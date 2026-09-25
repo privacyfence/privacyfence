@@ -1,5 +1,5 @@
-"""Tests for web/state_stream.py -- the SSE state-push channel (§16.3) and
-its call_on_main dispatcher target (§16.2.1). Exercises StateStream.
+"""Tests for web/state_stream.py -- the SSE state-push channel and its
+call_on_main dispatcher target. Exercises StateStream.
 subscribe() directly (an async generator, not via a real HTTP request) so a
 disconnect can be simulated without hanging -- see web/test_server.py's own
 comment on why TestClient can't drive an endless SSE response.
@@ -114,7 +114,7 @@ class TestSubscribe:
 
 
 class TestSubscribeTouch:
-    """Issue #423: a long-lived connection is itself proof of activity, so
+    """A long-lived connection is itself proof of activity, so
     ``subscribe()`` refreshes the session on the same cadence it already
     polls at, instead of leaving it untouched for the whole life of the
     connection."""

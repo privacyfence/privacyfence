@@ -163,8 +163,8 @@ class TestBuildAndMount:
 
 
 class TestCapabilityUploadRoute:
-    """Phase 4's PUT /mcp-files/slots/{slot} -- ADR 0007's "Clients without
-    the bridge" section. No Authorization header at all, unlike
+    """PUT /mcp-files/slots/{slot} -- ADR 0007's "Clients without
+    the bridge" section, ADR 0028. No Authorization header at all, unlike
     TestUploadRoute above -- the capability token in the URL is the whole
     credential."""
 
@@ -218,7 +218,7 @@ class TestCapabilityUploadRoute:
 
 
 class TestCapabilityDownloadRoute:
-    """Phase 4's GET /mcp-files/fetch/{token} -- no Authorization header,
+    """GET /mcp-files/fetch/{token} -- no Authorization header,
     same reasoning as TestCapabilityUploadRoute above."""
 
     def test_claims_a_staged_download_with_no_auth_header(self):

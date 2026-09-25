@@ -7,16 +7,13 @@ decision actually gets shown -- it just needs something that can show the
 write-gate popup, the review-gate popup, and the two smaller confirmation
 dialogs, and return a decision. ApprovalUI is that something.
 
-Through P9 this had two implementations: NativeApprovalUI (macOS AppKit/
-WKWebView dialogs, via approval_popup.py) and WebApprovalUI (the same card
-stack, served over HTTP). P10 deleted the native one -- "two approval
-surfaces means two places for a security fix to land" -- leaving
-WebApprovalUI (web_approval_ui.py) as the sole implementation. The ABC
-stays here, and gate.py still reaches it through get_approval_ui() rather
-than importing WebApprovalUI directly, on purpose: that decision's own
-reasoning was "the ApprovalUI seam lets it come back if that proves
-wrong", so a future implementation (e.g. a Windows-native dialog for #121,
-once that's revisited) only needs to implement this interface and call
+WebApprovalUI (web_approval_ui.py, the card stack served over HTTP) is
+the sole implementation: two approval surfaces would mean two places for a
+security fix to land (ADR 0001). The ABC stays here, and gate.py still
+reaches it through get_approval_ui() rather than importing WebApprovalUI
+directly, on purpose: the seam is what lets a native surface come back if
+one-implementation proves wrong, so a future implementation (e.g. a
+platform-native dialog) only needs to implement this interface and call
 init_approval_ui() with an
 instance of it -- gate.py's own call sites never change.
 """
@@ -28,9 +25,9 @@ from abc import ABC, abstractmethod
 class ApprovalUI(ABC):
     """One blocking human-approval surface. Every method mirrors one of
     WebApprovalUI's own (see web_approval_ui.py), which in turn mirrors
-    approval_popup.py's pre-P10 free functions -- these signatures were kept
-    identical across that transition so nothing calling through this ABC had
-    to change shape.
+    gate.py's module-level show_popup/show_read_popup/etc. wrappers -- the
+    signatures are identical so nothing calling through this ABC has to know
+    which backend is behind it.
     """
 
     @abstractmethod
@@ -110,7 +107,7 @@ class ApprovalUI(ABC):
         registered with, if it supports the deferred/hold-window protocol --
         ``None`` (the default) means this backend only ever blocks until a
         human decides.
-        WebApprovalUI (the only implementation since P10) always overrides
+        WebApprovalUI (the only implementation) always overrides
         this with a real registry; the default stays here for whatever
         future implementation the seam's own docstring anticipates, in case
         it has nowhere to send a human a reviewable link either.
@@ -123,8 +120,8 @@ class ApprovalUI(ABC):
 class _UnconfiguredApprovalUI(ApprovalUI):
     """The bare fallback get_approval_ui() constructs when nothing has
     called init_approval_ui() yet. Deliberately not WebApprovalUI: this
-    plays the same "inert, no-registry default" role NativeApprovalUI
-    played before P10 -- gate.py's own test suite mostly monkeypatches its
+    plays an "inert, no-registry default" role -- gate.py's own test suite
+    mostly monkeypatches its
     module-level show_popup/show_read_popup/etc. wrappers directly, relying
     on the default ApprovalUI having no deferred_registry (so gated_call()
     takes the plain blocking path, not the deferred/hold-window one) rather

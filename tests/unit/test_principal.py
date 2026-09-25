@@ -211,7 +211,7 @@ class TestPrincipalRegistry:
         assert len({id(r) for r in results}) == 1
 
     def test_principal_ids_lists_every_principal_seen(self):
-        """#400 C3e: an install-wide setting (org mode's privacy/PII policy)
+        """An install-wide setting (org mode's privacy/PII policy)
         has to be pushed to every principal already holding a copy, and
         get()/set() both resolve against current_principal() alone."""
         registry = PrincipalRegistry(dict)

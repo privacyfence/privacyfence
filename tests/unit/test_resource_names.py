@@ -144,7 +144,7 @@ class TestDiskPersistence:
 
 class TestGetResolverSingleton:
     def test_returns_the_same_instance_across_calls(self):
-        # Reset via the per-principal registry (P6) rather than a bare
+        # Reset via the per-principal registry rather than a bare
         # module global -- see tests/conftest.py's own autouse reset, which
         # already does this between tests; this test just makes the
         # "same instance for the same (here: default/local) principal"

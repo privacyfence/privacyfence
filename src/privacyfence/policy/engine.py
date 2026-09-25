@@ -42,8 +42,9 @@ class PolicyRule:
     internal address, and a user-facing verb list compiles down to it.
 
     ``id`` is the rule's identifier for logging. A rule read back from disk carries the
-    content-derived id ``policy.store.rule_id_for`` minted; a rule built in memory may carry
-    anything, which is why attribution recomputes it (``policy.store.rule_id_for_rule``).
+    content-derived id ``policy.store.rule_id_for`` minted, and that stored id is what decisions
+    are attributed to (ADR 0074). ``policy.store.rule_id_for_rule`` recomputes the same id from a
+    rule's content.
     """
 
     id: str
@@ -68,11 +69,10 @@ def _conditions_hold(rule: PolicyRule, ctx: ReviewContext) -> bool:
 def find_matching_rule(
     rules: Iterable[PolicyRule], operation_key: str, ctx: ReviewContext,
 ) -> "PolicyRule | None":
-    """The rule object ``evaluate()`` below would match, or ``None`` -- factored out for rule
-    attribution: a caller that needs to know *which row* matched, not just its ``.id`` (not
-    guaranteed canonical for a rule built in memory -- see ``policy.store.rule_id_for_rule``),
-    needs the object itself, and re-deriving it from ``evaluate()``'s returned id would be wrong
-    whenever two rules in the same list happen to share one. Never
+    """The rule object ``evaluate()`` below would match, or ``None`` -- for rule attribution:
+    gate.py's ``_evaluate_auto_accept`` records the matched rule's stored ``.id`` (ADR 0074), and
+    a caller that needs *which row* matched gets the object itself rather than looking a rule
+    back up by an id two rules in one list could share. Never
     considers the temp-accept grace window -- that is a session-scoped fallback, not a rule row,
     which is exactly why a caller resolving a decision to "one rule row" should get ``None`` here
     for it, not a pseudo-rule.

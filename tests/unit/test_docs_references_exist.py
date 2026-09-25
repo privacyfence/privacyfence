@@ -106,7 +106,7 @@ def test_the_pattern_reads_both_forms():
     current = _REF.search("see docs/getting-started.md for the install")
     assert current is not None and current.group(1) is None
     assert current.group(2) == "docs/getting-started.md"
-    historical = _REF.search("`git show be78e7ee^:docs/windows-support-plan.md` Phase 6.3")
+    historical = _REF.search("`git show be78e7ee^:docs/windows-support-plan.md`")
     assert historical is not None
     assert historical.groups() == ("be78e7ee^", "docs/windows-support-plan.md")
     assert _REF.search("mydocs/x.md") is None

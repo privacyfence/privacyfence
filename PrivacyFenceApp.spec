@@ -7,7 +7,7 @@
 #     Contents/MacOS/PrivacyFenceApp       ← daemon (main app; headless background
 #                                             process, reachable only over its own
 #                                             embedded web approval/settings UI --
-#                                             P10 retired the native menu bar/dialogs)
+#                                             there is no native menu bar or dialog UI)
 #     Contents/MacOS/privacyfence-app      ← symlink → PrivacyFenceApp (for daemon auto-start)
 #     Contents/MacOS/PrivacyFenceCompanion ← menu-bar companion (ADR 0002)
 #     Contents/MacOS/PrivacyFence          ← launcher: the bundle's CFBundleExecutable, i.e.
@@ -96,7 +96,7 @@ daemon_exe = EXE(
     icon=ICON,
 )
 
-# ── companion (#428 Phase 3, ADR 0002) ────────────────────────────────────────
+# ── companion (ADR 0002) ────────────────────────────────────────────────
 # A second entry point *inside this same .app bundle* -- Contents/MacOS/PrivacyFenceCompanion,
 # alongside Contents/MacOS/PrivacyFenceApp -- not a second .app, second signature, or second
 # notarization path (ADR 0002 decision 4). The extra hidden imports below are pystray's macOS

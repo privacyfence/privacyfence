@@ -9,27 +9,20 @@ exercised end to end against a frozen daemon that offers no ``build_connectors``
 Each module's own docstring explains why it makes that substitution; this module is the
 substitution itself, so the four of them name one tool rather than four copies of one.
 
-The probe is ``privacyfence_propose_policy_change`` (``gate.propose_policy_change``, P7 of the
-policy v2 redesign). It was gate.py's deprecated v1-shaped alias for it -- until #580/PSC-3 came
-to delete that tool (see ADR 0004), which would have left the release gate driving code that no
-longer exists. Both register their confirmation with ``sensitive=True`` (gate.py carries the same
-comment verbatim at both sites), so the dialog class, the unattended-session refusal and the
-step-up posture a packaged install imposes on it are all unchanged by the move; what changes is
-the request shape and, with it, what the audit log and settings.yaml assertions on the other side
-have to be keyed on:
+The probe is ``privacyfence_propose_policy_change`` (``gate.propose_policy_change``). It registers
+its confirmation with ``sensitive=True``, so the dialog class, the unattended-session refusal and
+the step-up posture a packaged install imposes all apply to it. Its request shape, and what the
+audit log and settings.yaml assertions on the other side are keyed on:
 
-=========================  ==============================================  ==========================================
-                           v1 (the deleted alias)                          v2 (``propose_policy_change``)
-=========================  ==============================================  ==========================================
-request                    ``{target, operation_key, rule_name, value}``   ``{operation, group, verbs, value}``
-validated against          nothing before the popup                        ``policy.catalogue.scope_catalogue()``
-audit ``connector``        ``"rule"`` (the ``target``)                     ``"policy"``
-audit ``decision``         ``rule_changed_via_bridge_proposal``            ``policy_rule_changed_via_bridge_proposal``
-=========================  ==============================================  ==========================================
+=========================  ==========================================
+request                    ``{operation, group, verbs, value}``
+validated against          ``policy.catalogue.scope_catalogue()``
+audit ``connector``        ``"policy"``
+audit ``decision``         ``policy_rule_changed_via_bridge_proposal``
+=========================  ==========================================
 
-``ACCEPTED_DESCRIPTION``/``rule sentence`` do *not* change: P9 already made the v1 alias report the
-v2 rule's own ``policy.describe.rule_sentence`` rather than echoing the v1 ``rule_name``, so the
-confirmed-response assertions carried over verbatim.
+``ACCEPTED_DESCRIPTION``/``rule sentence``: the confirmed response reports the rule's own
+``policy.describe.rule_sentence`` rather than echoing any rule name the caller passed.
 
 **On-disk shape is what to assert, not a rule name.** The probe's group compiles to a v2 rule whose
 ``predicate`` happens to still spell ``trusted_sender_domain`` -- v2 kept v1's predicate vocabulary

@@ -1,4 +1,4 @@
-"""Tests for web/approval_step_up.py (PSC-2a): the one step-up orchestration
+"""Tests for web/approval_step_up.py: the one step-up orchestration
 web/routes_approvals.py's local-mode and org-mode routes both call now,
 exercised directly against the module rather than through either mode's
 HTTP surface -- test_routes_approvals.py's and test_routes_org_approvals.py's
@@ -14,6 +14,7 @@ than inventing a second way to fake a passkey.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -322,13 +323,45 @@ class TestBatchStepUpResponse:
         step_up = StepUpConfig(enabled=True, rp_id="localhost")
         response = approval_step_up.batch_step_up_response(
             PRINCIPAL, step_up, batch_id="b1", fingerprint="fp", challenges=StepUpChallengeStore(),
+            unenrolled_batch_message=None,
         )
         assert response is None
+
+    def test_nothing_enrolled_and_require_passkey_off_with_a_message_refuses_with_400(self):
+        step_up = StepUpConfig(enabled=True, rp_id="localhost")
+        response = approval_step_up.batch_step_up_response(
+            PRINCIPAL, step_up, batch_id="b1", fingerprint="fp", challenges=StepUpChallengeStore(),
+            unenrolled_batch_message="enroll or use the cards",
+        )
+        assert response is not None
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        assert body == {"error": "batch_step_up_unavailable", "message": "enroll or use the cards"}
+
+    def test_require_passkey_on_wins_over_the_unenrolled_message(self):
+        step_up = StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True)
+        response = approval_step_up.batch_step_up_response(
+            PRINCIPAL, step_up, batch_id="b1", fingerprint="fp", challenges=StepUpChallengeStore(),
+            unenrolled_batch_message="enroll or use the cards",
+        )
+        assert response is not None
+        assert response.status_code == 403
+
+    def test_a_credential_offers_a_428_even_with_an_unenrolled_message(self):
+        _enroll()
+        step_up = StepUpConfig(enabled=True, rp_id="localhost")
+        response = approval_step_up.batch_step_up_response(
+            PRINCIPAL, step_up, batch_id="b1", fingerprint="fp", challenges=StepUpChallengeStore(),
+            unenrolled_batch_message="enroll or use the cards",
+        )
+        assert response is not None
+        assert response.status_code == 428
 
     def test_nothing_enrolled_and_require_passkey_on_hard_fails(self):
         step_up = StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True)
         response = approval_step_up.batch_step_up_response(
             PRINCIPAL, step_up, batch_id="b1", fingerprint="fp", challenges=StepUpChallengeStore(),
+            unenrolled_batch_message=None,
         )
         assert response is not None
         assert response.status_code == 403
@@ -339,6 +372,7 @@ class TestBatchStepUpResponse:
         step_up = StepUpConfig(enabled=True, rp_id="localhost")
         response = approval_step_up.batch_step_up_response(
             PRINCIPAL, step_up, batch_id="b1", fingerprint="fp", challenges=StepUpChallengeStore(),
+            unenrolled_batch_message=None,
         )
         assert response is not None
         assert response.status_code == 428
@@ -350,7 +384,7 @@ class TestGuardBatchDecision:
         response, verified = approval_step_up.guard_batch_decision(
             PRINCIPAL, StepUpConfig(enabled=False),
             parsed=[("a1", "accept")], registry=_FakeRegistry({"a1": _card("a1")}), batch_id="b1",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion=None, origin=ORIGIN, challenges=StepUpChallengeStore(),
         )
         assert response is None
@@ -360,7 +394,7 @@ class TestGuardBatchDecision:
         response, verified = approval_step_up.guard_batch_decision(
             PRINCIPAL, StepUpConfig(enabled=True, rp_id="localhost"),
             parsed=[("d1", "deny")], registry=_FakeRegistry({"d1": _card("d1")}), batch_id="b1",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion=None, origin=ORIGIN, challenges=StepUpChallengeStore(),
         )
         assert response is None
@@ -370,7 +404,7 @@ class TestGuardBatchDecision:
         response, verified = approval_step_up.guard_batch_decision(
             PRINCIPAL, StepUpConfig(enabled=True, rp_id="localhost", batch="per_item"),
             parsed=[("a1", "accept")], registry=_FakeRegistry({"a1": _card("a1")}), batch_id="b1",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion=None, origin=ORIGIN, challenges=StepUpChallengeStore(),
         )
         assert verified is False
@@ -382,17 +416,43 @@ class TestGuardBatchDecision:
         response, verified = approval_step_up.guard_batch_decision(
             PRINCIPAL, StepUpConfig(enabled=True, rp_id="localhost"),
             parsed=[("a1", "accept")], registry=_FakeRegistry({"a1": _card("a1")}), batch_id="b1",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion=None, origin=ORIGIN, challenges=StepUpChallengeStore(),
         )
         assert verified is False
         assert response is None  # nothing enrolled, require_passkey off -- evadable fall-through
 
+    def test_an_unenrolled_message_refuses_the_batch_unverified(self):
+        response, verified = approval_step_up.guard_batch_decision(
+            PRINCIPAL, StepUpConfig(enabled=True, rp_id="localhost"),
+            parsed=[("a1", "accept")], registry=_FakeRegistry({"a1": _card("a1")}), batch_id="b1",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            unenrolled_batch_message="enroll or use the cards",
+            assertion=None, origin=ORIGIN, challenges=StepUpChallengeStore(),
+        )
+        assert verified is False
+        assert response is not None
+        assert response.status_code == 400
+        assert json.loads(response.body) == {
+            "error": "batch_step_up_unavailable", "message": "enroll or use the cards",
+        }
+
+    def test_an_unenrolled_message_leaves_a_deny_only_batch_alone(self):
+        response, verified = approval_step_up.guard_batch_decision(
+            PRINCIPAL, StepUpConfig(enabled=True, rp_id="localhost"),
+            parsed=[("d1", "deny")], registry=_FakeRegistry({"d1": _card("d1")}), batch_id="b1",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            unenrolled_batch_message="enroll or use the cards",
+            assertion=None, origin=ORIGIN, challenges=StepUpChallengeStore(),
+        )
+        assert response is None
+        assert verified is False
+
     def test_require_passkey_with_nothing_enrolled_hard_fails_unverified(self):
         response, verified = approval_step_up.guard_batch_decision(
             PRINCIPAL, StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
             parsed=[("a1", "accept")], registry=_FakeRegistry({"a1": _card("a1")}), batch_id="b1",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion=None, origin=ORIGIN, challenges=StepUpChallengeStore(),
         )
         assert verified is False
@@ -407,7 +467,7 @@ class TestGuardBatchDecision:
         registry = _FakeRegistry({"a1": _card("a1")})
         first_response, first_verified = approval_step_up.guard_batch_decision(
             PRINCIPAL, step_up, parsed=parsed, registry=registry, batch_id="b1",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion=None, origin=ORIGIN, challenges=challenges,
         )
         assert first_verified is False
@@ -416,7 +476,7 @@ class TestGuardBatchDecision:
         with patch.object(wa.webauthn, "verify_authentication_response", return_value=_verified_assertion()):
             response, verified = approval_step_up.guard_batch_decision(
                 PRINCIPAL, step_up, parsed=parsed, registry=registry, batch_id="b1",
-                batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+                batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
                 assertion={"id": "Y3JlZC0x"}, origin=ORIGIN, challenges=challenges,
             )
         assert response is None
@@ -428,7 +488,7 @@ class TestGuardBatchDecision:
         response, verified = approval_step_up.guard_batch_decision(
             PRINCIPAL, step_up,
             parsed=[("a1", "accept")], registry=_FakeRegistry({"a1": _card("a1")}), batch_id="made-up-batch-id",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion={"id": "Y3JlZC0x"}, origin=ORIGIN, challenges=StepUpChallengeStore(),
         )
         assert verified is False
@@ -443,13 +503,13 @@ class TestGuardBatchDecision:
         registry = _FakeRegistry({"a1": _card("a1")})
         approval_step_up.guard_batch_decision(
             PRINCIPAL, step_up, parsed=parsed, registry=registry, batch_id="b1",
-            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+            batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
             assertion=None, origin=ORIGIN, challenges=challenges,
         )
         with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
             response, verified = approval_step_up.guard_batch_decision(
                 PRINCIPAL, step_up, parsed=parsed, registry=registry, batch_id="b1",
-                batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up",
+                batch_step_up_results=BATCH_STEP_UP_RESULTS, per_item_message="split them up", unenrolled_batch_message=None,
                 assertion={"id": "Y3JlZC0x"}, origin=ORIGIN, challenges=challenges,
             )
         assert verified is False

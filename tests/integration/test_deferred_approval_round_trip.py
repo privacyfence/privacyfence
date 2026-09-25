@@ -1,4 +1,4 @@
-"""End-to-end deferred-approval round trip (TST-09): drives the full P3
+"""End-to-end deferred-approval round trip: drives the full
 deferred protocol (gate.py's own module docstring) against a real, socket-bound
 web/server.py WebServer -- the official ``mcp`` Python client for the
 tool-call side, a real ``httpx`` POST against the real decide route for the
@@ -171,7 +171,7 @@ async def _decide(server: WebServer, approval_id: str, result: str) -> httpx.Res
 
 
 async def test_deferred_approval_round_trip_accept(running_deferred_server):
-    """The full P3 protocol, driven for real: a gated write's hold window
+    """The full deferred protocol, driven for real: a gated write's hold window
     elapses and comes back as approval_pending; deciding it Allow through
     the real HTTP decide route a human would use releases the data; a
     second, identical tool call then finds the decision already in the

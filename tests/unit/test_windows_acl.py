@@ -1,4 +1,4 @@
-"""#428 Phase 4 (B5c): the access-mask arithmetic every Windows layout
+"""The access-mask arithmetic every Windows layout
 decision rests on.
 
 ``windows_acl``'s audit functions are the Windows half of what POSIX
@@ -271,7 +271,7 @@ class TestImageProblems:
         assert windows_acl.image_problems(PATH, aces, service_account=ACCOUNT) == []
 
     def test_a_user_writable_install_is_reported(self):
-        # #407: a service runs whatever binPath names, so this is the agent
+        # A service runs whatever binPath names, so this is the agent
         # being handed a way to run its own code as the service account.
         aces = [windows_acl.Ace("MACHINE\\alice", windows_acl.FILE_ALL_ACCESS)]
 

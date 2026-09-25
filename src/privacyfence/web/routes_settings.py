@@ -1,14 +1,10 @@
-"""Settings on the web (W3/W4). One module now builds the route list for
-*both* local mode's ~30-action dispatcher and org mode's own settings
-surface (policy surface consolidation, PSC-4b/PSC-5) -- formerly a full
-second module, web/routes_org_settings.py. ``build_routes()`` (below) is
-still local mode's entry point (unchanged signature); ``build_org_routes()``
-is org mode's, replacing ``routes_org_settings.build_routes``.
+"""Settings on the web. One module builds the route list for *both* local
+mode's ~30-action dispatcher and org mode's own settings surface (ADR 0033).
+``build_routes()`` (below) is local mode's entry point;
+``build_org_routes()`` is org mode's.
 
-Org-mode page *rendering* used to live in its own web/org_settings_pages.py
-(PSC-4b moved it there verbatim, deliberately not merging it, since that was
-PSC-5's job) -- PSC-5 deletes that module. Both ``GET /settings`` and
-``GET /settings/privacy`` now serve settings_window_html.build_html(), the
+In org mode, both ``GET /settings`` and
+``GET /settings/privacy`` serve settings_window_html.build_html(), the
 exact same capability-filtered renderer local mode's own settings page uses
 (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's own
 docstring for exactly what each combination hides), and org mode's four
@@ -29,7 +25,7 @@ now module-level helpers both call: ``_needs_step_up``/
 ``_settings_step_up_response`` (the "does this sensitive action need a fresh
 WebAuthn assertion, and what does asking for one look like" pair -- byte-for-
 byte identical between modes once parameterized by ``principal``) and
-``_apply_step_up_gate`` (built on PSC-2a's shared
+``_apply_step_up_gate`` (built on the shared
 ``web/approval_step_up._verify_or_challenge``, the same ceremony primitive
 ``web/routes_approvals.py``'s own ``decide()`` already reduces to -- local
 mode's own inline try/except around ``step_up_decide.verify_step_up`` is
@@ -40,7 +36,7 @@ modes' dispatch now calls it -- see that function's own docstring.
 ``GET /settings`` serves settings_window_html.build_html(), wrapped in
 web_shell.wrap() so it reads as the same application as ``/approvals``;
 ``GET /settings/connectors`` serves the identical document with its
-Connectors section pre-selected server-side (issue #396 Part C -- the
+Connectors section pre-selected server-side (the
 first-run destination privacyfence_status points an un-onboarded install's
 human at, since Connectors is the screen that actually unblocks one; it is
 reached through the companion's Open Settings now that the sign-in-link tool
@@ -57,11 +53,11 @@ config bundle is a multipart upload, not a JSON action (there is no
 osascript "choose file" dialog to trigger from an HTTP request -- see
 settings_controller.install_org_config_bytes's own docstring); the audit
 log export is a file download, not a JSON response; ``quit_app`` gets its
-own route so it can carry §16.2.8's confirmation + local-mode-only gate
+own route so it can carry its own confirmation + local-mode-only gate
 without contaminating the generic dispatcher with one action's special
 case.
 
-**Standing rule this module exists to keep true (§16.2.4):** no route here
+**Standing rule this module exists to keep true:** no route here
 ever calls ``subprocess.run``/``os.system``/``open`` -- the four call sites
 that used to (install_org_config's osascript picker, export_audit_log's
 ``open <file>``, the update-available alert's ``open <url>``,
@@ -71,13 +67,13 @@ process's HTTP listener. TestNoSubprocessFromHttp in this module's test
 file is what a security review gets to point at instead of re-reading this
 comment.
 
-**Sensitive-action step-up (#426 Phase 3):** gating the local decide
+**Sensitive-action step-up (ADR 0034):** gating the local decide
 endpoint on ``step_up.require_passkey`` (web/routes_approvals.py) means
 nothing releasing a *write approval* can happen without a passkey -- but an
 agent that cannot forge an approval doesn't need to if it can just add an
 always-allow rule instead, and this dispatcher's ``POST /api/settings/
-{action}`` was that open door: none of its ~30 actions ever asked for
-step-up. ``_SENSITIVE_ACTIONS`` below is the subset that can change *what
+{action}`` would be that open door without a gate of its own.
+``_SENSITIVE_ACTIONS`` below is the subset that can change *what
 gets gated* (rule/grant/policy/PII actions) rather than merely how the app
 looks or behaves -- update checks, log level, notification detail, and
 connector auth all stay ungated, since gating all of them would make
@@ -94,29 +90,27 @@ verified and, on success, actually runs the action.
 in this module's test file for why a derived set would silently swallow a
 future action nobody classified either way.
 
-**Self-approval review, Phase 3 (F5/F6):** the sensitive-action net above
-only ever covered the generic dispatcher. ``org_config_upload`` had its own
-route and bypassed both ``_needs_step_up`` and ``require_human_session``
-entirely, even though an uploaded bundle can rewrite the PII policy, every
-auto-accept rule and every connector's OAuth client config in one shot
-(F5) -- it's now gated the same two ways, by hand, inside its own route
-function, plus an explicit ``confirm_pin`` round trip before a first signed
+**Bespoke routes:** the sensitive-action net above only covers the
+generic dispatcher. ``org_config_upload`` has its own route, and an
+uploaded bundle can rewrite the PII policy, every auto-accept rule and
+every connector's OAuth client config in one shot -- so it is gated the
+same two ways (``_needs_step_up`` and ``require_human_session``), by
+hand, inside its own route function, plus an explicit ``confirm_pin`` round trip before a first signed
 bundle's key gets pinned (``SettingsController.would_pin_new_org_signing_
 key``), rather than letting that TOFU pin happen as a side effect of an
-upload. ``toggle_connector`` was classified non-sensitive in both
-directions, but the classification comment's own reasoning -- "an agent
-that already has connector access gains nothing new" -- only holds for
-*disabling* one; it's now split into ``enable_connector`` (sensitive) and
-``disable_connector`` (not), see ``SettingsController.enable_connector``'s
-own docstring (F6). ``_BESPOKE_SENSITIVE_ROUTE_PATHS``/``_BESPOKE_EXEMPT_
+upload. Connector toggling is directional: the reasoning "an agent that
+already has connector access gains nothing new" only holds for
+*disabling* one, so ``enable_connector`` is sensitive and
+``disable_connector`` is not (ADR 0070). ``_BESPOKE_SENSITIVE_ROUTE_PATHS``/``_BESPOKE_EXEMPT_
 ROUTE_PATHS`` below widen ``TestSensitiveActionsCoverAllAllowedActions``'s
-own ratchet from action names to actual ``Route`` objects, so the next
-route added here can't repeat org_config_upload's mistake by existing.
+own ratchet from action names to actual ``Route`` objects, so a route
+added here cannot bypass the gate just by existing (ADR 0014).
 
-**B9:** ``enable_step_up`` (SettingsController's own new method) is the one
+**Turning step-up on:** ``enable_step_up`` is the one
 ``_ALLOWED_ACTIONS`` entry that can turn ``step_up.require_passkey`` on in
-the first place -- previously only a hand edit of ``config/settings.yaml``
-plus a daemon restart could. It's listed in ``_SENSITIVE_ACTIONS`` for the
+the first place; otherwise only a hand edit of ``config/settings.yaml``
+plus a daemon restart can, and turning it off has no action at all
+(ADR 0068). It's listed in ``_SENSITIVE_ACTIONS`` for the
 same reason every rule/grant/policy/PII action is, but ``_needs_step_up``
 below never gates its own *first* call: that check only fires once
 ``step_up.enabled``/``require_passkey`` are already both true, which by
@@ -189,12 +183,12 @@ logger = logging.getLogger(__name__)
 MAX_ORG_CONFIG_BYTES = 1_000_000
 
 # ---------------------------------------------------------------------------- #
-# §16.2.5's allowlist. A frozenset here, not a @web_action decorator on
+# The action allowlist. A frozenset here, not a @web_action decorator on
 # SettingsController -- that class's docstring is proud of having no web
 # concerns ("No unguarded AppKit/WebKit imports at module level"), and a
 # decorator naming an HTTP-shaped concept would be exactly that. This list
-# is every "mechanical" action from §16.4's own table, plus skip_update/
-# remind_later_update (§16.2.4's update banner). install_org_config,
+# is every "mechanical" SettingsController action, plus skip_update/
+# remind_later_update (the update banner). install_org_config,
 # export_audit_log, and quit_app are deliberately absent -- each has its
 # own route below instead of going through generic dispatch (see module
 # docstring); install_org_config_bytes is never web-reachable by this name
@@ -203,8 +197,8 @@ MAX_ORG_CONFIG_BYTES = 1_000_000
 # ---------------------------------------------------------------------------- #
 
 # Projected from web/org_settings_scope.py's ACTION_SCOPES -- every action
-# naming LOCAL_MODE, which is every action there is except AGT-5's two
-# org-only AI-system pin actions (local mode's own dispatcher predates that
+# naming LOCAL_MODE, which is every action there is except the two
+# org-only AI-system pin actions (ADR 0035 decision 3) (local mode's own dispatcher predates that
 # module's mode split and was never gated by it). That module is now the primary declaration; this is the
 # view of it local mode's own dispatch below actually consults.
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
@@ -212,7 +206,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------- #
-# #426 Phase 3's own allowlist-within-the-allowlist -- see module docstring.
+# The allowlist-within-the-allowlist (ADR 0034) -- see module docstring.
 # Every rule-row/grant/policy/PII action can change *what a future write
 # reaches decide() at all* (an always-allow rule, a granted capability, a
 # relaxed default policy), which is exactly the bypass a passkey requirement
@@ -228,7 +222,7 @@ _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
     "toggle_pii_detection", "toggle_pii_category",
-    # B9: changes *what gets gated* the same way every other entry here
+    # Changes *what gets gated* the same way every other entry here
     # does -- once step-up is already required, turning it on again (a
     # no-op SettingsController.enable_step_up already tolerates) still
     # demands a fresh assertion like any other sensitive action. The very
@@ -239,19 +233,19 @@ _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # enable_step_up itself enforces instead. See that method's own
     # docstring.
     "enable_step_up",
-    # F6 of the self-approval review: re-enabling a connector a human
+    # Re-enabling a connector a human
     # deliberately switched off is access an agent did not already have
     # -- unlike disable_connector below, this is not a no-op change of
-    # nothing.
+    # nothing (ADR 0070).
     "enable_connector",
 })
 
 _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
     "skip_update", "remind_later_update",
-    # F6: an agent that already has connector access gains nothing new by
-    # disabling one -- see SettingsController.enable_connector's own
-    # docstring for the asymmetry with the sensitive direction above.
+    # An agent that already has connector access gains nothing new by
+    # disabling one -- see ADR 0070 for the asymmetry with the sensitive
+    # direction above.
     "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_log_level", "set_notifications_detail",
@@ -260,7 +254,7 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "toggle_gmail_signature",
 })
 
-# AGT-5 (ADR 0035 decision 3): the org-only actions, classified the same
+# The org-only actions (ADR 0035 decision 3), classified the same
 # explicit way. Pinning a DCR client to an AI system creates attested
 # identity -- the only kind a rule may key on (ADR 0006 decision 3) -- and
 # unpinning takes it away, so both are sensitive: step-up gated in org mode
@@ -271,13 +265,12 @@ _ORG_ONLY_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 })
 
 # ---------------------------------------------------------------------------- #
-# F5/3.3 of the self-approval review: _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS
-# above only ever covered the generic POST /api/settings/{action}
-# dispatcher -- org_config_upload had a route of its own (module docstring's
-# own list of why: a multipart upload, not a JSON action) and, for that
-# reason alone, never passed through either _needs_step_up or
-# require_human_session at all, regardless of how much policy an uploaded
-# bundle could rewrite (F5). Every path in _BESPOKE_SENSITIVE_ROUTE_PATHS is
+# _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS above only cover the generic
+# POST /api/settings/{action} dispatcher. A bespoke route such as
+# org_config_upload (module docstring's own list of why: a multipart
+# upload, not a JSON action) would, for that reason alone, pass through
+# neither _needs_step_up nor require_human_session, regardless of how much
+# policy an uploaded bundle can rewrite. Every path in _BESPOKE_SENSITIVE_ROUTE_PATHS is
 # wired through the same _needs_step_up-shaped/require_human_session-shaped
 # gates as a _SENSITIVE_ACTIONS action, by hand, inside its own route
 # function -- request shapes differ too much (multipart vs. JSON) to share
@@ -303,10 +296,10 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
 })
 
 # Every other bespoke (non-generic-dispatch) route, and why it doesn't need
-# the same gates: quit_app carries its own §16.2.8 confirmation dialog and
+# the same gates: quit_app carries its own confirmation dialog and
 # doesn't change what gets gated at all; the rest are GETs, not mutations.
 _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
-    "/api/settings/quit_app": "its own confirmed=true gate (§16.2.8) -- doesn't change what gets gated",
+    "/api/settings/quit_app": "its own confirmed=true gate -- doesn't change what gets gated",
     "/api/settings/audit_log/download": "a GET -- read-only export, no mutation",
     "/settings": "a GET -- renders the page",
     "/settings/connectors": "a GET -- renders the page",
@@ -315,8 +308,8 @@ _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
 
 class _BadAction(Exception):
     """Raised by _call_action for a wrong-typed/missing argument -- mapped
-    to a 400 at the route, never a 500 (§16.7: "a wrong-typed argument
-    returns 400 rather than raising")."""
+    to a 400 at the route, never a 500: a wrong-typed argument returns 400
+    rather than raising."""
 
 
 def _coerce(value: Any, annotation: Any) -> Any:
@@ -339,8 +332,8 @@ def _coerce(value: Any, annotation: Any) -> Any:
 
 
 def _call_action(controller: SettingsController, action: str, payload: dict[str, Any]) -> Any:
-    """Real per-action argument validation (§16.2.5's own "not a copy of
-    the pyobjc workaround"): every parameter's type comes from
+    """Real per-action argument validation, not a copy of the old pyobjc
+    workaround: every parameter's type comes from
     SettingsController's own annotations (remove_policy_rule(rule_id: str),
     etc.) rather than a single hardcoded "idx is always an int" special
     case -- a wrong type on *any* parameter of *any* allowed action is
@@ -352,8 +345,7 @@ def _call_action(controller: SettingsController, action: str, payload: dict[str,
     # Signature.parameters[name].annotation is the *string* "int"/"str",
     # not the type object -- get_type_hints() is what actually resolves
     # those against the function's own module globals, the way this
-    # module's real per-action validation needs (§16.2.5: "not a copy of
-    # the pyobjc workaround").
+    # module's real per-action validation needs.
     hints = typing.get_type_hints(method)
     kwargs: dict[str, Any] = {}
     for name, param in sig.parameters.items():
@@ -366,11 +358,9 @@ def _call_action(controller: SettingsController, action: str, payload: dict[str,
 
 
 def _augment_connectors_with_icons(state: dict[str, Any]) -> dict[str, Any]:
-    """§16.2.6: the web equivalent of settings_window.py's
-    _augment_connectors_with_icons, ported onto approval_icons.py (P1's
-    PyObjC-free icon loader, already serving the approval card) instead of
-    approval_window's AppKit-tainted private functions -- SettingsController
-    itself stays free of any icon-loading concern either way."""
+    """Adds each connector's icon, loaded through approval_icons.py (the
+    PyObjC-free icon loader that also serves the approval card), so
+    SettingsController itself stays free of any icon-loading concern."""
     for connector in state.get("connectors", []):
         icon_path = approval_icons.connector_icon_path(connector.get("icon", ""))
         connector["icon_data_uri"] = approval_icons.icon_data_uri(icon_path)
@@ -388,18 +378,18 @@ def _snapshot(controller: SettingsController) -> dict[str, Any]:
 # web/routes_approvals.py's own _bridge_shim already uses for the approval
 # card (see that module's docstring). Four actions are intercepted here
 # instead of forwarded, because none of them is "POST an action, get a
-# snapshot back" (§16.2.4):
+# snapshot back":
 #   - open_repo: a plain link, opened client-side -- no request at all.
 #   - install_org_config: triggers the hidden <input type=file> below,
 #     which itself POSTs a multipart body to /api/settings/org_config/upload.
 #   - export_audit_log: a same-origin navigation to the download route.
-#   - quit_app: a client-side confirm() first (§16.2.8), then still POSTed
+#   - quit_app: a client-side confirm() first, then still POSTed
 #     through as an action, but to its own /api/settings/quit_app route
 #     (see build_routes below) rather than the generic dispatcher.
 # ---------------------------------------------------------------------------- #
 
 def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
-    """``pfSettingsPost``'s own ``428``/``403`` branches (#426 Phase 3) are
+    """``pfSettingsPost``'s own ``428``/``403`` branches are
     the settings-page counterpart of web/routes_approvals.py's own
     ``_bridge_shim`` step-up handling -- see that function's docstring for
     the shared shape (``428`` carries fresh ``webauthn_options`` to complete
@@ -416,11 +406,10 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "fileInput.addEventListener('change', function(){"
         "  if (!fileInput.files || !fileInput.files[0]) return;"
         "  var file = fileInput.files[0];"
-        # F5/3.1: org_config_upload can now answer 409 (would pin a new
-        # signing key -- ask first) and 428/403 (step-up, same shape
-        # pfSettingsPost's own retry chain below already handles for JSON
-        # actions) instead of only ever succeeding or 401/400/403-on-
-        # cross-origin. attemptOrgUpload() re-POSTs the same file as a
+        # org_config_upload can answer 409 (would pin a new signing key --
+        # ask first) and 428/403 (step-up, same shape pfSettingsPost's own
+        # retry chain below already handles for JSON actions) as well as
+        # succeeding or 401/400/403-on-cross-origin. attemptOrgUpload() re-POSTs the same file as a
         # fresh FormData each round -- multipart has no way to resume a
         # partially-approved request the way a JSON body's own retry does
         # by copying `body`.
@@ -564,15 +553,11 @@ def _action_fingerprint(action: str, body: dict[str, Any]) -> str:
 
 
 def _record_settings_audit(principal: Principal, summary: str) -> None:
-    """Moved in unchanged from the former web/routes_org_settings.py, where
-    #400 called for it by name: "Changing an org's privacy policy is
-    exactly the kind of act that belongs in the audit log under the
-    principal who did it." PSC-4b left local mode's own generic dispatch
-    silent on purpose, flagging the asymmetry as a decision for the
-    maintainer rather than resolving it -- now resolved: ``settings_action``
-    below calls this for every successful mutation and every step-up
-    refusal too, under ``LOCAL_PRINCIPAL``, the same shape org mode's own
-    routes already use."""
+    """Changing an org's privacy policy is exactly the kind of act that
+    belongs in the audit log under the principal who did it, and the same
+    holds in local mode: ``settings_action`` below calls this for every
+    successful mutation and every step-up refusal too, under
+    ``LOCAL_PRINCIPAL``, the same shape org mode's own routes use."""
     # Same free-form AuditEntry shape daemon_main.log_org_config_bundle_hash
     # uses for an install-level event that isn't a connector call -- this is
     # a settings mutation, not a gated tool call, so "connector"/"tool" stay
@@ -593,7 +578,7 @@ def _record_settings_audit(principal: Principal, summary: str) -> None:
 
 
 def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
-    """Shared by both modes (PSC-4b) -- identical once parameterized by
+    """Shared by both modes (ADR 0033) -- identical once parameterized by
     ``step_up``: local mode's own is optional (``None`` until web/server.py
     resolves one), org mode's is always given, but "no config yet" and "a
     config that hasn't turned require_passkey on" both mean the same thing
@@ -609,7 +594,7 @@ def _settings_step_up_response(
     principal: Principal, action: str, fingerprint_body: dict[str, Any], *,
     step_up: StepUpConfig, challenges: StepUpChallengeStore,
 ) -> JSONResponse:
-    """Shared by both modes (PSC-4b, formerly one near-identical copy each:
+    """Shared by both modes (ADR 0033; formerly one near-identical copy each:
     local mode's own hardcoded ``LOCAL_PRINCIPAL``, the former
     web/routes_org_settings.py's already took ``principal`` as a parameter --
     this is that shape, made the only one). With no enrolled
@@ -635,7 +620,7 @@ def _apply_step_up_gate(
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
 ) -> JSONResponse | None:
     """The one settings-action step-up check both modes' dispatch reduces
-    to (PSC-4b): ``None`` when ``action`` doesn't need a fresh assertion at
+    to (ADR 0033): ``None`` when ``action`` doesn't need a fresh assertion at
     all, or (org mode's own former ``_guard_step_up``) once
     ``approval_step_up._verify_or_challenge`` -- the same ceremony
     primitive web/routes_approvals.py's own ``decide()`` already
@@ -685,7 +670,7 @@ def build_routes(
     combined app (extra_routes, same pattern web/routes_mcp.py's
     mount_mcp() already established) -- see create_app() below for a
     standalone Starlette app wrapping the same routes, which is what this
-    module's own tests construct against. ``sessions`` (SEC-06, see
+    module's own tests construct against. ``sessions`` (see
     session_auth.py's own module docstring) is the same session store
     web/routes_approvals.py authenticates against -- one session for the
     whole combined app, per this module's own docstring.
@@ -698,7 +683,7 @@ def build_routes(
     all; SettingsController's existing on_change/_push_snapshot mechanism
     already fires for every mutating call, this request's own included.
 
-    ``step_up``/``step_up_origin`` (#426 Phase 3) gate ``_SENSITIVE_ACTIONS``
+    ``step_up``/``step_up_origin`` gate ``_SENSITIVE_ACTIONS``
     on a fresh WebAuthn assertion whenever ``step_up.require_passkey`` is on
     -- see module docstring. Both default to "off" so every existing caller
     of this function is unaffected; web/server.py's ``build_app`` passes the
@@ -706,13 +691,13 @@ def build_routes(
     routes_approvals.py's own decide-time check and web/routes_security.py's
     ``/security`` mount.
 
-    ``require_human_session`` (the self-approval plan's Phase 2) refuses
+    ``require_human_session`` refuses
     every ``_SENSITIVE_ACTIONS`` action -- the same set ``_needs_step_up``
     already names, i.e. everything that can change *what gets gated* -- to a
     session web/session_auth.py cannot attribute to a person. Unlike
     ``_needs_step_up`` it does not wait on ``step_up.require_passkey``: an
     install with no passkey requirement still has a policy an agent should
-    not be able to rewrite on its own say-so. See web/routes_approvals.py's
+    not be able to rewrite on its own say-so (ADR 0062). See web/routes_approvals.py's
     own ``require_human_session`` paragraph for why web/server.py turns this
     on for privilege-separated installs only.
     """
@@ -724,9 +709,9 @@ def build_routes(
     def _banner_html() -> str | None:
         if step_up is None:
             return None
-        # #426 Phase 4: the persistent "requirement was turned off" notice
+        # The persistent "requirement was turned off" notice
         # (webauthn_stepup.step_up_disabled_notice) stands alongside the
-        # Phase 3 "nothing enrolled yet" one -- either, both, or neither
+        # "nothing enrolled yet" one -- either, both, or neither
         # can be true at once, so both render together when present.
         parts = [
             step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL)),
@@ -738,7 +723,7 @@ def build_routes(
     async def _render_settings_page(request: Request, *, initial_section: str | None) -> Response:
         if not _authenticated(request):
             return _unauthorized_response(request)
-        # SEC-08: one nonce
+        # One nonce
         # for the whole document -- web/server.py's _SecurityHeadersMiddleware
         # already put one in request.state for this exact response, and
         # every <style>/<script> tag below (settings_window_html.build_html's
@@ -749,7 +734,7 @@ def build_routes(
         state = _snapshot(controller)
         body = settings_window_html.build_html(state, nonce=nonce, initial_section=initial_section)
         csrf = request.cookies.get(_SESSION_COOKIE, "")
-        # PF_WEBAUTHN_JS (#426 Phase 3): the same ceremony helpers web/
+        # PF_WEBAUTHN_JS: the same ceremony helpers web/
         # routes_approvals.py's card page carries, needed here whenever a
         # sensitive action's own 428/403 branch below (_settings_bridge_shim)
         # has to run one -- always injected, same reasoning that module's
@@ -776,7 +761,7 @@ def build_routes(
         return await _render_settings_page(request, initial_section=None)
 
     async def settings_connectors_page(request: Request) -> Response:
-        # issue #396 Part C: a real route (not a #fragment) so the initial
+        # A real route (not a #fragment) so the initial
         # section survives web/server.py's _BootstrapMiddleware, which
         # redirects a consumed ?bootstrap= code to `request.url.path` with
         # its query string stripped but the path itself untouched -- see
@@ -799,9 +784,9 @@ def build_routes(
         # The allowlist check happens *before* anything resembling
         # getattr(controller, action) runs -- an unlisted name (including
         # dunders, _load_config, snapshot itself) is a 404, not a lookup
-        # that then gets rejected (§16.2.5/§16.7's own required test).
-        # _ALLOWED_ACTIONS is itself projected from org_settings_scope.
-        # ACTION_SCOPES (PSC-4b) -- local mode has no admin concept to gate
+        # that then gets rejected (test_routes_settings.py tests exactly
+        # this). _ALLOWED_ACTIONS is itself projected from org_settings_scope.
+        # ACTION_SCOPES -- local mode has no admin concept to gate
         # on (that module's own docstring), so consulting the declaration
         # here is exactly this membership check, not a separate
         # is_action_permitted(..., mode=LOCAL_MODE) call.
@@ -854,7 +839,7 @@ def build_routes(
         if not allow_quit:
             return JSONResponse({"error": "quitting PrivacyFence from the web is disabled"}, status_code=403)
         if not isinstance(payload, dict) or payload.get("confirmed") is not True:
-            # §16.2.8: behind an explicit confirmation -- the page's own
+            # Behind an explicit confirmation -- the page's own
             # confirm() dialog sets this before it ever POSTs; a request
             # without it (a stray script, a replayed form) is refused
             # rather than treated as consent.
@@ -875,7 +860,7 @@ def build_routes(
         # _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check -- it's
         # the one path listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and it's
         # unconditionally sensitive whenever step-up is actually in force
-        # (F5): there's no non-sensitive shape this upload could take.
+        # -- there's no non-sensitive shape this upload could take.
         return step_up is not None and step_up.enabled and step_up.require_passkey
 
     async def org_config_upload(request: Request) -> Response:
@@ -900,7 +885,7 @@ def build_routes(
         raw = await upload.read()
         if len(raw) > MAX_ORG_CONFIG_BYTES:
             return JSONResponse({"error": "file too large"}, status_code=400)
-        # F5: pinning a signing key for the first time is a one-way trust
+        # Pinning a signing key for the first time is a one-way trust
         # decision (every future bundle is refused until an administrator
         # deletes the pinned key file by hand) -- controller.
         # install_org_config_bytes still performs it unconditionally
@@ -988,9 +973,8 @@ def build_routes(
         if route.path not in _BESPOKE_SENSITIVE_ROUTE_PATHS and route.path not in _BESPOKE_EXEMPT_ROUTE_PATHS:
             raise RuntimeError(
                 f"{route.path} is a new bespoke POST route with no _BESPOKE_SENSITIVE_ROUTE_PATHS/"
-                "_BESPOKE_EXEMPT_ROUTE_PATHS classification (3.3 of the self-approval review) -- "
-                "add it to one of the two above before it can bypass _SENSITIVE_ACTIONS-shaped gating "
-                "the way org_config_upload used to (F5)"
+                "_BESPOKE_EXEMPT_ROUTE_PATHS classification (ADR 0014) -- "
+                "add it to one of the two above so it cannot bypass _SENSITIVE_ACTIONS-shaped gating"
             )
     return routes
 
@@ -1035,25 +1019,20 @@ def build_org_routes(
     oauth_provider: OrgOAuthProvider | None = None,
     connector_registry: ConnectorRegistry | None = None,
 ) -> list[Route]:
-    """Org mode's own settings route list (#400; PSC-4b merged its dispatch
-    into this module; PSC-5 merges its *rendering* -- both ``GET /settings``
-    and ``GET /settings/privacy`` now serve the exact same settings_window_
-    html.build_html() local mode's own ``_render_settings_page`` above
-    does, capability-filtered for org mode (``mode="org"``,
-    ``is_admin=principal.is_admin`` -- see that function's own docstring),
-    with the former web/org_settings_pages.py deleted).
+    """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
+    ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
+    settings_window_html.build_html() local mode's own
+    ``_render_settings_page`` above does, capability-filtered for org mode
+    (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's
+    own docstring).
 
-    That merge folds the four bespoke, form-POSTing routes it used to
-    dispatch through (``add_rule``/``remove_rule``/``set_privacy_policy``/
-    ``set_pii_policy``, one path and payload shape each) into one generic
+    Writes go through one generic
     ``POST /api/settings/{action}`` -- the exact same path and JSON body
     shape local mode's own dispatcher already answers, restricted to
     ``_ORG_ALLOWED_ACTIONS`` (every action ``org_settings_scope.
     ACTION_SCOPES`` actually routes for ``ORG_MODE``, which is also
     everything the shared page's own JS bridge ever posts for a signed-in
-    org principal). That's what closes #579's own remaining follow-up
-    (PSC-4a/PSC-4b both flagged it, see this phase's own PR description):
-    the shared renderer's page now carries the exact same PF_WEBAUTHN_JS/
+    org principal). The shared renderer's page carries the exact same PF_WEBAUTHN_JS/
     step-up bridge shim local mode's own page does, so a 428/403 step-up
     refusal here shows the same passkey prompt local mode's does, instead
     of a raw JSON body replacing the page.
@@ -1074,8 +1053,8 @@ def build_org_routes(
     400 explaining exactly that rather than guessing at a path to
     overwrite.
 
-    ``step_up``/``step_up_origin`` (#579) close the gap local mode's own
-    dispatch has closed since #426 Phase 3: every org-routed
+    ``step_up``/``step_up_origin`` gate org mode the way local mode's own
+    dispatch is gated (ADR 0034): every org-routed
     ``_SENSITIVE_ACTIONS`` member below (``add_policy_rule``,
     ``remove_policy_rule``, and the two install-wide privacy/PII writes)
     demands the same fresh WebAuthn assertion whenever
@@ -1083,10 +1062,10 @@ def build_org_routes(
     ``routes_approvals.build_routes``'s own ``step_up``/``issuer_url`` pair
     already is: web/server.py resolves one ``StepUpConfig`` per org and
     threads it to every step-up-aware org route, this one included, rather
-    than leaving a default that would silently reopen #579 for a caller
-    that forgets to pass it.
+    than leaving a default that would silently leave org-mode settings
+    writes ungated for a caller that forgets to pass it.
 
-    ``oauth_provider`` (AGT-5, ADR 0035 decision 3) backs the admin-only
+    ``oauth_provider`` (ADR 0035 decision 3) backs the admin-only
     "AI systems" page: its DCR registrations are what an admin pins to a
     registry AI system (``pin_agent_client``/``unpin_agent_client``, both
     admin-only and step-up gated), and its ``agent_pins`` store is where the
@@ -1123,7 +1102,7 @@ def build_org_routes(
         dispatch always needed it.
 
         ``form_body`` is, despite the name, a JSON body's already-decoded
-        dict (PSC-5 -- ``settings_action`` below, this function's only
+        dict (ADR 0032 -- ``settings_action`` below, this function's only
         caller since the four bespoke form-POST routes it used to serve
         are gone) -- ``webauthn_assertion``, if present, is already a
         ``dict``, the same as local mode's own ``payload.get(
@@ -1154,17 +1133,17 @@ def build_org_routes(
         _load_principal_settings(install_wide_config=install_wide_settings)
 
     def _org_state(principal: Principal) -> dict[str, Any]:
-        """PSC-5's own org-mode counterpart of ``_snapshot(controller)``
+        """Org mode's counterpart of ``_snapshot(controller)`` (ADR 0032)
         above -- the exact same settings_window_html.build_html() shape,
         built fresh per request (org mode is stateless per request, unlike
         local mode's single long-lived ``SettingsController``) rather than
         cached anywhere. General's PII fields and Privacy Filter both read
-        the install-wide config directly (admin-only in this mode, #400's
-        own fail-closed ``"block"`` default for an unconfigured group --
+        the install-wide config directly (admin-only in this mode, with a
+        fail-closed ``"block"`` default for an unconfigured group --
         unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
         Auto-accept reads this principal's own on-disk rules; Audit Log
-        (AGT-5) this principal's own recent decisions; AI systems (AGT-5,
-        admin only) the OAuth provider's registrations and pins. Sections
+        this principal's own recent decisions; AI systems (admin only,
+        ADR 0035 decision 3) the OAuth provider's registrations and pins. Sections
         this mode never shows at all (Connectors) get an inert
         placeholder -- settings_window_html._capabilities_for is what
         actually keeps them from ever rendering, not the shape of a
@@ -1189,7 +1168,7 @@ def build_org_routes(
 
         resolver = get_resolver()
         rules = auto_accept.get_policy_v2_rules()
-        # AGT-5: the viewing principal's own recent decisions -- per-principal, exactly like
+        # The viewing principal's own recent decisions -- per-principal, exactly like
         # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
         # with the same agent column local mode's page gets.
         # A log that cannot be read costs the page its list, never the request -- the same
@@ -1221,7 +1200,7 @@ def build_org_routes(
         }
 
     def _agents_state() -> dict[str, Any]:
-        """The admin's "AI systems" page (AGT-5): every current DCR registration with its
+        """The admin's "AI systems" page: every current DCR registration with its
         claimed name and pin, every pin whose registration the TTL prune removed (stale --
         inert, shown so an admin can clear it; ADR 0035 decision 3), and the registry an admin
         can pin to. ``client_name`` is the caller's own string: sanitized here, escaped by the
@@ -1320,8 +1299,7 @@ def build_org_routes(
             mode=ORG_MODE, is_admin=principal.is_admin,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
-        # PF_WEBAUTHN_JS/_settings_bridge_shim (PSC-5, closing #579's own
-        # remaining follow-up): the exact same ceremony helpers local
+        # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
         # mode's own _render_settings_page carries -- see that function's
         # own comment. Whether it's ever exercised depends on this org's
         # StepUpConfig, not on whether the helpers exist.
@@ -1333,7 +1311,7 @@ def build_org_routes(
             # Org mode has no per-request settings push to subscribe a
             # live stream to (state_stream.py's own StateStream.push_
             # settings is wired to one local SettingsController's own
-            # on_change, module docstring) -- unchanged from before PSC-5.
+            # on_change, module docstring).
             live_updates=False, notifications_enabled=False,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
@@ -1380,8 +1358,8 @@ def build_org_routes(
         ``principal`` (already entered by the caller), returning the exact
         summary string to audit-log, or ``None`` when nothing actually
         changed -- the same "only audit a real change" behavior the former
-        per-action routes kept before PSC-5 folded them into this one
-        dispatcher. May raise ``org_install_policy.PolicyChangeRejected``/
+        per-action routes kept before they were folded into this one
+        dispatcher (ADR 0032). May raise ``org_install_policy.PolicyChangeRejected``/
         ``OSError``, left for the caller to map to a response the same way
         the former ``_apply_install_wide`` did.
         """
@@ -1409,8 +1387,7 @@ def build_org_routes(
                 return None
             return f"Unpinned OAuth client {client_id!r} from its AI system (admin={principal.id})"
         # The remaining four actions are all install-wide admin writes,
-        # applied through the same org_install_policy.apply_change #400
-        # C3e's own routes already used.
+        # applied through org_install_policy.apply_change.
         if action in ("toggle_pii_detection", "toggle_pii_category"):
             body = {**body, "enabled": not _current_pii_flag(action, body)}
         summary = org_install_policy.apply_change(
@@ -1441,8 +1418,8 @@ def build_org_routes(
         )
 
     async def settings_action(request: Request) -> Response:
-        """The generic ``POST /api/settings/{action}`` dispatcher PSC-5
-        gives org mode -- the same path and JSON body shape local mode's
+        """The generic ``POST /api/settings/{action}`` dispatcher org
+        mode shares (ADR 0032) -- the same path and JSON body shape local mode's
         own ``settings_action`` above answers (this SPA's shared bridge,
         settings_window_html.py's own ``pfSettingsPost``, posts the same
         way regardless of mode), restricted to ``_ORG_ALLOWED_ACTIONS``.

@@ -26,7 +26,7 @@ esac
 # decision 5 that is unconditional: this package's `configure` step ends with the daemon already
 # running under privacyfence-daemon.service, or it ends by failing.
 
-# ADR 0003 decisions 1, 3 and 5 (#428 D1, 4.1, is where this hook came from): separate this
+# ADR 0003 decisions 1, 3 and 5: separate this
 # install here, as part of configuring the package, on every install and upgrade (dpkg calls this
 # same `configure` case for both -- $2 is the old version on an upgrade, empty on a fresh install,
 # and neither changes what to do). postinst already runs as root, which is exactly what `enable`

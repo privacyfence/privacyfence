@@ -3,25 +3,12 @@
 # privacyfence` (see CLAUDE.md's "Publishing to PyPI" section for how the
 # package gets onto PyPI in the first place).
 #
-# ================================================================
-# The specific blocker this comment used to describe -- `daemon_main.
-# run_app()` unconditionally ending with `from .menu_bar import
-# run_menu_bar; run_menu_bar(...)`, and `menu_bar.py` doing a bare `import
-# rumps` (macOS AppKit) at module scope with no platform guard -- is fixed
-# as of P10, decision D6: menu_bar.py and the rest of the native AppKit UI
-# layer are deleted outright, not merely guarded, and run_app() now ends
-# by blocking on a plain threading.Event (see that module's own
-# `_wait_for_shutdown`).
-# `rumps`/`pyobjc-framework-*` are optional extras now (pyproject.toml's
-# `macos-native` group) that this install path never pulls in.
-#
-# Verified on a real Linux install: this systemd unit, a real `pipx install
-# privacyfence`, and a live connector's OAuth flow (`webbrowser.open()`-based)
-# have all been exercised end to end. Nothing in src/privacyfence/ imports a
-# platform-specific module (grep for `sys.platform`/`darwin` turns up nothing
-# outside this comment and its own history), and the daemon also starts and
-# runs headlessly in this repo's own Linux CI leg (`.github/workflows/tests.yml`).
-# ================================================================
+# The daemon has no native UI layer to import: `daemon_main.run_app()` ends
+# by blocking on a plain threading.Event (`_wait_for_shutdown`), not by
+# entering a macOS menu-bar run loop, so it runs the same on Linux. `rumps`
+# and `pyobjc-framework-*` are not declared as dependencies of any kind
+# (ADR 0001), and the daemon starts and runs headlessly in this repo's Linux
+# CI legs (`.github/workflows/tests.yml`).
 #
 # Install:
 #   mkdir -p ~/.config/systemd/user
@@ -41,7 +28,7 @@
 # or a dedicated venv).
 #
 # This unit runs the daemon as you, which is also who the AI client it
-# governs runs as -- issue #428's whole subject.
+# governs runs as -- the weakness privilege separation exists to close.
 # `sudo scripts/linux_privilege_separation.sh enable` runs it as a *system*
 # unit instead (installer/linux/privacyfence-daemon.service.tmpl,
 # /etc/systemd/system/privacyfence-daemon.service) under a dedicated

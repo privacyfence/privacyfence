@@ -11,6 +11,7 @@ import pytest
 
 from privacyfence.approvals import (
     ALL_APPROVAL_KINDS,
+    IdenticalWriteAwaitingApprovalError,
     LedgerHit,
     PendingApprovalRegistry,
     TooManyPendingApprovalsError,
@@ -257,6 +258,129 @@ class TestLedgerSingleUse:
         )
         assert registry.consume_ledger("k1") is None
 
+    def test_mark_collected_consumes_a_popup_entry(self):
+        # A write decided within the hold window reaches its caller directly;
+        # that delivery consumes it exactly as a ledger hit would, so an
+        # identical write afterwards cannot replay it (ADR 0073).
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1", waiting=True,
+        )
+        registry.finalize(approval.id, "accept")
+        registry.mark_collected(approval)
+        registry.release_waiter(approval)
+        assert approval.ledger_collected and approval.ledger_consumed
+        assert registry.consume_ledger("k1") is None
+        assert registry.get(approval.id) is None
+        fresh, created = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r2",
+        )
+        assert created is True
+        assert fresh is not approval
+
+    def test_mark_collected_leaves_a_review_entry_replayable(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1", waiting=True,
+        )
+        registry.finalize(approval.id, "accept")
+        registry.mark_collected(approval)
+        registry.release_waiter(approval)
+        assert approval.ledger_collected and not approval.ledger_consumed
+        hit = registry.consume_ledger("k1")
+        assert hit is not None and hit.decision == "accept"
+
+    def test_mark_collected_before_finalize_changes_nothing(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1",
+        )
+        registry.mark_collected(approval)
+        assert not approval.ledger_collected and not approval.ledger_consumed
+        assert registry.get(approval.id) is approval
+
+    def test_a_popup_entry_with_a_waiter_is_not_handed_out_by_the_ledger(self):
+        # Between finalize() and the waiting call's own mark_collected(), a
+        # re-issued identical write must not take the same decision.
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1", waiting=True,
+        )
+        registry.finalize(approval.id, "accept")
+        assert registry.consume_ledger("k1") is None
+        registry.release_waiter(approval)
+        # Nobody collected it after all (the waiter timed out just before
+        # the decision): a re-issued call takes it once, as usual.
+        assert registry.consume_ledger("k1") is not None
+        assert registry.consume_ledger("k1") is None
+
+
+class TestWriteCoalescingWithWaiters:
+    """Identical writes share one approval only while nobody is waiting on
+    it; reads coalesce however many calls wait (ADR 0073)."""
+
+    def test_an_identical_write_is_refused_while_another_call_waits(self):
+        registry = make_registry()
+        first, created = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1", waiting=True,
+        )
+        assert created is True and first.waiters == 1
+        with pytest.raises(IdenticalWriteAwaitingApprovalError, match="already awaiting approval"):
+            registry.register_or_coalesce(
+                dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r2", waiting=True,
+            )
+        # Refused without side effects: still one approval, still one waiter.
+        assert first.waiters == 1
+        assert len(registry.list_pending()) == 1
+
+    def test_an_identical_write_is_refused_between_decision_and_collection(self):
+        registry = make_registry()
+        first, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1", waiting=True,
+        )
+        registry.finalize(first.id, "accept")
+        with pytest.raises(IdenticalWriteAwaitingApprovalError):
+            registry.register_or_coalesce(
+                dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r2", waiting=True,
+            )
+
+    def test_a_reissued_write_coalesces_once_nobody_is_waiting(self):
+        # The deferred-write path: the first call timed out into
+        # approval_pending and stopped waiting; the re-issue must find the
+        # same approval to collect its decision.
+        registry = make_registry()
+        first, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1", waiting=True,
+        )
+        registry.release_waiter(first)
+        second, created = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r2", waiting=True,
+        )
+        assert created is False
+        assert second is first
+        assert first.waiters == 1
+
+    def test_identical_reads_coalesce_whatever_the_waiter_count(self):
+        registry = make_registry()
+        first, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1", waiting=True,
+        )
+        for i in range(3):
+            again, created = registry.register_or_coalesce(
+                dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id=f"r{i + 2}",
+                waiting=True,
+            )
+            assert created is False and again is first
+        assert first.waiters == 4
+
+    def test_release_waiter_never_goes_below_zero(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1",
+        )
+        registry.release_waiter(approval)
+        assert approval.waiters == 0
+
 
 class TestHoldWindow:
     async def test_wait_async_returns_true_once_finalized_within_the_window(self):
@@ -330,6 +454,56 @@ class TestLedgerTTLExpiry:
         # Not consumable anymore -- either via the ledger (it just expired)
         # or by finding it in the registry at all (swept on report).
         assert registry.consume_ledger("k1") is None
+        assert registry.get(approval.id) is None
+
+    def test_a_replayed_review_entry_is_not_reported_once_the_ledger_ttl_lapses(self):
+        # The read's data was released through the ledger, so its lapse is
+        # not "expired" (ADR 0073) -- but the entry is still cleaned up.
+        registry = make_registry(ledger_ttl=0.01)
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        registry.finalize(approval.id, "accept")
+        assert registry.consume_ledger("k1") is not None
+        assert approval.ledger_collected
+        time.sleep(0.02)
+        assert registry.pop_expired_ledger_events() == []
+        assert registry.get(approval.id) is None
+        assert registry.consume_ledger("k1") is None
+
+    def test_an_entry_collected_within_the_hold_window_is_not_reported(self):
+        registry = make_registry(ledger_ttl=0.01)
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1", waiting=True,
+        )
+        registry.finalize(approval.id, "accept")
+        registry.mark_collected(approval)
+        registry.release_waiter(approval)
+        time.sleep(0.02)
+        assert registry.pop_expired_ledger_events() == []
+        assert registry.get(approval.id) is None
+
+    def test_an_uncollected_popup_entry_is_still_reported(self):
+        registry = make_registry(ledger_ttl=0.01)
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="popup", request_id="r1", waiting=True,
+        )
+        registry.release_waiter(approval)  # timed out into approval_pending
+        registry.finalize(approval.id, "accept")
+        time.sleep(0.02)
+        assert [a.id for a in registry.pop_expired_ledger_events()] == [approval.id]
+
+    def test_an_entry_with_a_waiter_is_not_reported_until_the_waiter_is_done(self):
+        registry = make_registry(ledger_ttl=0.01)
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1", waiting=True,
+        )
+        registry.finalize(approval.id, "accept")
+        time.sleep(0.02)
+        assert registry.pop_expired_ledger_events() == []
+        registry.mark_collected(approval)
+        registry.release_waiter(approval)
+        assert registry.pop_expired_ledger_events() == []
         assert registry.get(approval.id) is None
 
     def test_a_reclaimed_entry_is_never_reported_as_a_ledger_expiry(self):
@@ -416,7 +590,7 @@ class TestApprovalUrl:
 
 
 class TestBinderUrl:
-    """Approval binder, Phase 4: the list page itself, distinct from any one
+    """Approval binder: the list page itself, distinct from any one
     approval's own approval_url()."""
 
     def test_no_base_url_configured_returns_none(self):
@@ -430,7 +604,7 @@ class TestBinderUrl:
 
 
 class TestHasOtherLive:
-    """Approval binder, Phase 4: gate.py's adaptive hold window collapses to
+    """Approval binder: gate.py's adaptive hold window collapses to
     zero exactly when this returns True for a call that just registered."""
 
     def test_false_when_nothing_else_is_pending(self):
@@ -585,8 +759,7 @@ class TestListPendingAndGet:
 
 
 class TestPrincipalDimension:
-    """P9: approvals.py finally gains the principal dimension approval_ui.py's
-    own module docstring already promised (see approvals.py's own module
+    """approvals.py's principal dimension (see approvals.py's own module
     docstring). Every approval defaults to LOCAL_PRINCIPAL_ID when nothing
     entered principal_scope() -- so every test above this class, none of
     which passes a principal_id anywhere, stays correct unchanged."""
@@ -607,7 +780,7 @@ class TestPrincipalDimension:
         assert approval.principal_id == "alice"
 
     def test_two_principals_with_the_identical_dedupe_key_get_two_approvals(self):
-        # The P7-precedented cross-principal dedupe-key collision (see
+        # The cross-principal dedupe-key collision (see
         # approvals.py's own module docstring) -- without the principal
         # dimension in _by_key, the second registration below would
         # coalesce onto the first instead of creating its own.
@@ -647,7 +820,7 @@ class TestPrincipalDimension:
             )
         assert len(registry.list_pending("alice")) == 1
         assert len(registry.list_pending("bob")) == 1
-        assert len(registry.list_pending()) == 2  # no filter -- every pre-P9 caller
+        assert len(registry.list_pending()) == 2  # no filter -- every principal's approvals
 
     def test_get_with_principal_id_rejects_a_foreign_approval(self):
         registry = make_registry()

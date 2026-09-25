@@ -1,15 +1,12 @@
 """Applying an install-wide privacy/PII policy change from org mode's admin
-settings surface (#400 C3e).
+settings surface.
 
-``web/org_settings_pages.py``'s first cut (#400 C3d) rendered this policy
-read-only and said so on the page, because the issue left one thing
-undecided: "Install-wide writes need a restart story. ``init_privacy_filter``
-runs once at startup. Either the UI writes settings.yaml and says a restart is
-required, or the privacy filter learns to reload." **This module is the
-second answer.** A restart-required banner would have been smaller, but it
-also would have shipped an editor whose edits do nothing until somebody with
-shell access on the server restarts the daemon -- which is most of the
-friction #400 exists to remove, kept and given a button.
+``init_privacy_filter`` runs once at startup, so an install-wide write needs
+either a restart or a reload. **This module reloads.** A restart-required
+banner would have been smaller, but it would ship an editor whose edits do
+nothing until somebody with shell access on the server restarts the daemon
+-- the friction an admin settings page exists to remove, kept and given a
+button.
 
 Reloading turned out to be the smaller change anyway, because most of it
 already existed and was simply never reachable from org mode:
@@ -83,7 +80,7 @@ logger = logging.getLogger(__name__)
 _write_lock = threading.Lock()
 
 # The action names this module can apply, deliberately the same strings
-# `org_settings_scope.ACTION_SCOPES` marks `admin_only` (#400 C3b/C3c) and
+# `org_settings_scope.ACTION_SCOPES` marks `admin_only` and
 # `routes_settings._ALLOWED_ACTIONS` dispatches in local mode -- one name per
 # concept across all three, so a route authorizes and applies the same
 # string rather than translating between two vocabularies.
@@ -132,7 +129,7 @@ def _group_section(settings: dict[str, Any], group: str) -> dict[str, Any]:
     """The group's own mapping in ``settings``, created empty if absent.
 
     The ``isinstance`` check is for a settings.yaml hand-edited *after* the
-    daemon started: ``init_privacy_filter`` (SEC-07) refuses to start on a
+    daemon started: ``init_privacy_filter`` refuses to start on a
     group that isn't a mapping, so it can't be there at boot, but this dict
     outlives boot. Without the check, ``settings.setdefault(group, {})[...]``
     on a string group raises ``TypeError`` and the route 500s.
@@ -257,7 +254,7 @@ def apply_change(
 def _reload_everywhere(settings: dict[str, Any]) -> None:
     privacy_filter.reload_for_all_principals(settings, org_managed=True)
     pii_detector.reload_for_all_principals(settings.get("pii_detection", {}) or {})
-    # SEC-23: the same thing settings_controller._save_config does after a
+    # The same thing settings_controller._save_config does after a
     # local-mode write, fanned out -- every entry recorded from here on
     # fingerprints the policy that actually governed it.
     set_security_config_hash_for_all_principals(compute_security_config_hash(settings))

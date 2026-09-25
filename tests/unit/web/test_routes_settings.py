@@ -1,16 +1,14 @@
-"""Tests for web/routes_settings.py -- settings on the web (W3/W4): the
+"""Tests for web/routes_settings.py -- settings on the web: the
 allowlisted action dispatcher, CSRF/Origin checks, per-action argument
 validation, the org config upload, the audit log download, and quit_app's
 confirmation gate.
 
-SEC-06: this module's own create_app() no longer takes a shared ``token``
--- it authenticates
-against a web/session_auth.py ``LocalSessionStore`` instead, the same store
+This module's own create_app() authenticates against a
+web/session_auth.py ``LocalSessionStore``, the same store
 test_routes_approvals.py's own tests use (this surface shares the approval
 surface's one session by design, see build_routes()'s own docstring).
 ``_authed()`` below signs a session in and returns its id, which now
-doubles as the CSRF value every mutating request below sends -- the direct
-replacement for the old shared ``TOKEN`` constant.
+doubles as the CSRF value every mutating request below sends.
 """
 from __future__ import annotations
 
@@ -171,8 +169,7 @@ class TestSettingsPage:
 
 
 class TestConnectorsPage:
-    """GET /settings/connectors -- issue #396 Part C's first-run
-    destination: the same document as GET /settings, but with the
+    """GET /settings/connectors -- the first-run destination: the same document as GET /settings, but with the
     Connectors section pre-selected server-side rather than defaulting to
     General, and no query string to lose across _BootstrapMiddleware's
     redirect (see that class's own docstring in web/server.py)."""
@@ -342,7 +339,7 @@ class TestActionDispatch:
 
 
 class TestSensitiveActionsCoverAllAllowedActions:
-    """#426 Phase 3's own allowlist-within-the-allowlist -- see module
+    """The allowlist-within-the-allowlist (ADR 0034) -- see module
     docstring on why _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS are both
     explicit rather than one being derived as the other's complement: a
     future action landing in _ALLOWED_ACTIONS with no matching entry in
@@ -361,7 +358,7 @@ def _step_up_client(controller, sessions, *, step_up: StepUpConfig) -> TestClien
 
 
 class TestSensitiveActionStepUp:
-    """#426 Phase 3: with ``step_up.require_passkey`` on, a sensitive action
+    """With ``step_up.require_passkey`` on, a sensitive action
     (module docstring's ``_SENSITIVE_ACTIONS``) needs a fresh WebAuthn
     assertion the same two-round-trip way web/routes_approvals.py's decide()
     does; a non-sensitive one is untouched. Mirrors test_routes_approvals.py's
@@ -512,7 +509,7 @@ class TestSensitiveActionStepUp:
 
 
 class TestEnableStepUpAction:
-    """B9: the dispatcher-level half of SettingsController.enable_step_up --
+    """The dispatcher-level half of SettingsController.enable_step_up --
     ``create_app``'s own ``step_up`` and ``controller._step_up`` (wired via
     ``wire_step_up``) are two independently-passed things; daemon_main.py's
     real boot path always hands the *same* LiveStepUpConfig to both (see
@@ -562,7 +559,7 @@ class TestEnableStepUpAction:
     def test_the_first_enable_is_never_step_up_gated(self, controller, sessions):
         # _needs_step_up only fires once step_up.enabled/require_passkey are
         # *already* both true -- the very first call can't be gated on a
-        # ceremony that isn't active yet (module docstring's own B9 note).
+        # ceremony that isn't active yet (module docstring's "Turning step-up on").
         self._enroll()
         client, live = self._live_client(controller, sessions)
         csrf = _authed(client, sessions)
@@ -647,7 +644,7 @@ class TestEnableStepUpRefusesOnAnUnseparatedInstall:
 
 
 class TestRequirePasskeyBanner:
-    """#426 Phase 3: the settings page carries the same banner the
+    """The settings page carries the same banner the
     approvals list does -- see test_routes_approvals.py's own
     TestRequirePasskeyBanner and step_up_config.py's
     local_enrollment_banner()."""
@@ -678,9 +675,9 @@ class TestRequirePasskeyBanner:
         assert '<div class="pf-shell-banner"' not in r.text
 
     def test_disabled_requirement_notice_is_shown(self, controller, sessions):
-        """#426 Phase 4: webauthn_stepup.observe_step_up_requirement's own
-        persistent notice, surfaced through this page's banner the same
-        way the Phase 3 enrollment one is."""
+        """webauthn_stepup.observe_step_up_requirement's own persistent
+        notice, surfaced through this page's banner the same way the
+        enrollment one is."""
         wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True)
         wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=False)
         client = _step_up_client(
@@ -701,7 +698,7 @@ class TestRequirePasskeyBanner:
 
 
 class TestConnectorAuthenticationEndToEnd:
-    """§16.5's W6 "Done when": a connector can be authenticated from a
+    """A connector can be authenticated from a
     browser, start to finish, with the page reflecting each step -- proven
     here for Slack (representative of the single-click OAuth connectors;
     Atlassian's own picker flow is covered end-to-end in
@@ -748,10 +745,9 @@ class TestConnectorAuthenticationEndToEnd:
 
 
 class TestConnectorToggleDirectional:
-    """F6 of the self-approval review: toggle_connector split into
-    enable_connector (sensitive) and disable_connector (not) -- see
-    SettingsController.enable_connector's own docstring for why the two
-    directions aren't symmetric."""
+    """Connector toggling is two actions, enable_connector (sensitive)
+    and disable_connector (not) -- see
+    ADR 0070 for why the two directions aren't symmetric."""
 
     def test_toggle_connector_no_longer_exists_as_a_dispatchable_action(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -865,7 +861,7 @@ def _signed_org_bundle():
 
 
 class TestOrgConfigUploadPinConfirmation:
-    """F5 of the self-approval review: install_org_config_bytes still
+    """install_org_config_bytes
     pins a first signed bundle's key unconditionally -- daemon_main.
     load_org_config's own hand-edited-file path needs that -- but this
     route, the only one reachable by an unsupervised local process, asks
@@ -950,7 +946,7 @@ def _org_config_step_up_client(controller, sessions, *, step_up: StepUpConfig) -
 
 
 class TestOrgConfigUploadStepUp:
-    """F5/3.1 of the self-approval review: org_config_upload is the one
+    """org_config_upload is the one
     path in _BESPOKE_SENSITIVE_ROUTE_PATHS -- with step_up.require_passkey
     on, it needs a fresh WebAuthn assertion the same two-round-trip way a
     _SENSITIVE_ACTIONS action does (mirrors TestSensitiveActionStepUp
@@ -1057,7 +1053,7 @@ class TestOrgConfigUploadStepUp:
 
 
 class TestOrgConfigUploadHumanSession:
-    """The self-approval plan's Phase 2, on the bespoke-route half: an
+    """require_human_session on the bespoke-route half: an
     organization config bundle changes *what gets gated* at least as much
     as any _SENSITIVE_ACTIONS entry, so it needs a session PrivacyFence
     can attribute to a person too. Mirrors
@@ -1205,7 +1201,7 @@ class TestQuitApp:
 
 
 class TestNoSubprocessFromHttp:
-    """§16.2.4's standing rule: no route in this module ever shells out.
+    """The module's standing rule: no route in this module ever shells out.
     Patches subprocess.run to explode, then exercises every route that used
     to (or plausibly could) reach one."""
 
@@ -1226,7 +1222,7 @@ class TestNoSubprocessFromHttp:
 
 
 class TestHumanSessionRequiredForSensitiveActions:
-    """The self-approval plan's Phase 2, on the settings half: an action that
+    """require_human_session on the settings half: an action that
     changes *what gets gated* needs a session PrivacyFence can attribute to a
     person, not merely a valid one. Deliberately independent of
     ``step_up.require_passkey`` -- an install with no passkey requirement
@@ -1287,12 +1283,12 @@ class TestHumanSessionRequiredForSensitiveActions:
 
 
 class TestBespokeRoutesAreClassified:
-    """3.3 of the self-approval review: widens the ratchet from action
+    """Widens the ratchet from action
     names (TestSensitiveActionsCoverAllAllowedActions above) to actual
     Route objects, so a new bespoke POST route added to build_routes()
     below fails this test instead of silently bypassing both
-    _needs_step_up and require_human_session the way org_config_upload
-    used to (F5) -- by existing, with no matching entry in either set."""
+    _needs_step_up and require_human_session just by existing, with no
+    matching entry in either set (ADR 0014)."""
 
     def test_every_post_route_is_the_generic_dispatcher_sensitive_or_explicitly_exempt(self, controller, sessions):
         routes = build_routes(controller, sessions=sessions)
@@ -1312,7 +1308,7 @@ class TestBespokeRoutesAreClassified:
         assert not (_BESPOKE_SENSITIVE_ROUTE_PATHS & set(_BESPOKE_EXEMPT_ROUTE_PATHS))
 
     def test_build_routes_raises_on_an_unclassified_bespoke_route(self, controller, sessions, monkeypatch):
-        """#614: the classification guard is an explicit `if ...: raise
+        """The classification guard is an explicit `if ...: raise
         RuntimeError(...)`, not `assert`, precisely so it still fires under
         `python -O`/PYTHONOPTIMIZE (which strips assert statements). Drop
         org_config_upload's own entry out of both sets so build_routes()
@@ -1324,7 +1320,7 @@ class TestBespokeRoutesAreClassified:
             build_routes(controller, sessions=sessions)
 
     def test_classification_guard_fires_under_python_dash_o(self, tmp_path):
-        """The regression #614 actually describes: with `assert`, this same
+        """The regression this guards against: with `assert`, this same
         scenario would silently mount the unclassified route under
         `python -O` instead of raising. Runs the guard in a real `-O`
         subprocess against a stripped-down copy of the two classification

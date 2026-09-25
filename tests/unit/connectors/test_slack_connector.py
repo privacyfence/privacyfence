@@ -261,7 +261,7 @@ class TestGetChannelHistory:
         # make_message() default), not the raw channel id -- no extra lookup.
         assert kwargs["preview"]["Channel"] == "#general"
         assert kwargs["new_info"]["Messages"] == "1"
-        # No literal excerpt in §3 -- the visibility row already discloses
+        # No literal excerpt in new_info -- the visibility row already discloses
         # "Message text: Full message text", and the actual text is in the
         # right-pane table.
         assert "First message" not in kwargs["new_info"]

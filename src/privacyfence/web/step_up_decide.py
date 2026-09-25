@@ -1,12 +1,8 @@
-"""Shared decide-time WebAuthn step-up sequence (#426 Phase 2's own
-ceremony, factored out here by the approval binder plan's Phase 2 --
-"Consolidate first"): web/routes_approvals.py's local-mode routes, its
-org-mode routes, and web/routes_settings.py each grew their own copy of
-"begin a challenge, store it, verify a resubmitted assertion against it" --
-the batch decide
-endpoint (approvals.PendingApprovalRegistry.answer_batch, wired up in this
-same phase) would have been a fourth copy had this module not existed
-first.
+"""Shared decide-time WebAuthn step-up sequence: web/routes_approvals.py's
+local-mode routes, its org-mode routes, web/routes_settings.py and the batch
+decide endpoint (approvals.PendingApprovalRegistry.answer_batch) all need
+"begin a challenge, store it, verify a resubmitted assertion against it",
+and this module is the one copy of it.
 
 Each caller keeps its own response shaping -- a plain 428, a 428 with an
 IdP-reauth fallback (org mode), or an unconditional 403 fail-closed
@@ -14,10 +10,9 @@ IdP-reauth fallback (org mode), or an unconditional 403 fail-closed
 already known to be on) -- only the two ceremony primitives are shared:
 ``begin_step_up`` (mint a challenge, bound to a caller-chosen
 ``subject_key``/``fingerprint`` pair) and ``verify_step_up`` (consume that
-challenge against a resubmitted assertion). Behavior-preserving by
-construction: every caller's own webauthn_stepup.py calls
-(``begin_assertion``/``verify_assertion``) and its own
-``StepUpChallengeStore`` instance are unchanged, only relocated.
+challenge against a resubmitted assertion), which wrap webauthn_stepup.py's
+``begin_assertion``/``verify_assertion``. Every caller keeps its own
+``StepUpChallengeStore`` instance.
 """
 from __future__ import annotations
 

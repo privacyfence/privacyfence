@@ -16,13 +16,16 @@ The WorkingDirectory should point to your privacyfence project root so that
 config/settings.yaml is resolved correctly. Adjust ProgramArguments to the
 absolute path of your privacyfence-app script (inside the project venv).
 
-Note that this is a LaunchAgent: it runs the daemon as whoever is logged in,
-which is also the account the AI client PrivacyFence governs runs as. #428
-Phase 4 offers the alternative -- scripts/macos_privilege_separation.sh
-installs a LaunchDaemon under a dedicated account instead
-(installer/macos/com.privacyfence.daemon.plist.tmpl), plus a LaunchAgent for
-the companion app, and disables this file if it finds it installed. See
-docs/security-and-compliance.md's "Privilege separation (macOS, opt-in)".
+This LaunchAgent is for a source/dev checkout only. It runs the daemon as
+whoever is logged in, which is also the account the AI client PrivacyFence
+governs runs as. A packaged install never uses it: every packaged install is
+privilege-separated (ADR 0003) and runs the daemon as a LaunchDaemon under a
+dedicated account (installer/macos/com.privacyfence.daemon.plist.tmpl), set up
+by scripts/macos_privilege_separation.sh, with the companion app as a
+separate LaunchAgent. That script does not touch this file: unload and remove
+it first (see Uninstall above), or it starts a second daemon in your session,
+which refuses to run on a separated install. See
+docs/security-and-compliance.md's "Privilege separation".
 -->
 <plist version="1.0">
 <dict>

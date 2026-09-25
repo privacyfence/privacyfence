@@ -11,9 +11,9 @@ independently-updating event types --
   keep -- see settings_controller.py's own docstring on ``on_change``.
 - ``event: approvals`` -- ``approvals.PendingApprovalRegistry.list_pending()``
   summaries, polled the same way ``web/routes_approvals.py``'s own
-  ``/api/approvals/stream`` already does. P3 already built the registry
-  that can hold several of these at once; this is the one new event this
-  phase adds to the shared channel, so the approvals page's own SSE
+  ``/api/approvals/stream`` already does. The registry can hold several
+  of these at once; carrying them on this shared channel too means the
+  approvals page's own SSE
   subscription (routes_approvals.py, unchanged) and this settings-shaped
   one agree on the same underlying data without either needing to know
   about the other.
@@ -23,11 +23,11 @@ Every open page re-renders from a *full* state dict, never a patch --
 idempotent full re-renders (settings_window_html.py's/the approval list's
 own convention) -- so there is no ordering or patch-application problem to
 solve here, only "deliver the latest snapshot, promptly, to every open
-connection", including on first connect/reconnect (§16.7: "a reconnect
-delivers full state rather than a patch").
+connection", including on first connect/reconnect (a reconnect delivers
+full state rather than a patch).
 
 This module also owns the one piece of plumbing settings_controller.py's
-``call_on_main`` dispatcher seam (§16.2.1) needs once a web server is
+``call_on_main`` dispatcher seam needs once a web server is
 actually running: ``set_loop``/``call_soon_threadsafe`` marshal a
 background-thread callback (an OAuth flow finishing, a rules-changed
 broadcast) onto this stream's own asyncio event loop, the same "some run
@@ -54,7 +54,7 @@ _APPROVALS_POLL_SECONDS = 1.0
 # The web server's own asyncio event loop, captured once at startup (see
 # server.py's lifespan wiring) -- settings_controller.call_on_main's
 # fallback dispatcher for a process with no AppKit run loop hosting
-# (§16.2.1) marshals onto this loop rather than running inline, once one is
+# marshals onto this loop rather than running inline, once one is
 # known. Module-level, not stashed on StateStream, because
 # set_main_dispatcher() needs a plain function reference it can register
 # once and never touch again -- see call_soon_threadsafe below.
@@ -129,7 +129,7 @@ class StateStream:
         for queue in list(self._subscribers):
             # maxsize=1, replace-not-append: each subscriber only ever
             # holds the *latest* pending message per stream, which is what
-            # "pushes are debounced" (§16.7) means here -- a burst of rapid
+            # "pushes are debounced" means here -- a burst of rapid
             # changes (several grant names resolving back to back) collapses
             # to one flush of the newest snapshot instead of a growing
             # backlog the reader falls behind on.
@@ -150,7 +150,7 @@ class StateStream:
     ):
         """Async generator of SSE-formatted strings for one connection.
 
-        ``touch``, when given, is called once per poll tick (issue #423): a
+        ``touch``, when given, is called once per poll tick: a
         long-lived connection is itself proof the tab is open, so the
         session backing it is refreshed on the same cadence this loop
         already wakes at, instead of only once when the connection was

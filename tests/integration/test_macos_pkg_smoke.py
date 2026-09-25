@@ -6,7 +6,7 @@ Deliberately the *lightweight* half of this artifact's coverage: it never
 installs anything and needs no root, so it runs inline in ``build.yml``'s
 release-critical ``build`` job, right after ``scripts/build_dmg.sh`` (which
 builds the ``.pkg`` itself, via ``scripts/build_pkg.sh``) --
-mirroring how ``test_macos_packaged_smoke.py`` (TST-15) stays a fast, no-
+mirroring how ``test_macos_packaged_smoke.py`` stays a fast, no-
 ``launchctl`` check in that same job while the real install-and-launchd
 verification (this artifact's own analogue is
 ``test_macos_pkg_install.py``) lives in the separate, weekly-scheduled
@@ -112,7 +112,7 @@ def test_pkg_distribution_and_version(expanded_pkg):
         f"Distribution's pkg-ref version doesn't match the artifact's own filename "
         f"({expected_version}):\n{xml}"
     )
-    # #428 D2: a per-user "just for me" install could never provision a
+    # A per-user "just for me" install could never provision a
     # system account -- scripts/build_pkg.sh's own distribution.xml forces
     # the system domain instead of merely defaulting to it.
     assert 'enable_localSystem="true"' in xml
@@ -210,8 +210,8 @@ def test_pkg_payload_is_not_relocatable(expanded_pkg):
     literal ``/Applications/PrivacyFenceApp.app`` path, so a relocated install
     also skips provisioning privilege separation entirely ("leaving privilege
     separation opt-in") -- and ADR 0003 decision 6 refuses to serve the
-    unseparated install that leaves behind. Both halves shipped, and were
-    mistaken for a flaky test for weeks (#562), because the symptom depends on
+    unseparated install that leaves behind. Both halves look like a flaky
+    test rather than a packaging defect, because the symptom depends on
     whether Launch Services happens to know about another copy yet.
 
     ``scripts/build_pkg.sh`` turns this off via ``--component-plist`` with
@@ -244,7 +244,7 @@ def test_pkg_payload_is_not_relocatable(expanded_pkg):
 def test_pkg_signature(expanded_pkg):
     """Same optional-and-skip posture as ``test_macos_packaged_smoke.py``'s
     own ``test_packaged_app_signature_and_notarization`` -- see this
-    module's own docstring §5."""
+    module's own docstring, point 6."""
     pkg_path = _built_pkgs()[-1]
     check = subprocess.run(
         ["pkgutil", "--check-signature", str(pkg_path)],

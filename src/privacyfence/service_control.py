@@ -1,6 +1,5 @@
-"""The local-mode-fixes plan's Phase 2 (companion-as-daemon-manager):
-start/stop/restart the separated daemon's system service, with a real
-elevation prompt.
+"""The companion as daemon manager (ADR 0026): start/stop/restart the
+separated daemon's system service, with a real elevation prompt.
 
 The counterpart to ``daemon_status.py`` -- see that module's own docstring
 for why the two are split: status needs no privileges, and everything in
@@ -34,7 +33,7 @@ anything but SYSTEM/Administrators) -- the identical check ``complete_
 per_user_separation()`` already applies before *its* elevation. Skipping
 that check here would make this module a one-shot local privilege
 escalation: an admin-password prompt that a compromised agent could aim at
-a file it can still rewrite.
+a file it can still rewrite (ADR 0058).
 """
 from __future__ import annotations
 
@@ -58,7 +57,7 @@ _ACTION_PAST_TENSE: dict[DaemonAction, str] = {
 #: end to end, prompt included -- longer than an ordinary command timeout on
 #: purpose, since the clock does not start until a human has answered the
 #: password dialog, and ``ensure-running``'s own retry loop (macOS's
-#: bootstrap/bootout race, #428 D1) can itself take up to half a minute.
+#: bootstrap/bootout race) can itself take up to half a minute.
 _ELEVATION_TIMEOUT_SECONDS = 120
 
 

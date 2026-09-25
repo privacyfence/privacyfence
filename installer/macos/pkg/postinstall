@@ -1,6 +1,6 @@
 #!/bin/bash
-# PrivacyFence.pkg postinstall — provisions privilege separation (#428 D2,
-# Phase 4) at install time. The .pkg is the only way PrivacyFence is installed
+# PrivacyFence.pkg postinstall — provisions privilege separation (ADR 0003)
+# at install time. The .pkg is the only way PrivacyFence is installed
 # on macOS (scripts/build_dmg.sh ships it, and nothing else that installs,
 # inside the DMG), so this is where every install becomes separated: Apple's
 # installer already verified this package's signature before running it and
@@ -36,9 +36,9 @@ CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
 if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ]; then
   # Nobody is actually logged in at install time (a remote/unattended install,
   # or a package run at the login window) -- there is no human account yet to
-  # add to the service group. That used to end this script, leaving the whole
-  # install unseparated; ADR 0003 decision 3 splits `enable` so it no longer
-  # has to. The machine half below runs regardless and fully separates the
+  # add to the service group. That must not leave the whole install
+  # unseparated, so ADR 0003 decision 3 splits `enable`: the machine half
+  # below runs regardless and fully separates the
   # install, and the one step that genuinely needs a human -- the group
   # membership -- is recorded as pending, which the companion app closes by
   # itself at the first real login session.
@@ -53,7 +53,7 @@ if [ ! -x "$SEPARATION_SCRIPT" ]; then
   exit 0
 fi
 
-log "provisioning privilege separation for ${CONSOLE_USER:-this machine} (#428 D2, ADR 0003 decision 3)…"
+log "provisioning privilege separation for ${CONSOLE_USER:-this machine} (ADR 0003 decision 3)…"
 ENABLE_STATUS=0
 if [ -n "$CONSOLE_USER" ]; then
   "$SEPARATION_SCRIPT" enable --auto --user "$CONSOLE_USER" --app "$APP_PATH" || ENABLE_STATUS=$?
@@ -74,10 +74,9 @@ else
   log "automatic privilege-separation enable did not complete -- install continues; run 'sudo ${SEPARATION_SCRIPT} enable' by hand later, or check Console.app / /var/log/install.log for details."
 fi
 
-# #428 Phase 2: `enable`'s own internal call to `daemon ensure-running`
+# `enable`'s own internal call to `daemon ensure-running`
 # (scripts/macos_privilege_separation.sh's cmd_enable) is what is *supposed*
-# to catch a daemon that came up stopped -- the privacyfence/privacyfence#598
-# upgrade gap this phase exists to close -- but that call is itself wrapped
+# to catch a daemon that came up stopped -- but that call is itself wrapped
 # in a subshell precisely so a hiccup in it cannot take the rest of `enable`
 # down, which also means its own failure is easy to miss in a log this long.
 # Running `daemon ensure-running` a second time here, directly, costs
@@ -85,16 +84,16 @@ fi
 # already-running daemon) and catches the case where it did not -- whether
 # `enable --auto` above reported success or not: ENABLE_STATUS above is
 # about `enable` completing, not about the daemon specifically ending up
-# running, and #598 was exactly a case where the two came apart.
+# running, and an upgrade that leaves the daemon stopped, or running as root,
+# is exactly a case where the two come apart.
 ENSURE_RUNNING_OUTPUT="$("$SEPARATION_SCRIPT" daemon ensure-running 2>&1)"
 ENSURE_RUNNING_STATUS=$?
 if [ "$ENSURE_RUNNING_STATUS" -eq 0 ]; then
   log "confirmed the daemon is running after install."
 else
   # Still not a reason to fail the package install -- see this script's own
-  # header. The companion app's tray menu (#428 Phase 2 §2.5) now surfaces a
-  # stopped daemon with a Start button, so a failed start here is no longer
-  # silent the way it used to be before this phase.
+  # header. The companion app's tray menu surfaces a stopped daemon with a
+  # Start button, so a failed start here is not silent.
   log "could not confirm the daemon is running after install: ${ENSURE_RUNNING_OUTPUT}"
 fi
 

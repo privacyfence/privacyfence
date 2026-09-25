@@ -1,4 +1,4 @@
-"""AGT-3: which AI system a tool call is attributed to, as routes_mcp.py's handle_call_tool
+"""Which AI system a tool call is attributed to, as routes_mcp.py's handle_call_tool
 captures it (ADR 0006, ADR 0035).
 
 Every capture path here is a *claim* -- the handshake ``clientInfo``, a 2026-07-28 request's own

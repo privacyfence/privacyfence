@@ -1,10 +1,9 @@
-"""Real graphical-session autostart verification for the packaged macOS ``.app``
-(B19, privacyfence/privacyfence#374).
+"""Real graphical-session autostart verification for the packaged macOS ``.app``.
 
-``test_macos_packaged_smoke.py`` (TST-15) already proves the DMG-packaged app starts
+``test_macos_packaged_smoke.py`` already proves the DMG-packaged app starts
 and serves a real MCP/approval round trip -- run as a direct subprocess, never
 through launchd (its own module docstring's 7-step list has no ``launchctl``/plist
-step at all). What that leaves unproven is the actual autostart wiring #428 D1 gives
+step at all). What that leaves unproven is the actual autostart wiring ADR 0003 gives
 every install the moment it separates: the daemon becomes a LaunchDaemon under its
 own dedicated account, and what starts in the logged-in user's own session instead is
 the companion, as a LaunchAgent (``scripts/macos_privilege_separation.sh``,
@@ -33,13 +32,12 @@ That's deliberately as far as this goes: proving both halves of the inversion vi
 physical login, which is out of scope here the same way it is for
 ``test_windows_graphical_session_autostart.py``'s own single logged-on account.
 
-``enable`` also runs a real B1 check (``require_trusted_image()``), but not against
-whatever ``--app`` points at directly any more: #428 D2 found that walking every
-directory up to ``/`` from a real ``/Applications/PrivacyFenceApp.app`` always failed
-it, since ``/Applications`` itself is admin-group-writable on every real Mac -- not a
-CI-only quirk, but the reason the *daemon's own* runtime auto-enable prompt
-(``maybe_auto_enable_macos()``) could never have actually separated a real install
-either. ``enable`` now stages its own root:wheel-owned copy of whatever ``--app``
+``enable`` also runs a real trusted-image check (``require_trusted_image()``), but not
+against whatever ``--app`` points at directly: walking every directory up to ``/`` from
+a real ``/Applications/PrivacyFenceApp.app`` always fails it, since ``/Applications``
+itself is admin-group-writable on every real Mac -- not a CI-only quirk, and it applies
+to the *daemon's own* runtime auto-enable prompt (``maybe_auto_enable_macos()``) just
+the same. So ``enable`` stages its own root:wheel-owned copy of whatever ``--app``
 points at (``stage_trusted_image()``, into ``TRUSTED_IMAGE_DIR``) before trusting
 anything, and checks *that* copy instead -- so this module hands it a plain,
 ``/tmp``-extracted, user-owned copy directly (``_copy_app_from_dmg``), the least
@@ -135,10 +133,9 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
     ``built_shim_entry`` fixture already states for itself.
 
     Lands under a plain user-owned scratch directory -- the least privileged
-    shape an unseparated install can have, and (#428 D2's B1 follow-up)
-    exactly what `enable` now accepts directly: it stages its own
-    root:wheel-owned copy internally before trusting anything, so this module
-    no longer needs to pre-stage one itself."""
+    shape an unseparated install can have, and exactly what `enable` accepts
+    directly: it stages its own root:wheel-owned copy internally before
+    trusting anything, so this module needs no pre-staged one itself."""
     dmg_path = _built_dmgs()[-1]
     mount_point = Path(tempfile.mkdtemp(prefix="pf-dmg-mount-"))
     subprocess.run(
@@ -269,9 +266,9 @@ def _wait_for_running(domain: str, *, timeout: float) -> str:
 def _separated_job_report(domain: str) -> str:
     """Why a job launchd says is running is not serving.
 
-    The same report ``test_macos_pkg_install.py`` grew for the same failure
-    (privacyfence/privacyfence#598 Failure B), which has since landed here
-    too: the socket wait times out and everything before it still passes.
+    The same report ``test_macos_pkg_install.py`` has for the same failure,
+    a daemon that crash-loops as the wrong account: the socket wait times out
+    and everything before it still passes.
     ``_wait_for_running()`` proves only that *a* pid exists under ``domain``,
     and under a ``KeepAlive`` LaunchDaemon that is also exactly what a crash
     loop looks like -- launchd relaunches, the next poll finds the
@@ -390,8 +387,8 @@ TRUSTED_IMAGE_DIR = "/Library/PrivacyFence/image"  # macos_privilege_separation.
 def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_separation_state):
     app_dir = Path(tempfile.mkdtemp(prefix="pf-graphical-session-"))
     try:
-        # No pre-staging: `enable` itself now copies whatever --app points at into its own
-        # root:wheel-owned TRUSTED_IMAGE_DIR before trusting it (B1 follow-up, #428 D2) -- handing
+        # No pre-staging: `enable` itself copies whatever --app points at into its own
+        # root:wheel-owned TRUSTED_IMAGE_DIR before trusting it -- handing
         # it a plain user-owned, /tmp-extracted copy directly is exactly the least-privileged
         # shape this is supposed to accept, not a workaround for it.
         app_path = _copy_app_from_dmg(app_dir)
@@ -401,16 +398,16 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
         enable = _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "enable", "--app", str(app_path), "--user", user, timeout=60)
         assert _sudo_path_exists(MARKER_PATH), f"{MARKER_PATH} missing after enable:\n{enable.stdout}{enable.stderr}"
         # `enable` repairs a daemon launchd started as the wrong account rather
-        # than leaving it (privacyfence/privacyfence#598 Failure A -- see
-        # start_daemon_as_service_account() in the script). A repaired start is
+        # than leaving it (see start_daemon_as_service_account() in the
+        # script). A repaired start is
         # a pass, so nothing below can assert on it; but how often launchd
         # needs the repair is the only measurement anyone has of how real that
         # defect is, and a silent pass throws it away. Same posture as
-        # test_macos_pkg_install.py's own #562 timing warning.
+        # test_macos_pkg_install.py's own app-bundle timing warning.
         if f"not {MACOS_SERVICE_ACCOUNT_NAME}" in enable.stderr:
             warnings.warn(
                 f"launchd started {DAEMON_LABEL} as the wrong account and `enable` had to restart it "
-                f"(#598 Failure A):\n{enable.stderr}",
+                f"(it came up as root):\n{enable.stderr}",
                 stacklevel=1,
             )
 
@@ -426,7 +423,7 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
             f"{DAEMON_LABEL} (pid {daemon_pid}) is not running the packaged daemon binary: {daemon_command!r}"
         )
         # Running from the staged copy, not the original --app path this test handed `enable` --
-        # the actual B1 follow-up fix, not just "some binary called PrivacyFenceApp is running".
+        # the trusted-image staging itself, not just "some binary called PrivacyFenceApp is running".
         daemon_printed = _launchctl_print(f"system/{DAEMON_LABEL}") or ""
         assert TRUSTED_IMAGE_DIR in daemon_printed, (
             f"{DAEMON_LABEL} (pid {daemon_pid}) is not running from {TRUSTED_IMAGE_DIR}:\n{daemon_printed}"

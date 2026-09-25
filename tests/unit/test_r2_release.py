@@ -134,7 +134,7 @@ class TestUploadRejectsDevBuild:
 
 
 # --------------------------------------------------------------------------------------------
-# Phase 2: manifest pipeline (finalize / verify / promote) and the upload immutability guard.
+# Manifest pipeline (finalize / verify / promote) and the upload immutability guard.
 #
 # Exercised against a fake S3 client rather than real R2: these tests are about this script's own
 # ordering and failure decisions, and a test that needs credentials is a test nobody runs.
@@ -253,7 +253,7 @@ class TestClassifyInstaller:
         assert r2_release.classify_installer(filename) is None
 
     def test_macos_pkg_is_not_a_downloadable_artifact(self):
-        # The .pkg (#428 D2) ships *inside* the DMG now (scripts/build_dmg.sh), so build.yml
+        # The .pkg ships *inside* the DMG (scripts/build_dmg.sh), so build.yml
         # never uploads one -- and if a stray one ever reached this prefix, it must not become a
         # second macOS download the Worker serves and counts alongside the DMG that contains it.
         assert r2_release.classify_installer("PrivacyFence-4.3.0.pkg") is None

@@ -83,6 +83,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   else. A move now auto-accepts only when both the current folder and the destination are in the
   rule, and an "Always allow" offered for a move names both folders.
 
+- **One approved write could be performed twice.** When you approved a write while the AI client
+  was still waiting for it, the same write sent again within five minutes went through without a
+  new card, and two identical writes sent at the same moment both went through on one approval.
+  Every approved write is now performed once: sending it again asks again, and a second identical
+  write sent while the first is still waiting is refused with nothing written. The audit log also
+  no longer records a released read, or a write approved while the client waited, as `expired`.
+  See [ADR 0073](docs/adr/0073-an-approved-write-is-single-use-and-an-approved-read-replays.md).
+
+- **Organization mode: approving several requests at once skipped step-up when no passkey was
+  enrolled.** With step-up on, `require_passkey` off and no passkey, a batch approval went through
+  without any check, although a single approval would have asked for an identity-provider sign-in.
+  Such a batch is now refused with nothing applied; approve each request from its card, or add a
+  passkey at `/security`. Denying several at once still needs no step-up.
+
 ### Changed
 
 - **You can now add a passkey with a security key or your phone, not only one built into the
@@ -96,6 +110,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   32-bit and arm64 Windows too, which are not supported: on Windows 11 on arm64 it ran under
   emulation, and elsewhere it installed in 32-bit mode, where the service could not start. See
   [ADR 0054](docs/adr/0054-the-windows-installer-refuses-anything-but-native-x64.md).
+
+- **Messages no longer cite internal tracker and plan references.** Log lines, refusal and error
+  messages, the Windows service description, the macOS installer's welcome screen, the Linux
+  service's documentation link, the `.mcpb` shim's "daemon not running" message, and the `--help`
+  text of `build_org_bundle.py`, `verify_audit_log.py` and the other scripts now say what they
+  mean in words, or name the ADR that explains it. The daemon's insecure-storage warning now reads
+  "Insecure storage permissions: …". See
+  [ADR 0056](docs/adr/0056-code-carries-no-project-history.md).
+- **The "Not authorized" page describes how sign-in works today instead of what changed.** It now
+  reads "PrivacyFence never gives a sign-in link to the program it governs." and "The link is not
+  written to any file either, where every program running as you could read it."
+  `privacyfence_status`'s "not set up" message to the AI client likewise says PrivacyFence "never
+  issues" it a sign-in link.
 
 ### Fixed
 

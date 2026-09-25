@@ -1,31 +1,23 @@
-"""``StepUpConfig`` (P9, §10.6/§15 D7; #426): the WebAuthn step-up decision,
-made concrete per install, in *either* deployment mode.
+"""``StepUpConfig``: the WebAuthn step-up decision, made concrete per install,
+in *either* deployment mode.
 
-This lived in ``org_mode.py`` and was org-mode-only by design through 4.0 --
-that module's own docstring reasoned that local mode's trust model
-(physical possession of the machine) was D7's explicit "not this mode"
-case, the same reason ``ServerConfig``/``IdpConfig`` never look at local
-mode either. #426/#427/#428 supersede that premise: the adversary that
-actually matters in local mode is not a human at the keyboard, it is an AI
-agent with shell access on the same machine -- the normal local-mode
-install -- and nothing about ``ServerConfig``'s "no server to configure" or
-``IdpConfig``'s "no IdP to talk to" reasoning applies to a step-up check,
-which needs neither. This module is #426 Phase 1: split out so the same
-config shape and the same enrollment surface (web/routes_security.py) serve
-both modes, with ``from_org_config`` kept byte-identical to before and a new
-``from_local_config`` reading ``config/settings.yaml``'s own ``step_up:``
-section.
+Step-up applies to local mode as well as org mode because the adversary that
+matters in local mode is not a human at the keyboard, it is an AI agent with
+shell access on the same machine -- the normal local-mode install (ADR 0002,
+ADR 0003). The reasoning that keeps ``ServerConfig``/``IdpConfig`` out of
+local mode ("no server to configure", "no IdP to talk to") does not apply to
+a step-up check, which needs neither. So one config shape and one enrollment
+surface (web/routes_security.py) serve both modes: ``from_org_config``
+reads the org config's ``step_up:`` section, and ``from_local_config`` reads
+``config/settings.yaml``'s own.
 
-Enrolling a credential here is necessary but not sufficient for the
-guarantee #426's issue body describes -- see webauthn_stepup.py's own
-module docstring on where the credential store lives (``paths.
-authority_dir()``, #428 Phase 1) and why write access to it is a full
-bypass, not merely a tamper-evidence gap. #428 Phase 4 (privilege
-separation) is what makes that store, and the ``require_passkey`` flag
-below, unwritable by the same agent the check defends against; enforcement
-of ``require_passkey`` in local mode is #426 Phase 3, not this one. Phase 1
-ships only the config shape and the ability to enroll -- "you can add a
-passkey, and nothing yet asks you for it."
+Enrolling a credential is necessary but not sufficient for the guarantee --
+see webauthn_stepup.py's own module docstring on where the credential store
+lives (``paths.authority_dir()``) and why write access to it is a full
+bypass, not merely a tamper-evidence gap. Privilege separation (ADR 0003) is
+what makes that store, and the ``require_passkey`` flag below, unwritable by
+the same agent the check defends against. This module only parses the
+config; web/routes_approvals.py and web/routes_settings.py enforce it.
 """
 from __future__ import annotations
 
@@ -49,26 +41,25 @@ StepUpBatchMode = Literal["single_assertion", "per_item"]
 STEP_UP_SCOPES: tuple[StepUpScope, ...] = ("writes", "writes_and_pii_reads", "writes_and_reads")
 _SCOPE_CHOICES_TEXT = ", ".join(f'"{name}"' for name in STEP_UP_SCOPES)
 
-# Phase 1.4 of the self-approval hardening plan: "writes_and_pii_reads",
-# not the "writes" this shipped with through 4.1. D7 names both as
-# reasonable, and the narrower one was picked back when the adversary in
-# view was a human at the keyboard. ADR 0003 adopts a different one -- an
-# agent with code execution on this machine -- and against that adversary
+# "writes_and_pii_reads", not the narrower "writes". Both are reasonable
+# against a human at the keyboard, but ADR 0003's adversary is an agent
+# with code execution on this machine, and against that adversary
 # "writes" leaves every read a session alone can release, including one
 # pii_detector.py *did* flag as carrying personal data. Exfiltration is the
-# obvious thing such an agent wants and the one thing the narrower default
-# never asked a human about, so the floor moves up by one rung. The widest
+# obvious thing such an agent wants and the one thing "writes" never asks
+# a human about, so the default is one rung wider. The widest
 # rung ("writes_and_reads", every gated read, flagged or not) stays opt-in:
 # it asks for a passkey on reads nothing has any reason to think are
-# sensitive, which is the kind of prompt people learn to click through.
+# sensitive, which is the kind of prompt people learn to click through
+# (ADR 0067).
 #
 # One value for both modes, deliberately -- see this module's own docstring
 # on why a key that means two different things by mode is the thing this
 # module exists to stop. An install with its own ``scope:`` set (either
 # mode) keeps exactly what it set; only an install that never expressed an
-# opinion moves.
+# opinion gets this default.
 DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes_and_pii_reads"
-# The approval binder's own knob (Phase 3 of the binder plan): "single_
+# The approval binder's own knob: "single_
 # assertion" is one bound WebAuthn ceremony over the whole selected set
 # (webauthn_stepup.batch_decision_fingerprint) -- the whole point of the
 # binder, and the default. "per_item" is the escape hatch for an install
@@ -78,6 +69,7 @@ DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes_and_pii_reads"
 # assertion per item within the same request -- see web/routes_approvals.py's
 # own batch_decide for exactly what that refusal looks like. Deny-only
 # batches are unaffected either way, since denying never needs step-up.
+# See ADR 0065.
 DEFAULT_STEP_UP_BATCH_MODE: StepUpBatchMode = "single_assertion"
 DEFAULT_RP_NAME = "PrivacyFence"
 # WebAuthn treats "localhost" as a secure context even over plain HTTP
@@ -92,8 +84,7 @@ DEFAULT_LOCAL_RP_ID = "localhost"
 def default_local_step_up() -> bool:
     """What ``step_up.enabled``/``step_up.require_passkey`` default to in
     local mode when ``config/settings.yaml`` expresses no opinion about
-    them -- Phase 1.1 of the self-approval hardening plan, and the item ADR
-    0003 listed under *Out of scope* ("the default stays off").
+    them -- the default ADR 0003's amendment under *Out of scope* records.
 
     True on a **packaged** install, False everywhere else. That split is
     the whole of the decision, and it is ADR 0003's own gate reused rather
@@ -141,46 +132,44 @@ def default_local_step_up() -> bool:
 
 @dataclass(frozen=True)
 class StepUpConfig:
-    """§10.6/§15 D7's step-up decision, made concrete per install: "Yes in
-    org mode, scoped and configurable -- via a WebAuthn platform
-    authenticator ... with IdP acr_values step-up as the org-mode
-    alternative ... and OIDC re-auth as the fallback." Org mode reads this
+    """The step-up decision, made concrete per install: step-up is scoped
+    and configurable, via a WebAuthn assertion, with IdP acr_values step-up
+    as the org-mode alternative and OIDC re-auth as the fallback there
+    (ADR 0034 for what it gates, ADR 0055 for which authenticators
+    enroll). Org mode reads this
     from ``org_config.json``'s ``step_up`` section (``from_org_config``);
     local mode reads it from ``config/settings.yaml``'s own ``step_up:``
     section (``from_local_config``) -- see this module's own docstring for
-    why local mode gets one at all now.
+    why local mode gets one at all.
 
     ``enabled=False`` is a real off switch, not just "no credentials
     enrolled yet": web/routes_approvals.py's decide endpoint skips the
-    whole step-up check when this is False, and local mode's own
-    decide-time check (#426 Phase 2) does the same.
+    whole step-up check when this is False, in both modes.
 
-    ``require_passkey=False`` keeps D7's original two-path design in org
-    mode -- a WebAuthn assertion *or* a fresh IdP re-authentication. Local
-    mode has no IdP, so ``require_passkey`` there is the only path a
-    decide-time check (#426 Phase 2/3) could ever offer -- this field is
-    generalized here (rather than added fresh) so its name and semantics
-    can't drift between the two modes.
+    ``require_passkey=False`` keeps org mode's two-path design -- a WebAuthn
+    assertion *or* a fresh IdP re-authentication. Local mode has no IdP, so
+    a passkey is the only path its decide-time check can offer. The field
+    lives on this shared class so its name and semantics can't drift
+    between the two modes.
 
     Both default to False *on this class*, which is the value a caller that
     constructs one directly gets and the value org mode resolves for an
     ``org_config.json`` with no ``step_up`` section -- org mode has an IdP
     and a human administrator writing that bundle, so an unstated opinion
-    there stays an unstated opinion. Local mode no longer reads these
+    there stays an unstated opinion. Local mode does not read these
     field defaults for an absent key: ``from_local_config`` resolves its
     own from ``default_local_step_up()``, which is True on a packaged
-    install (Phase 1.1). The two are not the same question, so they are not
+    install. The two are not the same question, so they are not
     the same default -- see that function's own docstring.
     """
 
     enabled: bool = False
-    # "writes" (gate_kind == "popup") is D7's baseline scope -- "scope it to
-    # writes, or to writes plus PII-flagged reads ... make the scope
-    # configurable" (§10.6). "writes_and_pii_reads" additionally covers a
+    # "writes" (gate_kind == "popup") is the baseline scope: every gated
+    # write. "writes_and_pii_reads" additionally covers a
     # read whose PendingApproval.pii_detected is True, the same signal
     # gate.py's own PII "are you sure?" confirmation already gates on.
     # "writes_and_reads" goes one step further and covers every gated read,
-    # flagged or not -- D7's two named scopes both leave an unflagged read
+    # flagged or not -- the two narrower scopes both leave an unflagged read
     # releasable by a session alone, which is only the guarantee an install
     # wants if it trusts pii_detector.py to have seen everything worth
     # confirming; this third value is for the installs that don't (a read
@@ -188,11 +177,11 @@ class StepUpConfig:
     # Defaults to DEFAULT_STEP_UP_SCOPE in both modes -- one key name
     # meaning two different things by mode is exactly what this module
     # exists to stop. See that constant for why the floor is
-    # "writes_and_pii_reads" rather than the "writes" this shipped with.
+    # "writes_and_pii_reads" rather than "writes".
     scope: StepUpScope = DEFAULT_STEP_UP_SCOPE
     # WebAuthn's Relying Party ID -- must be this server's own registrable
-    # domain (§10.6: "WebAuthn needs a secure context and a registrable-
-    # domain RP ID"). Org mode defaults this to ServerConfig.issuer_url's
+    # domain, because WebAuthn needs a secure context and a registrable-
+    # domain RP ID. Org mode defaults this to ServerConfig.issuer_url's
     # own hostname (from_org_config, below); local mode defaults it to
     # "localhost" (DEFAULT_LOCAL_RP_ID) -- unlike org mode, local mode
     # always has an rp_id, so /security is always reachable there, whether
@@ -232,7 +221,7 @@ class StepUpConfig:
         )
 
     def local_enrollment_banner(self, *, has_credentials: bool) -> str | None:
-        """#426 Phase 3's "loud persistent banner": ``None`` unless
+        """The loud, persistent "passkey required" banner: ``None`` unless
         ``require_passkey`` is actually in force (``enabled`` too -- see
         this module's own docstring on ``require_passkey``'s dependence on
         it) and nothing is enrolled yet, in which case web_shell.wrap()'s
@@ -241,24 +230,26 @@ class StepUpConfig:
         would remove the only path to ``/security`` that fixes it -- but
         web/routes_approvals.py's decide() and web/routes_settings.py's
         sensitive actions both hard-fail (403) rather than release
-        anything, so this string says exactly that rather than merely
-        "step-up is on"."""
+        anything step-up covers, so this string says exactly that rather
+        than merely "step-up is on". It names only approvals that need
+        step-up: one outside ``scope`` (an unflagged read, under the
+        default scope) is still released. See ADR 0069."""
         if self.enabled and self.require_passkey and not has_credentials:
             return (
-                "Passkey required: no passkey is enrolled, so approving decisions and sensitive "
-                'settings changes are blocked until you <a href="/security">add one</a>.'
+                "Passkey required: no passkey is enrolled, so approvals that need step-up and "
+                'sensitive settings changes are blocked until you <a href="/security">add one</a>.'
             )
         return None
 
     def off_notice(self) -> str | None:
-        """B23 of the 4.1.0 action plan: the residue B9 left behind.
+        """The notice that step-up is off.
         ``local_enrollment_banner`` above only speaks once ``require_
         passkey`` is actually in force, and webauthn_stepup.py's
         ``step_up_disabled_notice`` only once a disable *transition* has
         been latched -- neither says anything about the ordinary default
         an install ships with (``enabled=False``, nothing in ``step_up:``
-        at all), so a fresh install gave no sign the control existed, let
-        alone that it was off. This is the fallback for exactly that gap:
+        at all), so without this a fresh install would give no sign the
+        control existed, let alone that it was off. This covers that case:
         ``None`` whenever step-up is actually in force (``enabled and
         require_passkey`` -- the same pairing ``observe_step_up_
         requirement`` treats as "required"), a short sentence otherwise.
@@ -281,13 +272,13 @@ class StepUpConfig:
 
     @staticmethod
     def from_local_config(config: dict[str, Any]) -> "StepUpConfig":
-        """local mode's own entry point (#426 Phase 1) -- ``config`` is the
+        """local mode's own entry point -- ``config`` is the
         already-loaded ``config/settings.yaml`` dict (daemon_main.py's
         ``load_config()`` result), not a path. Unlike ``from_org_config``,
         ``rp_id`` defaults to a real value (``DEFAULT_LOCAL_RP_ID``) rather
         than requiring one to be set: local mode has no issuer_url to derive
         a default from, and "localhost" is always correct for its own
-        embedded server (web/server.py's own D1 bind-host decision)."""
+        embedded server (web/server.py's bind-host decision, ADR 0010)."""
         raw = config.get("step_up")
         raw = raw if isinstance(raw, dict) else {}
         scope = raw.get("scope", DEFAULT_STEP_UP_SCOPE)
@@ -302,7 +293,7 @@ class StepUpConfig:
                 f"config/settings.yaml's \"step_up\".\"batch\" must be \"single_assertion\" or "
                 f"\"per_item\", got {batch!r}"
             )
-        # Phase 1.1: the *absent*-key default is packaging-dependent now --
+        # The *absent*-key default is packaging-dependent --
         # see ``default_local_step_up()`` for why, and why it is resolved
         # once here so ``enabled`` and ``require_passkey`` can never default
         # apart. An explicitly written value always wins, in both
@@ -334,7 +325,7 @@ class StepUpConfig:
         if require_passkey and require_passkey_is_explicit and not separated_or_dev:
             raise ConfigurationError(
                 "config/settings.yaml's \"step_up\".\"require_passkey\" is true, but this install "
-                "is not privilege-separated (#428 Phase 4 / ADR 0003) -- the credential store a "
+                "is not privilege-separated (ADR 0003) -- the credential store a "
                 "passkey is checked against is writable by the same account the agent runs as, so "
                 "turning this on makes the guarantee worse, not better. Separate this install "
                 f"first, or set {privilege_separation.DEV_ALLOW_UNSEPARATED_ENV}=1 for local "
@@ -351,21 +342,18 @@ class StepUpConfig:
 
 
 class LiveStepUpConfig:
-    """A thread-safe, mutable holder around a ``StepUpConfig`` (B9 of the
-    4.1.0 action plan): web/server.py's own build_app()/WebServer resolve
-    local mode's ``StepUpConfig`` exactly once, at daemon startup, and hand
+    """A thread-safe, mutable holder around a ``StepUpConfig``: web/server.py's
+    own build_app()/WebServer resolve local mode's ``StepUpConfig`` exactly once, at daemon startup, and hand
     that same object to every consumer that gates on it (web/
     routes_approvals.py's decide endpoint, web/routes_settings.py's
     sensitive-action gate and banner, web/routes_security.py's enrollment
     page) -- "one StepUpConfig, read once, drives ... alike" (build_app()'s
-    own docstring). That made turning step-up *on* a config-file-plus-
-    restart operation with no UI path at all, the actual B9 gap: #426
-    shipped the whole chain and then defaulted it off with nothing in
-    /settings or /security able to flip it back on short of editing
-    ``config/settings.yaml`` by hand -- ``sudo`` and a text editor on a
-    privilege-separated install (#428 Phase 4).
+    own docstring). A plain ``StepUpConfig`` would make turning step-up
+    *on* a config-file-plus-restart operation with no UI path at all:
+    editing ``config/settings.yaml`` by hand, which is ``sudo`` and a text
+    editor on a privilege-separated install.
 
-    This class closes that gap without touching any of those call sites:
+    This class gives it a UI path without touching any of those call sites:
     every attribute/method a ``StepUpConfig`` exposes (``enabled``,
     ``scope``, ``rp_id``, ``rp_name``, ``require_passkey``,
     ``local_enrollment_banner``, ``off_notice``) is mirrored here, read
@@ -384,7 +372,7 @@ class LiveStepUpConfig:
     Deliberately one-directional in what it's used for: only ``enable_step_
     up`` ever calls ``update()``, always turning step-up *on* (see that
     method's own docstring for why turning it back *off* stays a config-
-    file-plus-restart operation on purpose). Org mode has no equivalent of
+    file-plus-restart operation on purpose, and ADR 0068). Org mode has no equivalent of
     this class -- its own ``StepUpConfig`` is re-derived from
     ``org.org_config`` on every ``_build_org_app`` call instead (web/
     server.py), which already has no restart problem to solve.

@@ -1,11 +1,9 @@
-"""Pure-function HTML for the ``/approvals`` list page
-(5deef1d8:docs/approval-list-ui-ux.md §2, the P1-compatible slice its own §6 says
-can land ahead of P3's full design -- the row shape, the empty state, and
-the central asymmetry of §2.2: **Deny is on the row; Allow is never on the
-row.** Denying without reading the card cannot leak anything; approving
-from a one-line summary is exactly the habituation failure the card exists
+"""Pure-function HTML for the ``/approvals`` list page: the row shape, the
+empty state, and the list's central asymmetry: **Deny is on the row; Allow
+is never on the row.** Denying without reading the card cannot leak
+anything; approving from a one-line summary is exactly the habituation failure the card exists
 to prevent, so there is no "Allow" button here at all -- only "Review",
-which opens the real card.
+which opens the real card (ADR 0065).
 
 Within the action cluster the order is Details, Review, Deny -- Deny last,
 not adjacent to Review. Row controls are a 44px target at phone widths but
@@ -29,41 +27,38 @@ paint -- for *every* connector this build bundles an icon for
 (``approval_icons.all_connector_icons()``), not just the ones with
 something pending at that moment, so a connector with nothing pending at
 load still draws its real mark the moment a row for it arrives live rather
-than degrading to a letter badge until the next full page load (issue
-#576). The bundled set is small and fixed (~10 files today), so this costs
+than degrading to a letter badge until the next full page load. The bundled set is small and fixed (~10 files today), so this costs
 one bounded, one-time addition to every first paint regardless of how many
 rows are pending -- the SSE tick itself still carries no image data at
 all, which is the cost this design was actually protecting against.
 
-**The approval binder (Phase 1 of the batch-decide plan):** a sequential
-agent can leave several approvals pending at once (P3's own removal of
-gate.py's ``_popup_lock``), and reviewing each with its own passkey ceremony
-(#426) is the regression this phase's own selection/grouping/deny-selected
-work starts to close -- see approvals.PendingApproval.is_batchable()'s own
-docstring for exactly which approvals that covers. This phase ships:
+**The approval binder:** a sequential agent can leave several approvals
+pending at once (gate.py has no one-dialog-at-a-time lock), and reviewing each
+with its own passkey ceremony would be a regression the binder's
+selection/grouping/batch-decide work closes -- see
+approvals.PendingApproval.is_batchable()'s own docstring for exactly which
+approvals that covers. The binder has:
 
 - a checkbox per **batchable** row (``kind == "card"``, not PII-forced --
   see ``is_batchable()``), grouped by ``(connector, operation_key)`` with a
   per-group and a page-level select-all;
 - **Deny-selected**, client-side over the existing per-id decide endpoint --
-  denying leaks nothing and needs no step-up, so there is no new server
-  endpoint yet (that's Phase 2's batch decide endpoint);
+  denying leaks nothing and needs no step-up, so it needs no batch
+  endpoint;
 - an inline "Details" disclosure sourced from ``GET /api/approvals/{id}/
   preview`` (the ``preview`` dict gate.py stamped at registration --
   metadata only, docs/coding-and-testing-guidelines.md §1.5), rendered with
-  ``textContent`` -- never an ``<iframe>`` onto the real card document (see
-  the binder plan's own "Rejected alternatives": card documents ship
-  ``frame-ancestors 'none'`` and this page's own ``frame-src`` admits
-  ``data:`` only).
+  ``textContent`` -- never an ``<iframe>`` onto the real card document
+  (card documents ship ``frame-ancestors 'none'`` and this page's own
+  ``frame-src`` admits ``data:`` only; ADR 0065).
 
-Approving still opens the card through Phase 2 -- 5deef1d8:docs/approval-list-ui-ux.md's
-own claim ("no Allow on the list") stays literally true up to there.
-
-**Phase 3 of the binder plan** is what finally breaks that claim: an
-**Approve selected** button posts the same set to the batch decide
-endpoint (Phase 2) with ``result: "accept"`` on every item, gated
+Approving a single row still opens its card. The one exception to "no
+Allow on the list" is batch approval: an
+**Approve selected** button posts the selected set to the batch decide
+endpoint with ``result: "accept"`` on every item, gated
 server-side on one WebAuthn assertion bound to the exact submitted set
-(webauthn_stepup.batch_decision_fingerprint) whenever step-up applies.
+(webauthn_stepup.batch_decision_fingerprint) whenever step-up applies; see
+ADR 0065.
 ``runBatch`` mirrors web/routes_settings.py's own ``pfSettingsPost``
 428/403 handling almost exactly: a ``428`` carries fresh
 ``webauthn_options`` (and this page's own ``batch_id`` to echo back) to
@@ -72,7 +67,7 @@ list route, same as the settings page) and
 resubmit; a ``403``/``400`` surfaces via ``window.alert`` since this page
 stays open across the ceremony, unlike a one-shot card. The submit
 button's own label names the selected set's composition -- "Approve 12 ·
-9 reads, 3 writes" (Q1 of the binder plan's own open questions) -- so an
+9 reads, 3 writes" -- so an
 unintended write can't hide inside a read-shaped batch.
 
 Selection lives in a JS ``Set`` keyed by approval id (``pfSelected``,
@@ -304,7 +299,7 @@ _CSS = """
 # own shim right before it navigates back here -- see
 # web/routes_approvals.py's _bridge_shim), the empty-state/row re-render on
 # every "approvals" SSE event, row-level Deny (a direct POST to the decide
-# endpoint, no navigation to the card at all -- §2.2's own point: denying
+# endpoint, no navigation to the card at all -- the list's own asymmetry: denying
 # needs no context), and the approval binder's own selection/deny-selected/
 # inline-details behavior (see module docstring).
 _JS = """
@@ -463,7 +458,7 @@ _JS = """
     return rows.filter(function (r) { return r.batchable; }).map(function (r) { return r.id; });
   }
 
-  // Q1 of the binder plan's own "Open questions": name the selected set's
+  // Name the selected set's
   // composition on the submit button itself -- "Approve 12 · 9 reads, 3
   // writes" -- so an unintended write can't hide inside a read-shaped
   // batch. gate_kind is "popup" (write) | "review" (read) | "" (a bare
@@ -527,7 +522,7 @@ _JS = """
       // Names the denominator explicitly ("10 of 11 selected") rather than
       // just the numerator -- a bare "10 selected" reads as "10 of 10" the
       // moment it's glanced at, which is indistinguishable from the
-      // denominator having silently shrunk (issue #576, bug 2).
+      // denominator having silently shrunk.
       countEl.textContent = selectedCount === 0 ? '' : selectedCount + ' of ' + ids.length + ' selected';
     }
     var approveBtn = document.getElementById('pf-approve-selected');
@@ -598,11 +593,11 @@ _JS = """
       if (row) { row.remove(); }
       pfSelected.delete(id);
       updateToolbar(pfLastRows);
-      // §4.4's "offer it after the first successful decision" isn't only
+      // "Offer it after the first successful decision" isn't only
       // the card page's own decision (whose own return-to-list flow
       // triggers this same prompt via the DOMContentLoaded handler below)
-      // -- row-level Deny is a first-class decision path (§2.2's whole
-      // point: denying needs no card) and never goes through that flow at
+      // -- row-level Deny is a first-class decision path (the list's
+      // whole point: denying needs no card) and never goes through that flow at
       // all, so without this, a workflow that only ever denies from the
       // list would never trigger the notification permission pre-prompt.
       if (r.ok && window.__pfNotifPrompt) { window.__pfNotifPrompt(); }
@@ -629,8 +624,8 @@ _JS = """
     });
   }
 
-  // The approval binder's own batch-approve path (Phase 3 of the binder
-  // plan): a single POST to the batch decide endpoint (Phase 2), gated on
+  // The approval binder's own batch-approve path: a single POST to the
+  // batch decide endpoint, gated on
   // one WebAuthn assertion bound to the exact submitted set when step-up
   // applies. Mirrors web/routes_settings.py's own pfSettingsPost 428/403
   // handling almost exactly -- this page stays open across the ceremony
@@ -840,7 +835,7 @@ _JS = """
           el.classList.add('shown');
           setTimeout(function () { el.classList.remove('shown'); }, 4000);
         }
-        // §4.4: offer the notification permission pre-prompt right after
+        // Offer the notification permission pre-prompt right after
         // the first successful decision, when the value is concrete --
         // never on page load. window.__pfNotifPrompt (web_shell.py) itself
         // no-ops past the first time (localStorage) and past a non-default
@@ -850,7 +845,7 @@ _JS = """
     } catch (e) { /* sessionStorage unavailable -- toast just doesn't show */ }
   });
 
-  // §3 point 4: focus moves to the next pending row's Review control, not
+  // Focus moves to the next pending row's Review control, not
   // into a re-opened card -- never auto-advance into a decision.
   var firstReview = document.querySelector('.pf-btn-review');
   if (firstReview) { firstReview.focus({preventScroll: true}); }
@@ -915,7 +910,7 @@ def _group_label(connector: str, operation_key: str, count: int) -> str:
 
 def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Buckets ``rows`` (``row_from_approval()``'s shape) into the binder's
-    own display groups (Phase 1: "Groups by (connector, operation_key)"):
+    own display groups, by ``(connector, operation_key)``:
     every batchable row sharing the same ``(connector, operation_key)``
     collapses into one group -- positioned at that key's first
     appearance in ``rows`` -- with a per-group select-all rendered only once
@@ -986,10 +981,10 @@ def _icon_connectors() -> dict[str, str]:
     -- it renders the same class name and the rule already in the document
     does the rest.
 
-    This used to build the map from ``rows`` alone, so a connector with
-    nothing pending at first paint had no rule, and a row that arrived for
-    it later drew the letter badge until the next full page load (issue
-    #576). Baking in the whole bundled set instead of just the rows present
+    Built from ``rows`` alone, the map would give a connector with
+    nothing pending at first paint no rule, and a row that arrived for
+    it later would draw the letter badge until the next full page load.
+    Baking in the whole bundled set instead of just the rows present
     right now closes that gap entirely: the set is small and fixed (~10
     files today), so this is a bounded, one-time cost per page load, not a
     per-row or per-tick one -- the SSE tick itself still never carries any
@@ -1251,7 +1246,7 @@ def build_list_html(
     # Always emitted, like #pf-approvals-heading below -- render() below
     # keeps it in sync (including its "hidden" state) on every SSE tick, and
     # an element that only exists when the first paint had rows is an
-    # element the live re-render can't create later (issue #576, bug 1).
+    # element the live re-render can't create later.
     toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows), hidden=not rows)
     icon_uris = _icon_connectors()
     agent_icon_uris = _agent_icon_uris()

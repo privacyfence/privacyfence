@@ -224,8 +224,8 @@ class TestSingleton:
 
 
 class TestClaimCapability:
-    """Phase 4's unauthenticated claim (ADR 0007's "Clients without the
-    bridge" section) -- same semantics as claim() minus the principal
+    """The unauthenticated capability claim (ADR 0007's "Clients without the
+    bridge" section, ADR 0028) -- same semantics as claim() minus the principal
     check, since the capability route it backs (routes_file_bridge.py's
     GET /mcp-files/fetch/<token>) carries no bearer header/session cookie/
     principal to check the entry against at all; the token itself is the

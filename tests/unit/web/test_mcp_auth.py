@@ -1,5 +1,4 @@
-"""Unit tests for web/mcp_auth.py's principal_from_access_token (P6/P7)
--- see test_routes_mcp_principal.py for the wire-level proof that routes_mcp.py
+"""Unit tests for web/mcp_auth.py's principal_from_access_token -- see test_routes_mcp_principal.py for the wire-level proof that routes_mcp.py
 actually calls this per request, and web/test_oauth_provider.py for the
 org-mode ``OrgOAuthProvider`` tokens this function is actually built to
 read (``subject``/``claims``), end to end.
@@ -24,7 +23,7 @@ class TestPrincipalFromAccessToken:
     def test_client_id_is_a_fallback_only_when_no_subject_is_present(self):
         # A hand-rolled/future verifier that doesn't populate subject --
         # PerUserTokenVerifier's own local-mode case is handled above
-        # already; OrgOAuthProvider (P7) always sets subject (see the next
+        # already; OrgOAuthProvider always sets subject (see the next
         # test), so this branch exists for robustness, not as the org-mode
         # path itself.
         token = AccessToken(token="t", client_id="some-oauth-client-id", scopes=[])

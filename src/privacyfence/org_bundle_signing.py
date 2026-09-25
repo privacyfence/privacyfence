@@ -1,6 +1,6 @@
-"""SEC-05 (full): Ed25519 signing/verification for organization config
-bundles (org_config.json), plus the plain-hash helper the SEC-05 interim
-fix (daemon_main.py's startup logging) uses.
+"""Ed25519 signing/verification for organization config bundles
+(org_config.json), plus the plain-hash helper daemon_main.py's startup
+logging uses. ADR 0016 records why integrity has these two layers.
 
 Threat model this closes: org_config.json carries the org's IdP client
 secret, the Google/Slack/Salesforce/Atlassian app registrations, and (in
@@ -10,8 +10,9 @@ anything that can write to this file -- a compromised backup, a
 misconfigured file share the bundle is distributed over, brief physical/
 admin access to the machine -- could silently redirect this daemon's
 whole trust root, and a tampered-but-still-valid-JSON replacement was
-indistinguishable from the real thing (SEC-04 only catches malformed/
-unreadable files, not a well-formed-but-hostile one).
+indistinguishable from the real thing (refusing a malformed org-mode
+config at startup only catches malformed/unreadable files, not a
+well-formed-but-hostile one).
 
 Design -- trust-on-first-use (TOFU), the same model SSH host keys use:
 each organization generates an Ed25519 keypair once
@@ -94,7 +95,7 @@ PINNED_PUBKEY_FILENAME = "org_config_signing_pubkey.txt"
 
 
 def sha256_hex(raw: bytes) -> str:
-    """SEC-05 interim: a hash any admin can compare by eye/script against
+    """A hash any admin can compare by eye/script against
     a known-good value, independent of whether the bundle is signed at
     all -- see daemon_main.py's startup logging."""
     return hashlib.sha256(raw).hexdigest()
@@ -147,7 +148,7 @@ def load_pinned_public_key(org_dir: Path) -> bytes | None:
 
 def _pin_public_key(org_dir: Path, raw_public_key: bytes) -> None:
     """Writes the pinned-key file, atomically and at 0600 from the moment
-    it exists -- see secure_files.py's module docstring (SEC-09)."""
+    it exists -- see secure_files.py's module docstring."""
     path = pinned_public_key_path(org_dir)
     atomic_write_text(path, base64.b64encode(raw_public_key).decode("ascii") + "\n")
 
@@ -166,8 +167,7 @@ def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
     True exactly when calling that function on the same arguments would
     pin a new signing key as a side effect.
 
-    F5 of the self-approval review: settings_controller.
-    install_org_config_bytes's web caller (routes_settings.py's
+    settings_controller.install_org_config_bytes's web caller (routes_settings.py's
     org_config_upload) wants to ask a human for an explicit confirmation
     before that TOFU pin happens, rather than letting it happen silently
     as a side effect of an upload verify_and_maybe_pin would otherwise

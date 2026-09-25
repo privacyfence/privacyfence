@@ -1,4 +1,4 @@
-"""Adversarial (SEC-01 / TST-01a) coverage for the two Markdown -> HTML
+"""Adversarial coverage for the two Markdown -> HTML
 renderers that build a clickable ``<a href>`` from externally-influenced
 text: markdown_to_html.py (the approval window's preview pane, fed by
 html_to_text.py's html_to_markdown() and text_extraction.py) and
@@ -8,8 +8,8 @@ The invariant under test: no unsafe URL scheme -- "javascript:", "data:",
 "vbscript:", or an obfuscated (percent-encoded, entity-encoded, mixed-case)
 spelling of one of those -- ever reaches an emitted ``href`` attribute. An
 unsafe link degrades to its plain, escaped label text; it never becomes an
-`<a ...>` at all. This is the regression test for SEC-01: markdown_to_html.py
-previously emitted `m.group(2)` as a raw href with no scheme check.
+`<a ...>` at all. This pins markdown_to_html.py's scheme check on the
+link URL (`m.group(2)`) it would otherwise emit as a raw href.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from privacyfence.html_to_text import html_to_markdown
 # None contain "(" / ")" in the URL itself -- markdown_to_html.py's link
 # regex (`[^)\s]+`) stops at the first ")", which would otherwise truncate
 # the match independently of the scheme check this test is pinning; that's
-# a separate, pre-existing parsing quirk, not part of SEC-01.
+# a separate parsing quirk, not part of the scheme check.
 UNSAFE_URL_PAYLOADS = [
     pytest.param("javascript:alert(document.cookie)", id="raw-javascript-scheme"),
     pytest.param("vbscript:msgbox(1)", id="raw-vbscript-scheme"),
@@ -109,7 +109,7 @@ class TestFullChainHtmlToMarkdownToHtml:
     """The full inbound/outbound round trip: html_to_text.py's
     html_to_markdown() (e.g. a Confluence page's XHTML storage format) feeds
     markdown_to_html.py (the approval preview pane) directly -- an unsafe
-    href surviving that trip is exactly the SEC-01 exploit path."""
+    href surviving that trip is exactly the exploit path this module guards."""
 
     @pytest.mark.parametrize(
         "href",

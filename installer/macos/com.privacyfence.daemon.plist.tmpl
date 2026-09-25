@@ -2,11 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-#428 Phase 4 (B5a): the PrivacyFence daemon as a LaunchDaemon, running under
+The PrivacyFence daemon as a LaunchDaemon, running under
 its own dedicated account.
 
-This replaces the per-user LaunchAgent (com.privacyfence.app.plist in the
-repo root) for installs that have opted into privilege separation. The
+Every packaged install runs the daemon this way (ADR 0003); the per-user
+LaunchAgent (com.privacyfence.app.plist in the repo root) is for a
+source/dev checkout only. The
 difference that matters is UserName below: a LaunchAgent runs as whoever is
 logged in -- which is also who the AI agent PrivacyFence exists to govern
 runs as -- and a LaunchDaemon runs as the account it names, in no login

@@ -154,7 +154,7 @@ class TestAllowlistedExceptionsStillReachTheClient:
     """The other side of the taxonomy: this codebase's own self-authored
     control-flow exceptions -- a ValueError for a caller-correctable
     problem, gate.py's own GateDeniedError for a denial -- still reach the
-    client verbatim. SEC-10 narrows what's trusted, it doesn't make every
+    client verbatim. The safe error taxonomy narrows what's trusted, it doesn't make every
     tool error opaque; see the bare-RuntimeError payload above for the one
     RuntimeError shape that's deliberately *not* on this side of the line."""
 
@@ -165,9 +165,9 @@ class TestAllowlistedExceptionsStillReachTheClient:
         assert "no such file" in result.content[0].text
 
     async def test_gate_denied_error_message_passes_through(self):
-        # The real type gate.py raises for a user/policy denial (SEC-10
-        # promoted this from a bare RuntimeError specifically so
-        # public_message() could tell it apart from a connector's wrapped
+        # The real type gate.py raises for a user/policy denial (its own
+        # type rather than a bare RuntimeError specifically so
+        # public_message() can tell it apart from a connector's wrapped
         # failure -- see safe_errors.py's module docstring).
         async with _session_calling(lambda: GateDeniedError("Request denied by user")) as session:
             result = await session.call_tool("boom_call", {})

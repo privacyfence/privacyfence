@@ -2,16 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-#428 Phase 4 (B5a): the companion app as a per-user LaunchAgent.
+The companion app as a per-user LaunchAgent.
 
-The other half of the startup inversion ADR 0002 describes. Before Phase 4,
-what autostarted in the user's login session was the daemon; afterwards the
-daemon is a LaunchDaemon with no session at all, and what autostarts here is
+The other half of the startup inversion ADR 0002 describes. On a separated
+install the daemon is a LaunchDaemon with no session at all, so what
+autostarts in the user's login session is
 the menu-bar companion (src/privacyfence/companion.py) -- Open Approvals,
 Open Settings, Quit, and the OPEN <url> channel the daemon's connector OAuth
 flows hand a browser URL to. Without it a separated install has no human-
 facing affordance except asking the MCP client for a link, which is the
-courier pattern this whole issue exists to retire.
+courier pattern privilege separation exists to retire.
 
 Installed to /Library/LaunchAgents/com.privacyfence.companion.plist (root:wheel
 0644) rather than ~/Library/LaunchAgents: the separated install is machine-

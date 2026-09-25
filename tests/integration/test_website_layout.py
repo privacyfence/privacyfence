@@ -183,7 +183,7 @@ def _save_screenshot(page, target: Path) -> str | None:
 
     Chromium intermittently answers a full-page capture with "Protocol error
     (Page.captureScreenshot): Unable to capture screenshot" on a page it captured fine at every
-    other width (PR #732's website-build run failed on /security/ at 1024 px this way, with every
+    other width (a website-build run has failed on /security/ at 1024 px this way, with every
     layout assertion unreached). The screenshot only feeds the uploaded review artifact, so a
     refused capture must not fail the layout checks that follow it: retry once, fall back to the
     viewport, and warn rather than raise if even that is refused.

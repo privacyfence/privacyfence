@@ -1,7 +1,6 @@
 <?xml version="1.0"?>
 <!--
-PrivacyFence *companion* autostart Task Scheduler task definition
-(#428 Phase 4, B5c).
+PrivacyFence *companion* autostart Task Scheduler task definition.
 
 scripts/windows_privilege_separation.ps1 substitutes __EXEC_PATH__ with the
 real installed PrivacyFenceCompanion.exe path and registers it via
@@ -9,10 +8,9 @@ real installed PrivacyFenceCompanion.exe path and registers it via
 `enable`, which the installer runs on every install. It is the only
 Scheduled Task a PrivacyFence install has.
 
-This is ADR 0002's "startup wiring inverts" on Windows. What used to start
-at sign-in was the daemon, from a task of its own that the installer
-registered and `enable` then disabled; that task is gone (ADR 0042's
-cleanup), and the daemon is a service running as NT SERVICE\PrivacyFence.
+This is ADR 0002's "startup wiring inverts" on Windows. What starts at
+sign-in is the companion, not the daemon: the daemon is a service running as
+NT SERVICE\PrivacyFence, with no sign-in task of its own (ADR 0042).
 On this platform the companion is not merely a convenience: a service runs
 in session 0, so the daemon cannot call webbrowser.open() for a
 Slack/Salesforce/Atlassian OAuth flow, and the companion's own control

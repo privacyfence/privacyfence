@@ -106,7 +106,7 @@ def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: s
     """Exchanges an authorization code for an Atlassian token. Returns the
     raw token response (``access_token``/``refresh_token``), *before* the
     accessible-resources lookup and site selection ``authorize_interactive``
-    does next -- kept separate so org mode's callback route (P8) can insert
+    does next -- kept separate so org mode's callback route can insert
     its own resource-choice page between exchange and persisting the token,
     the same way a multi-site account already needs a ``pick_resource``
     callback here."""

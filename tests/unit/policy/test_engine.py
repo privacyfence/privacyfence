@@ -1,10 +1,9 @@
-"""Tests for privacyfence.policy.engine (P3 of the policy v2 redesign): the v2 rule evaluator.
+"""Tests for privacyfence.policy.engine: the v2 rule evaluator.
 
 Per-predicate equivalence against the old evaluator lives in test_scopes.py and
 test_conditions.py. This module tests `evaluate()`/`preflight()` mechanics that a per-predicate fixture corpus can't reach
 on its own: multiple rules per operation, first-match ordering, `operations` filtering, fail-closed
-handling of an unrecognised predicate, and the temp-accept delegation the redesign proposal's §09
-files under this module ("evaluate(), preflight(), temp-accept window").
+handling of an unrecognised predicate, and the temp-accept delegation.
 """
 from __future__ import annotations
 
@@ -101,11 +100,10 @@ class TestEvaluateTempAccept:
 
 
 class TestFindMatchingRule:
-    """P8 (rule attribution and staleness): the rule *object* ``evaluate()`` matched, factored
-    out so a caller (gate.py's ``_evaluate_auto_accept``) can derive a canonical, content-based
-    id from it (``policy.store.rule_id_for_rule``) instead of the possibly-ambiguous name
-    ``evaluate()`` itself returns -- see that function's own docstring for why looking a rule back
-    up by name is unsafe when two rows can share one."""
+    """Rule attribution: the rule *object* ``evaluate()`` matched, so a caller (gate.py's
+    ``_evaluate_auto_accept``) records that rule's own stored ``.id`` (ADR 0074) rather than
+    looking a rule back up by an id -- see that function's own docstring for why that is unsafe
+    when two rows can share one."""
 
     def test_returns_the_matching_rule_object(self):
         rule = PolicyRule(id="r1", predicate="always_allow", value=None, operations=frozenset({"op"}))
@@ -122,7 +120,7 @@ class TestFindMatchingRule:
         assert find_matching_rule([], "op", make_ctx()) is None
 
     def test_picks_the_same_rule_evaluate_reports_by_id_when_ids_collide(self):
-        # Two rules sharing one `.id` (the F9 shape a rule list built in memory can have) but
+        # Two rules sharing one `.id` (a rule list built in memory can have duplicate ids) but
         # naming different resources: only
         # one of them actually matches this ctx, and find_matching_rule must return that exact
         # object, not merely "the first rule with a matching id".

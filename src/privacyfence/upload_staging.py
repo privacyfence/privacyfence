@@ -219,9 +219,9 @@ class UploadStagingStore:
         return self._finish_fill(slot, token, bytes(plaintext))
 
     async def afill_capability(self, token: bytes, stream: AsyncIterator[bytes]) -> int:
-        """Phase 4's own fill, for the unauthenticated ``PUT
+        """The capability fill, for the unauthenticated ``PUT
         /mcp-files/slots/<token>`` capability route (ADR 0007's "Clients
-        without the bridge" section) -- reached by a caller carrying no
+        without the bridge" section, ADR 0028) -- reached by a caller carrying no
         bearer header at all, so there is no principal to check the slot
         against here. That check isn't skipped, only moved: the slot is
         still bound to whichever principal created it (see

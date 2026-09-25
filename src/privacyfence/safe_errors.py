@@ -1,10 +1,10 @@
 """Sanitization at the boundary between an internal exception and anything
 that leaves the process -- an MCP tool-call error result handed back to the
-client, or a line written to the local log file (SEC-10).
+client, or a line written to the local log file.
 
-Today (pre-SEC-10) ``routes_mcp.py``'s ``handle_call_tool`` and
-``idp_callback`` both do the equivalent of ``str(exc)`` straight into a
-client-visible response or a log line. Most of what flows through a
+Passing ``str(exc)`` straight into a client-visible response or a log line
+(``routes_mcp.py``'s ``handle_call_tool``, ``idp_callback``) would be
+unsafe. Most of what flows through a
 ``raise SomeError(...)`` in this codebase is written by us and carries
 nothing sensitive (``f"Unknown tool: {tool!r}"``, ``"Request denied by
 user"``), but plenty of it isn't: every connector's own ``*ClientError``
@@ -23,13 +23,14 @@ docs/coding-and-testing-guidelines.md §2.7's own "new connector code
 catches it and re-raises as RuntimeError" rule. So a plain ``RuntimeError``
 is, by a repo-wide convention older than this fix, exactly the type that
 *does* carry arbitrary wrapped text -- while ``gate.py``'s own denial
-raises (``"Request denied by user"`` and friends) also used to be plain
-``RuntimeError``, composed only of static text. Same builtin type, two very
-different trust levels, indistinguishable by ``isinstance`` alone. SEC-10
-resolves this by giving every self-authored "denied, not failed" raise site
+raises (``"Request denied by user"`` and friends) are composed only of
+static text. Were both plain ``RuntimeError``, the same builtin type would
+carry two very different trust levels, indistinguishable by ``isinstance``
+alone. This module resolves that by giving every self-authored "denied, not failed" raise site
 its own named ``RuntimeError`` subclass instead (``gate.GateDeniedError``;
-``approvals.TooManyPendingApprovalsError`` and
-``connector_registry.TooManyPrincipalsError`` already were one) and having
+``approvals.TooManyPendingApprovalsError``,
+``approvals.IdenticalWriteAwaitingApprovalError``,
+``connector_registry.TooManyPrincipalsError``) and having
 ``public_message()`` below trust a *named* subclass but not the bare
 ``RuntimeError`` class itself -- so a connector's wrapped failure still
 falls through to the generic message, and a future call site gets the
@@ -110,6 +111,7 @@ def public_message(exc: BaseException) -> str:
     is exactly as likely to carry wrapped third-party text as one of the
     *ClientError types themselves. A named ``RuntimeError`` subclass
     (``gate.GateDeniedError``, ``approvals.TooManyPendingApprovalsError``,
+    ``approvals.IdenticalWriteAwaitingApprovalError``,
     ``connector_registry.TooManyPrincipalsError``) is still trusted --
     whoever defined it reviewed what goes into it, the same review this
     module's own docstring describes for the other three builtins."""

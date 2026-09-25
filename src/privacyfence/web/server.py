@@ -1,73 +1,64 @@
 """Embedded HTTP(S) server lifecycle: bind policy, security headers, and
 starting/stopping the ASGI app (uvicorn) on its own thread -- see daemon_
 main.py's own module docstring's "Threading model" section (its "Web
-thread") for how this fits alongside the daemon's other threads. Before
-P5 retired it, the bridge socket ran on its own dedicated thread the same
-way (``IPCServerThread``, since deleted along with the rest of ``ipc_
-server.py``).
+thread") for how this fits alongside the daemon's other threads.
 
-**Local mode**: D1's decision applies -- loopback HTTP, bound to
-``localhost`` (not a bare ``127.0.0.1``/``0.0.0.0``) so ``http://localhost``
-stays a secure context for whatever this surface needs (WebAuthn, P9)
-without anyone having to move the bind address. Auth is deliberately the
-simplest thing that's still a real control, not sessions/OIDC -- but since
-SEC-06 it is no
-longer "possession of one never-expiring, URL-carried token is the
-authority" the way it was through v4.0.0a12 (the same posture
-``~/.privacyfence/ipc_token`` had for the bridge, before P5 retired both --
-this surface, reachable from a browser rather than only a local process,
-needed more). What a browser actually presents is a short-lived,
+**Local mode**: loopback HTTP (ADR 0010), bound to ``localhost`` (not a
+bare ``127.0.0.1``/``0.0.0.0``) so ``http://localhost`` stays a secure
+context for whatever this surface needs (WebAuthn step-up) without anyone
+having to move the bind address. Auth is deliberately the simplest thing
+that's still a real control, not sessions/OIDC -- but it is not
+"possession of one never-expiring, URL-carried token is the authority":
+this surface is reachable from a browser rather than only a local process,
+and needs more. What a browser actually presents is a short-lived,
 single-use bootstrap code (``?bootstrap=<code>``, see
 ``_BootstrapMiddleware``), exchanged exactly once for an independent,
 random session id (web/session_auth.py's ``LocalSessionStore``) carrying
 its own idle and absolute expiry -- web/routes_approvals.py's own docstring
 covers the CSRF double-submit that session id also backs. Minting a fresh
 code on demand -- once a previous one has expired, without restarting the
-daemon -- no longer goes through this loopback port at all: #428 Phase 2
-replaced the old persistent-secret-over-HTTP design (a ``web_token`` file
-presented as a ``POST /api/bootstrap`` Bearer header) with
-``web/control_channel.py``'s ``ControlChannelServer``, a Unix domain socket
-(macOS/Linux) or ACL'd named pipe (Windows) a browser's own loopback
-connection cannot speak. See that module's own docstring for the full
+daemon -- does not go through this loopback port at all:
+``web/control_channel.py``'s ``ControlChannelServer`` is a Unix domain
+socket (macOS/Linux) or ACL'd named pipe (Windows) a browser's own loopback
+connection cannot speak, rather than a persistent secret presented over
+HTTP (ADR 0002 decision 2). See that module's own docstring for the full
 reasoning.
 
-**Org mode** (P7): a
+**Org mode**: a
 configurable bind host/port, optional TLS termination, optional
 ``X-Forwarded-*`` trust for a small explicit set of reverse-proxy
 addresses (never by default), and ``/mcp`` authenticated by
-``web/oauth_provider.py``'s real OAuth 2.1 authorization server instead of
-one shared secret. Passed to ``build_app``/``WebServer`` as one ``OrgAuth``
-bundle (see that class) rather than four separate parameters, so a caller
-either opts into the whole org-mode picture or none of it.
+``web/oauth_provider.py``'s real OAuth 2.1 authorization server (ADR 0011)
+instead of one shared secret. Passed to ``build_app``/``WebServer`` as one
+``OrgAuth`` bundle (see that class) rather than four separate parameters,
+so a caller either opts into the whole org-mode picture or none of it.
 
-**`/approvals` in org mode** (P9, web/routes_approvals.py's ``build_routes()``)
-is *not* ``routes_approvals.create_app``'s local-mode surface -- that one still
+**`/approvals` in org mode** (web/routes_approvals.py's ``build_routes()``)
+is *not* ``routes_approvals.create_app``'s local-mode surface -- that one
 authenticates with one shared secret and lists *every* pending approval
-with no principal filtering, which is exactly why it was never mounted
-here through P8 (exposing it as-is under org mode, where many principals
-share one daemon, would leak every principal's pending approvals to
-whoever holds any valid token). ``/approvals``/``/security`` here are a
-separate, principal-aware route set: every read and write is authorized
-against ``current_principal()`` via ``org_session``, and a *write*
-decision additionally demands a fresh WebAuthn step-up when
-``org_config.json``'s ``step_up.enabled`` is set (§10.6, D7) --
+with no principal filtering, so exposing it as-is under org mode, where
+many principals share one daemon, would leak every principal's pending
+approvals to whoever holds any valid token. ``/approvals``/``/security``
+here are a separate, principal-aware route set (ADR 0033): every read and
+write is authorized against ``current_principal()`` via ``org_session``,
+and a *write* decision additionally demands a fresh WebAuthn step-up when
+``org_config.json``'s ``step_up.enabled`` is set --
 web/routes_approvals.py's own module docstring covers both.
 
-**`/settings` in org mode** (#400) is, likewise, *not*
+**`/settings` in org mode** is, likewise, *not*
 ``routes_settings.py``'s ~30-action local-mode dispatcher opened up
-wholesale -- ``routes_settings.build_org_routes()`` (the former
-web/routes_org_settings.py) mounts a capability-filtered subset instead,
+wholesale -- ``routes_settings.build_org_routes()`` mounts a
+capability-filtered subset instead,
 restricted to ``org_settings_scope.ACTION_SCOPES``'s own ``ORG_MODE``
 members: ``GET /settings``, every signed-in principal's own auto-accept
 rules, read-only except for adding or removing one; and ``GET
-/settings/privacy``, an admin-only (``Principal.is_admin`` -- #400 C3c
-finally gave that field a real consumer) view of the install-wide
-PII/privacy policy, editable since #400 C3e (web/org_install_policy.py).
-PSC-5 makes that subset render through the exact same settings_window_
-html.build_html() local mode's own settings page does (capability-filtered
-per mode/``is_admin``, web/org_settings_pages.py deleted) and dispatches
-every write through the same generic ``POST /api/settings/{action}``
-local mode's own dispatcher answers, restricted to
+/settings/privacy``, an admin-only (``Principal.is_admin``) view of the
+install-wide PII/privacy policy, editable through web/org_install_policy.py.
+That subset renders through the exact same settings_window_html.build_html()
+local mode's own settings page does (capability-filtered per
+mode/``is_admin``) and dispatches every write through the same generic
+``POST /api/settings/{action}`` local mode's own dispatcher answers (ADR
+0032), restricted to
 ``routes_settings._ORG_ALLOWED_ACTIONS``. The rest of routes_settings.py's
 ~30 actions (connector management, the update banner, Telegram's
 interactive auth -- see web/org_settings_scope.py's own ``ACTION_SCOPES``
@@ -150,16 +141,12 @@ DEFAULT_PORT = 8765
 MCP_URL_FILE_NAME = "mcp_url"
 
 # Content-Security-Policy: see web/csp.py's own module docstring for the
-# full policy and the reasoning behind each directive (SEC-08 -- this
-# replaced a blanket 'unsafe-inline' grant on both script-src and
-# style-src, which is what
-# this comment described through v4.0.0a12; that description had grown
-# actively inaccurate, since the code below it granted exactly the
-# "blanket 'unsafe-inline'" the comment said this policy avoided). Built
+# full policy and the reasoning behind each directive -- script-src and
+# style-src take a nonce rather than a blanket 'unsafe-inline' grant. Built
 # per-response, from that request's own nonce (_SecurityHeadersMiddleware
-# below), not a fixed module-level constant any more.
+# below), not a fixed module-level constant.
 
-# SEC-18: every
+# Every
 # browser feature this app never uses, denied outright -- the same "narrow,
 # explicit exceptions for exactly what these pages actually use" posture
 # web/csp.py's build_csp() already takes. ``publickey-credentials-get``/
@@ -177,7 +164,7 @@ _PERMISSIONS_POLICY = (
     "publickey-credentials-get=(self), screen-wake-lock=(), usb=(), xr-spatial-tracking=()"
 )
 
-# SEC-18: one year, subdomains included -- the usual conservative starting
+# One year, subdomains included -- the usual conservative starting
 # point (see e.g. OWASP's HSTS cheat sheet) short of the two-year "preload"
 # submission length, which this app has no business requesting: preload is
 # a permanent, browser-vendor-controlled commitment keyed on the exact
@@ -233,7 +220,8 @@ def confirm_first_passkey_enrollment() -> tuple[bool, str]:
 def present_recovery_code(code: str) -> tuple[bool, str]:
     """Local mode's ``deliver_recovery_code`` (web/routes_security.py):
     hand a freshly minted one-time recovery code to the companion, which
-    puts it in front of whoever is at this machine's own login session.
+    puts it in front of whoever is at this machine's own login session
+    (ADR 0003's 2026-09-19 Out-of-scope amendment).
 
     Wired only on a *packaged* build -- ``build_app`` below decides that --
     for the same reason ``confirm_first_passkey_enrollment`` above honors a
@@ -253,7 +241,7 @@ def present_recovery_code(code: str) -> tuple[bool, str]:
 
 def reissue_local_recovery_code() -> tuple[bool, str]:
     """The companion's ``RECOVERY`` command, from the daemon's side: confirm
-    with the human, mint, show, and only then store (plan item 1.3's
+    with the human, mint, show, and only then store (the
     "re-presented by the companion" half).
 
     This is the *only* way a second recovery code is ever produced, and it
@@ -267,7 +255,8 @@ def reissue_local_recovery_code() -> tuple[bool, str]:
     agent shares (web/control_channel.py's own ``0660`` paragraph): the
     reply carries no code, so triggering this learns an attacker nothing,
     and the dialog means it cannot even invalidate the human's saved code
-    without somebody at the keyboard agreeing to it.
+    without somebody at the keyboard agreeing to it. See ADR 0003's
+    2026-09-19 Out-of-scope amendment.
     """
     confirmed, reason = request_recovery_confirmation()
     if not confirmed:
@@ -283,7 +272,7 @@ def reissue_local_recovery_code() -> tuple[bool, str]:
 def local_enrollment_state(step_up: StepUpConfig | None) -> str:
     """The companion's ``ENROLLMENT`` command, from the daemon's side:
     ``"pending"`` when this install requires a passkey and has none
-    enrolled, ``"ok"`` otherwise (plan item 1.2).
+    enrolled, ``"ok"`` otherwise.
 
     "Requires" is ``enabled and require_passkey`` together, the same
     pairing every other consumer of this config treats as in force (see
@@ -303,9 +292,9 @@ def local_enrollment_state(step_up: StepUpConfig | None) -> str:
 
 
 def local_status_payload(started_at: str) -> str:
-    """The companion's ``STATUS`` command, from the daemon's side (the
-    local-mode-fixes plan's Phase 2): a compact JSON object -- ``daemon_status.probe()``'s "the
-    control channel answered" case, and what the companion's tray menu and
+    """The companion's ``STATUS`` command, from the daemon's side: a
+    compact JSON object -- ``daemon_status.probe()``'s "the control
+    channel answered" case, and what the companion's tray menu and
     ``Service Details...`` dialog are actually built from.
 
     Read-only and free of anything a local process couldn't already infer
@@ -335,15 +324,14 @@ def local_status_payload(started_at: str) -> str:
 
 
 def _write_mcp_url_file(url: str) -> None:
-    """The direct successor of ipc.py's PORT_FILE for a client that talks to
-    /mcp instead of the old IPC socket -- see mcpb/shim/src/protocol.ts's
-    module docstring, which reads this same file (D11): "WebServer.start()
-    writes ~/.privacyfence/mcp_url when it binds, and clears it on
-    shutdown -- the only new daemon-side surface P4b needs." 0600 for the
+    """The discovery file a client that talks to /mcp reads to find it --
+    see mcpb/shim/src/protocol.ts's module docstring, which reads this same
+    file: WebServer.start() writes it when it binds, and clears it on
+    shutdown. 0600 for the
     same reason web_token/mcp_token are: not a secret itself, but written
     alongside them under the same directory.
 
-    ``handoff_dir()`` rather than ``data_dir()`` since #428 Phase 4: every
+    ``handoff_dir()`` rather than ``data_dir()``: every
     discovery file this module writes exists to be read by something in the
     user's *own* session (the MCPB shim, the companion, a human following the
     not-authorized page), so all of them stay on the user-reachable side of a
@@ -362,7 +350,7 @@ def _clear_mcp_url_file() -> None:
 
 
 def _write_web_base_url_file(base_url: str) -> None:
-    """#428 Phase 3: the companion's own way to learn this install's base
+    """The companion's own way to learn this install's base
     URL (see ``web/control_channel.py``'s ``read_base_url()``) without
     importing this module -- written unconditionally alongside ``mcp_url``
     whenever this server runs local mode's own control channel (``self.
@@ -378,9 +366,9 @@ def _clear_web_base_url_file() -> None:
 class _SecurityHeadersMiddleware:
     """Plain ASGI middleware (not starlette.middleware.base.
     BaseHTTPMiddleware, which buffers the whole response) adding the fixed
-    header set every response from this app needs -- see, for the three
-    added by SEC-18, the module-level ``_PERMISSIONS_POLICY``/``_HSTS``
-    constants' own comments.
+    header set every response from this app needs -- see, for
+    Permissions-Policy and HSTS, the module-level
+    ``_PERMISSIONS_POLICY``/``_HSTS`` constants' own comments.
     Cache-Control: no-store is also set per-route (web/routes_approvals.py
     and friends) for the routes that actually carry sensitive content,
     since a static blanket no-store here would be redundant with, not a
@@ -399,10 +387,10 @@ class _SecurityHeadersMiddleware:
     HTTPS (TLS terminated here or, just as often, at a reverse proxy in
     front of this daemon -- either way the browser's own connection is
     HTTPS, which is what HSTS actually governs), so pinning that hostname
-    to HTTPS-only is exactly the SEC-18 win intended, with none of local
+    to HTTPS-only is exactly the win intended, with none of local
     mode's collateral risk.
 
-    **CSP nonce (SEC-08, Phase 3.1).** A fresh nonce is minted for every
+    **CSP nonce.** A fresh nonce is minted for every
     HTTP request and placed on ``scope["state"]`` (readable downstream as
     ``request.state.csp_nonce``, see web/csp.py's ``nonce_for``) *before*
     the wrapped app runs -- every route that builds its document fresh
@@ -415,11 +403,10 @@ class _SecurityHeadersMiddleware:
     read from ``scope["state"]`` at send time, *after* the app has already
     run and had a chance to override it -- not the value minted up front --
     so the header always matches whichever nonce actually ended up in the
-    response body.
+    response body. Why a nonce and not ``'unsafe-inline'``: ADR 0063.
 
-    **Replace, not extend (SEC-08, Phase 3.1).** Previously this appended
-    the fixed header set onto whatever the wrapped app already sent, which
-    would silently emit *two* headers of the same name -- ambiguous at
+    **Replace, not extend.** Appending the fixed header set onto whatever
+    the wrapped app already sent would silently emit *two* headers of the same name -- ambiguous at
     best, and for Content-Security-Policy specifically, most browsers
     intersect multiple CSP headers into their most-restrictive combination,
     which is not the same thing as "the value this middleware computed"
@@ -460,7 +447,7 @@ class _SecurityHeadersMiddleware:
 
 @dataclass(frozen=True)
 class OrgAuth:
-    """Everything build_app()/WebServer need to run org mode (P7) -- one
+    """Everything build_app()/WebServer need to run org mode -- one
     bundle instead of four separate parameters, so a caller either opts
     into the whole org-mode picture (a real OAuth 2.1 AS, real sessions,
     the IdP config both go through) or passes ``org=None`` and gets local
@@ -472,7 +459,7 @@ class OrgAuth:
     sessions: OrgSessionStore
     idp: IdpConfig
     issuer_url: str
-    # P8: per-user service
+    # Per-user service
     # authorization (Google/Slack/Salesforce/Atlassian/Telegram) and the
     # /connect page that drives it. Both default to None/{} so every
     # existing caller of OrgAuth (this module's own tests included) keeps
@@ -483,7 +470,7 @@ class OrgAuth:
     # always supplies both.
     connector_registry: ConnectorRegistry | None = None
     org_config: dict = field(default_factory=dict)
-    # #400: the server's own install-wide settings.yaml (run_app()'s
+    # The server's own install-wide settings.yaml (run_app()'s
     # ``config``) -- routes_settings.build_org_routes()'s admin-only
     # privacy-policy view reads this directly, and
     # daemon_main._start_org_web_server threads the
@@ -492,7 +479,7 @@ class OrgAuth:
     # same "every existing OrgAuth() caller keeps working" reason
     # connector_registry/org_config already do.
     install_wide_settings: dict = field(default_factory=dict)
-    # #400 C3e: where that dict was loaded from, so the admin privacy page
+    # Where that dict was loaded from, so the admin privacy page
     # can write it back. Separate from the dict rather than derived from it
     # because nothing in a parsed settings.yaml records its own path.
     # Empty means "read-only": routes_settings.build_org_routes() renders
@@ -531,7 +518,7 @@ def _local_principal_resolver(sessions: LocalSessionStore) -> Callable[[Request]
 
 
 def _org_principal_resolver(sessions: OrgSessionStore) -> Callable[[Request], Principal]:
-    """Org mode's default resolver (P7): a valid ``pf_org_session`` cookie
+    """Org mode's default resolver: a valid ``pf_org_session`` cookie
     (web/org_session.py) resolves to the human who signed in via
     ``/login``; anything else -- no cookie, an unknown or expired one --
     resolves to ``ANONYMOUS_PRINCIPAL``, never ``LOCAL_PRINCIPAL`` (see
@@ -549,8 +536,8 @@ def _org_principal_resolver(sessions: OrgSessionStore) -> Callable[[Request], Pr
 
 
 class _PrincipalScopeMiddleware:
-    """The browser surface's principal_scope() entry point (P6: "entered
-    once per HTTP request, in exactly one place per surface") -- the MCP
+    """The browser surface's principal_scope() entry point -- entered
+    once per HTTP request, in exactly one place per surface; the MCP
     endpoint's own entry point is routes_mcp.py's handle_call_tool. Every
     per-principal registry
     downstream (auto_accept.py, audit_log.py, pii_detector.py,
@@ -559,7 +546,7 @@ class _PrincipalScopeMiddleware:
 
     ``resolve`` defaults to _local_principal_resolver(sessions) in local
     mode (ADR 0008: LOCAL_PRINCIPAL, or whichever principal minted the
-    request's own session), or _org_principal_resolver in org mode (P7) --
+    request's own session), or _org_principal_resolver in org mode --
     parameterized rather than hardcoded so a test can inject a resolver
     that varies by request to prove two principals stay isolated all the
     way through the real HTTP routes, not just via principal_scope()
@@ -623,14 +610,13 @@ def _owner_only_routes(routes: list) -> list:  # noqa: ANN401 -- list[BaseRoute]
 
 
 def _parse_host_header(raw: str) -> str | None:
-    """Standards-aware ``Host`` header -> bare hostname (SEC-17). The manual
-    ``split(":", 1)[0]`` this replaced assumed the first colon always
-    separates host from port, which is only true for a bare name or IPv4
-    address -- an IPv6 literal has colons *in* the host itself
-    (``[::1]:8443``, or even a port-less ``[::1]``), so that split just
-    returned the literal ``"["`` -- every IPv6 request either got rejected
-    outright, or wrongly let through by whatever else happened to compare
-    equal to ``"["``.
+    """Standards-aware ``Host`` header -> bare hostname. A manual
+    ``split(":", 1)[0]`` would assume the first colon always separates host
+    from port, which is only true for a bare name or IPv4 address -- an
+    IPv6 literal has colons *in* the host itself (``[::1]:8443``, or even a
+    port-less ``[::1]``), so that split would return the literal ``"["``
+    and every IPv6 request would either be rejected outright, or wrongly
+    let through by whatever else happened to compare equal to ``"["``.
 
     Delegating to ``urlsplit`` on a synthesized ``//<raw>`` authority
     gets RFC 3986's bracket-aware host/port grammar for free -- its
@@ -682,7 +668,7 @@ class _HostAllowlistMiddleware:
 
 
 class _BootstrapMiddleware:
-    """SEC-06: the
+    """The
     single place a ``?bootstrap=<code>`` query string is ever honored,
     ahead of every route in the local-mode app. A live, unexpired code is
     consumed (so it can never be replayed -- successful exchange or not)
@@ -690,12 +676,10 @@ class _BootstrapMiddleware:
     ``pf_session`` cookie; either way the response is a redirect to the
     *same path* with no query string at all, so neither the code nor the
     session id it minted ever appears in a URL, browser history, or a
-    Referer header the way the old ``?token=`` link (itself the literal
-    session-cookie value) did. A request that carries no ``bootstrap``
+    Referer header. A request that carries no ``bootstrap``
     param passes straight through untouched -- this only ever intercepts
     the one-time exchange, never ordinary authenticated traffic, which
-    keeps proving itself out via the ``pf_session`` cookie exactly as
-    before.
+    keeps proving itself out via the ``pf_session`` cookie.
     """
 
     def __init__(self, app: ASGIApp, *, bootstrap: BootstrapStore, sessions: LocalSessionStore) -> None:
@@ -727,18 +711,16 @@ class _BootstrapMiddleware:
 
 
 def _state_stream_route(stream: StateStream, *, sessions: LocalSessionStore) -> Route:
-    """``GET /api/state/stream`` (§16.3) -- the one interface this phase
-    and P3 share; see web/state_stream.py's own module docstring for what
-    it carries. Built here (not in state_stream.py itself) purely because
+    """``GET /api/state/stream`` -- the one push channel the settings page
+    and the approval list share; see web/state_stream.py's own module
+    docstring for what it carries. Built here (not in state_stream.py itself) purely because
     every other route factory in this module already lives beside
     _HostAllowlistMiddleware/build_app -- state_stream.py stays focused on
     the stream's own state and SSE-formatting logic.
 
-    Issue #423: a tab holding this connection open for the whole idle
-    timeout used to get evicted anyway -- the old ``session_auth.
-    authenticated()`` helper only ever touched the session once, at
-    connect time, and the loop inside ``stream.subscribe`` never touched
-    it again no matter how long the tab stayed open and watching. The
+    A tab holding this connection open for the whole idle timeout must not
+    be evicted, which it would be if the session were touched only once,
+    at connect time, and never again inside ``stream.subscribe``. The
     session id is read here, once, so the same ``sessions.touch`` this
     handler already runs for the initial auth check can be handed to
     ``subscribe`` as its per-tick ``touch`` callback -- an open connection
@@ -764,8 +746,8 @@ async def _combined_lifespan(managers: list) -> AsyncIterator[None]:
     below} this build actually needs into the one ``lifespan`` Starlette
     accepts -- build_app() constructs `managers` from whichever of
     mcp_dispatcher/state_stream were actually passed in, so a caller that
-    passes neither (every pre-P2 test in this repo) gets an empty list and
-    this is a no-op context manager, unchanged."""
+    passes neither (many tests in this repo) gets an empty list and this is
+    a no-op context manager."""
     async with contextlib.AsyncExitStack() as stack:
         for cm in managers:
             await stack.enter_async_context(cm)
@@ -777,16 +759,15 @@ async def _state_stream_loop_lifespan(ready_event: threading.Event | None = None
     """Captures this ASGI app's own running event loop into
     web/state_stream.py's module-level ``_loop`` for the app's whole
     lifetime -- settings_controller.call_on_main's fallback dispatcher
-    (§16.2.1) needs it to marshal a background-thread callback onto this
+    needs it to marshal a background-thread callback onto this
     loop rather than running inline. Cleared on shutdown so a stale loop
     reference from a previous server instance (e.g. across daemon restarts
     in a single test process) is never mistaken for a live one.
 
     ``ready_event``, when given, is set right after the loop is captured --
     WebServer's own ``wait_until_ready`` is what a synchronous caller on
-    another thread (daemon_main.py's run_app(), the direct successor of the
-    old IPCServerThread's own ``_ready`` Event) blocks on to learn this
-    loop, the one every connector call now actually runs on (P5)."""
+    another thread (daemon_main.py's run_app()) blocks on to learn this
+    loop, the one every connector call actually runs on."""
     loop = asyncio.get_running_loop()
     _state_stream.set_loop(loop)
     if ready_event is not None:
@@ -823,51 +804,49 @@ def build_app(
     alone (no wrapping) is what tests reach for when they want to exercise
     the routes without also exercising this middleware stack.
 
-    ``org`` (P7) switches this into org mode: ``sessions``/
+    ``org`` switches this into org mode: ``sessions``/
     ``bootstrap``/``mcp_token``/``controller``/``state_stream`` are all
     ignored (org mode doesn't mount the local-session-authenticated
     approval/settings surface at all -- see this module's own docstring for
     why), ``/mcp`` is authenticated by ``org.provider`` instead of a shared
     secret, and the OAuth 2.1 authorization-server + browser-login routes
-    are mounted alongside it. Local mode (``org=None``, the default) is
-    entirely unchanged from before this phase.
+    are mounted alongside it. Local mode is ``org=None``, the default.
 
     ``principal_resolver`` defaults to _local_principal_resolver(sessions)
     (local mode, ADR 0008) or _org_principal_resolver (org mode) --
     pass an explicit one only to prove per-principal isolation over real
     HTTP in a test.
 
-    ``mcp_dispatcher`` (P2) folds
+    ``mcp_dispatcher`` folds
     the ``/mcp`` Streamable HTTP endpoint into this same app. In local
     mode it's authenticated by its own ``mcp_token`` -- a secret
     independent of ``sessions`` (the approval surface's own session/CSRF
-    store, SEC-06), which is what makes the audience separation ("the
+    store), which is what makes the audience separation ("the
     MCP access token must never be accepted on approval-decision endpoints,
     and the browser session cookie must never be accepted on /mcp") hold
-    structurally rather than by convention. In org mode the same
+    structurally rather than by convention (ADR 0061). In org mode the same
     separation holds because ``org.provider``'s tokens and
     ``org.sessions``' cookies are two entirely different stores with
     nothing that compares one against the other (see
     web/test_org_mcp_e2e.py's own audience-separation tests).
 
-    ``controller`` (P4, §16) folds ``/settings`` and its ``/api/settings/*``
+    ``controller`` folds ``/settings`` and its ``/api/settings/*``
     actions into the same app, on the *same* ``sessions`` store -- unlike
     MCP, the settings surface shares the approval surface's own session/
-    CSRF cookie by design (§16.1's exit criterion: "/approvals and
-    /settings are one application: one header, one nav, one palette, one
-    session"). ``state_stream`` (built by WebServer when either
+    CSRF cookie by design: /approvals and /settings are one application,
+    with one header, one nav, one palette and one session. ``state_stream`` (built by WebServer when either
     ``controller`` or ``web_ui`` needs the push channel) backs
     ``GET /api/state/stream`` either way. Minting a fresh bootstrap code on
-    demand is no longer an HTTP route this app exposes at all -- #428 Phase
-    2 moved that to ``web/control_channel.py``'s ``ControlChannelServer``,
-    which ``WebServer`` runs alongside this ASGI app rather than inside it.
+    demand is not an HTTP route this app exposes at all -- that is
+    ``web/control_channel.py``'s ``ControlChannelServer``, which
+    ``WebServer`` runs alongside this ASGI app rather than inside it.
     ``sessions``/``bootstrap`` default to a fresh store each when omitted,
     since every real (non-test) local-mode caller is ``WebServer``, which
-    always constructs and shares one pair for its whole lifetime. Every new
-    parameter defaults to ``None``/unchanged behavior, so every existing
-    caller (including this module's own pre-P4 tests) is unaffected.
+    always constructs and shares one pair for its whole lifetime. Every
+    optional surface's parameter defaults to ``None``, so a caller (a test,
+    usually) that omits it simply does not get that surface.
 
-    ``step_up``/``step_up_issuer_url`` (#426 Phase 1) mount ``/security`` in
+    ``step_up``/``step_up_issuer_url`` mount ``/security`` in
     local mode -- ignored when ``org`` is given, since ``_build_org_app``
     resolves its own ``StepUpConfig`` from ``org.org_config`` directly (see
     that function's own step_up handling). ``step_up_issuer_url`` is the
@@ -875,9 +854,9 @@ def build_app(
     role ``org.issuer_url`` plays for org mode's own mount below) -- passed
     separately from ``step_up`` itself since local mode's origin depends on
     ``WebServer``'s own ``host``/``port``, which this function has no other
-    way to see. The same two values (#426 Phase 2) also gate
+    way to see. The same two values also gate
     ``create_approvals_app``'s own decide endpoint on a fresh WebAuthn
-    assertion, and (#426 Phase 3) ``build_settings_routes``'s own sensitive
+    assertion, and ``build_settings_routes``'s own sensitive
     settings actions when ``step_up.require_passkey`` is on -- one
     ``StepUpConfig``, read once here, drives the enrollment surface, the
     decide-time check, and the settings-action check alike.
@@ -911,7 +890,7 @@ def build_app(
         # authenticated exactly like /mcp (same bearer-token verifier) --
         # see routes_file_bridge.py's own module docstring for why this
         # can't just be more routes on the main approval-surface app. Also
-        # includes Phase 4's unauthenticated capability pair
+        # includes the unauthenticated capability pair (ADR 0028)
         # (privacyfence_create_upload_slot and the no-bridge download
         # fallback hand out /mcp-files/slots|fetch URLs a client with no
         # shim -- and possibly no way to set a custom header at all -- can
@@ -919,14 +898,14 @@ def build_app(
         # one at the same prefix, see mount_file_bridge's own docstring.
         extra_routes.extend(mount_file_bridge(token=mcp_token, verifier=mcp_verifier))
 
-    # The self-approval plan's Phase 2 -- one answer, read once here, for
+    # One answer, read once here, for
     # both gates below: an approving decision (web/routes_approvals.py) and
     # a sensitive settings action (web/routes_settings.py) require a session
     # this daemon can attribute to a person. See either module's own
     # ``require_human_session`` paragraph for why privilege separation is
     # the line: it is what ADR 0003 makes mandatory on every packaged
     # install, and what guarantees the companion that mints such a session
-    # exists at all.
+    # exists at all. See ADR 0062.
     require_human_session = privilege_separation.is_enabled()
 
     if controller is not None:
@@ -936,11 +915,11 @@ def build_app(
             require_human_session=require_human_session,
         )))
 
-    # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike
-    # org mode, local mode's own StepUpConfig.from_local_config() always
-    # gives it (DEFAULT_LOCAL_RP_ID), so this is unconditional in practice
-    # for every real (non-test) caller. Enrollment only -- nothing yet
-    # consults an enrolled credential in local mode (#426 Phase 2/3).
+    # The /security enrollment surface: mounted whenever step_up.rp_id is
+    # set -- which, unlike org mode, local mode's own
+    # StepUpConfig.from_local_config() always gives it (DEFAULT_LOCAL_RP_ID),
+    # so this is unconditional in practice for every real (non-test) caller.
+    # The decide and settings step-up gates consult what it enrolls.
     if step_up is not None and step_up.rp_id:
         from . import routes_security
 
@@ -967,7 +946,7 @@ def build_app(
             # call below passes nothing -- see routes_security.py's
             # build_routes docstring on why the two differ here.
             confirm_first_enrollment=confirm_first_passkey_enrollment,
-            # Plan item 1.3: the companion shows the one-time recovery code
+            # The companion shows the one-time recovery code
             # instead of this response carrying it -- on a packaged build
             # only, which is the only kind of install ADR 0003 guarantees a
             # companion for. Everywhere else this stays None and the code
@@ -1024,8 +1003,8 @@ def _build_org_app(
     docstrings for what's deliberately absent (the local-token settings
     surface's ~30-action dispatcher, still -- only its own purpose-built
     replacement is mounted, see build_org_routes below).
-    ``/approvals`` and ``/security`` (P9,
-    web/routes_approvals.py/web/routes_security.py) are mounted
+    ``/approvals`` and ``/security``
+    (web/routes_approvals.py/web/routes_security.py) are mounted
     unconditionally here -- unlike ``/connect`` (below), they need nothing
     from ``org.connector_registry``, only ``web_ui`` (already a required
     parameter of build_app() in both modes) and ``org.org_config`` for
@@ -1046,7 +1025,7 @@ def _build_org_app(
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
-        # Phase 4: org mode's own privacyfence_create_upload_slot and
+        # ADR 0028: org mode's own privacyfence_create_upload_slot and
         # DownloadDeliveryConfig.agent_links need the same two
         # unauthenticated capability routes local mode mounts above --
         # see routes_file_bridge.py's own module docstring. Gated on
@@ -1061,13 +1040,13 @@ def _build_org_app(
     # org.sessions, same reasoning /approvals'/security's own unconditional
     # mount below gives for needing only web_ui/org.org_config.
     extra_routes.extend(routes_downloads.build_routes(sessions=org.sessions))
-    # P8: only mounted once a
+    # Only mounted once a
     # real ConnectorRegistry exists to evict on a successful authorization
     # -- see OrgAuth's own docstring. daemon_main.py's real org-mode boot
     # path always supplies one; a hand-built OrgAuth in a test that only
     # cares about the OAuth-AS/session-login surface can omit it and get
-    # exactly P7's own route set, with /connect and /oauth/start|callback
-    # left out (see test_server_org_mode.py's TestConnectSurfaceOrgMode).
+    # that surface alone, with /connect and /oauth/start|callback left out
+    # (see test_server_org_mode.py's TestConnectSurfaceOrgMode).
     default_next_path = routes_org_identity.DEFAULT_NEXT_PATH
     if org.connector_registry is not None:
         extra_routes.extend(routes_connect.build_routes(
@@ -1077,7 +1056,7 @@ def _build_org_app(
         default_next_path = "/connect"
     extra_routes.extend(routes_org_identity.build_routes(
         idp=org.idp, sessions=org.sessions, base_url=org.issuer_url, default_next_path=default_next_path,
-        # SEC-22: derived from org.org_config directly here, the same
+        # Derived from org.org_config directly here, the same
         # "self-contained, cheap re-parse" pattern StepUpConfig below
         # already uses -- see that call's own comment.
         policy=AuthzPolicyConfig.from_org_config(org.org_config),
@@ -1085,7 +1064,7 @@ def _build_org_app(
 
     issuer_host = urlparse(org.issuer_url).hostname or ""
     step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)
-    # PSC-2b: one approval route module now builds both modes' routes --
+    # One approval route module builds both modes' routes (ADR 0033) --
     # only the IdP step-up routes (no local-mode analogue at all) stay a
     # separate mount, see routes_org_stepup.py's own module docstring.
     extra_routes.extend(routes_approvals.build_routes(
@@ -1109,20 +1088,20 @@ def _build_org_app(
             # own module docstring on ``nav_items``.
             nav_items=web_shell.ORG_NAV_ITEMS,
         ))
-    # #400: mounted unconditionally, same reasoning as /approvals above --
+    # Mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
     # already required parameters of this function either way.
-    # PSC-4b/PSC-5: routes_settings.py now builds both modes' settings
-    # routes and renders both through the same settings_window_html.
-    # build_html() -- see build_org_routes's own docstring.
+    # routes_settings.py builds both modes' settings routes and renders
+    # both through the same settings_window_html.build_html() (ADR 0033)
+    # -- see build_org_routes's own docstring.
     extra_routes.extend(build_org_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
         install_wide_settings_path=org.install_wide_settings_path,
-        # #579: the same StepUpConfig/origin routes_approvals.build_routes
+        # The same StepUpConfig/origin routes_approvals.build_routes
         # above already resolves from org.org_config -- see that call and
         # this function's own build_org_routes docstring.
         step_up=step_up, step_up_origin=org.issuer_url,
-        # AGT-5: the admin's "AI systems" pin page lists and pins this provider's DCR clients.
+        # The admin's "AI systems" pin page (ADR 0035) lists and pins this provider's DCR clients.
         oauth_provider=org.provider,
         # Auto-accept rule values resolve to names through the viewing principal's own connectors.
         connector_registry=org.connector_registry,
@@ -1144,7 +1123,7 @@ def _build_org_app(
 
 class WebServer:
     """Runs the embedded HTTP server on its own daemon thread -- always
-    started in local mode since P10 (daemon_main.py's own
+    started in local mode (daemon_main.py's own
     ``_maybe_start_web_server``), since the web approval UI is the only one
     there is (ADR 0001 removed the native popup)."""
 
@@ -1169,19 +1148,18 @@ class WebServer:
         agent_overrides: AgentOverrides | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
-        are org mode's own additions (P7, §10.2) -- every local-mode caller
-        (every one before this phase) leaves them unset and gets exactly
-        today's behavior. ``ssl_certfile``/``ssl_keyfile`` (both required
-        together, or neither) terminate TLS directly in uvicorn; leave both
+        are org mode's own -- every local-mode caller leaves them unset.
+        ``ssl_certfile``/``ssl_keyfile`` (both required together, or
+        neither) terminate TLS directly in uvicorn; leave both
         unset when a reverse proxy in front of this daemon terminates TLS
-        instead. ``trusted_proxies`` is the explicit allowlist §10.2
-        requires before ``X-Forwarded-For``/``X-Forwarded-Proto`` are
+        instead. ``trusted_proxies`` is the explicit allowlist required
+        before ``X-Forwarded-For``/``X-Forwarded-Proto`` are
         honored at all -- empty (the default) means never, regardless of
         mode.
 
-        ``step_up`` (#426 Phase 1) is local mode's own ``StepUpConfig`` --
-        ``None`` (the default) mounts no ``/security`` route at all, which
-        is what every caller before this phase gets; daemon_main.py's real
+        ``step_up`` is local mode's own ``StepUpConfig`` --
+        ``None`` (the default) mounts no ``/security`` route at all;
+        daemon_main.py's real
         boot path always passes one (``StepUpConfig.from_local_config``).
         Ignored in org mode, which resolves its own from ``org.org_config``
         (see ``_build_org_app``).
@@ -1193,17 +1171,16 @@ class WebServer:
         self.host = host
         self.port = port
         self.org = org
-        # SEC-06: local mode's real session/bootstrap-code stores, built
+        # Local mode's real session/bootstrap-code stores, built
         # once here and shared with build_app() below -- None in org mode,
         # which has its own OrgSessionStore (org.sessions) and no bootstrap
         # concept at all (org mode's entry point is /login, not a one-time
-        # link). Nothing in this class hands a code out any more: the
+        # link). Nothing in this class hands a code out: the
         # control channel is the only way one is minted, and who may ask for
         # an *attested* one is web/control_channel.py's own business.
         #
-        # #428 Phase 2: self.control_channel is the control channel that
-        # replaces the old web_token-authenticated POST /api/bootstrap as
-        # the way a fresh code gets minted on demand -- also None in org
+        # self.control_channel is how a fresh code gets minted on demand
+        # (see web/control_channel.py's module docstring) -- also None in org
         # mode, same reasoning (nothing to mint a code for). Built from a
         # local `bootstrap` variable, not `self.bootstrap` directly, purely
         # so its type stays a plain `BootstrapStore` in this branch --
@@ -1230,7 +1207,7 @@ class WebServer:
             self.sessions = LocalSessionStore()
             bootstrap = BootstrapStore()
             self.bootstrap = bootstrap
-            # The local-mode-fixes plan's Phase 2: captured once, here,
+            # For STATUS: captured once, here,
             # rather than read fresh per STATUS call -- this *is* when the
             # daemon started, for exactly
             # as long as this WebServer instance is the one serving.
@@ -1268,8 +1245,8 @@ class WebServer:
         self.notifications_enabled = notifications_enabled
         self.notifications_detail = notifications_detail
         self.principal_resolver = principal_resolver
-        # The state-push channel (§16.3) backs both /settings (async
-        # outcomes reaching an open tab) and /approvals (P3's own list, via
+        # The state-push channel backs both /settings (async
+        # outcomes reaching an open tab) and /approvals (the list, via
         # the same "approvals" event) -- built whenever either surface is
         # actually being served, not gated on mcp_dispatcher, which has
         # nothing to do with either page. Not built in org mode: neither
@@ -1331,7 +1308,7 @@ class WebServer:
             agent_overrides=agent_overrides,
         )
         if trusted_proxies:
-            # §10.2: honored only when this explicit list is non-empty --
+            # Honored only when this explicit list is non-empty --
             # never by default, in either mode.
             wrapped = ProxyHeadersMiddleware(wrapped, trusted_hosts=list(trusted_proxies))
         # proxy_headers=False: uvicorn otherwise applies its own

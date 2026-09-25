@@ -39,6 +39,13 @@ exercised independently.
 - Default to no comments. Only add one when it captures a non-obvious *why* — a hidden constraint,
   a race that was fixed, a workaround for a specific API quirk — never a restatement of *what* the
   next line does.
+- Comments, docstrings and user-visible strings carry no project history: no phase names, plan or
+  review item IDs, finding IDs, bare issue or PR numbers, section numbers of a deleted plan, or
+  "as of version N" phrasing. Say the reason in your own words, and when the reason is a decision,
+  name its ADR (`ADR 0003`, or a section or decision of it). Work that is still open is cited by
+  the issue's full URL, with the limitation described next to it. History belongs in
+  `CHANGELOG.md` and the ADRs. `tests/unit/test_code_no_history.py` enforces this as a blocking
+  test; see [ADR 0056](adr/0056-code-carries-no-project-history.md).
 - Long files separate groups of methods with a three-line `# ----- #` banner comment (e.g.
   `connectors/gmail.py`'s "Auto (no gate)" group). Use this once a connector or client grows past
   ~5-6 methods; don't bother for short files.

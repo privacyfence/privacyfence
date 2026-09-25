@@ -261,7 +261,7 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
     ];
     console.error(
       `Daemon not running (${describeTarget(mcpUrlFile)}) — this install runs it as ` +
-        `${manager} under its own account (#428 Phase 4), so waiting for the service ` +
+        `${manager} under its own account, so waiting for the service ` +
         // The companion's own menu (macOS/Windows) or Applications-menu
         // entry (Linux) is what most people should
         // reach for first -- it can start/restart/stop the service itself,

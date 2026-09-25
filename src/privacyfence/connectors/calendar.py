@@ -536,7 +536,7 @@ class CalendarConnector(Connector):
 
     async def _get_event_details(self, calendar_id: str, event_id: str) -> Any:
         event = await self._fetch(self._calendar.get_event, calendar_id, event_id)
-        # §1 ("What Claude already knows"): exactly calendar_list_events'
+        # The preview ("What Claude already knows"): exactly calendar_list_events'
         # own fields (id/title/start/end/day_of_week/all_day/status) -- see
         # 5deef1d8:docs/claude-knowledge-boundary.md's Calendar section. Everything else
         # below is new only once this call is approved.
@@ -544,7 +544,7 @@ class CalendarConnector(Connector):
             "Title": event.title or "(untitled)",
             "Time": f"{event.start_time} – {event.end_time}",
         }
-        # §3 ("What will be provided to Claude"): the real values that will
+        # new_info ("What will be provided to Claude"): the real values that will
         # actually reach Claude, not a policy summary -- Calendar has no
         # privacy-category schema (see 5deef1d8:docs/claude-knowledge-boundary.md's
         # redaction-scope section), so there's no redact/block placeholder

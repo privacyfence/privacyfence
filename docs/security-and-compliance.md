@@ -140,12 +140,14 @@ Adding a passkey, and removing your last one, are gated whatever `require_passke
 How the settings combine:
 
 - **`require_passkey` on, nothing enrolled:** the daemon starts, every page shows a banner, and
-  every approving decision and sensitive change is refused (`403`, naming `/security`) until a
-  passkey is added. On a packaged install the companion opens `/security` at its next start so you
-  can enroll one.
+  every approving decision `scope` covers and every sensitive change is refused (`403`, naming
+  `/security`) until a passkey is added. On a packaged install the companion opens `/security` at
+  its next start so you can enroll one.
 - **`enabled` on, `require_passkey` off:** a passkey is asked for only if one is enrolled. With
-  none enrolled, decisions go through. In organization mode a fresh sign-in at the identity
-  provider is accepted instead of a passkey.
+  none enrolled, local mode lets decisions, batches included, go through. Organization mode accepts
+  a fresh sign-in at the identity provider instead of a passkey for a single decision, and refuses
+  a batch that needs step-up (`400`, nothing applied): approve each item from its card, or add a
+  passkey ([ADR 0066](adr/0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md)).
 - **Batch approval:** one assertion covers a selected set of approvals and is bound to that exact
   set and each item's result. It cannot be replayed for a larger, smaller or altered set.
   `batch: per_item` sends every item that needs step-up back to its own card. PII confirmations
