@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.5.0] — 2026-09-25
+
 ### Added
 
 - **Apps Script can be connected from Settings**, like the other Google connectors: *Connectors →
@@ -61,6 +63,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Linux: the `.deb` declares `amd64` only.** Its package metadata listed `arm64` too, but no
   arm64 `.deb` has ever been built or tested; `scripts/build_deb.sh` now refuses to package on a
   host architecture the package doesn't declare (#679, ADR 0044).
+
 - **Linux: `apt remove` keeps your data, `apt purge` deletes it.** Removing the `.deb` now stops
   PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
   reinstall picks them up; it no longer moves them into your home directory. `apt purge` deletes
@@ -110,35 +113,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `privacyfence-privilege-separation enable` no longer moves `~/.privacyfence` into
   `/var/lib/privacyfence` or disables a pip install's `--user` unit (ADR 0041).
 
-- **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
-  still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
-  startup with a configuration error naming the section, instead of being converted to the
-  `auto_accept:` section on first start. Remove the section and recreate its rules on the Settings
+- **The v1 auto-accept settings format is no longer read or converted.** An install upgrading
+  from 4.1–4.4 needs no change: those versions already converted your rules to the `auto_accept:`
+  section and left the old `auto_accept_rules:`/`auto_accept_grants:` sections behind, and 4.5
+  removes those leftovers on its first start and logs a warning naming what it removed. A
+  `settings.yaml` whose v1 sections were never converted (one edited by hand, or last started
+  before 4.1) now stops PrivacyFence at startup with a configuration error naming the section,
+  instead of being converted. Remove the section and recreate its rules on the Settings
   Auto-accept page. The one-time conversion, its `settings.yaml.bak` backup and the "your
   auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
   `settings.yaml` is written in the current format. See
-  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md) and
+  [ADR 0047](docs/adr/0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md).
+
 - **Org mode: the old registered-clients format is no longer read.** An entry in
   `oauth_clients.json` that uses the format from before registered clients recorded their last use
   is now skipped, with a warning in the log, and that client has to register again. Entries in the
   current format still load. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 - **Files from earlier data-directory layouts are no longer moved or deleted at startup.** The
   daemon no longer moves a `config/settings.yaml`, `webauthn_credentials.json`, `web_token`,
   `web_token_version` or `logs/audit/` it finds directly under the data directory into
   `authority/`, no longer deletes a leftover shared `handoff/mcp_token` on a privilege-separated
   install, and no longer deletes old `approvals_url`/`settings_url`/`security_url` files. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 - **The Claude Desktop extension gets its MCP token only from the running PrivacyFence.** It no
   longer falls back to reading an `mcp_token` file when it cannot get a token over PrivacyFence's
   control channel. Instead it stops with an error asking you to check that PrivacyFence and the
   extension are the same version. On Windows it also no longer looks for PrivacyFence under
   `%LOCALAPPDATA%\Programs`, where no current installer puts it.
+
 - **The macOS installer no longer moves data from an earlier layout.** `enable` (and so the `.pkg`)
   no longer moves `~/.privacyfence` into `/Library/Application Support/PrivacyFence`, no longer
   moves files into `handoff/` from the root of the data directory, and no longer disables a
   per-user `com.privacyfence.app` LaunchAgent. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 - **The Windows installer no longer registers a daemon sign-in task or moves data from an earlier
   layout.** The daemon is a Windows service, and the companion's `PrivacyFenceCompanion` task is
   now the only Scheduled Task an install has (the `PrivacyFence` task the installer used to
@@ -157,15 +169,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which can open behind the browser window. Adding a passkey a device already has enrolled says
   so too, instead of the raw `InvalidStateError`.
 
-- **Upgrading from 4.1–4.4 no longer stops PrivacyFence from starting.** Those versions converted
-  your auto-accept rules to the current format but left the old `auto_accept_rules` section in
-  `settings.yaml`. 4.5 refused to start on that section, even though your rules were already in
-  effect from the new one. It now removes the leftover section and starts. On Windows the service
-  stopped within seconds of every start and nothing said why (ADR 0047).
-
-- **Windows: a service that refuses to start now says why in the event log.** The reason used to
-  go to a console the service doesn't have, before the daemon had opened its own log file. It is
-  now part of the "PrivacyFence exited with status 1" entry in the Application event log.
+- **Windows: a service that refuses to start now says why in the event log.** A configuration
+  error found at startup used to go to a console the service doesn't have, before the daemon had
+  opened its own log file, so the service stopped within seconds and nothing said why. The reason
+  is now part of the "PrivacyFence exited with status 1" entry in the Application event log.
 
 - **Windows: PrivacyFence's event log entries show their text.** The installer never registered
   PrivacyFence as an event log source, so Event Viewer showed every PrivacyFence entry with an
@@ -2641,7 +2648,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...HEAD
+[4.5.0]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.1
