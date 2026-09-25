@@ -79,6 +79,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   else. A move now auto-accepts only when both the current folder and the destination are in the
   rule, and an "Always allow" offered for a move names both folders.
 
+- **Organization mode: approving several requests at once skipped step-up when no passkey was
+  enrolled.** With step-up on, `require_passkey` off and no passkey, a batch approval went through
+  without any check, although a single approval would have asked for an identity-provider sign-in.
+  Such a batch is now refused with nothing applied; approve each request from its card, or add a
+  passkey at `/security`. Denying several at once still needs no step-up.
+
 ### Changed
 
 - **You can now add a passkey with a security key or your phone, not only one built into the

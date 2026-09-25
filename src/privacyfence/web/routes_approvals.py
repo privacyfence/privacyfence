@@ -39,6 +39,12 @@ pattern web/routes_security.py's own ``build_routes()`` already uses for
   the notifications-detail dial; org's carries the signed-in principal's
   label and subscribes to ``/api/approvals/stream`` for live updates (org mode
   mounts no ``/api/state/stream``).
+- ``unenrolled_batch_message`` -- what an approving batch that needs
+  step-up gets when nothing is enrolled and ``require_passkey`` is off:
+  local passes ``None`` (the batch applies, as a single decision would);
+  org passes a message and the batch is refused with a ``400``, since a
+  batch has no IdP link to fall back to (web/approval_step_up.py's
+  ``batch_step_up_response``, ADR 0065).
 - ``human_session_guard`` -- session provenance (web/session_auth.py's
   ``PROVENANCE_HUMAN``), local-only: org mode has no session-provenance concept at all (its
   equivalent is IdP re-auth), so its own adapter is a no-op.
@@ -464,6 +470,7 @@ def _build_route_list(
     bridge_shim: Callable[..., str],
     render_list_page: Callable[..., str],
     per_item_message: str,
+    unenrolled_batch_message: str | None,
     human_session_guard: Callable[[Request, str], Response | None],
 ) -> list[Route]:
     """The route list shared by both modes -- see module docstring for what
@@ -707,7 +714,7 @@ def _build_route_list(
         stepup_response, batch_id_verified = approval_step_up.guard_batch_decision(
             principal, step_up,
             parsed=parsed, registry=registry, batch_id=batch_id, batch_step_up_results=_BATCH_STEP_UP_RESULTS,
-            per_item_message=per_item_message,
+            per_item_message=per_item_message, unenrolled_batch_message=unenrolled_batch_message,
             assertion=payload.get("webauthn_assertion"), origin=origin, challenges=challenges,
         )
         if stepup_response is not None:
@@ -888,6 +895,7 @@ def create_app(
             "This install requires a separate passkey check per decision -- "
             "decide these individually instead of as a batch."
         ),
+        unenrolled_batch_message=None,
         human_session_guard=_human_session_guard,
     )
     all_routes: list[BaseRoute] = list(routes)
@@ -944,6 +952,10 @@ def build_routes(
         per_item_message=(
             "This organization requires a separate passkey check per decision -- "
             "decide these individually instead of as a batch."
+        ),
+        unenrolled_batch_message=(
+            "Approving several requests at once needs a passkey. Set one up at /security, "
+            "or approve each request from its card, where you can verify by signing in again."
         ),
         human_session_guard=_no_human_session_guard,
     )

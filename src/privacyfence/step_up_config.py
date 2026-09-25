@@ -230,12 +230,14 @@ class StepUpConfig:
         would remove the only path to ``/security`` that fixes it -- but
         web/routes_approvals.py's decide() and web/routes_settings.py's
         sensitive actions both hard-fail (403) rather than release
-        anything, so this string says exactly that rather than merely
-        "step-up is on". See ADR 0069."""
+        anything step-up covers, so this string says exactly that rather
+        than merely "step-up is on". It names only approvals that need
+        step-up: one outside ``scope`` (an unflagged read, under the
+        default scope) is still released. See ADR 0069."""
         if self.enabled and self.require_passkey and not has_credentials:
             return (
-                "Passkey required: no passkey is enrolled, so approving decisions and sensitive "
-                'settings changes are blocked until you <a href="/security">add one</a>.'
+                "Passkey required: no passkey is enrolled, so approvals that need step-up and "
+                'sensitive settings changes are blocked until you <a href="/security">add one</a>.'
             )
         return None
 
