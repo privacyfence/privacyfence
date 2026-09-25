@@ -19,7 +19,13 @@
  * Phase 2's manifest schema exactly.
  */
 import { CHANNELS, isChannel, type Channel } from "./channel.js";
-import { findArtifact, resolveLatestManifest, resolveVersionManifest, type Manifest } from "./manifest.js";
+import {
+  findArtifact,
+  publicManifest,
+  resolveLatestManifest,
+  resolveVersionManifest,
+  type Manifest,
+} from "./manifest.js";
 import { recordDownload, queryStats } from "./counters.js";
 import { artifactHeaders, isDownloadStart, parseRangeHeader } from "./artifacts.js";
 import { corsPreflight, jsonResponse, methodNotAllowed, notFound, withCors } from "./http.js";
@@ -151,7 +157,10 @@ async function handleHistory(request: Request, env: Env, ctx: ExecutionContext):
 async function routeApi(path: string, request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (path === "/api/releases") {
     const entries = await Promise.all(
-      CHANNELS.map(async (channel) => [channel, await resolveLatestManifest(env.RELEASES, channel)] as const),
+      CHANNELS.map(async (channel) => {
+        const manifest = await resolveLatestManifest(env.RELEASES, channel);
+        return [channel, manifest && publicManifest(manifest)] as const;
+      }),
     );
     return jsonResponse({ channels: Object.fromEntries(entries) });
   }
@@ -165,7 +174,7 @@ async function routeApi(path: string, request: Request, env: Env, ctx: Execution
     if (!isChannel(channel)) return notFound(`unknown channel: ${channel}`);
     const manifest = await resolveLatestManifest(env.RELEASES, channel);
     if (!manifest) return notFound(`no published release for channel: ${channel}`);
-    return jsonResponse(manifest);
+    return jsonResponse(publicManifest(manifest));
   }
 
   if (path === "/api/stats/downloads") return handleStats(env);

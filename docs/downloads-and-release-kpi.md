@@ -126,7 +126,8 @@ Properties to know before changing any of it:
 - **Manifest schema is `1`** (`MANIFEST_SCHEMA`): `schema`, `version`, `channel`, `published_at`,
   and `artifacts[]` of `id`, `kind` (`installer`), `platform`, `architecture`, `filename`, `key`,
   `size`, `sha256`, sorted by `id`. The contract is `cloudflare/downloads/src/manifest.ts`; change
-  both and the Worker's test fixtures together.
+  both and the Worker's test fixtures together. `key` is for the Worker alone: the `/api/*`
+  routes publish every other field and never `key` (see "Routes" below).
 - **SHA-256 is recorded as R2 object metadata (`sha256`) at upload time**, not computed during
   `finalize`, which runs on a runner where none of the installers exist on disk. An ETag is no
   substitute: large uploads go multipart, and a multipart ETag is not the object's MD5.
@@ -157,8 +158,8 @@ itself:
 | ----- | ------- | ------- |
 | `/download/<channel>/<artifact-id>` | `GET`, `HEAD` | resolves `releases/<channel>/latest.json` → manifest → artifact and streams it from R2 |
 | `/download/version/<version>/<artifact-id>` | `GET`, `HEAD` | same, from that version's own manifest (older versions stay downloadable) |
-| `/api/releases` | `GET` | `{"channels": {stable, alpha, beta, rc}}`, each the latest manifest or `null` |
-| `/api/releases/<channel>` | `GET` | that channel's latest manifest; 404 if unknown or unpublished |
+| `/api/releases` | `GET` | `{"channels": {stable, alpha, beta, rc}}`, each the latest manifest (without R2 keys) or `null` |
+| `/api/releases/<channel>` | `GET` | that channel's latest manifest (without R2 keys); 404 if unknown or unpublished |
 | `/api/releases/history` | `GET` | `{"releases": [...]}`: every published version on every channel, newest first (see below) |
 | `/api/stats/downloads` | `GET` | `{total, by_channel, by_platform}` from D1; 503 on a D1 error, never a fake zero |
 | `/health` | `GET`, `HEAD` | `{"status":"ok"}`; touches neither binding |
@@ -167,6 +168,12 @@ itself:
 (`macos-arm64`, `windows-x64`, `linux-x64`). Downloads are streamed, never redirected. Anything
 else returns 404 JSON (`{"error": "no such route"}` for an unknown top-level path, including `/`);
 a wrong method returns 405 with `Allow`. `/api/*` accepts `GET` and `OPTIONS` only.
+
+**No `/api/*` response names an R2 key or URL.** Each manifest goes out through
+`publicManifest()` (`src/manifest.ts`), which copies `schema`, `version`, `channel`,
+`published_at` and each artifact's `id`, `kind`, `platform`, `architecture`, `filename`, `size`
+and `sha256` field by field, so a field added to the manifest later is not published until it is
+listed there. Only the `/download/...` routes read `key`, to find the object they stream.
 
 Download responses carry `Content-Type` (by extension: `.dmg`, `.exe`, `.deb`, `.pkg`, else
 `application/octet-stream`), `Content-Length`, `ETag`, `Accept-Ranges: bytes` and
@@ -180,9 +187,8 @@ is not newer than the version the channel's `latest.json` points at: `finalize` 
 manifest before it verifies and promotes, so a newer manifest is a release that never finished
 publishing, or one rolled back by promoting an older version. A channel with no `latest.json`
 lists nothing, and a manifest that cannot be read is skipped rather than failing the list. Each
-entry is the manifest reduced to `schema`, `version`, `channel`, `published_at` and its
-`kind: "installer"` artifacts, **without `key`**: the route never names an R2 key or URL, and
-downloads stay on `/download/version/<version>/<artifact-id>`. Ordering is major.minor.patch, then
+entry is the public manifest (as above, without `key`) with its `kind: "installer"` artifacts
+only; downloads stay on `/download/version/<version>/<artifact-id>`. Ordering is major.minor.patch, then
 stable > rc > beta > alpha, then stage number (`compareVersions` in `src/channel.ts`). The
 response carries `Cache-Control: public, max-age=300` and is kept in the Worker's edge cache
 (`caches.default`) for the same five minutes, under one key whatever the query string or

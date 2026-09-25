@@ -66,6 +66,37 @@ export async function resolveVersionManifest(
   return { channel, manifest };
 }
 
+/** A manifest artifact as the `/api/*` routes publish it: everything but its R2 `key`. */
+export type PublicArtifact = Omit<ManifestArtifact, "key">;
+
+export interface PublicManifest extends Omit<Manifest, "artifacts"> {
+  artifacts: PublicArtifact[];
+}
+
+/**
+ * The manifest as the `/api/*` routes return it. No R2 key or URL ever leaves the Worker (the
+ * browser has no use for one: downloads go through `/download/...`, which resolves the key
+ * itself). Fields are copied one by one rather than by dropping `key`, so a field added to the
+ * manifest later is not published until it is listed here.
+ */
+export function publicManifest(manifest: Manifest): PublicManifest {
+  return {
+    schema: manifest.schema,
+    version: manifest.version,
+    channel: manifest.channel,
+    published_at: manifest.published_at,
+    artifacts: (manifest.artifacts ?? []).map(({ id, kind, platform, architecture, filename, size, sha256 }) => ({
+      id,
+      kind,
+      platform,
+      architecture,
+      filename,
+      size,
+      sha256,
+    })),
+  };
+}
+
 export function findArtifact(manifest: Manifest, artifactId: string): ManifestArtifact | undefined {
   return manifest.artifacts.find((artifact) => artifact.id === artifactId);
 }

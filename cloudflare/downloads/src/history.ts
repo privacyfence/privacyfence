@@ -10,8 +10,8 @@
  * the same rule that keeps it off `/download/<channel>/...` keeps it off the list. A channel with
  * no `latest.json` lists nothing.
  *
- * The response carries no R2 key or URL: each artifact is reduced to what the page shows, and
- * downloads stay on `/download/version/<version>/<artifact-id>`.
+ * Like every `/api/*` route, the response carries no R2 key or URL (`publicManifest`); downloads
+ * stay on `/download/version/<version>/<artifact-id>`.
  */
 import { CHANNELS, channelForVersion, compareVersions, type Channel } from "./channel.js";
 import {
@@ -19,19 +19,10 @@ import {
   latestPointerKey,
   manifestKey,
   type LatestPointer,
+  publicManifest,
   type Manifest,
-  type ManifestArtifact,
+  type PublicManifest,
 } from "./manifest.js";
-
-export type PublicArtifact = Omit<ManifestArtifact, "key">;
-
-export interface PublicRelease {
-  schema: number;
-  version: string;
-  channel: Channel;
-  published_at: string;
-  artifacts: PublicArtifact[];
-}
 
 /** The `<version>` directory names under `releases/<channel>/`, across every list page. */
 async function listVersionDirectories(bucket: R2Bucket, channel: Channel): Promise<string[]> {
@@ -54,27 +45,16 @@ function isListable(version: string, channel: Channel, latest: string): boolean 
   }
 }
 
-function toPublic(manifest: Manifest, channel: Channel): PublicRelease {
+function toPublic(manifest: Manifest, channel: Channel): PublicManifest {
+  const release = publicManifest(manifest);
   return {
-    schema: manifest.schema,
-    version: manifest.version,
+    ...release,
     channel, // the directory it was listed from, which is what its download route resolves
-    published_at: manifest.published_at,
-    artifacts: (manifest.artifacts ?? [])
-      .filter((artifact) => artifact.kind === "installer")
-      .map(({ id, kind, platform, architecture, filename, size, sha256 }) => ({
-        id,
-        kind,
-        platform,
-        architecture,
-        filename,
-        size,
-        sha256,
-      })),
+    artifacts: release.artifacts.filter((artifact) => artifact.kind === "installer"),
   };
 }
 
-async function channelHistory(bucket: R2Bucket, channel: Channel): Promise<PublicRelease[]> {
+async function channelHistory(bucket: R2Bucket, channel: Channel): Promise<PublicManifest[]> {
   const pointer = await getJson<LatestPointer>(bucket, latestPointerKey(channel));
   if (!pointer || !isListable(pointer.version, channel, pointer.version)) return [];
 
@@ -99,7 +79,7 @@ async function channelHistory(bucket: R2Bucket, channel: Channel): Promise<Publi
 }
 
 /** Every listed release on every channel, newest version first. */
-export async function listReleaseHistory(bucket: R2Bucket): Promise<PublicRelease[]> {
+export async function listReleaseHistory(bucket: R2Bucket): Promise<PublicManifest[]> {
   const perChannel = await Promise.all(CHANNELS.map((channel) => channelHistory(bucket, channel)));
   return perChannel.flat().sort((a, b) => compareVersions(b.version, a.version));
 }

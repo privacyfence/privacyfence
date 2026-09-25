@@ -233,13 +233,6 @@ describe("GET /api/releases/history", () => {
     expect(rc?.artifacts.map((artifact) => [artifact.id, artifact.kind])).toEqual([["macos-arm64", "installer"]]);
   });
 
-  it("never exposes an R2 key or path", async () => {
-    const text = await (await call("/api/releases/history")).text();
-    expect(text).not.toMatch(/"key"/);
-    expect(text).not.toMatch(/releases\//);
-    expect(text).not.toMatch(/r2\.|cloudflarestorage/);
-  });
-
   it("is cacheable and served from the cache, so page views cannot drive R2 reads", async () => {
     const first = await call("/api/releases/history");
     expect(first.headers.get("Cache-Control")).toBe("public, max-age=300");
@@ -302,6 +295,40 @@ describe("GET /api/releases/history", () => {
 
   it("rejects POST", async () => {
     expect((await call("/api/releases/history", { method: "POST" })).status).toBe(405);
+  });
+});
+
+describe("metadata routes", () => {
+  it.each(["/api/releases", "/api/releases/stable", "/api/releases/rc", "/api/releases/history"])(
+    "%s never exposes an R2 key or path",
+    async (path) => {
+      const response = await call(path);
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toContain('"sha256"'); // the artifacts are there, just without their keys
+      expect(text).not.toMatch(/"key"/);
+      expect(text).not.toMatch(/releases\//);
+      expect(text).not.toMatch(/r2\.|cloudflarestorage/);
+    },
+  );
+
+  it("the latest-per-channel routes keep every other artifact field", async () => {
+    const body = (await (await call("/api/releases/stable")).json()) as { artifacts: object[] };
+    expect(body.artifacts[0]).toEqual({
+      id: "macos-arm64",
+      kind: "installer",
+      platform: "macos",
+      architecture: "arm64",
+      filename: "PrivacyFence-4.3.0.dmg",
+      size: 39,
+      sha256: "938a4c3a3ae6a02a3214a6182582efc906fdf0d06b8aed6de8de21d6c04876ff",
+    });
+  });
+
+  it("stripping the key from the API leaves downloads resolving it", async () => {
+    const response = await call("/download/stable/macos-arm64");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("FAKE-DMG-BYTES-stable-4.3.0-macos-arm64");
   });
 });
 
