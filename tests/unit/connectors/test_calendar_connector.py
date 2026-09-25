@@ -279,12 +279,12 @@ class TestFreeBusyFullDetailsToggle:
 
 
 class TestGetEventDetails:
-    """§1 ("What Claude already knows") is exactly calendar_list_events' own
+    """The preview ("What Claude already knows") is exactly calendar_list_events' own
     fields (Title, Time) -- everything else the tool discloses is new only
-    on approval, and lives in `new_info` (§3) instead of `preview` now. No
+    on approval, and lives in `new_info` instead of `preview`. No
     separate Organizer field anywhere in the UI: merged into Attendees (see
     _merged_attendees_display). conference_link/hangout_link/attachments are
-    no longer surfaced at all -- not in preview, not in new_info, not in
+    not surfaced at all -- not in preview, not in new_info, not in
     details_text, not in filtered_data (i.e. never reach Claude either)."""
 
     async def test_preview_is_title_and_time_only(self, gated_call_spy):

@@ -42,8 +42,9 @@ class PolicyRule:
     internal address, and a user-facing verb list compiles down to it.
 
     ``id`` is the rule's identifier for logging. A rule read back from disk carries the
-    content-derived id ``policy.store.rule_id_for`` minted; a rule built in memory may carry
-    anything, which is why attribution recomputes it (``policy.store.rule_id_for_rule``).
+    content-derived id ``policy.store.rule_id_for`` minted, and that stored id is what decisions
+    are attributed to (ADR 0074); a rule built in memory may carry anything, which is what
+    ``policy.store.rule_id_for_rule`` recomputes the canonical id for.
     """
 
     id: str

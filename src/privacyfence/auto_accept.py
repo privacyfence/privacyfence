@@ -15,8 +15,8 @@ What's left here is genuinely engine-agnostic:
   ``policy.engine.evaluate``/``preflight`` and ``gate.py`` consult via callback, independent of
   where the rule list they're otherwise checking comes from.
 - ``ReviewContext`` and the small parsing helpers (``_file_from``, ``_domain_of``, ``_address_of``,
-  ``_attendee_email``) P2's scope/condition selectors (``policy/scopes.py``, ``policy/conditions.py``)
-  and P5's proposal builder (``policy/propose.py``) import directly.
+  ``_attendee_email``) the scope/condition selectors (``policy/scopes.py``, ``policy/conditions.py``)
+  and the proposal builder (``policy/propose.py``) import directly.
 - ``_AutoAcceptState``/the ``PrincipalRegistry`` it lives in -- per-principal config path, the
   temp-accept store, the hot-reloaded v2 rule cache, and the rules-changed listener broadcast that
   lets a pending approval re-resolve the moment a rule changes.
@@ -167,8 +167,8 @@ TOOL_TO_OPERATION: dict[str, str] = {
 # auto-accepted ones, since a preflight check needs a definitive answer for
 # those too.
 #
-# This is the single source of truth the connector tables in
-# 5deef1d8:docs/TECHNICAL_REFERENCE.md are checked against (see
+# This is the single source of truth docs/tools-reference.md's per-tool
+# gate column is checked against (see
 # tests/unit/connectors/test_readme_manifest_alignment.py) -- keep it in sync
 # with the gate= argument each connectors/*.py call site actually passes to
 # gated_call(), not just with the docs.

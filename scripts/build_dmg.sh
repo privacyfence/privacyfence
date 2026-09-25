@@ -8,16 +8,14 @@
 # "mount the DMG, double-click PrivacyFence.pkg, then double-click
 # PrivacyFence.mcpb", both steps in the same window.
 #
-# That replaces an earlier layout where the DMG carried the .app plus an
-# /Applications symlink and the .pkg shipped as a *separate* download beside
-# it. Two problems, both fixed by this: dragging the .app installed a copy
-# that had to ask for an administrator password later, at some unrelated
-# moment, to provision privilege separation (#428 D1's runtime prompt), where
-# the .pkg does it during the install the user is already answering a password
-# for (#428 D2); and the .pkg's own conclusion screen told the user to open
-# the .mcpb "next to this installer", which was simply untrue for a standalone
-# .pkg download — there was no .mcpb next to it. One download, one install
-# path, and the sentence is now true.
+# The DMG carries no draggable .app, and the .pkg ships nowhere else, for two
+# reasons. A dragged .app would have to ask for an administrator password
+# later, at some unrelated moment, to provision privilege separation (the
+# daemon's runtime prompt), where the .pkg does it during the install the user
+# is already answering a password for (ADR 0003). And the .pkg's own
+# conclusion screen tells the user to open the .mcpb "next to this
+# installer", which is only true when both sit in the same disk image. One
+# download, one install path.
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e .        # PrivacyFence itself, so VERSION below can read
@@ -134,11 +132,10 @@ if command -v fileicon &>/dev/null; then
 fi
 
 # ── 4b. Bundle the privilege-separation script + its launchd templates ───────
-# #428 D1 (4.1): the daemon's own auto-enable trigger (privilege_separation.py
-# maybe_auto_enable_macos()) shells out to this script, elevated. Until now
-# nothing shipped it into the DMG at all -- opting in required a source
-# checkout, which is also why the auto trigger couldn't exist before this.
-# scripts/macos_privilege_separation.sh resolves its own REPO_ROOT as
+# The daemon's own auto-enable trigger (privilege_separation.py
+# maybe_auto_enable_macos()) shells out to this script, elevated, so the
+# bundle has to carry it: an installed app has no source checkout to find it
+# in. scripts/macos_privilege_separation.sh resolves its own REPO_ROOT as
 # "$(dirname "${BASH_SOURCE[0]}")/.." and reads templates from
 # "${REPO_ROOT}/installer/macos" -- copying both directories into
 # Contents/Resources/ with that same scripts/ + installer/macos/ sibling
@@ -167,10 +164,9 @@ if [ -n "$SIGN_IDENTITY" ]; then
 fi
 
 # ── 6. Build the Claude Desktop extension (.mcpb) ─────────────────────────────
-# One extension since P5 retired the bridge (decision D11): the /mcp shim
-# (PrivacyFence.mcpb). Until P5 this step built a second, "Legacy Bridge"
-# .mcpb alongside it as a rollback that needed no /mcp setup -- that lever
-# isn't needed any more now that the bridge itself no longer exists.
+# One extension: the /mcp shim (PrivacyFence.mcpb). The daemon's /mcp
+# endpoint is the only transport there is, so there is no second extension
+# to build alongside it.
 echo "→ Building PrivacyFence's Claude Desktop extension…"
 bash scripts/build_mcpb.sh
 MCPB_SHIM_PATH="dist/${PRODUCT_NAME}-${VERSION}.mcpb"

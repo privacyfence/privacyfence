@@ -317,8 +317,8 @@ async def _achunks(data: bytes):
 
 
 class TestAfillCapability:
-    """Phase 4's unauthenticated fill (ADR 0007's "Clients without the
-    bridge" section) -- same semantics as fill()/afill() minus the
+    """The unauthenticated capability fill (ADR 0007's "Clients without the
+    bridge" section, ADR 0028) -- same semantics as fill()/afill() minus the
     principal check, since the capability route it backs
     (routes_file_bridge.py's PUT /mcp-files/slots/<token>) carries no
     bearer header/principal to check the slot against at all."""

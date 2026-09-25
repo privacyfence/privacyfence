@@ -1,11 +1,11 @@
-// PrivacyFence's service worker -- tier 1 notifications only
-// (5deef1d8:docs/approval-list-ui-ux.md §4.1). Its one job is to host
+// PrivacyFence's service worker -- tier 1 notifications only, which stay
+// on this machine (ADR 0064). Its one job is to host
 // registration.showNotification() calls the page itself makes (see
 // web_shell.py's own script) and to route a click on one of those back to
 // an open /approvals tab -- there is no `push` handler here, because tier
-// 2 (web push, VAPID, a subscription store) is org-mode/P7+ work, not
-// this phase's. Nothing here fetches, caches, or intercepts requests --
-// this is deliberately not an offline-support service worker.
+// 2 (web push, VAPID, a subscription store) is not implemented. Nothing
+// here fetches, caches, or intercepts requests -- this is deliberately not
+// an offline-support service worker.
 //
 // Served at the origin root (GET /sw.js, see web/routes_approvals.py) so
 // its default scope covers the whole app -- a service worker's scope can

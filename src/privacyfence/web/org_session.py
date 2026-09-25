@@ -1,4 +1,4 @@
-"""Org-mode browser sessions (P7): the session cookie is Secure, HttpOnly,
+"""Org-mode browser sessions: the session cookie is Secure, HttpOnly,
 SameSite=Lax, with a short idle timeout. A server-side session store mapping an opaque, unguessable
 session id to the ``Principal`` that authenticated it via web/routes_org_
 identity.py's ``/login`` -- deliberately not the local-mode ``session_
@@ -6,21 +6,13 @@ auth.py`` model of "the cookie's own value is the one shared secret
 everyone in the install has": org mode has more than one user, so each
 session has to carry its own, distinct identity.
 
-As of P9 this backs a real, principal-scoped ``/approvals``/``/security``
-surface for org mode -- web/routes_approvals.py's ``build_routes()``, not
-that same module's local-mode ``create_app()``, which still authenticates
-with one shared secret and has no principal filtering (see that module's
-own docstring for why the shared-secret surface was never mounted under
-org mode as-is). ``/settings``
-(routes_settings.py's ~30-action surface) is the one still not wired into
-this session model -- still local-mode-only for now, a documented
-follow-up (see web/server.py's own module docstring's "Still deliberately
-not mounted in org mode" section). What this module and routes_org_
-identity.py deliver is the session mechanism itself, real and tested end
-to end, plus web/server.py's ``_PrincipalScopeMiddleware`` resolving
-``current_principal()`` from it (P6's own seam) -- so any route built
-against it from here on gets per-principal scoping for free, exactly as
-web/routes_approvals.py's org-mode routes already do.
+This backs org mode's principal-scoped ``/approvals``, ``/security`` and
+``/settings`` surfaces -- the ``build_routes()`` of web/routes_approvals.py,
+web/routes_security.py and web/routes_settings.py, each given org mode's
+session functions (ADR 0033). What this module and routes_org_identity.py
+deliver is the session mechanism itself, plus web/server.py's
+``_PrincipalScopeMiddleware`` resolving ``current_principal()`` from it --
+so any route built against it gets per-principal scoping for free.
 """
 from __future__ import annotations
 
@@ -42,7 +34,7 @@ SESSION_COOKIE = "pf_org_session"
 # logged out mid-task; an abandoned tab is.
 DEFAULT_IDLE_TIMEOUT_SECONDS = 30 * 60
 
-# SEC-13: a hard cap
+# A hard cap
 # from creation, regardless of activity -- the sliding idle timeout above
 # is not enough on its own, since a session an attacker (or a script) keeps
 # "active" by polling never idles out. Same figure and rationale as
@@ -89,9 +81,9 @@ class OrgSessionStore:
 
     def get(self, session_id: str) -> Principal | None:
         """The session's ``Principal`` if ``session_id`` is live and
-        neither idle- nor absolute-expired (SEC-13) -- touches
-        ``last_seen_at`` as a side effect (the sliding idle timeout §9.4
-        asks for) only when it's still live. ``None`` for an unknown or
+        neither idle- nor absolute-expired -- touches
+        ``last_seen_at`` as a side effect (the sliding idle timeout) only
+        when it's still live. ``None`` for an unknown or
         expired session; never raises, so a forged or stale cookie is just
         "not authenticated," not a 500."""
         now = time.time()
@@ -137,9 +129,9 @@ def authenticated(request: Request, store: OrgSessionStore) -> Principal | None:
 
 def set_session_cookie(response: Response, session_id: str) -> None:
     # secure=True (unlike session_auth.py's local-mode cookie): org mode is
-    # HTTPS-mandatory (§10.2), so a Secure cookie is never silently dropped
+    # HTTPS-mandatory, so a Secure cookie is never silently dropped
     # here the way it would be forced to be over local mode's deliberate
-    # plain-HTTP loopback transport (D1, §15).
+    # plain-HTTP loopback transport (ADR 0010).
     #
     # samesite="lax", NOT "strict" -- the one place org mode's cookie
     # policy has to differ from local mode's. This cookie is minted at the

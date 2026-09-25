@@ -16,8 +16,8 @@
  *    piece of the bridge whose job survives verbatim).
  * 2. Get a bearer token for /mcp: mint one over the daemon's control
  *    channel (controlChannel.ts's ``mintMcpToken()``, ``MINT MCP\n``), which
- *    resolves to *this OS account's own* token (ADR 0008, ``docs/adr/
- *    0008-one-principal-per-os-user.md``, D3). There is no file to fall
+ *    resolves to *this OS account's own* token (ADR 0008 D3, ``docs/adr/
+ *    0008-one-principal-per-os-user.md``). There is no file to fall
  *    back to: every current daemon answers ``MINT MCP``, separated or not,
  *    and only the current install layout is supported (ADR 0041). Read the
  *    daemon's current /mcp URL from its own discovery file (web/server.py's
@@ -116,8 +116,8 @@ export interface MainOptions {
    * exercise both the "mint succeeds" and "mint fails, the shim exits"
    * paths without touching a real socket/pipe. Defaults to the real
    * controlChannel.ts ``mintMcpToken()`` with its own default timeout (see
-   * the note above ``getMcpToken()`` for why this call site no longer
-   * shortens it). */
+   * the note above ``getMcpToken()`` for why this call site does not
+   * shorten it). */
   mintMcpToken?: () => Promise<string>;
   /** Overridable for tests; defaults to MINT_RETRY_WINDOW_MS. See
    * ``getMcpToken()``. */
@@ -182,12 +182,12 @@ function isRetryableMintError(err: unknown): boolean {
 }
 
 /**
- * Mints this OS account's own MCP token over the control channel (ADR 0008
- * D3), retrying a mint nobody answered for up to MINT_RETRY_WINDOW_MS (see
- * above). A plain connection error and a ``ControlChannelError`` (the daemon
- * answered but refused) both end the same way: a ``ShimExitError`` whose
- * message carries ``err.message``, so whoever reads privacyfence.log next
- * can tell which one it was.
+ * Mints this OS account's own MCP token over the control channel
+ * (ADR 0008 D3), retrying a mint nobody answered for up to
+ * MINT_RETRY_WINDOW_MS (see above). A plain connection error and a
+ * ``ControlChannelError`` (the daemon answered but refused) both end the
+ * same way: a ``ShimExitError`` whose message carries ``err.message``, so
+ * whoever reads privacyfence.log next can tell which one it was.
  */
 async function getMcpToken(opts: MainOptions): Promise<string> {
   const mint = opts.mintMcpToken ?? (() => mintMcpTokenReal());

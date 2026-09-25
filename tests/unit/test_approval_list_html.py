@@ -1,5 +1,4 @@
-"""approval_list_html.py -- the /approvals list page (docs/approval-list-
-ui-ux.md §2, the P1-compatible slice)."""
+"""approval_list_html.py -- the /approvals list page."""
 from __future__ import annotations
 
 import json
@@ -57,7 +56,7 @@ class TestBuildListHtml:
         assert "Read Gmail message" in html
 
     def test_never_renders_an_allow_button(self):
-        # §2.2's central asymmetry: Deny is on the row, Allow never is.
+        # The list's central asymmetry: Deny is on the row, Allow never is.
         rows = [approval_list_html.row_from_approval(_card())]
         html = approval_list_html.build_list_html(rows, csrf="tok")
         assert "data-deny=" in html
@@ -227,18 +226,17 @@ class TestBinderMarkup:
         assert 'id="pf-approvals-toolbar" hidden' not in html
 
     def test_approve_selected_starts_disabled(self):
-        # Phase 3 of the binder plan: like Deny selected, nothing is
+        # Like Deny selected, nothing is
         # selected on first paint, so there is nothing to approve yet.
         rows = [approval_list_html.row_from_approval(_real_card())]
         html = approval_list_html.build_list_html(rows, csrf="t")
         assert 'id="pf-approve-selected" disabled' in html
 
     def test_toolbar_present_but_hidden_on_the_empty_state(self):
-        # Issue #576, bug 1: the toolbar used to be omitted entirely when
-        # nothing was pending at first paint, which meant it could never be
-        # created later by window.__pfRenderApprovals's own SSE-driven
-        # re-render (that function only ever updates existing elements). It
-        # must stay in the DOM, just hidden, so the live re-render can
+        # Omitted when nothing is pending at first paint, the toolbar
+        # could never be created later by window.__pfRenderApprovals's own
+        # SSE-driven re-render (that function only ever updates existing
+        # elements). It must stay in the DOM, just hidden, so the live re-render can
         # reveal it (see updateToolbar in _JS) the moment something
         # batchable actually arrives.
         html = approval_list_html.build_list_html([], csrf="t")
@@ -291,7 +289,7 @@ class TestRowActionOrder:
 
 
 class TestPhoneWidthRules:
-    """F2/F3: the row's own ``flex-wrap`` never engages, because
+    """Without these rules, at phone widths the row's own ``flex-wrap`` never engages, because
     ``.pf-approval-main`` is ``flex:1;min-width:0`` against a
     ``flex-shrink:0`` action cluster -- so the text column shrinks to about
     25px at 393px instead of the row wrapping. These assert the rules that
@@ -318,11 +316,11 @@ class TestPhoneWidthRules:
 
 
 class TestRowNamesItsObject:
-    """F4: ``tool_name`` was the row's title and ``summary`` only its
-    fallback -- and ``tool_name`` is always populated, so a normal row never
-    reached the fallback and the one fact that decides the request was never
-    on screen. The raw MCP tool id was the kicker instead, which is what
-    README positions the product *against*."""
+    """The row's title is ``summary``, the one fact that decides the
+    request, and the raw MCP tool id is only the kicker. ``tool_name`` is
+    always populated, so a title that fell back to ``summary`` would never
+    show it, and a raw tool id as the headline is what README positions the
+    product *against*."""
 
     def test_title_is_the_summary_and_the_kicker_is_the_tool(self):
         row = approval_list_html.row_from_approval(
@@ -359,10 +357,10 @@ class TestRowNamesItsObject:
 
 
 class TestReadWriteDirectionOnTheRow:
-    """F6: the card commits hard to read vs write -- a pill in the header
-    and a coloured rail down the window edge -- while the row carried
-    neither, though ``gate_kind`` was already in the payload and already
-    drove the Approve-selected composition label."""
+    """The card commits hard to read vs write -- a pill in the header and a
+    coloured rail down the window edge -- so the row carries the direction
+    too, from the ``gate_kind`` that also drives the Approve-selected
+    composition label."""
 
     def test_read_gate_gets_a_read_pill(self):
         row = approval_list_html.row_from_approval(_card(gate_kind="review"))
@@ -411,10 +409,9 @@ class TestHeadingComposition:
 
 
 class TestApproveSelectedIsNotTheLoudestControl:
-    """F5: both Approve-selected and Review were filled
-    ``var(--color-accent)``, so the least-informed action -- select-all
-    plus one click, off one-line summaries -- was as loud as the one that
-    opens disclosure."""
+    """Approve-selected is the least-informed action -- select-all plus one
+    click, off one-line summaries -- so it must not be as loud (filled
+    ``var(--color-accent)``) as Review, the one that opens disclosure."""
 
     def test_approve_selected_is_an_outline(self):
         html = approval_list_html.build_list_html([], csrf="t")
@@ -432,11 +429,11 @@ class TestApproveSelectedIsNotTheLoudestControl:
 
 
 class TestConnectorIconsSurviveLiveUpdates:
-    """F7: the first paint drew the real brand PNG and the live re-render
-    always drew a letter badge, so every row silently degraded within one
-    poll interval -- on the page that most needs to look trustworthy. The
-    icon now lives in one CSS rule per connector, which both render paths
-    reach by class name."""
+    """The first paint and the live re-render must draw the same brand
+    icon; if the re-render fell back to a letter badge, every row would
+    silently degrade within one poll interval -- on the page that most
+    needs to look trustworthy. The icon lives in one CSS rule per
+    connector, which both render paths reach by class name."""
 
     def _rows(self, *connectors):
         return [
@@ -473,7 +470,7 @@ class TestConnectorIconsSurviveLiveUpdates:
         assert 'class="pf-approval-icon pf-approval-icon-fallback">N<' in row_html
 
     def test_the_connector_name_list_is_handed_to_the_page(self):
-        # Issue #576, bug 1: this is every bundled connector, not just the
+        # This is every bundled connector, not just the
         # ones with a row on the page right now -- otherwise a connector
         # with nothing pending at first paint would draw a letter badge for
         # any row that arrives for it later, until the next full reload.
@@ -492,10 +489,9 @@ class TestConnectorIconsSurviveLiveUpdates:
         assert approval_list_html._icon_slug("") == ""
 
     def test_icon_css_present_even_when_nothing_is_pending(self):
-        # The crux of issue #576's bug 1: a connector with nothing pending
-        # at first paint used to get no icon rule at all, so a row that
-        # arrived for it later drew a letter badge until the next full page
-        # load. The bundled icon set is small and fixed, so it's all baked
+        # A connector with nothing pending at first paint still needs an
+        # icon rule, or a row that arrives for it later draws a letter
+        # badge until the next full page load. The bundled icon set is small and fixed, so it's all baked
         # in unconditionally instead.
         from privacyfence import approval_icons
 
@@ -506,7 +502,7 @@ class TestConnectorIconsSurviveLiveUpdates:
 
 
 class TestFirstRunEmptyState:
-    """F8: "Nothing is waiting. / PrivacyFence is watching." is exactly
+    """"Nothing is waiting. / PrivacyFence is watching." is exactly
     right on a working install and misleading on one where no connector is
     authenticated -- nothing is waiting because nothing *can* wait, and the
     reassurance claims a protection that isn't running."""
@@ -542,7 +538,7 @@ class TestFirstRunEmptyState:
 
 
 class TestAgentOnTheRow:
-    """AGT-4: each row shows who is asking in the same tiered form as the
+    """Each row shows who is asking in the same tiered form as the
     card (agent_label.py) -- only the attested tier draws the vendor's mark."""
 
     @staticmethod

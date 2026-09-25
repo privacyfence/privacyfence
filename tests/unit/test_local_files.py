@@ -197,7 +197,7 @@ class TestRequireLocalFilesBridge:
 
 
 class TestRequireLocalFilesUploadRef:
-    """Phase 4 ("Clients without the bridge"): an ``upload:<id>`` reference
+    """Capability uploads (ADR 0028): an ``upload:<id>`` reference
     is claimed unconditionally -- it works in every mode, with or without a
     bridge, since a capability slot needs neither can_access_user_files()
     nor a shim -- see require_local_files' own docstring."""
@@ -324,8 +324,8 @@ class TestDeliverFile:
                 "~/Downloads", "report.pdf", b"content", "application/pdf", download_mode="local",
             )
         assert result["delivery"] == "link"
-        # Phase 4: the no-bridge fallback link is now the capability route
-        # (no bearer header needed), not Phase 1's bearer-authenticated
+        # The no-bridge fallback link is the capability route
+        # (no bearer header needed), not the shim's bearer-authenticated
         # /mcp-files/downloads/ -- see local_files._deliver_link.
         assert result["download_url"].startswith("http://127.0.0.1:8765/mcp-files/fetch/")
         assert "note" in result

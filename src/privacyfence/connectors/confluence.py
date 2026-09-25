@@ -401,7 +401,7 @@ class ConfluenceConnector(Connector):
         # bridge instead -- see local_files.can_access_user_files's own
         # docstring.
         direct_write = local_files.can_access_user_files(self.download_mode)
-        # Phase 3 audit trail -- see connectors/drive.py's own `delivery`
+        # Audit trail -- see connectors/drive.py's own `delivery`
         # comment for the reasoning.
         delivery = (
             ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"

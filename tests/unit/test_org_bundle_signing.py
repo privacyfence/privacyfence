@@ -1,5 +1,5 @@
-"""Tests for org_bundle_signing.py -- SEC-05 (full signing)'s trust-on-
-first-use verification core, shared by daemon_main.load_org_config and
+"""Tests for org_bundle_signing.py -- the org-config bundle's Ed25519
+signature and trust-on-first-use verification core (ADR 0016), shared by daemon_main.load_org_config and
 settings_controller.install_org_config_bytes. See that module's own
 docstring for the model these tests exercise directly (test_daemon_main.py
 and test_settings_controller.py cover the two call sites' own wiring)."""
@@ -124,8 +124,8 @@ class TestVerifyAndMaybePin:
 
 
 class TestWouldPinNewKey:
-    """F5 of the self-approval review: a pure duplicate of verify_and_
-    maybe_pin's own "first signed bundle" branch condition, with no disk
+    """A pure duplicate of verify_and_maybe_pin's own "first signed bundle"
+    branch condition, with no disk
     side effect -- see that function's own docstring for why it's kept
     deliberately independent rather than sharing a helper."""
 

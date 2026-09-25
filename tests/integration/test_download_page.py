@@ -4,7 +4,7 @@ The download page is built entirely at runtime from the Cloudflare Worker's rele
 nothing meaningful about it can be asserted by reading the HTML: the platform cards, filenames,
 sizes and checksums only exist after `download.js` has fetched and rendered them. These tests run
 the real page in headless Chromium with the API responses stubbed at the network layer
-(`page.route`), which is what lets them assert the behaviours Phase 5 actually specifies --
+(`page.route`), which is what lets them assert the behaviours the page is meant to have --
 "OS detection only highlights, never hides", "stats gracefully disappear if the stats API is
 unavailable" -- rather than merely that some markup exists.
 
@@ -260,7 +260,7 @@ class TestOsDetection:
             context.close()
 
     def test_never_hides_the_platforms_it_did_not_pick(self, browser, website_server):
-        # The rule Phase 5 states outright: detection may highlight, never hide. Downloading an
+        # The rule: detection may highlight, never hide. Downloading an
         # installer for a different machine than the one you are browsing on is ordinary.
         context, page = _open_download_page(browser, website_server, user_agent=self.MAC_UA)
         try:
@@ -401,9 +401,9 @@ class TestDegradedApi:
 class TestUnknownArtifactId:
     """download.js hardcodes nothing about a release: an artifact id its own PLATFORMS map has no
     display name for still gets a card (falling back to the id itself) rather than being silently
-    dropped while it waits for a website deploy. This is the property that used to be exercised by
-    a second macOS card for the `.pkg` -- which is no longer a download of its own, since the DMG
-    now carries it (see scripts/build_dmg.sh) -- so it is asserted directly here instead."""
+    dropped while it waits for a website deploy. No real artifact exercises this -- the `.pkg` is
+    not a download of its own, since the DMG carries it (see scripts/build_dmg.sh) -- so it is
+    asserted directly here."""
 
     MAC_UA = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

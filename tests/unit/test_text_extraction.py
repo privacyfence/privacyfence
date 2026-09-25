@@ -35,10 +35,7 @@ PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presen
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # Minimal single-page PDF -- enough for pypdf.PdfReader to parse successfully
-# and report its text, not a claim this is a spec-perfect PDF. Reuses the
-# same fixture shape test_approval_window.py's TestPdfViewEmbed already
-# pinned as parseable by PDFKit's PDFDocument, the API that module still
-# uses for rendering (this one no longer does, for extraction).
+# and report its text, not a claim this is a spec-perfect PDF.
 VALID_PDF = (
     b"%PDF-1.1\n"
     b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
@@ -301,7 +298,7 @@ class TestPptx:
 
 
 class TestZipBombProtection:
-    """SEC-14: a DOCX/PPTX's word/document.xml or slideN.xml is decompressed
+    """A DOCX/PPTX's word/document.xml or slideN.xml is decompressed
     from an attacker-controlled zip before a human has approved anything --
     a crafted entry that's small on disk but huge once decompressed must not
     be fully read into memory. See _read_zip_member_bounded() and its
@@ -368,7 +365,7 @@ class TestZipBombProtection:
 
 
 class TestXxeProtection:
-    """SEC-14: word/document.xml and slideN.xml are parsed with defusedxml
+    """word/document.xml and slideN.xml are parsed with defusedxml
     rather than xml.etree.ElementTree, so a DOCTYPE declaring entities in an
     attacker-controlled attachment is rejected instead of expanded."""
 

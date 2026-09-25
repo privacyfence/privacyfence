@@ -3,13 +3,10 @@ canonical scenario): one real daemon -> MCP -> approval -> audit scenario, prove
 identical on ``ubuntu-latest``, ``windows-latest``, and ``macos-latest`` --
 no new CI wiring needed for that (``pyproject.toml``'s ``testpaths =
 ["tests"]`` already collects this module wherever the full suite already
-runs, same as Phase 2.3's ``tests/platform/`` before it).
+runs, same as ``tests/platform/``).
 
 Deliberately combines two patterns this repo already has, rather than
-reinventing either (per this phase's own text in the plan, and per Phase
-2.3's own status note: "Phase 3 should reuse this module's spawn/isolation
-pattern rather than reinventing it, the same way its own text already says
-to reuse test_mcp_daemon_contract.py's"):
+reinventing either:
 
 - **Real process boundary** -- tests/platform/test_daemon_process_lifecycle.py's
   spawn technique: ``python -c <bootstrap>`` monkeypatches
@@ -56,13 +53,13 @@ reliably exercise the same code path -- see run_app()'s own ``finally``
 block, which only runs when ``_wait_for_shutdown()`` returns normally).
 
 Cross-platform assertions are deliberately light on top of the shared
-scenario -- Phase 2.3's own grounding pass already put OS-level
-path/lock/process coverage under ``tests/platform/`` (state/config path
+scenario -- OS-level path/lock/process coverage lives under
+``tests/platform/`` (state/config path
 resolution, secure-directory creation, single-instance locking across a
 real process boundary, daemon process spawning/discovery/cleanup);
 duplicating any of that here would be pure churn. What this module adds on
 top is the one thing tests/platform/ deliberately doesn't cover: that the
-secure-directory permission floor (SEC-09's ``secure_mkdir``) that backs
+secure-directory permission floor (secure_files.py's ``secure_mkdir``) that backs
 every one of those state paths is actually in effect on the *audit log*
 directory this exact scenario just wrote to, on every POSIX OS this runs
 on (skipped on Windows, where ``Path.chmod`` doesn't carry the same
@@ -193,7 +190,7 @@ def _prepare_sandbox(tmp_path: Path, *, port: int) -> Path:
     config["web"]["port"] = port
     config["web"]["approvals"] = {"hold_window_seconds": 0.3}
     config["update_check"]["enabled"] = False
-    # #428 Phase 1: settings.yaml (like the control channel's socket and the
+    # settings.yaml (like the control channel's socket and the
     # audit log) lives under an `authority` subdirectory of data_dir(), not
     # data_dir() itself.
     config_dir = sandbox / "authority" / "config"
@@ -262,7 +259,7 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 10.0) -> None
 
 async def _bootstrap_session(web_client: httpx.AsyncClient, sandbox: Path, *, path: str) -> str:
     """Exactly the "still have filesystem access, no valid link handy" path
-    ``unauthorized_html``'s own 401 page recommends -- #428 Phase 2's
+    ``unauthorized_html``'s own 401 page recommends -- the
     control channel (a real Unix domain socket/named pipe against this
     daemon's own sandboxed data directory, via ``tests.control_channel_
     client``) mints a fresh one-time code on demand, never carried over
@@ -303,8 +300,8 @@ async def _call_tool(mcp_url: str, token: str, message: str):
 
 
 async def _call_status_tool(mcp_url: str, token: str) -> dict:
-    """One real MCP session calling privacyfence_status -- issue #396 Part
-    B/C's own meta-tool, exercised here against a real daemon process
+    """One real MCP session calling privacyfence_status -- the first-run
+    setup meta-tool, exercised here against a real daemon process
     rather than the in-process dispatcher tests in
     tests/unit/web/test_mcp_dispatch.py."""
     headers = {"Authorization": f"Bearer {token}"}
@@ -343,8 +340,8 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
         mcp_token = (sandbox / "mcp_token").read_text(encoding="utf-8").strip()
         assert mcp_token
         if sys.platform != "win32":
-            # #428 Phase 2: the control channel replaces web_token -- no
-            # file to read a secret out of any more, but the socket itself
+            # The control channel mints sessions -- there is no file to
+            # read a secret out of, but the socket itself
             # (unlike a Windows named pipe, which isn't a filesystem
             # object) is still directly observable as a basic liveness
             # check ahead of the real mint call below.
@@ -469,7 +466,7 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
 
 
 async def test_local_mode_status_bootstrap_lands_on_connectors_page(tmp_path):
-    """Issue #396 Part B/C, end to end: a fresh install (this test's own
+    """First-run setup, end to end: a fresh install (this test's own
     ``SystemTestConnector`` is never one of ``ALL_CONNECTORS``, so
     ``privacyfence_status`` sees it as un-onboarded exactly like a real
     fresh install with zero authenticated connectors) -> ``privacyfence_
@@ -480,11 +477,8 @@ async def test_local_mode_status_bootstrap_lands_on_connectors_page(tmp_path):
     with its Connectors section pre-selected, the actual screen an
     un-onboarded user needs rather than ``/settings``'s own General default.
 
-    The self-approval plan's Phase 2 is what changed the middle step: issue
-    #396's own threat-model follow-up had already kept ``status`` from
-    minting, leaving ``privacyfence_get_sign_in_link`` to do it on the
-    human's "yes"; that tool is now retired, so there is no tool left for
-    this test to call and the credential comes from where a human's own
+    No MCP tool mints a sign-in credential (ADR 0013), so there is no tool
+    for this test to call: the credential comes from where a human's own
     click gets it.
     """
     port = _free_port()

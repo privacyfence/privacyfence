@@ -1,23 +1,16 @@
 """Domain/business logic behind the web settings page (web/routes_settings.py).
 
-Through P9 this also backed a native macOS webview settings window
-(settings_window.py); P10 (D6) deleted that host along with the rest of the AppKit UI layer, leaving the
-web settings page (when ``web.settings.enabled`` is set) as the only way to
-drive this controller interactively -- editing ``config/settings.yaml`` by
-hand remains the headless path either way. This module itself was already
-headless-first before that (see docs/coding-and-testing-guidelines.md's
-"stay dependency-light" pattern also used by policy/resource_registry.py/
-privacy_filter.py) and needed no AppKit/PyObjC imports of its own to begin
-with -- ``rumps``/``dialog_window``/``PyObjCTools.AppHelper`` were the
-native host's own dependencies, imported here only to marshal callbacks onto
-its run loop and to host the Atlassian multi-resource picker (issue #145);
-none of that is needed anymore, see ``call_on_main``/``_pick_resource_index``
-below.
+The web settings page (when ``web.settings.enabled`` is set) is the only way
+to drive this controller interactively -- there is no native UI (ADR 0001),
+and editing ``config/settings.yaml`` by hand remains the headless path. This
+module is headless (see docs/coding-and-testing-guidelines.md's "stay
+dependency-light" pattern also used by policy/resource_registry.py/
+privacy_filter.py) and needs no AppKit/PyObjC imports: callbacks are
+marshaled through ``call_on_main`` and the Atlassian multi-resource picker
+runs through ``_pick_resource_index``, both below.
 
-``SettingsController`` holds the same instance state ``PrivacyFenceMenuBar``
-used to hold directly pre-#120, with one method per mutation the old NSMenu
-tree performed (see menu_bar.py's git history pre-#120 for the shape this
-was extracted from) -- every mutating method follows load config -> mutate
+``SettingsController`` holds the settings page's instance state, with one
+method per mutation -- every mutating method follows load config -> mutate
 -> save config -> hot-reload -> return a fresh ``snapshot()`` for the caller
 (web/routes_settings.py) to push into the page. Long-running work (OAuth
 flows, grant name resolution) runs on a background thread via
@@ -99,7 +92,7 @@ ALL_CONNECTORS: list[str] = [
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
-# 5deef1d8:docs/approval-list-ui-ux.md §4.3) -- see set_notifications_detail below
+# ADR 0064) -- see set_notifications_detail below
 # and web_shell.py's notificationBody() for what each level is allowed to
 # read off a pending-approval row.
 NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed")
@@ -254,14 +247,11 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------- #
 
 
-# The catalogue itself moved to policy/catalogue.py at P7, so the bridge's
+# The catalogue itself lives in policy/catalogue.py, so the bridge's
 # privacyfence_propose_policy_change can share it instead of re-deriving it a second time (see that
-# module's own docstring). Re-exported here under their original, private spellings so every
-# existing caller/test in this file keeps working unchanged -- which is only these four. P7's
-# original block carried three more (``_PolicyExtraScope``, ``_POLICY_VALUE_HINTS``,
-# ``_extra_operations_for``); nothing referenced them under either spelling, so they were aliases
-# kept for callers that had already moved. Import them from ``policy/catalogue.py`` directly if
-# one ever needs them again, rather than re-adding a private alias here.
+# module's own docstring). Re-exported here under private spellings for the callers/tests in this
+# file -- which is only these four. Import anything else from ``policy/catalogue.py`` directly
+# rather than adding a private alias here.
 _POLICY_EXTRA_SCOPES = policy_catalogue.EXTRA_SCOPES
 _policy_scope_catalogue = policy_catalogue.scope_catalogue
 _parse_verbs = policy_catalogue.parse_verbs
@@ -274,10 +264,8 @@ _rules_for_catalogue_entry = policy_catalogue.rules_for_catalogue_entry
 # main thread" before touching ``self`` again -- ``self.on_change``/the
 # change listeners are expected to push into a live web page, and doing that
 # from an arbitrary background thread would race whatever's reading state on
-# the ASGI loop. Through P9 this could also mean AppKit's own run loop (the
-# native settings window, via ``PyObjCTools.AppHelper.callAfter``); P10
-# deleted that host, so ``call_on_main`` below now has exactly one real
-# dispatcher to consider.
+# the ASGI loop. ``call_on_main`` below has exactly one real dispatcher to
+# consider.
 #
 # ``call_on_main`` is the one place that decides where "the main thread"
 # actually is: whatever dispatcher daemon_main.py registered via
@@ -317,7 +305,7 @@ def call_on_main(fn: Callable[..., None], *args: Any) -> None:
 
 
 def _pick_resource_index(*, title: str, prompt: str, options: list[str]) -> int | None:
-    """§16.2.2's generalized multi-resource picker, driven through whichever
+    """The generalized multi-resource picker, driven through whichever
     ``ApprovalUI`` is currently live: register a choice dialog through the
     same registry/blocking mechanism every approval card and confirmation
     already uses (web_prompt.py, dialog_window_html.build_choice_html for
@@ -325,13 +313,9 @@ def _pick_resource_index(*, title: str, prompt: str, options: list[str]) -> int 
     the same "no longer pending" landing page an approval link already has.
 
     ``None`` (no registry -- see approval_ui.py's deferred_registry
-    docstring; WebApprovalUI, the only implementation since P10, always has
-    one) is what pick_resource's own caller already treats as "fall back to
-    the first resource" -- there was never an abort path of its own to
-    preserve here either. Through P9 a second branch here fell back to
-    dialog_window.show_choice_dialog when no web registry was active and
-    pyobjc was present; P10 deleted that native picker along with the rest
-    of the AppKit UI layer.
+    docstring; WebApprovalUI, the only implementation, always has one) is
+    what pick_resource's own caller already treats as "fall back to the
+    first resource" -- there is no abort path of its own.
     """
     registry = get_approval_ui().deferred_registry
     if registry is None:
@@ -346,8 +330,7 @@ def _run_async(work: Callable[[], Any], on_done: Callable[[bool, Any], None]) ->
     ``on_done(ok, result)`` is called on the main thread via
     ``call_on_main`` -- ``result`` is the return value on success, or the
     raised exception on failure. Never touch ``self``/the page from
-    ``work``; do it in ``on_done``. Relocated from menu_bar.py's identical
-    helper -- see its own pre-#120 history.
+    ``work``; do it in ``on_done``.
     """
     def _runner() -> None:
         try:
@@ -362,7 +345,7 @@ def _run_async(work: Callable[[], Any], on_done: Callable[[bool, Any], None]) ->
 def _parse_value_list(raw_text: str) -> list[str] | None:
     """The Auto-accept page's "value" field (a comma-separated list of resource ids/keys/domains)
     -> a v2 rule value, or ``None`` for a value-less scope's empty field. Every v2 identity/valued-
-    attribute scope this page can write (``policy.propose.SCOPES_BY_GROUP`` plus the P6 extras --
+    attribute scope this page can write (``policy.propose.SCOPES_BY_GROUP`` plus the extra scopes --
     see ``_policy_scope_catalogue``) takes a plain list of strings; there is no int-valued scope in
     that catalogue the way v1's ``age_threshold_days``/``time_window_days`` condition rules were,
     since this page writes scopes, not conditions (see this module's own Auto-accept section
@@ -394,7 +377,7 @@ def _relative_time(timestamp: str) -> str:
 # ---------------------------------------------------------------------------- #
 # State builders with no per-instance dependency (no resolver cache, no
 # connector registry) -- pure functions of a config dict, factored out of the
-# instance methods below of the same name (PSC-5) so web/routes_settings.py's
+# instance methods below of the same name (ADR 0032) so web/routes_settings.py's
 # own org-mode state builder can share them instead of re-deriving the same
 # PII-field/privacy-policy/about shape a second time. Each instance method
 # further down is now a thin wrapper calling straight through.
@@ -433,7 +416,7 @@ def _privacy_state_from_config(cfg: dict[str, Any], *, fail_safe_default: str = 
         try:
             parsed = _parse_privacy_group(cfg.get(group), group=group, fail_safe_default=fail_safe_default)
         except PrivacyFilterConfigError as exc:
-            # init_privacy_filter (SEC-07) already refused to start the
+            # init_privacy_filter already refused to start the
             # daemon on a malformed group at startup, so reaching this
             # is only possible if settings.yaml was hand-edited on disk
             # to something malformed *after* that -- the live enforced
@@ -476,7 +459,7 @@ def _rule_usage_map() -> dict[str, Any]:
     ``data_dir`` are themselves principal-scoped (the same contextvar
     ``principal_scope`` sets), so this already reads whichever principal is
     currently scoped when called, local mode's single ``LOCAL_PRINCIPAL``
-    or (PSC-5) an org caller's own ``with principal_scope(principal):``
+    or an org caller's own ``with principal_scope(principal):``
     block -- see ``_auto_accept_state_from_rules`` below, this function's
     only caller."""
     log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
@@ -515,7 +498,7 @@ def _auto_accept_state_from_rules(
     resolve_value: Callable[[PolicyRule], str],
 ) -> dict[str, Any]:
     """The Auto-accept page's state, factored out of ``SettingsController.
-    _auto_accept_state`` (PSC-5) so web/routes_settings.py's own org-mode
+    _auto_accept_state`` (ADR 0032) so web/routes_settings.py's own org-mode
     state builder can share it. ``resolve_value`` renders one rule's value; both modes
     pass ``cached_rule_value`` (resource ids shown by their cached names), and differ only
     in how a missing name gets resolved -- local's ``_resolved_rule_value`` in the background
@@ -570,7 +553,7 @@ def _entry_agent(entry: AuditEntry) -> AgentIdentity:
 
 
 def audit_rows(entries: list[AuditEntry]) -> list[dict[str, Any]]:
-    """The Audit Log page's "Recent decisions" rows (AGT-5) -- shared by local mode's
+    """The Audit Log page's "Recent decisions" rows -- shared by local mode's
     ``_audit_state`` and org mode's own page state, so both show the same columns. ``agent`` is
     ``agent_label.AgentLabel.to_dict()``: the same tiered wording the approval card and list use
     (``agent_label.py``), raw text the page escapes."""
@@ -593,8 +576,7 @@ class SettingsController:
     __init__ here unconditionally, regardless of whether ``web.settings.
     enabled`` ever opts a browser into looking at it. ``wire_unattended_
     listener`` (below) is the equivalent wiring for unattended-session
-    changes, but is *not* done from __init__: since P5 retired the bridge,
-    the only thing that can ever produce an unattended session is
+    changes, but is *not* done from __init__: the only thing that can ever produce an unattended session is
     web/mcp_dispatch.py's McpDispatcher, and whether one even exists
     depends on web.mcp.enabled -- something this constructor has no
     visibility into. daemon_main.py's own _maybe_start_web_server calls it
@@ -608,10 +590,8 @@ class SettingsController:
     (which the web surface actually uses, since more than one consumer can
     be attached at once); kept as its own attribute mainly because it's a
     convenient single hook for a test to observe ``_push_snapshot()``
-    calls. Through P9 this was also how the native settings window wired
-    itself in (``controller.on_change = self._push_state``); P10 deleted
-    that host, so nothing sets this in a real deployment anymore, but the
-    slot itself costs nothing to keep.
+    calls. Nothing sets this in a real deployment, but the slot itself
+    costs nothing to keep.
     """
 
     def __init__(
@@ -632,9 +612,9 @@ class SettingsController:
         self._connector_objs: dict[str, Any] = {c.name: c for c in (connector_objs or [])}
         # name -> "no_org_config" | "not_authenticated" | a redacted
         # message, for every *enabled* connector build_connectors() didn't
-        # end up producing (issue #396 Phase 1) -- read by _connectors_state
+        # end up producing -- read by _connectors_state
         # below as each row's blocked_by, so "never set up" and "auth
-        # expired" stop looking identical to a client asking why a
+        # expired" don't look identical to a client asking why a
         # connector is missing. Same refresh cadence as _connector_objs.
         self._connector_failures: dict[str, str] = dict(connector_failures or {})
         self._resolver = get_resolver()
@@ -662,21 +642,19 @@ class SettingsController:
         # Kept as a single settable slot -- see this class's own docstring
         # for why it's distinct from add_change_listener below.
         self.on_change: Callable[[dict[str, Any]], None] | None = None
-        # Additional listeners, notified alongside on_change (§16.8's risk
-        # #2: "two on_change consumers... make it a list, test that both
-        # fire") -- daemon_main.py subscribes web/state_stream.py's push
+        # Additional listeners, notified alongside on_change -- a list,
+        # since more than one consumer can be attached -- daemon_main.py subscribes web/state_stream.py's push
         # here so a rule changed over MCP, an OAuth flow finishing, or any
-        # other background outcome reaches an open browser tab exactly the
-        # way it already reaches an open native window.
+        # other background outcome reaches an open browser tab.
         self._change_listeners: list[Callable[[dict[str, Any]], None]] = []
-        # issue #396 Part C: fired by refresh_connectors()'s own done()
+        # Fired by refresh_connectors()'s own done()
         # callback whenever the live connector set actually gets swapped --
         # wired to McpDispatcher.notify_tools_changed by daemon_main.py once
         # an MCP dispatcher exists (see set_connectors_changed_listener's
         # own docstring), so an open MCP client learns about newly (or no
         # longer) authenticated connectors without needing to reconnect.
         self._connectors_changed_listener: Callable[[], None] | None = None
-        # B9: wired in by wire_step_up (see that method's own docstring for
+        # Wired in by wire_step_up (see that method's own docstring for
         # why not a constructor argument) -- None until then, which makes
         # enable_step_up a safe no-op in every test/caller that never wires
         # step-up at all.
@@ -688,13 +666,11 @@ class SettingsController:
         """Register this controller's push-on-change with ``dispatcher``
         (web.mcp_dispatch.McpDispatcher) -- called by daemon_main.py's
         _maybe_start_web_server once it knows a dispatcher actually exists
-        (web.mcp.enabled), the direct successor of what this constructor
-        used to do itself, unconditionally, with ipc_server.py's IPCServer
-        before P5 retired it."""
+        (web.mcp.enabled)."""
         dispatcher.set_unattended_changed_listener(self._on_unattended_changed)
 
     def wire_step_up(self, step_up: LiveStepUpConfig) -> None:
-        """B9: registers the same ``LiveStepUpConfig`` daemon_main.py's
+        """Registers the same ``LiveStepUpConfig`` daemon_main.py's
         local-mode boot path hands to web/server.py's ``WebServer`` (and,
         through it, to every route that gates on step-up) -- called from
         ``_maybe_start_web_server`` once that object exists, the same
@@ -708,7 +684,7 @@ class SettingsController:
 
     def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
         """``callback`` is ``McpDispatcher.notify_tools_changed`` in
-        production (issue #396 Part C) -- called, on the main thread, right
+        production -- called, on the main thread, right
         after refresh_connectors() swaps in a freshly-built connector set,
         so an already-connected MCP client is told its tool list changed
         instead of needing a restart to see it. Wired by daemon_main.py
@@ -775,7 +751,7 @@ class SettingsController:
             logger.warning("Could not save config: %s", exc)
             return
         try:
-            # SEC-23: every settings.yaml write is a privacy-policy change,
+            # Every settings.yaml write is a privacy-policy change,
             # so the fingerprint every *new* audit entry carries
             # (AuditEntry.security_config_hash) needs to move with it --
             # daemon_main.run_app() only stamps this AuditLogger with a
@@ -837,22 +813,20 @@ class SettingsController:
         return self.snapshot()
 
     # ------------------------------------------------------------------ #
-    # Step-up (WebAuthn) enforcement -- B9 of the 4.1.0 action plan
+    # Step-up (WebAuthn) enforcement
     # ------------------------------------------------------------------ #
 
     def enable_step_up(self) -> dict[str, Any]:
         """The browser-reachable counterpart to hand-editing ``config/
-        settings.yaml``'s own ``step_up:`` section, which #426 shipped
-        enrollment and enforcement for and then left with no way to turn on
-        short of a shell (B9's own problem statement -- see step_up_
-        config.py's ``LiveStepUpConfig`` docstring for the mechanism this
-        method writes through). Always sets *both* ``enabled`` and
+        settings.yaml``'s own ``step_up:`` section, which otherwise has no
+        way to turn on short of a shell (see step_up_config.py's
+        ``LiveStepUpConfig`` docstring for the mechanism this method writes
+        through). Always sets *both* ``enabled`` and
         ``require_passkey`` together, never one alone: local mode has no
         IdP fallback, so an ``enabled=True, require_passkey=False`` install
         enforces nothing beyond what ``enabled=False`` already didn't (see
         ``StepUpConfig.from_local_config``'s own docstring) -- "turn
-        step-up on, and make it mandatory" (B9's "done when" wording) is
-        one action here, not two.
+        step-up on, and make it mandatory" is one action here, not two.
 
         Refuses -- config untouched, ``self.error`` set, same failure
         surfacing every other guarded action in this class uses -- unless a
@@ -871,7 +845,7 @@ class SettingsController:
         signal webauthn_stepup.observe_step_up_requirement's "treat this
         install as compromised" banner watches for (see that module's own
         docstring) -- a UI path that could also produce a disable would
-        make that banner impossible to trust.
+        make that banner impossible to trust. See ADR 0068.
         """
         if self._step_up is None or not _has_webauthn_credentials(LOCAL_PRINCIPAL):
             self.error = "Add a passkey at /security before turning step-up on."
@@ -897,7 +871,7 @@ class SettingsController:
         self._save_config(cfg)
         self._step_up.update(new_step_up)
         self.error = ""
-        # #426 Phase 4's own tracking -- called here, not just left for the
+        # Requirement tracking -- called here, not just left for the
         # next daemon startup to notice, so this transition is audited the
         # moment it happens (see webauthn_stepup.py's own module docstring
         # on why an *enable* observed outside startup is expected now,
@@ -981,9 +955,7 @@ class SettingsController:
 
     def on_update_check_timer(self) -> None:
         """Periodic "is it time to check yet?" pulse -- called by
-        daemon_main.py's own background timer thread (through P9, menu_bar.
-        py's rumps.Timer; deleted at P10 along with the rest of the AppKit
-        UI layer). check_for_update() re-derives whether 24h have actually
+        daemon_main.py's own background timer thread. check_for_update() re-derives whether 24h have actually
         passed from its own on-disk timestamp."""
         cfg = self._load_config()
         update_check_cfg = cfg.get("update_check", {}) or {}
@@ -1007,10 +979,7 @@ class SettingsController:
             return
         self._latest_update = result
         self._push_snapshot()
-        # Through P9 an update found here also popped a native rumps.alert()
-        # (Download / Skip This Version / Remind Me Later), when pyobjc was
-        # present -- P10 deleted that host along with the rest of the
-        # AppKit UI layer. The web settings page's own in-page banner
+        # The web settings page's own in-page banner
         # (renderGeneral's g.update_available, driven by _general_state
         # below, with skip_update/remind_later_update as its two dismiss
         # actions) is this surface's only notification now.
@@ -1032,16 +1001,12 @@ class SettingsController:
 
     def install_org_config_bytes(self, raw: bytes) -> None:
         """The validate-then-write step behind web/routes_settings.py's
-        multipart upload (§16.2.4). Through P9 there was also a native
-        "choose file" picker (``osascript``'s ``choose file``) calling
-        into this same method, run synchronously on the calling (main)
-        thread -- P10 deleted that host along with the rest of the AppKit
-        UI layer, leaving this the only way an organization config bundle
-        gets installed. Sets self.error on failure, clears it on success --
+        multipart upload -- the only way an organization config bundle gets
+        installed from the settings page. Sets self.error on failure, clears it on success --
         callers push a fresh snapshot() themselves, the same convention
         every other mutating method here follows.
 
-        SEC-05 (full signing): also runs the bundle through
+        Signing (ADR 0016): also runs the bundle through
         org_bundle_signing.verify_and_maybe_pin() before writing anything
         to disk -- a bundle that doesn't verify against a previously
         pinned signing key (or, for a "mode": "org" bundle, isn't signed
@@ -1099,7 +1064,7 @@ class SettingsController:
 
     def would_pin_new_org_signing_key(self, raw: bytes) -> bool:
         """Read-only precheck for web/routes_settings.py's org_config_
-        upload route (F5 of the self-approval review): whether installing
+        upload route: whether installing
         ``raw`` would pin a new organization-config signing key as a side
         effect of install_org_config_bytes above, so that route can
         demand an explicit confirmation before calling it, rather than
@@ -1128,7 +1093,7 @@ class SettingsController:
 
     def _org_config_or_empty(self) -> dict[str, Any]:
         """load_org_config() now raises ``org_mode.ConfigurationError`` for
-        a present-but-broken org_config.json (SEC-04) instead of silently
+        a present-but-broken org_config.json instead of silently
         treating it as absent -- exactly the fail-closed behavior daemon_
         main.py's startup path needs, since that's where "mode" gets
         resolved and org-mode auth gets wired from it. This settings
@@ -1147,15 +1112,14 @@ class SettingsController:
             return {}
 
     def enable_connector(self, connector: str) -> dict[str, Any]:
-        """F6 of the self-approval review: split out of a single
-        ``toggle_connector`` so the two directions can be gated
-        differently by web/routes_settings.py's _SENSITIVE_ACTIONS. An
-        agent that already has connector access gains nothing new by
-        *disabling* one (see disable_connector below and that module's
-        classification comment), but re-enabling one a human deliberately
-        switched off is exactly the access the agent did not have before
-        -- the same rationale toggle_grant_capability etc. are already
-        gated on."""
+        """Split out of a single ``toggle_connector`` so the two
+        directions can be gated differently by web/routes_settings.py's
+        _SENSITIVE_ACTIONS. An agent that already has connector access
+        gains nothing new by *disabling* one (see disable_connector below
+        and that module's classification comment), but re-enabling one a
+        human deliberately switched off is exactly the access the agent
+        did not have before -- the same rationale the rule and policy
+        actions are gated on. See ADR 0070."""
         return self._set_connector_enabled(connector, True)
 
     def disable_connector(self, connector: str) -> dict[str, Any]:
@@ -1195,7 +1159,7 @@ class SettingsController:
                 self._connector_failures = failures
                 if self.connector_host is not None:
                     self.connector_host.set_connectors(result)
-                # issue #396 Part C: after the live set is actually swapped,
+                # After the live set is actually swapped,
                 # not before -- a listener that asks for fresh connector
                 # state (McpDispatcher.notify_tools_changed's own broadcast
                 # is fire-and-forget, but the principle holds) must see the
@@ -1321,18 +1285,15 @@ class SettingsController:
         def pick_resource(resources: list[dict[str, Any]]) -> dict[str, Any]:
             # Runs on work()'s own background thread (see _run_async) --
             # _pick_resource_index below handles marshaling the actual
-            # picker onto whichever surface is live (native window or web)
-            # and blocking this one until it resolves, the same convention
-            # gate.py's asyncio.to_thread(show_*_popup, ...) call sites
-            # already use. See that function's own docstring (§16.2.2: "the
-            # same pattern P1 already solved" -- generalized here rather
-            # than a second, web-only mechanism).
+            # picker onto the web approval surface and blocking this one
+            # until it resolves, the same convention gate.py's
+            # asyncio.to_thread(show_*_popup, ...) call sites already use.
+            # See that function's own docstring.
             #
-            # Two behaviors carried over deliberately, not by accident
-            # (§16.2.2): a cancelled picker (idx is None) falls back to the
-            # first resource -- there was never an abort path of its own,
-            # on either surface; and the options shown are site URLs, not
-            # names.
+            # Two behaviors are deliberate, not accidental: a cancelled
+            # picker (idx is None) falls back to the first resource --
+            # there is no abort path of its own; and the options shown are
+            # site URLs, not names.
             options = [r.get("url", r.get("id", "")) for r in resources]
             idx = _pick_resource_index(
                 title="PrivacyFence", prompt="Choose the Atlassian site to connect:", options=options,
@@ -1360,11 +1321,8 @@ class SettingsController:
         _run_async(work, done)
 
     # -- Telegram: bridge-driven multi-step sign-in (phone -> code -> optional
-    # 2FA password), replacing the native rumps.Window-based flow the first
-    # pass of issue #120 kept as a deliberate scope boundary. Each step opens
-    # its own short-lived TelegramClient/connect/disconnect, exactly like the
-    # pre-#120 flow did (see git history at 1f367ca, menu_bar.py's
-    # _authenticate_telegram) -- no long-lived connection is held across
+    # 2FA password). Each step opens its own short-lived
+    # TelegramClient/connect/disconnect -- no long-lived connection is held across
     # bridge calls, since a webview round trip can be arbitrarily far apart
     # from the next one. self._telegram_auth carries the phone number and
     # phone_code_hash send_code_request returned, needed by the code step;
@@ -1493,7 +1451,7 @@ class SettingsController:
         return self.snapshot()
 
     # ------------------------------------------------------------------ #
-    # Auto-accept (policy v2) -- P6 of the policy v2 redesign. See this
+    # Auto-accept (policy v2). See this
     # module's own "Auto-accept (policy v2)" section, above, for the
     # catalogue (_policy_scope_catalogue/_POLICY_EXTRA_SCOPES/
     # _rules_for_catalogue_entry) these two actions build on.
@@ -1507,7 +1465,7 @@ class SettingsController:
         rather than creating a duplicate row (``policy.store.merge_rules``) -- which is also how
         "add more verbs to an existing rule" works from this same form, no separate edit action
         needed. Silently does nothing for an unrecognized group, a group none of the requested verbs
-        govern, or (for the one valued P6 extra, ``apps_script.project``) a value-needing scope
+        govern, or (for the one valued extra scope, ``apps_script.project``) a value-needing scope
         submitted with none -- see ``_rules_for_catalogue_entry``'s own docstring.
         """
         verb_enums = _parse_verbs(verbs)
@@ -1526,8 +1484,8 @@ class SettingsController:
     def remove_policy_rule(self, rule_id: str) -> dict[str, Any]:
         """Removes the rule with this stable id from the on-disk v2 ``auto_accept:`` section
         entirely -- narrowing (rather than adding a rule) is always a remove-and-re-add-narrower
-        here, the same "additive only" posture the redesign proposal's §03 gives the whole model, not
-        a smaller-scoped edit action of its own."""
+        here, the same "additive only" posture the whole policy model has, not a smaller-scoped
+        edit action of its own."""
         cfg = self._load_config()
         existing = policy_store.compile_rules_from_config(cfg)
         remaining = [rule for rule in existing if rule.id != rule_id]
@@ -1626,13 +1584,12 @@ class SettingsController:
         return self.snapshot()
 
     def export_audit_log_path(self) -> str | None:
-        """Web/routes_settings.py's download endpoint uses this (§16.2.4):
+        """Web/routes_settings.py's download endpoint uses this:
         builds this week's .xlsx and returns its path for the route to
         serve directly, instead of running ``open`` on the daemon's own
         machine (which would show the file to whoever is sitting at *that*
         machine, not to the browser that made the request -- possibly a
-        different device entirely; through P9, that ``open``-based version
-        was the native settings window's own equivalent, deleted at P10).
+        different device entirely).
         There is nothing sensible to "download" when there's no audit
         activity for the current week yet (opening the containing folder
         doesn't translate to an HTTP download), so that case is an error
@@ -1656,11 +1613,8 @@ class SettingsController:
     def quit_app(self) -> None:
         """The web settings page's "Quit PrivacyFence" action
         (web/routes_settings.py's quit_action, behind ``allow_quit``/an
-        in-page confirmation). Through P9 this called ``rumps.
-        quit_application()`` -- the native menu bar's own equivalent,
-        deleted at P10 along with the rest of the AppKit UI layer -- so
-        this now signals daemon_main.py's own shutdown wait instead; see
-        that module's ``request_shutdown``."""
+        in-page confirmation). Signals daemon_main.py's own shutdown wait;
+        see that module's ``request_shutdown``."""
         from . import daemon_main
         daemon_main.request_shutdown()
 
@@ -1725,7 +1679,7 @@ class SettingsController:
             # `state` alone).
             "notifications_enabled": notifications_cfg.get("enabled", True),
             "notifications_detail": notifications_cfg.get("detail", "minimal"),
-            # §16.2.4: the web General page's own update-available banner --
+            # The web General page's own update-available banner --
             # see skip_update/remind_later_update and _on_update_check_done
             # above for the actions it drives.
             "update_available": bool(latest is not None and latest.is_update_available),
@@ -1738,7 +1692,7 @@ class SettingsController:
                 "Install/Update Organization Config…" if org_installed else "Install Organization Config…"
             ),
             "version": __version__,
-            # B9: the General page's Security card reads these three to
+            # The General page's Security card reads these three to
             # decide whether to show "Turn on step-up", a disabled hint
             # ("add a passkey first"), or nothing (already on) -- see
             # enable_step_up's own docstring and settings_window_html.py's
@@ -1780,7 +1734,7 @@ class SettingsController:
                 # row simply hasn't been through a build for yet; otherwise
                 # "no_org_config" | "not_authenticated" | a redacted
                 # message, from build_connectors()'s own per-connector
-                # failure map (issue #396 Phase 1).
+                # failure map.
                 "blocked_by": (
                     None if connected or not enabled else self._connector_failures.get(cname)
                 ),
@@ -1789,8 +1743,7 @@ class SettingsController:
         return rows
 
     def status_connectors(self) -> list[dict[str, Any]]:
-        """privacyfence_status's own connector view (issue #396 Phase 2,
-        web/mcp_dispatch.py's ``McpDispatcher.set_connectors_state_provider``
+        """privacyfence_status's own connector view (web/mcp_dispatch.py's ``McpDispatcher.set_connectors_state_provider``
         seam) -- the same underlying state ``_connectors_state`` above
         derives for the settings page, reshaped into the
         ``{name, enabled, authenticated, blocked_by}`` rows the MCP status
@@ -1807,13 +1760,10 @@ class SettingsController:
         ]
 
     def _auto_accept_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        """State for the Auto-accept page (P6): every rule in the on-disk v2 ``auto_accept:``
-        section, sentence-rendered, plus the "add a rule" scope catalogue -- one filterable list,
-        replacing the per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-page surface
-        this method used to build (``_rules_state``/``_drive_grant_summary``/``_grant_entry_label``,
-        through P5).
+        """State for the Auto-accept page: every rule in the on-disk v2 ``auto_accept:``
+        section, sentence-rendered, plus the "add a rule" scope catalogue -- one filterable list.
 
-        P8 adds each row's own usage: ``match_count``/``last_matched`` (a relative-time string,
+        Each row carries its own usage: ``match_count``/``last_matched`` (a relative-time string,
         via ``_relative_time``, empty when the rule has never matched) and ``never_matched``,
         from ``AuditLogger.rule_usage()`` grouped by the same ``rule.id`` this row is keyed on --
         gate.py's ``_evaluate_auto_accept`` stamps every "auto_accepted" audit entry's ``rule_id``
@@ -1821,7 +1771,7 @@ class SettingsController:
         that field's own docstring), so a count here is never a guess. Reads straight off this
         principal's own ``logs/audit/`` directory, the same way ``_audit_state`` builds "Recent
         decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
-        different principal's logger by the time this renders (P6, org mode)."""
+        different principal's logger by the time this renders (org mode)."""
         rules = policy_store.compile_rules_from_config(cfg)
         return _auto_accept_state_from_rules(rules, _rule_usage_map(), resolve_value=self._resolved_rule_value)
 

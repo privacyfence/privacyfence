@@ -89,7 +89,7 @@ class TestClaimSuccess:
         assert r.content == b"file bytes"
 
     def test_claim_writes_an_audit_entry_with_no_token_in_it(self, tmp_path):
-        """Phase 3: the moment a staged download is actually served must
+        """The moment a staged download is actually served must
         leave a trail -- and that trail must never carry the token
         itself."""
         init_audit_logger(str(tmp_path / "audit"))
@@ -159,9 +159,8 @@ class TestClaimFailures:
         assert r.status_code == 403
 
     def test_404_and_403_responses_are_no_store(self):
-        # SEC-18: a per-token path is low caching risk either way, but
-        # this route never sent Cache-Control at all on its error branches
-        # before.
+        # A per-token path is low caching risk either way, but the error
+        # branches still send Cache-Control: no-store, like the success one.
         app, sessions, store = _app()
         token = store.stage(ALICE, b"data", "f.txt", "text/plain")
         client = _client(app)

@@ -1,13 +1,11 @@
 """Unit tests for privacyfence.auto_accept -- the tool/gate/temp-accept infrastructure and the
-per-principal v2 rule cache (P9 of the policy v2 redesign).
+per-principal v2 rule cache.
 
-Through P8, this module also housed the v1 rule engine (``AutoAcceptEvaluator`` and every
-``_rule_*`` predicate), the popup's suggestion tables, and the v1 ``auto_accept_rules``/
-``auto_accept_grants`` writers -- all of that, and this file's own coverage of it, is gone at P9.
-The v2 replacements have their own, already-existing test suites:
+Rule matching, rule proposals and the on-disk rule schema live in ``policy/`` and have their own
+test suites:
 
 - Scope/condition predicate matching: tests/unit/policy/test_scopes.py, test_conditions.py
-  (equivalence-checked against a frozen pre-P9 reference, tests/unit/policy/_v1_reference.py).
+  (equivalence-checked against a frozen v1 reference, tests/unit/policy/_v1_reference.py).
 - Rule evaluation (``policy.engine.evaluate``/``preflight``): tests/unit/policy/test_engine.py.
 - Popup/Settings/bridge rule proposals and the one writer: tests/unit/policy/test_propose.py,
   test_describe.py, test_catalogue.py.
@@ -131,8 +129,7 @@ class TestDriveSheetsDocsSingleSourceOfTruth:
 
 class TestAttendeeEmail:
     """_attendee_email is a live dependency of policy.conditions._no_external_attendees_matches
-    (no_external_attendees), unlike every other predicate helper this module used to own -- it's
-    imported by, not just kept alongside, P2's condition selectors."""
+    (no_external_attendees) -- it's imported by, not just kept alongside, the condition selectors."""
 
     def test_dict_shaped_attendee(self):
         assert _attendee_email({"email": "a@example.com"}) == "a@example.com"
@@ -211,8 +208,8 @@ class TestTempAcceptKey:
 
 
 class TestTempAcceptGraceWindow:
-    """register_temp_accept()/is_temp_accepted() used to be AutoAcceptEvaluator instance methods;
-    P9 makes them module-level functions against the current principal's own _AutoAcceptState
+    """register_temp_accept()/is_temp_accepted() are module-level functions against the current
+    principal's own _AutoAcceptState
     (auto_accept._REGISTRY), reset between tests by tests/conftest.py's autouse fixture."""
 
     def test_not_accepted_before_registration(self):

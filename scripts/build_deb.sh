@@ -51,7 +51,7 @@ command -v objdump &>/dev/null || { echo "Required tool not found: objdump (apt-
 # PrivacyFence itself hasn't been `pip install -e .`d yet.
 VERSION=$("$PYTHON" -c "from importlib.metadata import version; print(version('privacyfence'))")
 
-# Debian version-string handling (P4.1): setuptools_scm's resolved version is PEP 440
+# Debian version-string handling: setuptools_scm's resolved version is PEP 440
 # (e.g. "4.0.0a13", or a dev version like "4.0.1.dev3+gabc1234"), which isn't a valid Debian
 # version string as-is -- the bare "a13" pre-release suffix and the "+g<sha>" local segment don't
 # sort correctly under `dpkg --compare-versions`. Convert: a/b/rc -> ~a/~b/~rc (Debian's own
@@ -172,7 +172,7 @@ fi
 # (0755, the same mode as the daemon binary itself) -- correct for the DMG's .app bundle (macOS
 # doesn't police this), but flagged by lintian as `shared-library-is-executable` on Debian: a
 # vendored .so is data, not something meant to be run directly, and convention (and this
-# package's own lint gate, P4.3) expects 0644. Only the actual entry points --
+# package's own lintian gate in step 7) expects 0644. Only the actual entry points --
 # opt/privacyfence/PrivacyFenceApp and the privacyfence-app symlink to it -- need to stay
 # executable.
 find "${STAGE}/opt/privacyfence" \( -name '*.so' -o -name '*.so.*' \) -type f -exec chmod 0644 {} +
@@ -185,7 +185,7 @@ install -m 0755 resources/linux/privacyfence-app-wrapper "${STAGE}/usr/bin/priva
 install -m 0755 resources/linux/privacyfence-companion-wrapper "${STAGE}/usr/bin/privacyfence-companion"
 install -m 0644 resources/linux/privacyfence-companion.desktop \
   "${STAGE}/usr/share/applications/privacyfence-companion.desktop"
-# #428 Phase 4 (B5b): the opt-in privilege-separation tool and the two templates it renders.
+# The privilege-separation tool and the two templates it renders.
 # /usr/sbin, not /usr/bin -- it refuses to run without root, and /usr/sbin is on root's PATH
 # rather than an ordinary user's. Named without the .sh suffix for the same reason every other
 # command here is: what a person types is a command, not a file. The templates travel with it
@@ -198,7 +198,7 @@ install -m 0644 installer/linux/privacyfence-daemon.service.tmpl \
   "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-daemon.service.tmpl"
 install -m 0644 installer/linux/privacyfence-companion.desktop.tmpl \
   "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-companion.desktop.tmpl"
-# #428 Phase 2: the polkit action that lets the companion's tray menu run
+# The polkit action that lets the companion's tray menu run
 # `daemon start`/`stop`/`restart` elevated via pkexec -- see the policy
 # file's own comment for the trust reasoning, and debian/install for the
 # equivalent mapping a `dh_install`-driven build would use instead of this
@@ -261,7 +261,7 @@ for line in pkg_stanza.splitlines():
         continue
     if line.startswith("Architecture:"):
         # Only package for an architecture debian/control declares -- and it declares only what CI
-        # builds and tests (#679) -- so an arm64 host can't quietly produce an untested arm64 .deb.
+        # builds and tests (ADR 0044) -- so an arm64 host can't quietly produce an untested arm64 .deb.
         declared = line.partition(":")[2].split()
         if arch not in declared:
             sys.exit(f"host architecture {arch!r} is not in debian/control's Architecture: {' '.join(declared)}")
@@ -311,7 +311,7 @@ dpkg-deb --build --root-owner-group "$STAGE" "dist/${DEB_NAME}"
 # Non-fatal warnings are logged but don't fail the build; any error-severity finding does --
 # catches packaging-policy mistakes (bad permissions, FHS violations, a malformed changelog)
 # before they ship, the same role PrivacyFenceApp.spec's own structure already plays for macOS
-# bundling mistakes (P4.3).
+# bundling mistakes.
 if command -v lintian &>/dev/null; then
   echo "→ Running lintian…"
   set +e

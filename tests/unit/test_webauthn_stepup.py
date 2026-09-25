@@ -1,8 +1,8 @@
 """Tests for webauthn_stepup.py.
 
 The ``webauthn`` package's own CBOR/COSE attestation parsing and signature
-verification is not re-tested here (D2's own reasoning: it's a maintained
-library, not this repo's code) -- ``verify_registration_response``/
+verification is not re-tested here (it's a maintained library, not this
+repo's code) -- ``verify_registration_response``/
 ``verify_authentication_response`` are mocked at the module boundary so
 these tests cover what this module is actually responsible for: credential
 storage, challenge binding/single-use/TTL, the decision fingerprint, and
@@ -216,7 +216,7 @@ class TestDecisionFingerprint:
 
 
 class TestBatchDecisionFingerprint:
-    """The approval binder's own binding (Phase 3): the role
+    """The approval binder's own binding: the role
     decision_fingerprint plays for one decision, over a whole submitted
     set."""
 
@@ -257,7 +257,7 @@ class TestBatchDecisionFingerprint:
         )
 
     def test_binds_deny_items_too_not_just_the_accepting_ones(self):
-        # §10.6's own binding covers the whole set a human saw, not merely
+        # The binding covers the whole set a human saw, not merely
         # the subset that happened to need step-up -- an assertion for
         # {accept A, deny B} must not cover {accept A, deny C} either.
         with_b = [("a1", "accept"), ("b", "deny")]
@@ -300,7 +300,7 @@ class TestStepUpChallengeStore:
         assert store.pop("alice", "a1") is not None
 
     def test_put_sweeps_expired_entries_so_unpopped_keys_dont_accumulate(self):
-        """B26: a client-chosen key (routes_approvals.py's batch decide
+        """A client-chosen key (routes_approvals.py's batch decide
         mints one straight from the request body) that is never popped
         must not grow the store without bound -- ``put()`` itself has to
         evict anything past the TTL, since nothing else ever will."""

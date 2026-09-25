@@ -12,18 +12,13 @@ Also carries PrivacyFence's own meta-tools (privacyfence_check_policy and
 friends) -- not sourced from any connector's manifest, ported field-for-field
 from bridge/src/tools.ts's ``registerMetaTools`` (same names, same
 descriptions, same input shapes) since routes_mcp.py replaces the bridge as
-the thing serving them, not what they are (§8.1: "the other three move into
-web/routes_mcp.py against the connector registry directly"). One exception has no bridge-era
-counterpart: ``PRIVACYFENCE_STATUS_TOOL`` (issue #396), the meta-tool that
-tells a client an install is not set up yet. It had a companion --
-``GET_SIGN_IN_LINK_TOOL``, added once P10 had left local mode's web UI
-headless with no menu bar link of its own -- which minted a live sign-in
-link and handed it to the agent. The self-approval plan's Phase 2 retired
-it: its own justification ("nothing installs or starts the companion
-automatically yet") expired when ADR 0003 made the companion mandatory on
-all three platforms, and a session is no longer something to hand the party
-it governs (web/session_auth.py's ``PROVENANCE_*``). What is left in its
-place is the companion itself, and ``privacyfence-app
+the thing serving them, not what they are. One exception has no bridge-era
+counterpart: ``PRIVACYFENCE_STATUS_TOOL``, the meta-tool that
+tells a client an install is not set up yet. There is deliberately no
+meta-tool that mints a sign-in link for the agent (ADR 0013): ADR 0003 makes
+the companion mandatory on all three platforms, and a session is not
+something to hand the party it governs (web/session_auth.py's
+``PROVENANCE_*``). What stands in for one is the companion itself, and ``privacyfence-app
 --print-sign-in-link`` for a human whose companion menu is out of reach.
 """
 from __future__ import annotations
@@ -41,9 +36,9 @@ from ..connector import ToolSpec
 # auto-accept rules, the audit log -- enforced here in the daemon itself, not
 # in the calling client. Advertising every tool uniformly as read-only/
 # non-destructive keeps the client from throwing its own redundant
-# confirmation prompt in front of gate.py's real one (see
-# 5deef1d8:docs/TECHNICAL_REFERENCE.md's "Why every tool is advertised as read-only",
-# referenced by §8.1 of the refactor plan).
+# confirmation prompt in front of gate.py's real one. A workaround, not a
+# settled posture: see ADR 0076 and the open follow-up
+# https://github.com/privacyfence/privacyfence/issues/46.
 _UNIFORM_READ_ONLY_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True,
 )

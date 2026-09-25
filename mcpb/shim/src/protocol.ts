@@ -16,9 +16,8 @@
  * ``DEV_DATA_DIR_ENV``).
  *
  * Privilege separation adds one more branch, and it is the reason this path goes
- * through ``handoffDir()`` rather than ``dataDir()`` directly: on an install
- * that has opted into privilege separation -- any of the three platforms,
- * since B5c -- the daemon runs as its own account and its data directory
+ * through ``handoffDir()`` rather than ``dataDir()`` directly: on a
+ * privilege-separated install -- any of the three platforms -- the daemon runs as its own account and its data directory
  * moves to a system location that account owns (``%ProgramData%\PrivacyFence``
  * on Windows, which is also why the ``%LOCALAPPDATA%`` branch above is not
  * the whole answer there). ``mcp_url`` is one of the files
@@ -75,7 +74,7 @@ export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
 /** Each platform's default separated root, keyed exactly like
  * privilege_separation.PLATFORM_LAYOUTS. A platform absent from here has no
  * privilege-separation installer, so nothing can have written a marker for it and
- * this must not go looking for one; as of B5c all three are present.
+ * this must not go looking for one; all three desktop platforms are present.
  *
  * Windows' entry is spelled with forward slashes on purpose. It is only ever
  * consumed by path.join(), which normalizes separators, and writing it this
@@ -136,13 +135,13 @@ function isRealMarker(marker: { version?: unknown; platform?: unknown } | null):
  * scripts/windows_privilege_separation.ps1), or
  * null on an install (or a platform) that has no privilege separation.
  * Mirrors privilege_separation.system_root()/separation(): same default
- * roots, same version and platform checks, and -- B11 -- the same guard on
+ * roots, same version and platform checks, and the same guard on
  * PRIVACYFENCE_SYSTEM_ROOT: this shim's environment is whatever the
  * logged-in user's session set, so once a real install is provisioned at
  * the platform's actual root, that variable is refused rather than letting
- * a user-session process redirect the shim onto a root it controls. It is
- * still honoured on the common dev/CI machine, which has no real marker at
- * that literal system root to begin with.
+ * a user-session process redirect the shim onto a root it controls
+ * (ADR 0060). It is still honoured on the common dev/CI machine, which has
+ * no real marker at that literal system root to begin with.
  * Exported only for tests, which need to point it at a temp directory. */
 export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.PRIVACYFENCE_SYSTEM_ROOT;
@@ -166,7 +165,7 @@ export function handoffDir(env: NodeJS.ProcessEnv = process.env): string {
 export const MCP_URL_FILE = path.join(handoffDir(), "mcp_url");
 
 /**
- * ADR 0008 (docs/adr/0008-one-principal-per-os-user.md, D3): the address of
+ * ADR 0008 D3 (docs/adr/0008-one-principal-per-os-user.md): the address of
  * the daemon's control channel -- the same one companion.py already speaks
  * ``MINT``/``MINT COMPANION``/``STATUS``/``QUIT`` over (web/control_channel.
  * py) -- ported to TypeScript, because minting MCP tokens per OS account

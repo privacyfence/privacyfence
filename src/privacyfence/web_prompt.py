@@ -4,7 +4,7 @@ web_approval_ui.py -- ``WebApprovalUI._run_card``/``_run_confirm`` are now
 thin wrappers around ``block_on_card``/``block_on_confirm`` below, with no
 behavior change ("Done when": no behavior change to approvals).
 
-The insight §16.2.2 names: a worker thread blocked on a human's answer is
+The insight: a worker thread blocked on a human's answer is
 the same mechanism whether the answer is "accept/deny/accept_all" (a card),
 "confirm/cancel" (a PII/rule confirmation), or "which of these N options"
 (settings_controller.py's Atlassian multi-resource picker, today's
@@ -57,7 +57,7 @@ def block_on_choice(registry: PendingApprovalRegistry, html: str) -> int | None:
     into ``PendingApproval.result`` as a string), block until answered, and
     return the chosen index, or ``None`` for "cancel"/no answer.
 
-    Two behaviors settings_controller.py's Atlassian picker (§16.2.2) needs
+    Two behaviors settings_controller.py's Atlassian picker needs
     to carry over deliberately, not by accident: a cancelled picker is
     ``None`` here (the caller -- pick_resource -- is what falls back to
     ``resources[0]``, there never having been an abort path of its own);

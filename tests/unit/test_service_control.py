@@ -1,5 +1,5 @@
-"""Tests for privacyfence.service_control -- the local-mode-fixes plan's
-Phase 2 (companion-as-daemon-manager): the elevated half of daemon
+"""Tests for privacyfence.service_control -- the companion as daemon
+manager (ADR 0026): the elevated half of daemon
 management, run_elevated(). Every real subprocess call (osascript/pkexec/
 the Windows UAC relaunch) is stubbed; nothing here spawns a real process or
 puts a password dialog on screen -- see privilege_separation.py's own

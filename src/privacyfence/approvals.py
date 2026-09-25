@@ -58,7 +58,7 @@ confirmation -- see gate.py's own module docstring):
   interaction driver arrives at after however many UI steps it took. Only
   finalize() writes the decision ledger (keyed by
   ``(connector, tool, canonical(args))``, single-use for writes, so one
-  approval never releases a second identical write) and
+  approval never releases a second identical write -- ADR 0073) and
   wakes ``wait_async()`` -- the thing gate.py's hold window actually awaits.
 
 Both events are ``threading.Event`` rather than ``asyncio.Event``: this
@@ -662,7 +662,7 @@ class PendingApprovalRegistry:
         LedgerHit or None. Single-use entries
         (writes) are removed on the read that consumes them; read-gate
         entries stay reusable until ``ledger_ttl``: re-reading data a human
-        already released discloses nothing new.
+        already released discloses nothing new (ADR 0073).
 
         Scoped to ``current_principal()`` implicitly (module docstring) --
         gate.py's own call site needs no change, and this is the one method

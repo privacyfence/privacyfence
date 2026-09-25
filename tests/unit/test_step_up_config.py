@@ -1,4 +1,4 @@
-"""Tests for step_up_config.py: the mode-agnostic WebAuthn step-up config (#426 Phase 1)."""
+"""Tests for step_up_config.py: the mode-agnostic WebAuthn step-up config."""
 from __future__ import annotations
 
 import pytest
@@ -7,12 +7,9 @@ from privacyfence import org_mode, privilege_separation, step_up_config
 
 
 class TestStepUpConfigFromOrgConfig:
-    """P9, §10.6/§15 D7: WebAuthn step-up is off by default (an existing org
-    install with no "step_up" section keeps working exactly as before this
-    phase -- see web/routes_approvals.py's own decide()'s
-    ``if step_up.enabled`` gate). Byte-identical to org_mode.py's own
-    pre-Phase-1 parsing -- these assertions are unchanged from before the
-    move, only the import moved (see test_org_mode.py's own git history)."""
+    """WebAuthn step-up is off by default in org mode (an org install with
+    no "step_up" section is not gated -- see web/routes_approvals.py's own
+    decide()'s ``if step_up.enabled`` gate)."""
 
     def test_absent_section_is_disabled_with_defaults(self):
         config = step_up_config.StepUpConfig.from_org_config({})
@@ -75,9 +72,9 @@ class TestStepUpConfigFromOrgConfig:
 
 
 class TestStepUpConfigFromLocalConfig:
-    """#426 Phase 1: local mode's own entry point. Unlike org mode, ``rp_id``
+    """Local mode's own entry point. Unlike org mode, ``rp_id``
     defaults to a real value (``localhost``) rather than an empty string --
-    local mode's own embedded server always answers to it (D1), so
+    local mode's own embedded server always answers to it (ADR 0010), so
     ``/security`` is reachable on a fresh install with no step_up section at
     all, well before ``enabled`` is ever turned on."""
 
@@ -181,8 +178,8 @@ class TestRequirePasskeyNeedsSeparation:
 
 
 class TestDefaultLocalStepUp:
-    """Plan item 1.1: the ADR 0003 *Out of scope* item, now that Phase 0 has
-    made the passkey actually bind. The whole decision is "is this a build
+    """The default ADR 0003's amendment under *Out of scope* records. The
+    whole decision is "is this a build
     ADR 0003 already guarantees is privilege-separated?", because a passkey
     checked against a credential store the agent can write is a checkbox a
     local process ticks for itself (ADR 0002 decision 6)."""
@@ -273,7 +270,7 @@ class TestPackagedLocalDefaults:
 
 
 class TestLocalEnrollmentBanner:
-    """#426 Phase 3's "loud persistent banner" -- fires only in the one
+    """The loud, persistent "passkey required" banner -- fires only in the one
     state that actually means something is blocked: step-up genuinely in
     force (``enabled`` *and* ``require_passkey``) and nothing enrolled yet.
     See web_shell.py's own TestBanner for how the string this returns is
@@ -299,7 +296,7 @@ class TestLocalEnrollmentBanner:
 
 
 class TestOffNotice:
-    """B23 of the 4.1.0 action plan: the fallback for the state neither of
+    """The fallback for the state neither of
     the other two banners cover -- an install that has simply never turned
     step-up on. Fires exactly when step-up is *not* actually "required"
     (the same ``enabled and require_passkey`` pairing ``observe_step_up_
@@ -327,7 +324,7 @@ class TestOffNotice:
 
 
 class TestLiveStepUpConfig:
-    """B9: ``LiveStepUpConfig`` mirrors every read a plain ``StepUpConfig``
+    """``LiveStepUpConfig`` mirrors every read a plain ``StepUpConfig``
     offers, off whatever value it currently holds, so every consumer that
     was written against a bare ``StepUpConfig`` (web/routes_approvals.py,
     web/routes_settings.py, web/routes_security.py) keeps working unchanged

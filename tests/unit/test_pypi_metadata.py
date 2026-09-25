@@ -2,12 +2,12 @@
 
 `pyproject.toml`'s `[project]` table and `README.md` are, together, the entire PyPI project page:
 the sidebar comes from `[project.urls]` and `classifiers`, and the page body *is* `README.md`,
-rendered by a machine that has never heard of this repo's directory layout. Both halves used to be
-wrong at once (privacyfence/privacyfence#370) -- no links or facets in the sidebar, and a body
-whose every doc link 404'd and whose four screenshots were broken images.
+rendered by a machine that has never heard of this repo's directory layout. Both halves can go
+wrong at once -- no links or facets in the sidebar, and a body whose every doc link 404s and
+whose screenshots are broken images.
 
-Nothing about that failure is visible from a source checkout, which is exactly why it survived
-eighteen pre-release tags: `README.md` renders perfectly on GitHub either way. These tests assert
+Nothing about that failure is visible from a source checkout: `README.md` renders perfectly on
+GitHub either way. These tests assert
 the two properties a checkout can't show you -- that the sidebar metadata is present and
 self-consistent, and that the long description contains no path only GitHub could resolve.
 

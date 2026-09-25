@@ -1,21 +1,20 @@
-"""#428 Phase 4: running local mode's daemon under its own OS account.
+"""Running local mode's daemon under its own OS account (ADR 0003).
 
-Phases 1-3 built everything this needs and deliberately bought no security
-with any of it. Phase 1 (``paths.authority_dir()``) collected the files that
-back the *human's* authority -- ``config/settings.yaml``, enrolled WebAuthn
-credentials, the audit log and its HMAC key -- under one root, so that
-re-owning them later would be a permissions change at a single directory
-rather than a hunt through every call site. Phase 2 replaced the
-``web_token`` file with a socket/pipe control channel. Phase 3 gave the human
-a companion app that can speak it. This module is the phase where the uid
-finally splits, and all four of issue #428's weaknesses close at once: the
-agent runs as the logged-in user, the daemon runs as a dedicated service
-account, and the human-authority files are ``0700`` under the latter.
+The files that back the *human's* authority -- ``config/settings.yaml``,
+enrolled WebAuthn credentials, the audit log and its HMAC key -- live under
+one root (``paths.authority_dir()``), so that re-owning them is a
+permissions change at a single directory rather than a hunt through every
+call site. The daemon hands out no ``web_token`` file; it speaks a
+socket/pipe control channel, and the companion app speaks it for the human.
+This module is where the uid splits, and the four weaknesses of a shared
+account (the agent reading the session-minting credential, rewriting
+policy, forging a passkey, reading the audit key) close at once: the agent
+runs as the logged-in user, the daemon runs as a dedicated service account,
+and the human-authority files are ``0700`` under the latter.
 
-**All three platforms, opt-in on every one.** ``SUPPORTED_PLATFORMS`` is
-the single gate, and B5c completes it: an install that has not run its
-platform's installer resolves every path in ``paths.py`` exactly as it did
-before this module existed, byte for byte, everywhere.
+**All three platforms.** ``SUPPORTED_PLATFORMS`` is the single gate: an
+install that has not run its platform's installer resolves every path in
+``paths.py`` to its unseparated location, byte for byte, everywhere.
 
 ## The layout
 
@@ -59,12 +58,12 @@ Two consequences are worth stating rather than leaving to be discovered:
   service account*. That is why ``enable`` refuses such an install outright
   and why ``audit_layout()`` re-checks the image on every start -- see
   ``windows_acl.image_problems()``. It is also why there is only one Windows
-  install tier: ADR 0003 decision 4 withdrew #407's non-elevated per-user
+  install tier: ADR 0003 decision 4 withdrew the non-elevated per-user
   one, which by construction could never satisfy this. macOS has the same
   exposure by a different route: ``/Applications`` is ``root:admin
   drwxrwxr-x`` and a drag-installed ``.app`` is normally owned by the
   installing user, so nothing about a packaged macOS install makes the
-  daemon's image root-owned on its own (B1) -- ``_posix_image_problems()``
+  daemon's image root-owned on its own -- ``_posix_image_problems()``
   is that platform's counterpart, a ``stat`` walk rather than an ACL read.
 
 ``scripts/macos_privilege_separation.sh enable``,
@@ -77,7 +76,7 @@ file this module reads. Afterwards, taking Linux's root as the example::
     ├── privilege-separation.json                  privacyfence:privacyfence  0644
     ├── authority/                                 privacyfence:privacyfence  0700
     │   ├── config/settings.yaml                     <- policy the agent may not edit
-    │   ├── webauthn_credentials.json                <- #426's store, now unforgeable
+    │   ├── webauthn_credentials.json                <- passkey store, unforgeable
     │   └── logs/audit/                              <- and its HMAC key
     ├── credentials/, logs/, ...                   privacyfence:privacyfence  0700
     └── handoff/                                   privacyfence:privacyfence  3770
@@ -100,15 +99,15 @@ rather than *uncallable*: the companion and the agent run as the same uid, so
 no permission bit can tell them apart, and trying would give three platforms
 three different strengths of the same claimed guarantee. What moves out of
 the agent's reach is ``authority/`` -- policy, passkeys, audit -- and that is
-the whole of what Phase 4 claims.
+the whole of what privilege separation claims.
 
 ## What this does not defend against
 
 An agent that can obtain root. ``sudo`` re-owns any file and reconfigures any
-LaunchDaemon or systemd unit; issue #428's "Honest limits" says so, and so
-does ``docs/security-and-compliance.md``. The guarantee is against an agent
-running with the user's *normal* privileges, which is the ordinary case, and
-it makes escalation require an authentication prompt a human sees.
+LaunchDaemon or systemd unit; ``docs/security-and-compliance.md`` says so.
+The guarantee is against an agent running with the user's *normal*
+privileges, which is the ordinary case, and it makes escalation require an
+authentication prompt a human sees.
 """
 from __future__ import annotations
 
@@ -149,9 +148,9 @@ LINUX_SERVICE_ACCOUNT_NAME = "privacyfence"
 # derives it from the service's, as ``NT SERVICE\<service name>`` -- which is
 # why the two constants below are one fact written twice and
 # ``tests/unit/test_privilege_separation.py`` asserts they agree. Preferred
-# over ``LocalService`` (#428's own wording) because that account is shared
+# over ``LocalService`` because that account is shared
 # with every other service that picked it, so ACLs naming it would grant
-# those services access to PrivacyFence's authority files too.
+# those services access to PrivacyFence's authority files too (ADR 0059).
 WINDOWS_SERVICE_NAME = "PrivacyFence"
 WINDOWS_SERVICE_ACCOUNT_NAME = f"NT SERVICE\\{WINDOWS_SERVICE_NAME}"
 # The Windows stand-in for the POSIX service *group*: a local group the
@@ -159,17 +158,17 @@ WINDOWS_SERVICE_ACCOUNT_NAME = f"NT SERVICE\\{WINDOWS_SERVICE_NAME}"
 # service account cannot be given secondary group memberships, so unlike
 # macOS/Linux -- where account and group are the same name and the daemon is
 # a member of its own group -- the two principals are always listed
-# separately in every ACL and pipe DACL this phase writes.
+# separately in every ACL and pipe DACL the Windows installer writes.
 WINDOWS_SERVICE_GROUP_NAME = "PrivacyFenceUsers"
 # Windows' own "startup wiring inverts" (ADR 0002): the daemon is the
 # service above, and the only Scheduled Task is the one that starts the
 # *companion* at sign-in.
 WINDOWS_COMPANION_TASK_NAME = "PrivacyFenceCompanion"
 
-# Where a separated install keeps everything ``paths.data_dir()`` used to put
-# under ``~/.privacyfence``. A service account cannot sensibly own something
-# inside a human's home directory -- the same reasoning #428 gives for
-# Windows having to move out of ``%LOCALAPPDATA%`` into ``%ProgramData%``.
+# Where a separated install keeps everything an unseparated one keeps under
+# ``~/.privacyfence``. A service account cannot sensibly own something
+# inside a human's home directory -- the same reasoning that puts Windows'
+# root in ``%ProgramData%`` rather than ``%LOCALAPPDATA%``.
 # macOS's is the system-wide twin of the ``~/Library/Application Support``
 # every app already uses; Linux's is FHS 3.0 §5.8's ``/var/lib/<package>``,
 # "variable state information" a program modifies as it runs, which is
@@ -203,14 +202,14 @@ MARKER_VERSION = 1
 # Every process of one install has to agree on it, which is exactly why a
 # real install uses the default and passes nothing.
 #
-# B11: the daemon's own environment is controlled by launchd/systemd, but the
+# The daemon's own environment is controlled by launchd/systemd, but the
 # companion and the MCPB shim honour this var too, and *their* environment is
 # whatever the logged-in user's session set -- on a genuinely separated
 # install, that is exactly the boundary this module exists to hold. So
 # system_root() below only honours it when the platform's real default root
 # has no marker of its own; once a real install is provisioned there, a
 # user-session process redirecting itself elsewhere is not a test, it's the
-# attack.
+# attack (ADR 0060).
 SYSTEM_ROOT_ENV_VAR = "PRIVACYFENCE_SYSTEM_ROOT"
 
 HANDOFF_DIR_NAME = "handoff"
@@ -222,10 +221,9 @@ HANDOFF_DIR_NAME = "handoff"
 # ``tests/unit/test_privilege_separation.py`` can assert the shell script
 # agrees with them.
 SYSTEM_ROOT_MODE = 0o711
-# The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6): the
-# leading ``3`` is ``01000`` (the sticky bit) on top of the setgid ``02000``
-# this already
-# carried -- the filesystem-level half of the companion-socket-takeover fix
+# The multi-user guard against companion socket takeover (ADR 0027): the
+# leading ``3`` is ``01000`` (the sticky bit) on top of the setgid
+# ``02000`` -- the filesystem-level half of the companion-socket-takeover fix
 # ``web/control_channel.py``'s ``_existing_socket_owner_problem()`` is the
 # code-level half of. Without it, any member of the service group (every
 # account this install has been extended to) can unlink another member's
@@ -243,9 +241,9 @@ SOCKET_MODE_SHARED_UID = 0o600
 # Files *inside* handoff/. 0640 rather than the 0600 every other credential
 # in this codebase gets: the whole point of that directory is that the two
 # accounts can read each other's files, and ``mcp_token`` in particular has
-# to stay readable by the agent -- it is the agent's own credential, and
-# #428 keeps it deliberately reachable ("the point is to stop one uid holding
-# both sides", not to take the agent's own side away). Group-readable, never
+# to stay readable by the agent -- it is the agent's own credential, and it
+# stays deliberately reachable (the point is to stop one uid holding both
+# sides, not to take the agent's own side away). Group-readable, never
 # group-writable: nothing in the user's session needs to *rewrite* what the
 # daemon publishes there.
 HANDOFF_FILE_MODE_SEPARATED = 0o640
@@ -280,7 +278,7 @@ class PlatformLayout:
     #: the thing to do instead of whatever produced a wrong-account process.
     start_command: str
     #: How to stop the daemon on a separated install -- what the control
-    #: channel's own ``QUIT`` refuses in its place (#428 Phase 4 / B4):
+    #: channel's own ``QUIT`` refuses in its place:
     #: once the daemon is a system service, only its service manager gets
     #: to stop it, not a line on a socket the agent shares a group with.
     stop_command: str
@@ -290,10 +288,9 @@ class PlatformLayout:
     #: rather than ``installer`` verbatim (see that field's own docstring
     #: for why the two differ).
     enable_command: str
-    #: The local-mode-fixes plan's Phase 2 (companion-as-daemon-manager): the
-    #: *unprivileged* argv that reads this platform's service-manager state
-    #: without asking for a password -- ``daemon_status.probe()``'s fallback
-    #: once the control
+    #: The companion as daemon manager (ADR 0026): the *unprivileged* argv
+    #: that reads this platform's service-manager state without asking for a
+    #: password -- ``daemon_status.probe()``'s fallback once the control
     #: channel itself doesn't answer. Not ``status_command`` above, which is
     #: what a human types (and which needs ``sudo``/an elevated shell only
     #: because the *script's* own ``status`` prints the on-disk layout audit,
@@ -314,9 +311,7 @@ class PlatformLayout:
 MACOS_PACKAGED_INSTALLER = "/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh"
 
 
-# #428 P4 ships per platform (B5a/B5b/B5c) rather than as one "x3 platforms"
-# phase, so macOS and Linux could land and soak even if Windows' net-new ACL
-# work runs long. A platform is supported exactly when it has an entry here,
+# A platform is supported exactly when it has an entry here,
 # and an entry without a matching installer would make every process on that
 # platform look for a marker nothing can write.
 PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
@@ -398,20 +393,20 @@ class SeparationHandover(PrivilegeSeparationError):
     for; ``daemon_main.main()`` catches this one first and exits *0*,
     because nothing went wrong -- see that call site.
 
-    Why this exists at all: before it, a packaged daemon that repaired its
-    own install went on to serve from the layout it had just separated,
-    **as the human**. ``check_runtime_identity()`` -- the gate that exists
-    to stop precisely that -- had already run and passed, several steps
-    earlier, when the install was still unseparated. So the process carried
-    on into a root whose ``authority/`` is now ``0700`` to the service
-    account, could not read ``config/settings.yaml`` through it, and
-    ``load_config()``'s first-run behaviour seeded a fresh default policy
-    over the real one: the silent policy reset ``check_runtime_identity()``
-    is written to prevent, arrived at by a route it could not see. On
-    Windows it also raced the service ``enable`` had just started for the
-    same port and the same control pipe, which is the collision
-    ``tests/integration/test_windows_packaged_smoke.py`` gave up its
-    unseparated scenario over.
+    Without it, a packaged daemon that repaired its own install would go on
+    to serve from the layout it had just separated, **as the human**.
+    ``check_runtime_identity()`` -- the gate that exists to stop precisely
+    that -- has already run and passed, several steps earlier, while the
+    install was still unseparated. The process would carry on into a root
+    whose ``authority/`` is now ``0700`` to the service account, fail to
+    read ``config/settings.yaml`` through it, and ``load_config()``'s
+    first-run behaviour would seed a fresh default policy over the real
+    one: the silent policy reset ``check_runtime_identity()`` is written to
+    prevent, arrived at by a route it cannot see. On Windows it would also
+    race the service ``enable`` has just started for the same port and the
+    same control pipe, which is why
+    ``tests/integration/test_windows_packaged_smoke.py`` has no unseparated
+    scenario.
     """
 
 
@@ -458,15 +453,15 @@ def current_platform() -> str:
 
 
 def platform_layout() -> PlatformLayout | None:
-    """This platform's entry in ``PLATFORM_LAYOUTS``, or None on one #428 P4
-    hasn't shipped for yet."""
+    """This platform's entry in ``PLATFORM_LAYOUTS``, or None on a platform
+    privilege separation does not support."""
     return PLATFORM_LAYOUTS.get(current_platform())
 
 
 def _default_system_root() -> Path | None:
     """``system_root()`` ignoring ``SYSTEM_ROOT_ENV_VAR`` entirely -- both
     its own fallback, and what it checks for a *real* marker before trusting
-    the override at all (see B11 above)."""
+    the override at all (see ``SYSTEM_ROOT_ENV_VAR`` above)."""
     layout = platform_layout()
     if layout is None:
         return None
@@ -488,9 +483,9 @@ def _default_system_root() -> Path | None:
 
 def system_root() -> Path | None:
     """Where a separated install's root *would* be on this platform, whether
-    or not one has been provisioned -- None on a platform #428 P4 hasn't
-    shipped for yet, which is what makes every other function here a cheap
-    no-op there."""
+    or not one has been provisioned -- None on a platform privilege
+    separation does not support, which is what makes every other function
+    here a cheap no-op there."""
     default_root = _default_system_root()
     override = os.environ.get(SYSTEM_ROOT_ENV_VAR)
     if override:
@@ -725,7 +720,7 @@ def current_user_name() -> str:
     container).
 
     Windows answers from the process token rather than from ``%USERNAME%``,
-    which #428 P4's Windows phase made necessary rather than merely tidier:
+    which the Windows service account makes necessary rather than merely tidier:
     a service running under the virtual ``NT SERVICE\\PrivacyFence`` account
     is handed an environment block whose ``USERNAME`` is the *machine*
     account, so the env var would report a mismatch for the one process that
@@ -782,8 +777,8 @@ def service_account_uid() -> int | None:
     ``_current_user_security_attributes()`` skips a missing Windows trustee
     rather than crashing).
 
-    #428 B10's own reason to exist: ``web/control_channel.py``'s companion
-    channel is the one place ``SO_PEERCRED``/``LOCAL_PEERCRED``'s uid is
+    ``web/control_channel.py``'s companion channel needs it: that channel
+    is the one place ``SO_PEERCRED``/``LOCAL_PEERCRED``'s uid is
     actually meaningful (ADR 0002 decision 6 is explicit that it is *not*,
     everywhere else, while the companion and the agent share a uid) --
     once separated, the daemon is the one end of that channel that has
@@ -848,14 +843,14 @@ def check_runtime_identity() -> None:
             if layout is not None
             else ""
         )
-        # Explicitly quoted rather than ``!r``: every account name here is a
-        # Windows one on B5c's platform (``NT SERVICE\PrivacyFence``), and
+        # Explicitly quoted rather than ``!r``: on Windows every account name
+        # here contains a backslash (``NT SERVICE\PrivacyFence``), and
         # repr would double each backslash -- so the message would name an
         # account that does not exist for the one reader most likely to paste
         # it into a command.
         raise PrivilegeSeparationError(
-            f"This install runs the daemon under the dedicated '{state.service_account}' account "
-            f"(#428 Phase 4), but this process is running as '{actual}'. Refusing to start: the "
+            f"This install runs the daemon under the dedicated '{state.service_account}' account, "
+            f"but this process is running as '{actual}'. Refusing to start: the "
             f"human-authority files under {state.authority_dir} are not readable as '{actual}', so "
             f"starting would seed a fresh default policy and ignore the real one.{how_to_start}"
         )
@@ -879,11 +874,11 @@ def audit_layout() -> list[str]:
     here because two of these three directories are *deliberately* not
     ``0700`` (see the layout in this module's docstring).
 
-    Empty list on an unseparated install, so ``daemon_main``'s own SEC-09
-    startup check can call it unconditionally. Best-effort like every other
-    permission check in this codebase: a path that can't be ``stat``'d is
-    skipped rather than reported, since the process doing the checking may
-    legitimately not be able to see it.
+    Empty list on an unseparated install, so ``daemon_main``'s own
+    storage-permissions startup check can call it unconditionally. Best-effort
+    like every other permission check in this codebase: a path that can't be
+    ``stat``'d is skipped rather than reported, since the process doing the
+    checking may legitimately not be able to see it.
     """
     state = separation()
     if state is None:
@@ -909,7 +904,7 @@ def audit_layout() -> list[str]:
 def daemon_image_paths() -> tuple[Path, ...]:
     """The files this daemon's own frozen executable actually runs from --
     what a Windows service's ``binPath`` names (``windows_acl.
-    image_problems()``), and, since B1, what a packaged macOS install's
+    image_problems()``), and what a packaged macOS install's
     LaunchDaemon names (``_posix_image_problems()``).
 
     Two paths, not one, because there are two ways to replace what gets run:
@@ -940,13 +935,13 @@ def daemon_image_paths() -> tuple[Path, ...]:
 # safe the way ``/opt`` is): an ``admin`` member is any human with a local
 # account who has ever answered a password prompt, which on a single-user
 # Mac is the same account the agent runs as -- trusting it here would be
-# trusting the exact account B1 exists to stop.
+# trusting the exact account this check exists to stop.
 _TRUSTED_POSIX_IMAGE_GROUP = "wheel"
 
 
 def _posix_image_paths_to_check(paths: tuple[Path, ...]) -> list[Path]:
     """``paths`` plus every directory on the way to each -- the "or any
-    directory on the path to it" half of B1's fix, and the thing an NTFS ACL
+    directory on the path to it" half of the check, and the thing an NTFS ACL
     gets for free through inheritance that a POSIX mode bit does not: a
     root-owned, non-writable executable still isn't safe if the directory
     holding it can be emptied and refilled by someone else."""
@@ -958,13 +953,13 @@ def _posix_image_paths_to_check(paths: tuple[Path, ...]) -> list[Path]:
 
 
 def _posix_image_problems(paths: tuple[Path, ...]) -> list[str]:
-    """The POSIX counterpart of ``windows_acl.image_problems()`` (B1) -- a
+    """The POSIX counterpart of ``windows_acl.image_problems()`` -- a
     ``stat`` walk rather than an ACL read, since POSIX has no inheritance to
     lean on. ``daemon_image_paths()`` is empty on every unfrozen install
     (source checkouts, the current Linux ``.deb``), so in practice this
     only ever finds something to say about a packaged macOS build.
 
-    ADR 0002 §5a used to claim ``/Applications`` was root-owned the same way
+    ADR 0002 §5a assumes ``/Applications`` is root-owned the same way
     ``/opt`` is, which is false: it is ``root:admin drwxrwxr-x``, and a
     drag-installed ``.app`` is normally owned by the installing user -- the
     same account the agent runs as. So this checks the same thing Windows
@@ -1097,7 +1092,8 @@ def windows_channel_trustees() -> tuple[str, ...]:
 def _authority_owner_problem(state: Separation) -> str | None:
     """The check that actually matters: ``authority/`` being ``0700`` buys
     nothing if it is ``0700`` *under the logged-in user's own uid*, which is
-    precisely the pre-#428 state this phase exists to leave behind."""
+    precisely the shared-account state privilege separation exists to leave
+    behind."""
     if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
         # Windows has no file owner to compare, and its equivalent of this
         # check -- "is authority/ reachable by anything but the service
@@ -1124,18 +1120,15 @@ def _authority_owner_problem(state: Separation) -> str | None:
     )
 
 
-# ── #428 D1 (4.1): auto-enable trigger ────────────────────────────────────────
+# ── Auto-enable trigger (ADR 0003) ────────────────────────────────────────────
 #
-# D1 was the original plan's "flip the default on, once a platform's opt-in
-# has soaked through a full release cycle" step, deferred to 4.2. That soak
-# period is explicitly overridden for 4.1: macOS and Linux both auto-enable
-# now, macOS from here and Linux from debian/postinst (root already, at
-# package-configure time, no prompt needed). Windows has no B5c yet, so
-# nothing here touches it -- SUPPORTED_PLATFORMS still gates everything else
-# in this module the same way it always has.
+# macOS and Linux both separate an install automatically: macOS from here
+# and Linux from debian/postinst (root already, at package-configure time,
+# no prompt needed). Windows' installer runs `enable` itself, so nothing
+# here touches it.
 #
-# macOS's own package-manager-equivalent hook is the .pkg's postinstall (#428
-# D2), which the DMG carries and which is the only way PrivacyFence is
+# macOS's own package-manager-equivalent hook is the .pkg's postinstall,
+# which the DMG carries and which is the only way PrivacyFence is
 # installed on macOS -- so this prompt is the fallback rather than the usual
 # path. It is still reachable on a fresh install (ADR 0041 decision 4 keeps
 # it for that reason): the postinstall never fails the package install, so
@@ -1145,15 +1138,12 @@ def _authority_owner_problem(state: Separation) -> str | None:
 # short of a human answering an admin password prompt can create a system
 # account or a LaunchDaemon from there. This is that prompt.
 #
-# ADR 0003 decision 6 removed the one-shot marker this used to write
-# (``AUTO_ENABLE_ATTEMPTED_MARKER_NAME``): a decline used to be respected
-# forever, silently. Under decision 6 a decline is not a configuration, it is
-# an unfinished install, so this is asked again on every start that finds the
-# install still unseparated -- and, on a packaged build, ``enforce_
-# separation()`` below is what makes that matter: it is the thing that now
-# calls this synchronously (never on a background thread the way the old,
-# purely-cosmetic D1 prompt did) so it can act on the outcome rather than
-# fire-and-forget it.
+# Under ADR 0003 decision 6 a decline is not a configuration, it is an
+# unfinished install, so nothing records it: this is asked again on every
+# start that finds the install still unseparated -- and, on a packaged
+# build, ``enforce_separation()`` below is what makes that matter: it calls
+# this synchronously (never on a background thread) so it can act on the
+# outcome rather than fire-and-forget it.
 
 
 def _macos_installer_script_path() -> Path | None:
@@ -1183,7 +1173,7 @@ _CODESIGN = "/usr/bin/codesign"
 
 
 def _posix_script_elevation_problem(script: Path) -> str | None:
-    """The POSIX half of #428 B2's check (see
+    """The POSIX half of the elevation check (see
     ``_macos_auto_enable_script_problem()`` below for the whole argument):
     ``script`` is safe to run as root only if root is the one account that
     can rewrite it.
@@ -1207,7 +1197,7 @@ def _posix_script_elevation_problem(script: Path) -> str | None:
 
 
 def _macos_auto_enable_script_problem(script: Path) -> str | None:
-    """#428 B2: whether ``script`` is safe to run as root via the admin
+    """Whether ``script`` is safe to run as root via the admin
     prompt ``maybe_auto_enable_macos()`` is about to trigger.
 
     Both places ``_macos_installer_script_path()`` can resolve to are, on
@@ -1216,7 +1206,7 @@ def _macos_auto_enable_script_problem(script: Path) -> str | None:
     special, and a source checkout is never root-owned. Running whatever is
     at that path as root on the strength of a routine-looking password
     dialog would hand an agent that can edit either of those a one-shot
-    local privilege escalation, so this refuses unless the resolved script
+    local privilege escalation (ADR 0058), so this refuses unless the resolved script
     itself is owned by root and not group- or world-writable, and -- for a
     packaged install, where there is a signature to check at all -- unless
     the app bundle's signature still verifies. A source checkout can never
@@ -1264,7 +1254,7 @@ def _applescript_quoted(text: str) -> str:
 
 
 def maybe_auto_enable_macos() -> None:
-    """#428 D1 (4.1) / ADR 0003 decision 6: on an unseparated macOS install,
+    """ADR 0003 decision 6: on an unseparated macOS install,
     ask -- via the standard macOS admin-password dialog -- to run
     ``scripts/macos_privilege_separation.sh enable`` on this human's behalf.
 
@@ -1276,13 +1266,12 @@ def maybe_auto_enable_macos() -> None:
     or a source checkout run without ``scripts/`` next to it). Also a no-op
     -- logged, not raised -- when ``_macos_auto_enable_script_problem()``
     finds the resolved script is not something this prompt should run as
-    root; see that function for why (#428 B2). That check never passes for a
+    root; see that function for why. That check never passes for a
     source checkout, which is deliberate: this prompt only ever runs a
     script the installer itself shipped.
 
     Asked again on every start that finds the install still unseparated --
-    decision 6 retired the one-shot ``AUTO_ENABLE_ATTEMPTED_MARKER_NAME``
-    marker this used to write, because under this ADR a decline is not a
+    nothing records a decline, because under this ADR a decline is not a
     configuration, it is an unfinished install.
 
     Every failure is non-fatal and logged rather than raised: the caller,
@@ -1330,7 +1319,7 @@ def _run_auto_enable_macos(script: Path) -> None:
         logger.info("automatic privilege-separation enable did not complete: %s", result.stderr.strip())
         return
     reset_cache()
-    logger.info("privilege separation enabled automatically (#428 D1 / ADR 0003 decision 6)")
+    logger.info("privilege separation enabled automatically (ADR 0003 decision 6)")
 
 
 # ── ADR 0003 decision 6: a packaged daemon that finds itself unseparated ────
@@ -1596,14 +1585,14 @@ def _data_dir_log_files_released() -> Iterator[None]:
     ``enforce_separation()`` runs from inside a packaged daemon that has
     already called ``daemon_main.setup_logging()``, so ``logs/privacyfence.log``
     is open for append in this very process for the whole elevated run.
-    ``enable`` used to *move* that directory, and on Windows, which has no
-    POSIX rename-over-open-files escape hatch, that was a sharing violation
-    every time (``Move-Item : The process cannot access the file because it
-    is being used by another process``), after which ``Undo-PartialEnable``
-    rolled the whole thing back and decision 6 refused to serve. ``enable``
-    no longer moves anything (ADR 0041), but releasing the handles costs
-    nothing and keeps the elevated run from depending on what this process
-    has open.
+    ``enable`` moves nothing (ADR 0041), but on Windows, which has no POSIX
+    rename-over-open-files escape hatch, a step in it that moved that
+    directory would hit a sharing violation every time (``Move-Item : The
+    process cannot access the file because it is being used by another
+    process``), after which ``Undo-PartialEnable`` would roll the whole
+    thing back and decision 6 would refuse to serve. Releasing the handles
+    costs nothing and keeps the elevated run from depending on what this
+    process has open.
 
     Nothing is lost while the window is open: ``FileHandler.emit()``
     reopens ``baseFilename`` by itself whenever ``stream`` is ``None`` --
@@ -1686,13 +1675,12 @@ def _run_full_auto_enable_non_macos() -> None:
     ``is_enabled()`` -- not this function's return -- is what decides
     whether to refuse.
 
-    It re-checks ``is_enabled()`` for its *own* log line too, which is the
-    second half of privacyfence/privacyfence#599 and is deliberately
-    belt-and-braces with the exit-code plumbing in
+    It re-checks ``is_enabled()`` for its *own* log line too, which is
+    deliberately belt-and-braces with the exit-code plumbing in
     ``_windows_runas_argv()``. A success message here is the only account a
     user or an operator gets of what happened during a start that then
-    refused to serve, and it was being written off a subprocess return code
-    rather than off the machine. Nothing about an elevation's exit code is
+    refused to serve, so it is written off the machine rather than off a
+    subprocess return code. Nothing about an elevation's exit code is
     trustworthy enough to keep saying "separation enabled" without looking,
     so this looks.
     """
@@ -1812,8 +1800,8 @@ def enforce_separation() -> None:
             f"doing; run '{layout.status_command}' to see the install."
         )
     raise PrivilegeSeparationError(
-        "This is a packaged PrivacyFence install, and it is not privilege-separated (#428 Phase "
-        "4 / ADR 0003 decision 6). The agent and the daemon would run under the same account, so "
+        "This is a packaged PrivacyFence install, and it is not privilege-separated (ADR 0003 "
+        "decision 6). The agent and the daemon would run under the same account, so "
         "a local process could mint its own session and approve its own request -- the guarantee "
         "the approvals UI claims would not actually hold. Refusing to start: no /mcp, no "
         f"approvals. Run '{layout.enable_command}' to fix this, then restart PrivacyFence."
@@ -1957,19 +1945,16 @@ def owner_membership_pending() -> bool:
     an install with no separation at all is a different problem with a
     different answer (ADR 0003 decision 6's daemon-side gate).
 
-    Through the local-mode-fixes plan's Phase 2 (§2.6), this was also false
-    for any account that was not this install's recorded owner -- a second
-    OS user was refused rather than onboarded, to close a leak (a shared
-    principal, a takeable companion socket) that ADR 0008's Phase 3 has since
-    fixed at its actual source. Now that a second account gets its own
-    isolated principal (``os-<uid>``/``os-<sid>``) instead of the owner's,
-    there is nothing left for an owner-mismatch to protect against here: any
-    service-group member who has not yet joined is "pending" in exactly the
-    sense the owner always was, and ``companion.py``'s own
+    Whether the account is this install's recorded owner does not matter. A
+    second account gets its own isolated principal (``os-<uid>``/``os-<sid>``,
+    ADR 0008) instead of the owner's, and its companion socket cannot be taken
+    over (ADR 0027), so there is nothing for an owner-mismatch to protect
+    against here: any service-group member who has not yet joined is "pending"
+    in exactly the sense the owner always was, and ``companion.py``'s own
     ``_complete_pending_separation()`` completing ``enable --for-user`` on
-    their behalf hands them their own empty principal, never the owner's.
-    See ADR 0008 ("D2: two identities, not one, per install") for the full
-    account of what changed and why.
+    their behalf hands them their own empty principal, never the owner's. See
+    ADR 0008 ("D2: two identities, not one, per install") for the full
+    reasoning.
     """
     state = separation()
     if state is None:
@@ -2077,11 +2062,11 @@ def installer_script_path() -> Path | None:
 
 
 def _windows_script_elevation_problem(script: Path) -> str | None:
-    """#428 B2's check, in the one idiom Windows has for it. There is no uid
+    """The elevation check, in the one idiom Windows has for it. There is no uid
     to compare, so the question is the one ``windows_acl.image_problems()``
     asks of the daemon's own image and for the same reason: whether anything
     outside SYSTEM and Administrators can rewrite what is about to run
-    elevated."""
+    elevated (ADR 0058)."""
     from . import windows_acl
 
     aces = windows_acl.read_dacl(script)
@@ -2178,7 +2163,7 @@ def _per_user_argv(script: Path, user: str, transcript: Path) -> list[str] | Non
 
     The three argv builders (``_macos_admin_argv``/``_windows_runas_argv``/
     ``_pkexec_argv``) are shared with ``service_control.py``'s ``daemon
-    start/stop/restart`` (the local-mode-fixes plan's Phase 2) -- this function is only what
+    start/stop/restart`` (ADR 0026) -- this function is only what
     composes the ``enable --for-user`` command line each of them runs.
     """
     platform = current_platform()
@@ -2262,14 +2247,13 @@ def complete_per_user_separation(user: str | None = None) -> bool:
         )
         return False
     reset_cache()
-    # The same re-check `_run_full_auto_enable_non_macos()` makes, for the
-    # same reason (privacyfence/privacyfence#599) and with the same
-    # belt-and-braces relationship to the exit code above: returning True
-    # here makes the companion tell somebody to log out and back in, and a
-    # log-out that fixes nothing is worse advice than none. Only a group
-    # that could not be read at all is taken on trust -- the fallback
-    # `owner_membership_pending()` already takes, and for the same reason:
-    # guessing on a platform just failed to interrogate would have the
+    # The same re-check `_run_full_auto_enable_non_macos()` makes, for the same
+    # reason and with the same belt-and-braces relationship to the exit code
+    # above: returning True here makes the companion tell somebody to log out
+    # and back in, and a log-out that fixes nothing is worse advice than none.
+    # Only a group that could not be read at all is taken on trust -- the
+    # fallback `owner_membership_pending()` already takes, and for the same
+    # reason: guessing on a platform just failed to interrogate would have the
     # companion re-prompt at every start.
     members = service_group_members(state.service_group)
     if members is not None and not any(accounts_equal(member, account) for member in members):

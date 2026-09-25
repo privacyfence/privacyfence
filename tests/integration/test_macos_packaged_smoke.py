@@ -1,5 +1,4 @@
-"""Release-workflow smoke test against the actual packaged macOS artifact
-(TST-15).
+"""Release-workflow smoke test against the actual packaged macOS artifact.
 
 Every other test in this repo runs against source -- an editable install, or
 (tests/integration/test_shim_mcp_contract.py) a freshly-built dist/shim.js
@@ -38,15 +37,14 @@ the packaged app:
    here for the same reason ``test_macos_graphical_session_autostart.py``
    already does it this way (that module's own docstring). ADR 0003
    decision 6 (``privilege_separation.enforce_separation()``) makes a
-   packaged daemon refuse to serve at all once unseparated has no meaning
-   left to fall back on -- see this module's own "Real-daemon helpers"
-   section below for what running against the real, separated
+   packaged daemon refuse to serve at all while unseparated, so there is no
+   unseparated mode to fall back on -- see this module's own "Real-daemon
+   helpers" section below for what running against the real, separated
    ``system/com.privacyfence.daemon`` LaunchDaemon means for the rest of
-   this module, in place of the directly-Popen'd, deliberately-unseparated
-   process this used to start against a scratch ``$HOME``. Mints a
-   bootstrap link the same way a human with no daemon-log line handy would
-   (through the #428 Phase 2 control channel -- a real Unix domain socket
-   against the daemon's own, now root-owned, data directory): SEC-10's
+   this module, rather than a directly-Popen'd, unseparated process against
+   a scratch ``$HOME``. Mints a bootstrap link the same way a human with no
+   daemon-log line handy would (through the control channel -- a real Unix
+   domain socket against the daemon's own, root-owned, data directory): the
    ``SecretRedactingFormatter`` redacts a ``bootstrap=<value>`` substring
    from every log line on principle, so this can't just be read out of a
    log. Connects as this account with ``${SERVICE_GROUP}`` added in (``sudo
@@ -69,7 +67,7 @@ the packaged app:
    ``mcp_token`` straight off the group-shared ``handoff/`` directory
    itself (``mcpb/shim/src/protocol.ts``'s own ``privilegeSeparationRoot()``).
 4. **Open the approval UI**: a real headless-Chromium page follows the
-   bootstrap link (SEC-06), landing signed in on ``/approvals`` -- an
+   bootstrap link, landing signed in on ``/approvals`` -- an
    ordinary HTTP client, so none of the group-membership plumbing above
    applies to it.
 5. **One synthetic Allow/Deny round trip**: call
@@ -109,7 +107,7 @@ the packaged app:
    manual, per this plan's own governing rule. Runs against its own private
    copy of the bundle (``signed_app_copy``), not the one step 6 deletes --
    see that fixture's own docstring for why.
-8. **Upgrade in place** (deliberately not built in the same PR as steps 1-7): install
+8. **Upgrade in place**: install
    version N, apply real state through the daemon's own MCP surface,
    replace the bundle with a synthetically-relabeled version N+1 (``enable
    --app`` run a second time against the new copy -- idempotent, and what
@@ -263,7 +261,7 @@ def _can_sudo() -> bool:
 pytestmark = [
     pytest.mark.skipif(
         platform.system() != "Darwin",
-        reason="only meaningful against a real .app/.dmg -- see the plan's TST-15 row",
+        reason="only meaningful against a real .app/.dmg -- see this module's docstring",
     ),
     pytest.mark.skipif(
         not _built_dmgs(),
@@ -362,7 +360,7 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
 
 def test_dmg_carries_only_the_installer_and_the_extension():
     """The shipped macOS artifact is a carrier for two files: the installer
-    that provisions privilege separation at install time (#428 D2) and the
+    that provisions privilege separation at install time (ADR 0003) and the
     Claude Desktop extension the .pkg's own conclusion screen tells the user
     to open "next to this installer" -- a sentence that is only true because
     both are on this image.
@@ -396,7 +394,7 @@ def installed_app() -> Path:
     """The shared copy of ``PrivacyFenceApp.app`` used by the primary
     round-trip test and (via ``signed_app_copy``'s own reasoning) nothing
     else -- module-scoped because the primary test mutates and then deletes
-    it (module docstring §6). The DMG mount and package expansion behind it
+    it (module docstring's point 6). The DMG mount and package expansion behind it
     are shared across the whole session regardless, by ``_extracted_app``."""
     install_dir = Path(tempfile.mkdtemp(prefix="pf-dmg-install-"))
     try:
@@ -559,9 +557,8 @@ def _companion_agent_paused():
 def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     """Mints a bootstrap code that can actually *approve*.
 
-    A bare ``MINT`` -- what this helper used to send -- lands an
-    ``unattested`` session, which since the self-approval review's Phase 2
-    may view ``/approvals`` but cannot release a sensitive confirm
+    A bare ``MINT`` lands an ``unattested`` session, which may view
+    ``/approvals`` but cannot release a sensitive confirm
     (web/routes_approvals.py's ``require_human_session``, turned on by
     web/server.py for every separated install, which is every packaged one).
     The attested shape is ``MINT COMPANION <nonce>``. This runner does have a
@@ -576,9 +573,8 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     importable) as test_deb_packaged_lifecycle.py's own equivalent -- but as
     this account, not root: ADR 0008 makes the daemon key ``CONFIRM MINT``'s
     companion address off the connecting peer's own principal
-    (``control_channel.principal_id_for_peer()``), and a root peer no longer
-    maps to the install's owner the way every peer used to pre-ADR-0008 --
-    it maps to its own ``os-0`` principal, with its own, different companion
+    (``control_channel.principal_id_for_peer()``), and a root peer does not
+    map to the install's owner -- it maps to its own ``os-0`` principal, with its own, different companion
     address, which nothing here binds. Connecting as this account instead
     (``_sudo_capture_as_owner``) keeps the peer uid the same as
     ``_enable_separation``'s own ``--user``, so it still resolves to
@@ -827,8 +823,9 @@ def running_packaged_daemon(installed_app):
     """The primary round-trip test's own daemon: real privilege separation
     against ``installed_app``'s own scratch copy (``enable`` stages its own
     root-owned copy under ``/Library/PrivacyFence/image`` -- see this
-    module's own docstring §2/§6 for why handing it a plain, user-owned
-    copy is exactly the right, least-privileged input, not a shortcut),
+    module's own docstring, points 2 and 6, for why handing it a plain,
+    user-owned copy is exactly the right, least-privileged input, not a
+    shortcut),
     undone again on the way out regardless of what the test itself already
     did to it (``_purge_installed_state`` is idempotent -- a no-op once
     nothing is installed any more)."""
@@ -1034,7 +1031,7 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
                     PROBE_TOOL,
                     probe_arguments(
                         value=["example.com"],
-                        reason="TST-15 packaged-app smoke test synthetic approval round trip",
+                        reason="packaged-app smoke test synthetic approval round trip",
                     ),
                 )
             )
@@ -1048,8 +1045,8 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     assert result.structured_content is not None
     assert result.structured_content["confirmed"] is True
     assert result.structured_content["changed"] is True
-    # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
-    # human-readable sentence, not an echo of any rule name the caller passed in.
+    # The confirmed-response description is the rule's own human-readable sentence, not an
+    # echo of any rule name the caller passed in.
     assert expected_description("example.com") in result.structured_content["description"]
 
     # Confirms the round trip actually reached persisted state, not just a
@@ -1061,7 +1058,7 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     assert settings_text, settings_text
     assert_probe_rule_on_disk(settings_text, value=["example.com"])
 
-    # ── State lives outside the package, twice over (module docstring, §6) ──
+    # ── State lives outside the package, twice over (module docstring, point 6) ───
     # First: delete the *original* scratch copy `enable --app` was pointed
     # at, not the copy the daemon actually runs from any more (`enable`
     # stages its own root-owned copy under /Library/PrivacyFence/image --
@@ -1071,8 +1068,8 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     # claim than plain $HOME-independence would be on an unseparated
     # install. This deletes the shared `installed_app` fixture's own copy,
     # not a throwaway one -- deliberately, which is exactly why
-    # `test_packaged_app_signature_and_notarization` below no longer
-    # depends on `installed_app` still existing afterward (see that test's
+    # `test_packaged_app_signature_and_notarization` below does not
+    # depend on `installed_app` still existing afterward (see that test's
     # own `signed_app_copy` fixture).
     shutil.rmtree(installed_app)
     assert not installed_app.exists()
@@ -1101,7 +1098,7 @@ def signed_app_copy() -> Path:
     """A private copy of the extracted bundle, independent of the shared
     module-scoped ``installed_app`` fixture: the primary round-trip test
     above deletes *its* copy of ``installed_app`` partway through its own
-    run (module docstring §6) to prove package removal never touches
+    run (module docstring's point 6) to prove package removal never touches
     ``$HOME`` -- since pytest runs test functions in file-definition order
     by default, a signature test that depended on that same shared fixture
     would silently find nothing there afterward (``codesign`` against a
@@ -1117,7 +1114,7 @@ def signed_app_copy() -> Path:
 
 
 def test_packaged_app_signature_and_notarization(signed_app_copy):
-    """§7 of the module docstring -- distinct from the MCP/approval round
+    """Point 7 of the module docstring -- distinct from the MCP/approval round
     trip above, and deliberately its own test so a signature failure and an
     approval-protocol failure are never conflated in one report.
 
@@ -1184,7 +1181,7 @@ def test_packaged_app_signature_and_notarization(signed_app_copy):
 
 
 # --------------------------------------------------------------------------- #
-# Upgrade in place preserves user state (Phase 6 item 20)
+# Upgrade in place preserves user state
 # --------------------------------------------------------------------------- #
 
 def _bump_bundle_version(app_path: Path) -> str:
@@ -1196,7 +1193,7 @@ def _bump_bundle_version(app_path: Path) -> str:
     proven (``$HOME`` survives a reinstall) doesn't depend on anything
     actually changing *inside* the bundle. Unlike either of those platforms'
     installers, macOS has no version-ordering (or any other) gate an
-    "install" has to satisfy at all -- per the module docstring's own §6,
+    "install" has to satisfy at all -- per the module docstring's own point 6,
     "installing" a new version here is just replacing the ``.app`` bundle
     wholesale -- so any different string is enough to prove this is a
     distinct bundle rather than the identical one being re-applied."""
@@ -1325,12 +1322,11 @@ async def _resolve_pending_card(
                              # already assumes one `enable` plus a real browser round trip, so
                              # this needs the same headroom again for the second `enable`.
 async def test_macos_upgrade_preserves_user_state():
-    """Phase 6 item 20 -- deliberately not built in the same PR as this
-    module's own 6.1 gap-closing work: install version N, use it to create
-    real on-disk state (an applied auto-accept rule, via the real MCP round
-    trip -- not a hand-written settings.yaml), replace it with a
-    synthetically-relabeled version N+1, and confirm the state survived and
-    the new bundle still starts and serves. Own, independent bundle copies
+    """Install version N, use it to create real on-disk state (an applied
+    auto-accept rule, via the real MCP round trip -- not a hand-written
+    settings.yaml), replace it with a synthetically-relabeled version N+1,
+    and confirm the state survived and the new bundle still starts and
+    serves. Own, independent bundle copies
     throughout (``_copy_app_from_dmg``) -- see ``signed_app_copy``'s own
     docstring for why this module doesn't share mutable fixture state like
     that across tests.
@@ -1368,7 +1364,7 @@ async def test_macos_upgrade_preserves_user_state():
         assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 
         # ── "Install" a synthetically-relabeled version N+1 -- delete the
-        # old bundle and put a fresh copy in its place (module docstring §8;
+        # old bundle and put a fresh copy in its place (module docstring's point 8;
         # a real second PyInstaller build would multiply this module's
         # already-heavy setup cost for no additional coverage -- see
         # _bump_bundle_version's own docstring) ───────────────────────────

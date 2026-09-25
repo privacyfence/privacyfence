@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Compute the website's public release-stats.json (release-publishing plan Phase 4).
+"""Compute the website's public release-stats.json.
 
-Before this script existed, `.github/workflows/pages.yml` summed every release asset's
-`download_count` inline, in a heredoc with no test coverage -- including SBOMs (`*.spdx.json`,
-`*.cdx.json`), the org-config scripts (`*.py`), and the sdist/wheel (`*.whl`, `*.tar.gz`), none of
-which are installers a user downloaded. That inflated the GitHub half of the KPI this repo actually
+Summing every release asset's `download_count` would count SBOMs (`*.spdx.json`, `*.cdx.json`),
+the org-config scripts (`*.py`), and the sdist/wheel (`*.whl`, `*.tar.gz`), none of which are
+installers a user downloaded. That would inflate the GitHub half of the KPI this repo actually
 wants: "PrivacyFence installer downloads" (see docs/downloads-and-release-kpi.md's KPI section).
 
-This script fixes that by reusing `classify_installer()` from `scripts/r2_release.py` -- the same
+This script avoids that by reusing `classify_installer()` from `scripts/r2_release.py` -- the same
 DMG / `-setup.exe` / `.deb` filename patterns that already decide what a tagged release's manifest
 lists as a downloadable installer (see that module's `_INSTALLERS`). A GitHub Release for a stable
 tag is built from exactly those files (`build.yml` attaches the DMG/installer/`.deb` it builds), so
@@ -16,7 +15,7 @@ and GitHub halves of the KPI, rather than two filters that could quietly drift a
 
 The emitted field is named `github_installer_downloads`, not `downloads`, so a reader of
 release-stats.json (website/stats.js, or anyone else) can't mistake it for the combined KPI --
-`downloads` was ambiguous about whether it already included Cloudflare's counts (it never did).
+a plain `downloads` would be ambiguous about whether it already included Cloudflare's counts.
 
 Usage (same as .github/workflows/pages.yml):
     python3 scripts/release_stats.py --repo privacyfence/privacyfence --output _site/release-stats.json

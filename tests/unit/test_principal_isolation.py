@@ -1,9 +1,7 @@
-"""Cross-cutting exit criterion: "Two principals isolated in tests; local
-mode byte-identical to before" -- every per-principal registry
-de-singletoned along the way -- auto_accept, audit_log, pii_detector,
+"""Every per-principal registry -- auto_accept, audit_log, pii_detector,
 privacy_filter, resource_names -- actually isolates two principals from
-each other, and the local principal's own behavior is unchanged from
-calling the same accessor with no principal_scope() at all.
+each other (ADR 0008), and the local principal's own behavior is identical
+to calling the same accessor with no principal_scope() at all.
 
 Each module already has its own focused unit tests (test_auto_accept.py,
 test_audit_log.py, test_pii_detector.py, test_privacy_filter.py,
@@ -52,8 +50,7 @@ class TestAutoAcceptIsolation:
         assert bob_rules == []  # bob never saw it
 
     def test_two_principals_get_different_state_instances(self):
-        # Stands in for the pre-P9 "different AutoAcceptEvaluator instances" check: what's
-        # per-principal now is the _AutoAcceptState the registry hands back (config path,
+        # What's per-principal is the _AutoAcceptState the registry hands back (config path,
         # temp-accept store, hot-reloaded v2 rule cache, listeners), not a rule-engine object.
         alice, bob = Principal(id="alice"), Principal(id="bob")
         with principal_scope(alice):

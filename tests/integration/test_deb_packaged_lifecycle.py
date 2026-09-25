@@ -1,10 +1,9 @@
 """Packaged-artifact lifecycle test for the Linux ``.deb``.
 
-This lifecycle -- install/validate/remove/purge, and, partially, that
-reinstalling the same build over itself leaves ``$HOME`` alone -- used to be
-proven only by hand. This module turns that into a repeatable CI job, the same role
-``tests/integration/test_macos_packaged_smoke.py`` (TST-15) already plays for
-the DMG: install the actual built artifact, not a source checkout or an
+This module proves the lifecycle -- install/validate/remove/purge/upgrade --
+in a repeatable CI job, playing the same role for the ``.deb`` that
+``tests/integration/test_macos_packaged_smoke.py`` plays for the DMG:
+install the actual built artifact, not a source checkout or an
 editable dev install, and exercise it as closely as possible to how a real
 user would.
 
@@ -23,33 +22,33 @@ user would.
 3. **Start the real installed daemon** (``/usr/bin/privacyfence-app``, the
    wrapper ``debian/install`` puts on ``PATH`` -- not the PyInstaller onedir
    output directly, so this also proves the wrapper script itself works) and
-   run the Phase 3 (``tests/system/test_local_mode_system.py``) daemon → MCP
-   → approval → audit contract's own shape against it: a real bootstrap
-   session, an MCP tool call resolved through the real HTTP decide route
+   run the local-mode system test's
+   (``tests/system/test_local_mode_system.py``) daemon → MCP → approval →
+   audit contract's own shape against it: a real bootstrap session, an MCP
+   tool call resolved through the real HTTP decide route
    both Allow and Deny, the audit log read back from disk, and a graceful
    shutdown via the real "Quit PrivacyFence" action.
 
-   **One deliberate substitution** from Phase 3's own scenario, for the same
-   reason ``test_macos_packaged_smoke.py`` already made it: Phase 3 injects a
-   synthetic ``Connector`` by monkeypatching ``daemon_main.build_connectors``
-   *before* ``daemon_main`` is ever imported -- only possible when the test
-   controls the Python import itself. A packaged, frozen daemon started as
-   its own binary offers no such hook. This module instead drives
-   ``privacyfence_propose_policy_change``, the one built-in meta-tool that
-   "ALWAYS blocks on a native confirmation dialog" with no
-   connector/credential of any kind behind it (see that tool's own
+   **One deliberate substitution** from the system test's own scenario, for
+   the same reason ``test_macos_packaged_smoke.py`` already makes it: the
+   system test injects a synthetic ``Connector`` by monkeypatching
+   ``daemon_main.build_connectors`` *before* ``daemon_main`` is ever imported
+   -- only possible when the test controls the Python import itself. A
+   packaged, frozen daemon started as its own binary offers no such hook. This
+   module instead drives ``privacyfence_propose_policy_change``, the one
+   built-in meta-tool that "ALWAYS blocks on a native confirmation dialog"
+   with no connector/credential of any kind behind it (see that tool's own
    description in ``web/mcp_tools.py``) -- same reasoning
    ``test_macos_packaged_smoke.py``'s own docstring gives for the identical
-   choice. The call itself, and the audit vocabulary to read back on the
-   far side of it, come from ``tests/packaged_policy_probe.py``, which all
-   four packaged-artifact smoke tests share. Unlike that module (which
-   drives a real headless-Chromium click), this one resolves the pending
-   card the same way Phase 3 itself does: a
-   direct HTTP POST to ``/api/approvals/<id>/decide`` with the bootstrap-
-   minted session cookie doubling as the CSRF token -- no Node/Playwright
-   dependency needed here, keeping this job's prerequisites to exactly what
-   ``scripts/build_deb.sh`` itself already needs (Python + ``dpkg``/
-   ``lintian``).
+   choice. The call itself, and the audit vocabulary to read back on the far
+   side of it, come from ``tests/packaged_policy_probe.py``, which all four
+   packaged-artifact smoke tests share. Unlike that module (which drives a
+   real headless-Chromium click), this one resolves the pending card the same
+   way the system test itself does: a direct HTTP POST to
+   ``/api/approvals/<id>/decide`` with the bootstrap-minted session cookie
+   doubling as the CSRF token -- no Node/Playwright dependency needed here,
+   keeping this job's prerequisites to exactly what ``scripts/build_deb.sh``
+   itself already needs (Python + ``dpkg``/``lintian``).
 4. **Remove, then reinstall** (``dpkg -r``, ADR 0042): package-owned files
    gone (``/opt/privacyfence``, ``/usr/bin/privacyfence-app``); ``prerm``'s
    ``uninstall`` has stopped the daemon and removed its unit and the
@@ -60,7 +59,7 @@ user would.
 5. **Purge** (``dpkg -P``): nothing is left -- no data directory, no service
    account or group, no unit, no autostart entry, no ``$HOME`` state, and
    dpkg no longer knows the package.
-6. **Upgrade in place** (P7.3): install version N, use it to create real
+6. **Upgrade in place**: install version N, use it to create real
    on-disk state (an applied auto-accept rule, via the same MCP round trip
    as step 3), install a synthetically-bumped version N+1 of the identical
    build over it, confirm the state survived and the upgraded binary still
@@ -69,10 +68,9 @@ user would.
    already-heavy setup cost for no additional coverage (the file-level
    ``$HOME`` isolation this proves doesn't depend on what changed inside the
    package) -- see ``_synthetic_next_version_deb``'s own docstring for why a
-   version-string bump on the same build is sufficient here, closing the
-   exact gap P7.3's own "partially checked" note (which only re-installed
-   the *identical* version) left open: a real version transition, not just a
-   reinstall.
+   version-string bump on the same build is sufficient here: what it proves
+   is a real version transition, not just a reinstall of the *identical*
+   version.
 7. **The postinst's own failure policy** (ADR 0003 decision 5): an
    *unattended* install -- ``dpkg -i`` with no ``$SUDO_USER`` behind it, the
    MDM/``unattended-upgrades`` case -- configures successfully and still ends
@@ -82,9 +80,9 @@ user would.
    module that assert *about* privilege separation rather than around it.
 
 Scenarios 1-6 above run against the real, separated install a plain
-``sudo dpkg -i``/``sudo apt install`` leaves behind: issue #428 D1 made
-``debian/postinst`` provision privilege separation on every install *and*
-upgrade, and ADR 0003 decision 5 made its machine half unconditional (the
+``sudo dpkg -i``/``sudo apt install`` leaves behind: ``debian/postinst``
+provisions privilege separation on every install *and* upgrade, and ADR 0003
+decision 5 makes its machine half unconditional (the
 per-user half still runs only when ``$SUDO_USER`` resolves to a real,
 non-root account -- true for this module's own passwordless-``sudo`` CI
 account, same as a real human's ``sudo dpkg -i``). That moves the daemon to
@@ -243,9 +241,8 @@ def _built_debs() -> list[Path]:
 
 def _can_install_packages() -> bool:
     """``dpkg -i``/``-r``/``-P`` all need root. ``sudo -n`` succeeds
-    immediately (no password prompt, no hang) both when already root -- this
-    is how this plan's own P7.1 note says its implementation environment was
-    exercised -- and on a passwordless-sudo CI runner (``ubuntu-latest``'s
+    immediately (no password prompt, no hang) both when already root and on
+    a passwordless-sudo CI runner (``ubuntu-latest``'s
     default ``runner`` user); anything else (a real password required, no
     sudo at all) fails fast here rather than hanging the test on a prompt
     nothing will ever answer."""
@@ -411,14 +408,13 @@ def _clean_package_state(request):
 # like that module's own helpers -- except _sudo_mint_attested_bootstrap_
 # code() and _sudo_companion_stand_in(), which dial the control/companion
 # sockets as this account (`sudo -u <this account> -g ${SERVICE_GROUP}`)
-# rather than as root. Connecting as root used to be harmless, because every
-# peer mapped to the same principal; ADR 0008 changed that
-# (control_channel.principal_id_for_peer() maps a root peer's uid 0 to its
+# rather than as root. Under ADR 0008 connecting as root is not harmless:
+# control_channel.principal_id_for_peer() maps a root peer's uid 0 to its
 # own os-0 principal, not the install's owner, so its CONFIRM MINT would
-# dial a companion-0.sock nothing here binds), so these two now have to run
-# as the owner to keep landing on LOCAL_PRINCIPAL_ID -- matching what a real,
-# human-run companion connects as. HANDOFF_DIR's own group grant is enough
-# for the socket I/O itself; nothing about it needs root.
+# dial a companion-0.sock nothing here binds. So these two run as the owner
+# to land on LOCAL_PRINCIPAL_ID -- matching what a real, human-run
+# companion connects as. HANDOFF_DIR's own group grant is enough for the
+# socket I/O itself; nothing about it needs root.
 # --------------------------------------------------------------------------- #
 
 def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None:
@@ -458,7 +454,7 @@ def _prepare_home(home: Path, *, port: int) -> None:
     below) to do it -- kept here, not there, so the two modules' own
     ``$HOME``-seeding stays byte-identical rather than drifting into two
     copies."""
-    # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
+    # settings.yaml lives under an authority/ subdirectory of
     # data_dir(), same as the control channel's socket below -- not
     # data_dir() itself.
     config_dir = home / ".privacyfence" / "authority" / "config"
@@ -500,7 +496,7 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
 
 
 def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
-    """Mints the one thing a bare ``MINT`` can no longer buy: a
+    """Mints the one thing a bare ``MINT`` cannot buy: a
     ``human``-provenance session, the only kind web/routes_approvals.py lets
     release a sensitive confirm on a separated install. Runs through an
     inline stdlib-only script, for the same reason every other helper in
@@ -508,9 +504,8 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     no ``privacyfence`` (nor ``tests``) package importable -- but as this
     account, not root: ADR 0008 makes the daemon key ``CONFIRM MINT``'s
     companion address off the connecting peer's own principal
-    (``control_channel.principal_id_for_peer()``), and a root peer no longer
-    maps to the install's owner the way every peer used to pre-ADR-0008 --
-    it maps to its own ``os-0`` principal, with its own, different companion
+    (``control_channel.principal_id_for_peer()``), and a root peer does not
+    map to the install's owner -- it maps to its own ``os-0`` principal, with its own, different companion
     address, which nothing here binds. ``_sudo_capture_as_owner`` keeps the
     peer uid the one the daemon's marker actually names as owner, so it
     still resolves to ``LOCAL_PRINCIPAL_ID`` and dials the address
@@ -655,7 +650,7 @@ def _wait_for_daemon_unit_stopped(*, timeout: float = 15.0) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# The daemon → MCP → approval → audit round trip -- Phase 3's own shape
+# The daemon → MCP → approval → audit round trip -- the system test's own shape
 # (bootstrap session, tools/list, a gated call resolved through the real HTTP
 # decide route, audit log confirms the decision), against the one built-in
 # meta-tool that needs no connector (see module docstring's point 3).
@@ -664,7 +659,7 @@ def _wait_for_daemon_unit_stopped(*, timeout: float = 15.0) -> None:
 async def _bootstrap_session(
     web_client: httpx.AsyncClient, data_dir: Path = SYSTEM_ROOT, *, path: str = "/settings",
 ) -> str:
-    # #428 Phase 2: minted through the control channel (a real Unix domain
+    # Minted through the control channel (a real Unix domain
     # socket against this daemon's own data directory), not a bearer-
     # authenticated HTTP route -- see tests.control_channel_client's own
     # module docstring. Defaults to the real separated system root (this
@@ -783,7 +778,7 @@ async def _quit(web_client: httpx.AsyncClient, session_id: str) -> None:
 
 async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None:
     async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
-        # Unauthenticated first, same as Phase 3's own scenario.
+        # Unauthenticated first, same as the system test's own scenario.
         assert (await web_client.get("/approvals")).status_code == 401
         assert (await web_client.get("/settings")).status_code == 401
 
@@ -828,8 +823,8 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert allow_result.is_error is not True, getattr(allow_result, "content", allow_result)
         assert allow_result.structured_content["confirmed"] is True
         assert allow_result.structured_content["changed"] is True
-        # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
-        # human-readable sentence, not an echo of any rule name the caller passed in.
+        # The confirmed-response description is the rule's own human-readable sentence, not an
+        # echo of any rule name the caller passed in.
         assert expected_description("allowed.example.com") in allow_result.structured_content["description"]
 
         # -- Deny round trip ----------------------------------------------------
@@ -860,7 +855,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert AUDIT_DECISION_CHANGED in decisions
         assert AUDIT_DECISION_REJECTED in decisions
 
-        # Same cross-platform-suite permission assertion Phase 3's own
+        # Same cross-platform-suite permission assertion the system test's own
         # scenario adds -- this module always runs on Linux (pytestmark
         # above), so no Windows skip needed here.
         mode_result = _sudo_capture("stat", "-c", "%a", str(audit_dir))
@@ -875,7 +870,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
 
 
 # --------------------------------------------------------------------------- #
-# Test 1 -- P7.1 and ADR 0042: install / validate / start+scenario / remove /
+# Test 1 -- ADR 0042: install / validate / start+scenario / remove /
 # reinstall / purge
 # --------------------------------------------------------------------------- #
 
@@ -918,14 +913,14 @@ async def test_deb_install_validate_scenario_remove_reinstall_purge_lifecycle():
     status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True, check=True)
     assert "Status: install ok installed" in status.stdout
 
-    # ── Validate the .desktop entries (P7.1): the application-menu entry
+    # ── Validate the .desktop entries: the application-menu entry
     # the package installs, and the companion autostart entry the postinst
     # rendered ───────────────────────────────────────────────────────────
     _validate_desktop_file(COMPANION_MENU_DESKTOP_FILE)
     _validate_desktop_file(COMPANION_AUTOSTART_DESKTOP_FILE)
 
     # ── The real, already-running privacyfence-daemon.service; run the
-    # Phase 3 scenario against it ─────────────────────────────────────────
+    # system-test scenario against it ─────────────────────────────────────
     daemon = _wait_for_real_daemon()
     await _run_daemon_mcp_approval_audit_scenario(daemon)
 
@@ -986,7 +981,7 @@ async def test_deb_install_validate_scenario_remove_reinstall_purge_lifecycle():
 
 
 # --------------------------------------------------------------------------- #
-# Test 2 -- P7.3: upgrade in place preserves user state
+# Test 2 -- upgrade in place preserves user state
 # --------------------------------------------------------------------------- #
 
 def _synthetic_next_version_deb(src_deb: Path, dst_deb: Path) -> str:
@@ -996,11 +991,10 @@ def _synthetic_next_version_deb(src_deb: Path, dst_deb: Path) -> str:
     appending a non-empty suffix is always ">" the original regardless of the
     original's own shape (stable/pre-release/dev-local, see
     ``scripts/build_deb.sh``'s own version-string handling comment). This is
-    the same *bytes* as version N, just relabeled -- deliberately: what P7.3
-    needs proven is that ``dpkg -i``-over-an-existing-install (a real version
-    transition, not a same-version reinstall -- the gap its own "partially
-    checked" note names) never reaches into ``$HOME``, which doesn't depend
-    on anything actually changing *inside* the package. Building a second
+    the same *bytes* as version N, just relabeled -- deliberately: what needs
+    proving is that ``dpkg -i``-over-an-existing-install (a real version
+    transition, not a same-version reinstall) never reaches into ``$HOME``,
+    which doesn't depend on anything actually changing *inside* the package. Building a second
     genuine PyInstaller bundle just for a "real" code change would multiply
     this module's already-heavy setup cost for no additional coverage of
     that claim.
@@ -1059,7 +1053,7 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
     settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
     assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 
-    # ── Install a synthetically-bumped version N+1 over it (P7.3). prerm's
+    # ── Install a synthetically-bumped version N+1 over it. prerm's
     # `upgrade` case stops the unit before dpkg unpacks the new files over
     # /opt/privacyfence; postinst's machine half (which runs on every
     # `configure`, upgrade included) starts it back up once they're in
@@ -1072,7 +1066,7 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
     status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True, check=True)
     assert f"Version: {new_version}" in status.stdout
 
-    # ── State survived the upgrade untouched (P2.2/P7.3) ──────────────────
+    # ── State survived the upgrade untouched ──────────────────────────────
     settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
     assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 

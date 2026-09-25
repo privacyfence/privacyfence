@@ -2,8 +2,7 @@
 pending card or confirmation, and these routes are what let a human actually
 see and decide it from a browser instead of a native dialog. One module now
 builds the route list for *both* local mode's single-secret session and org
-mode's principal-aware one (policy surface consolidation, PSC-2b) --
-formerly a full second copy of this file, web/routes_org_approvals.py.
+mode's principal-aware one, with an auth adapter per mode (ADR 0033).
 
 ``create_app()`` is local mode's entry point (unchanged signature: wraps the
 route list in a ``Starlette`` app, folding in whatever ``extra_routes``/
@@ -25,13 +24,14 @@ pattern web/routes_security.py's own ``build_routes()`` already uses for
   redirects a page view to ``/login?next=...`` but answers a JSON read with a
   plain ``401`` -- see either mode's own adapter below for the exact shapes
   this module used before the merge.
-- ``step_up_response`` -- the one piece PSC-2a's web/approval_step_up.py
-  left mode-specific (its own module docstring): local's passkey-only
+- ``step_up_response`` -- the one piece web/approval_step_up.py
+  leaves mode-specific (its own module docstring): local's passkey-only
   ``428``/``403``; org's, which can also carry an IdP-reauth link (closed by
-  ``step_up.require_passkey``, #406). Kept as the two private factories
+  ``step_up.require_passkey``). Kept as the two private factories
   below (``_local_step_up_response``/``_org_step_up_response``) -- selected,
   not merged, since the org one is a real behavioral difference (a fallback
-  local mode has nothing to fall back to), not incidental duplication.
+  local mode has nothing to fall back to), not incidental duplication; see
+  ADR 0066.
 - ``bridge_shim`` -- the org variant additionally handles a ``428``'s
   ``idp_stepup_url`` and a ``403``'s ``enroll_url`` in the injected JS; kept
   as ``_bridge_shim``/``_org_bridge_shim`` for the same reason.
@@ -39,12 +39,13 @@ pattern web/routes_security.py's own ``build_routes()`` already uses for
   the notifications-detail dial; org's carries the signed-in principal's
   label and subscribes to ``/api/approvals/stream`` for live updates (org mode
   mounts no ``/api/state/stream``).
-- ``human_session_guard`` -- the self-approval review's Phase 2, local-only
-  and unchanged: org mode has no session-provenance concept at all (its
+- ``human_session_guard`` -- session provenance (web/session_auth.py's
+  ``PROVENANCE_HUMAN``), local-only: org mode has no session-provenance concept at all (its
   equivalent is IdP re-auth), so its own adapter is a no-op.
 
-**Step-up (§10.6, D7 / #426)** is otherwise identical between modes and
-lives in web/approval_step_up.py (PSC-2a): before releasing a *write*
+**Step-up** (ADR 0002 decision 6: a session alone must not be enough to
+release an approval) is otherwise identical between modes and
+lives in web/approval_step_up.py: before releasing a *write*
 decision (or, with ``step_up.scope == "writes_and_pii_reads"``, a
 PII-flagged read too -- or, with ``"writes_and_reads"``, every gated read),
 the decide endpoint demands proof of a fresh WebAuthn platform-authenticator
@@ -54,10 +55,9 @@ is only the HTTP protocol wrapping it. **Deny needs no step-up** -- denying
 leaks nothing, so step-up is scoped to the two approving results
 (``accept``/``accept_all``) only.
 
-**A confirm dialog that is itself the gate (the self-approval review's
-Phase 4)** is the one place ``_STEP_UP_RESULTS``' "only an approving
-decision" rule under-reaches: ``gate.propose_policy_change`` (P7 of the
-policy v2 redesign) raises no card at all, so confirming one is the whole gate on a rule that
+**A confirm dialog that is itself the gate** is the one place
+``_STEP_UP_RESULTS``' "only an approving decision" rule under-reaches:
+``gate.propose_policy_change`` raises no card at all, so confirming one is the whole gate on a rule that
 decides what auto-accepts from here on. Those register with
 ``sensitive=True`` (approvals.PendingApprovalRegistry.register_confirm);
 ``approval_step_up.guard_decision`` takes the passkey half of that (gated on
@@ -135,8 +135,7 @@ _STREAM_POLL_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
 
-# resources/sw.js -- tier 0/1 notifications (5deef1d8:docs/approval-list-ui-ux.md
-# §4). Served at the origin root, not under /api, so its default scope
+# resources/sw.js -- tier 0/1 notifications. Served at the origin root, not under /api, so its default scope
 # covers the whole app (a service worker's scope can never be wider than the
 # path it's served from) -- see web_shell.py's own registration call. Shared
 # by both modes -- neither the document nor its own no-auth-required posture
@@ -160,13 +159,13 @@ def _local_step_up_response(
     principal: Principal, approval_id: str, *, result: str, choice: int | None,
     step_up: StepUpConfig, challenges: StepUpChallengeStore,
 ) -> JSONResponse | None:
-    """Local mode's step-up challenge factory (#426 Phase 2/3). ``None``
+    """Local mode's step-up challenge factory. ``None``
     when there is no enrolled passkey to challenge *and*
     ``step_up.require_passkey`` is off, which the caller takes as "let the
     decision through unguarded" -- evadable by simply never enrolling a
     passkey, kept only for that configuration. With ``require_passkey`` on
     and nothing enrolled, this hard-fails with a ``403`` instead -- the
-    write is never released."""
+    write is never released. See ADR 0066."""
     fingerprint = webauthn_stepup.decision_fingerprint(
         approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
     )
@@ -189,13 +188,14 @@ def _org_step_up_response(
     step_up: StepUpConfig, challenges: StepUpChallengeStore,
 ) -> JSONResponse:
     """Org mode's step-up challenge factory: same passkey ceremony as local
-    mode's, plus an IdP-reauth fallback link (D7) whenever
+    mode's, plus an IdP-reauth fallback link whenever
     ``step_up.require_passkey`` is off -- so, unlike local mode, this never
     lets a decision through unguarded; see
     web/routes_org_stepup.py's own module docstring for the redirect this
-    URL leads to. ``require_passkey`` (#406) closes that fallback instead:
+    URL leads to. ``require_passkey`` closes that fallback instead:
     with nothing enrolled, this hard-refuses with a ``403`` naming
-    ``/security``, same as local mode's own ``require_passkey`` branch."""
+    ``/security``, same as local mode's own ``require_passkey`` branch
+    (ADR 0066)."""
     body: dict = {"error": "step_up_required"}
     fingerprint = webauthn_stepup.decision_fingerprint(
         approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
@@ -207,7 +207,7 @@ def _org_step_up_response(
         body["webauthn_options"] = json.loads(options_json)
     elif step_up.require_passkey:
         # No enrolled passkey, and this org has closed the IdP-reauth
-        # fallback (#406) -- hard-fail rather than silently downgrading to a
+        # fallback -- hard-fail rather than silently downgrading to a
         # weaker step-up than what was configured.
         return JSONResponse(
             {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
@@ -230,8 +230,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
     local mode has no IdP alternative to link a client toward, see
     ``_org_bridge_shim`` for the mode that does.
 
-    5deef1d8:docs/approval-list-ui-ux.md §3 ("After a decision: back to the list"):
-    on a 2xx or a 409 (``already_decided`` -- a rule elsewhere resolved this
+    After a decision, back to the list: on a 2xx or a 409 (``already_decided`` -- a rule elsewhere resolved this
     one first, a genuinely common case once rules-changed re-evaluation is
     live, not an error), navigate straight back to ``/approvals`` via
     ``location.replace`` (not a push -- the browser back button must not
@@ -241,7 +240,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
     with an inline message -- there is nothing to navigate back to for
     those.
 
-    A ``428`` (#426 Phase 2) means step-up is outstanding: when the body
+    A ``428`` means step-up is outstanding: when the body
     carries ``webauthn_options``, run the assertion ceremony
     (``window.pfWebauthnGet``, defined by ``PF_WEBAUTHN_JS`` below) and
     retry the same decide POST with a ``webauthn_assertion`` attached; a
@@ -249,7 +248,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
     fall through to the generic failure message, since local mode has no IdP
     link to offer instead.
 
-    ``nonce`` (SEC-08): this shim is a real ``<script>`` element injected
+    ``nonce``: this shim is a real ``<script>`` element injected
     into an already-rendered card document (see ``_inject_shim`` below), so
     it has to carry the same nonce that document's own ``<script>``/
     ``<style>`` tags already do -- ``show_approval`` below recovers that
@@ -308,15 +307,15 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
     ``window.webkit.messageHandlers.pf.postMessage`` swap, plus the two
     branches org mode's own ``_org_step_up_response``/``decide()`` responses
     need that local mode's never send: a ``428``'s ``idp_stepup_url``
-    fallback link, and a ``403``'s ``enroll_url`` (#406,
-    ``step_up.require_passkey``). ``stepup_options_url`` is unused by the JS
+    fallback link, and a ``403``'s ``enroll_url``
+    (``step_up.require_passkey``). ``stepup_options_url`` is unused by the JS
     below directly (a ``428`` body already carries fresh options inline) but
     is threaded through so a future retry-without-a-body variant has
     somewhere to fetch a fresh challenge from without a second server-side
     endpoint to design -- today's flow never needs it because the first
     ``428`` already includes everything the client needs.
 
-    ``nonce`` (SEC-08): same role as ``_bridge_shim``'s -- this is a real
+    ``nonce``: same role as ``_bridge_shim``'s -- this is a real
     ``<script>`` element injected into an already-rendered card document, so
     it must carry that document's own nonce."""
     del stepup_options_url  # reserved -- see docstring
@@ -433,7 +432,7 @@ def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Princ
     the cosmetic fields first (see principal.py), falling back to the opaque
     id rather than rendering an unlabelled header."""
     body = approval_list_html.build_list_html(rows, csrf=csrf, nonce=nonce)
-    # PF_WEBAUTHN_JS (approval binder Phase 3): needed here whenever
+    # PF_WEBAUTHN_JS: needed here whenever
     # Approve-selected's own 428 branch (approval_list_html.py's own JS) has
     # to run a ceremony -- always injected, same reasoning show_approval's
     # own shim below gives.
@@ -473,7 +472,7 @@ def _build_route_list(
     own version of the "principal-or-reject" seam
     web/routes_security.py's ``build_routes()`` already established;
     ``step_up_response``/``bridge_shim``/``render_list_page`` are the three
-    places PSC-2a's shared web/approval_step_up.py still left to the
+    places the shared web/approval_step_up.py leaves to the
     caller, here selected (not merged) between ``_local_*``/``_org_*``
     below.
     """
@@ -528,7 +527,7 @@ def _build_route_list(
                 headers={"Cache-Control": "no-store"},
             )
         csrf = request.cookies.get(session_cookie_name, "")
-        # SEC-08: card.html was rendered once, at approval-creation time --
+        # card.html was rendered once, at approval-creation time --
         # long before this request/response existed -- so its own nonce was
         # picked then, not now. Recover it and make *this* response's CSP
         # header match it, rather than the fresh per-request nonce
@@ -544,8 +543,8 @@ def _build_route_list(
         return HTMLResponse(_inject_shim(card.html, shim), headers={"Cache-Control": "no-store"})
 
     async def approval_preview(request: Request) -> Response:
-        """Read-only inline-disclosure fragment for the approval binder
-        (Phase 1): the ``preview`` dict ``gate.py`` stamped onto this
+        """Read-only inline-disclosure fragment for the approval binder:
+        the ``preview`` dict ``gate.py`` stamped onto this
         approval at registration -- metadata only, never
         ``details_text``/``html``/full body content -- so a binder row can
         disclose what it's about without waiting on ``card.html``. Same auth
@@ -576,8 +575,8 @@ def _build_route_list(
         # same way every other read here is.
         #
         # The principal is re-resolved on every tick, not just at connect
-        # time -- the issue #423 reasoning server.py's
-        # ``_state_stream_route`` gives: resolving touches the session (an
+        # time -- the reasoning server.py's ``_state_stream_route``
+        # gives: resolving touches the session (an
         # open, watching tab is itself activity), and once the session has
         # idle-/absolute-expired or been signed out, the stream ends
         # instead of continuing to serve a queue nobody is authorized to see.
@@ -661,7 +660,7 @@ def _build_route_list(
 
         accepted = web_ui.resolve(approval_id, result, choice, principal_id=principal.id)
         if not accepted:
-            # Idempotent by design (§7.1): the first accepted decision for
+            # Idempotent by design: the first accepted decision for
             # an id wins, any later one -- including a genuine double-submit
             # from a slow network retry -- is rejected here, not treated as
             # an error worth alarming over.
@@ -669,10 +668,10 @@ def _build_route_list(
         return JSONResponse({"status": "ok"})
 
     async def batch_decide(request: Request) -> Response:
-        """The approval binder's own batch decide endpoint (Phase 2:
-        approve or deny a whole selected set in one request; Phase 3: gate
-        an approving batch on one WebAuthn assertion bound to the exact
-        submitted set). Deliberately narrower than ``decide``: no
+        """The approval binder's own batch decide endpoint: approve or
+        deny a whole selected set in one request, gating an approving
+        batch on one WebAuthn assertion bound to the exact submitted set
+        (ADR 0065). Deliberately narrower than ``decide``: no
         ``choice`` (a choice dialog is never batchable), no ``accept_all``
         (rule creation needs its own scoped confirmation)."""
         principal = resolve_principal(request)
@@ -766,7 +765,7 @@ def create_app(
     require_human_session: bool = False,
 ) -> Starlette:
     """Build the Starlette app serving local mode's approval surface.
-    ``sessions`` (SEC-06, see session_auth.py's own module docstring) is the
+    ``sessions`` (see session_auth.py's own module docstring) is the
     local-mode session store -- this function takes it as a plain argument
     rather than reading paths.py itself, so tests can construct an app
     against an isolated WebApprovalUI/session-store pair with no filesystem
@@ -783,17 +782,17 @@ def create_app(
     unaffected.
 
     ``notifications_enabled``/``notifications_detail`` are settings.yaml.
-    example's ``web.notifications.enabled``/``detail`` (P5) -- see
+    example's ``web.notifications.enabled``/``detail`` -- see
     web_shell.wrap's own docstring for what they turn off/dial.
 
-    ``step_up``/``step_up_origin`` (#426 Phase 2) gate an approving decision
+    ``step_up``/``step_up_origin`` gate an approving decision
     on a fresh WebAuthn assertion -- see module docstring for what's
     deliberately different from org mode's own factory (no IdP fallback,
     still evadable by not enrolling). Both default to "off" so every
     existing caller of this function is unaffected; web/server.py's
     ``build_app`` is the one real (non-test) caller that passes them.
 
-    ``require_human_session`` (the self-approval plan's Phase 2) refuses an
+    ``require_human_session`` refuses an
     approving decision -- the same two results ``_STEP_UP_RESULTS``/
     ``_BATCH_STEP_UP_RESULTS`` step-up already scopes to, since denying
     leaks nothing -- taken by a session web/session_auth.py cannot
@@ -803,7 +802,7 @@ def create_app(
     enrolled still wants the second question asked.
 
     Default off, and web/server.py turns it on for exactly one kind of
-    install: a privilege-separated one -- see ADR 0003; an unseparated
+    install: a privilege-separated one -- see ADR 0003 and ADR 0062; an unseparated
     build-from-source install has no companion to attribute a session to,
     and an agent that can rewrite the credential store directly gains
     nothing from the check anyway. Same line ``StepUpConfig.
@@ -832,8 +831,8 @@ def create_app(
     def _banner_html(principal: Principal) -> str | None:
         if step_up is None:
             return None
-        # #426 Phase 4: the persistent "requirement was turned off" notice
-        # stands alongside the Phase 3 "nothing enrolled yet" one -- see
+        # The persistent "requirement was turned off" notice stands
+        # alongside the "nothing enrolled yet" one -- see
         # web/routes_settings.py's own _banner_html for the same pairing.
         parts = [
             step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(principal)),
@@ -843,7 +842,7 @@ def create_app(
         return " ".join(parts) if parts else None
 
     def _off_notice_html() -> str | None:
-        # B23 of the 4.1.0 action plan: unlike _banner_html above (a live
+        # Unlike _banner_html above (a live
         # problem, re-derived every request), this is an invitation --
         # step-up existing and being off is this install's ordinary
         # default, not a defect -- so it's rendered as a dismissible notice
@@ -855,7 +854,7 @@ def create_app(
             rows, csrf=csrf, nonce=nonce,
             any_authed=any_connector_authenticated() if any_connector_authenticated else True,
         )
-        # PF_WEBAUTHN_JS (#426 Phase 3, approval binder Phase 3): the same
+        # PF_WEBAUTHN_JS: the same
         # ceremony helpers web/routes_settings.py's own settings page
         # carries, needed here whenever Approve-selected's own 428 branch
         # has to run one -- always injected regardless of whether step-up is
@@ -899,16 +898,14 @@ def create_app(
 def build_routes(
     *, web_ui: WebApprovalUI, sessions: org_session.OrgSessionStore, step_up: StepUpConfig, issuer_url: str,
 ) -> list[Route]:
-    """Build org mode's own ``/approvals`` route list (P9) -- extended into
+    """Build org mode's own ``/approvals`` route list -- extended into
     ``_build_org_app``'s larger app the same way web/routes_security.py's
     own ``build_routes()`` already is. ``sessions`` is an
     ``OrgSessionStore``, not the local-mode ``LocalSessionStore``
     ``create_app`` above takes.
 
-    Not mounted through P8 -- the local-mode surface authenticates with one
-    shared secret and, unlike this route list, has no principal to filter
-    by, so exposing it as-is under org mode would leak every principal's
-    pending approvals to whoever holds any valid token. Every read and
+    It shares ``create_app``'s route layer and differs only in its auth
+    adapter (ADR 0033). Every read and
     write here is authorized against ``current_principal()`` (org_session's
     own ``authenticated()``), filtered through ``PendingApprovalRegistry``'s
     own principal dimension.
