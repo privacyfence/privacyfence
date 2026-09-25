@@ -54,6 +54,7 @@ Requires the `docs` extra (`pip install --require-hashes -r requirements/docs.lo
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -697,6 +698,10 @@ def write_docs_project(
         )
         (docs_dir / f"{stem}.md").write_text(front + export.markdown[stem], encoding="utf-8")
 
+    # The project icon in the docs bar, in place of the generator's default book icon.
+    (docs_dir / "assets").mkdir()
+    shutil.copyfile(REPO / "src" / "privacyfence" / "resources" / "icon_512.png", docs_dir / "assets" / "logo.png")
+
     overrides = workdir / "overrides"
     shutil.copytree(WEBSITE / "_docs" / "overrides", overrides)
     partials = overrides / "partials"
@@ -720,7 +725,7 @@ def write_docs_project(
             # Self-hosted only (guardrail 13): no Google Fonts, no GitHub API calls for repo stats.
             "font": False,
             "favicon": "/assets/icon.png",
-            "logo": "/assets/icon.png",
+            "logo": "assets/logo.png",
             "language": "en",
             "features": ["navigation.sections", "navigation.footer", "toc.follow", "search.highlight"],
         },
@@ -776,27 +781,6 @@ def render_docs(config_file: Path, out_docs: Path) -> None:
     for name in ("sitemap.xml", "sitemap.xml.gz", "404.html"):
         (built / name).unlink(missing_ok=True)
     shutil.copytree(built, out_docs)
-
-
-# ---- Links into /docs/ when it is not built ------------------------------------------------------
-
-DOCS_HREF_RE = re.compile(r'href="/docs/(?P<stem>[a-z0-9-]*?)/?(?P<fragment>#[^"]*)?"')
-
-
-def docs_links_to_github(page: str) -> str:
-    """Points a hand-written page's `/docs/...` links at the same docs on GitHub (`main`).
-
-    Used only when the build has no `/docs/` (`--no-docs`, no stable tag, or the stale-tag guard),
-    so the header's Docs link and every "read the details" link still lead somewhere instead of
-    failing the link check. A heading's anchor is kept: GitHub slugs headings the same way."""
-
-    def github(match: re.Match[str]) -> str:
-        fragment = match["fragment"] or ""
-        if not match["stem"]:
-            return f'href="{GITHUB_URL}/blob/main/docs/README.md{fragment}"'
-        return f'href="{GITHUB_URL}/blob/main/docs/{match["stem"]}.md{fragment}"'
-
-    return DOCS_HREF_RE.sub(github, page)
 
 
 # ---- Generated files ---------------------------------------------------------------------------
@@ -932,6 +916,54 @@ def check_links(site: Path) -> list[str]:
 
 # ---- The build ---------------------------------------------------------------------------------
 
+_ASSET_REF = re.compile(r'(?P<attr>\b(?:src|href)=")(?P<path>/[^"?#]+\.(?:css|js))(?=")')
+_DOCS_LINK = re.compile(r'(?P<attr>\bhref=")/docs/(?P<stem>[^"#?/]*)/?(?P<frag>#[^"]*)?"')
+
+
+def fingerprint_assets(site: Path) -> None:
+    """Appends `?v=<content hash>` to every root-relative .css/.js reference in the built HTML.
+
+    GitHub Pages and the Cloudflare proxy cache these files for a while under a fixed URL, so a
+    deploy that changes a page and its script together could otherwise serve the new HTML with
+    the old script: /download/ once showed every card twice, because a cached pre-Wave-3
+    download.js appended the live cards to the build's pre-rendered ones instead of replacing
+    them. A content hash changes the URL exactly when the file changes."""
+    hashes: dict[str, str] = {}
+
+    def versioned(match: re.Match[str]) -> str:
+        path = match["path"]
+        if path not in hashes:
+            file = site / path.lstrip("/")
+            if not file.is_file():
+                return match[0]
+            hashes[path] = hashlib.sha256(file.read_bytes()).hexdigest()[:12]
+        return f"{match['attr']}{path}?v={hashes[path]}"
+
+    for page in site.rglob("*.html"):
+        text = page.read_text(encoding="utf-8")
+        updated = _ASSET_REF.sub(versioned, text)
+        if updated != text:
+            page.write_text(updated, encoding="utf-8")
+
+
+def point_docs_links_at_github(site: Path, ref: str) -> None:
+    """When /docs/ is not built (stale tag, --no-docs), links to it from the marketing pages go to
+    the docs on GitHub at `ref` instead, so the site has no dead link and the link walker passes.
+    The caller passes `main`, as llms.txt does: a stale tag may not have the page linked at all."""
+
+    def github(match: re.Match[str]) -> str:
+        stem, frag = match["stem"], match["frag"] or ""
+        target = f"{GITHUB_URL}/blob/{ref}/docs/{stem}.md{frag}" if stem else f"{GITHUB_URL}/tree/{ref}/docs"
+        return f'{match["attr"]}{target}"'
+
+    for page in site.rglob("*.html"):
+        if page.is_relative_to(site / "docs"):
+            continue
+        text = page.read_text(encoding="utf-8")
+        updated = _DOCS_LINK.sub(github, text)
+        if updated != text:
+            page.write_text(updated, encoding="utf-8")
+
 
 @dataclass
 class BuildReport:
@@ -1030,11 +1062,10 @@ def build(
             docs_state = "published"
 
     docs_pages = ["/docs/", *(f"/docs/{stem}/" for stem in export.stems)] if export and render else []
-    pages = list(PAGES)
     if not docs_pages:
-        for page_source in PAGES.values():
-            target = out / page_source
-            target.write_text(docs_links_to_github(target.read_text(encoding="utf-8")), encoding="utf-8")
+        point_docs_links_at_github(out, "main")
+    fingerprint_assets(out)
+    pages = list(PAGES)
     (out / "sitemap.xml").write_text(sitemap_xml(pages + docs_pages), encoding="utf-8")
     (out / "robots.txt").write_text(ROBOTS_TXT, encoding="utf-8")
     (out / "llms.txt").write_text(llms_txt(export, version or docs_version), encoding="utf-8")

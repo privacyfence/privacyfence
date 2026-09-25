@@ -70,9 +70,12 @@ def test_the_stale_tag_guard_skips_docs_for_a_tag_without_the_published_set(tmp_
     llms = (site / "llms.txt").read_text(encoding="utf-8")
     assert "https://github.com/privacyfence/privacyfence/tree/main/docs" in llms
     assert "/docs/" not in (site / "sitemap.xml").read_text(encoding="utf-8")
-    # The header's Docs link and the pages' links into /docs/ lead to GitHub instead.
+    # The header's Docs link and every hand-written page's links into /docs/ go to GitHub instead.
     for source in build_site.PAGES.values():
         assert 'href="/docs/' not in (site / source).read_text(encoding="utf-8"), source
+    home = (site / "index.html").read_text(encoding="utf-8")
+    assert 'href="https://github.com/privacyfence/privacyfence/tree/main/docs"' in home
+    assert 'href="https://github.com/privacyfence/privacyfence/blob/main/docs/tools-reference.md"' in home
 
 
 def test_docs_source_at_a_ref_reads_that_ref():
@@ -139,20 +142,6 @@ def test_clients_requirement_sentence():
     assert build_site.clients_requirement() == (
         "An MCP-compatible AI client, such as Claude Desktop, Claude Code or claude.ai (organization deployment)"
     )
-
-
-def test_docs_links_fall_back_to_github_without_docs():
-    page = (
-        '<a href="/docs/">Docs</a> <a href="/docs/tools-reference/#gmail">Gmail</a>'
-        ' <a href="/docs/getting-started/">Start</a> <a href="/download/">Download</a>'
-    )
-    out = build_site.docs_links_to_github(page)
-    blob = "https://github.com/privacyfence/privacyfence/blob/main/docs"
-    assert f'href="{blob}/README.md"' in out
-    assert f'href="{blob}/tools-reference.md#gmail"' in out
-    assert f'href="{blob}/getting-started.md"' in out
-    assert 'href="/download/"' in out
-    assert 'href="/docs/' not in out
 
 
 def test_every_page_gets_the_same_header_and_footer():
@@ -400,3 +389,52 @@ def test_the_build_refuses_a_manifest_that_publishes_a_private_file(monkeypatch)
     monkeypatch.setattr(build_site, "REPOSITORY_ONLY", frozenset({"assets/og-source.html"}))
     with pytest.raises(build_site.BuildError, match="repository-only"):
         build_site.check_manifest()
+
+
+def test_assets_are_versioned_by_content(tmp_path):
+    # A deploy must never pair new HTML with a cached old script: /download/ once showed every
+    # card twice when a cached download.js appended to the pre-rendered cards.
+    site = tmp_path / "_site"
+    (site / "sub").mkdir(parents=True)
+    (site / "a.js").write_text("one", encoding="utf-8")
+    (site / "b.css").write_text("two", encoding="utf-8")
+    (site / "sub" / "index.html").write_text(
+        '<link rel="stylesheet" href="/b.css"><script src="/a.js"></script>'
+        '<script src="/missing.js"></script><img src="/a.js.png"><a href="https://x.test/c.js">x</a>',
+        encoding="utf-8",
+    )
+    build_site.fingerprint_assets(site)
+    page = (site / "sub" / "index.html").read_text(encoding="utf-8")
+    one, two = (build_site.hashlib.sha256(v).hexdigest()[:12] for v in (b"one", b"two"))
+    assert f'href="/b.css?v={two}"' in page
+    assert f'src="/a.js?v={one}"' in page
+    assert 'src="/missing.js"' in page
+    assert 'src="/a.js.png"' in page
+    assert 'href="https://x.test/c.js"' in page
+
+    (site / "a.js").write_text("changed", encoding="utf-8")
+    (site / "sub" / "index.html").write_text('<script src="/a.js"></script>', encoding="utf-8")
+    build_site.fingerprint_assets(site)
+    assert one not in (site / "sub" / "index.html").read_text(encoding="utf-8")
+
+
+def test_docs_links_fall_back_to_github_when_docs_are_not_built(tmp_path):
+    site = tmp_path / "_site"
+    (site / "docs").mkdir(parents=True)
+    (site / "index.html").write_text(
+        '<a href="/docs/">d</a><a href="/docs/getting-started/#first">g</a><a href="/download/">x</a>',
+        encoding="utf-8",
+    )
+    (site / "docs" / "index.html").write_text('<a href="/docs/">self</a>', encoding="utf-8")
+    build_site.point_docs_links_at_github(site, "main")
+    home = (site / "index.html").read_text(encoding="utf-8")
+    base = "https://github.com/privacyfence/privacyfence"
+    assert f'href="{base}/tree/main/docs"' in home
+    assert f'href="{base}/blob/main/docs/getting-started.md#first"' in home
+    assert 'href="/download/"' in home
+    assert (site / "docs" / "index.html").read_text(encoding="utf-8") == '<a href="/docs/">self</a>'
+
+
+def test_the_header_links_the_docs():
+    header = (WEBSITE / "_partials" / "header.html").read_text(encoding="utf-8")
+    assert header.count('<a href="/docs/">Docs</a>') == 2  # .nav-links and the <details> menu
