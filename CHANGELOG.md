@@ -84,6 +84,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   approval card and the PII check used to see only the first 2,000 characters, while approving
   released up to 100 KB of text, so an IBAN or ID number further into a document raised no
   warning.
+- **Organization mode forwards each person's audit entries too.** With audit forwarding enabled,
+  only the install's own log reached syslog or the HTTPS endpoint. The approve and deny decisions
+  in each person's log were never sent, and they carried no `deployment_id`. They now reach the
+  same destination with the install's `deployment_id`.
 
 ## [4.5.0] — 2026-09-25
 

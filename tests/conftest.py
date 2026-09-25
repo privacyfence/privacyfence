@@ -45,6 +45,7 @@ from tests.diagnostics import capture_failure_diagnostics, suite_name_for
 def _reset() -> None:
     auto_accept._REGISTRY.reset()
     audit_log._REGISTRY.reset()
+    audit_log._INSTALL_SETTINGS = audit_log._InstallAuditSettings()
     approval_ui._INSTANCE = None
     pii_detector._REGISTRY.reset()
     privacy_filter._REGISTRY.reset()

@@ -744,11 +744,10 @@ are removed and the file is rewritten.
   `Connector registry is at capacity`, `registered-client limit`, and failures to reach the identity
   provider.
 - **Disk:** the data directory grows with audit logs and staged downloads.
-- **Audit forwarding:** with `--enable-audit-forwarding`, the install's audit log
-  (`authority/logs/audit/`) is also sent to syslog or your HTTPS endpoint. The local log stays the
-  authoritative record, with a hash chain over its entries. Each person's decisions are recorded in
-  their own log under `users/<principal>/logs/audit/`; check that your collector receives the
-  entries you need, and collect those directories as well if it does not.
+- **Audit forwarding:** with `--enable-audit-forwarding`, every audit entry is also sent to syslog
+  or your HTTPS endpoint: the install's own log (`authority/logs/audit/`) and each person's
+  (`users/<principal>/logs/audit/`), all carrying the install's `deployment_id`. The local logs
+  stay the authoritative record, each with a hash chain over its entries.
 
 ### Key and secret rotation
 
