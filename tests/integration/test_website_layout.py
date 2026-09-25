@@ -15,7 +15,9 @@ the measurable rules from the header comment of `website/styles.css`:
   buttons and footer links.
 
 It also saves a full-page screenshot of every page at every width under
-test-results/website-layout/, which tests.yml uploads for review.
+test-results/website-layout/, which tests.yml uploads for review. The screenshot is a review
+artifact, not an assertion: when Chromium refuses the capture it is retried once, then taken of the
+viewport only, then skipped with a warning -- it never fails the layout test (see _save_screenshot).
 
 External requests are stubbed: the download Worker answers with a fixed manifest (so
 /download/'s cards render), and nothing else leaves the machine. Same skip posture as
@@ -25,6 +27,7 @@ test_download_page.py: skipped when playwright or its Chromium build is missing.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import pytest
@@ -83,6 +86,12 @@ def _stub_network(page, site_url):
             route.continue_()
         elif url == f"{API_ORIGIN}/api/releases/stable":
             route.fulfill(status=200, content_type="application/json", body=json.dumps(STABLE_MANIFEST))
+        elif url == f"{API_ORIGIN}/api/releases/history":
+            # /releases/'s full history: a dozen rows, so the longer table is what gets measured.
+            releases = [
+                {**STABLE_MANIFEST, "version": f"4.{minor}.{patch}"} for minor in range(6, 2, -1) for patch in (2, 1, 0)
+            ]
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"releases": releases}))
         elif url == f"{API_ORIGIN}/api/releases":
             # /releases/'s table, filled so its scroll container is what gets measured.
             body = {"channels": {"stable": STABLE_MANIFEST, "alpha": None, "beta": None, "rc": None}}
@@ -169,17 +178,43 @@ def _slug(path: str) -> str:
     return path.strip("/").replace("/", "_") or "home"
 
 
+def _save_screenshot(page, target: Path) -> str | None:
+    """Save the review screenshot; return "full", "viewport", or None if none could be taken.
+
+    Chromium intermittently answers a full-page capture with "Protocol error
+    (Page.captureScreenshot): Unable to capture screenshot" on a page it captured fine at every
+    other width (PR #732's website-build run failed on /security/ at 1024 px this way, with every
+    layout assertion unreached). The screenshot only feeds the uploaded review artifact, so a
+    refused capture must not fail the layout checks that follow it: retry once, fall back to the
+    viewport, and warn rather than raise if even that is refused.
+    """
+    for attempt in range(2):
+        try:
+            page.screenshot(path=str(target), full_page=True)
+            return "full"
+        except PlaywrightError:
+            if attempt == 0:
+                page.wait_for_timeout(250)
+    try:
+        page.screenshot(path=str(target))
+    except PlaywrightError as exc:
+        warnings.warn(f"no layout screenshot for {target.name}: {exc}", stacklevel=2)
+        return None
+    warnings.warn(f"{target.name} is a viewport-only screenshot: the full-page capture was refused twice", stacklevel=2)
+    return "viewport"
+
+
 @pytest.mark.parametrize("width", WIDTHS)
 @pytest.mark.parametrize("path", PAGES)
 def test_page_layout(browser, site_url, path, width):
     context, page = _open(browser, site_url, path, width)
     try:
         # The review screenshot first, so a failing page still leaves one behind. Lazy images
-        # are made eager so a full-page capture shows them.
+        # are made eager so a full-page capture shows them. Best effort: see _save_screenshot.
         page.evaluate("() => document.querySelectorAll('img[loading=lazy]').forEach((i) => { i.loading = 'eager'; })")
         page.wait_for_load_state("networkidle")
         SCREENSHOTS.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(SCREENSHOTS / f"{_slug(path)}-{width}.png"), full_page=True)
+        _save_screenshot(page, SCREENSHOTS / f"{_slug(path)}-{width}.png")
 
         scroll_width, inner_width = page.evaluate("() => [document.documentElement.scrollWidth, window.innerWidth]")
         assert scroll_width <= inner_width, f"{path} scrolls sideways at {width}px ({scroll_width} > {inner_width})"
@@ -280,3 +315,41 @@ def test_screenshots_directory_is_under_test_results():
     workflow = (REPO / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     assert "test-results/website-layout/" in workflow
     assert Path(SCREENSHOTS).relative_to(REPO).as_posix() == "test-results/website-layout"
+
+
+class _RefusingPage:
+    """Stands in for a Playwright page whose first `refusals` screenshot calls are refused."""
+
+    def __init__(self, refusals: int):
+        self.refusals = refusals
+        self.calls: list[bool] = []  # full_page flag of each screenshot call
+
+    def screenshot(self, path: str, full_page: bool = False) -> None:
+        self.calls.append(full_page)
+        if len(self.calls) <= self.refusals:
+            raise PlaywrightError("Protocol error (Page.captureScreenshot): Unable to capture screenshot")
+        Path(path).write_bytes(b"png")
+
+    def wait_for_timeout(self, timeout: float) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("refusals", "result", "calls"),
+    [
+        (0, "full", [True]),
+        (1, "full", [True, True]),
+        (2, "viewport", [True, True, False]),
+        (3, None, [True, True, False]),
+    ],
+)
+def test_a_refused_screenshot_never_fails_the_layout_test(tmp_path, refusals, result, calls):
+    page = _RefusingPage(refusals)
+    target = tmp_path / "security-1024.png"
+    if result == "full":
+        assert _save_screenshot(page, target) == result
+    else:
+        with pytest.warns(UserWarning, match="security-1024.png"):
+            assert _save_screenshot(page, target) == result
+    assert page.calls == calls
+    assert target.exists() == (result is not None)

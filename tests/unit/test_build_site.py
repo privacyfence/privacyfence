@@ -7,6 +7,7 @@ guard, partials, the /download/ pre-render, how doc links are rewritten, and the
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import subprocess
@@ -279,6 +280,28 @@ RELEASES = {
 }
 
 
+# What /api/releases/history returns: every published version on every channel, newest first.
+HISTORY = {
+    "releases": [
+        RELEASES["channels"]["alpha"],
+        RELEASES["channels"]["stable"],
+        {
+            "version": "4.6.1rc1",
+            "channel": "rc",
+            "published_at": "2026-09-22T08:00:00Z",
+            "artifacts": [_installer("macos-arm64", "PrivacyFence-4.6.1rc1.dmg")],
+        },
+        {
+            "version": "4.6.0",
+            "channel": "stable",
+            "published_at": "2026-09-20T08:00:00Z",
+            "artifacts": [_installer("linux-x64", "privacyfence_4.6.0_amd64.deb")],
+        },
+        RELEASES["channels"]["rc"],
+    ]
+}
+
+
 def test_release_version_order():
     order = ["4.10.0", "4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.1b2", "4.6.1b1", "4.6.1a9", "4.0.0rc3"]
     assert sorted(order, key=build_site.release_version_key, reverse=True) == order
@@ -303,6 +326,32 @@ def test_a_channel_without_installers_or_a_parseable_version_is_left_out():
     }
     assert [m["version"] for m in build_site.published_releases(data)] == ["4.7.0a1"]
     assert build_site.published_releases({"channels": {}}) == []
+
+
+def test_published_releases_take_the_whole_history():
+    releases = build_site.published_releases(HISTORY)
+    assert [m["version"] for m in releases] == ["4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.0", "4.0.0rc3"]
+    assert [a["id"] for a in releases[-1]["artifacts"]] == ["linux-x64"]  # the sbom is dropped
+    # Order comes from the versions, not from the route; unknown channels and junk are left out.
+    shuffled = {
+        "releases": [
+            *reversed(HISTORY["releases"]),
+            {"version": "4.9.0", "channel": "nightly", "artifacts": [_installer("linux-x64", "x.deb")]},
+            {"version": "4.8.0.dev1", "channel": "stable", "artifacts": [_installer("linux-x64", "x.deb")]},
+            "not a manifest",
+        ]
+    }
+    assert build_site.published_releases(shuffled) == releases
+    assert build_site.published_releases({"releases": []}) == []
+
+
+def test_history_rows_mark_only_the_newest_stable_current_and_older_prereleases_superseded():
+    rows = build_site.render_release_rows(build_site.published_releases(HISTORY)).split("\n")
+    by_version = {re.search(r'data-version="([^"]+)"', row)[1]: row for row in rows}
+    assert list(by_version) == ["4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.0", "4.0.0rc3"]
+    assert [v for v, row in by_version.items() if "download-badge" in row] == ["4.6.1"]
+    assert [v for v, row in by_version.items() if "Superseded by 4.6.1" in row] == ["4.6.1rc1", "4.0.0rc3"]
+    assert 'href="https://downloads.privacyfence.eu/download/version/4.6.0/linux-x64"' in by_version["4.6.0"]
 
 
 def test_release_rows_link_the_worker_by_exact_version():
@@ -339,6 +388,13 @@ def test_releases_prerender_replaces_the_loading_row():
         build_site.prerender_releases("<html></html>", RELEASES)
 
 
+def test_the_build_prerenders_the_history_when_given_it(tmp_path):
+    report = build_site.build(tmp_path / "_site", docs_ref=None, manifest=MANIFEST, releases=HISTORY)
+    assert report.releases == ["4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.0", "4.0.0rc3"]
+    page = (tmp_path / "_site" / "releases" / "index.html").read_text(encoding="utf-8")
+    assert "download/version/4.6.0/linux-x64" in page
+
+
 def test_the_build_prerenders_releases_when_given_the_list(tmp_path):
     report = build_site.build(tmp_path / "_site", docs_ref=None, manifest=MANIFEST, releases=RELEASES)
     assert report.releases == ["4.7.0a2", "4.6.1", "4.0.0rc3"]
@@ -353,6 +409,51 @@ def test_an_unreachable_worker_leaves_releases_to_the_browser(monkeypatch, capsy
     monkeypatch.setattr(build_site.urllib.request, "urlopen", fail)
     assert build_site.fetch_all_releases() is None
     assert "could not read the release list" in capsys.readouterr().err
+
+
+def _stub_worker(monkeypatch, responses):
+    """urlopen answering each URL from `responses`: a dict/list is the JSON body, an exception is
+    raised. Returns the URLs asked for, in order."""
+    asked = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(request, timeout):
+        asked.append(request.full_url)
+        answer = responses[request.full_url]
+        if isinstance(answer, Exception):
+            raise answer
+        return Response(json.dumps(answer).encode())
+
+    monkeypatch.setattr(build_site.urllib.request, "urlopen", urlopen)
+    return asked
+
+
+def test_the_build_reads_the_history_first(monkeypatch):
+    asked = _stub_worker(monkeypatch, {build_site.HISTORY_API: HISTORY, build_site.ALL_RELEASES_API: RELEASES})
+    assert build_site.fetch_all_releases() == HISTORY
+    assert asked == [build_site.HISTORY_API]
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        urllib.error.HTTPError(build_site.HISTORY_API, 404, "Not Found", {}, None),
+        urllib.error.URLError("reset"),
+        {"error": "no such API route"},
+    ],
+    ids=["route-missing", "unreachable", "unexpected-body"],
+)
+def test_a_worker_without_the_history_falls_back_to_the_newest_per_channel(monkeypatch, capsys, history):
+    asked = _stub_worker(monkeypatch, {build_site.HISTORY_API: history, build_site.ALL_RELEASES_API: RELEASES})
+    assert build_site.fetch_all_releases() == RELEASES
+    assert asked == [build_site.HISTORY_API, build_site.ALL_RELEASES_API]
+    assert "falls back to the newest release per channel" in capsys.readouterr().err
 
 
 def test_releases_js_mirrors_the_build():

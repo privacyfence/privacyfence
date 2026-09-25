@@ -26,9 +26,14 @@ authority/
 # staging directories -- same "dev-mode data_dir() is the repo root"
 # reasoning as authority/ above. Only ever holds encrypted, short-lived
 # ciphertext (see either module's own docstring), but there's no reason
-# for it to sit in the working tree either.
-downloads/
-uploads/
+# for it to sit in the working tree either. Anchored to the two places
+# paths.py puts them (the local principal's data_dir() root, and
+# users/<id>/ for every other principal), so the pattern does not also
+# swallow cloudflare/downloads/, the download Worker's source.
+/downloads/
+/uploads/
+/users/*/downloads/
+/users/*/uploads/
 
 # Local runtime caches (dev-mode data_dir() is the repo root -- see paths.py)
 resource_name_cache.json

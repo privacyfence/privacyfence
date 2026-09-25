@@ -1,10 +1,12 @@
 """Static checks on /releases/, the release history page, as scripts/build_site.py builds it.
 
 The page's rows exist only once the build (render_release_rows, tests/unit/test_build_site.py) or
-releases.js (tests/integration/test_releases_page.py) has read the Worker's /api/releases. What
-the page's own HTML and script must carry is checked here: it is deployed and in the sitemap,
-/download/ and the footer link it while the header nav does not, it offers no download that
-bypasses the download Worker, and it presents installers only.
+releases.js (tests/integration/test_releases_page.py) has read the Worker's
+/api/releases/history, or /api/releases when that route is unavailable. What the page's own HTML
+and script must carry is checked here: it is deployed and in the sitemap, /download/ and the
+footer link it while the header nav does not, it reads the history with the per-channel list as
+its fallback, it offers no download that bypasses the download Worker, and it presents installers
+only.
 """
 
 from __future__ import annotations
@@ -52,6 +54,11 @@ def test_the_script_downloads_only_through_the_worker():
     assert "`${API}/download/version/" in SCRIPT
     assert "r2.dev" not in SCRIPT and "r2.cloudflarestorage" not in SCRIPT
     assert re.findall(r"`\$\{REPO\}([^`$]*)", SCRIPT) == ["/releases/tag/v"]
+
+
+def test_the_script_reads_the_history_and_falls_back_to_the_newest_per_channel():
+    # The Worker and the site deploy independently: the history route may not exist yet.
+    assert re.findall(r"load\('([^']+)'\)", SCRIPT) == ["/api/releases/history", "/api/releases"]
 
 
 def test_the_script_presents_installers_only():

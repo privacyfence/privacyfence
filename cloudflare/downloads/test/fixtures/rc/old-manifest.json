@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "version": "4.3.0rc1",
+  "channel": "rc",
+  "published_at": "2026-08-20T12:00:00Z",
+  "artifacts": [
+    {
+      "id": "macos-arm64",
+      "kind": "installer",
+      "platform": "macos",
+      "architecture": "arm64",
+      "filename": "PrivacyFence-4.3.0rc1.dmg",
+      "key": "releases/rc/4.3.0rc1/PrivacyFence-4.3.0rc1.dmg",
+      "size": 39,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "id": "sbom-python",
+      "kind": "sbom",
+      "platform": "any",
+      "architecture": "any",
+      "filename": "sbom-python.cdx.json",
+      "key": "releases/rc/4.3.0rc1/sbom-python.cdx.json",
+      "size": 2,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

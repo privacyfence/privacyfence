@@ -24,9 +24,10 @@ What it does, in order:
    working download links without JavaScript; `download.js` still refreshes it in the browser.
    If the Worker cannot be reached the build warns and the page keeps its loading row, exactly as
    before. The version also goes into the JSON-LD `softwareVersion` of `/` and `/download/`.
-   **`/releases/`** is pre-rendered the same way from `/api/releases` (the newest release on
-   every channel): one table row per published release, installers only, and `releases.js`
-   refreshes it in the browser. Without the Worker it keeps its loading row.
+   **`/releases/`** is pre-rendered the same way from `/api/releases/history` (every published
+   version on every channel), falling back to `/api/releases` (the newest release per channel)
+   when that route is missing or failing: one table row per published release, installers only,
+   and `releases.js` refreshes it in the browser. Without the Worker it keeps its loading row.
 3. **`/docs/` from the latest stable release.** The docs are the ones at the newest stable tag
    (`vX.Y.Z`, the same channel rule as `scripts/r2_release.py`), not `main`: the site documents
    the version people can download. The published set, its order and its sections come from
@@ -86,6 +87,7 @@ SITE_URL = "https://privacyfence.eu"
 GITHUB_URL = "https://github.com/privacyfence/privacyfence"
 RELEASES_API = "https://downloads.privacyfence.eu/api/releases/stable"
 ALL_RELEASES_API = "https://downloads.privacyfence.eu/api/releases"
+HISTORY_API = "https://downloads.privacyfence.eu/api/releases/history"
 DOWNLOAD_ORIGIN = "https://downloads.privacyfence.eu"
 
 # ---- The build manifest ----------------------------------------------------------------------
@@ -467,13 +469,29 @@ def release_version_key(version: str) -> tuple[int, int, int, int, int] | None:
     return int(major), int(minor), int(patch), _STAGE_RANK[stage] if stage else 3, int(number or 0)
 
 
-def fetch_all_releases(url: str = ALL_RELEASES_API, timeout: float = 15) -> dict | None:
-    """`/api/releases` from the download Worker (`{"channels": {channel: manifest or null}}`), or
-    None (with a warning) if it cannot be read. /releases/ then loads it in the browser."""
+def _read_json(url: str, timeout: float) -> object:
     request = urllib.request.Request(url, headers={"User-Agent": "privacyfence-site-build"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 -- fixed https URL
+        return json.load(response)
+
+
+def fetch_all_releases(
+    url: str = HISTORY_API, fallback_url: str = ALL_RELEASES_API, timeout: float = 15
+) -> dict | None:
+    """The release list from the download Worker: `/api/releases/history`
+    (`{"releases": [manifest, ...]}`, every published version), or, when that route is missing or
+    failing, `/api/releases` (`{"channels": {channel: manifest or null}}`, the newest per channel).
+    The Worker deploys independently of the site, so neither may assume the other has landed.
+    None (with a warning) if neither can be read; /releases/ then loads it in the browser."""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 -- fixed https URL
-            data = json.load(response)
+        data = _read_json(url, timeout)
+        if isinstance(data, dict) and isinstance(data.get("releases"), list):
+            return data
+        warn("the release history has no release list; /releases/ falls back to the newest release per channel")
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        warn(f"could not read the release history ({exc}); /releases/ falls back to the newest release per channel")
+    try:
+        data = _read_json(fallback_url, timeout)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         warn(f"could not read the release list ({exc}); /releases/ is built without pre-rendered rows")
         return None
@@ -483,21 +501,32 @@ def fetch_all_releases(url: str = ALL_RELEASES_API, timeout: float = 15) -> dict
     return data
 
 
+def _listed_manifests(data: dict) -> list[tuple[str, object]]:
+    """(channel, manifest) pairs from either response shape `fetch_all_releases` returns."""
+    if isinstance(data.get("releases"), list):
+        return [(m.get("channel", ""), m) for m in data["releases"] if isinstance(m, dict)]
+    channels = data.get("channels") or {}
+    return [(channel, channels.get(channel)) for channel in CHANNEL_NAMES]
+
+
 def published_releases(data: dict) -> list[dict]:
-    """The manifests /releases/ lists, newest version first: one per channel that has a published
-    release with at least one installer. Only installers are kept (the manifest lists nothing
-    else, and the page must never present anything else as a download); a manifest whose version
-    does not parse is left out, as download.js does."""
+    """The manifests /releases/ lists, newest version first: every version in the history, or one
+    per channel from `/api/releases`, that has a published release with at least one installer.
+    Only installers are kept (the manifest lists nothing else, and the page must never present
+    anything else as a download); a manifest whose version does not parse, or whose channel the
+    page does not know, is left out, as download.js does."""
     releases = []
-    for channel in CHANNEL_NAMES:
-        manifest = (data.get("channels") or {}).get(channel)
+    for channel, manifest in _listed_manifests(data):
         if not isinstance(manifest, dict) or release_version_key(manifest.get("version", "")) is None:
+            continue
+        channel = manifest.get("channel") or channel
+        if channel not in CHANNEL_NAMES:
             continue
         installers = [
             a for a in manifest.get("artifacts") or [] if isinstance(a, dict) and a.get("kind") == "installer"
         ]
         if installers:
-            releases.append({**manifest, "channel": manifest.get("channel") or channel, "artifacts": installers})
+            releases.append({**manifest, "channel": channel, "artifacts": installers})
     return sorted(releases, key=lambda m: release_version_key(m["version"]), reverse=True)
 
 
@@ -508,7 +537,7 @@ def render_release_rows(releases: list[dict]) -> str:
     rows = []
     for manifest in releases:
         version, channel = str(manifest["version"]), str(manifest["channel"])
-        parts = [f'<tr data-channel="{e(channel)}">', f'<th scope="row">{e(version)}']
+        parts = [f'<tr data-channel="{e(channel)}" data-version="{e(version)}">', f'<th scope="row">{e(version)}']
         if manifest is stable:
             parts.append(' <span class="download-badge">Current</span>')
         parts.append("</th>")
@@ -1129,8 +1158,8 @@ def build(
 ) -> BuildReport:
     """Builds the whole site into `out` (replacing it). `docs_ref` is a git ref, "latest" (the
     newest stable tag), "worktree", or None for no docs. `manifest` and `releases` are the Worker's
-    `/api/releases/stable` and `/api/releases` responses; when not given they are fetched, unless
-    `fetch_manifest` is false."""
+    `/api/releases/stable` response and its release list (`fetch_all_releases`); when not given
+    they are fetched, unless `fetch_manifest` is false."""
     check_manifest()
     if out.exists():
         shutil.rmtree(out)
