@@ -1,15 +1,15 @@
-"""Drift detection between the docs privacy matrix and the actual code.
+"""Drift detection between the published tools reference and the actual code.
 
-The docs document, per tool, whether it's a read or a write and what
-gate it goes through -- this is PrivacyFence's public privacy promise.
-Nothing enforces that the table stays in sync with the connectors as they
-evolve, so this test parses the docs tables and cross-checks them
-against each connector's real ToolSpec.read_only flag, and against
-auto_accept.TOOL_TO_GATE (the static "auto"/"review"/"popup" registry a
-preflight caller relies on -- see privacyfence_check_policy). It caught two
-real gaps when written: gmail_reply_draft/gmail_reply_all_draft and
-drive_upload_file existed in code but were undocumented in the README (the
-privacy matrix has since moved to docs/TECHNICAL_REFERENCE.md).
+docs/tools-reference.md documents, per tool, whether it's a read or a write and what gate it goes
+through -- PrivacyFence's public privacy promise. It is generated
+(scripts/generate_tools_reference.py), and tests/unit/test_docs_tools_reference.py checks it is not
+stale. This module checks the same promise from the other side, independently of the generator:
+it parses the doc's rows and cross-checks them against each connector's real ToolSpec.read_only
+flag, against auto_accept.TOOL_TO_GATE (the static "auto"/"review"/"popup" table a preflight caller
+relies on -- see privacyfence_check_policy), and against the gate= each connectors/*.py call site
+actually passes to gated_call(). The connector list here is written out by hand, and a test checks
+it matches the connector classes the generator discovers, so a connector the generator missed (or
+one this list missed) fails here rather than silently dropping out of the doc.
 """
 from __future__ import annotations
 
@@ -39,13 +39,13 @@ CONNECTOR_CLASSES = [
     TasksConnector, TelegramConnector, AppsScriptConnector,
 ]
 
-README_PATH = Path(__file__).resolve().parents[3] / "docs" / "TECHNICAL_REFERENCE.md"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DOC_PATH = REPO_ROOT / "docs" / "tools-reference.md"
 
-# Matches only rows of the 5-column privacy-matrix tables
-# (`Tool | Dir | Gate | Cowork preview | Details popup`), not the differently-shaped
-# tables in the "## Auto-accept" section (scope catalogue, conditions, verbs) further
-# down the file.
-_ROW_RE = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|\s*(read|write)\s*\|\s*(auto|review|popup)\s*\|", re.MULTILINE)
+# Matches the per-connector tool rows (`| `tool` | read | `gate` | description |`), not the summary
+# table's rows, whose first cell is a link rather than a code span.
+_ROW_RE = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|\s*(read|write)\s*\|\s*`(auto|review|popup)`\s*\|", re.MULTILINE)
+
 
 # Matches a tool="..." kwarg followed (non-greedily, across the rest of that
 # same gated_call(...) invocation) by its gate="..." kwarg -- the two are
@@ -55,12 +55,9 @@ _ROW_RE = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|\s*(read|write)\s*\|\s*(auto|rev
 _SRC_TOOL_GATE_RE = re.compile(r'tool="(?P<tool>\w+)",.*?gate="(?P<gate>review|popup)"', re.DOTALL)
 
 
-def _readme_privacy_matrix() -> dict[str, tuple[str, str]]:
-    text = README_PATH.read_text(encoding="utf-8")
-    start = text.index("## Connectors & privacy matrix")
-    end = text.index("## Auto-accept")
-    section = text[start:end]
-    return {tool: (direction, gate) for tool, direction, gate in _ROW_RE.findall(section)}
+def _doc_privacy_matrix() -> dict[str, tuple[str, str]]:
+    text = DOC_PATH.read_text(encoding="utf-8")
+    return {tool: (direction, gate) for tool, direction, gate in _ROW_RE.findall(text)}
 
 
 def _all_code_tools() -> dict[str, bool]:
@@ -89,9 +86,9 @@ def _source_declared_gates() -> dict[str, str]:
 
 
 @pytest.fixture(scope="module")
-def readme_matrix():
-    matrix = _readme_privacy_matrix()
-    assert len(matrix) > 30, "README parser found suspiciously few rows -- check _ROW_RE / section markers"
+def doc_matrix():
+    matrix = _doc_privacy_matrix()
+    assert len(matrix) > 30, "doc parser found suspiciously few rows -- check _ROW_RE"
     return matrix
 
 
@@ -100,25 +97,25 @@ def code_tools():
     return _all_code_tools()
 
 
-def test_every_code_tool_is_documented_in_readme(readme_matrix, code_tools):
-    undocumented = sorted(set(code_tools) - set(readme_matrix))
+def test_every_code_tool_is_documented(doc_matrix, code_tools):
+    undocumented = sorted(set(code_tools) - set(doc_matrix))
     assert undocumented == [], (
-        f"Tools exist in connector code but are missing from docs/TECHNICAL_REFERENCE.md's privacy matrix: {undocumented}"
+        f"Tools exist in connector code but are missing from docs/tools-reference.md: {undocumented}"
     )
 
 
-def test_every_readme_tool_still_exists_in_code(readme_matrix, code_tools):
-    stale = sorted(set(readme_matrix) - set(code_tools))
+def test_every_documented_tool_still_exists_in_code(doc_matrix, code_tools):
+    stale = sorted(set(doc_matrix) - set(code_tools))
     assert stale == [], (
-        f"docs/TECHNICAL_REFERENCE.md documents tools that no longer exist in any connector: {stale}"
+        f"docs/tools-reference.md documents tools that no longer exist in any connector: {stale}"
     )
 
 
 @pytest.mark.parametrize("tool", sorted(_all_code_tools()))
-def test_read_only_flag_matches_documented_direction(tool, readme_matrix, code_tools):
-    if tool not in readme_matrix:
-        pytest.skip(f"{tool} undocumented in docs (see test_every_code_tool_is_documented_in_readme)")
-    direction, _gate = readme_matrix[tool]
+def test_read_only_flag_matches_documented_direction(tool, doc_matrix, code_tools):
+    if tool not in doc_matrix:
+        pytest.skip(f"{tool} undocumented in docs (see test_every_code_tool_is_documented)")
+    direction, _gate = doc_matrix[tool]
     expected_read_only = direction == "read"
     assert code_tools[tool] == expected_read_only, (
         f"{tool}: docs say dir={direction!r} (expects read_only={expected_read_only}) "
@@ -141,10 +138,10 @@ def test_tool_to_gate_has_no_stale_entries(code_tools):
 
 
 @pytest.mark.parametrize("tool", sorted(TOOL_TO_GATE))
-def test_tool_to_gate_matches_documented_gate(tool, readme_matrix):
-    if tool not in readme_matrix:
-        pytest.skip(f"{tool} undocumented in docs (see test_every_code_tool_is_documented_in_readme)")
-    _direction, documented_gate = readme_matrix[tool]
+def test_tool_to_gate_matches_documented_gate(tool, doc_matrix):
+    if tool not in doc_matrix:
+        pytest.skip(f"{tool} undocumented in docs (see test_every_code_tool_is_documented)")
+    _direction, documented_gate = doc_matrix[tool]
     assert TOOL_TO_GATE[tool] == documented_gate, (
         f"{tool}: docs say gate={documented_gate!r} but "
         f"auto_accept.TOOL_TO_GATE[{tool!r}]={TOOL_TO_GATE[tool]!r}"
@@ -161,3 +158,15 @@ def test_tool_to_gate_matches_gated_call_source(tool, code_tools):
         f"{tool}: connectors/*.py passes gate={expected!r} to gated_call() (or never calls it, "
         f"implying \"auto\") but auto_accept.TOOL_TO_GATE[{tool!r}]={TOOL_TO_GATE.get(tool)!r}"
     )
+
+
+def test_connector_list_matches_the_generators_discovery():
+    """CONNECTOR_CLASSES above is written out by hand; the generator discovers connectors from the
+    package. Each is a check on the other: a new connector must show up in both."""
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import generate_tools_reference as gen
+
+    discovered = {cls.__qualname__ for cls in gen._connector_classes()}
+    assert discovered == {cls.__qualname__ for cls in CONNECTOR_CLASSES}
