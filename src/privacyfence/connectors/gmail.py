@@ -700,8 +700,8 @@ class GmailConnector(Connector):
             details_text=body or "(no body)",
             pii_scan_text=body,
             # No "Sender & metadata" row here: From/Date/Subject are already
-            # in the preview (known via gmail_list_messages) and To is already a
-            # concrete recipient list in new_info above -- an abstract
+            # in the preview (known via gmail_list_messages) and To is already
+            # a concrete recipient list in new_info above -- an abstract
             # "Full sender & metadata" disclosure sentence would just
             # restate what's already shown as real values, not add
             # information.
@@ -710,8 +710,8 @@ class GmailConnector(Connector):
                 "Attachments": category_policy("privacy", "attachments"),
             },
             # No effect on the current rendering (build_preview_body_html has no
-            # email special case -- From/Subject/Date are in preview, To in new_info) -- see
-            # gate.py's content_kind docstring.
+            # email special case -- From/Subject/Date are in the preview, To in
+            # new_info) -- see gate.py's content_kind docstring.
             content_kind="email",
             my_email=self.my_email,
             args={"message_id": message_id},
@@ -741,11 +741,12 @@ class GmailConnector(Connector):
         # thread_id in the first place), it already knows the subject,
         # same "conditionally known via a call that commonly precedes this
         # one" reasoning already applied to Drive's file metadata. Kept in
-        # the preview on that basis. Participants/Dates are never sent to Claude at
-        # all (computed purely for the human reviewer, never part of
-        # filtered_data below) -- kept in the preview anyway as identifying context
-        # (same reasoning as Salesforce's own-input record id: useful to
-        # the reviewer even though it isn't "Claude already knows this").
+        # the preview on that basis. Participants/Dates are never sent to
+        # Claude at all (computed purely for the human reviewer, never part
+        # of filtered_data below) -- kept in the preview anyway as
+        # identifying context (same reasoning as Salesforce's own-input
+        # record id: useful to the reviewer even though it isn't "Claude
+        # already knows this").
         # Messages (count) has no equivalent free source anywhere and
         # stays genuinely new (new_info).
         preview = {
@@ -809,10 +810,10 @@ class GmailConnector(Connector):
             details_text=details,
             pii_scan_text="\n".join(bodies),
             # No "Sender & metadata" row here either (see gmail_get_message's
-            # same reasoning): Subject/Participants/Dates are already in the preview, and each
-            # message's From/Date are already concrete fields in the
-            # preview_blocks right pane below -- an abstract policy row would
-            # just restate them.
+            # same reasoning): Subject/Participants/Dates are already in the
+            # preview, and each message's From/Date are already concrete
+            # fields in the preview_blocks right pane below -- an abstract
+            # policy row would just restate them.
             visibility={
                 "Thread messages": category_policy("privacy", "thread_history"),
                 "Attachments": category_policy("privacy", "attachments"),
@@ -1344,13 +1345,13 @@ class GmailConnector(Connector):
 
     def _require_attachment_paths(self, paths: list[str]) -> None:
         """Runs local_files.require_local_files() on ``paths`` before
-        gating -- see ADR 0007 for why local mode always needs this (the bridge
-        handshake) and org mode's own literal filesystem paths never do
-        (its daemon runs on a different machine than the user entirely).
-        Capability-slot ``upload:`` references (ADR 0028) are the one path shape that needs
-        this in *every* mode, org included -- a capability slot claim, not
-        a filesystem read, so it's filtered out here rather than skipped
-        along with the rest of org mode's paths.
+        gating -- see ADR 0007 for why local mode always needs this (the
+        bridge handshake) and org mode's own literal filesystem paths never
+        do (its daemon runs on a different machine than the user entirely).
+        Capability-slot ``upload:`` references (ADR 0028) are the one path
+        shape that needs this in *every* mode, org included -- a capability
+        slot claim, not a filesystem read, so it's filtered out here rather
+        than skipped along with the rest of org mode's paths.
         """
         if self.download_mode != "org":
             local_files.require_local_files(
@@ -1372,10 +1373,9 @@ class GmailConnector(Connector):
         ADR 0007: each of this method's three call sites already calls
         local_files.require_local_files() first for local mode, which
         raises before this ever runs if a path can't be reached at all --
-        so no os.path.isfile check is needed here any more, only
-        local_files.local_file_size(). Dropped ``@staticmethod`` (was
-        ``paths: list[str]`` with no ``self``) since bridge-awareness needs
-        ``self.download_mode``.
+        so no os.path.isfile check is needed here, only
+        local_files.local_file_size(). Not a ``@staticmethod``, since
+        bridge-awareness needs ``self.download_mode``.
 
         Org mode never goes through require_local_files above for a plain
         filesystem path (its daemon runs on a different machine than the

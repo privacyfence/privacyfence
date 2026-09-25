@@ -3,8 +3,9 @@
 `describe.py` exists so that one intent reads the same wherever it is shown, and so that a surface
 can state a rule's *width* instead of leaving the user to infer it from an operation key. The
 assertions here are mostly about that width: `covered_tools` on a one-verb rule and on the full
-sandbox-folder rule set are the two numbers the popup and Settings currently disagree about
-without saying so.
+sandbox-folder rule set are the two numbers that matter most, and the popup's confirmation dialog
+(`confirmation_text`) and the Auto-accept Settings page (`settings_controller.py`) both take them
+from this one function, so the two surfaces state the same width for the same rule.
 """
 from __future__ import annotations
 
@@ -80,8 +81,8 @@ class TestRuleVerbsAndCoverage:
         assert describe.covered_tools(rule) == ("drive_get_file_content",)
 
     def test_covered_tools_counts_the_sandbox_folders_real_width(self):
-        """The width a surface has to state: one "Write auto-accept" toggle, thirteen operation keys, and
-        the tools behind them."""
+        """The width a surface has to state: one "Write auto-accept" toggle, thirteen operation keys,
+        and the tools behind them."""
         rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], _WRITE_VERBS)
         tools = {tool for rule in rules for tool in describe.covered_tools(rule)}
         assert len(tools) == 13
@@ -106,7 +107,7 @@ class TestSentences:
         assert describe.rule_sentence(rule) == "Drive - owned by me: allow read"
 
     def test_a_condition_rule_says_it_is_unconditional_and_names_the_condition(self):
-        """D4: an unconditional grant should read as unconditional rather than hide behind a rule
+        """An unconditional grant should read as unconditional rather than hide behind a rule
         name under an operation key."""
         rule = PolicyRule(id="r", predicate="always_allow", value=None,
                           operations=frozenset({"calendar.read_event_details"}),

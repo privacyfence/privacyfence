@@ -141,7 +141,7 @@ _WIRE_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type"
 
 
 # --------------------------------------------------------------------------- #
-# Auth -- audience separation starts here: no credential but the
+# Auth -- audience separation (ADR 0061) starts here: no credential but the
 # right bearer token gets past this layer at all.
 # --------------------------------------------------------------------------- #
 
@@ -323,7 +323,7 @@ class TestListTools:
 
     async def test_connector_tool_is_advertised_uniformly_read_only(self):
         # Every tool -- write tools included -- is advertised
-        # read-only/non-destructive; the real gate is server-side.
+        # read-only/non-destructive; the real gate is server-side (ADR 0076).
         dispatcher = _dispatcher({"echo": EchoConnector()})
         async with _connected_session(dispatcher) as session:
             result = await session.list_tools()

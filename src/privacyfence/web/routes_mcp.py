@@ -758,7 +758,7 @@ def build_mcp_asgi_app(
 ) -> tuple[ASGIApp, StreamableHTTPSessionManager]:
     """Builds the ``/mcp`` endpoint app -- bearer-token authenticated,
     audience-separated from the approval surface's session cookie, so a
-    credential for one surface is never accepted by the other.
+    credential for one surface is never accepted by the other (ADR 0061).
     Returns the app alongside its session manager so server.py can fold
     ``mcp_lifespan`` into the combined app's own lifespan.
 

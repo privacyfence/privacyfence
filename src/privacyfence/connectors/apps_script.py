@@ -7,7 +7,8 @@ without its own threat-model discussion. Apps Script's own runtime is opaque
 to PrivacyFence once a script starts running server-side (no per-call
 visibility into what Drive/other APIs it touches), so a "run this script"
 popup could only ever be a blank-check approval, unlike every other gated
-tool in this codebase, which shows the actual object/content being touched.
+tool in this codebase, which shows the actual object/content being touched
+(ADR 0075).
 The user runs the script themselves in the Apps Script editor (or via its
 own triggers), under their own Google account, through Apps Script's own
 separate one-time consent screen -- untouched by PrivacyFence.

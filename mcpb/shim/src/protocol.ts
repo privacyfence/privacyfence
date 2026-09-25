@@ -16,9 +16,8 @@
  * ``DEV_DATA_DIR_ENV``).
  *
  * Privilege separation adds one more branch, and it is the reason this path goes
- * through ``handoffDir()`` rather than ``dataDir()`` directly: on an install
- * that has opted into privilege separation -- any of the three platforms --
- * the daemon runs as its own account and its data directory
+ * through ``handoffDir()`` rather than ``dataDir()`` directly: on a
+ * privilege-separated install -- any of the three platforms -- the daemon runs as its own account and its data directory
  * moves to a system location that account owns (``%ProgramData%\PrivacyFence``
  * on Windows, which is also why the ``%LOCALAPPDATA%`` branch above is not
  * the whole answer there). ``mcp_url`` is one of the files
@@ -140,9 +139,9 @@ function isRealMarker(marker: { version?: unknown; platform?: unknown } | null):
  * PRIVACYFENCE_SYSTEM_ROOT: this shim's environment is whatever the
  * logged-in user's session set, so once a real install is provisioned at
  * the platform's actual root, that variable is refused rather than letting
- * a user-session process redirect the shim onto a root it controls. It is
- * still honoured on the common dev/CI machine, which has no real marker at
- * that literal system root to begin with.
+ * a user-session process redirect the shim onto a root it controls
+ * (ADR 0060). It is still honoured on the common dev/CI machine, which has
+ * no real marker at that literal system root to begin with.
  * Exported only for tests, which need to point it at a temp directory. */
 export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.PRIVACYFENCE_SYSTEM_ROOT;

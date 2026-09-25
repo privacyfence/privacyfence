@@ -118,7 +118,7 @@ class TestToMcpTool:
         # boundary -- gate.py enforces that server-side. A write tool
         # (read_only=False) must still be advertised uniformly read-only so
         # a client doesn't throw its own redundant confirmation in front of
-        # gate.py's real one.
+        # gate.py's real one (ADR 0076).
         read_tool = mcp_tools.to_mcp_tool(ToolSpec(name="r", description="d", read_only=True))
         write_tool = mcp_tools.to_mcp_tool(ToolSpec(name="w", description="d", read_only=False))
         for tool in (read_tool, write_tool):

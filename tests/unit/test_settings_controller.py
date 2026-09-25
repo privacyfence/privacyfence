@@ -404,7 +404,7 @@ class TestPiiDetection:
 
 
 class TestEnableStepUp:
-    """B9: the browser-reachable counterpart to hand-editing config/
+    """The browser-reachable counterpart to hand-editing config/
     settings.yaml's own step_up: section. See SettingsController.
     enable_step_up's own docstring for what it refuses and why."""
 
@@ -781,7 +781,7 @@ class TestOrgConfigInstallSigning:
 
 @pytest.mark.usefixtures("stub_connector_build")
 class TestWouldPinNewOrgSigningKey:
-    """F5 of the self-approval review: the read-only precheck web/
+    """The read-only precheck web/
     routes_settings.py's org_config_upload route uses to demand an
     explicit confirmation before install_org_config_bytes above pins a
     new key as a side effect."""
@@ -817,9 +817,8 @@ class TestWouldPinNewOrgSigningKey:
 
 
 class TestConnectorEnableDisable:
-    """F6 of the self-approval review: enable_connector/disable_connector
-    replace a single toggle_connector so web/routes_settings.py can gate
-    the two directions differently -- see enable_connector's own
+    """enable_connector/disable_connector are separate actions so
+    web/routes_settings.py can gate the two directions differently -- see enable_connector's own
     docstring for why."""
 
     def test_disable_connector_sets_it_false_and_refreshes(self, controller, monkeypatch):

@@ -11,12 +11,12 @@ allow-list, so those callers pass a fixed port. Google's "Desktop app" OAuth
 clients accept any loopback port, so its caller passes ``port=0`` and lets the
 OS pick one.
 
-``run_browser_oauth()`` opens a browser
-on **the machine running the PrivacyFence daemon**, not on
-whatever device the person clicking "Authenticate…" is holding -- by default
-(``open_browser=None``) via ``_default_open_browser()``, which asks a running
-companion app (ADR 0002 decision 5) to do it and falls back to
-calling ``webbrowser.open()`` directly when none is running. In ``local`` mode
+``run_browser_oauth()`` opens a browser on **the machine running the
+PrivacyFence daemon**, not on whatever device the person clicking
+"Authenticate…" is holding -- by default (``open_browser=None``) via
+``_default_open_browser()``, which asks a running companion app (ADR 0002
+decision 5) to do it and falls back to calling ``webbrowser.open()``
+directly when none is running. In ``local`` mode
 that's the same machine by construction (this is the whole assumption `local`
 mode makes), so it works as-is;
 it stops being true the moment a browser tab reaches a `local`-mode daemon from
@@ -25,20 +25,20 @@ settings page says so in its own copy next to a connector's Authenticate button
 (settings_window_html.py's `renderConnectors`) rather than leaving it implicit
 -- a cheap, honest statement of a real limitation beats a silent one.
 
-``org`` mode doesn't use this module's
-loopback listener at all. ``web/routes_connect.py``'s ``GET /oauth/start/
-{service}``/``GET /oauth/callback/{service}`` build the same authorize
+``org`` mode doesn't use this module's loopback listener at all.
+``web/routes_connect.py``'s ``GET /oauth/start/{service}``/``GET
+/oauth/callback/{service}`` build the same authorize
 URL/exchange the code server-side, against a real public redirect_uri
 (``{issuer_url}/oauth/callback/{service}``), with the browser doing the
 provider round trip instead of a loopback port on this machine. That's
 exactly why ``build_authorize_url``/``exchange_code`` are public,
 module-level functions in each of slack_client.py/salesforce_client.py/
 atlassian_oauth.py rather than private to ``authorize_interactive``: this
-module's ``run_browser_oauth`` is what drives them in ``local`` mode,
-but ``org`` mode calls the same functions
-directly and drives the provider round trip over real HTTP redirects
-instead. Google's equivalent functions live in ``google_oauth.py``, whose
-``authorize_local()`` drives them through this module's loopback flow too.
+module's ``run_browser_oauth`` is what drives them in ``local`` mode, but
+``org`` mode calls the same functions directly and drives the provider
+round trip over real HTTP redirects instead. Google's equivalent functions
+live in ``google_oauth.py``, whose ``authorize_local()`` drives them through
+this module's loopback flow too.
 """
 
 from __future__ import annotations

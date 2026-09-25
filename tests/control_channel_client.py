@@ -128,7 +128,7 @@ def mint_bootstrap_code(data_dir: Path, *, timeout: float = 5.0) -> str:
 # pending, but web/routes_approvals.py's ``require_human_session`` gate
 # refuses it a step-up result or a sensitive confirm, and
 # web/routes_settings.py refuses it every ``_SENSITIVE_ACTIONS`` change (see
-# web/session_auth.py's own ``PROVENANCE_*`` comment). That gate is on
+# web/session_auth.py's own ``PROVENANCE_*`` comment and ADR 0062). That gate is on
 # whenever privilege separation is -- ``web/server.py``'s
 # ``require_human_session = privilege_separation.is_enabled()`` -- so it is
 # on for every packaged install, which is exactly what the packaged-artifact

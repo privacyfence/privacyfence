@@ -316,11 +316,11 @@ class TestPhoneWidthRules:
 
 
 class TestRowNamesItsObject:
-    """F4: ``tool_name`` was the row's title and ``summary`` only its
-    fallback -- and ``tool_name`` is always populated, so a normal row never
-    reached the fallback and the one fact that decides the request was never
-    on screen. The raw MCP tool id was the kicker instead, which is what
-    README positions the product *against*."""
+    """The row's title is ``summary``, the one fact that decides the
+    request, and the raw MCP tool id is only the kicker. ``tool_name`` is
+    always populated, so a title that fell back to ``summary`` would never
+    show it, and a raw tool id as the headline is what README positions the
+    product *against*."""
 
     def test_title_is_the_summary_and_the_kicker_is_the_tool(self):
         row = approval_list_html.row_from_approval(
@@ -357,10 +357,10 @@ class TestRowNamesItsObject:
 
 
 class TestReadWriteDirectionOnTheRow:
-    """F6: the card commits hard to read vs write -- a pill in the header
-    and a coloured rail down the window edge -- while the row carried
-    neither, though ``gate_kind`` was already in the payload and already
-    drove the Approve-selected composition label."""
+    """The card commits hard to read vs write -- a pill in the header and a
+    coloured rail down the window edge -- so the row carries the direction
+    too, from the ``gate_kind`` that also drives the Approve-selected
+    composition label."""
 
     def test_read_gate_gets_a_read_pill(self):
         row = approval_list_html.row_from_approval(_card(gate_kind="review"))
@@ -409,10 +409,9 @@ class TestHeadingComposition:
 
 
 class TestApproveSelectedIsNotTheLoudestControl:
-    """F5: both Approve-selected and Review were filled
-    ``var(--color-accent)``, so the least-informed action -- select-all
-    plus one click, off one-line summaries -- was as loud as the one that
-    opens disclosure."""
+    """Approve-selected is the least-informed action -- select-all plus one
+    click, off one-line summaries -- so it must not be as loud (filled
+    ``var(--color-accent)``) as Review, the one that opens disclosure."""
 
     def test_approve_selected_is_an_outline(self):
         html = approval_list_html.build_list_html([], csrf="t")
@@ -430,11 +429,11 @@ class TestApproveSelectedIsNotTheLoudestControl:
 
 
 class TestConnectorIconsSurviveLiveUpdates:
-    """F7: the first paint drew the real brand PNG and the live re-render
-    always drew a letter badge, so every row silently degraded within one
-    poll interval -- on the page that most needs to look trustworthy. The
-    icon now lives in one CSS rule per connector, which both render paths
-    reach by class name."""
+    """The first paint and the live re-render must draw the same brand
+    icon; if the re-render fell back to a letter badge, every row would
+    silently degrade within one poll interval -- on the page that most
+    needs to look trustworthy. The icon lives in one CSS rule per
+    connector, which both render paths reach by class name."""
 
     def _rows(self, *connectors):
         return [
@@ -503,7 +502,7 @@ class TestConnectorIconsSurviveLiveUpdates:
 
 
 class TestFirstRunEmptyState:
-    """F8: "Nothing is waiting. / PrivacyFence is watching." is exactly
+    """"Nothing is waiting. / PrivacyFence is watching." is exactly
     right on a working install and misleading on one where no connector is
     authenticated -- nothing is waiting because nothing *can* wait, and the
     reassurance claims a protection that isn't running."""
@@ -539,7 +538,7 @@ class TestFirstRunEmptyState:
 
 
 class TestAgentOnTheRow:
-    """AGT-4: each row shows who is asking in the same tiered form as the
+    """Each row shows who is asking in the same tiered form as the
     card (agent_label.py) -- only the attested tier draws the vendor's mark."""
 
     @staticmethod

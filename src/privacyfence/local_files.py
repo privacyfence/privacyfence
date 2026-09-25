@@ -3,17 +3,18 @@ local path an agent named in a tool call -- a Drive upload's ``local_path``,
 a download's ``destination_dir``, a Gmail/Confluence attachment path -- gets
 turned into bytes, or bytes get turned into a file on the user's disk.
 
-Privilege separation (ADR 0003) moved the daemon onto its own OS account, so
-a plain ``open()`` against a path the agent supplied can no longer reach the
-real user's home directory. Every connector that used to call ``open()``,
-``os.path.isfile``, ``os.path.getsize`` or ``os.path.expanduser`` on an
-agent-supplied path now calls through here instead -- this module decides,
+Privilege separation (ADR 0003) runs the daemon under its own OS account, so
+a plain ``open()`` against a path the agent supplied cannot reach the real
+user's home directory. No connector calls ``open()``, ``os.path.isfile``,
+``os.path.getsize`` or ``os.path.expanduser`` on an agent-supplied path; each
+calls through here instead -- this module decides,
 per call, whether the daemon can read/write the path directly (an
 unseparated dev checkout or pip/pipx install, where the daemon *is* the
 user) or must route the bytes through the ``.mcpb`` shim, which runs as the
 user and already sits on the request path of every tool call
 (ADR 0007 D1). A client with no shim (Claude Code, any other direct HTTP
-client, or an old ``.mcpb``) gets a clearly worded fallback instead of a bare failure.
+client, or an old ``.mcpb``) gets a clearly worded fallback instead of a
+bare failure.
 
 State for the current ``tools/call`` dispatch -- whether the calling shim
 advertised the bridge, which paths it already uploaded, the bytes claimed
@@ -51,8 +52,9 @@ logger = logging.getLogger(__name__)
 # ValueError subclass -- see safe_errors.public_message()'s passthrough
 # rule) when a tool needs to read a local path but neither a direct read
 # nor a bridge handshake is available. A capability upload slot
-# (privacyfence_create_upload_slot, ADR 0028) is the way forward for a client with no shim at all -- Claude
-# Code, org mode, or an old .mcpb -- so this message leads with that rather
+# (privacyfence_create_upload_slot, ADR 0028) is the way forward for a
+# client with no shim at all -- Claude Code, org mode, or an old .mcpb -- so
+# this message leads with that rather
 # than content_base64, which still works for drive_upload_file alone and
 # stays mentioned as the no-round-trip alternative for a small file.
 NO_BRIDGE_UPLOAD_MESSAGE = (
@@ -71,9 +73,10 @@ NO_BRIDGE_UPLOAD_MESSAGE = (
 META_KEY = "privacyfence.eu/file-bridge"
 
 # deliver_file() is synchronous and fully in memory (both the bridge and
-# no-bridge-link paths stage the whole file before anything is written), so this is a real memory cap, not just a
-# transfer-size guideline. Configurable via settings.yaml's `file_bridge:
-# max_download_bytes:` -- see daemon_main.py's own local-mode setup, which
+# no-bridge-link paths stage the whole file before anything is written), so
+# this is a real memory cap, not just a transfer-size guideline.
+# Configurable via settings.yaml's `file_bridge: max_download_bytes:` -- see
+# daemon_main.py's own local-mode setup, which
 # calls configure_file_bridge() once at startup with whatever that section
 # resolves to. 200MB: generous for anything a Drive/Gmail/Confluence tool
 # plausibly downloads, small enough that holding one in memory on a
@@ -190,9 +193,9 @@ def can_access_user_files(download_mode: str) -> bool:
     """True only when the daemon runs as the same OS user as its client:
     local mode (``download_mode != "org"``) and privilege separation is not
     enabled. Dev checkouts and unseparated pip/pipx installs keep direct
-    file I/O -- see ADR 0007. Org mode is not a
-    file-bridge case at all: it already has its own delivery path
-    (org_mode.DownloadDeliveryConfig / staged links), and its daemon does
+    file I/O -- see ADR 0007. Org mode is not a file-bridge case at all: it
+    already has its own delivery path (org_mode.DownloadDeliveryConfig /
+    staged links), and its daemon does
     not run on the agent's machine in the first place, so a local path
     would be meaningless there regardless of privilege separation."""
     if _force_bridge_for_tests:
@@ -201,7 +204,7 @@ def can_access_user_files(download_mode: str) -> bool:
 
 
 def call_produced_deliveries() -> bool:
-    """B3: ``McpDispatcher.call()`` checks this right after a successful
+    """``McpDispatcher.call()`` checks this right after a successful
     dispatch to decide whether the result may be reused from its dedupe
     cache. A result that staged a download (bridge delivery *or* the
     no-bridge link fallback -- either way, a single-use token from
@@ -470,10 +473,11 @@ def _deliver_bridge(state: "_CallState", dest_dir: str, name: str, data: bytes, 
 
 def _deliver_link(state: "_CallState | None", name: str, data: bytes, mime_type: str) -> dict[str, Any]:
     """A capability link (``/mcp-files/fetch/<token>``, no bearer
-    header needed -- the token in the URL is the credential) rather than
-    the shim's bearer-authenticated ``/mcp-files/downloads/<token>`` (ADR 0028), since
-    the whole point of this branch is a caller with no bridge and,
-    frequently, no way to attach a custom header either (a sandboxed agent
+    header needed -- the token in the URL is the credential; ADR 0028)
+    rather than the shim's bearer-authenticated
+    ``/mcp-files/downloads/<token>``, since the whole point of this branch
+    is a caller with no bridge and, frequently, no way to attach a custom
+    header either (a sandboxed agent
     `curl`-ing a URL it was handed). See web/routes_file_bridge.py and
     local_files.build_upload_slot's own docstring for the upload-side
     counterpart of this same capability-URL shape."""

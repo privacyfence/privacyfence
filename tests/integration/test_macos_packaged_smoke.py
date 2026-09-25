@@ -37,15 +37,14 @@ the packaged app:
    here for the same reason ``test_macos_graphical_session_autostart.py``
    already does it this way (that module's own docstring). ADR 0003
    decision 6 (``privilege_separation.enforce_separation()``) makes a
-   packaged daemon refuse to serve at all once unseparated has no meaning
-   left to fall back on -- see this module's own "Real-daemon helpers"
-   section below for what running against the real, separated
+   packaged daemon refuse to serve at all while unseparated, so there is no
+   unseparated mode to fall back on -- see this module's own "Real-daemon
+   helpers" section below for what running against the real, separated
    ``system/com.privacyfence.daemon`` LaunchDaemon means for the rest of
-   this module, in place of the directly-Popen'd, deliberately-unseparated
-   process this used to start against a scratch ``$HOME``. Mints a
-   bootstrap link the same way a human with no daemon-log line handy would
-   (through the control channel -- a real Unix domain socket against the
-   daemon's own, root-owned, data directory): the
+   this module, rather than a directly-Popen'd, unseparated process against
+   a scratch ``$HOME``. Mints a bootstrap link the same way a human with no
+   daemon-log line handy would (through the control channel -- a real Unix
+   domain socket against the daemon's own, root-owned, data directory): the
    ``SecretRedactingFormatter`` redacts a ``bootstrap=<value>`` substring
    from every log line on principle, so this can't just be read out of a
    log. Connects as this account with ``${SERVICE_GROUP}`` added in (``sudo
@@ -558,8 +557,8 @@ def _companion_agent_paused():
 def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     """Mints a bootstrap code that can actually *approve*.
 
-    A bare ``MINT`` lands an ``unattested`` session, which
-    may view ``/approvals`` but cannot release a sensitive confirm
+    A bare ``MINT`` lands an ``unattested`` session, which may view
+    ``/approvals`` but cannot release a sensitive confirm
     (web/routes_approvals.py's ``require_human_session``, turned on by
     web/server.py for every separated install, which is every packaged one).
     The attested shape is ``MINT COMPANION <nonce>``. This runner does have a
@@ -574,9 +573,8 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     importable) as test_deb_packaged_lifecycle.py's own equivalent -- but as
     this account, not root: ADR 0008 makes the daemon key ``CONFIRM MINT``'s
     companion address off the connecting peer's own principal
-    (``control_channel.principal_id_for_peer()``), and a root peer no longer
-    maps to the install's owner the way every peer used to pre-ADR-0008 --
-    it maps to its own ``os-0`` principal, with its own, different companion
+    (``control_channel.principal_id_for_peer()``), and a root peer does not
+    map to the install's owner -- it maps to its own ``os-0`` principal, with its own, different companion
     address, which nothing here binds. Connecting as this account instead
     (``_sudo_capture_as_owner``) keeps the peer uid the same as
     ``_enable_separation``'s own ``--user``, so it still resolves to
@@ -825,8 +823,9 @@ def running_packaged_daemon(installed_app):
     """The primary round-trip test's own daemon: real privilege separation
     against ``installed_app``'s own scratch copy (``enable`` stages its own
     root-owned copy under ``/Library/PrivacyFence/image`` -- see this
-    module's own docstring, points 2 and 6, for why handing it a plain, user-owned
-    copy is exactly the right, least-privileged input, not a shortcut),
+    module's own docstring, points 2 and 6, for why handing it a plain,
+    user-owned copy is exactly the right, least-privileged input, not a
+    shortcut),
     undone again on the way out regardless of what the test itself already
     did to it (``_purge_installed_state`` is idempotent -- a no-op once
     nothing is installed any more)."""
@@ -1069,8 +1068,8 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     # claim than plain $HOME-independence would be on an unseparated
     # install. This deletes the shared `installed_app` fixture's own copy,
     # not a throwaway one -- deliberately, which is exactly why
-    # `test_packaged_app_signature_and_notarization` below no longer
-    # depends on `installed_app` still existing afterward (see that test's
+    # `test_packaged_app_signature_and_notarization` below does not
+    # depend on `installed_app` still existing afterward (see that test's
     # own `signed_app_copy` fixture).
     shutil.rmtree(installed_app)
     assert not installed_app.exists()
@@ -1323,11 +1322,11 @@ async def _resolve_pending_card(
                              # already assumes one `enable` plus a real browser round trip, so
                              # this needs the same headroom again for the second `enable`.
 async def test_macos_upgrade_preserves_user_state():
-    """Install version N, use it to create
-    real on-disk state (an applied auto-accept rule, via the real MCP round
-    trip -- not a hand-written settings.yaml), replace it with a
-    synthetically-relabeled version N+1, and confirm the state survived and
-    the new bundle still starts and serves. Own, independent bundle copies
+    """Install version N, use it to create real on-disk state (an applied
+    auto-accept rule, via the real MCP round trip -- not a hand-written
+    settings.yaml), replace it with a synthetically-relabeled version N+1,
+    and confirm the state survived and the new bundle still starts and
+    serves. Own, independent bundle copies
     throughout (``_copy_app_from_dmg``) -- see ``signed_app_copy``'s own
     docstring for why this module doesn't share mutable fixture state like
     that across tests.

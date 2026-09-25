@@ -7,15 +7,12 @@ Runs as a system service under its own account (the LaunchDaemon
 Windows -- see ADR 0003 and ADR 0026). Only one instance is allowed
 (enforced via a lock file). Claude reaches this process over the embedded
 ``/mcp`` Streamable HTTP endpoint (see web/mcp_dispatch.py's module
-docstring) -- the original bridge/IPC-socket transport is gone;
-``connector_host.py``'s ``ConnectorHost`` is what's left of
-``ipc_server.py``'s own role once the socket and its dispatch logic were
-removed. A human reaches it the same way: over the embedded web approval/
-settings surfaces (``/approvals``, and ``/settings`` when
-``web.settings.enabled``). There used to be a native macOS AppKit UI too (a
-menu bar tray icon, native approval dialogs, a native webview settings
-window); it was deleted because two approval surfaces means two places for
-a security fix to land (see ADR 0001), so the web surface is now the only
+docstring), the only transport there is; ``connector_host.py``'s
+``ConnectorHost`` holds the connectors that endpoint dispatches to. A human
+reaches it the same way: over the embedded web approval/settings surfaces
+(``/approvals``, and ``/settings`` when ``web.settings.enabled``). There is
+no native UI in this process: two approval surfaces would mean two places
+for a security fix to land (see ADR 0001), so the web surface is the only
 one, on every platform this process runs on.
 
 Threading model:
@@ -885,7 +882,7 @@ def _maybe_start_web_server(
     # that fixes this misconfiguration, so this is a log line, not a raised
     # ConfigurationError -- web_shell.wrap()'s own banner (StepUpConfig.
     # local_enrollment_banner) is what actually makes this loud for a human
-    # who isn't reading the daemon's own log.
+    # who isn't reading the daemon's own log. See ADR 0069.
     if local_step_up.local_enrollment_banner(has_credentials=has_webauthn_credentials(LOCAL_PRINCIPAL)) is not None:
         logger.warning(
             "step_up.require_passkey is set but no passkey is enrolled yet -- approving decisions and "

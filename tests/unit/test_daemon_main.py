@@ -875,10 +875,10 @@ class TestBuildConnectorsSlack:
             "user_cache_file": str(data_dir() / "slack_user_cache.json"),
             "channel_cache_file": str(data_dir() / "slack_channel_cache.json"),
         }
-        # Directory-cache warming no longer happens inline in
+        # Directory-cache warming does not happen inline in
         # build_connectors() -- it's kicked off separately, in the
         # background, by _warm_connector_caches() (see run_app()), so a
-        # large workspace's re-sync can't delay the menu bar icon.
+        # large workspace's re-sync can't delay startup.
         assert fake.directories_refreshed is False
 
     def test_skipped_when_org_config_absent(self, monkeypatch):
@@ -1106,7 +1106,7 @@ class TestBuildConnectorsTelegram:
             "chat_cache_file": str(data_dir() / "telegram_chat_cache.json"),
         }
         # Same as Slack (see TestBuildConnectorsSlack): directory-cache
-        # warming is no longer inline in build_connectors() for either
+        # warming is not inline in build_connectors() for either
         # connector -- it's kicked off separately, in the background, by
         # _warm_connector_caches() (see run_app()).
         assert fake.directories_refreshed is False
@@ -1546,8 +1546,8 @@ class TestMaybeStartWebServer:
     ):
         # With a passkey required and none enrolled, the daemon starts,
         # releases nothing, and shows a loud persistent banner rather than
-        # refusing to boot. This is the "loud" half
-        # aimed at the daemon's own log; web_shell.py's TestBanner/
+        # refusing to boot. This is the "loud" half aimed at the daemon's own
+        # log; web_shell.py's TestBanner/
         # test_routes_approvals.py's TestRequirePasskeyBanner cover the
         # human-facing half.
         #
@@ -1969,7 +1969,8 @@ class TestMaybeStartWebServerOrgMode:
             )
 
     def test_org_mode_reports_org_in_the_status_tool(self, monkeypatch, tmp_path):
-        # privacyfence_status's own mode field -- this is the one branch that must not default to "local".
+        # privacyfence_status's own mode field -- this is the one branch that
+        # must not default to "local".
         self._no_bind(monkeypatch, tmp_path)
         result = daemon_main._maybe_start_web_server(
             {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
@@ -1992,9 +1993,8 @@ class TestMaybeStartWebServerOrgMode:
 
 # ---------------------------------------------------------------------------- #
 # _start_org_web_server -- per-principal ConnectorRegistry wiring.
-# connector_registry.py's own ConnectorRegistry existed already but was never
-# plugged into org mode's
-# actual /mcp dispatch until now -- see that module's own docstring.
+# connector_registry.py's own ConnectorRegistry, as plugged into org mode's
+# actual /mcp dispatch -- see that module's own docstring.
 # ---------------------------------------------------------------------------- #
 
 class TestOrgModeConnectorRegistry:

@@ -60,13 +60,14 @@ constant), an ACE that grants the owner rather than any fixed principal.
 ``SYSTEM`` and ``Administrators`` are ignored by every check below, which is
 a claim worth making explicitly rather than by omission: they are the
 service manager and the account that provisioned the install, and a local
-Administrator defeats the whole design by taking ownership anyway -- a
-limit of privilege separation, not something an ACL can close. Reporting them would report
-the design as a defect on every startup, exactly as auditing ``handoff/``
-against a flat ``0700`` would have on POSIX (see ``daemon_main.py``'s
-storage-permissions check). Everything else -- the logged-in user, ``Users``,
-``Authenticated Users``, ``Everyone``, a stale ``CREATOR OWNER`` ACE that
-means ``icacls /inheritance:r`` did not take -- is reported.
+Administrator defeats the whole design by taking ownership anyway -- a limit
+of privilege separation, not something an ACL can close. Reporting them
+would report the design as a defect on every startup, exactly as auditing
+``handoff/`` against a flat ``0700`` would have on POSIX (see
+``daemon_main.py``'s storage-permissions check). Everything else -- the
+logged-in user, ``Users``, ``Authenticated Users``, ``Everyone``, a stale
+``CREATOR OWNER`` ACE that means ``icacls /inheritance:r`` did not take --
+is reported.
 """
 from __future__ import annotations
 
@@ -304,9 +305,9 @@ def authority_problems(
     ``authority/`` holds the policy the agent may not edit, the WebAuthn
     store passkey step-up depends on being unforgeable, and the audit log's
     HMAC key. Any ACE at all for anything but the service account defeats
-    the whole design, so unlike the root this does not distinguish read from write --
-    reading ``settings.yaml`` is not harmless, it tells an agent exactly
-    which approvals it can already grant itself.
+    the whole design, so unlike the root this does not distinguish read from
+    write -- reading ``settings.yaml`` is not harmless, it tells an agent
+    exactly which approvals it can already grant itself.
     """
     return [
         f"{path} grants {describe_ace(ace, owner)} access (mask {ace.mask:#010x}) -- the "

@@ -92,7 +92,7 @@ ALL_CONNECTORS: list[str] = [
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
-# 5deef1d8:docs/approval-list-ui-ux.md §4.3) -- see set_notifications_detail below
+# ADR 0064) -- see set_notifications_detail below
 # and web_shell.py's notificationBody() for what each level is allowed to
 # read off a pending-approval row.
 NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed")
@@ -377,7 +377,7 @@ def _relative_time(timestamp: str) -> str:
 # ---------------------------------------------------------------------------- #
 # State builders with no per-instance dependency (no resolver cache, no
 # connector registry) -- pure functions of a config dict, factored out of the
-# instance methods below of the same name (PSC-5) so web/routes_settings.py's
+# instance methods below of the same name (ADR 0032) so web/routes_settings.py's
 # own org-mode state builder can share them instead of re-deriving the same
 # PII-field/privacy-policy/about shape a second time. Each instance method
 # further down is now a thin wrapper calling straight through.
@@ -459,7 +459,7 @@ def _rule_usage_map() -> dict[str, Any]:
     ``data_dir`` are themselves principal-scoped (the same contextvar
     ``principal_scope`` sets), so this already reads whichever principal is
     currently scoped when called, local mode's single ``LOCAL_PRINCIPAL``
-    or (PSC-5) an org caller's own ``with principal_scope(principal):``
+    or an org caller's own ``with principal_scope(principal):``
     block -- see ``_auto_accept_state_from_rules`` below, this function's
     only caller."""
     log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
@@ -498,7 +498,7 @@ def _auto_accept_state_from_rules(
     resolve_value: Callable[[PolicyRule], str],
 ) -> dict[str, Any]:
     """The Auto-accept page's state, factored out of ``SettingsController.
-    _auto_accept_state`` (PSC-5) so web/routes_settings.py's own org-mode
+    _auto_accept_state`` (ADR 0032) so web/routes_settings.py's own org-mode
     state builder can share it. ``resolve_value`` renders one rule's value; both modes
     pass ``cached_rule_value`` (resource ids shown by their cached names), and differ only
     in how a missing name gets resolved -- local's ``_resolved_rule_value`` in the background
@@ -553,7 +553,7 @@ def _entry_agent(entry: AuditEntry) -> AgentIdentity:
 
 
 def audit_rows(entries: list[AuditEntry]) -> list[dict[str, Any]]:
-    """The Audit Log page's "Recent decisions" rows (AGT-5) -- shared by local mode's
+    """The Audit Log page's "Recent decisions" rows -- shared by local mode's
     ``_audit_state`` and org mode's own page state, so both show the same columns. ``agent`` is
     ``agent_label.AgentLabel.to_dict()``: the same tiered wording the approval card and list use
     (``agent_label.py``), raw text the page escapes."""
@@ -826,8 +826,7 @@ class SettingsController:
         IdP fallback, so an ``enabled=True, require_passkey=False`` install
         enforces nothing beyond what ``enabled=False`` already didn't (see
         ``StepUpConfig.from_local_config``'s own docstring) -- "turn
-        step-up on, and make it mandatory" (B9's "done when" wording) is
-        one action here, not two.
+        step-up on, and make it mandatory" is one action here, not two.
 
         Refuses -- config untouched, ``self.error`` set, same failure
         surfacing every other guarded action in this class uses -- unless a
@@ -846,7 +845,7 @@ class SettingsController:
         signal webauthn_stepup.observe_step_up_requirement's "treat this
         install as compromised" banner watches for (see that module's own
         docstring) -- a UI path that could also produce a disable would
-        make that banner impossible to trust.
+        make that banner impossible to trust. See ADR 0068.
         """
         if self._step_up is None or not _has_webauthn_credentials(LOCAL_PRINCIPAL):
             self.error = "Add a passkey at /security before turning step-up on."
@@ -1113,15 +1112,14 @@ class SettingsController:
             return {}
 
     def enable_connector(self, connector: str) -> dict[str, Any]:
-        """F6 of the self-approval review: split out of a single
-        ``toggle_connector`` so the two directions can be gated
-        differently by web/routes_settings.py's _SENSITIVE_ACTIONS. An
-        agent that already has connector access gains nothing new by
-        *disabling* one (see disable_connector below and that module's
-        classification comment), but re-enabling one a human deliberately
-        switched off is exactly the access the agent did not have before
-        -- the same rationale toggle_grant_capability etc. are already
-        gated on."""
+        """Split out of a single ``toggle_connector`` so the two
+        directions can be gated differently by web/routes_settings.py's
+        _SENSITIVE_ACTIONS. An agent that already has connector access
+        gains nothing new by *disabling* one (see disable_connector below
+        and that module's classification comment), but re-enabling one a
+        human deliberately switched off is exactly the access the agent
+        did not have before -- the same rationale the rule and policy
+        actions are gated on. See ADR 0070."""
         return self._set_connector_enabled(connector, True)
 
     def disable_connector(self, connector: str) -> dict[str, Any]:

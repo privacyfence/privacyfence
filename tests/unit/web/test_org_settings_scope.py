@@ -36,8 +36,8 @@ def test_every_action_names_local_mode_or_is_a_classified_org_only_action():
     # Local mode's own dispatcher predates this table and was never gated
     # by it -- every action classified here must still be reachable there,
     # so ACTION_SCOPES can be the one place both modes project from rather
-    # than local mode needing a second, separate list. AGT-5's AI-system pin
-    # actions are the one exception: they have no local-mode meaning (no DCR
+    # than local mode needing a second, separate list. The AI-system pin
+    # actions (ADR 0035 decision 3) are the one exception: they have no local-mode meaning (no DCR
     # registrations to pin), so each org-only action must be both admin-only
     # and classified sensitive -- an org-only action can never land quietly.
     for action, scope in ACTION_SCOPES.items():
@@ -127,7 +127,7 @@ def test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_setting
     assert LOCAL_PRINCIPAL.is_admin is False
     assert is_action_permitted(next(iter(_ORG_ROUTED_PER_PRINCIPAL_ACTIONS)), LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
     # Picked from the admin-only actions that also have a local route --
-    # AGT-5's org-only pin actions are admin-only but never local.
+    # The org-only AI-system pin actions are admin-only but never local.
     admin_only_local = min(_ORG_ROUTED_ADMIN_ONLY_ACTIONS & _LOCAL_ROUTED_ACTIONS)
     assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
     # ...but the same admin-only action, asked about ORG_MODE for a

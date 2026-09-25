@@ -495,10 +495,10 @@ class SlackClient:
         separated to require all of them), the fast path resolves it to user
         id(s) against the cached user directory and asks ``users.conversations``
         directly which channels each shares with the caller -- one paginated
-        call per needle, replacing what used to be one ``conversations.members``
-        call *per channel returned*. A participant string the directory can't
-        resolve unambiguously (see ``_resolve_participant_user_ids``) falls back
-        to the old per-channel ``conversations.members`` walk, run concurrently
+        call per needle, rather than one ``conversations.members`` call *per
+        channel returned*. A participant string the directory can't resolve
+        unambiguously (see ``_resolve_participant_user_ids``) falls back to
+        that per-channel ``conversations.members`` walk, run concurrently
         across channels rather than one at a time.
 
         The filter -- either path -- is applied to each page of

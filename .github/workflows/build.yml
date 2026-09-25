@@ -818,7 +818,7 @@ jobs:
       # half of that gap on every channel (a warning), and closes it for real on a stable tag
       # specifically (`--channel`, below, makes a gap fail this step rather than just annotate it)
       # -- see scripts/check_graphical_session_coverage.py's own module docstring for exactly what
-      # counts as a gap and why pre-release tags stay ungated on purpose.
+      # counts as a gap and why pre-release tags stay ungated on purpose (ADR 0057).
       - name: Check graphical-session/autostart coverage (gates stable tags only)
         env:
           GH_TOKEN: ${{ github.token }}

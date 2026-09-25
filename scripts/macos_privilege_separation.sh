@@ -223,11 +223,11 @@ TRUSTED_IMAGE_DIR="/Library/PrivacyFence/image"
 # elevates to it. ADR 0002 §5a assumed /Applications was root-owned the same
 # way /opt is; it is actually root:admin drwxrwxr-x, and a drag-installed
 # .app is normally owned by the installing user -- the same account the
-# agent runs as. Walks $1 and every
-# directory on the way to it (a root-owned, unwritable executable still
-# isn't safe if the directory holding it can be emptied and refilled by
-# someone else) and dies naming every path that fails: owned by anyone but
-# root, or writable by world or by a group other than $TRUSTED_IMAGE_GROUP.
+# agent runs as (ADR 0058). Walks $1 and every directory on the way to it
+# (a root-owned, unwritable executable still isn't safe if the directory
+# holding it can be emptied and refilled by someone else) and dies naming
+# every path that fails: owned by anyone but root, or writable by world or
+# by a group other than $TRUSTED_IMAGE_GROUP.
 # Mirrors ``privilege_separation._posix_image_problems()``, which
 # ``audit_layout()`` re-runs on every daemon start in case the install is
 # replaced in place after this check has already passed once.
@@ -259,8 +259,8 @@ require_trusted_image() {
 }
 
 # Why the image is staged at all (test_macos_pkg_install.py's real
-# `installer -pkg ... -target /` covers it): require_trusted_image() walks every
-# directory on the way to the image, and /Applications itself is root:admin
+# `installer -pkg ... -target /` covers it): require_trusted_image() walks
+# every directory on the way to the image, and /Applications itself is root:admin
 # drwxrwxr-x on every real Mac -- group-writable by the same admin account
 # the agent runs as. So the walk refuses *any* app installed at the
 # standard /Applications/PrivacyFenceApp.app location, no matter how the
@@ -284,8 +284,9 @@ require_trusted_image() {
 # One real consequence: once separated, replacing /Applications/
 # PrivacyFenceApp.app in place (a fresh DMG drag) no longer takes effect on
 # its own -- the separated daemon keeps running the staged copy until `enable`
-# is run again. That is the one honest way to close the hole above: auto-refreshing the staged copy from an
-# already-running, already-elevated process would mean trusting
+# is run again. That is the one honest way to close the hole above:
+# auto-refreshing the staged copy from an already-running, already-elevated
+# process would mean trusting
 # /Applications again, silently, which is exactly what this exists to stop
 # doing. Re-authenticating (by hand, or a future re-prompt) is the correct
 # cost of an upgrade on a separated macOS install.
@@ -406,8 +407,8 @@ wait_for_service_account() {
   # point depends on that lookup: apply_layout()'s `chown -R`, and, far more
   # quietly, launchd's own resolution of UserName in the LaunchDaemon plist --
   # launchd runs a job as *root* when the account it names does not resolve at
-  # bootstrap time: an install that reports itself separated while its daemon holds every
-  # privilege separation exists to drop.
+  # bootstrap time, leaving an install that reports itself separated while its
+  # daemon holds every privilege separation exists to drop.
   #
   # So flush the cache and then actually wait for the account to answer,
   # rather than assuming the write is immediately visible.
@@ -697,13 +698,13 @@ bootstrap_daemon_with_retry() {
 start_daemon_as_service_account() {
   # The one thing `launchctl bootstrap` will not tell you: it exits 0 having
   # started the job as root when the plist's UserName did not resolve.
-  # Everything downstream then
-  # *says* the install is separated -- the marker, `status`, the approvals UI
-  # -- while the daemon holds exactly the privileges separation exists to
-  # drop. And it is not only a reporting problem: a root-owned daemon on a
-  # separated install is refused by privilege_separation.check_runtime_
-  # identity() on every start, so launchd's KeepAlive relaunches it forever
-  # and no control socket ever appears -- the same cause, seen differently.
+  # Everything downstream then *says* the install is separated -- the
+  # marker, `status`, the approvals UI -- while the daemon holds exactly the
+  # privileges separation exists to drop. And it is not only a reporting
+  # problem: a root-owned daemon on a separated install is refused by
+  # privilege_separation.check_runtime_identity() on every start, so
+  # launchd's KeepAlive relaunches it forever and no control socket ever
+  # appears -- the same root cause, surfacing as a crash loop instead.
   #
   # wait_for_service_account() above removes the obvious reason for that
   # lookup to fail, and is not sufficient: this has been observed with
@@ -967,12 +968,12 @@ cmd_enable() {
   # reported a pid" is not the same claim as "reachable, with a control
   # socket, and owned by the right account" -- and a daemon that came up as
   # root is exactly a case where the first succeeds and the second silently
-  # does not. Run in a subshell, the same way --auto
-  # itself is below: cmd_daemon_ensure_running's own die() would otherwise
-  # take this whole `enable` down with it under set -euo pipefail, which is
-  # not what a hiccup *here* -- after everything else above has already
-  # succeeded -- should do to the rest of the install. A failure is reported,
-  # once, clearly, and left to the companion's own Start button (or
+  # does not. Run in a subshell, the same way --auto itself is below:
+  # cmd_daemon_ensure_running's own die() would otherwise take this whole
+  # `enable` down with it under set -euo pipefail, which is not what a
+  # hiccup *here* -- after everything else above has already succeeded --
+  # should do to the rest of the install. A failure is reported, once,
+  # clearly, and left to the companion's own Start button (or
   # installer/macos/pkg/postinstall's own follow-up ensure-running call) to
   # recover from.
   if ! ( cmd_daemon_ensure_running ); then

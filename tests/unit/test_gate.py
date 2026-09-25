@@ -324,7 +324,7 @@ class TestPolicyV2StoreRules:
 class TestRuleIdAttribution:
     """Rule attribution: AuditEntry.rule_id -- a decision in the audit log attributes to exactly
     one on-disk rule row, never an ambiguous rule name (a rule is identified by its id, since names
-    can repeat). There is only one rule source, so every real v2-store match always carries a
+    can repeat; ADR 0074). There is only one rule source, so every real v2-store match always carries a
     rule_id. These tests exercise its two shapes -- a genuine
     store-rule match (rule_id == auto_accept_rule == the matched rule's own canonical id) and the
     temp-accept pseudo-match (no rule row at all) -- plus the two in-branch race-recheck call
@@ -2677,7 +2677,7 @@ class TestDeferredApprovalProtocol:
     async def test_write_gate_ledger_entry_is_single_use(self, monkeypatch, audit_dir):
         # Read decisions stay reusable within the ledger TTL; write
         # decisions don't -- a second identical write must re-gate, not
-        # silently replay the first's approval.
+        # silently replay the first's approval (ADR 0073).
         registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
         approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
@@ -3495,7 +3495,7 @@ class TestConfigurePopupExecutor:
 
 
 class TestAgentAttribution:
-    """AGT-2: a gated call's audit row carries the agent in scope; an expiry-sweep row carries
+    """A gated call's audit row carries the agent in scope; an expiry-sweep row carries
     the agent that created the approval, not the one whose call happens to run the sweep."""
 
     async def test_gated_call_row_carries_scoped_agent(self, monkeypatch, audit_dir):

@@ -626,7 +626,8 @@ class TestStepUpEvadableWithNoPasskeyEnrolled:
     enrolled and no IdP to fall back to (unlike org mode), the decide
     endpoint has no ceremony left to demand -- the decision goes through
     unguarded rather than deadlocking behind one nobody can complete.
-    ``require_passkey`` closes it (TestRequirePasskeyHardFail below)."""
+    ``require_passkey`` closes it (TestRequirePasskeyHardFail below). See
+    ADR 0066."""
 
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):

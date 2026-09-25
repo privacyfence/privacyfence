@@ -358,7 +358,7 @@ class TestNarrowestVerbFirst:
         assert search.operations == frozenset({"slack.read_messages"})
 
     def test_an_unconditional_scope_is_never_widenable(self):
-        """D4 says an unconditional grant should read as unconditional; it must also not be one
+        """An unconditional grant reads as unconditional (see test_describe.py); it must also not be one
         click away from being wider."""
         draft = propose.proposals_for("gmail_create_draft", make_ctx(args={"to": "x@y.com"}))[0]
         assert draft.scope.scope_type == "gmail.anything"

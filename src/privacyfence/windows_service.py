@@ -11,10 +11,10 @@ seconds with error 1053 ("the service did not respond to the start request
 in a timely fashion"). Pointing ``sc create``'s ``binPath`` straight at
 ``privacyfence-app.exe`` produces exactly that, every time.
 
-So privilege separation on Windows needs one thing its POSIX siblings do not: a
-service *host*. This module is it, and it is deliberately the thinnest one
-that can work -- it starts nothing of its own, owns no state, and makes no
-decision the ordinary entry point does not already make:
+So privilege separation on Windows needs one thing its POSIX siblings do
+not: a service *host*. This module is it, and it is deliberately the
+thinnest one that can work -- it starts nothing of its own, owns no state,
+and makes no decision the ordinary entry point does not already make:
 
     SvcDoRun  -> daemon_main.main([])      (the same call ``privacyfence-app`` makes)
     SvcStop   -> daemon_main.request_shutdown()  (what the web UI's Quit button calls)
@@ -25,10 +25,10 @@ takes the identical shutdown path a human clicking Quit does, rather than a
 second one that would have to be kept working alongside it.
 
 **No new dependency.** ``pywin32`` is already required on Windows for the
-control channel's named pipes and arrives transitively through ``mcp`` besides, and
-``win32serviceutil.ServiceFramework`` is part of it. ADR 0002 decision 4's
-budget is about the *companion*; this is the daemon, whose dependency set
-that decision says must not change, and it does not.
+control channel's named pipes and arrives transitively through ``mcp``
+besides, and ``win32serviceutil.ServiceFramework`` is part of it. ADR 0002
+decision 4's budget is about the *companion*; this is the daemon, whose
+dependency set that decision says must not change, and it does not.
 
 **Frozen builds are the real deployment.** ``scripts/windows_privilege_
 separation.ps1`` registers the service as ``<installed exe> --windows-

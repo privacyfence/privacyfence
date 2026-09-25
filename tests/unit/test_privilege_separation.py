@@ -18,7 +18,7 @@ is three strings (a root, an account, a group) and a second installer, and a
 test that only ever exercised one platform's strings would not have noticed
 the other's going wrong.
 
-Windows is the exception that proves how far that goes. Windows shares the
+Windows is the exception that proves how far that goes. It shares the
 marker, the directory layout, the migration list and every path decision --
 so it joins ``PLATFORMS`` and runs all of that unchanged -- but it expresses
 the *permissions* as NTFS ACLs rather than as mode bits, and it provisions
@@ -26,11 +26,11 @@ them from PowerShell rather than from bash. So the installer contract and
 the layout audit split in two: ``POSIX_PLATFORMS`` keeps the shell-script
 and mode-bit assertions, and ``TestWindows*`` below covers the half that has
 no POSIX counterpart at all -- the ACL audit, the ``.ps1``, the companion
-Scheduled Task, and the service. The one check every platform needs turns
-out not to be Windows-only after all: a packaged macOS install's own
-image can be just as writable by the account it's separated
-from as an unelevated Windows one, so ``TestPosixImageAudit`` below covers
-the ``stat``-walk counterpart to ``TestWindowsLayoutAudit``'s ACL read.
+Scheduled Task, and the service. The image check is not Windows-only,
+though: a packaged macOS install's own image can be just as writable by the
+account it's separated from as an unelevated Windows one, so
+``TestPosixImageAudit`` below covers the ``stat``-walk counterpart to
+``TestWindowsLayoutAudit``'s ACL read.
 
 ``current_platform`` is monkeypatched rather than ``sys.platform`` itself,
 and ``PRIVACYFENCE_SYSTEM_ROOT`` relocates the whole layout under
@@ -363,7 +363,8 @@ class TestSystemRootOverride:
         # session -- exactly the boundary privilege separation exists to
         # hold. Once a real install is provisioned at the platform's actual
         # root, a user-session process redirecting itself elsewhere is the
-        # attack this guards against, not the test hatch the variable is for.
+        # attack this guards against, not the test hatch the variable is for
+        # (ADR 0060).
         real_root = tmp_path / "real"
         _write_marker(real_root, platform_name)
         monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: real_root)
@@ -729,11 +730,11 @@ class TestAuditLayoutBestEffort:
 
 
 class TestPosixImageAudit:
-    """B1: nothing previously verified the daemon/companion image was not
-    user-writable before privilege separation elevated to it. ADR 0002 §5a
-    used to claim ``/Applications`` was root-owned the same way ``/opt`` is
-    -- it's actually ``root:admin drwxrwxr-x``, and a drag-installed ``.app``
-    is normally owned by the installing user. This is the POSIX counterpart
+    """The daemon/companion image must not be user-writable before
+    privilege separation elevates to it. ``/Applications`` is not root-owned
+    the way ``/opt`` is -- it's ``root:admin drwxrwxr-x``, and a
+    drag-installed ``.app`` is normally owned by the installing user -- so
+    this is checked rather than assumed. This is the POSIX counterpart
     of ``TestWindowsLayoutAudit``'s image tests and of
     ``windows_acl.image_problems()`` itself: a ``stat`` walk rather than an
     ACL read, since a mode bit has no inheritance to lean on the way an ACL
@@ -848,7 +849,7 @@ class TestPosixImageAudit:
         assert privilege_separation._posix_image_problems((image,)) == []
 
     def test_checks_every_directory_on_the_way_to_the_image(self, fake_stats):
-        # The other half of B1's "or any directory on the path to it": a
+        # The other half of the check, "or any directory on the path to it": a
         # root-owned, unwritable executable still isn't safe if the bundle
         # holding it can be deleted and replaced wholesale.
         image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
@@ -1571,7 +1572,7 @@ class TestAutoEnableMacos:
         script = tmp_path / "macos_privilege_separation.sh"
         script.write_text("#!/bin/sh\n", encoding="utf-8")
         monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
-        # B2's script-safety check is covered by its own TestMacosAutoEnableScriptProblem
+        # The script-safety check is covered by its own TestMacosAutoEnableScriptProblem
         # below; a script this test writes itself is never root-owned, so it is bypassed
         # here to keep this test about the dispatch behavior alone.
         monkeypatch.setattr(privilege_separation, "_macos_auto_enable_script_problem", lambda _script: None)
@@ -3085,8 +3086,8 @@ class TestForUserKeepsTheRecordedOwner:
     """ADR 0043: the marker's ``owner_user`` is written once and then kept.
     ``owner_uid()``/``owner_sid()`` map the account it names to
     ``LOCAL_PRINCIPAL`` -- the install's original data -- so ``enable
-    --for-user`` for a second account (ADR 0008) must leave it alone. Each
-    script used to write the account it had just resolved, which moved the
+    --for-user`` for a second account (ADR 0008) must leave it alone. A
+    script that wrote the account it had just resolved would move the
     owner's principal to whoever was added last.
 
     Runs each script's real ``cmd_enable_for_user``/``Invoke-EnableForUser``,
@@ -4134,9 +4135,8 @@ class TestCompletePerUserSeparation:
 
         Default rather than per-test because every test below that expects
         True depends on it -- an exit code alone is not enough to return
-        True, and this is the machine state
-        that makes it sufficient. The tests that care about the *absence* of
-        this override it back."""
+        True, and this is the machine state that makes it sufficient. The
+        tests that care about the *absence* of this override it back."""
         monkeypatch.setattr(
             privilege_separation, "service_group_members", lambda group: frozenset({"alice", "bob"})
         )
@@ -4240,7 +4240,7 @@ class TestCompletePerUserSeparation:
     def test_an_exit_zero_that_changed_nothing_is_not_success(
         self, separated, script, monkeypatch, caplog
     ):
-        # The half that reaches a person: returning True here makes companion.py tell somebody to sign out
+        # Returning True here makes companion.py tell somebody to sign out
         # and back in, and a sign-out that fixes nothing is worse advice than
         # none. On Windows an exit code need not even be the script's --
         # `Start-Process -Verb RunAs -Wait` without -PassThru exits 0
@@ -4591,9 +4591,9 @@ class TestRunFullAutoEnableNonMacos:
 
         Default rather than per-test for the same reason as
         TestCompletePerUserSeparation's own: the success *log line* is
-        written off the machine rather than off an exit code, so every test below that
-        expects one depends on this. The test that cares about its absence
-        overrides it."""
+        written off the machine rather than off an exit code, so every test
+        below that expects one depends on this. The test that cares about its
+        absence overrides it."""
         monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
 
     def test_warns_when_no_script_is_found(self, monkeypatch, caplog):

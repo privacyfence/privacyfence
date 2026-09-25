@@ -1370,10 +1370,11 @@ class TestBodyMarkdownRichText:
 
 class TestWriteToolsWithAttachmentsGateAndPreview:
     """gmail_create_draft_with_attachments/gmail_reply_draft_with_attachments/
-    gmail_reply_all_draft_with_attachments. Parallel to TestWriteToolsGateAndPreview's plain-draft coverage,
-    plus: the attachments arg is a JSON array of local file paths, stat'd
-    (not read) before gating so the popup shows real filenames/sizes without
-    the connector reading file content pre-approval.
+    gmail_reply_all_draft_with_attachments. Parallel to
+    TestWriteToolsGateAndPreview's plain-draft coverage, plus: the attachments
+    arg is a JSON array of local file paths, stat'd (not read) before gating so
+    the popup shows real filenames/sizes without the connector reading file
+    content pre-approval.
     """
 
     async def test_create_draft_with_attachments_preview_and_args(self, gated_call_spy, tmp_path):

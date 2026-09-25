@@ -301,14 +301,14 @@ describe("ensureDaemonRunning", () => {
   });
 
   it("survives a spawn failure (missing/corrupted binary) instead of crashing the process", async () => {
-    // Reproduces a failure seen in the field: a Finder
-    // upgrade interrupted mid-drag (or a Gatekeeper-quarantined bundle) can
-    // leave findDaemonCmd() pointing at a binary that no longer runs. Before
-    // the fix, spawn()'s async ENOENT surfaced as an unhandled 'error' event
-    // on the child process, which Node rethrows as an uncaught exception --
-    // killing this whole shim process well before the ShimExitError timeout
-    // below ever had a chance to fire. If that regressed, this test would
-    // itself crash the test runner rather than observing a rejection.
+    // A Finder upgrade interrupted mid-drag (or a Gatekeeper-quarantined
+    // bundle) can leave findDaemonCmd() pointing at a binary that no longer
+    // runs. Left unhandled, spawn()'s async ENOENT surfaces as an 'error'
+    // event on the child process, which Node rethrows as an uncaught
+    // exception -- killing this whole shim process well before the
+    // ShimExitError timeout below ever has a chance to fire. If that
+    // regressed, this test would itself crash the test runner rather than
+    // observing a rejection.
     const { mcpUrlFile, cleanup } = makeTempMcpFiles();
     try {
       await assert.rejects(

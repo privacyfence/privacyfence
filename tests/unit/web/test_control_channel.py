@@ -1304,7 +1304,7 @@ class TestAttestedMintCommands:
     """``MINT`` has two attested shapes, because a plain ``MINT`` cannot say
     who asked for the session it mints -- and whether a session may approve
     depends on that (web/session_auth.py's own
-    ``PROVENANCE_*`` comment).
+    ``PROVENANCE_*`` comment, ADR 0062).
 
     Both shapes cost a round trip into the companion process. Neither is
     authentication of that process (companion and agent share a uid, ADR 0002

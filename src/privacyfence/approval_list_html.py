@@ -3,7 +3,7 @@ empty state, and the list's central asymmetry: **Deny is on the row; Allow
 is never on the row.** Denying without reading the card cannot leak
 anything; approving from a one-line summary is exactly the habituation failure the card exists
 to prevent, so there is no "Allow" button here at all -- only "Review",
-which opens the real card.
+which opens the real card (ADR 0065).
 
 Within the action cluster the order is Details, Review, Deny -- Deny last,
 not adjacent to Review. Row controls are a 44px target at phone widths but
@@ -50,14 +50,15 @@ approvals that covers. The binder has:
   metadata only, docs/coding-and-testing-guidelines.md §1.5), rendered with
   ``textContent`` -- never an ``<iframe>`` onto the real card document
   (card documents ship ``frame-ancestors 'none'`` and this page's own
-  ``frame-src`` admits ``data:`` only).
+  ``frame-src`` admits ``data:`` only; ADR 0065).
 
 Approving a single row still opens its card. The one exception to "no
 Allow on the list" is batch approval: an
 **Approve selected** button posts the selected set to the batch decide
 endpoint with ``result: "accept"`` on every item, gated
 server-side on one WebAuthn assertion bound to the exact submitted set
-(webauthn_stepup.batch_decision_fingerprint) whenever step-up applies.
+(webauthn_stepup.batch_decision_fingerprint) whenever step-up applies; see
+ADR 0065.
 ``runBatch`` mirrors web/routes_settings.py's own ``pfSettingsPost``
 428/403 handling almost exactly: a ``428`` carries fresh
 ``webauthn_options`` (and this page's own ``batch_id`` to echo back) to

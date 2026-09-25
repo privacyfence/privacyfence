@@ -339,10 +339,10 @@ class TestGetFileContent:
             client.get_file_content("")
 
     def test_google_doc_is_read_via_docs_api_as_markdown(self):
-        # Regression test: a Google Doc used to be exported through the
-        # Drive API's plain-text export, dropping all formatting -- it now
-        # goes through the structured Docs API instead, same call the
-        # docs_* write tools already use, and comes back as Markdown.
+        # A Google Doc goes through the structured Docs API, same call the
+        # docs_* write tools already use, and comes back as Markdown -- not
+        # through the Drive API's plain-text export, which drops all
+        # formatting.
         service = MagicMock()
         service.files.return_value.get.return_value.execute.return_value = {
             "id": "f1", "name": "Doc", "mimeType": "application/vnd.google-apps.document",
@@ -2392,7 +2392,8 @@ class TestDownloadFile:
         # a read-only/synthetic mount point that rejects mkdir, etc.) must
         # surface as DriveClientError like every other failure in this
         # method -- not a bare OSError, which
-        # coding-and-testing-guidelines.md §1.4 requires every *_client.py public method to never leak.
+        # coding-and-testing-guidelines.md §1.4 requires every *_client.py
+        # public method to never leak.
         service = MagicMock()
         service.files.return_value.get.return_value.execute.return_value = {
             "id": "f1", "name": "f.bin", "mimeType": "application/octet-stream",

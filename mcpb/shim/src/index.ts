@@ -116,8 +116,8 @@ export interface MainOptions {
    * exercise both the "mint succeeds" and "mint fails, the shim exits"
    * paths without touching a real socket/pipe. Defaults to the real
    * controlChannel.ts ``mintMcpToken()`` with its own default timeout (see
-   * the note above ``getMcpToken()`` for why this call site no longer
-   * shortens it). */
+   * the note above ``getMcpToken()`` for why this call site does not
+   * shorten it). */
   mintMcpToken?: () => Promise<string>;
   /** Overridable for tests; defaults to MINT_RETRY_WINDOW_MS. See
    * ``getMcpToken()``. */
@@ -183,11 +183,11 @@ function isRetryableMintError(err: unknown): boolean {
 
 /**
  * Mints this OS account's own MCP token over the control channel
- * (ADR 0008 D3), retrying a mint nobody answered for up to MINT_RETRY_WINDOW_MS (see
- * above). A plain connection error and a ``ControlChannelError`` (the daemon
- * answered but refused) both end the same way: a ``ShimExitError`` whose
- * message carries ``err.message``, so whoever reads privacyfence.log next
- * can tell which one it was.
+ * (ADR 0008 D3), retrying a mint nobody answered for up to
+ * MINT_RETRY_WINDOW_MS (see above). A plain connection error and a
+ * ``ControlChannelError`` (the daemon answered but refused) both end the
+ * same way: a ``ShimExitError`` whose message carries ``err.message``, so
+ * whoever reads privacyfence.log next can tell which one it was.
  */
 async function getMcpToken(opts: MainOptions): Promise<string> {
   const mint = opts.mintMcpToken ?? (() => mintMcpTokenReal());

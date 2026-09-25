@@ -485,12 +485,13 @@ class TestPdfViewEmbed:
 
 
 class TestDownloadFile:
-    """drive_download_file used to call DriveClient.download_file (which
-    streams the full file straight to its final destination) before ever
-    gating -- so a Deny still left the file on disk. Fixed so the gate runs
-    first, using only cheap metadata (name/size/owner/modified, all already
-    available from get_file_metadata) for the preview, mirroring
-    gmail.py's _download_attachment. These tests pin the corrected ordering.
+    """drive_download_file must gate before calling
+    DriveClient.download_file (which streams the full file straight to its
+    final destination) -- otherwise a Deny would still leave the file on
+    disk. The gate runs first, using only cheap metadata (name/size/owner/
+    modified, all already available from get_file_metadata) for the
+    preview, mirroring gmail.py's _download_attachment. These tests pin that
+    ordering.
     """
 
     @pytest.mark.skipif(
@@ -1040,9 +1041,8 @@ class TestWriteToolsGateAndPreview:
 
 class TestOrgModeUpload:
     """ADR 0007 is Claude-Desktop-only: org mode's local_path upload keeps
-    reading directly from wherever the org daemon's own filesystem is,
-    exactly as before this phase -- see _upload_file's own
-    is_org_local_path branch."""
+    reading directly from wherever the org daemon's own filesystem is --
+    see _upload_file's own is_org_local_path branch."""
 
     async def test_local_path_upload_preview_and_dispatch_are_unchanged_in_org_mode(
         self, tmp_path, gated_call_spy,
@@ -1113,10 +1113,10 @@ class TestUploadFile:
         assert kwargs["preview"]["Source"] == "uploaded via privacyfence_create_upload_slot"
 
     async def test_upload_id_works_in_org_mode_too(self, gated_call_spy):
-        """The point of capability uploads (ADR 0028): org mode has no filesystem to read a
-        local_path from, but an upload_id claim needs neither
-        can_access_user_files() nor a bridge -- see local_files.
-        require_local_files' own ``upload:`` handling."""
+        """The point of capability uploads (ADR 0028): org mode has no
+        filesystem to read a local_path from, but an upload_id claim needs
+        neither can_access_user_files() nor a bridge -- see
+        local_files.require_local_files' own ``upload:`` handling."""
         from privacyfence import local_files
         from privacyfence.principal import LOCAL_PRINCIPAL
         from privacyfence.upload_staging import get_upload_staging_store

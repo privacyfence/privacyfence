@@ -29,7 +29,7 @@ preview actually renders (the card's ``<embed>`` is blocked by the
 implicit ``default-src 'none'`` fallback unless the policy names
 ``object-src``/``frame-src`` exceptions). Both assert real pass/fail
 outcomes -- see ``TestSecurityHeadersCsp``/``TestPdfPreview`` below, and
-web/csp.py's ``build_csp()`` for the policy they check.
+web/csp.py's ``build_csp()`` for the policy they check (ADR 0063).
 """
 from __future__ import annotations
 
@@ -413,11 +413,11 @@ class TestBootstrapLogin:
         the resulting page URL -- what a real browser bar, history entry,
         and Referer header would carry -- contains neither the bootstrap
         code nor any other credential, which is the point of exchanging the
-        code for a cookie (see web/session_auth.py's module docstring). ASGI TestClient assertions
-        already cover the redirect response's own Location header (test_
-        server.py) -- this proves a real browser actually lands there with
-        nothing left in its own address bar, not just that the server sent
-        the right header."""
+        code for a cookie (see web/session_auth.py's module docstring). ASGI
+        TestClient assertions already cover the redirect response's own
+        Location header (test_server.py) -- this proves a real browser
+        actually lands there with nothing left in its own address bar, not
+        just that the server sent the right header."""
         server, _web_ui = local_server
         url = _sign_in_url(server, "/approvals")
         assert "bootstrap=" in url  # sanity: the link under test does carry one
@@ -876,11 +876,11 @@ class TestApprovalListBehavior:
         """A slow-network retry (or an over-eager double click) posting the
         exact same decision twice must resolve the pending call exactly
         once: the first POST wins (200), the second is turned away as
-        ``already_decided`` (409, the decide route's own idempotency guarantee) rather
-        than raising or double-resolving the already-unblocked
-        ``show_popup()`` call. Driven with a raw ``fetch()`` (same approach
-        as ``test_wrong_csrf_value_is_rejected`` above) since the real
-        button click navigates away after the first response, leaving
+        ``already_decided`` (409, the decide route's own idempotency
+        guarantee) rather than raising or double-resolving the
+        already-unblocked ``show_popup()`` call. Driven with a raw ``fetch()``
+        (same approach as ``test_wrong_csrf_value_is_rejected`` above) since
+        the real button click navigates away after the first response, leaving
         nothing on screen to click a genuine second time."""
         server, web_ui = local_server
         _sign_in_local(page, server)
@@ -979,7 +979,7 @@ class TestApprovalBinder:
         programmatic ``.check()`` call, since that's the actual
         keyboard-accessibility contract Playwright's own ``.check()``
         deliberately bypasses. (Initial page-load focus is not the binder's
-        and is not re-asserted here.)"""
+        concern and is not re-asserted here.)"""
         server, web_ui = local_server
         _sign_in_local(page, server)
         thread, card = _register_card(web_ui)
@@ -1095,12 +1095,12 @@ class TestApprovalBinder:
                 thread.join(timeout=5)
 
     def test_icon_renders_for_a_connector_with_nothing_pending_at_first_paint(self, page, local_server):
-        """A connector with nothing pending at first paint still needs its
-        CSS rule baked in; without one, a row that arrived for it live would
-        draw the generic letter badge until the next full reload. Slack has
-        nothing pending at first paint here -- the only card at load time is a Gmail one -- so a Slack row
-        arriving live must still draw the real bundled icon, not a letter
-        "S"."""
+        """A connector with nothing pending at first paint still needs its CSS
+        rule baked in; without one, a row that arrived for it live would draw
+        the generic letter badge until the next full reload. Slack has nothing
+        pending at first paint here -- the only card at load time is a Gmail
+        one -- so a Slack row arriving live must still draw the real bundled
+        icon, not a letter "S"."""
         server, web_ui = local_server
         _sign_in_local(page, server)
         thread_a, card_a = _register_gated_card(
@@ -1386,14 +1386,14 @@ class TestMobileLayoutViewport:
             thread.join(timeout=5)
 
     def test_list_row_keeps_a_readable_title_column(self, mobile_page, local_server):
-        """The list row's title column, as it actually reaches a phone:
-        ``.pf-approval-actions`` is
-        ``flex-shrink:0`` around ~220px of buttons while
-        ``.pf-approval-main`` is ``flex:1;min-width:0``, so the row's own
-        ``flex-wrap`` never fires -- the text column shrinks to roughly
-        25px instead, and the title truncates after two or three
-        characters. The number is the assertion: a title column narrower
-        than the icon beside it is not a row anyone can decide from."""
+        """The list row's title column, as it actually reaches a phone.
+        The failure this guards against: with ``.pf-approval-actions`` at
+        ``flex-shrink:0`` around ~220px of buttons and ``.pf-approval-main``
+        at ``flex:1;min-width:0``, the row's own ``flex-wrap`` never fires
+        -- the text column shrinks to roughly 25px instead, and the title
+        truncates after two or three characters. The number is the
+        assertion: a title column narrower than the icon beside it is not a
+        row anyone can decide from."""
         server, web_ui = local_server
         _sign_in_local(mobile_page, server)
         thread, card = _register_card(web_ui)
@@ -1872,8 +1872,8 @@ class TestSettingsPageRendering:
         assert page.get_by_text("Auto-accept").first.is_visible()
         self._screenshot(page, "org-settings-non-admin")
 
-        # The audit log is read-only in org mode -- the local-only export and log-level
-        # controls have no org route, so they must not be drawn.
+        # The audit log is read-only in org mode -- the local-only export and
+        # log-level controls have no org route, so they must not be drawn.
         page.locator('.pf-navitem[data-nav="audit"]').click()
         page.wait_for_selector(".pf-audit-list")
         assert page.get_by_text("Recent decisions", exact=True).is_visible()

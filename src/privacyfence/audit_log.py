@@ -10,7 +10,7 @@ hash), so a line inserted, edited, or removed after the fact -- without
 also holding this install's own signing key (AuditLogger's
 ``.audit_chain.key``, generated on first use and never itself written
 into the log it protects) -- breaks the chain in a way ``verify_chain()``
-(or ``scripts/verify_audit_log.py``) detects. Every entry also carries an explicit,
+(or ``scripts/verify_audit_log.py``) detects (ADR 0071). Every entry also carries an explicit,
 monotonically-increasing ``schema_version`` per entry (AuditEntry.
 schema_version); a stable ``event_id`` unique to that one JSONL line
 (distinct from ``request_id``, which is deliberately *shared* across a
@@ -59,11 +59,11 @@ logger = logging.getLogger(__name__)
 # Bump this, and add a line to the history below, the next time a field is
 # added, renamed, or repurposed.
 #   1 -- implicit, undocumented shape (no schema_version key)
-#   2 -- the hash chain: + schema_version, event_id, deployment_id,
+#   2 -- the hash chain (ADR 0071): + schema_version, event_id, deployment_id,
 #        security_config_hash, prev_hash, entry_hash
 #   3 -- batch decisions from the approval binder: + decided_via, batch_id
-#   4 -- rule attribution and staleness: + rule_id
-#   5 -- agent attribution AGT-2 (ADR 0006, ADR 0035): + agent_id, agent_name,
+#   4 -- rule attribution and staleness (ADR 0074): + rule_id
+#   5 -- agent attribution (ADR 0006, ADR 0035): + agent_id, agent_name,
 #        agent_version, agent_source
 CURRENT_SCHEMA_VERSION = 5
 
@@ -205,7 +205,7 @@ class AuditEntry:
                             #  a preflight question, not a real decision; recorded for
                             #  pattern-spotting only)
                             # ("rules_listed": web/mcp_dispatch.py's McpDispatcher.list_rules
-                            #  (deleted along with the meta-tool it backed in PSC-3, once ADR 0004
+                            #  (deleted along with the meta-tool it backed, once ADR 0004
                             #  decision 3's one-minor-release grace period was honoured) -- not a
                             #  decision either, but the full current rule/grant set was disclosed,
                             #  worth its own record for the same pattern-spotting reason as
@@ -252,7 +252,7 @@ class AuditEntry:
                             #  privacyfence_list_policy's own
                             #  disclosure of the current v2 auto_accept: rule set, kept distinct from
                             #  "rules_listed" (the older v1 auto_accept_rules/auto_accept_grants
-                            #  disclosure the now-PSC-3-deleted list-rules meta-tool gave) since they
+                            #  disclosure the since-deleted list-rules meta-tool gave) since they
                             #  list two different config sections, not two names for the same event)
                             # ("policy_rule_changed_via_bridge_proposal"/
                             #  "policy_rule_removed_via_bridge_proposal"/"policy_bridge_proposal_no_op":
@@ -325,23 +325,23 @@ class AuditEntry:
                               # ordinary single-decide entry, and for every entry recorded before
                               # this field existed. See approvals.PendingApproval.decided_via's own
                               # docstring for how a decision gets stamped with it.
-    rule_id: str = ""       # The on-disk v2 auto_accept: rule's own
-                              # stable, content-derived id (policy.store.rule_id_for_rule) that
+    rule_id: str = ""       # The on-disk auto_accept: rule's own
+                              # stable, content-derived id (policy.store.rule_id_for) that
                               # matched, when this decision is "auto_accepted" and the match
-                              # resolves unambiguously to exactly one rule row. Distinct from
-                              # auto_accept_rule above: that field is a rule *name*, which
-                              # can be the same string for several different grants/rules and so
+                              # resolves to exactly one rule row. Distinct from
+                              # auto_accept_rule above: that field has held a rule *name*, which
+                              # can be the same string for several different rules and so
                               # can never answer "which rule let this through" on its own; this
                               # field is what AuditLogger.rule_usage() below groups by to get a
                               # per-rule match count and last-matched date for the Auto-accept
-                              # Settings page. Left "" -- fail closed, never guessed -- for every
-                              # non-"auto_accepted" decision, for an entry recorded before this
-                              # field existed, for the in-memory "session_temp_accept" grace-window
-                              # pseudo-match (not a stored rule row at all), and for a real
-                              # auto-accept where the v1 and v2 engines disagree on which rule
-                              # matched (logged separately at WARNING by gate.py's
-                              # _evaluate_auto_accept -- the audit log must never attribute a
-                              # decision to a row it isn't certain about).
+                              # Settings page (ADR 0074). Left "" -- fail closed, never guessed --
+                              # for every non-"auto_accepted" decision, for an entry recorded
+                              # before this field existed, and for the in-memory
+                              # "session_temp_accept" grace-window pseudo-match (not a stored rule
+                              # row at all). There is one rule engine (ADR 0004), so a real
+                              # auto-accept always resolves to the one row gate.py's
+                              # _evaluate_auto_accept matched -- the audit log never attributes a
+                              # decision to a row it isn't certain about.
     batch_id: str = ""       # The server-minted id of the batch this decision was submitted as part
                               # of, when decided_via == "binder" -- "" otherwise. Lets a reviewer (or
                               # a compliance report) group every audit entry a single passkey
@@ -889,7 +889,7 @@ class AuditLogger:
 
     def rule_usage(self) -> dict[str, dict[str, Any]]:
         """Per-rule usage, for the Auto-accept Settings page's "Matched 42x, last 3 days ago" /
-        "never matched" line, keyed by rule id because a rule name can repeat: ``{rule_id:
+        "never matched" line, keyed by rule id because a rule name can repeat (ADR 0074): ``{rule_id:
         {"count": int, "last_matched": <ISO-8601 timestamp string>}}``, built from every ``"auto_accepted"`` decision this
         install has ever recorded whose ``rule_id`` resolved to a real row (see AuditEntry.
         rule_id's own docstring for when that's empty).
@@ -946,7 +946,7 @@ def _load_or_create_chain_key(path: Path) -> bytes:
     itself. The real defense against a fully-privileged local
     administrator tampering with their own audit trail is a copy that
     leaves this trust boundary entirely -- see audit_forwarding.py's
-    centralized forwarding.
+    centralized forwarding (ADR 0071).
     """
     try:
         if path.exists():

@@ -592,8 +592,8 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
     every rule, wherever it originated -- authored through Settings, the MCP bridge, the
     popup's own "Always allow" flow, or migrated from a hand-edited v1 config at startup -- lives
     in the on-disk v2 ``auto_accept:`` section, so there is exactly one rule list to check and its
-    own ``.id`` (content-derived, ``policy.store.rule_id_for_rule``) is already the canonical id
-    an audit entry records. An empty ``matched_rule_id`` on an ``"auto_accepted"`` audit entry still means
+    own ``.id`` (content-derived, ``policy.store.rule_id_for``) is already the canonical id
+    an audit entry records (ADR 0074). An empty ``matched_rule_id`` on an ``"auto_accepted"`` audit entry still means
     exactly what it always has: the temp-accept grace window matched, not a rule row.
     """
     rules = get_policy_v2_store_rules()

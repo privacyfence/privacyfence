@@ -36,9 +36,9 @@ CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
 if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ]; then
   # Nobody is actually logged in at install time (a remote/unattended install,
   # or a package run at the login window) -- there is no human account yet to
-  # add to the service group. That used to end this script, leaving the whole
-  # install unseparated; ADR 0003 decision 3 splits `enable` so it no longer
-  # has to. The machine half below runs regardless and fully separates the
+  # add to the service group. That must not leave the whole install
+  # unseparated, so ADR 0003 decision 3 splits `enable`: the machine half
+  # below runs regardless and fully separates the
   # install, and the one step that genuinely needs a human -- the group
   # membership -- is recorded as pending, which the companion app closes by
   # itself at the first real login session.
@@ -84,8 +84,8 @@ fi
 # already-running daemon) and catches the case where it did not -- whether
 # `enable --auto` above reported success or not: ENABLE_STATUS above is
 # about `enable` completing, not about the daemon specifically ending up
-# running, and a daemon that came up as root is exactly a case where the two
-# come apart.
+# running, and an upgrade that leaves the daemon stopped, or running as root,
+# is exactly a case where the two come apart.
 ENSURE_RUNNING_OUTPUT="$("$SEPARATION_SCRIPT" daemon ensure-running 2>&1)"
 ENSURE_RUNNING_STATUS=$?
 if [ "$ENSURE_RUNNING_STATUS" -eq 0 ]; then

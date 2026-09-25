@@ -377,7 +377,8 @@ class TestCacheControlOnSensitivePages:
 
 
 class TestCspNonce:
-    """A fresh CSP nonce per response, matching the one in the document."""
+    """A fresh CSP nonce per response, matching the one in the document
+    (ADR 0063)."""
 
     def _client(self):
         sessions = LocalSessionStore()
@@ -677,7 +678,8 @@ class TestHumanSessionWiring:
     the companion an attested session is minted through exists at all
     (decisions 3-5) -- on an unseparated build-from-source install neither
     holds, and an agent that can rewrite the credential store directly (ADR
-    0002 decision 6) gains nothing from a session check anyway.
+    0002 decision 6) gains nothing from a session check anyway. ADR 0062
+    records the gate itself.
 
     The decide route's own behavior is web/routes_approvals.py's to test
     (TestHumanSessionRequiredToApprove there); what is checked here is that
@@ -910,7 +912,7 @@ class TestMcpUrlFile:
 
 
 # --------------------------------------------------------------------------- #
-# Audience separation: the MCP bearer token and the approval
+# Audience separation (ADR 0061): the MCP bearer token and the approval
 # surface's session cookie/CSRF token are different secrets, checked in
 # different middleware, and neither is ever accepted on the other's routes.
 # One test in this class is there to fail loudly if the middleware is ever

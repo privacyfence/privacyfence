@@ -25,8 +25,9 @@ own session/CSRF cookie**: audience separation --
 endpoints, and the browser session cookie must never be accepted on
 /mcp" -- has to hold even if someone reuses one file's contents by hand, so
 the two are generated independently and never compared against each other
-anywhere in this codebase. See web/test_routes_mcp.py's audience-separation
-test, which is the one required to fail loudly if that ever changes.
+anywhere in this codebase (ADR 0061). See tests/unit/web/test_server.py's
+``TestAudienceSeparation``, which is the one required to fail loudly if
+that ever changes.
 """
 from __future__ import annotations
 

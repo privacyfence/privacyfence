@@ -12,7 +12,7 @@
   the audit log's HMAC key. One change closes all four -- a dedicated account
   owning those files -- and this script is that change, made reversible.
 
-  macOS and Linux got the same change in their own idioms
+  macOS and Linux make the same change in their own idioms
   (scripts/macos_privilege_separation.sh, scripts/linux_privilege_separation.sh)
   and this deliberately mirrors them step for step. Three things have no POSIX
   counterpart at all:
@@ -53,20 +53,19 @@
 
   Adding the owner to $ServiceGroup is the only step here that needs to know
   *which human* this install is for, and ADR 0003 decision 3 splits it out
-  for that reason: an MDM push or
-  a SYSTEM-context install resolves no owner account, and that used to leave
-  the whole install unseparated. It no longer does. `enable` with no
-  resolvable owner does everything an administrator can do alone and records
+  for that reason: an MDM push or a SYSTEM-context install resolves no owner
+  account, and that must not leave the whole install unseparated. `enable`
+  with no resolvable owner does everything an administrator can do alone and records
   the group membership as pending; `enable -ForUser <name>` closes that half
   later, idempotently, and is what the companion app runs by itself at the
   first real sign-in.
 
-  No longer opt-in. ADR 0003 decision 4 has installer/privacyfence.iss run
+  Not opt-in. ADR 0003 decision 4 has installer/privacyfence.iss run
   `enable` itself, elevated, as a step of every install -- so on Windows this
   script is normally something a human runs only to look at an install
-  (`status`) or to purge one (`uninstall -Purge`), the same way the .deb's postinst
-  runs the Linux script. Running `enable` by hand still
-  works, and is the documented way to re-provision an install whose service,
+  (`status`) or to purge one (`uninstall -Purge`), the same way the .deb's
+  postinst runs the Linux script. Running `enable` by hand still works, and
+  is the documented way to re-provision an install whose service,
   ACLs or companion task have drifted.
 #>
 [CmdletBinding()]
@@ -373,7 +372,8 @@ function Test-TrustedIdentity {
     # SYSTEM and Administrators are ignored everywhere in this script, for the
     # reason windows_acl.py's own docstring gives: they are the service manager
     # and the account that provisioned the install, and a local Administrator
-    # defeats the design by taking ownership anyway. Matched by SID so this holds on a non-English Windows.
+    # defeats the design by taking ownership anyway. Matched by SID so this
+    # holds on a non-English Windows.
     #
     # NT SERVICE\TrustedInstaller (S-1-5-80-956008885-3418522649-1831038044-
     # 1853292631-2271478464 -- an "NT SERVICE" SID, computed the same
@@ -406,14 +406,14 @@ function Test-TrustedIdentity {
 
 function Assert-ImageProtected {
     <#
-      A service runs whatever binPath names, so an install the
-      logged-in user can rewrite turns privilege separation inside out -- the
-      agent gains a way to run its own code *as the service account*, which is
+      A service runs whatever binPath names, so an install the logged-in
+      user can rewrite turns privilege separation inside out -- the agent
+      gains a way to run its own code *as the service account*, which is
       strictly worse than an unseparated install.
 
-      ADR 0003 decision 4 removed the non-elevated per-user install tier
-      under %LOCALAPPDATA%\Programs -- Setup is PrivilegesRequired=admin and runs
-      this script itself, so a stock install lands under %ProgramFiles% and
+      ADR 0003 decision 4 rules out a non-elevated per-user install tier
+      under %LOCALAPPDATA%\Programs -- Setup is PrivilegesRequired=admin and
+      runs this script itself, so a stock install lands under %ProgramFiles% and
       never reaches the refusal below. What is left for it to catch is
       everything else that can put a writable image under a service's binPath:
       a -DaemonExec pointed at a copy somewhere in a profile, an install
@@ -762,7 +762,7 @@ function Install-DaemonService {
     # the SCM materializes it with the service, gives it its own SID, and
     # grants it the "log on as a service" right itself -- none of which is
     # true for an ordinary account, which would need a password stored
-    # somewhere and a separate LsaAddAccountRights call.
+    # somewhere and a separate LsaAddAccountRights call. See ADR 0059.
     #
     # The spaces after each `=` are sc.exe's own (genuinely strange) syntax,
     # not a typo: the separator is "name= value", and "name=value" is parsed
@@ -792,9 +792,8 @@ function Install-DaemonService {
         'DisplayName=', (ConvertTo-CommandLineToken 'PrivacyFence')
     ) -join ' ') | Out-Null
     Invoke-Sc @('description', $ServiceName, 'Runs the PrivacyFence approval daemon under its own account.') | Out-Null
-    # Crash restart, the thing the Scheduled Task's repeating TimeTrigger was
-    # standing in for before there was a service manager involved: three
-    # restarts with a widening delay, and the counter resets after a day.
+    # Crash restart: three restarts with a widening delay, and the counter
+    # resets after a day.
     Invoke-Sc @('failure', $ServiceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/10000/restart/30000') | Out-Null
 }
 
@@ -987,10 +986,10 @@ function Undo-PartialEnable {
       0042: nothing restores data into a user profile). A re-run `enable`
       picks it up exactly as a reinstall does.
 
-      An operation that is not atomic and does not
-      clean up after itself when it fails midway leaves an install that is
-      neither separated nor whole -- here, a marker claiming a layout whose
-      service is gone, which paths.py would resolve for nobody.
+      An operation that is not atomic and does not clean up after itself
+      when it fails midway leaves an install that is neither separated nor
+      whole -- here, a marker claiming a layout whose service is gone,
+      which paths.py would resolve for nobody.
 
       Every step is a no-op on the state it was not reached from
       (Uninstall-* return early on what is not there), which is what lets one
@@ -1062,11 +1061,10 @@ function Invoke-Enable {
     # Everything that can leave this install in neither layout, in one block
     # that undoes itself. The two states worth having are "separated" and
     # "not"; an `enable` that stops between them produces neither, and that
-    # is not a theoretical shape. One observed on a real runner was the
-    # daemon's data under %ProgramData% -- a real
-    # install's authority directory, audit log and MCP token -- with no marker,
-    # no service and no companion task pointing at it, which `paths.py`
-    # resolves for nobody.
+    # is not a theoretical shape: one seen on a real runner is the daemon's
+    # data under %ProgramData% -- a real install's authority directory, audit
+    # log and MCP token -- with no marker, no service and no companion task
+    # pointing at it, which `paths.py` resolves for nobody.
     #
     # Install-DaemonService goes first because it is what brings
     # NT SERVICE\PrivacyFence into existence, and Set-Layout's grants cannot

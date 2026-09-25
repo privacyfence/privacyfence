@@ -318,7 +318,7 @@ select.pf-input { cursor: pointer; }
 .pf-audit-badge.denied { background: var(--pf-danger-tint); color: var(--pf-danger); }
 .pf-audit-badge.auto_accepted { background: rgba(0,113,227,.1); color: var(--pf-accent); }
 .pf-audit-badge.other { background: var(--pf-surface-2); color: var(--pf-text-muted); }
-/* AGT-5: who asked, with its tier -- agent_label.py's wording, the approval list's tiers. */
+/* Who asked, with its tier -- agent_label.py's wording, the approval list's tiers. */
 .pf-audit-agent { width: 190px; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--pf-text-muted); flex-shrink: 0; min-width: 0; }
 /* The name gives way, never the tier marker: a truncated claim must still say it is a claim. */
 .pf-audit-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -327,7 +327,7 @@ select.pf-input { cursor: pointer; }
 .pf-audit-tier { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; white-space: nowrap; }
 .pf-audit-tier.attested { background: rgba(0,113,227,.1); color: var(--pf-accent); }
 .pf-audit-tier.claimed, .pf-audit-tier.unknown { background: var(--pf-surface-2); color: var(--pf-text-muted); }
-/* AGT-5: the admin's AI-system pin page. */
+/* The admin's AI-system pin page (ADR 0035 decision 3). */
 .pf-agents-list { max-width: 640px; border: 1px solid var(--pf-border); border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
 .pf-agents-row { padding: 10px 14px; border-bottom: 1px solid var(--pf-border); }
 .pf-agents-row:last-child { border-bottom: none; }
@@ -380,14 +380,15 @@ select.pf-input { cursor: pointer; }
 
 _JS = r"""
 (function () {
-  // PSC-5: window.__pfCapabilities is Python's own settings_window_html.
+  // window.__pfCapabilities is Python's own settings_window_html.
   // build_html()/_capabilities_for() -- which inner-nav sections this
   // (mode, is_admin) combination gets, and which individual actions never
   // have a real route to post to at all (org_settings_scope.
   // NOT_APPLICABLE_ACTIONS, plus the handful of local-only bespoke actions
   // that table doesn't cover -- see that function's own docstring). Every
-  // call site before PSC-5 renders under the fallback below, which hides
-  // nothing -- local mode's own rendering is unaffected by any of this.
+  // call site that sets no capabilities renders under the fallback below, which hides
+  // nothing -- local mode's own rendering is unaffected by any of this
+  // (ADR 0032).
   var CAPS = window.__pfCapabilities || {
     mode: 'local', is_admin: false,
     sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
@@ -405,7 +406,7 @@ _JS = r"""
     // for what's otherwise purely client-side UI state (see this module's
     // own docstring on `ui`). Every other route omits the script that sets
     // it, so this falls back to 'general' exactly as before -- except in a
-    // mode where General itself is hidden (PSC-5: a non-admin org
+    // mode where General itself is hidden (a non-admin org
     // principal), where landing on a nav item that isn't drawn at all would
     // leave the page with no visible selection; Auto-accept is the one
     // section every org principal, admin or not, always gets.
@@ -530,7 +531,7 @@ _JS = r"""
   // General
   // -------------------------------------------------------------------- //
 
-  // Approval-notification permission (5deef1d8:docs/approval-list-ui-ux.md §4.4) is
+  // Approval-notification permission (the tier-1 notifications of ADR 0064) is
   // browser state, not anything SettingsController tracks or this window's
   // Python side could toggle -- Notification.permission lives per-origin in
   // the browser itself, so this reads it live off `window` at render time
@@ -553,8 +554,8 @@ _JS = r"""
   // in the common case; the config-disabled branch only ever applies to
   // the web surface, where that flag is always set.
   //
-  // web.notifications.detail (settings.yaml.example, docs/
-  // 5deef1d8:docs/approval-list-ui-ux.md §4.3) -- unlike the enabled flag above, this one
+  // web.notifications.detail (settings.yaml.example; how much a notification
+  // body may say, ADR 0064) -- unlike the enabled flag above, this one
   // *is* a real control: set_notifications_detail persists straight to
   // config (settings_controller.py) and the returned snapshot's own
   // general.notifications_detail is what drives this segmented control's
@@ -668,8 +669,8 @@ _JS = r"""
     // edit is the only way back to any other state), on but no passkey
     // yet (the control would just 400/self.error -- hidden, with a hint
     // pointing at the button above instead of a control guaranteed to
-    // fail), or ready (the actual button).
-    // B9's own machinery hardcodes LOCAL_PRINCIPAL throughout
+    // fail), or ready (the actual button). See ADR 0068.
+    // enable_step_up hardcodes LOCAL_PRINCIPAL throughout
     // (org_settings_scope.ACTION_SCOPES's own comment on enable_step_up) --
     // stepUpApplicable is g.step_up_available further gated on this not
     // being one of the modes/principals that control could never act
@@ -695,7 +696,7 @@ _JS = r"""
     }
     html += '</div>';
 
-    // PSC-5: both cards below are meaningless on a headless org server --
+    // Both cards below are meaningless on a headless org server --
     // an update check against GitHub Releases and installing *this org's
     // own* configuration bundle are both local-desktop-install concepts
     // (org_settings_scope.NOT_APPLICABLE_ACTIONS covers toggle_update_check;
@@ -803,7 +804,7 @@ _JS = r"""
       // (_SENSITIVE_ACTIONS) differently from disabling one (see
       // web/routes_settings.py's own classification comment), so the
       // action this click sends has to match which direction the very
-      // next click will actually take.
+      // next click will actually take (ADR 0070).
       html += toggleHtml(c.enabled, c.enabled ? 'disable_connector' : 'enable_connector', { connector: c.key }, false, c.label + ' enabled');
       html += '</div>';
     });
@@ -1011,7 +1012,7 @@ _JS = r"""
       ? '<div class="pf-page-subtitle">Your own recent decisions — accepted, denied, or auto-accepted — and which AI system asked for each.</div>'
       : '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
 
-    // PSC-5/AGT-5: org mode shows each principal's own recent decisions, but has no export
+    // Org mode shows each principal's own recent decisions, but has no export
     // route and no install log level to set -- both controls are local-only actions.
     if (!notApplicable('export_audit_log')) {
       html += '<div class="pf-export-row"><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Export Audit Log" ' +
@@ -1050,7 +1051,7 @@ _JS = r"""
     return html;
   }
 
-  // AGT-5: settings_controller.audit_rows()'s `agent` -- agent_label.AgentLabel.to_dict(), the
+  // settings_controller.audit_rows()'s `agent` -- agent_label.AgentLabel.to_dict(), the
   // same tiered wording the approval card and list use. A row with no agent (a log line from
   // before attribution) reads as unknown: never blank, never "Claude". No brand mark here --
   // the tier marker carries the distinction on a page this dense.
@@ -1067,7 +1068,7 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
-  // AI systems (AGT-5, org mode, admin only -- ADR 0035 decision 3)
+  // AI systems (org mode, admin only -- ADR 0035 decision 3)
   // -------------------------------------------------------------------- //
 
   function renderAgents(state) {
@@ -1158,7 +1159,7 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   function renderSection(state) {
-    // PSC-5: a section CAPS itself hides never renders, even if `ui.section`
+    // A section CAPS itself hides never renders, even if `ui.section`
     // somehow still names it (e.g. a stale `data-nav` click recorded before
     // a capabilities-driven re-render, or a route naming it directly via
     // window.__pfInitialSection) -- falls back to whichever of Auto-accept/
@@ -1495,7 +1496,7 @@ _LOCAL_ONLY_BESPOKE_ACTIONS: frozenset[str] = frozenset({
 
 
 def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
-    """PSC-5: which of the inner-nav sections this ``(mode, is_admin)``
+    """Which of the inner-nav sections this ``(mode, is_admin)``
     combination gets, and which individual controls (see ``dataAttr``/
     ``toggleHtml`` call sites throughout ``_JS``) must never draw at all --
     kept out of ``state`` itself (a separate ``window.__pfCapabilities``
@@ -1506,8 +1507,8 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 
     Local mode (every existing caller) gets every section and no
     suppressed action -- this function must be a no-op for ``mode !=
-    ORG_MODE``, since that's what keeps every currently-shipped local
-    rendering path (webview and web alike) unchanged by this phase.
+    ORG_MODE``, since that's what keeps every local rendering path
+    (webview and web alike) independent of org mode's filtering.
 
     Org mode gets ``org_settings_scope.NOT_APPLICABLE_ACTIONS`` (every
     action with no real org route at all -- see that module for the
@@ -1515,10 +1516,10 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     itself owns, all narrower than "has an org route": Connectors has no
     applicable action *and* nothing else worth showing (no read-only
     connector list exists for org mode today), so the whole section is
-    hidden rather than rendered empty; Audit Log (AGT-5) is shown to every
+    hidden rather than rendered empty; Audit Log is shown to every
     principal as a read-only list of their own recent decisions, its
     local-only export and log-level controls suppressed through
-    ``not_applicable_actions``; AI systems (AGT-5) is org-admin-only and
+    ``not_applicable_actions``; AI systems (ADR 0035 decision 3) is org-admin-only and
     never shown in local mode; General and Privacy
     Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
     split (every action either page
@@ -1529,7 +1530,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     if mode != ORG_MODE:
         return {
             "mode": LOCAL_MODE, "is_admin": False,
-            # AGT-5: the AI-system pin page is org-only -- local mode has no DCR
+            # The AI-system pin page is org-only -- local mode has no DCR
             # registrations to pin (settings.yaml's agent_overrides: only relabels, ADR 0037).
             "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False},
             "not_applicable_actions": [],
@@ -1549,7 +1550,7 @@ def build_html(
     mode: str = LOCAL_MODE, is_admin: bool = False,
 ) -> str:
     """Full self-contained HTML document for the settings window's WKWebView
-    (``mode="local"``, every caller before PSC-5) *and*, since PSC-5, for
+    (``mode="local"``) *and* for
     org mode's own ``GET /settings``/``GET /settings/privacy`` -- one
     implementation rendering a capability-filtered subset for each, not one
     page (see ADR 0033 and ADR 0032): the nav items and page content below
@@ -1580,16 +1581,16 @@ def build_html(
     directly on the screen that unblocks the user, instead of ``/settings``'s
     default General page. ``None`` (every other route) emits no script at
     all, leaving the JS's own ``'general'`` fallback exactly as before.
-    PSC-5's own org-mode callers pass ``"auto_accept"``/``"privacy"`` for
+    Org mode's callers pass ``"auto_accept"``/``"privacy"`` for
     the same reason -- org mode's own General page is empty (hidden
     entirely, in fact) for a non-admin principal, so falling back to it
     would land every non-admin on a blank nav selection.
 
-    ``mode``/``is_admin`` (PSC-5): see ``_capabilities_for`` above for
+    ``mode``/``is_admin``: see ``_capabilities_for`` above for
     exactly what each combination hides. Both default to local mode's own
-    values, so every pre-PSC-5 call site (every one of them, until
-    web/routes_settings.py's org routes started passing ``mode="org"``)
-    is unaffected.
+    values, so a call site that passes neither (every one except
+    web/routes_settings.py's org routes, which pass ``mode="org"``)
+    renders the full local page.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json.dumps(state)

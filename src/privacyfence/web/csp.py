@@ -14,7 +14,7 @@ the way. A per-response nonce closes
 that: only ``<style>``/``<script>`` elements carrying the exact nonce this
 response's own ``Content-Security-Policy`` header names are honored, and an
 attacker injecting markup into the response body has no way to know that
-value in advance.
+value in advance. See ADR 0063.
 
 **Why ``style-src-attr`` keeps ``'unsafe-inline'``.** CSP nonces only ever
 cover ``<style>``/``<script>`` *elements* -- there is no nonce mechanism for

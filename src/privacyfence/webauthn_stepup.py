@@ -113,7 +113,7 @@ this module only tracks the state an entry needs to be written from:
   that asymmetry is what keeps ``step_up_disabled_notice``'s "treat this
   install as compromised" banner trustworthy -- a disable this module ever
   observes did not come from a human clicking a button in their own
-  browser.
+  browser. See ADR 0068.
 """
 from __future__ import annotations
 

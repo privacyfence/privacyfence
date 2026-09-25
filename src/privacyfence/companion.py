@@ -83,7 +83,8 @@ nothing but ``web/control_channel.py``:
   packaged install; the daemon calls into this process's own
   channel to put it on the desktop. Re-presenting one means issuing a new
   one, since nothing keeps the plaintext, which is what the menu entry
-  ``_show_recovery_code()`` backs does.
+  ``_show_recovery_code()`` backs does. See ADR 0003's 2026-09-19
+  Out-of-scope amendment.
 """
 from __future__ import annotations
 
@@ -292,7 +293,7 @@ def _open_path(path: str) -> bool:
     open ``path`` in the user's default browser -- this process's whole
     product surface (ADR 0002 decision 2), and the only route to a session
     that may *approve* rather
-    than merely view (web/session_auth.py's ``PROVENANCE_HUMAN``).
+    than merely view (web/session_auth.py's ``PROVENANCE_HUMAN``, ADR 0062).
 
     What makes that session attestable is the daemon calling back to
     whichever process owns the companion channel, so which process this is

@@ -100,7 +100,8 @@ companion is the only PrivacyFence process that runs where a human is:
 - ``RECOVERY`` (companion -> daemon), and ``CONFIRM RECOVERY`` / ``SHOW
   RECOVERY <code>`` (daemon -> companion), move the one-time recovery code
   off the ``/security`` HTTP response body and onto the companion's own
-  dialog. ``RECOVERY``'s reply never carries the code -- it
+  dialog (ADR 0003's 2026-09-19 Out-of-scope amendment). ``RECOVERY``'s
+  reply never carries the code -- it
   is ``OK`` or ``ERROR <reason>`` and nothing else, so a local process that
   speaks this socket learns only that a human was asked, never what they
   were shown.
@@ -389,7 +390,8 @@ def _handle_daemon_request(
         # what anything on this machine can send, so it mints the session
         # that may view but not approve. The two attested shapes cost a
         # round trip into the companion process, which is the only
-        # PrivacyFence process running where a human can be asked at all.
+        # PrivacyFence process running where a human can be asked at all
+        # (ADR 0062).
         #
         # ADR 0008: every shape below now also binds the resulting session
         # to whichever principal this *connection* belongs to (peer
@@ -2243,7 +2245,9 @@ def send_recovery_code(code: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SEC
     treats that as "no code was issued" rather than storing one that cannot
     be produced. Never call this with anything but a code straight from
     ``webauthn_stepup``: the companion refuses a line that does not match
-    the format, which is the backstop, not the contract."""
+    the format, which is the backstop, not the contract. Why the code goes
+    through the companion rather than an HTTP response: ADR 0003's
+    2026-09-19 Out-of-scope amendment."""
     return _ask_companion(
         f"SHOW RECOVERY {code}\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
     )

@@ -36,8 +36,9 @@ from ..connector import ToolSpec
 # auto-accept rules, the audit log -- enforced here in the daemon itself, not
 # in the calling client. Advertising every tool uniformly as read-only/
 # non-destructive keeps the client from throwing its own redundant
-# confirmation prompt in front of gate.py's real one (see
-# 5deef1d8:docs/TECHNICAL_REFERENCE.md's "Why every tool is advertised as read-only").
+# confirmation prompt in front of gate.py's real one. A workaround, not a
+# settled posture: see ADR 0076 and the open follow-up
+# https://github.com/privacyfence/privacyfence/issues/46.
 _UNIFORM_READ_ONLY_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True,
 )

@@ -4,7 +4,8 @@
  * py`` listens on, and that ``companion.py`` already speaks
  * ``MINT``/``MINT COMPANION``/``STATUS``/``QUIT`` over. ADR 0008 D3
  * (kernel-authenticated MCP tokens, ``docs/adr/0008-one-principal-per-os-
- * user.md``) is why the shim is a client of it at all: its /mcp bearer token comes from here, not from a file.
+ * user.md``) is why the shim is a client of it at all: its /mcp bearer
+ * token comes from here, not from a file.
  *
  * ``MINT MCP`` is the one command this file speaks. It is the exact same
  * request/response shape every other control-channel client in this

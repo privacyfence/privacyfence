@@ -96,8 +96,8 @@ QATEST_TAG = "[QATEST]"
 # eventually-consistent-delete retries below -- every *_client.py already
 # gets its own logger this way and logs its own request/response at
 # info/debug level (e.g. jira_client.py's "create_issue created %s",
-# "update_issue %s: updated fields %s"); this script itself never had one
-# until now because it otherwise only ever prints its report to stdout.
+# "update_issue %s: updated fields %s"); this script otherwise only ever
+# prints its report to stdout.
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------- #
@@ -1607,7 +1607,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #   - gmail -- create_draft() has no matching get_draft()/update_draft() in
 #     GmailClient, so there is no read/update step to exercise; creating and
 #     immediately deleting a draft is not the create/read/update/delete
-#     cycle this phase asks for.
+#     cycle this section checks.
 #   - drive, slack -- both have write methods (create_blank_file/
 #     write_sheet_values, send_message) but neither exposes the kind of
 #     update-in-place-then-read-it-back pair the four connectors above do.
@@ -1837,8 +1837,8 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
             # Cleans up through the same client method a real
             # calendar_delete_event MCP call would use (default scope=
             # "this") -- see this section's own module comment above for
-            # why calendar no longer needs the raw events().delete()
-            # service call jira/tasks still do.
+            # why calendar does not need the raw events().delete() service
+            # call jira/tasks still do.
             delete_note = _attempt_delete(
                 lambda: client.delete_event(calendar_id, event_id),
                 request_desc=f"calendar_id={calendar_id!r}, event_id={event_id!r}",
@@ -1862,9 +1862,9 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
                 if confirm_note:
                     note = f"{note}; {confirm_note}" if note else confirm_note
 
-    # The recurring-event delete round trip, a second and independent check alongside
-    # the plain event above -- see _lifecycle_calendar_recurrence's own
-    # docstring for why it's split out and what it does and doesn't cover.
+    # The recurring-event delete round trip, a second and independent check
+    # alongside the plain event above -- see _lifecycle_calendar_recurrence's
+    # own docstring for why it's split out and what it does and doesn't cover.
     # Its own cleanup failure folds into cleanup_ok (same meaning as the
     # plain event's: "something this run created didn't get cleaned up"),
     # never into ok -- ok stays "the create/read/update assertions

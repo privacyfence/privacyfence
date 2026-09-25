@@ -25,7 +25,6 @@ import pytest
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PENDING_DIR = Path(__file__).resolve().parent / "code_history_pending"
 
 # docs/ has its own guard, and ADRs are history by design. The changelog and recorded fixtures are
 # history and third-party data respectively. The two guards quote the shapes as their own samples.
@@ -44,17 +43,23 @@ _PATTERNS = {
     "phase name": re.compile(r"\b[Pp]hase \d"),
     "phase ID": re.compile(r"\bP\d{1,2}(?:\.\d+)?\b"),
     "issue/PR number": re.compile(r"(?:\b[\w.-]+/[\w.-]+#|(?<![\w&#])#)\d{2,4}\b(?!-)"),
-    "finding ID": re.compile(r"\b(?:SEC|TST)-\d+"),
+    "finding ID": re.compile(r"\b(?:SEC|TST|PSC|AGT)-\d+"),
     "section reference": re.compile(r"§\s?\d+(?:\.\d+)*"),
-    # Not inside a short string literal, so data such as a Slack file ID "F1" does not count.
-    "plan item ID": re.compile(r"(?<![\"'\w])[BDFW]\d{1,2}\b(?![\"'])"),
+    # Not inside a short string literal, so data such as a Slack file ID "F1" does not count, but
+    # right after a docstring's opening quotes or before a possessive 's it does. A W after a
+    # four-digit year and a hyphen is an ISO week (an audit log's 2026-W28.jsonl), not a plan item.
+    "plan item ID": re.compile(
+        r"(?:(?<=\"\"\")|(?<=''')|(?<![\"'\w]))(?:[BDF]\d{1,2}|(?<!\d{4}-)W\d{1,2})\b(?![\"'](?!s\b))"
+    ),
     "wave": re.compile(r"\bWave \d"),
     "version-qualified history": re.compile(r"\b(?:as of|since|through|until) v?\d+\.\d", re.IGNORECASE),
 }
 
-# What may precede a section reference or plan item ID when it cites something that still exists.
+# What may precede a section reference or plan item ID when it cites something that still exists. A
+# Markdown path that follows a commit and a colon names a document that no longer does.
 _CITATION = re.compile(
-    r"(?:ADR \d{4}(?:'s)?(?: decision)?|RFC ?\d+|WebAuthn(?: L\d)?|Debian policy|[\w./-]+\.md`?(?:'s)?)[,:]?\s*$"
+    r"(?:ADR \d{4}(?:'s)?(?: decision)?|RFC ?\d+|WebAuthn(?: L\d)?|Debian policy|(?<![\w./:-])[\w./-]+\.md`?(?:'s)?)"
+    r"[,:]?\s*$"
 )
 _CITABLE = {"section reference", "plan item ID"}
 
@@ -67,22 +72,14 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("privilege_separation.py", "since 4.3"): "4.3BSD, the Unix release, not a PrivacyFence version",
     ("privilege_separation.py", "§5.8"): "FHS 3.0 §5.8, the Filesystem Hierarchy Standard's /var/lib",
     ("installer/privacyfence.iss", "#13"): "Pascal's #13 character literal (CR, as in #13#10), not an issue",
-    ("tests/unit/test_paths.py", "W01"): "ISO week 01 in an audit log file name (2026-W01.jsonl), not a plan item",
     ("web/routes_connect.py", "#555"): "a CSS hex colour in the connect page's stylesheet",
     ("web/routes_connect.py", "#888"): "a CSS hex colour in the connect page's stylesheet",
     ("scripts/qa_readme_screenshots.py", "B2"): "a spreadsheet cell reference in demo data",
     ("scripts/qa_readme_screenshots.py", "B4"): "a spreadsheet cell reference in demo data",
     ("src/privacyfence/connectors/drive.py", "B2"): "a spreadsheet cell reference in a tool description's example",
     ("", "§2.7"): "the definition of done in docs/coding-and-testing-guidelines.md, cited by number everywhere",
-    ("scripts/verify_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
-    ("tests/unit/test_verify_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
-    ("tests/unit/test_verify_audit_log.py", "W29"): "an ISO week in an audit log file name (2026-W29.jsonl)",
-    ("tests/unit/test_audit_log.py", "W01"): "an ISO week in an audit log file name (2026-W01.jsonl)",
-    ("tests/unit/test_audit_log.py", "W02"): "an ISO week in an audit log file name (2026-W02.xlsx)",
-    ("tests/unit/test_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
     ("web/routes_security.py", "#555"): "a CSS hex colour in the /security page's stylesheet",
     ("web/routes_security.py", "#888"): "a CSS hex colour in the /security page's stylesheet",
-    ("tests/unit/test_settings_window_html.py", "W31"): "an ISO week number in an audit log file name",
 }
 
 # Embedded base64 (fonts in the approval window's stylesheet) is data that spells anything.
@@ -134,50 +131,16 @@ def _file_hits(rel: str) -> list[str]:
 
 
 def _in_scope(rel: str) -> bool:
-    return not (
-        rel.startswith(_EXEMPT)
-        or Path(rel).suffix.lower() in _BINARY_SUFFIXES
-        or Path(rel).name in _LOCKFILES
-        or rel.startswith("tests/unit/code_history_pending/")
-    )
-
-
-def _pending() -> dict[str, str]:
-    """Paths still waiting for their tags to be rewritten, mapped to the list that names them."""
-    pending: dict[str, str] = {}
-    if PENDING_DIR.is_dir():
-        for listing in sorted(PENDING_DIR.glob("*.txt")):
-            for line in listing.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    pending.setdefault(line.strip(), listing.name)
-    return pending
+    return not (rel.startswith(_EXEMPT) or Path(rel).suffix.lower() in _BINARY_SUFFIXES or Path(rel).name in _LOCKFILES)
 
 
 def test_code_carries_no_history():
-    pending = _pending()
-    hits = [hit for rel in _files() if _in_scope(rel) and rel not in pending for hit in _file_hits(rel)]
+    hits = [hit for rel in _files() if _in_scope(rel) for hit in _file_hits(rel)]
     assert not hits, (
         "Code comments, docstrings and strings say why in their own words; history belongs in "
         "CHANGELOG.md or an ADR, and an open issue is cited by its full URL (see "
         "tests/unit/test_code_no_history.py's docstring):\n" + "\n".join(hits)
     )
-
-
-def test_pending_lists_name_each_existing_file_once():
-    seen: dict[str, str] = {}
-    problems = []
-    if PENDING_DIR.is_dir():
-        for listing in sorted(PENDING_DIR.glob("*.txt")):
-            for line in listing.read_text(encoding="utf-8").splitlines():
-                rel = line.strip()
-                if not rel:
-                    continue
-                if rel in seen:
-                    problems.append(f"{rel} is in both {seen[rel]} and {listing.name}")
-                seen[rel] = listing.name
-                if not (REPO_ROOT / rel).is_file():
-                    problems.append(f"{listing.name} names {rel}, which does not exist")
-    assert not problems, "\n".join(problems)
 
 
 def test_the_patterns_catch_the_shapes_they_exist_for():
@@ -194,6 +157,10 @@ def test_the_patterns_catch_the_shapes_they_exist_for():
     for label, text in samples.items():
         assert (label, _PATTERNS[label].search(text).group(0)) in line_hits("src/x.py", text), label
     assert line_hits("src/x.py", "owner/repo#374") == [("issue/PR number", "owner/repo#374")]
+    assert line_hits("src/x.py", '"""F5 of the review') == [("plan item ID", "F5")]
+    assert line_hits("src/x.py", "F9's rule id") == [("plan item ID", "F9")]
+    assert line_hits("src/x.py", "the PSC-4a merge") == [("finding ID", "PSC-4")]
+    assert line_hits("src/x.py", "5deef1d8:docs/approval-list-ui-ux.md §3") == [("section reference", "§3")]
 
 
 def test_citations_and_data_are_not_history():
@@ -211,5 +178,6 @@ def test_citations_and_data_are_not_history():
         "authData flag bits (WebAuthn L2 §6.1)",
         "run the full §2.7 gate",
         "src: url(data:font/woff2;base64,d09GMgABAAAAP1W35B7)",
+        "audit/2026-W28.jsonl",
     ):
         assert line_hits("src/x.py", text) == [], text

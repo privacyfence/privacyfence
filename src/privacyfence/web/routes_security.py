@@ -58,7 +58,9 @@ check with it, on the strongest configuration this product offers. Nothing
 downstream can tell such a credential from a real one: registration uses
 ``none`` attestation and the user-verified flag is a bit the authenticator
 sets about itself, so ``require_user_verification=True`` is a claim, not a
-proof -- see webauthn_stepup.py's own "five things" list.
+proof -- see webauthn_stepup.py's own "five things" list. This gate is
+what made defaulting ``require_passkey`` on defensible (ADR 0003's *Out of
+scope* amendment).
 
 So ``register_options`` gates the ceremony before it starts, in whichever of
 two ways the credential store's own state allows:
@@ -93,7 +95,8 @@ enrollment nobody asked for distinguishable from one a human made -- the
 here writes an audit entry (see ``_audit`` below), and ``register_verify``
 issues a one-time recovery code whenever this principal doesn't currently
 have an unused one on file. Who shows it is ``deliver_recovery_code``'s
-answer (plan item 1.3, see ``build_routes``' own docstring): the browser,
+answer (see ``build_routes``' own docstring and ADR 0003's *Out of scope*
+amendment): the browser,
 once, in that same response -- or, on a packaged local-mode install, the
 companion app on the human's own desktop, with nothing about it in the
 response at all. ``recover_credential`` is the code's only consumer:
@@ -370,7 +373,7 @@ def build_routes(
     the event loop (``asyncio.to_thread``), since what it does is put a
     dialog in front of a human and wait.
 
-    ``deliver_recovery_code`` (plan item 1.3) is the third and last place
+    ``deliver_recovery_code`` is the third and last place
     the two modes differ, and it is packaging-dependent rather than
     mode-dependent. ``None`` -- org mode, and any local-mode install that is
     not a packaged build -- keeps what this always did: the one-time
@@ -594,7 +597,8 @@ def build_routes(
             # authorized challenge -- kept as the invariant's own tripwire so
             # a future path that issues a registration challenge without
             # passing the enrollment gate fails closed here rather than silently
-            # enrolling an unvetted credential. See the module docstring.
+            # enrolling an unvetted credential. See the module docstring and
+            # ADR 0003's *Out of scope* amendment.
             logger.warning("Refused to complete an enrollment whose challenge was never authorized.")
             _audit(
                 principal, "webauthn_enrollment_refused",

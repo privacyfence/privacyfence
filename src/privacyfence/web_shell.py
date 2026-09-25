@@ -150,7 +150,7 @@ body {
 # bridge already has between "receive a message" and "render it".
 #
 # Notifications, tiers 0-1 only -- no push, no VAPID, nothing leaving the
-# machine (a push tier would be org mode's):
+# machine (a push tier would be org mode's; see ADR 0064):
 #   - tier 0: the document title gains a "(N) " badge and a visually
 #     hidden aria-live region announces the count, whenever the approvals
 #     event's row count changes -- works with no permission at all.
@@ -162,12 +162,13 @@ body {
 #     `minimal`, or whenever more than one approval fired at once (there is
 #     no "several different named things" copy -- the grouping case
 #     above), the body is always the bare count -- "N approval(s) pending".
-#     `standard` adds exactly two fields off the single pending row's own
-#     summary dict -- connector and gate_kind (read/write direction), both
-#     safe by construction: gate_kind names a category, never gated
-#     content, and connector is the same bare connector key
-#     approval_list_html.py's own row kicker already capitalizes and shows
-#     unescaped, nothing this function invents access to. `detailed` adds
+#     `standard` adds three fields off the single pending row's own
+#     summary dict -- connector, tool_name and gate_kind (read/write
+#     direction), all safe by construction: gate_kind names a category,
+#     tool_name names an MCP tool, never gated content, and connector is
+#     the same bare connector key approval_list_html.py's own row kicker
+#     already capitalizes and shows unescaped, nothing this function
+#     invents access to. `detailed` adds
 #     one more field: the row's own `summary` -- the one field that
 #     genuinely can carry gated content (an event title, a contact name, a
 #     document title -- see approvals.PendingApproval's own docstring on
@@ -428,7 +429,7 @@ def wrap(
     ``step_up.require_passkey`` check: with that flag on and no passkey
     enrolled, the daemon starts and keeps serving (step_up_config.py's own
     "closed for releases, open for repair" -- refusing to boot would remove
-    the only path to ``/security``, the one page that can fix this), but
+    the only path to ``/security``, the one page that can fix this; ADR 0069), but
     every approving decision and every sensitive settings action hard-fails
     (webauthn_stepup.has_credentials() is False, so decide()/settings_
     action() both 403 rather than release anything) -- this banner is what

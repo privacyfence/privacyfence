@@ -30,7 +30,8 @@ pattern web/routes_security.py's own ``build_routes()`` already uses for
   ``step_up.require_passkey``). Kept as the two private factories
   below (``_local_step_up_response``/``_org_step_up_response``) -- selected,
   not merged, since the org one is a real behavioral difference (a fallback
-  local mode has nothing to fall back to), not incidental duplication.
+  local mode has nothing to fall back to), not incidental duplication; see
+  ADR 0066.
 - ``bridge_shim`` -- the org variant additionally handles a ``428``'s
   ``idp_stepup_url`` and a ``403``'s ``enroll_url`` in the injected JS; kept
   as ``_bridge_shim``/``_org_bridge_shim`` for the same reason.
@@ -164,7 +165,7 @@ def _local_step_up_response(
     decision through unguarded" -- evadable by simply never enrolling a
     passkey, kept only for that configuration. With ``require_passkey`` on
     and nothing enrolled, this hard-fails with a ``403`` instead -- the
-    write is never released."""
+    write is never released. See ADR 0066."""
     fingerprint = webauthn_stepup.decision_fingerprint(
         approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
     )
@@ -193,7 +194,8 @@ def _org_step_up_response(
     web/routes_org_stepup.py's own module docstring for the redirect this
     URL leads to. ``require_passkey`` closes that fallback instead:
     with nothing enrolled, this hard-refuses with a ``403`` naming
-    ``/security``, same as local mode's own ``require_passkey`` branch."""
+    ``/security``, same as local mode's own ``require_passkey`` branch
+    (ADR 0066)."""
     body: dict = {"error": "step_up_required"}
     fingerprint = webauthn_stepup.decision_fingerprint(
         approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
@@ -668,7 +670,8 @@ def _build_route_list(
     async def batch_decide(request: Request) -> Response:
         """The approval binder's own batch decide endpoint: approve or
         deny a whole selected set in one request, gating an approving
-        batch on one WebAuthn assertion bound to the exact submitted set. Deliberately narrower than ``decide``: no
+        batch on one WebAuthn assertion bound to the exact submitted set
+        (ADR 0065). Deliberately narrower than ``decide``: no
         ``choice`` (a choice dialog is never batchable), no ``accept_all``
         (rule creation needs its own scoped confirmation)."""
         principal = resolve_principal(request)
@@ -799,7 +802,7 @@ def create_app(
     enrolled still wants the second question asked.
 
     Default off, and web/server.py turns it on for exactly one kind of
-    install: a privilege-separated one -- see ADR 0003; an unseparated
+    install: a privilege-separated one -- see ADR 0003 and ADR 0062; an unseparated
     build-from-source install has no companion to attribute a session to,
     and an agent that can rewrite the credential store directly gains
     nothing from the check anyway. Same line ``StepUpConfig.
