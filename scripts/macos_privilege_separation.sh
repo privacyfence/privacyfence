@@ -1118,8 +1118,17 @@ cmd_uninstall() {
 
   To delete the data (connector sign-ins, policy, audit log) and the
   account as well:
-    sudo $0 uninstall --purge
 DONE
+    # On a .pkg install the bundle removal above just deleted this script,
+    # so repeating $0 would name a file that is gone.
+    if [ -f "$0" ]; then
+      echo "    sudo $0 uninstall --purge"
+    else
+      cat <<DONE
+    install PrivacyFence again, then run
+    sudo ${DEFAULT_APP}/Contents/Resources/scripts/macos_privilege_separation.sh uninstall --purge
+DONE
+    fi
     return 0
   fi
 

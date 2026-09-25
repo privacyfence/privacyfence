@@ -45,7 +45,7 @@ You have two options:
 
    | Platform | Keep data | Delete data and marker |
    |---|---|---|
-   | macOS | `sudo "/Applications/PrivacyFence.app/Contents/Resources/scripts/macos_privilege_separation.sh" uninstall` | same, with `--purge` |
+   | macOS | `sudo "/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh" uninstall` | same, with `--purge` |
    | Linux | `sudo apt remove privacyfence` | `sudo apt purge privacyfence` |
    | Windows | Uninstall PrivacyFence from Settings → Apps | the same, with **Delete PrivacyFence data** ticked |
 
