@@ -10,7 +10,7 @@ Documentation assets. Each file here is used by at least one of the places below
 | `sheets-write.png` | `README.md`, website homepage | `scripts/qa_readme_screenshots.py` |
 
 `README.md` embeds all four through `raw.githubusercontent.com/.../main/docs/images/screenshots/…`
-URLs, so a change here shows up there once it is on `main`. `.github/workflows/pages.yml` copies
+URLs, so a change here shows up there once it is on `main`. `scripts/build_site.py` copies
 `gmail-read-thread.png` and `sheets-write.png` into the site's `assets/` (referenced by
 `website/index.html`), and a push to `main` touching `docs/images/**` redeploys the site.
 
@@ -46,7 +46,7 @@ not on every settings or card change. Never hand-edit an image here.
 - Keep only screenshots that current documentation or the website references. When the UI
   changes, regenerate the affected image and delete obsolete ones rather than keeping historical
   copies here.
-- Renaming or removing a file here also means updating `README.md`, `pages.yml`'s copy step and
-  `website/index.html`.
+- Renaming or removing a file here also means updating `README.md`, `scripts/build_site.py`'s
+  `STATIC` list and `website/index.html`.
 - Never capture real account data, tokens, email addresses, tenant identifiers, or private
   document/message content.

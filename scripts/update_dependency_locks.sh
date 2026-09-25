@@ -85,4 +85,12 @@ uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate
   --output-file=requirements/dev.lock.txt \
   pyproject.toml
 
-echo "Regenerated requirements/runtime.lock.txt and requirements/dev.lock.txt."
+# docs.lock.txt holds the `docs` extra and nothing else -- not the package's runtime dependencies,
+# which the website build never installs (see requirements/README.md). `uv pip compile
+# pyproject.toml --extra docs` would add them, so the extra's own requirement lines are read out of
+# pyproject.toml and compiled on their own, from stdin.
+python3 -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["docs"]))' \
+  | uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
+    --output-file=requirements/docs.lock.txt -
+
+echo "Regenerated requirements/runtime.lock.txt, requirements/dev.lock.txt and requirements/docs.lock.txt."

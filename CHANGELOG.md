@@ -43,6 +43,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.6.1] — 2026-09-25
+
+### Added
+
+- **The documentation is on the website,** at `privacyfence.eu/docs/`, with navigation, search
+  and a layout for phones. It shows the docs of the latest stable release and says which version
+  that is; contributor docs and design records stay on GitHub. The download page lists the
+  current release's installers even without JavaScript, and the site offers `llms.txt` and
+  `llms-full.txt` for AI assistants.
+
 ### Fixed
 
 - **The companion no longer says a separated install "is not privilege-separated".** Whenever
@@ -2712,7 +2722,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...HEAD
+[4.6.1]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...v4.6.1
 [4.6.0]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...v4.6.0
 [4.5.0]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...v4.4.0

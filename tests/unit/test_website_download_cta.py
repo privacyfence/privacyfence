@@ -6,26 +6,28 @@ covers what the page *does*, but it needs Chromium and skips without it -- and t
 module exists to catch is the one where the CTAs survive a revert of the page (or vice versa),
 leaving every "Download" button on the homepage pointing at nothing. That is worth an assertion
 that runs on every machine, in every suite, with no browser.
+
+It also holds guardrail 7: every file under website/ is either published by the build manifest in
+scripts/build_site.py or explicitly kept back from the public site.
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.unit
+from tests.website_site import REPO, WEBSITE, build_site, built_site, read_page
 
-WEBSITE = Path(__file__).resolve().parents[2] / "website"
-INDEX = WEBSITE / "index.html"
+pytestmark = pytest.mark.unit
 
 # The three CTAs Phase 6 repoints: header nav, hero, and the closing call to action.
 CTA_PATTERN = re.compile(r'<a class="(?:nav-cta|button primary)" href="([^"]+)">([^<]*Download[^<]*)</a>')
 
 
 def _ctas() -> list[tuple[str, str]]:
-    return CTA_PATTERN.findall(INDEX.read_text(encoding="utf-8"))
+    # The built page: the header CTA comes from the shared header partial.
+    return CTA_PATTERN.findall(read_page("/"))
 
 
 def test_the_download_page_the_ctas_point_at_exists():
@@ -51,48 +53,62 @@ def test_no_primary_cta_still_points_at_github_releases():
 def test_github_remains_linked_for_source_and_docs():
     # The cutover repoints the download buttons; it must not quietly delist the project's own
     # source, which the plan keeps as a documented secondary source.
-    assert "https://github.com/privacyfence/privacyfence" in INDEX.read_text(encoding="utf-8")
+    assert "https://github.com/privacyfence/privacyfence" in read_page("/")
 
 
-PAGES_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "pages.yml"
-
-# Files under website/ that deliberately stay in the repository: the source of the canonical
-# description (tests/unit/test_website_canonical_description.py) and the source the OpenGraph
-# image is rendered from. Everything else under website/ is public.
-REPOSITORY_ONLY = {"canonical-description.md", "assets/og-source.html"}
+def _website_files() -> set[str]:
+    return {path.relative_to(WEBSITE).as_posix() for path in WEBSITE.rglob("*") if path.is_file()}
 
 
 def test_every_website_file_is_actually_deployed():
-    """Every file under website/ is copied by pages.yml's build step.
+    """Guardrail 7: every file under website/ is published by scripts/build_site.py's manifest,
+    or is explicitly one of the build's inputs or repository-only.
 
     This is the test that was missing when the download page shipped: the page existed in the
     repo, the homepage CTAs pointed at it, every other test passed -- and `/download/` was a 404
-    in production, because pages.yml copies a hand-written list of files rather than the
-    directory. Asserting the files exist locally proves nothing about what the public site
-    serves.
+    in production, because the deploy step copied a hand-written list of files rather than the
+    directory. The build still publishes a named list rather than the directory, so nothing
+    lands on the public site by accident; this is what keeps that list complete.
 
     Deliberately checks the whole tree rather than the two download files, so the next file
     added under website/ is caught the same way instead of repeating this exact outage.
     """
-    workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
-    missing = [
-        path.relative_to(WEBSITE).as_posix()
-        for path in sorted(WEBSITE.rglob("*"))
-        if path.is_file()
-        and path.relative_to(WEBSITE).as_posix() not in REPOSITORY_ONLY
-        and f"website/{path.relative_to(WEBSITE).as_posix()}" not in workflow
-    ]
+    accounted = (
+        set(build_site.PAGES.values())
+        | {source.removeprefix("website/") for source in build_site.STATIC.values() if source.startswith("website/")}
+        | set(build_site.BUILD_INPUTS)
+        | set(build_site.REPOSITORY_ONLY)
+    )
+    missing = sorted(_website_files() - accounted)
     assert not missing, (
-        f"these website files are never copied into _site by pages.yml, so they 404 in production: {missing}"
+        f"these website files are in no list of scripts/build_site.py (PAGES, STATIC, BUILD_INPUTS or "
+        f"REPOSITORY_ONLY), so they 404 in production: {missing}"
     )
 
 
-def test_repository_only_files_are_not_deployed():
-    copy_lines = [
-        line for line in PAGES_WORKFLOW.read_text(encoding="utf-8").splitlines() if line.strip().startswith("cp ")
-    ]
-    for name in REPOSITORY_ONLY:
-        assert (WEBSITE / name).is_file(), f"{name} is listed as repository-only but does not exist"
-        assert not any(f"website/{name}" in line for line in copy_lines), (
-            f"{name} is repository-only but pages.yml deploys it"
-        )
+def test_the_manifest_names_only_files_that_exist():
+    for source in build_site.PAGES.values():
+        assert (WEBSITE / source).is_file(), f"PAGES names website/{source}, which does not exist"
+    for dest, source in build_site.STATIC.items():
+        assert (REPO / source).is_file(), f"STATIC copies {source} to {dest}, but {source} does not exist"
+    for name in build_site.BUILD_INPUTS:
+        assert (WEBSITE / name).is_file(), f"BUILD_INPUTS names website/{name}, which does not exist"
+
+
+def test_every_manifest_entry_is_in_the_built_site():
+    site = built_site()
+    for source in build_site.PAGES.values():
+        assert (site / source).is_file(), f"{source} is in PAGES but not in the built site"
+    for dest in build_site.STATIC:
+        assert (site / dest).is_file(), f"{dest} is in STATIC but not in the built site"
+
+
+def test_repository_only_files_and_build_inputs_are_not_deployed():
+    published = set(build_site.PAGES.values()) | {s.removeprefix("website/") for s in build_site.STATIC.values()}
+    built_names = {path.name for path in built_site().rglob("*") if path.is_file()}
+    for name in build_site.REPOSITORY_ONLY | build_site.BUILD_INPUTS:
+        assert (WEBSITE / name).is_file(), f"{name} is listed as not deployed but does not exist"
+        assert name not in published, f"{name} is not to be deployed, but the build manifest publishes it"
+    for name in build_site.REPOSITORY_ONLY:
+        assert name.rsplit("/", 1)[-1] not in built_names, f"{name} is repository-only but is in the built site"
+    assert not any(built_site().glob("_*")), "a build-only directory (website/_partials, website/_docs) was published"

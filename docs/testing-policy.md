@@ -104,7 +104,7 @@ connectors, so it cannot see a principal's tool list or auto-accept rules; those
   `pyproject.toml`, `requirements/*.lock.txt` or either `package.json`/`package-lock.json`, weekly
   (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
   `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`
-  and reports `dev.lock.txt` informationally; `npm-audit` blocks on high/critical in the shim's
+  and `docs.lock.txt` (the website's docs generator) and reports `dev.lock.txt` informationally; `npm-audit` blocks on high/critical in the shim's
   runtime dependencies (`--omit=dev`); `npm-audit-worker` blocks on high/critical across the whole
   `cloudflare/downloads/` tree, dev dependencies included, because `wrangler` deploys with a
   production token.
@@ -112,6 +112,13 @@ connectors, so it cannot see a principal's tool list or auto-accept rules; those
   `cloudflare/downloads/**`: `npm ci`, `npm run typecheck`, `npm test` (local Miniflare, no
   Cloudflare credentials), `npm run dry-run`. Its `deploy` job needs `verify` and runs only on
   `main` or dispatch. Neither job is in `REQUIRED_STATUS_CHECKS`.
+- **`website-build.yml`** — on every PR and every push to `main`/`releases/**`: builds
+  privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
+  would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
+  commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
+  `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`
+  and `test_download_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  sites and the layout screenshots. Not in `REQUIRED_STATUS_CHECKS`.
 
 ### `qa_web_smoke.py` (layer 4, by hand)
 

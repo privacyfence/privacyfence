@@ -1,6 +1,7 @@
-"""Static checks on every hand-written privacyfence.eu page (website/**/index.html).
+"""Static checks on every hand-written privacyfence.eu page, as scripts/build_site.py builds it.
 
-No browser: these read the HTML. The browser-level guardrails are
+No browser: these read the built HTML (tests/website_site.py), so the shared header and footer
+partials are checked where visitors get them. The browser-level guardrails are
 tests/integration/test_website_layout.py (responsive layout) and
 tests/integration/test_website_consent.py (nothing third-party before consent). This module
 checks what the HTML itself must carry:
@@ -10,7 +11,8 @@ checks what the HTML itself must carry:
 - `site.js` (the consent banner) on every page, and no Google script tag anywhere: analytics is
   injected by site.js after consent, never written into a page;
 - OpenGraph/Twitter tags and parseable JSON-LD on the homepage and /download/;
-- robots.txt allows every crawler and names the sitemap; the sitemap lists every page.
+- the generated robots.txt allows every crawler and names the sitemap; the generated sitemap
+  lists every page, /docs/ included when it was built.
 """
 
 from __future__ import annotations
@@ -18,28 +20,18 @@ from __future__ import annotations
 import json
 import re
 import xml.etree.ElementTree as ET
-from pathlib import Path
-
 import pytest
+
+from tests.website_site import WEBSITE, build_site, built_site, read_page
 
 pytestmark = pytest.mark.unit
 
-REPO = Path(__file__).resolve().parents[2]
-WEBSITE = REPO / "website"
 APEX = "https://privacyfence.eu"
 CONTENT_GROUPS = {"marketing", "download", "connector", "platform", "docs"}
 MEASUREMENT_ID = "G-7Z3PFP4XPT"
 
 
-def _pages() -> dict[str, str]:
-    pages = {}
-    for index in sorted(WEBSITE.rglob("index.html")):
-        rel = index.parent.relative_to(WEBSITE).as_posix()
-        pages["/" if rel == "." else f"/{rel}/"] = index.read_text(encoding="utf-8")
-    return pages
-
-
-PAGES = _pages()
+PAGES = {path: read_page(path) for path in build_site.PAGES}
 
 
 def _meta(page: str, attr: str, name: str) -> str | None:
@@ -94,6 +86,12 @@ def test_the_measurement_id_lives_only_in_site_js():
         if p.is_file() and p.suffix in {".html", ".js"} and MEASUREMENT_ID in p.read_text(encoding="utf-8")
     ]
     assert holders == ["site.js"]
+    built = [
+        p.relative_to(built_site()).as_posix()
+        for p in built_site().rglob("*")
+        if p.is_file() and p.suffix in {".html", ".js"} and MEASUREMENT_ID in p.read_text(encoding="utf-8")
+    ]
+    assert built == ["site.js"]
 
 
 @pytest.mark.parametrize("path", ["/", "/download/"])
@@ -156,13 +154,24 @@ def test_homepage_title_and_heading():
 
 
 def test_robots_allows_every_crawler_and_names_the_sitemap():
-    robots = (WEBSITE / "robots.txt").read_text(encoding="utf-8")
+    robots = (built_site() / "robots.txt").read_text(encoding="utf-8")
     rules = [line.strip() for line in robots.splitlines() if line.strip() and not line.startswith("#")]
     assert rules == ["User-agent: *", "Allow: /", f"Sitemap: {APEX}/sitemap.xml"]
 
 
 def test_sitemap_lists_every_page():
-    tree = ET.parse(WEBSITE / "sitemap.xml")
+    tree = ET.parse(built_site() / "sitemap.xml")
     ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     locs = {loc.text for loc in tree.getroot().findall("s:url/s:loc", ns)}
-    assert locs == {f"{APEX}{path}" for path in PAGES}
+    pages = set()
+    for index in built_site().rglob("index.html"):
+        rel = index.parent.relative_to(built_site()).as_posix()
+        pages.add("/" if rel == "." else f"/{rel}/")
+    assert locs == {f"{APEX}{path}" for path in pages}
+
+
+def test_robots_and_sitemap_are_generated_not_hand_written():
+    # Both are written by scripts/build_site.py; a hand-written copy under website/ would be
+    # silently overwritten, or worse, published instead.
+    assert not (WEBSITE / "robots.txt").exists()
+    assert not (WEBSITE / "sitemap.xml").exists()

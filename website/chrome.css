@@ -1,0 +1,118 @@
+/* privacyfence.eu site chrome: what every page shares, the /docs/ pages included.
+
+   The layout primitives, the skip link, the header and its <details> menu, buttons, the footer
+   and the consent banner. Every rule here is scoped to a class, never to a bare element (the
+   reduced-motion reset aside), because the /docs/ theme loads this file next to its own
+   stylesheet (website/_docs/). Page-level typography and sections are in styles.css, which only
+   the hand-written pages load. The rules both files follow are in styles.css's header comment. */
+
+/* ---- Layout primitives ----------------------------------------------------------------- */
+
+/* Centred, max-width container. Also a size container, so a .split inside it collapses by the
+   space it actually has rather than by the viewport. */
+.shell { width: min(1160px, 100% - 2 * var(--gutter)); margin-inline: auto; container-type: inline-size; }
+
+/* Vertical rhythm: every direct child after the first gets the same gap. */
+.stack > * { margin-block: 0; }
+.stack > * + * { margin-block-start: var(--stack-gap, var(--space-s)); }
+
+/* Wrapping inline group. */
+.cluster { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cluster-gap, var(--space-xs)); }
+
+/* As many equal columns as fit at --min each; one column on a phone. */
+.grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(var(--min, 260px), 100%), 1fr)); gap: var(--grid-gap, 18px); }
+
+/* Two columns (--split-cols) that stack when the enclosing container is narrower than 860 px. */
+.split { display: grid; grid-template-columns: var(--split-cols, 1fr 1fr); gap: var(--split-gap, var(--space-xl)); align-items: center; }
+.split > .split-end { order: 2; }
+@container (max-width: 860px) {
+  .split { grid-template-columns: 1fr; --split-gap: 45px; }
+  .split > .split-end { order: initial; }
+}
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Not rendered at all until focused: parking it above the page (top: -100px) let macOS/iOS
+   elastic overscroll reveal it at the top of the page. */
+.skip-link { position: fixed; left: var(--gutter); top: 10px; z-index: 30; padding: 10px 14px; background: var(--ink); color: #fff; border-radius: var(--radius-s); }
+.skip-link:not(:focus) { width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---- Header and navigation ------------------------------------------------------------- */
+
+.site-header { width: min(1220px, 100% - 2 * var(--gutter) + 12px); margin: 18px auto 0; min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-s); padding: 8px 10px 8px 16px; background: rgba(255,255,255,.9); border: 1px solid rgba(219,227,233,.9); border-radius: 18px; backdrop-filter: blur(16px); position: sticky; top: 14px; z-index: 20; box-shadow: 0 8px 28px rgba(20,33,43,.05); }
+.brand, .footer-brand { display: flex; align-items: center; gap: 10px; font-weight: 750; letter-spacing: -.02em; }
+.brand { min-height: var(--tap); min-width: var(--tap); }
+.brand img, .footer-brand img { border-radius: 8px; }
+.site-header nav { display: flex; align-items: center; gap: var(--space-2xs); font-size: var(--step-small); color: var(--ink-soft); }
+.nav-links { display: flex; align-items: center; gap: 4px; }
+.nav-links a, .nav-cta { display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap); min-width: var(--tap); padding: 0 11px; border-radius: var(--radius-s); }
+.nav-links a:hover, .nav-menu-panel a:hover, .site-footer a:hover, .text-link:hover { color: var(--accent-dark); }
+.nav-cta { padding: 0 15px; background: var(--ink); color: #fff !important; font-weight: 650; }
+
+/* The menu is a <details> disclosure: no JavaScript needed to open it, keyboard-operable, and
+   announced as expandable. It carries the same links as .nav-links, which it replaces below
+   the 900 px nav breakpoint. */
+.nav-menu { display: none; }
+.nav-menu summary { display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); min-width: var(--tap); padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-s); background: #fff; font-weight: 650; cursor: pointer; list-style: none; }
+.nav-menu summary::-webkit-details-marker { display: none; }
+.nav-menu summary::before { content: ""; width: 16px; height: 12px; background: linear-gradient(currentColor 0 0) top / 100% 2px no-repeat, linear-gradient(currentColor 0 0) center / 100% 2px no-repeat, linear-gradient(currentColor 0 0) bottom / 100% 2px no-repeat; }
+.nav-menu[open] summary::before { background: linear-gradient(45deg, transparent 45%, currentColor 45% 55%, transparent 55%), linear-gradient(-45deg, transparent 45%, currentColor 45% 55%, transparent 55%); }
+/* Anchored to the header (the nearest positioned ancestor), so it never runs off a narrow screen. */
+.nav-menu-panel { position: absolute; right: 0; top: calc(100% + 8px); width: min(280px, 100%); display: grid; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.nav-menu-panel a { display: flex; align-items: center; min-height: var(--tap); padding: 0 12px; border-radius: 8px; font-size: 16px; color: var(--ink); }
+.nav-menu-panel a + a { border-top: 1px solid var(--surface-soft); }
+
+@media (max-width: 900px) {
+  .nav-links { display: none; }
+  .nav-menu { display: block; }
+}
+
+/* ---- Buttons ------------------------------------------------------------------------------ */
+
+.actions { --cluster-gap: 12px; margin-top: 34px; }
+.button { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 19px; border-radius: 12px; border: 0; font: inherit; font-weight: 700; font-size: 15px; cursor: pointer; transition: transform .15s ease, box-shadow .15s ease, background .15s ease; }
+.button:hover { transform: translateY(-1px); }
+.primary { background: var(--ink); color: #fff; box-shadow: 0 8px 24px rgba(20,33,43,.13); }
+.primary:hover { background: #253743; }
+.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+
+/* ---- Footer ---------------------------------------------------------------------------- */
+
+.site-footer { display: grid; grid-template-columns: auto 1fr; gap: 12px 35px; align-items: center; padding: 36px 0 40px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.site-footer p { margin: 0; }
+.footer-links { grid-column: 1 / -1; --cluster-gap: 0 6px; margin: 0; padding: 0; list-style: none; }
+.footer-links a { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 8px; margin-left: -8px; margin-right: 8px; }
+
+/* ---- Consent banner (site.js) ---------------------------------------------------------- */
+
+/* Accept and Decline carry equal weight: same size, same style, nothing pre-selected. */
+.consent-banner { position: fixed; z-index: 40; left: 50%; bottom: var(--gutter); transform: translateX(-50%); width: min(720px, 100% - 2 * var(--gutter)); padding: 20px 22px; background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
+.consent-banner h2 { font-size: 18px; letter-spacing: -.01em; margin: 0 0 6px; }
+.consent-banner p { margin: 0; color: var(--ink-soft); font-size: 14px; }
+.consent-banner p a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; }
+.consent-banner .actions { margin-top: 14px; }
+.consent-banner .actions { flex-direction: row; }
+.consent-banner .button { flex: 1 1 110px; background: #fff; color: var(--ink); border: 1px solid var(--ink); box-shadow: none; }
+
+/* ---- Breakpoints ------------------------------------------------------------------------- */
+
+@media (max-width: 560px) {
+  .site-header { top: 8px; margin-top: 10px; gap: var(--space-xs); padding: 6px 6px 6px 10px; }
+  .brand span { font-size: 15px; }
+  .nav-cta { padding: 0 12px; }
+  .actions { flex-direction: column; align-items: stretch; }
+  .site-footer { grid-template-columns: 1fr; }
+}
+
+/* The narrowest phones: the menu toggle shows only its icon (its text stays for screen readers),
+   and below 350 px so does the brand, so the header still fits on one line with the CTA. */
+@media (max-width: 420px) {
+  .nav-menu summary { padding: 0; justify-content: center; width: var(--tap); }
+  .nav-menu summary .nav-menu-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+@media (max-width: 350px) {
+  .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; }
+}
