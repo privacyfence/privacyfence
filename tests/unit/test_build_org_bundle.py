@@ -1,4 +1,4 @@
-"""Tests for scripts/build_org_bundle.py's SEC-05 (full signing) support.
+"""Tests for scripts/build_org_bundle.py's bundle signing support.
 
 This script deliberately doesn't import the ``privacyfence`` package (see
 its own module docstring -- it's meant to be runnable standalone, without

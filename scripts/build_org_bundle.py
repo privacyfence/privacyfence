@@ -18,7 +18,7 @@ release build — see docs/telegram-setup.md and src/privacyfence/app_credential
 Only pass the flags for services you've set up; a connector is offered to
 users only if its section is present in the bundle. Stdlib only — no
 PrivacyFence install required to run this -- except --sign-key/
---generate-signing-key (SEC-05 full signing, below), which need the
+--generate-signing-key (bundle signing, below), which need the
 `cryptography` package (pip install cryptography) specifically, not a
 full PrivacyFence install.
 
@@ -174,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the client_secret.json downloaded from Google Cloud Console "
              "(OAuth client of type 'Desktop app' for local mode, or 'Web "
              "application' for org mode -- see docs/org-mode-setup-guide.md's "
-             "§4.2).",
+             "\"Connector apps\" section).",
     )
 
     slack = parser.add_argument_group("Slack")
@@ -198,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     atlassian.add_argument("--atlassian-client-secret")
 
     mode = parser.add_argument_group(
-        "Deployment mode (P7)",
+        "Deployment mode",
     )
     mode.add_argument(
         "--mode", choices=["local", "org"], default=None,
@@ -231,8 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--server-trusted-proxy", action="append", default=[], metavar="IP", dest="server_trusted_proxies",
         help="An X-Forwarded-For/X-Forwarded-Proto-trusted reverse proxy's own IP address -- "
-             "repeat for more than one. §10.2: honored only when at least one is given here, "
-             "never by default.",
+             "repeat for more than one. Forwarded headers are honored only when at least one is "
+             "given here, never by default.",
     )
     mode.add_argument(
         "--idp-issuer", metavar="URL",
@@ -262,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     authz = parser.add_argument_group(
-        "App-level authorization policy (SEC-22)",
+        "App-level authorization policy",
     )
     authz.add_argument(
         "--authz-allowed-domain", action="append", default=[], metavar="DOMAIN", dest="authz_allowed_domains",
@@ -284,14 +284,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     step_up = parser.add_argument_group(
-        "WebAuthn step-up (P9, D7)",
+        "WebAuthn step-up",
     )
     step_up_toggle = step_up.add_mutually_exclusive_group()
     step_up_toggle.add_argument(
         "--step-up-enabled", action="store_true",
         help="Require a fresh passkey (or IdP re-authentication) before releasing a write "
-             "approval -- off by default. Only meaningful with --mode org (§10.6: local mode's "
-             "own trust model is physical possession of the machine, which this doesn't add to).",
+             "approval -- off by default. Only meaningful with --mode org; local mode reads its "
+             "step-up settings from settings.yaml's step_up: section instead.",
     )
     step_up_toggle.add_argument(
         "--step-up-disabled", action="store_true", help="Explicitly turn step-up back off (useful with --merge).",
@@ -310,21 +310,21 @@ def build_parser() -> argparse.ArgumentParser:
     step_up.add_argument(
         "--step-up-rp-id", metavar="DOMAIN",
         help="WebAuthn Relying Party ID -- must be --server-issuer-url's own registrable domain "
-             "(a secure-context requirement, see §10.6). Defaults to that hostname, derived "
+             "(WebAuthn only runs in a secure context). Defaults to that hostname, derived "
              "automatically -- only set this to override it.",
     )
     step_up.add_argument("--step-up-rp-name", metavar="NAME", help='Shown in the OS passkey prompt. Default: "PrivacyFence".')
     step_up.add_argument(
         "--idp-step-up-acr-value", action="append", default=[], metavar="ACR", dest="idp_step_up_acr_values",
         help="An acr_values your IdP accepts to request stronger authentication on step-up's "
-             "IdP re-auth path (§10.6's \"IdP acr_values step-up ... where the IdP already does "
-             "this well\") -- repeat for more than one. Omit to fall back to plain re-"
+             "IdP re-auth path, for an IdP that already enforces stronger authentication "
+             "itself -- repeat for more than one. Omit to fall back to plain re-"
              "authentication (prompt=login) with no acr_values hint.",
     )
     step_up_require_passkey_toggle = step_up.add_mutually_exclusive_group()
     step_up_require_passkey_toggle.add_argument(
         "--step-up-require-passkey", action="store_true",
-        help="Close the IdP-reauth fallback (#406): a principal with no enrolled passkey gets a "
+        help="Close the IdP-reauth fallback: a principal with no enrolled passkey gets a "
              "hard failure pointing at /security instead of a silent downgrade to plain IdP "
              "re-authentication. Off by default -- only meaningful with --step-up-enabled.",
     )
@@ -377,8 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     audit_forwarding = parser.add_argument_group(
-        "Centralized audit-log forwarding (org mode, SEC-23, "
-        "src/privacyfence/audit_forwarding.py)",
+        "Centralized audit-log forwarding (org mode, src/privacyfence/audit_forwarding.py)",
     )
     audit_forwarding.add_argument(
         "--audit-forwarding-kind", choices=("syslog", "http"), default=None,
@@ -427,7 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     signing = parser.add_argument_group(
-        "Bundle signing (SEC-05 full signing, src/privacyfence/org_bundle_signing.py)",
+        "Bundle signing (src/privacyfence/org_bundle_signing.py)",
     )
     signing.add_argument(
         "--generate-signing-key", metavar="PATH",
