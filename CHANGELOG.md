@@ -149,6 +149,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Authenticate… for a Google connector opens the sign-in tab again.** On a desktop install,
+  clicking *Authenticate…* for Gmail, Drive, Calendar, Contacts, Tasks or Apps Script only wrote
+  the Google sign-in link to the log: PrivacyFence runs in the background without access to your
+  desktop, so it couldn't open a browser itself. Google sign-in now asks PrivacyFence's
+  menu-bar/tray app to open the tab, as Slack, Salesforce and Jira/Confluence already did. A
+  sign-in not finished within three minutes now fails with an error you can retry, instead of
+  leaving the connector stuck as busy.
+
 - **Windows: an upgrade no longer stops at "Setup was unable to automatically close all
   applications".** The installer already ended PrivacyFence's service and processes before copying
   files; it now also waits until they are actually gone, and anything still holding a file is

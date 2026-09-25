@@ -167,6 +167,13 @@ class TestRunBrowserOauthSuccess:
         run_browser_oauth(flow.build_authorize_url, flow.exchange, port=port, open_browser=flow.opener_for())
         assert flow.captured["redirect_uri"] == f"http://127.0.0.1:{port}/callback"
 
+    def test_port_zero_puts_the_os_picked_port_in_the_redirect_uri(self):
+        flow = _Flow()
+        run_browser_oauth(flow.build_authorize_url, flow.exchange, port=0, open_browser=flow.opener_for())
+        port = int(flow.captured["redirect_uri"].rsplit(":", 1)[1].split("/", 1)[0])
+        assert port != 0
+        assert flow.captured["exchanged_code"] == "auth-code-123"
+
     def test_redirect_host_override_used_in_redirect_uri(self):
         flow = _Flow()
         port = free_port()
