@@ -1,4 +1,4 @@
-"""Static checks on /releases/, the release history page (#365), as scripts/build_site.py builds it.
+"""Static checks on /releases/, the release history page, as scripts/build_site.py builds it.
 
 The page's rows exist only once the build (render_release_rows, tests/unit/test_build_site.py) or
 releases.js (tests/integration/test_releases_page.py) has read the Worker's /api/releases. What
