@@ -1,7 +1,6 @@
-"""Tests for the shared Google OAuth 2.0 server-redirect helper -- used only
-by web/routes_connect.py's org-mode routes. Local mode's own InstalledAppFlow-based authorize_interactive
-methods on GmailClient/DriveClient/etc. are untouched by this module and keep
-their own existing test coverage.
+"""Tests for the shared Google OAuth 2.0 helper -- org mode's server-redirect
+functions (web/routes_connect.py) and local mode's ``authorize_local``, which
+every Google client's ``authorize_interactive`` calls.
 
 ``google_auth_oauthlib.flow.Flow``'s own network calls (``fetch_token``) are
 mocked at the ``requests``/session layer it ultimately uses via
@@ -11,14 +10,18 @@ test_salesforce_client.py already take for their own OAuth exchanges.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import stat
 import sys
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 
-from privacyfence import google_oauth
+from privacyfence import google_oauth, oauth_loopback
 
 _CLIENT_CONFIG = {
     "client_id": "cid",
@@ -173,6 +176,96 @@ class TestExchangeCode:
         _, kwargs = ctor.call_args
         assert kwargs["code_verifier"] == "verifier-abc"
         assert kwargs["autogenerate_code_verifier"] is False
+
+
+_INSTALLED_CONFIG = {"installed": {k: v for k, v in _CLIENT_CONFIG.items() if k != "redirect_uris"}}
+
+
+class TestAuthorizeLocal:
+    """Local mode's Google sign-in, run for real through oauth_loopback's
+    listener. Only the browser and the token endpoint are stand-ins."""
+
+    @staticmethod
+    def _visit(url: str, params: dict) -> None:
+        # Not through HTTP(S)_PROXY: a real browser doesn't proxy loopback either.
+        session = requests.Session()
+        session.trust_env = False
+        session.get(url.replace("://localhost:", "://127.0.0.1:"), params=params, timeout=5)
+
+    def _run(self, monkeypatch, opener):
+        exchanged = {}
+
+        def fake_exchange(client_config, scopes, redirect_uri, code, code_verifier):
+            exchanged.update(
+                client_config=client_config, scopes=scopes, redirect_uri=redirect_uri,
+                code=code, code_verifier=code_verifier,
+            )
+            return "creds"
+
+        monkeypatch.setattr(oauth_loopback, "_default_open_browser", opener)
+        monkeypatch.setattr(google_oauth, "exchange_code", fake_exchange)
+        return google_oauth.authorize_local(_INSTALLED_CONFIG, ["scope-a"]), exchanged
+
+    def test_opens_the_google_authorize_url_through_the_companion_aware_opener(self, monkeypatch):
+        # The bug this guards: InstalledAppFlow.run_local_server() called
+        # webbrowser.open() from the daemon, which on a separated install
+        # reaches no desktop session, so Authenticate opened no tab.
+        opened = []
+
+        def opener(url: str) -> bool:
+            opened.append(url)
+            query = parse_qs(urlparse(url).query)
+            self._visit(query["redirect_uri"][0], {"code": "auth-code", "state": query["state"][0]})
+            return True
+
+        creds, exchanged = self._run(monkeypatch, opener)
+
+        assert creds == "creds"
+        assert len(opened) == 1
+        assert opened[0].startswith("https://accounts.google.com/o/oauth2/auth?")
+        assert exchanged["code"] == "auth-code"
+        assert exchanged["scopes"] == ["scope-a"]
+        assert exchanged["client_config"] is _INSTALLED_CONFIG
+
+    def test_redirect_uri_is_a_loopback_port_the_os_picked(self, monkeypatch):
+        seen = {}
+
+        def opener(url: str) -> bool:
+            query = parse_qs(urlparse(url).query)
+            seen["redirect_uri"] = query["redirect_uri"][0]
+            self._visit(seen["redirect_uri"], {"code": "c", "state": query["state"][0]})
+            return True
+
+        _, exchanged = self._run(monkeypatch, opener)
+
+        parsed = urlparse(seen["redirect_uri"])
+        assert (parsed.scheme, parsed.hostname, parsed.path) == ("http", "localhost", "/")
+        assert parsed.port and parsed.port != 0
+        assert exchanged["redirect_uri"] == seen["redirect_uri"]
+
+    def test_pkce_challenge_in_the_url_matches_the_verifier_exchanged(self, monkeypatch):
+        seen = {}
+
+        def opener(url: str) -> bool:
+            query = parse_qs(urlparse(url).query)
+            seen.update(challenge=query["code_challenge"][0], method=query["code_challenge_method"][0])
+            self._visit(query["redirect_uri"][0], {"code": "c", "state": query["state"][0]})
+            return True
+
+        _, exchanged = self._run(monkeypatch, opener)
+
+        digest = hashlib.sha256(exchanged["code_verifier"].encode("ascii")).digest()
+        assert seen["method"] == "S256"
+        assert seen["challenge"] == base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+    def test_a_callback_with_the_wrong_state_is_refused(self, monkeypatch):
+        def opener(url: str) -> bool:
+            query = parse_qs(urlparse(url).query)
+            self._visit(query["redirect_uri"][0], {"code": "c", "state": "attacker-supplied"})
+            return True
+
+        with pytest.raises(oauth_loopback.OAuthLoopbackError, match="state mismatch"):
+            self._run(monkeypatch, opener)
 
 
 class TestSaveCredentials:

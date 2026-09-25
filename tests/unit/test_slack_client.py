@@ -5,8 +5,7 @@ list_channels, and the error-description helper that surfaces Slack's
 MagicMock stand-in for slack_sdk.WebClient.
 
 Also covers ``authorize_interactive`` (the browser-loopback OAuth v2 flow --
-a different shape from the Google clients' InstalledAppFlow, and from
-Salesforce's Web Server + PKCE flow, since Slack's ``oauth_v2_access``
+a different shape from Salesforce's Web Server + PKCE flow, since Slack's ``oauth_v2_access``
 exchange goes through ``slack_sdk.WebClient`` rather than a raw HTTP POST).
 As with test_salesforce_client.py, ``run_browser_oauth`` (the
 ``oauth_loopback`` module boundary) is mocked with a fake that invokes the

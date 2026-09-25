@@ -1148,7 +1148,7 @@ def _start_org_web_server(
 
 def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
     """Wrap the bundle's flat Google app fields back into the "installed" shape
-    that ``InstalledAppFlow.from_client_config`` expects."""
+    that ``google_oauth.authorize_local`` expects."""
     google = org_config.get("google") or {}
     if not google.get("client_id") or not google.get("client_secret"):
         return {}
