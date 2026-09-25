@@ -126,7 +126,7 @@ def data_dir() -> Path:
     for anything that's per-user data.
 
     Created (or re-tightened) to ``0700`` via ``secure_mkdir`` -- see that
-    function's own docstring and ``docs/security-and-compliance.md``'s "Storage format and permissions"
+    function's own docstring and ``docs/security-and-compliance.md``'s "Privilege separation"
     section for what this closes. (``secure_mkdir``'s ``chmod`` is a no-op
     best-effort on Windows, which has no POSIX permission bits to set --
     see that function's own docstring.)
