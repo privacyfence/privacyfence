@@ -34,7 +34,7 @@ merge commits to it. It is not permission to push anywhere else.
   `<ref>`'s SHA, then retry the push. If the push is still refused, stop and tell the user in one
   line. Do not quietly fall back to your own session branch, because child sessions would then
   merge somewhere the user did not choose.
-- **If it already exists:** this is a resumed run. Check it out and continue from §2. A phase is
+- **If it already exists:** this is a resumed run. Check it out and continue from "Scheduling" below. A phase is
   done if the feature branch's history holds a merge commit whose message carries the trailer
   `Plan-Phase: <plan slug>/<phase id>` (`git log --grep`). Do not re-run done phases.
 
@@ -44,9 +44,10 @@ Keep an orchestration ledger as a comment on a GitHub issue if the manifest name
 Otherwise keep it in your own replies: for each phase record its state (`pending` / `running` /
 `merged` / `failed`), its session id, and its branch. Update the ledger on every state change.
 
-A phase is **ready** when every phase in its `depends_on` is `merged`. Start every ready phase at
+A phase is **ready** when every phase in its `depends_on` is `merged`, and, if any of those
+phases is marked `human_gate: true`, the user has approved it (see "Merge" step 6 below). Start every ready phase at
 once, up to `max_parallel` (manifest, default 2). Phases in the same wave touch different files by
-design. If a merge conflicts anyway, §4 handles it.
+design. If a merge conflicts anyway, "Waiting, collecting and merging" below handles it.
 
 ## 3. Starting a phase session
 
@@ -131,7 +132,17 @@ On each check-in, for each `running` phase, call `get_session`:
    (`git revert -m 1`), push, send the failure back to the phase, and mark the phase `running`
    again.
 5. Push the feature branch. Mark the phase `merged`, delete the phase branch on origin, and
-   `archive_session` the child. Then start any phases that just became ready.
+   `archive_session` the child. If the manifest has `screenshots_after_merge`, run it and send the
+   user the images (`SendUserFile`) with a one-line caption naming the phase, so they can watch
+   the result take shape and object early.
+6. **Human gate.** If the phase is marked `human_gate: true`, stop scheduling. Send the user the
+   phase's review material (its screenshots and its `PHASE-REPORT`), and ask one question:
+   approve, or change what. Do not arm a check-in while you wait for their answer; the reply
+   wakes you. On approval, record it in the ledger and continue. On requested changes, start a
+   follow-up session on a fresh `<feature_branch>--<phase id>-rev<n>` branch cut from the
+   feature branch, whose brief is the user's feedback verbatim plus the phase's original brief.
+   Merge it the same way, and gate again.
+7. Start any phases that just became ready.
 
 ## 5. Finishing
 
