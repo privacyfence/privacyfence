@@ -3,37 +3,104 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PrivacyFence — Human control for AI access to enterprise services</title>
-  <meta name="description" content="PrivacyFence is an open-source, local-first governance layer that adds policy, human approval, PII checks and audit to AI access to supported enterprise services.">
+  <title>PrivacyFence — privacy and approval gateway for AI assistants (MCP)</title>
+  <meta name="description" content="PrivacyFence is an open-source privacy and approval gateway between AI assistants and your business systems: human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more.">
+  <meta name="pf-content-group" content="marketing">
   <meta name="theme-color" content="#f6f8fb">
-  <link rel="icon" type="image/png" href="assets/icon.png">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="canonical" href="https://privacyfence.eu/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/">
+  <meta property="og:title" content="PrivacyFence — AI access without giving AI the keys">
+  <meta property="og:description" content="Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PrivacyFence: AI access without giving AI the keys. Approve the sensitive. Automate the routine.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="PrivacyFence — AI access without giving AI the keys">
+  <meta name="twitter:description" content="Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit.">
+  <meta name="twitter:image" content="https://privacyfence.eu/assets/og.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://privacyfence.eu/#software",
+        "name": "PrivacyFence",
+        "description": "An open-source privacy and approval gateway between AI assistants and your business systems.",
+        "url": "https://privacyfence.eu/",
+        "downloadUrl": "https://privacyfence.eu/download/",
+        "applicationCategory": "SecurityApplication",
+        "operatingSystem": ["macOS", "Windows", "Linux"],
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+        "image": "https://privacyfence.eu/assets/og.png",
+        "sameAs": [
+          "https://github.com/privacyfence/privacyfence",
+          "https://pypi.org/project/privacyfence/"
+        ],
+        "publisher": { "@id": "https://privacyfence.eu/#publisher" }
+      },
+      {
+        "@type": "Person",
+        "@id": "https://privacyfence.eu/#publisher",
+        "name": "Andras Takacs",
+        "email": "mailto:info@privacyfence.eu",
+        "address": { "@type": "PostalAddress", "addressLocality": "Budapest", "addressCountry": "HU" }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://privacyfence.eu/#website",
+        "name": "PrivacyFence",
+        "url": "https://privacyfence.eu/",
+        "inLanguage": "en",
+        "publisher": { "@id": "https://privacyfence.eu/#publisher" }
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
+  <a class="skip-link" href="#top">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="#top" aria-label="PrivacyFence home">
-      <img src="assets/icon.png" alt="" width="38" height="38">
+    <a class="brand" href="/" aria-label="PrivacyFence home">
+      <img src="/assets/icon.png" alt="" width="38" height="38">
       <span>PrivacyFence</span>
     </a>
     <nav aria-label="Primary navigation">
-      <a href="#how-it-works">How it works</a>
-      <a href="#privacy">Privacy</a>
-      <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
-      <a class="nav-cta" href="download/">Download</a>
+      <div class="nav-links">
+        <a href="/#how-it-works">How it works</a>
+        <a href="/#privacy">Privacy</a>
+        <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+      </div>
+      <details class="nav-menu">
+        <summary><span class="nav-menu-label">Menu</span></summary>
+        <div class="nav-menu-panel">
+          <a href="/#how-it-works">How it works</a>
+          <a href="/#privacy">Privacy</a>
+          <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+        </div>
+      </details>
+      <a class="nav-cta" href="/download/">Download</a>
     </nav>
   </header>
 
-  <main id="top">
-    <section class="hero shell">
+<main id="top">
+    <section class="hero shell split">
       <div class="hero-copy">
         <div class="eyebrow"><span class="dot"></span> Open source · Local-first · Human-in-the-loop</div>
-        <h1>Give AI assistants access.<br><span>Not authority.</span></h1>
-        <p class="lede">PrivacyFence sits between an MCP-compatible AI assistant and supported business systems, adding independent policy, human approval, PII checks and audit before sensitive reads or actions are executed.</p>
-        <div class="actions">
-          <a class="button primary" href="download/">Download PrivacyFence</a>
+        <h1>AI access without <span>giving AI the keys.</span></h1>
+        <p class="tagline">Approve the sensitive. Automate the routine.</p>
+        <div class="actions cluster">
+          <a class="button primary" href="/download/">Download PrivacyFence</a>
           <a class="button secondary" href="https://github.com/privacyfence/privacyfence">View on GitHub</a>
         </div>
-        <div class="release-meta" id="release-meta" aria-live="polite">
+        <div class="release-meta cluster" id="release-meta" aria-live="polite">
           <span>Apache 2.0</span><span>macOS · Windows · Linux</span><span>No account required</span>
         </div>
       </div>
@@ -42,16 +109,28 @@
         <div class="flow-label">AI assistant</div>
         <div class="flow-line"></div>
         <div class="pf-card">
-          <div class="pf-title"><img src="assets/icon.png" alt="" width="34" height="34"><strong>PrivacyFence</strong></div>
-          <div class="pf-grid">
+          <div class="pf-title"><img src="/assets/icon.png" alt="" width="34" height="34"><strong>PrivacyFence</strong></div>
+          <div class="pf-grid grid-auto">
             <span>Policy</span><span>Human approval</span><span>PII checks</span><span>Audit</span>
           </div>
         </div>
         <div class="flow-line"></div>
-        <div class="services">
+        <div class="services cluster">
           <span>Gmail</span><span>Drive</span><span>Slack</span><span>Salesforce</span><span>Jira</span><span>Confluence</span><span>Calendar</span><span>More</span>
         </div>
         <p class="visual-note">PrivacyFence governs defined connectors and supported operations. It is not a generic proxy for arbitrary MCP tools.</p>
+      </div>
+    </section>
+
+    <section class="about shell" aria-labelledby="about-heading">
+      <div class="section-heading compact">
+        <p class="kicker">What it is</p>
+        <h2 id="about-heading">A gateway you control, between the assistant and your systems.</h2>
+      </div>
+      <div class="about-copy stack">
+        <p>PrivacyFence is an open-source privacy and approval gateway between AI assistants and your business systems. It connects MCP-compatible assistants such as Claude Desktop and Claude Code to Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram, and more.</p>
+        <p>PrivacyFence enforces, independently of the AI, what an assistant may see and do. Sensitive reads and consequential actions require human approval, while routine requests can be automated by policy. Optional PII detection runs locally before personal data reaches the AI, and every decision is audited.</p>
+        <p>PrivacyFence runs on an employee’s own computer (macOS, Windows, or Linux) or as a central deployment on infrastructure the organization controls, allowing web clients such as claude.ai to connect as well. Connector credentials stay with PrivacyFence, never with the AI client, and no data passes through PrivacyFence-operated servers — there are none.</p>
       </div>
     </section>
 
@@ -61,7 +140,7 @@
         <h2>Permission does not equal intent.</h2>
         <p>Traditional access control can tell you whether a user may access a system. It does not necessarily tell you whether an AI assistant should perform this specific action, on this specific data, right now.</p>
       </div>
-      <div class="principle-grid">
+      <div class="principle-grid grid-auto">
         <article><span>01</span><h3>Control what AI can see</h3><p>Sensitive reads from supported services can be reviewed before the content enters the AI context. Optional PII detection runs locally.</p></article>
         <article><span>02</span><h3>Control what AI can do</h3><p>Writes and consequential operations can require explicit approval, with the intended action shown in business terms.</p></article>
         <article><span>03</span><h3>Keep the decision independent</h3><p>The AI assistant is not the authorization boundary. PrivacyFence applies policy and approval separately from the model making the request.</p></article>
@@ -69,7 +148,7 @@
     </section>
 
     <section class="proof-section">
-      <div class="shell proof-grid">
+      <div class="shell proof-grid split">
         <div class="proof-copy">
           <p class="kicker">Informed human approval</p>
           <h2>See the content before the AI does.</h2>
@@ -82,28 +161,28 @@
           </ul>
         </div>
         <figure class="screenshot-frame">
-          <img src="assets/gmail-read-thread.png" alt="PrivacyFence Gmail review dialog showing AI visibility details and a detected PII warning" loading="lazy">
+          <img src="/assets/gmail-read-thread.png" width="1960" height="1768" alt="PrivacyFence Gmail review dialog showing AI visibility details and a detected PII warning" loading="lazy">
           <figcaption>Real PrivacyFence review screen: Gmail thread access with local PII detection.</figcaption>
         </figure>
       </div>
     </section>
 
     <section class="proof-section alternate">
-      <div class="shell proof-grid reverse">
-        <div class="proof-copy">
+      <div class="shell proof-grid reverse split">
+        <div class="proof-copy split-end">
           <p class="kicker">Actions need context too</p>
           <h2>Review what will change before it changes.</h2>
           <p>For supported write operations, PrivacyFence presents the target and values before execution, so approval is tied to the actual business action rather than a broad permission granted earlier.</p>
         </div>
         <figure class="screenshot-frame">
-          <img src="assets/sheets-write.png" alt="PrivacyFence review dialog for a spreadsheet write action" loading="lazy">
+          <img src="/assets/sheets-write.png" width="1960" height="1356" alt="PrivacyFence review dialog for a spreadsheet write action" loading="lazy">
           <figcaption>Real PrivacyFence review screen: a spreadsheet write before execution.</figcaption>
         </figure>
       </div>
     </section>
 
     <section class="privacy shell" id="privacy">
-      <div class="privacy-card">
+      <div class="privacy-card split">
         <div>
           <p class="kicker">Privacy by architecture</p>
           <h2>Your enterprise data does not need to pass through PrivacyFence infrastructure.</h2>
@@ -121,25 +200,25 @@
         <h2>Built around real business workflows.</h2>
         <p>PrivacyFence provides connector-level governance for common enterprise systems rather than pretending every arbitrary MCP tool is understood.</p>
       </div>
-      <div class="connector-list" aria-label="Supported connector examples">
+      <div class="connector-list cluster" aria-label="Supported connector examples">
         <span>Gmail</span><span>Google Drive</span><span>Google Docs</span><span>Google Sheets</span><span>Calendar</span><span>Contacts</span><span>Tasks</span><span>Slack</span><span>Telegram</span><span>Salesforce</span><span>Jira</span><span>Confluence</span>
       </div>
       <a class="text-link" href="https://github.com/privacyfence/privacyfence#what-privacyfence-governs">See governed operations on GitHub →</a>
     </section>
 
     <section class="cta-section">
-      <div class="shell cta-card">
+      <div class="shell cta-card split">
         <div>
           <p class="kicker">Open source</p>
           <h2>Run it yourself. Inspect everything.</h2>
           <p>PrivacyFence is released under Apache 2.0. Try it locally, inspect the implementation, and tell me what does not work.</p>
-          <div class="stats" id="stats" hidden>
+          <div class="stats cluster" id="stats" hidden>
             <span><strong id="download-count">0</strong> release downloads</span>
             <span><strong id="star-count">0</strong> GitHub stars</span>
           </div>
         </div>
-        <div class="actions vertical">
-          <a class="button primary" href="download/">Download latest release</a>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/download/">Download latest release</a>
           <a class="button secondary" href="https://github.com/privacyfence/privacyfence">Source &amp; documentation</a>
         </div>
       </div>
@@ -147,11 +226,18 @@
   </main>
 
   <footer class="site-footer shell">
-    <div class="footer-brand"><img src="assets/icon.png" alt="" width="28" height="28"><span>PrivacyFence</span></div>
-    <p>Independent open-source software for human control of AI access to enterprise services.</p>
-    <div><a href="https://github.com/privacyfence/privacyfence">GitHub</a><a href="https://github.com/privacyfence/privacyfence/blob/main/LICENSE">Apache 2.0</a></div>
+    <div class="footer-brand"><img src="/assets/icon.png" alt="" width="28" height="28"><span>PrivacyFence</span></div>
+    <p>Independent open-source software for human control of AI access to business systems.</p>
+    <ul class="footer-links cluster" aria-label="Site information">
+      <li><a href="/privacy/" data-privacy-link>Privacy</a></li>
+      <li><a href="/imprint/">Imprint</a></li>
+      <li><button type="button" class="link-button" data-cookie-settings hidden>Cookie settings</button></li>
+      <li><a href="https://github.com/privacyfence/privacyfence">GitHub</a></li>
+      <li><a href="https://github.com/privacyfence/privacyfence/blob/main/LICENSE">Apache 2.0</a></li>
+      <li><a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a></li>
+    </ul>
   </footer>
-
-  <script src="stats.js" defer></script>
+  <script src="/site.js" defer></script>
+  <script src="/stats.js" defer></script>
 </body>
 </html>

@@ -3,22 +3,76 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Download PrivacyFence</title>
-  <meta name="description" content="Download PrivacyFence for macOS, Windows and Linux. Every installer is published with a SHA-256 checksum you can verify before you run it.">
+  <title>Download PrivacyFence for macOS, Windows and Linux</title>
+  <meta name="description" content="Download PrivacyFence, the open-source privacy and approval gateway for AI assistants, for macOS, Windows and Linux. Every installer is published with a SHA-256 checksum you can verify before you run it.">
+  <meta name="pf-content-group" content="download">
   <meta name="theme-color" content="#f6f8fb">
-  <link rel="icon" type="image/png" href="../assets/icon.png">
-  <link rel="stylesheet" href="../styles.css">
+  <link rel="canonical" href="https://privacyfence.eu/download/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/download/">
+  <meta property="og:title" content="Download PrivacyFence">
+  <meta property="og:description" content="PrivacyFence for macOS, Windows and Linux: free, open source, with a SHA-256 checksum for every installer.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PrivacyFence: AI access without giving AI the keys. Approve the sensitive. Automate the routine.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Download PrivacyFence">
+  <meta name="twitter:description" content="PrivacyFence for macOS, Windows and Linux: free, open source, with a SHA-256 checksum for every installer.">
+  <meta name="twitter:image" content="https://privacyfence.eu/assets/og.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "@id": "https://privacyfence.eu/#software",
+    "name": "PrivacyFence",
+    "description": "An open-source privacy and approval gateway between AI assistants and your business systems.",
+    "url": "https://privacyfence.eu/",
+    "downloadUrl": "https://privacyfence.eu/download/",
+    "applicationCategory": "SecurityApplication",
+    "operatingSystem": ["macOS", "Windows", "Linux"],
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+    "image": "https://privacyfence.eu/assets/og.png",
+    "sameAs": [
+      "https://github.com/privacyfence/privacyfence",
+      "https://pypi.org/project/privacyfence/"
+    ],
+    "publisher": {
+      "@type": "Person",
+      "@id": "https://privacyfence.eu/#publisher",
+      "name": "Andras Takacs",
+      "email": "mailto:info@privacyfence.eu",
+      "address": { "@type": "PostalAddress", "addressLocality": "Budapest", "addressCountry": "HU" }
+    }
+  }
+  </script>
 </head>
 <body>
+  <a class="skip-link" href="#top">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="../" aria-label="PrivacyFence home">
-      <img src="../assets/icon.png" alt="" width="38" height="38">
+    <a class="brand" href="/" aria-label="PrivacyFence home">
+      <img src="/assets/icon.png" alt="" width="38" height="38">
       <span>PrivacyFence</span>
     </a>
     <nav aria-label="Primary navigation">
-      <a href="../#how-it-works">How it works</a>
-      <a href="../#privacy">Privacy</a>
-      <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+      <div class="nav-links">
+        <a href="/#how-it-works">How it works</a>
+        <a href="/#privacy">Privacy</a>
+        <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+      </div>
+      <details class="nav-menu">
+        <summary><span class="nav-menu-label">Menu</span></summary>
+        <div class="nav-menu-panel">
+          <a href="/#how-it-works">How it works</a>
+          <a href="/#privacy">Privacy</a>
+          <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+        </div>
+      </details>
       <a class="nav-cta" href="https://github.com/privacyfence/privacyfence/releases">All releases</a>
     </nav>
   </header>
@@ -31,7 +85,7 @@
         Free and open source, under Apache 2.0. PrivacyFence runs locally on your own machine —
         nothing you approve or deny leaves it.
       </p>
-      <div class="release-meta" id="release-meta" aria-live="polite"></div>
+      <div class="release-meta cluster" id="release-meta" aria-live="polite"></div>
     </section>
 
     <!-- Populated entirely from the release manifest: filenames, sizes and checksums are never
@@ -39,7 +93,7 @@
          shows a loading row rather than an empty page. -->
     <section aria-labelledby="stable-heading">
       <h2 id="stable-heading" class="visually-hidden">Stable downloads</h2>
-      <div class="download-grid" id="download-grid">
+      <div class="download-grid grid-auto" id="download-grid">
         <p class="download-loading" id="download-loading">Loading the latest release…</p>
       </div>
 
@@ -70,7 +124,7 @@ Get-FileHash &lt;file&gt; -Algorithm SHA256   <span class="verify-os">Windows</s
     <section class="prerelease-block" id="prerelease-block" aria-labelledby="prerelease-heading" hidden>
       <h2 id="prerelease-heading">Want to test the next version?</h2>
       <p id="prerelease-summary"></p>
-      <div class="download-grid compact" id="prerelease-grid"></div>
+      <div class="download-grid grid-auto compact" id="prerelease-grid"></div>
       <p class="prerelease-note">
         Pre-release builds get the same checks as stable, but they are newer and less proven.
         Install them alongside nothing you rely on.
@@ -81,11 +135,19 @@ Get-FileHash &lt;file&gt; -Algorithm SHA256   <span class="verify-os">Windows</s
   </main>
 
   <footer class="site-footer shell">
-    <div class="footer-brand"><img src="../assets/icon.png" alt="" width="28" height="28"><span>PrivacyFence</span></div>
-    <p>Independent open-source software for human control of AI access to enterprise services.</p>
-    <div><a href="https://github.com/privacyfence/privacyfence">GitHub</a><a href="https://github.com/privacyfence/privacyfence/blob/main/LICENSE">Apache 2.0</a></div>
+    <div class="footer-brand"><img src="/assets/icon.png" alt="" width="28" height="28"><span>PrivacyFence</span></div>
+    <p>Independent open-source software for human control of AI access to business systems.</p>
+    <ul class="footer-links cluster" aria-label="Site information">
+      <li><a href="/privacy/" data-privacy-link>Privacy</a></li>
+      <li><a href="/imprint/">Imprint</a></li>
+      <li><button type="button" class="link-button" data-cookie-settings hidden>Cookie settings</button></li>
+      <li><a href="https://github.com/privacyfence/privacyfence">GitHub</a></li>
+      <li><a href="https://github.com/privacyfence/privacyfence/blob/main/LICENSE">Apache 2.0</a></li>
+      <li><a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a></li>
+    </ul>
   </footer>
 
-  <script src="download.js" defer></script>
+  <script src="/site.js" defer></script>
+  <script src="/download/download.js" defer></script>
 </body>
 </html>

@@ -37,7 +37,7 @@ def test_all_three_primary_ctas_point_at_the_download_page():
     ctas = _ctas()
     assert len(ctas) == 3, f"expected 3 primary download CTAs, found {len(ctas)}: {ctas}"
     for href, label in ctas:
-        assert href == "download/", f"{label.strip()!r} points at {href!r}, not the download page"
+        assert href == "/download/", f"{label.strip()!r} points at {href!r}, not the download page"
 
 
 def test_no_primary_cta_still_points_at_github_releases():
@@ -56,6 +56,11 @@ def test_github_remains_linked_for_source_and_docs():
 
 PAGES_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "pages.yml"
 
+# Files under website/ that deliberately stay in the repository: the source of the canonical
+# description (tests/unit/test_website_canonical_description.py) and the source the OpenGraph
+# image is rendered from. Everything else under website/ is public.
+REPOSITORY_ONLY = {"canonical-description.md", "assets/og-source.html"}
+
 
 def test_every_website_file_is_actually_deployed():
     """Every file under website/ is copied by pages.yml's build step.
@@ -73,8 +78,21 @@ def test_every_website_file_is_actually_deployed():
     missing = [
         path.relative_to(WEBSITE).as_posix()
         for path in sorted(WEBSITE.rglob("*"))
-        if path.is_file() and f"website/{path.relative_to(WEBSITE).as_posix()}" not in workflow
+        if path.is_file()
+        and path.relative_to(WEBSITE).as_posix() not in REPOSITORY_ONLY
+        and f"website/{path.relative_to(WEBSITE).as_posix()}" not in workflow
     ]
     assert not missing, (
         f"these website files are never copied into _site by pages.yml, so they 404 in production: {missing}"
     )
+
+
+def test_repository_only_files_are_not_deployed():
+    copy_lines = [
+        line for line in PAGES_WORKFLOW.read_text(encoding="utf-8").splitlines() if line.strip().startswith("cp ")
+    ]
+    for name in REPOSITORY_ONLY:
+        assert (WEBSITE / name).is_file(), f"{name} is listed as repository-only but does not exist"
+        assert not any(f"website/{name}" in line for line in copy_lines), (
+            f"{name} is repository-only but pages.yml deploys it"
+        )

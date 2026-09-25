@@ -159,6 +159,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+      # tests/integration/test_website_layout.py (guardrail 12) screenshots every privacyfence.eu
+      # page at every tested width, pass or fail, so a website change can be reviewed at 360 px
+      # and 1440 px without checking the branch out.
+      - name: Upload website layout screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: website-layout-screenshots
+          path: test-results/website-layout/
+          if-no-files-found: ignore
+          retention-days: 30
+
   # Prove the
   # package actually works on every Python version pyproject.toml's
   # `requires-python = ">=3.11"` claims to support -- both below and above
