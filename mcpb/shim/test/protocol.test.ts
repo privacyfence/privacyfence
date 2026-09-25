@@ -7,6 +7,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   CONTROL_SOCKET_FILE_NAME,
   dataDir,
+  DEV_DATA_DIR_ENV,
   handoffDir,
   MAX_SUN_PATH_BYTES,
   pipeNameFor,
@@ -87,6 +88,55 @@ describe("readMcpUrl", () => {
 
   it("throws when the file doesn't exist", () => {
     assert.throws(() => readMcpUrl("/definitely/does/not/exist/mcp_url"));
+  });
+});
+
+describe("dataDir with DEV_DATA_DIR_ENV (a source checkout's daemon)", () => {
+  const checkout = path.join(os.tmpdir(), "pf-checkout");
+  /** No marker anywhere: a temp root with nothing in it stands in for the
+   * platform's system root, so a real install on the test machine can't
+   * change the answer. */
+  function withUnseparatedEnv(fn: (env: NodeJS.ProcessEnv) => void): void {
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pf-nosep-"));
+    try {
+      fn({ PRIVACYFENCE_SYSTEM_ROOT: emptyRoot, [DEV_DATA_DIR_ENV]: checkout });
+    } finally {
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
+  }
+
+  it("resolves mcp_url's directory, the control socket and the pipe name under the checkout", () => {
+    withUnseparatedEnv((env) => {
+      assert.equal(dataDir(env), checkout);
+      assert.equal(handoffDir(env), checkout);
+      withPlatform("linux", () => {
+        assert.equal(posixControlSocketPath(env), path.join(checkout, "authority", CONTROL_SOCKET_FILE_NAME));
+      });
+      assert.equal(windowsControlPipeName(env), pipeNameFor(checkout));
+    });
+  });
+
+  it("ignores a relative path", () => {
+    withUnseparatedEnv((env) => {
+      withPlatform("linux", () => {
+        assert.equal(dataDir({ ...env, [DEV_DATA_DIR_ENV]: "relative/dir" }), path.join(os.homedir(), ".privacyfence"));
+      });
+    });
+  });
+
+  it("is ignored on a privilege-separated install", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pf-sep-"));
+    try {
+      fs.writeFileSync(
+        path.join(root, "privilege-separation.json"),
+        JSON.stringify({ version: 1, platform: process.platform }),
+      );
+      const env = { PRIVACYFENCE_SYSTEM_ROOT: root, [DEV_DATA_DIR_ENV]: checkout };
+      assert.notEqual(dataDir(env), checkout);
+      assert.equal(handoffDir(env), path.join(root, "handoff"));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

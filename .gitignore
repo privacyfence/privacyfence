@@ -40,6 +40,11 @@ deployment_id
 # same dev-mode-data_dir()-is-the-repo-root reasoning as deployment_id above.
 approvals_url
 settings_url
+# The handoff files a source daemon writes (paths.handoff_dir() is data_dir(), the repo root,
+# here): mcp_url and web_base_url for discovery, and mcp_token, the agent's live bearer token.
+/mcp_url
+/mcp_token
+/web_base_url
 
 # QA fixture manifest (keep only the .example) -- reveals which real
 # project/space/folder/calendar/list/channel/chat a QA environment uses,

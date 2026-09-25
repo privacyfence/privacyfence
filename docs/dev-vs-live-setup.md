@@ -93,9 +93,12 @@ refuses to serve.
 | Non-editable `pip`/`pipx` install | `~/.privacyfence` (`%LOCALAPPDATA%\PrivacyFence` on Windows) |
 | Packaged install (privilege-separated) | the system root above. Files the user's own session reads (`mcp_url`, the control-channel sockets) live in its `handoff/` subdirectory |
 
-The MCPB shim (`mcpb/shim/src/protocol.ts`) looks for `mcp_url` in only two places: `handoff/` under
-the system root when a valid marker exists, and otherwise `~/.privacyfence`
-(`%LOCALAPPDATA%\PrivacyFence` on Windows). It never looks in a source checkout.
+The MCPB shim (`mcpb/shim/src/protocol.ts`) looks for `mcp_url` and the control channel under
+`handoff/` in the system root when a valid marker exists. Otherwise it looks in
+`PRIVACYFENCE_DEV_DATA_DIR` when that is set to an absolute path, and in `~/.privacyfence`
+(`%LOCALAPPDATA%\PrivacyFence` on Windows) when it is not. `dev_start.sh` sets the variable to the
+checkout's data directory in the entry it registers; a shim registered any other way does not find
+a source daemon. The variable is ignored on a privilege-separated install.
 
 ## Local web port
 
@@ -117,8 +120,9 @@ The script:
 1. creates `.venv` with an editable install if none exists;
 2. copies `settings.yaml.example` to `config/settings.yaml` if that file is missing;
 3. builds the shim (`mcpb/shim/dist/shim.js`);
-4. registers it as the `privacyfence` MCP server, through `claude mcp add` if the Claude Code CLI is
-   on `PATH`, otherwise in Claude Desktop's `claude_desktop_config.json` on macOS;
+4. registers it as the `privacyfence` MCP server, with `PRIVACYFENCE_DEV_DATA_DIR` set to the
+   checkout's data directory, through `claude mcp add` if the Claude Code CLI is on `PATH`,
+   otherwise in Claude Desktop's `claude_desktop_config.json` on macOS;
 5. runs `privacyfence-app` in the foreground.
 
 Ctrl-C stops the daemon and removes the registration.
