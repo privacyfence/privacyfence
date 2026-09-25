@@ -809,7 +809,7 @@ Preview and scan paths are bounded to avoid unbounded processing of provider-con
 
 Connector OAuth/session credentials are stored in PrivacyFence state, not returned through MCP tools. File creation/update paths that contain credentials use the repository's secure file helpers and restrictive permissions where the operating system supports them.
 
-The self-hosted live-provider test runner keeps its real QA connector credentials outside GitHub-hosted runners and outside committed repository content. See [`connector-live-check-setup.md`](connector-live-check-setup.md).
+The self-hosted live-provider test runner keeps its real QA connector credentials outside GitHub-hosted runners and outside committed repository content. See [`connector-qa.md`](connector-qa.md#credential-boundary).
 
 Each connector's OAuth client secret is shared across every user of a given deployment rather than issued per-user: it authenticates the PrivacyFence installation to the provider, not an individual end user. A leaked client secret should be rotated with the provider directly; PrivacyFence itself has no per-secret rotation schedule or automated rotation mechanism.
 
@@ -889,7 +889,7 @@ See [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md).
 
 Current automated security evidence includes unit/integration tests, browser/CSP tests, coverage-floor enforcement, static analysis, Python compatibility checks, scheduled live-provider checks, and release/platform smoke coverage described in [`testing-policy.md`](testing-policy.md).
 
-What is deliberately left to human judgment rather than automated, and why, is in [`testing-policy.md`](testing-policy.md)'s "What deliberately remains manual".
+What is deliberately left to human judgment rather than automated, and why, is in [`release-testing.md`](release-testing.md#what-stays-manual)'s "What stays manual".
 
 ## Vendor risk criteria
 

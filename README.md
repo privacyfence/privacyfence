@@ -493,7 +493,7 @@ walkthrough.
 - [Telegram setup](https://github.com/privacyfence/privacyfence/blob/main/docs/telegram-setup.md)
 - [Org mode setup guide](https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md) — Ubuntu server, Caddy, Google identity
 - [Org mode operational readiness](https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-operational-readiness.md) — support/readiness level, backup/restore, upgrade/rollback, persisted-state compatibility, restart and single-daemon availability behaviour
-- [Connector QA testing](https://github.com/privacyfence/privacyfence/blob/main/docs/connector-qa-testing.md)
+- [Connector QA testing](https://github.com/privacyfence/privacyfence/blob/main/docs/connector-qa.md)
 - [Release testing](https://github.com/privacyfence/privacyfence/blob/main/docs/release-testing.md)
 - [Approval window content reference](https://github.com/privacyfence/privacyfence/blob/main/docs/approval-window-content-reference.md) — what each approval dialog shows, grouped by dialog shape
 - ["Always allow" per-tool reference](https://github.com/privacyfence/privacyfence/blob/main/docs/always-allow-rules-reference.md) — what clicking Always allow does, tool by tool

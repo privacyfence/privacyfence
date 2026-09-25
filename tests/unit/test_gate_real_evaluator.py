@@ -6,18 +6,17 @@ A FakeEvaluator-style stub returns a canned (bool, str) with no rule-matching lo
 own, so test_gate.py's ~50 tests prove gated_call's state machine is correct given *some*
 auto-accept verdict, but not that any specific rule entry actually produces that verdict for
 a given connector call. That's exactly what a human currently checks by hand, rule by rule,
-connector by connector, across docs/connector-qa-testing.md's ten phases ("should NOT
-prompt" / "should still prompt" instructions). Each class below ports one of those checks
+connector by connector, in docs/connector-qa.md's per-connector exploratory checks ("reads
+without a card" / "prompts" instructions). Each class below ports one of those checks
 into a deterministic test: real v2 rules (built by ``tests.helpers.policy_rules`` from a
 compact ``{operation_key: [{"predicate": name, "value": value}]}`` table), args/raw_data shaped
 the way the real
 connector module builds them, and an assertion on both the return value and the resulting
 AuditEntry fields -- not just "a popup would/wouldn't show."
 
-The popup layer (``gate.show_read_popup``/``gate.show_popup`` -- P10 deleted the native
-AppKit implementation behind them, so they now delegate to whichever ``ApprovalUI`` is
-current, i.e. ``WebApprovalUI``) is still monkeypatched to a scripted answer, same as before;
-only the auto-accept side moves from a v1 evaluator to real v2 rules (P9). The actual card
+The popup layer (``gate.show_read_popup``/``gate.show_popup``, which delegate to whichever
+``ApprovalUI`` is current, i.e. ``WebApprovalUI``) is monkeypatched to a scripted answer; only
+the auto-accept side runs for real. The actual card
 construction has its own coverage in test_approval_window_html.py/test_web_approval_ui.py.
 
 salesforce.read_record's approved_object_types rule already has a real-rule regression test
@@ -105,8 +104,8 @@ def fail_if_popup_shown(monkeypatch, *, review=True, popup=True):
 
 
 class TestGmailTrustedSenderDomain:
-    """connector-qa-testing.md Phase 1 step 6: trusted_sender_domain must
-    match subdomains of the configured value, not just an exact match."""
+    """connector-qa.md "Gmail checks", trusted sender domain: trusted_sender_domain
+    must match subdomains of the configured value, not just an exact match."""
 
     RULES = {"gmail.read_message": [{"predicate": "trusted_sender_domain", "value": "trusted.com"}]}
 
@@ -139,9 +138,10 @@ class TestGmailTrustedSenderDomain:
 
 
 class TestDriveApprovedFolder:
-    """connector-qa-testing.md Phase 2 step 3 (plain auto-accept) and
-    steps 21-23 (PII detection overrides a matching approved_folder rule on
-    the read side, but a write to the same folder is never scanned)."""
+    """connector-qa.md "Drive checks": trusted folder (plain auto-accept) and
+    PII on reads only / PII overrides a matching rule (PII detection overrides
+    a matching approved_folder rule on the read side, but a write to the same
+    folder is never scanned)."""
 
     RULES = {"drive.read_file_contents": [{"predicate": "approved_folder", "value": ["qa-folder-id"]}]}
 
@@ -251,7 +251,7 @@ class TestDriveSandboxFolderCoveragePastComment:
 
 
 class TestDriveTempAccept:
-    """connector-qa-testing.md Phase 2 steps 5/13/16: accepting one
+    """connector-qa.md "Drive checks", temp-accept window: accepting one
     temp-accept-eligible call must silently auto-accept a second call for
     the same file, against the real, in-memory temp-accept store
     (auto_accept.register_temp_accept/is_temp_accepted -- module-level
@@ -514,7 +514,7 @@ class TestAlwaysAllowUnconditionalRule:
 
 
 class TestCalendarIAmOrganizer:
-    """connector-qa-testing.md Phase 4 step 5."""
+    """connector-qa.md "Calendar checks", own events."""
 
     RULES = {"calendar.read_event_details": [{"predicate": "i_am_organizer"}]}
 
@@ -544,8 +544,8 @@ class TestCalendarIAmOrganizer:
 
 
 class TestJiraRules:
-    """connector-qa-testing.md Phase 9 steps 2-3 (approved_project_keys,
-    with an out-of-allowlist contrast) and step 5 (i_am_reporter /
+    """connector-qa.md "Jira checks": approved project (approved_project_keys,
+    with an out-of-allowlist contrast) and own issues (i_am_reporter /
     i_am_assignee auto-accept independent of the project rule)."""
 
     async def test_issue_in_approved_project_auto_accepts(self, monkeypatch, audit_dir):
@@ -606,8 +606,8 @@ class TestJiraRules:
 
 
 class TestConfluenceRules:
-    """connector-qa-testing.md Phase 10 steps 2-3 (approved_space_keys, with
-    an out-of-allowlist contrast) and step 5 (i_am_author auto-accepts
+    """connector-qa.md "Confluence checks": approved space (approved_space_keys,
+    with an out-of-allowlist contrast) and own pages (i_am_author auto-accepts
     independent of the space rule)."""
 
     async def test_page_in_approved_space_auto_accepts(self, monkeypatch, audit_dir):
@@ -651,7 +651,7 @@ class TestConfluenceRules:
 
 
 class TestContactsNoContactInfoChange:
-    """connector-qa-testing.md Phase 5 steps 5-6: a name/note-only edit may
+    """connector-qa.md "Contacts checks", contact-info edits: a name/note-only edit may
     auto-accept; the same rule must not cover an edit that also touches
     email/phone."""
 
@@ -683,8 +683,8 @@ class TestContactsNoContactInfoChange:
 
 
 class TestTasksApprovedTaskList:
-    """connector-qa-testing.md Phase 6 step 4 (create/update in an approved
-    list) and step 6's move variant, which -- unlike every other operation
+    """connector-qa.md "Tasks checks": approved list (create/update in an
+    approved list) and moves, which -- unlike every other operation
     this rule covers -- requires BOTH the source and destination list to be
     on the allowlist (policy/scopes.py's own approved_task_list docstring)."""
 
@@ -738,7 +738,7 @@ class TestTasksApprovedTaskList:
 
 
 class TestAcceptAllPersistsARealRule:
-    """connector-qa-testing.md's Always allow pattern (e.g. Phase 2 step 12):
+    """connector-qa.md's Always allow checks ("Gmail checks", "Drive checks"):
     confirming 'Always allow' on one call must persist a real rule that then
     silently covers a second, different-but-matching call -- exercised here
     against the real on-disk persistence path (gate.py's own accept_all
