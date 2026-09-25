@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """Publish release artifacts to the Cloudflare R2 release archive.
 
-Replaces (and was rehearsed by) the one-off ".github/workflows/r2-smoke-test.yml" workflow --
-that workflow proved the GitHub Actions -> R2 credentials/endpoint plumbing works and has been
-deleted now that this script exists.
-
 Every tagged release (stable and pre-release alike) uploads its artifacts here, laid out as:
 
     releases/
@@ -38,9 +34,9 @@ carries its own copy of the version-parsing regex, mirroring update_checker.py's
 importing it, so a CI job can run it (e.g. the SBOM job in build.yml) without first installing the
 full package.
 
-Requires these environment variables (matching r2-smoke-test.yml's, before its deletion; renamed
-from the original CF_R2_* to disambiguate from the download Worker's own CLOUDFLARE_* deploy
-credentials -- see this repo's CLAUDE.md "Cloudflare R2 release archive" section):
+Requires these environment variables (prefixed CF_RELEASES_ to keep them apart from the download
+Worker's own CLOUDFLARE_* deploy credentials -- see docs/downloads-and-release-kpi.md's
+"Credentials" section):
     CF_RELEASES_R2_ACCESS_KEY_ID, CF_RELEASES_R2_SECRET_ACCESS_KEY  -- R2 API token
     CF_RELEASES_R2_ENDPOINT                                         -- R2 S3-compatible endpoint URL
     R2_BUCKET                                                       -- defaults to "privacyfence-releases"
@@ -120,9 +116,9 @@ _TAG_STAGE_ALIASES = {
 DEFAULT_BUCKET = "privacyfence-releases"
 
 # Schema version of the manifest this script writes. Consumed by cloudflare/downloads/src/
-# manifest.ts, whose `Manifest`/`ManifestArtifact` interfaces are the real contract -- that tree
-# shipped first (Phase 1) against hand-written fixtures of this exact shape, so changing anything
-# here means changing the Worker and its fixtures in the same PR.
+# manifest.ts, whose `Manifest`/`ManifestArtifact` interfaces are the real contract -- the
+# Worker's tests read hand-written fixtures of this exact shape, so changing anything here means
+# changing the Worker and its fixtures in the same PR.
 MANIFEST_SCHEMA = 1
 
 # SHA-256 is recorded as S3 user metadata at upload time rather than recomputed later, because
@@ -147,7 +143,7 @@ _SHA256_METADATA_KEY = "sha256"
 # arm64, windows-latest x64, ubuntu-latest amd64) and the fixtures in
 # cloudflare/downloads/test/fixtures/.
 #
-# One installer per platform, and deliberately no entry for the macOS `.pkg` (#428 D2): it is
+# One installer per platform, and deliberately no entry for the macOS `.pkg`: it is
 # not a downloadable artifact of its own any more -- scripts/build_dmg.sh puts it *inside* the
 # DMG, next to the `.mcpb`, so "macos-arm64" is the whole macOS story again. It used to have its
 # own `macos-arm64-pkg` id here, and its own opt-out from the "required" set below, precisely
