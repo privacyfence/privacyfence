@@ -68,9 +68,10 @@ HIDDEN_IMPORTS = [
     # selected dynamically at import time inside the package itself, which
     # is exactly the shape PyInstaller's static analysis can miss.
     "portalocker",
-    # privacyfence connectors -- all ten, imported directly by daemon_main.py;
-    # listed explicitly anyway as a defensive backstop against PyInstaller's
-    # static analysis missing one.
+    # privacyfence connectors -- every module in src/privacyfence/connectors/
+    # (tests/unit/test_pyinstaller_hidden_imports.py checks the list is
+    # complete), imported directly by daemon_main.py; listed explicitly anyway
+    # as a defensive backstop against PyInstaller's static analysis missing one.
     "privacyfence.connectors.gmail",
     "privacyfence.connectors.drive",
     "privacyfence.connectors.calendar",
@@ -81,4 +82,5 @@ HIDDEN_IMPORTS = [
     "privacyfence.connectors.salesforce",
     "privacyfence.connectors.jira",
     "privacyfence.connectors.confluence",
+    "privacyfence.connectors.apps_script",
 ]
