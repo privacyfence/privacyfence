@@ -10,8 +10,9 @@ what you need, which guide to follow, and what your first approval looks like.
 - Administrator rights on it, for the install.
 - An MCP-compatible AI client. Claude Desktop and Claude Code are tested with every install;
   claude.ai works through an [organization deployment](#local-or-organization-deployment) only.
-- A built-in passkey authenticator: Touch ID on a Mac, Windows Hello on Windows, or one your
-  browser offers on Linux.
+- A passkey authenticator that asks for your PIN, fingerprint or face: Touch ID on a Mac, Windows
+  Hello on Windows, a USB or NFC security key, or your phone (the browser shows a QR code). On
+  Linux, where there is usually nothing built in, use a security key or your phone.
 - The accounts you want PrivacyFence to govern, and the organization configuration file your IT
   administrator gave you, if any.
 

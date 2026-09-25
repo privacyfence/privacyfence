@@ -265,11 +265,11 @@ function pfWebauthnCreate(optionsJson) {
 }
 // The browser's own NotAllowedError text ("The operation either timed out or
 // was not allowed") is deliberately vague -- WebAuthn forbids saying more to
-// the page -- and is the whole of what a Windows user without Windows Hello
-// set up sees, since registration asks for a platform authenticator only
-// (webauthn_stepup.py's begin_registration). Asking the browser whether one
-// is available at all tells those two cases apart after the fact; the error
-// name stays in the message so a bug report still carries it.
+// the page -- and is also what a user sees who has no built-in authenticator
+// set up (Windows without Windows Hello, most Linux desktops) and dismissed
+// the browser's offer of a security key or phone. Asking the browser whether
+// a built-in one is available at all tells those two cases apart after the
+// fact; the error name stays in the message so a bug report still carries it.
 function pfExplainCreateError(err) {
   var name = err && err.name;
   if (name === 'InvalidStateError') {
@@ -283,11 +283,11 @@ function pfExplainCreateError(err) {
   return probe.then(function (available) {
     if (!available) {
       throw new Error('this device has no built-in passkey authenticator ready to use. ' +
-        'On Windows, set up Windows Hello (Settings > Accounts > Sign-in options, add a PIN), ' +
-        'then try again (' + name + ')');
+        'Try again with a security key or your phone, or on Windows set up Windows Hello ' +
+        '(Settings > Accounts > Sign-in options, add a PIN) (' + name + ')');
     }
     throw new Error('the passkey prompt was cancelled, timed out, or was blocked. ' +
-      'Try again and finish the Windows Hello / Touch ID prompt -- it can open behind ' +
+      'Try again and finish the passkey prompt -- it can open behind ' +
       'this browser window (' + name + ')');
   });
 }

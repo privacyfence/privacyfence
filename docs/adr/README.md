@@ -160,3 +160,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0052](0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md) | The docs are built with Zensical, from the latest stable release tag | Accepted |
 | [0053](0053-the-website-is-hosted-on-github-pages-behind-cloudflare.md) | The website is hosted on GitHub Pages, behind the Cloudflare proxy | Accepted |
 | [0054](0054-the-windows-installer-refuses-anything-but-native-x64.md) | The Windows installer refuses anything but a native x64 Windows, Windows 11 on arm64 included | Accepted |
+| [0055](0055-step-up-passkey-enrollment-accepts-any-authenticator.md) | Step-up passkey enrollment accepts any authenticator: built in, security key or phone; user verification stays required | Accepted |

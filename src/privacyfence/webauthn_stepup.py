@@ -1,5 +1,6 @@
-"""WebAuthn step-up (P9, D7; #426): platform-authenticator proof (Face ID / Touch ID / Android fingerprint
-/ Windows Hello) that a human -- not merely a possessed, stolen session
+"""WebAuthn step-up (P9, D7; #426): user-verified passkey proof (Face ID /
+Touch ID / Windows Hello, a security key with a PIN or biometric, or a phone
+over the hybrid flow) that a human -- not merely a possessed, stolen session
 cookie -- is the one approving a gated *write*, in org mode, and (#426
 Phase 1) enrollable in local mode too, though nothing there consults it
 yet -- see step_up_config.py's own module docstring for why local mode
@@ -35,28 +36,30 @@ path:
   (no biometric/PIN) is rejected outright rather than silently accepted as
   "good enough". What that check reads is the ``UV`` bit in the
   authenticator's own ``authData``, which is a claim the authenticator
-  makes about itself: a real platform authenticator sets it only after a
+  makes about itself: a real authenticator sets it only after a
   biometric or PIN, and a process that is not one sets it to 1 because
   nothing signs the *absence* of a human. Registration here uses ``none``
   attestation (below), so there is also no attestation statement tying the
   key to a genuine authenticator model to fall back on. Treat this flag as
   "this authenticator says a human was verified", not as proof that one
-  was -- exactly the same client-side-enforced posture as platform
-  attachment below, and for the same structural reason. The control that
-  makes it *mean* something against a local adversary is not this flag but
-  the enrollment gate (web/routes_security.py's ``register_options``): a
+  was -- the same structural reason attachment is not constrained
+  (below). The control that makes it *mean* something against a local
+  adversary is not this flag but the enrollment gate (web/routes_security.py's ``register_options``): a
   key nothing attests to is only as good as the proof demanded before it
   got into the store in the first place.
-- **Platform attachment is requested, not (and cannot be) cryptographically
-  enforced.** ``authenticatorSelection.authenticator_attachment=platform``
-  at registration time is what stops a compliant browser from offering a
-  roaming security key in the first place; WebAuthn's signed payload
-  carries no attachment claim to re-verify server-side after the fact (the
+- **Any authenticator attachment is accepted, because none could be
+  enforced.** Registration sets no ``authenticator_attachment``, so a
+  browser offers a built-in authenticator, a roaming security key, or a
+  phone over the hybrid (QR code) flow alike. Asking for ``platform`` would
+  only have been a request to a cooperating browser: WebAuthn's signed
+  payload carries no attachment claim to re-verify server-side (the
   browser-reported ``authenticatorAttachment`` field on the credential is
-  informational only), so this is real but client-side-enforced, the same
-  posture every RP using this mechanism has. ``exclude_credentials`` (below,
-  from ``list_credentials``) is client-side-enforced in the same way and
-  worth naming as such: it stops a *browser* offering to re-enroll an
+  informational only), so it bought no assurance -- while making enrollment
+  impossible on a machine with no built-in authenticator, which is most
+  Linux desktops. User verification, above, is the property that matters
+  and stays required. See ADR 0055. ``exclude_credentials`` (below, from
+  ``list_credentials``) is client-side-enforced in the same way and worth
+  naming as such: it stops a *browser* offering to re-enroll an
   authenticator this principal already has, and stops nothing else.
 - **The RP ID must be a real registrable domain.** D1 (§15) already pins
   local mode's own dev server to ``localhost`` for exactly this reason;
@@ -132,7 +135,6 @@ from typing import Any
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.structs import (
-    AuthenticatorAttachment,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     ResidentKeyRequirement,
@@ -318,7 +320,6 @@ def begin_registration(principal: Principal, *, rp_id: str, rp_name: str) -> tup
         user_id=principal.id.encode("utf-8"),
         user_display_name=principal.display_name or principal.email or principal.id,
         authenticator_selection=AuthenticatorSelectionCriteria(
-            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
             resident_key=ResidentKeyRequirement.PREFERRED,
             user_verification=UserVerificationRequirement.REQUIRED,
         ),

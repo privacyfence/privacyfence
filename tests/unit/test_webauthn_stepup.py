@@ -12,6 +12,7 @@ verify anything.
 """
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import patch
 
@@ -107,6 +108,13 @@ class TestBeginRegistration:
         assert isinstance(challenge, bytes) and len(challenge) >= 16
         assert '"id": "pf.example.com"' in options_json or '"id":"pf.example.com"' in options_json
         assert "PrivacyFence" in options_json
+
+    def test_any_attachment_is_offered_but_user_verification_is_required(self):
+        options_json, _ = wa.begin_registration(ALICE, rp_id="pf.example.com", rp_name="PrivacyFence")
+        selection = json.loads(options_json)["authenticatorSelection"]
+        assert "authenticatorAttachment" not in selection
+        assert selection["userVerification"] == "required"
+        assert selection["residentKey"] == "preferred"
 
     def test_existing_credentials_are_excluded(self):
         wa.add_credential(ALICE, _credential(credential_id=CRED1_ID))

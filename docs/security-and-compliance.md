@@ -98,8 +98,8 @@ sign-in), and neither can be done at a time of the AI client's choosing without 
 
 ## Passkey step-up
 
-Step-up asks for a fresh WebAuthn passkey assertion (Touch ID, Windows Hello, a security key)
-before a decision is released. The `step_up` settings (in `config/settings.yaml` for local mode,
+Step-up asks for a fresh WebAuthn passkey assertion (Touch ID, Windows Hello, a security key, or
+a phone over the browser's QR-code flow) before a decision is released. The `step_up` settings (in `config/settings.yaml` for local mode,
 `org_config.json` for organization mode; see [Configuration reference](configuration-reference.md))
 default to:
 
@@ -166,8 +166,14 @@ allow**) need neither again.
 
 ### Enrolling a passkey
 
+Registration accepts any authenticator: built in, a roaming security key, or a phone. It requires
+user verification (a PIN, fingerprint or face), and asks for no particular attachment, because
+nothing in a passkey's signed data says how it is attached, so the server could not check it
+([ADR 0055](adr/0055-step-up-passkey-enrollment-accepts-any-authenticator.md)).
+
 Registration uses `none` attestation, so the server cannot prove a person or real authenticator
-created a new passkey. Enrollment itself is therefore gated:
+created a new passkey, and the user-verification flag is the authenticator's own claim. Enrollment
+itself is therefore gated:
 
 - **A passkey is already enrolled:** adding another needs an assertion with an existing one. Same
   in both modes.
