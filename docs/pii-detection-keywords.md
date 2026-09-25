@@ -68,6 +68,10 @@ The check reads the content being released, not the envelope around it:
 - **Confluence** — the page body.
 - **Drive** — a document's text, all of what the AI system receives (at most 100 KB); a sheet
   read, limited to its first 50 rows.
+- **Salesforce** — what the card lists: a record's field names and values, a report's rows, or a
+  search's matches (object type, name and ID).
+- **Apps Script** — a project's source code, or an execution log's entries (function, status,
+  start time and duration), limited to the first 2,000 characters.
 - **Attachments and downloaded or uploaded files** — the text PrivacyFence can extract from the
   file (see [File previews](approvals-and-policy.md#file-previews)), capped at 20,000 characters.
   A file larger than 5 MB is not scanned, and images are not read (no OCR).
