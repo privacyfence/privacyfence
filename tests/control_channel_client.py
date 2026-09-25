@@ -1,16 +1,11 @@
-"""Shared real client for #428 Phase 2's control channel (``privacyfence.web.
+"""Shared real client for the daemon's control channel (``privacyfence.web.
 control_channel``), for any integration/system test that mints a bootstrap
 code against a *real*, separately-spawned daemon process.
 
-Before Phase 2, that meant a plain ``POST /api/bootstrap`` over the same
-loopback HTTP port the browser uses, authenticated by the persistent
-``web_token`` file (see ``test_local_mode_system.py``'s git history for what
-that helper used to look like). Phase 2 retired both the endpoint and the
-file -- minting on demand now goes through a Unix domain socket (macOS/
-Linux) or an ACL'd named pipe (Windows) instead, neither of which a plain
-HTTP client can reach, so every test that used to POST a Bearer header now
-needs a real socket/pipe client instead. This module is that client, so it
-exists once rather than once per test file.
+Minting on demand goes through a Unix domain socket (macOS/Linux) or an
+ACL'd named pipe (Windows), neither of which a plain HTTP client can reach,
+so every such test needs a real socket/pipe client. This module is that
+client, so it exists once rather than once per test file.
 
 A test driving a real subprocess (spawned against its own sandboxed
 ``data_dir()``, e.g. ``tests/system/test_local_mode_system.py``'s own
@@ -128,8 +123,8 @@ def mint_bootstrap_code(data_dir: Path, *, timeout: float = 5.0) -> str:
 # --------------------------------------------------------------------------- #
 # Attested minting -- a code that may actually *approve*
 #
-# Everything above mints with a bare ``MINT``, which since the self-approval
-# review's Phase 2 lands an ``unattested`` session: it may view what is
+# Everything above mints with a bare ``MINT``, which lands an
+# ``unattested`` session: it may view what is
 # pending, but web/routes_approvals.py's ``require_human_session`` gate
 # refuses it a step-up result or a sensitive confirm, and
 # web/routes_settings.py refuses it every ``_SENSITIVE_ACTIONS`` change (see

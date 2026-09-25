@@ -1,5 +1,5 @@
-"""Tests for web/control_channel.py -- #428 Phase 2's replacement for
-web_token -> POST /api/bootstrap. POSIX-only: the Unix-domain-socket half is
+"""Tests for web/control_channel.py -- the daemon's control channel, and
+the companion's own channel in the other direction. POSIX-only: the Unix-domain-socket half is
 real and runs on any CI OS this suite already targets; the named-pipe half
 needs pywin32 and a real Windows kernel object, so it's exercised for real
 only by the Windows-hosted system/integration tests (see
@@ -165,8 +165,7 @@ class TestControlChannelServerPosix:
             server.stop()
 
     def test_refuses_to_take_over_a_socket_owned_by_another_account(self, tmp_path, monkeypatch, caplog):
-        # The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6):
-        # a socket file left
+        # The multi-user guard (ADR 0027): a socket file left
         # by a different uid is never unlinked-and-rebound, even a stale
         # one -- see _existing_socket_owner_problem()'s own docstring for
         # the takeover this stops.
@@ -219,7 +218,7 @@ class TestExistingSocketOwnerProblem:
 
 
 class TestQuitCommand:
-    """#428 Phase 3 (ADR 0002): the companion's tray/launcher "Quit" action
+    """ADR 0002: the companion's tray/launcher "Quit" action
     and the web settings page's own Quit button both end up here -- and
     both respect the same allow_quit flag."""
 
@@ -260,7 +259,7 @@ class TestQuitCommand:
     def test_quit_is_refused_on_a_privilege_separated_install_even_when_allowed(
         self, tmp_path, monkeypatch,
     ):
-        """#428 B4: this socket is 0660 group-shared with the companion on a
+        """ADR 0026: this socket is 0660 group-shared with the companion on a
         separated install, which puts the agent in the same group -- so
         unlike the ``allow_quit`` case above, this must not be a setting a
         separated install can leave on."""
@@ -291,10 +290,10 @@ class TestQuitCommand:
 
 
 class TestCompanionChannelServer:
-    """#428 Phase 3: the reverse-direction channel -- the daemon is the
-    client, the companion is the server -- used to hand a connector OAuth
-    URL to a process that can still reach the user's browser once #428
-    Phase 4 moves the daemon off the user's own desktop session."""
+    """The reverse-direction channel -- the daemon is the client, the
+    companion is the server -- used to hand a connector OAuth URL to a
+    process that can still reach the user's browser when privilege
+    separation moves the daemon off the user's own desktop session."""
 
     def _server(self, tmp_path, monkeypatch):
         from privacyfence import paths
@@ -566,7 +565,7 @@ class TestEnrollmentCommand:
 
 
 class TestStatusCommand:
-    """The local-mode-fixes plan's Phase 2: ``STATUS``, ``daemon_status.py``'s
+    """``STATUS``, ``daemon_status.py``'s
     "the control channel answered" source. Unlike every other command on
     this channel it is never gated on ``allow_quit`` or a passkey -- it
     carries nothing but a version string, a pid and connector-configured-ness,
@@ -763,8 +762,8 @@ class TestShowRecoveryCommand:
         assert reply.startswith("ERROR")
 
     def test_show_with_an_unknown_subject_is_refused_without_a_dialog(self, tmp_path, monkeypatch):
-        # ``SHOW`` carries two subjects now: this class's ``RECOVERY <code>``
-        # and Phase 2's ``SHOW <path>``. Anything that is not ``RECOVERY`` is
+        # ``SHOW`` carries two subjects: this class's ``RECOVERY <code>``
+        # and ``SHOW <path>`` (ADR 0031). Anything that is not ``RECOVERY`` is
         # therefore read as a page, and an unknown one answers "unknown page"
         # rather than "unknown command" -- ``RECOVERY`` is not in SHOW_PATHS,
         # so the two subjects cannot collide. What has to stay true either way
@@ -995,7 +994,7 @@ class TestRequestEnrollmentConfirmation:
 
 
 class TestCompanionChannelPeerVerification:
-    """#428 B10: unlike ``ControlChannelServer``'s MINT/QUIT (ADR 0002
+    """ADR 0002 decision 5: unlike ``ControlChannelServer``'s MINT/QUIT (ADR 0002
     decision 6 -- no peer check, deliberately, because companion and agent
     share a uid), this channel's whole reason to exist is the daemon asking
     the companion to open a URL, and separation is the one case where the
@@ -1302,9 +1301,9 @@ class TestReadBaseUrl:
 
 
 class TestAttestedMintCommands:
-    """The self-approval plan's Phase 2: ``MINT`` grew two attested shapes,
-    because the one it had could not say who asked for the session it minted
-    -- and every session it minted could approve (web/session_auth.py's own
+    """``MINT`` has two attested shapes, because a plain ``MINT`` cannot say
+    who asked for the session it mints -- and whether a session may approve
+    depends on that (web/session_auth.py's own
     ``PROVENANCE_*`` comment).
 
     Both shapes cost a round trip into the companion process. Neither is
@@ -1564,11 +1563,9 @@ class TestOpenAttestedUrl:
 
 
 class TestEveryMintIsAudited:
-    """The self-approval plan's Phase 2: before it, exactly one of the three
-    ways to a session wrote an audit entry -- the MCP sign-in-link tool, now
-    retired -- and the two silent ones were the two anything on this machine
-    could use. The log recorded the sanctioned path and not the reachable
-    ones."""
+    """Every way to a session writes an audit entry -- including the ones
+    anything on this machine could use, so the log records the reachable
+    paths and not only a sanctioned one."""
 
     @pytest.fixture(autouse=True)
     def _isolated_audit_log(self, tmp_path):
@@ -1827,9 +1824,9 @@ class TestPeerIdentityPosix:
 
 
 class TestPrincipalIdForPeer:
-    """ADR 0008's own owner/non-owner mapping -- the local-mode-fixes plan's
-    §3.1 "the account named by the marker's owner_user maps to the existing
-    LOCAL_PRINCIPAL; every other service-group member maps to os-<uid>"."""
+    """ADR 0008's own owner/non-owner mapping -- the account named by the
+    marker's owner_user maps to the existing LOCAL_PRINCIPAL; every other
+    service-group member maps to os-<uid>."""
 
     def test_unseparated_is_always_local(self, monkeypatch):
         monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: False)

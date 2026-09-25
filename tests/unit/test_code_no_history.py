@@ -65,6 +65,8 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("website/", "D1"): "Cloudflare D1, the Worker's database",
     ("CLAUDE.md", "D1"): "Cloudflare D1, the Worker's database",
     ("privilege_separation.py", "since 4.3"): "4.3BSD, the Unix release, not a PrivacyFence version",
+    ("web/routes_connect.py", "#555"): "a CSS hex colour in the connect page's stylesheet",
+    ("web/routes_connect.py", "#888"): "a CSS hex colour in the connect page's stylesheet",
     ("", "§2.7"): "the definition of done in docs/coding-and-testing-guidelines.md, cited by number everywhere",
 }
 

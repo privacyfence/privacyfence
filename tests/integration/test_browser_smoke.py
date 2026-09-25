@@ -1,5 +1,5 @@
 """Small, always-on Playwright suite driving the real web approval surface
-in a real headless browser (TST-06).
+in a real headless browser.
 
 Every other test of this surface (tests/unit/web/) drives it through either
 ``starlette.testclient.TestClient`` (an in-process ASGI transport, no real
@@ -23,16 +23,13 @@ Node binary -- this suite is "always-on" in the sense that CI always has
 both (see .github/workflows/tests.yml's ``Install Playwright browsers``
 step), not that it forces every contributor's machine to.
 
-Both checks TST-06 lists (a no-inline-script CSP check
-and "PDF preview actually renders") now assert real pass/fail outcomes --
-see ``TestSecurityHeadersCsp``/``TestPdfPreview`` below. Both were
-previously written as a skip/an ``xfail`` respectively, against the
-pre-SEC-08 policy: ``script-src``/``style-src`` were a blanket
-``'unsafe-inline'`` with no ``object-src`` exception, which both left the
-"no-inline-script" check with nothing real to assert against and left the
-card's own PDF ``<embed>`` blocked by the implicit ``default-src 'none'``
-fallback (the "currently likely broken -- no test catches this" bug
-SEC-08 fixed). web/csp.py's ``build_csp()`` is what closed both.
+Two checks need a real browser because ``TestClient`` does not enforce
+CSP: that no inline script runs without its nonce, and that the PDF
+preview actually renders (the card's ``<embed>`` is blocked by the
+implicit ``default-src 'none'`` fallback unless the policy names
+``object-src``/``frame-src`` exceptions). Both assert real pass/fail
+outcomes -- see ``TestSecurityHeadersCsp``/``TestPdfPreview`` below, and
+web/csp.py's ``build_csp()`` for the policy they check.
 """
 from __future__ import annotations
 
@@ -405,7 +402,7 @@ def _register_confirm(web_ui: WebApprovalUI, categories: list[str]) -> tuple[thr
 
 
 # --------------------------------------------------------------------- #
-# Bootstrap + login (SEC-06)
+# Bootstrap + login
 # --------------------------------------------------------------------- #
 
 
@@ -415,8 +412,8 @@ class TestBootstrapLogin:
         ``_BootstrapMiddleware``) actually signs a real browser in, *and*
         the resulting page URL -- what a real browser bar, history entry,
         and Referer header would carry -- contains neither the bootstrap
-        code nor any other credential, per SEC-06's whole point (see
-        web/session_auth.py's module docstring). ASGI TestClient assertions
+        code nor any other credential, which is the point of exchanging the
+        code for a cookie (see web/session_auth.py's module docstring). ASGI TestClient assertions
         already cover the redirect response's own Location header (test_
         server.py) -- this proves a real browser actually lands there with
         nothing left in its own address bar, not just that the server sent
@@ -514,7 +511,7 @@ class TestApprovalDecisionFlow:
                 thread.join(timeout=5)
 
     def test_deny_from_the_list_row_resolves_the_pending_call_without_opening_the_card(self, page, local_server):
-        """§2.2's asymmetry (approval_list_html.py's own docstring): Deny is
+        """The list's asymmetry (approval_list_html.py's own docstring): Deny is
         on the row, Allow never is. Exercises that row-level POST -- a
         separate JS path from the card page's own bridge shim above -- from
         a real click, with no navigation to the card at all."""
@@ -879,7 +876,7 @@ class TestApprovalListBehavior:
         """A slow-network retry (or an over-eager double click) posting the
         exact same decision twice must resolve the pending call exactly
         once: the first POST wins (200), the second is turned away as
-        ``already_decided`` (409, §7.1's own idempotency guarantee) rather
+        ``already_decided`` (409, the decide route's own idempotency guarantee) rather
         than raising or double-resolving the already-unblocked
         ``show_popup()`` call. Driven with a raw ``fetch()`` (same approach
         as ``test_wrong_csrf_value_is_rejected`` above) since the real
@@ -913,7 +910,7 @@ class TestApprovalListBehavior:
 
 
 # --------------------------------------------------------------------- #
-# The approval binder (Phase 1 of the batch-decide plan): selection state
+# The approval binder (batch decide): selection state
 # survives approval_list_html.py's own wholesale innerHTML replace on every
 # SSE tick, checkboxes are real, keyboard-operable form controls, and the
 # added toolbar/group-header markup doesn't reintroduce horizontal overflow.
@@ -981,8 +978,8 @@ class TestApprovalBinder:
         toggle via Space once focused -- proven with real keypresses, not a
         programmatic ``.check()`` call, since that's the actual
         keyboard-accessibility contract Playwright's own ``.check()``
-        deliberately bypasses. (Initial page-load focus -- §3 point 4 --
-        is unchanged by this phase and pre-dates it; not re-asserted here.)"""
+        deliberately bypasses. (Initial page-load focus is not the binder's
+        and is not re-asserted here.)"""
         server, web_ui = local_server
         _sign_in_local(page, server)
         thread, card = _register_card(web_ui)
@@ -1053,8 +1050,8 @@ class TestApprovalBinder:
             thread.join(timeout=5)
 
     def test_no_horizontal_overflow_at_400px_with_a_pending_approval(self, page, local_server):
-        """TST-06's own "no horizontal page scroll" requirement, at the
-        narrowest width this phase's own binder toolbar/checkbox/group-header
+        """The "no horizontal page scroll" requirement, at the
+        narrowest width the binder's own toolbar/checkbox/group-header
         markup could plausibly overflow at -- 400px, not merely the
         375px/768px/1280px named viewports TestResponsiveLayout already
         covers for the pre-binder page shape."""
@@ -1071,13 +1068,12 @@ class TestApprovalBinder:
             thread.join(timeout=5)
 
     def test_toolbar_appears_for_an_item_that_arrives_after_the_page_was_empty(self, page, local_server):
-        """Issue #576, bug 1: opening ``/approvals`` while nothing is
-        pending used to mean the toolbar element itself was never emitted
-        (``build_list_html``'s own ``toolbar = ... if rows else ""``), so no
-        amount of SSE-driven re-rendering could make it appear later --
-        only a reload, which re-runs ``build_list_html`` with the
-        now-nonempty ``rows``, created it. The toolbar must now always
-        exist (just ``hidden``) and the live re-render must reveal it."""
+        """Opening ``/approvals`` while nothing is pending must still emit
+        the toolbar element (just ``hidden``), and the live re-render must
+        reveal it. A toolbar emitted only when there are rows could never
+        appear through SSE-driven re-rendering -- only a reload, which
+        re-runs ``build_list_html`` with the now-nonempty ``rows``, would
+        create it."""
         server, web_ui = local_server
         _sign_in_local(page, server)
         page.goto(f"{server.base_url}/approvals")
@@ -1099,10 +1095,9 @@ class TestApprovalBinder:
                 thread.join(timeout=5)
 
     def test_icon_renders_for_a_connector_with_nothing_pending_at_first_paint(self, page, local_server):
-        """Issue #576, bug 1 (icon half): a connector with nothing pending
-        at first paint used to have no baked-in CSS rule at all, so a row
-        that arrived for it live drew the generic letter badge until the
-        next full reload. Slack has nothing pending at first paint here --
+        """A connector with nothing pending at first paint still needs its
+        CSS rule baked in; without one, a row that arrived for it live would
+        draw the generic letter badge until the next full reload. Slack has nothing pending at first paint here --
         the only card at load time is a Gmail one -- so a Slack row
         arriving live must still draw the real bundled icon, not a letter
         "S"."""
@@ -1138,7 +1133,7 @@ class TestApprovalBinder:
                     thread.join(timeout=5)
 
     def test_select_all_denominator_stays_pinned_after_deselecting_one(self, page, local_server):
-        """Issue #576, bug 2: with 11 batchable approvals pending, checking
+        """With 11 batchable approvals pending, checking
         "Select all" and then unchecking one must report "10 of 11
         selected" -- the denominator must stay pinned to the true total
         rather than reading as though only 10 ever existed."""
@@ -1587,8 +1582,7 @@ class TestColorScheme:
 
 
 # --------------------------------------------------------------------- #
-# PDF preview (part of TST-06's own list) -- see module docstring for why
-# this is xfail, not a plain pass/fail assertion.
+# PDF preview -- see module docstring for why this needs a real browser.
 # --------------------------------------------------------------------- #
 
 
@@ -1622,7 +1616,7 @@ class TestPdfPreview:
 
 
 # --------------------------------------------------------------------- #
-# CSP: no-inline-script (SEC-08/Phase 3.1)
+# CSP: no-inline-script
 # --------------------------------------------------------------------- #
 
 
