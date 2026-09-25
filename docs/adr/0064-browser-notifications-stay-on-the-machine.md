@@ -1,4 +1,4 @@
-# ADR 0064: browser notifications stay on the machine
+# ADR 0064: Browser notifications stay on the machine
 
 ## Status
 

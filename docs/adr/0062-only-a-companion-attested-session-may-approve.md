@@ -1,4 +1,4 @@
-# ADR 0062: only a companion-attested session may approve
+# ADR 0062: Only a companion-attested session may approve
 
 ## Status
 

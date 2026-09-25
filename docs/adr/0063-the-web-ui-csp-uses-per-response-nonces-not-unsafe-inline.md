@@ -1,4 +1,4 @@
-# ADR 0063: the web UI's CSP uses nonces, not `'unsafe-inline'`
+# ADR 0063: The web UI's CSP uses nonces, not `'unsafe-inline'`
 
 ## Status
 

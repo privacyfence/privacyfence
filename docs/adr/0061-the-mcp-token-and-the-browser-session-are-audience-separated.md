@@ -1,4 +1,4 @@
-# ADR 0061: the MCP token and the browser session are audience-separated
+# ADR 0061: The MCP token and the browser session are audience-separated
 
 ## Status
 
