@@ -32,7 +32,9 @@ It combines four inputs:
 - [Guardrails](#guardrails)
 - [Canonical product description](#canonical-product-description-draft-for-review)
 - [Waves](#waves) — order, dependencies, and each wave's scope
+- [Analytics](#analytics-google-analytics-4-behind-consent)
 - [Measurement](#measurement)
+- [Release history page](#release-history-page-releases-365) — #365, gated
 - [ADRs this plan creates](#adrs-this-plan-creates)
 - [Inputs needed from the maintainer](#inputs-needed-from-the-maintainer)
 - [Retiring this plan](#retiring-this-plan)
@@ -63,8 +65,8 @@ only so a later reader can tell a deliberate choice from a default.
 | C7 | Doc links that leave the published set are **rewritten at build time** to GitHub blob URLs at the same tag. |
 | D1 | **Allow all crawlers**, search and training alike. |
 | D2 | `privacyfence.eu` is **proxied by Cloudflare; AI-bot blocking is off**. |
-| D3 | Google Search Console is set up; **Bing Webmaster Tools is not yet**. |
-| D4 | **Cloudflare Web Analytics** (cookieless). |
+| D3 | **Google only for search tooling**: Google Search Console (already set up) is the one search console. No Bing Webmaster Tools and no IndexNow (changed 2026-09-25; see [Analytics](#analytics-google-analytics-4-behind-consent)). |
+| D4 | **Google Analytics 4** for site analytics, loaded **only after the visitor consents**, linked to Search Console (changed 2026-09-25 from Cloudflare Web Analytics; see [Analytics](#analytics-google-analytics-4-behind-consent)). |
 | D5 | Generate **`llms.txt` and `llms-full.txt`** at build time. |
 | D6 | Canonical host is the **apex**, `https://privacyfence.eu`. |
 | D7 | Target search intents: **MCP security / gateway**, **secure Claude access to Gmail/Drive/Slack/Salesforce/Jira**, **human-in-the-loop approval for AI agents**, **PII protection before data reaches an LLM**. No compliance-framework targeting. |
@@ -165,6 +167,12 @@ Re-checked again on 2026-09-25 at `7b61b6c1`: two more PRs merged, neither remov
 | **The `.deb` is amd64 only** (#681, ADR 0044, amending ADR 0018): `debian/control` declares `amd64`, `build_deb.sh` refuses other hosts, `platform-support.md`'s matrix already says so. | `platform-support.md` (the architectures column is now correct at the source; keep it when cutting the page to ~120 lines), `getting-started.md`'s Linux section (no arm64 `.deb`; say what an arm64 Linux user can install instead, after checking whether the PyPI install is supported there), `/download/` and the JSON-LD's platform list. |
 | **Org mode skips old-format registered OAuth clients** with a per-entry warning instead of converting them (#680). | Nothing to document (G1: no upgrade paths). The org guide's troubleshooting must not mention the old format. |
 
+Re-checked a third time on 2026-09-25 after #682 (Windows/macOS packaged-test stability, eSigner
+pin): ADR 0045 (the Windows installer ends its own processes, force-closes the rest) and ADR 0046
+(release CI pins CodeSignTool by version and SHA-256). Both are build/installer internals:
+`packaging.md` (Wave 2) takes the CodeSignTool pin that `platform-support.md` just gained, and
+`release-testing.md` the installer's process handling. No user-doc change.
+
 Two consequences for how the waves run:
 
 - **Branch every wave from current `main`**, not from `claude/documentation-refactoring`, which
@@ -234,6 +242,7 @@ after its surviving content is in the target above and every link to it is updat
 | `/connectors/google-workspace/`, `/slack/`, `/salesforce/`, `/jira-confluence/`, `/telegram/` | hand-written | 5 |
 | `/faq/` | hand-written | 5 |
 | `/download/` | existing page, current stable **pre-rendered** at build | 3 |
+| `/releases/` | release history ([#365](https://github.com/privacyfence/privacyfence/issues/365)), pre-rendered at build from `/api/releases` | after 3, gated |
 | `/docs/…` | the [published set](#published-docs--privacyfenceeudocs), rendered at the latest stable tag | 3 |
 | `/privacy/`, `/imprint/` | hand-written | 0 |
 | `/robots.txt`, `/sitemap.xml` | static in wave 0, generated from wave 3 | 0 → 3 |
@@ -349,9 +358,11 @@ the guardrails that protect its own work.
 | 10 | **Clients are data**: the supported-clients list lives in one file used by homepage, `/faq/` and JSON-LD. | 4 |
 | 11 | **No claims ADR 0025 rules out**: no website page contains "certified", "compliant with", "SLA" or "guarantee" outside the `/security/` limitations section. | 4 |
 | 12 | **Responsive layout** — the one guardrail that needs a browser: `tests/integration/test_website_layout.py` (`integration` + `browser` markers, same setup and skip posture as `test_download_page.py`, network stubbed) loads every page at the six [tested viewports](#what-responsive-means-here). It asserts no page-level horizontal scroll, every header destination reachable (visible, or visible after opening the menu), tap targets ≥ 44 px below 1024 px, and no element's box extending past the viewport outside a scroll container. It saves a full-page screenshot per page × width as a CI artifact, for the maintainer's review. | 0 (source pages), 3 (built `_site/`) |
+| 13 | **Nothing third-party before consent**: in a browser test, loading every page with no stored choice makes no request to any origin other than the site itself (and `downloads.privacyfence.eu` on `/download/` and `/releases/`) and sets no cookie; accepting loads `googletagmanager.com`; declining loads nothing, and the choice persists across pages. | 0 |
 
-Also: no third-party resources on the site apart from the Cloudflare Web Analytics beacon — fonts,
-images and scripts stay self-hosted, as today.
+Also: no third-party resources on the site apart from Google Analytics, which loads only after
+consent (see [Analytics](#analytics-google-analytics-4-behind-consent)). Fonts, images, scripts and
+the consent banner itself stay self-hosted, as today. Guardrail 13 enforces both halves.
 
 ## Canonical product description (draft for review)
 
@@ -380,6 +391,9 @@ Wave 2 contributor docs ─┴─► Wave 3 docs site ─► Wave 4 core pages �
 ```
 
 - **Wave 0** is independent and can land first.
+- **`/releases/`** ([#365](https://github.com/privacyfence/privacyfence/issues/365)) is built
+  after Wave 3 and is gated on the issue's own conditions, not on a wave. See
+  [Release history page](#release-history-page-releases-365).
 - **Waves 1 and 2** can run in parallel. Wave 1 must land before Wave 3, because Wave 3 publishes it.
 - **Wave 3** renders from the latest *stable tag* (C4), so the new docs appear on the site only
   after a stable release that contains Wave 1. Plan a release between Wave 1 and Wave 3's launch,
@@ -426,25 +440,36 @@ Unchanged in scope from the first revision, minus the README drift fixes (now in
   macOS/Windows/Linux, Apache-2.0, price 0, GitHub + PyPI in `sameAs`) with a `Person` publisher,
   plus `WebSite`.
 - `robots.txt` (allow all, sitemap line) and a static `sitemap.xml`.
-- `/privacy/` (GitHub Pages, Cloudflare proxy, Web Analytics, and the downloads Worker's
+- `/privacy/` (GitHub Pages, Cloudflare proxy, Google Analytics with what it collects, its
+  cookies, retention and the Google transfer, how to withdraw consent, and the downloads Worker's
   counters-only table) and `/imprint/`.
-- Cloudflare Web Analytics beacon as a visible `<script>` in the repo.
-- Footer on both pages: Privacy · Imprint · GitHub · Apache 2.0 · `info@privacyfence.eu`.
+- **Google Analytics 4 behind a self-hosted consent banner** (see
+  [Analytics](#analytics-google-analytics-4-behind-consent)): the GA snippet is in the repo, and
+  the page injects it only after "Accept". A "Cookie settings" footer link reopens the choice.
+  Guardrail 13.
+- Footer on both pages: Privacy · Imprint · Cookie settings · GitHub · Apache 2.0 · `info@privacyfence.eu`.
 - `pages.yml` copy step and its guard test updated.
 - **Responsive foundation** ([When it is built](#when-it-is-built), Wave 0 row): `styles.css`
   rebuilt into tokens + layout primitives with the desktop look unchanged, the `<details>` header
   menu, 44 px tap targets, and **guardrail 12** over `/`, `/download/`, `/privacy/` and `/imprint/`.
-- **ADRs: crawler and training-bot policy; website CSS without a framework.**
+- **ADRs: crawler and training-bot policy; website CSS without a framework; website analytics
+  (GA4 behind consent, Google-only search tooling).**
 
 Outside the repo (maintainer, ~30 min): Cloudflare → Bots: "Block AI bots" off **and "Managed
-robots.txt" off**; Redirect Rule `www` → apex (301); Web Analytics token; Bing Webmaster import
-from Search Console and sitemap submission in both; confirm `info@privacyfence.eu` delivers;
-record the baseline (3 months of Search Console, download total, stars).
+robots.txt" off**; Redirect Rule `www` → apex (301). Google: create the GA4 property and web
+stream (measurement ID `G-…` goes in the repo; it is not a secret), set data retention, turn off
+Google Signals and ads personalization, link it to Search Console, and submit the sitemap in
+Search Console. GitHub: change the repository description from "Enterprise AI governance platform
+…" to the B1 category and set topics (`mcp`, `mcp-server`, `claude`, `privacy`,
+`human-in-the-loop`, …). The About box feeds GitHub search and link previews, and it currently
+contradicts B1. Confirm `info@privacyfence.eu` delivers; record the baseline (3 months of Search
+Console, download total, stars).
 
 Done when: `curl -A` as GPTBot, OAI-SearchBot, ClaudeBot and Googlebot gets 200 on `/`,
 `/robots.txt`, `/sitemap.xml`; Rich Results Test parses the JSON-LD; the OG card renders;
 guardrail 12 passes and the maintainer has looked at its 360 px and 1440 px screenshots of every
-page, plus one real phone.
+page, plus one real phone; guardrail 13 passes; on the live site, GA4's Realtime report shows a
+visit only after "Accept", and the served `/` contains no `cloudflareinsights` script.
 
 ### Wave 1 — user documentation
 
@@ -543,25 +568,108 @@ version without JavaScript; the sitemap lists docs pages and both search console
   AI clients work? What does the AI see before I approve? Can routine requests run without
   approval? Is PrivacyFence certified? Local or organization mode? Is it free? How do I verify a
   download?
-- Optional: IndexNow key file and a post-deploy ping, only if Bing indexing proves slow.
+
+## Analytics: Google Analytics 4 behind consent
+
+Decided 2026-09-25 (D3, D4), replacing Cloudflare Web Analytics and dropping Bing Webmaster
+Tools. The maintainer works in the Google ecosystem: Search Console is already set up, so one
+vendor is simpler to run than three. GA4 also links to Search Console, which puts search queries
+and on-site behavior in one place.
+
+**What this changes, stated plainly so the ADR can record it:**
+
+- **Consent is required.** GA4 sets cookies (`_ga`, `_ga_<id>`) and reads device storage. On an EU
+  site that needs prior opt-in consent (ePrivacy Art. 5(3)). Cloudflare Web Analytics set no
+  cookie and needed no banner. The site therefore gets a consent banner. It is
+  self-hosted, with no third-party consent platform, and offers **Accept** and **Decline** with
+  equal weight and nothing pre-selected. The choice is stored in `localStorage` and can be
+  reopened from "Cookie settings" in the footer.
+- **Nothing reaches Google before "Accept."** The GA snippet is injected only after consent. This
+  is Consent Mode's *basic* implementation. The *advanced* mode, which sends cookieless pings
+  before consent, is rejected: it is a third-party request the visitor has not agreed to.
+  Guardrail 13 tests this.
+- **GA4 settings:** Google Signals off, ads personalization and data sharing off, data retention
+  2 months, no User-ID, no custom dimensions carrying anything visitor-specific.
+- **`/privacy/`** names Google as a processor and lists the cookies and their lifetime, the
+  EU–US Data Privacy Framework transfer, the retention period, and how to withdraw consent.
+- **Coverage is partial.** GA4 counts only visitors who accept, so it shows trends and referral
+  sources, not totals. Downloads keep coming from the Worker's own cookieless counter, which stays
+  the headline KPI (A3).
+- **Reputational trade-off, accepted.** A privacy product's own site runs Google Analytics. The
+  mitigations (consent-only, minimal settings, disclosed on `/privacy/`) are what keep that
+  defensible. `/faq/` must not claim the site is tracker-free.
+- **Cloudflare's own Web Analytics must stay off.** For proxied sites Cloudflare can inject its
+  beacon at the edge, outside the repo, where guardrail 13 cannot see it in the source. The Wave 0
+  dashboard steps confirm it is disabled, and Wave 0's done-check fetches the live `/` and asserts
+  no `cloudflareinsights` script is present.
+
+**Dropping Bing Webmaster Tools** costs Bing-side reporting and sitemap submission, not
+indexing. Bingbot still finds the sitemap through `robots.txt`'s `Sitemap:` line, and D1/D5
+(crawlers allowed, `llms.txt`) are unchanged. Bing's index feeds ChatGPT search and Copilot,
+so if the Measurement check shows those assistants lagging behind Google-backed answers,
+re-adding Bing Webmaster Tools (a 5-minute import from Search Console) is the first remedy.
 
 ## Measurement
 
-Monthly, against the Wave 0 baseline: downloads (existing KPI), Search Console and Bing
-impressions/clicks for the D7 intents, AI referrals in Cloudflare Web Analytics (`chatgpt.com`,
-`claude.ai`, `perplexity.ai`, `copilot.microsoft.com`), GitHub stars. After each wave, ask ChatGPT,
+Monthly, against the Wave 0 baseline: downloads (existing KPI), Search Console
+impressions/clicks for the D7 intents, AI referrals in GA4's traffic-acquisition report
+(`chatgpt.com`, `claude.ai`, `perplexity.ai`, `copilot.microsoft.com`, `gemini.google.com`), GitHub
+stars. GA4 sees only visitors who accepted, so read its numbers as trends, not totals. The download
+count (Worker-side, cookieless) stays the headline KPI. After each wave, ask ChatGPT,
 Claude and Perplexity "What is PrivacyFence?" and "How do I install PrivacyFence on Windows?" and
 note whether the answers match the canonical description and the current install flow.
+
+## Release history page (`/releases/`, #365)
+
+[#365](https://github.com/privacyfence/privacyfence/issues/365) (carried over from the retired
+release-publishing KPI plan) joins this plan. The issue stays open and is closed by the PR that
+builds the page. Scope as the issue defines it:
+
+- `website/releases/index.html` + `releases.js`, backed by the downloads Worker's existing
+  `GET /api/releases` (no Worker change).
+- Per release: version, channel, release date, available platforms, a link to its release notes
+  (the GitHub Release, whose stable body is `CHANGELOG.md`'s section) and its downloads.
+- Every download link points at `downloads.privacyfence.eu`, never R2 or GitHub. Only installers
+  are presented as downloads; SBOMs, org-config scripts and the sdist/wheel are not, because the
+  KPI counts installers only.
+- Built from the API response, never hardcoded filenames, with `download.js`'s degradation paths
+  (API down → GitHub Releases link; an empty channel renders nothing).
+
+What this plan adds to the issue:
+
+- **Pre-rendered at build** by Wave 3's `build_site.py`, like `/download/`: the list is readable
+  without JavaScript and by crawlers, and `releases.js` refreshes it. It uses the shared
+  header/footer partials and layout primitives. Guardrails 12 (responsive; long version tables
+  scroll inside their container) and 13 apply. It is listed in `sitemap.xml`.
+- **Deployed through the Wave 3 build manifest.** The issue's warning about `pages.yml`'s
+  hand-written copy list is resolved there (guardrail 7).
+- **Linked from** `/download/` (its header's "All releases" link, which currently points at GitHub
+  Releases, and the "Want to test the next version?" section) and the footer. It does not go in
+  the main nav.
+
+**When:** after Wave 3, and only once both of the issue's gate conditions hold. As of 2026-09-25:
+
+1. *A stable release exists*: **met** (`v4.2.0`, `v4.2.1`, `v4.3.0`, `v4.4.0`).
+2. *The counts clear `stats.js`'s bar* (≥ 50 installer downloads or ≥ 10 GitHub stars): **not
+   met.** The repo has 1 star. The download total could not be read from the planning session
+   (the Worker is outside its network allowlist); the issue recorded 2 on 2026-09-13. Check with
+   `curl -s https://downloads.privacyfence.eu/api/stats/downloads`.
+
+If the gate opens before Wave 3 lands, build the page on the Wave 0 foundation with the
+`pages.yml` copy step, and Wave 3 moves it into the manifest. The plan's retirement does not wait
+for `/releases/`: if Wave 5 lands with the gate still closed, #365 remains the tracking issue.
+Before this file is deleted, update the issue with the additions above.
 
 ## ADRs this plan creates
 
 Next free numbers when each PR lands (0039–0043 were taken by the product cleanup, 0044 by the
-amd64-only `.deb`; 0045+ as of 2026-09-25).
+amd64-only `.deb`, 0045–0046 by #682's installer and signing changes; 0047+ as of 2026-09-25).
 
 | ADR | Wave |
 |---|---|
 | Crawler and training-bot policy: allow all | 0 |
 | Website CSS: responsive on plain modern CSS, no framework (H2, with the rejected Tailwind/Bootstrap/Pico) | 0 |
+| Website analytics: GA4 behind consent, Google-only search tooling (D3/D4, with the rejected Cloudflare Web Analytics and Bing Webmaster Tools) | 0 |
 | Which docs are published on privacyfence.eu | 3 |
 | Docs generator, and docs built from the latest stable tag | 3 |
 | Website hosting: GitHub Pages behind the Cloudflare proxy | 3 |
@@ -573,9 +681,12 @@ Positioning (B1) and the documentation principles are not ADRs: the first lives 
 
 - **Imprint**: postal (or service) address and the name as it should appear.
 - **Cloudflare**: the Wave 0 dashboard steps; confirm the Pages custom domain is the apex.
+- **Google**: the GA4 property and its measurement ID; the Search Console link.
+- **GitHub**: the repository description and topics (Wave 0).
 - **Mailbox**: confirm `info@privacyfence.eu` delivers.
 - **Review**: every doc (Waves 1–2) and every page (Waves 0, 4, 5) in its PR.
 - **ChatGPT/Gemini**: say when the release that adds them ships.
+- **`/releases/`**: nothing. Its gate is checkable (see [#365](#release-history-page-releases-365)).
 
 ## Retiring this plan
 
