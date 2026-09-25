@@ -1,79 +1,110 @@
-# Google Cloud Console Setup
+# Google setup (Gmail, Drive, Calendar, Contacts, Tasks, Apps Script)
 
-This guide walks through creating a Google Cloud project, configuring OAuth, and enabling the APIs that PrivacyFence's Gmail, Drive, Calendar, Contacts, Tasks, and Apps Script connectors require. If your organization also does Workspace room/resource booking, there's a second, separate project involved — see "Room directory sync" below.
+One administrator registers PrivacyFence with Google Cloud once per organization and puts the
+resulting OAuth client into the organization config bundle. Users then sign in to each Google
+connector from PrivacyFence — they never open the Google Cloud console.
 
-Google is organization-level config: **one IT admin does this once**, packages the result into PrivacyFence's organization config bundle, and distributes it. Individual users never touch the Google Cloud Console — they just click **Authenticate…** in PrivacyFence Settings and sign in with their browser.
+## What you need
 
----
+- A Google Cloud project you can administer (create one at
+  [console.cloud.google.com](https://console.cloud.google.com/)).
+- For Workspace accounts, ideally the right to create an **Internal** app, so no Google
+  verification is needed (see [Consent screen and verification](#3-consent-screen-and-verification)).
+- Python 3 to run `scripts/build_org_bundle.py`.
+- Which deployment you are building for: **desktop installs**, an **organization server**, or
+  both. They need different OAuth client types (step 4).
 
-## For IT admins (once per organization)
+## Register the app
 
-### 1. Create a new project
+### 1. Select the project
 
-1. Go to [https://console.cloud.google.com/](https://console.cloud.google.com/) and sign in.
-2. Click the project selector at the top of the page → **New Project**.
-3. Give it a name (e.g. `privacyfence`) and click **Create**.
-4. Make sure the new project is selected in the project selector before continuing.
+In the Google Cloud console, pick your project in the project selector (or **New Project**, give it
+a name such as `privacyfence`, and select it).
 
-### 2. Enable required APIs
+### 2. Enable the APIs
 
-Open **APIs & Services → Library** and enable each of the following APIs one by one. Use the search box to find them.
+Open **APIs & Services → Library** and enable each API the connectors you plan to offer use:
 
-| API name | Library search term | Used by |
-|----------|--------------------|---------| 
-| Gmail API | `Gmail API` | Gmail connector |
-| Google Drive API | `Google Drive API` | Drive connector |
-| Google Docs API | `Google Docs API` | Drive connector (`drive_write_doc_content`, `drive_docs_edit_content`, `drive_docs_format_content`) |
-| Google Sheets API | `Google Sheets API` | Drive connector (`drive_sheets_*`) |
-| Google People API | `People API` | Contacts connector |
-| Google Calendar API | `Google Calendar API` | Calendar connector |
-| Google Tasks API | `Tasks API` | Google Tasks connector |
-| Apps Script API | `Apps Script API` | Apps Script connector (`apps_script_get_content`, `apps_script_write_content`, `apps_script_get_execution_log`) |
+| API | Used by |
+|---|---|
+| Gmail API | Gmail |
+| Google Drive API | Drive, and Apps Script (to list your script projects) |
+| Google Docs API | Drive's document editing tools (`drive_write_doc_content`, `drive_docs_*`) |
+| Google Sheets API | Drive's spreadsheet tools (`drive_sheets_*`) |
+| People API | Contacts |
+| Google Calendar API | Calendar |
+| Tasks API | Tasks |
+| Apps Script API | Apps Script |
 
-For each: click the API in the search results, then click **Enable**.
+The Docs and Sheets APIs need no scope of their own (they accept Drive's), but each must still be
+enabled here or those tools fail with `accessNotConfigured`.
 
-> **Note:** The People API covers Google Contacts. Do not confuse it with the older Contacts API, which is deprecated.
+### 3. Consent screen and verification
 
-> **Note:** The Sheets API doesn't need its own OAuth scope or consent-screen entry — it accepts the same `drive` scope already granted, so users don't re-authenticate. It still has to be individually **enabled** in this project's API Library like every other API here; if it's left disabled, `drive_sheets_*` calls fail with an `accessNotConfigured` / "API has not been used in project ... before or it is disabled" error even though the user's OAuth token is otherwise valid.
+Open **Google Auth Platform** (also reachable as **APIs & Services → OAuth consent screen**):
 
-> **Note:** This project deliberately never requests Admin SDK / Workspace-directory scopes. `calendar_list_rooms` (room/resource booking) is served from a static room directory synced separately — see "Room directory sync" below — precisely so that the OAuth client every employee authorizes day to day can never read the Workspace directory.
+1. **Branding:** app name (for example `PrivacyFence`), user support email and developer contact
+   email.
+2. **Audience:** choose the user type.
+   - **Internal** (Google Workspace only): only accounts in your Workspace organization can sign
+     in, and Google requires **no verification**, whatever the scopes. Use this when you can.
+   - **External**: any Google account. The app starts in **Testing**: only the accounts you add
+     as **test users** (up to 100) can sign in, and Google expires their sign-ins after **7 days**,
+     so each user has to **Reconnect…** weekly. To lift both limits you publish the app, which
+     requires Google's verification (below).
+3. **Data access:** you can add the scopes from the [values table](#values) here; they are
+   requested at sign-in either way, but verification reviews this list.
 
-> **Note:** The Apps Script API is the one API in this table that enabling here is *not* sufficient for. Each individual user must also turn on **Google Apps Script API** at [script.google.com/home/usersettings](https://script.google.com/home/usersettings) — a per-user switch Google keeps entirely separate from this project's API Library, and off by default. Until they do, every `apps_script_*` call fails with a 403 (`User has not enabled the Apps Script API`) even though the project has the API enabled and the user's OAuth token is otherwise valid. It costs one click, but nothing in the Cloud console surfaces it, so include it in whatever setup instructions your users get.
+**Restricted scopes.** Google classifies `gmail.modify`, `drive` and `drive.metadata.readonly` as
+*restricted*; the others PrivacyFence requests are *sensitive*. An External app in production that
+requests restricted scopes must pass Google's verification, which includes an annual third-party
+security assessment. Unverified, it shows users an "unverified app" warning and is capped in
+users. An Internal app avoids all of this. If you offer only some Google connectors, you only
+request those connectors' scopes: Calendar, Contacts and Tasks use no restricted scope.
 
-> **Note:** The Apps Script connector also requests a narrow `drive.metadata.readonly` scope (name/id/timestamps only, never file content) purely to list a user's own standalone script projects — the Apps Script API itself has no "list my projects" endpoint. It runs no script code: there is deliberately no `run`/execute tool. See `apps_script_client.py`'s module docstring.
+### 4. Create the OAuth client
 
-### 3. Configure the OAuth consent screen
+Open **Google Auth Platform → Clients** (or **APIs & Services → Credentials → + Create
+Credentials → OAuth client ID**):
 
-1. Go to **APIs & Services → OAuth consent screen**.
-2. Choose **Internal** if you're on Google Workspace (so only your organization's accounts can authorize), or **External** for a personal Google account. Click **Create**.
-3. Fill in the required fields:
-   - **App name:** `PrivacyFence` (or any name you prefer)
-   - **User support email:** your email address
-   - **Developer contact information:** your email address
-4. Click **Save and Continue**.
-5. On the **Scopes** step, click **Save and Continue** — you do not need to add scopes here; they are requested at runtime.
-6. If you chose **External**, add every user who will use PrivacyFence as a **Test user** on that step (or submit the app for verification if you have many users — see Google's docs on OAuth verification).
-7. Review the summary and click **Back to Dashboard**.
+- **Desktop installs:** application type **Desktop app**. No redirect URI is registered: a
+  Desktop app client accepts a loopback redirect on any port, which is what PrivacyFence uses.
+- **Organization server:** application type **Web application**, with every org redirect URI from
+  the [values table](#values) under **Authorized redirect URIs**. Use a client dedicated to the
+  connectors, separate from the one your server uses for sign-in (see
+  [org-mode-setup-guide.md](org-mode-setup-guide.md)).
 
-### 4. Create OAuth 2.0 credentials
+The two types are not interchangeable: a Desktop app client cannot hold an HTTPS redirect URI, and
+a Web application client cannot accept a loopback redirect on a port picked at sign-in time. If you
+run both kinds of deployment, create one client of each type (in the same project is fine).
 
-1. Go to **APIs & Services → Credentials**.
-2. Click **+ Create Credentials → OAuth client ID**.
-3. Set **Application type** to **Desktop app**.
-4. Give it a name (e.g. `PrivacyFence Desktop`) and click **Create**.
-5. In the confirmation dialog, click **Download JSON**. This is your `client_secret.json` — keep it private, treat it like a password.
+Download each client's JSON (`client_secret_….json`). Treat it as a secret.
 
-   > **Deploying [`org` mode](org-mode-setup-guide.md) instead of (or in addition to) local desktop
-   > installs?** Org mode's server-side redirect flow needs a **Web application** client, not a
-   > Desktop app one, with explicit HTTPS redirect URIs registered — a different client id/secret
-   > from the Desktop app client above (the two can coexist; local desktop installs and the org-mode
-   > server just use different credentials for the same Google project). See
-   > [`org-mode-setup-guide.md` §4.2](org-mode-setup-guide.md#42-the-google-connector-client-optional)
-   > for the exact steps.
+## Values
 
-### 5. Add it to the organization config bundle
+| Item | Value |
+|---|---|
+| Local redirect (desktop installs) | `http://localhost:<port>/`, port picked by the operating system at each sign-in. Nothing to register — requires a **Desktop app** client. |
+| Org redirects (organization server) | Register all six on the **Web application** client, with `<server>` your server's `--server-issuer-url`:<br>`https://<server>/oauth/callback/gmail`<br>`https://<server>/oauth/callback/drive`<br>`https://<server>/oauth/callback/calendar`<br>`https://<server>/oauth/callback/contacts`<br>`https://<server>/oauth/callback/tasks`<br>`https://<server>/oauth/callback/apps_script` |
+| Gmail scopes | `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/gmail.settings.basic` |
+| Drive scope | `https://www.googleapis.com/auth/drive` |
+| Calendar scope | `https://www.googleapis.com/auth/calendar` |
+| Contacts scope | `https://www.googleapis.com/auth/contacts` |
+| Tasks scope | `https://www.googleapis.com/auth/tasks` |
+| Apps Script scopes | `https://www.googleapis.com/auth/script.projects`, `https://www.googleapis.com/auth/script.processes`, `https://www.googleapis.com/auth/drive.metadata.readonly` |
+| Bundle flag | `--google-client-secret <path to the downloaded JSON>` |
 
-From the PrivacyFence repo (or anywhere with Python 3 installed — the script has no dependencies):
+Each Google connector is a separate sign-in with only its own scopes. PrivacyFence never requests
+Admin SDK or Workspace-directory scopes from users; room booking uses a separately synced directory
+([below](#optional-room-directory-for-calendar_list_rooms)). Apps Script's
+`drive.metadata.readonly` scope reads only file names, IDs and timestamps, to list your script
+projects; the connector has no tool that runs a script.
+
+## Build and distribute the bundle
+
+`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
+stable GitHub Release. It needs only Python 3 (signing with `--sign-key` also needs
+`pip install cryptography`); no PrivacyFence install is required.
 
 ```bash
 python3 scripts/build_org_bundle.py \
@@ -82,113 +113,102 @@ python3 scripts/build_org_bundle.py \
   -o org_config.json
 ```
 
-Run it again with `--merge` if you're adding Google to a bundle that already has other services configured. Distribute the resulting `org_config.json` to your users (email, a shared drive, MDM — whatever your organization already uses to distribute internal tools).
+Add `--merge` to add Google to an existing `org_config.json` without losing its other sections;
+the `google` section itself is replaced by the client you pass. A bundle holds one Google client,
+so desktop installs (Desktop app client) and an organization server (Web application client) get
+separate bundles.
 
----
+Distribute the bundle to desktop users by whatever channel you use for internal tools; for an
+organization server, build it with the server flags and install it there. Signing, the org-mode
+flags and installing on the server are covered in
+[org-mode-setup-guide.md](org-mode-setup-guide.md).
 
-## Room directory sync (optional, separate Google Cloud project)
+### Optional: room directory for `calendar_list_rooms`
 
-Skip this whole section if your organization doesn't do Workspace room/resource booking —
-every other Calendar tool works fine without it.
+Skip this if your organization does not book Workspace rooms; every other Calendar tool works
+without it.
 
-`calendar_list_rooms` doesn't call Google live. It reads a static room directory (name, email,
-building, floor, capacity) that IT syncs into `org_config.json` ahead of time with
-`scripts/sync_room_directory.py`. That script needs `admin.directory.resource.calendar.readonly`,
-a Workspace-admin-level scope — and it deliberately runs against **a second Google Cloud
-project**, separate from the one above, so the OAuth client every employee authorizes for
-Gmail/Drive/Calendar/Contacts/Tasks never carries that scope. A leaked or over-shared per-user
-token then simply can't read your Workspace directory, no matter what.
+`calendar_list_rooms` reads a room list (name, email, building, floor, capacity) stored in the
+bundle's `rooms` section, not Google live. `scripts/sync_room_directory.py` (from the same
+repository and release) fills it. It needs the Workspace-admin scope
+`admin.directory.resource.calendar.readonly`, so it uses a **second** Google Cloud project,
+keeping that scope off the client every user signs in with:
 
-1. Create a **second** project the same way as step 1 above (e.g. `privacyfence-room-sync`).
-2. **APIs & Services → Library** → enable **Admin SDK API** only.
-3. **APIs & Services → OAuth consent screen** → same as step 3 above, but there's no need to add
-   test users beyond whoever on your IT team will actually run the sync.
-4. **APIs & Services → Credentials** → **+ Create Credentials → OAuth client ID** → **Desktop app**
-   → **Download JSON**. This is a *second*, separate `client_secret.json` — keep it at least as
-   private as the first one, and never add it to `org_config.json` or hand it to end users.
-5. Run the sync, signed in with an account that holds the Workspace **Directory Reader** role (or
-   super admin). Like `build_org_bundle.py`, this script doesn't need a full PrivacyFence install
-   — copy it out of the repo if you like — just the same three Google client libraries PrivacyFence
-   itself depends on:
+1. Create a second project (for example `privacyfence-room-sync`) and enable only the **Admin SDK
+   API**.
+2. Configure its consent screen as in step 3; only the administrators who run the sync need access.
+3. Create a **Desktop app** OAuth client and download its JSON. Never put it in `org_config.json`.
+4. Run the sync signed in as an account with the Workspace **Directory Reader** role (or super
+   admin):
+
    ```bash
    pip install google-auth google-auth-oauthlib google-api-python-client
    python3 scripts/sync_room_directory.py \
      --admin-client-secret /path/to/room_sync_client_secret.json \
      --org-config org_config.json
    ```
-   This merges a `rooms` snapshot into the existing bundle without touching its other sections.
-   Re-run it whenever your organization's rooms change; `--token-file` (default
-   `.room_sync_token.json`) caches the sync's own token so you don't have to re-consent every time
-   — keep that file private too, for the same reason as the client secret.
 
-   > **If `org_config.json` is already signed** (you built it with `build_org_bundle.py
-   > --sign-key`, e.g. for [org mode](org-mode-setup-guide.md)), you MUST also pass `--sign-key
-   > <path to that same signing key>` here. Merging the room directory in changes the bundle, which
-   > invalidates its existing signature — `sync_room_directory.py` refuses to write anything at all
-   > (leaving the file untouched) if you omit `--sign-key` on an already-signed bundle, precisely so
-   > you don't accidentally distribute a bundle that every install with your key already pinned (or
-   > any org-mode install, which requires signing) will then refuse to start on. An unsigned bundle
-   > is unaffected — `--sign-key` stays optional there. Needs the `cryptography` package (`pip
-   > install cryptography`) in addition to the three above, same as `build_org_bundle.py
-   > --sign-key`.
-6. Redistribute the updated `org_config.json` exactly as in step 5 above. The `rooms` data itself
-   is plain metadata, not a credential, so it's fine for every user's install to have it.
+   It merges the `rooms` section into the bundle and leaves the rest untouched. `--query` filters
+   which rooms are fetched; `--token-file` (default `.room_sync_token.json`) caches the sync's own
+   sign-in between runs — keep it private.
+5. If the bundle is signed, pass `--sign-key <same signing key>` too (needs `pip install
+   cryptography`). Without it the script refuses to modify a signed bundle, since the merge would
+   invalidate the signature.
+6. Redistribute the bundle. Re-run the sync whenever your rooms change.
 
----
+## Users connect
 
-## For users
+Users install the bundle and click **Authenticate…** (desktop) or **Connect** (organization
+server) for each Google connector they want — the shared flow is described in
+[connecting-a-service.md](connecting-a-service.md). Google-specific points:
 
-**Local desktop install:**
-
-1. Get `org_config.json` from your IT team.
-2. In PrivacyFence Settings: **Organization Config…**, and select the file.
-3. For each Google connector you want (Gmail, Drive, Calendar, Contacts, Tasks, Apps Script): **Connectors → \<service\> → Authenticate…**. Your browser opens to Google's sign-in page — sign in and click **Allow**.
-4. Quit and reopen PrivacyFence to activate the connector.
-
-**[`org` mode](org-mode-setup-guide.md) deployment** (a server your IT team runs, not a desktop
-install — ask them which applies to you; see
-[`org-mode-setup-guide.md` §4.2](org-mode-setup-guide.md#42-the-google-connector-client-optional)):
-
-1. Visit `https://your-server-hostname/login` and sign in with whatever identity provider your
-   organization's server uses for sign-in (org mode's IdP is a separate, independent choice from
-   which connectors it wires up — see [`org-mode-setup-guide.md`
-   §4.1](org-mode-setup-guide.md#41-the-oidc-sign-in-client-required) — it's commonly Google too, but
-   doesn't have to be). Either way, there's no separate "install a config file" step like local mode's.
-2. On the `/connect` page, click **Connect** next to each Google connector you want (Gmail, Drive,
-   Calendar, Contacts, Tasks, Apps Script). Each redirects to Google, asks for consent to that connector's specific
-   scopes, and lands you back on `/connect` showing it connected.
-3. Nothing to quit/reopen, since there's no local app. See [`org-mode-setup-guide.md`
-   §8](org-mode-setup-guide.md#8-first-sign-in-and-connecting-a-service).
-
----
+- Each Google connector is its own sign-in; connecting Gmail does not connect Drive.
+- Leave every permission checkbox on Google's consent page ticked. Unticking one fails the sign-in
+  (see below).
+- **Apps Script** also needs a per-user switch in Google: turn on **Google Apps Script API** at
+  [script.google.com/home/usersettings](https://script.google.com/home/usersettings). It is off by
+  default and nothing in the Cloud console turns it on; include it in your user instructions.
 
 ## Troubleshooting
 
-**"Access blocked: PrivacyFence has not completed the Google verification process"** (IT admin)
-The app is in Testing mode. Make sure the Google account signing in is listed as a test user (step 3.6 above), or submit the app for Google's verification if you have many users.
+**"Access blocked: … has not completed the Google verification process"** — the app is External
+and in Testing, and the account is not a test user. Add it under **Audience → Test users**, or use
+an Internal app.
 
-**"This app isn't verified"**
-Click **Advanced → Go to PrivacyFence (unsafe)** to proceed. This warning appears for any unverified OAuth app and is expected until the org's app is verified by Google.
+**"This app isn't verified"** — expected for an unverified External app. Test users can continue
+through **Advanced → Go to PrivacyFence**. See [verification](#3-consent-screen-and-verification).
 
-**"redirect_uri_mismatch"** (IT admin)
-For a local desktop install, make sure you created credentials of type **Desktop app**, not Web
-application — Desktop app clients accept any loopback redirect port, which is what PrivacyFence's
-OAuth flow uses. For an [`org` mode](org-mode-setup-guide.md) deployment it's the other way around:
-the connector client must be a **Web application** client with the exact
-`https://your-server-hostname/oauth/callback/<service>` redirect URIs registered — see
-[`org-mode-setup-guide.md` §4.2](org-mode-setup-guide.md#42-the-google-connector-client-optional).
-These are two different, unrelated OAuth clients even against the same Google Cloud project — check
-you're editing the one this install actually uses.
+**"Error 403: org_internal"** — the app is Internal and the account is outside your Workspace
+organization.
 
-**Scopes not granted / 403 errors** (user)
-Click **Reconnect…** next to the connector in PrivacyFence Settings to re-run the OAuth flow. From source, you can also run `privacyfence-app --gmail-oauth` (or `--drive-oauth` / `--contacts-oauth` / `--calendar-oauth` / `--tasks-oauth` / `--apps-script-oauth`).
+**Sign-ins stop working after a week** — an External app in Testing: Google expires test-user
+sign-ins after 7 days. Users can **Reconnect…**; to stop it, use an Internal app or publish and
+verify the External one.
 
-**`calendar_list_rooms` comes back empty** (user)
-This just means IT hasn't run `scripts/sync_room_directory.py` yet, or hasn't redistributed the
-result — it's not an error. Ask IT to run the sync (see "Room directory sync" above) and send you
-the refreshed `org_config.json`.
+**"Error 400: redirect_uri_mismatch"** — the client type does not match the deployment. Desktop
+installs need a **Desktop app** client; an organization server needs a **Web application** client
+with all six `https://<server>/oauth/callback/<service>` URIs registered, spelled exactly as
+PrivacyFence builds them from `--server-issuer-url` (the Apps Script one is `apps_script`, with
+an underscore). Check which client the installed bundle actually contains.
 
-**`sync_room_directory.py` fails with "Room directory listing requires Google Workspace admin access"** (IT admin)
-The Google account you signed in with when running the script isn't a Workspace admin and doesn't
-hold the **Directory Reader** role. Re-run the script signed in as an account that does — this is
-enforced by Google, not by PrivacyFence.
+**"authentication failed: Google OAuth exchange failed: the granted scopes are missing [...]"** —
+a permission was unticked on Google's consent page. **Reconnect…** and leave every box ticked.
+
+**`accessNotConfigured` / "API has not been used in project … or it is disabled"** — the API
+behind that tool is not enabled in the project ([step 2](#2-enable-the-apis)). Enabling it takes
+effect within a few minutes; users do not need to reconnect.
+
+**Apps Script calls fail with 403 "User has not enabled the Apps Script API"** — the user has not
+turned on the per-user switch at
+[script.google.com/home/usersettings](https://script.google.com/home/usersettings).
+
+**Scopes changed on the client, or a 403 on a tool that worked before** — **Reconnect…** the
+connector so Google issues a token with the current scopes.
+
+**`calendar_list_rooms` returns nothing** — the bundle has no `rooms` section yet. Run the
+[room directory sync](#optional-room-directory-for-calendar_list_rooms) and redistribute the
+bundle.
+
+**`sync_room_directory.py` fails with "Room directory listing requires Google Workspace admin
+access"** — the account you signed in with lacks the **Directory Reader** role. Run it again as an
+account that has it.

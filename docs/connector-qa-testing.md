@@ -92,7 +92,7 @@ For changes affecting card content or connector metadata, inspect the browser ap
 - eligible always-allow choices create only the intended scoped rule;
 - sensitive content is not exposed in notification/list summaries beyond the configured detail level.
 
-See [`approval-list-ui-ux.md`](approval-list-ui-ux.md) and [`approval-window-content-reference.md`](approval-window-content-reference.md).
+See [`approvals-and-policy.md`](approvals-and-policy.md).
 
 ## 5. Connector authorization
 

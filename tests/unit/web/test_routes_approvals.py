@@ -267,7 +267,7 @@ class TestListApprovals:
 
 
 class TestServiceWorker:
-    """W8 (tier 0/1 notifications, docs/approval-list-ui-ux.md §4): served
+    """W8 (tier 0/1 notifications, 5deef1d8:docs/approval-list-ui-ux.md §4): served
     at the origin root with no auth required, so registration never fails
     on a session that hasn't authenticated yet."""
 
@@ -380,7 +380,7 @@ class TestShowApproval:
         assert 'href="/approvals"' in r.text
 
     def test_shim_navigates_back_to_the_list_on_success_not_innerhtml(self, client, sessions, web_ui):
-        # §3 of docs/approval-list-ui-ux.md: a decision navigates back to
+        # §3 of 5deef1d8:docs/approval-list-ui-ux.md: a decision navigates back to
         # /approvals via location.replace (so the back button can't walk
         # into a dead card) with a toast stashed in sessionStorage, instead
         # of rewriting the document body in place.

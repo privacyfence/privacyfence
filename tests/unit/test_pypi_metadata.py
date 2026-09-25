@@ -108,7 +108,7 @@ def test_the_readme_scan_actually_found_targets():
 
 @pytest.mark.parametrize("line, target", _README_TARGETS, ids=lambda v: v if isinstance(v, str) else "")
 def test_readme_target_renders_off_github(line: int, target: str):
-    """PyPI resolves nothing relative to this repo: `docs/TECHNICAL_REFERENCE.md` 404s there and
+    """PyPI resolves nothing relative to this repo: `docs/how-it-works.md` 404s there and
     `docs/images/screenshots/*.png` renders as a broken image. In-page `#anchor` links are fine --
     PyPI slugs headings the same way GitHub does -- and so is `mailto:`."""
     assert target.startswith(("https://", "#", "mailto:")), (
