@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure AI access to Telegram — PrivacyFence</title>
+  <meta name="description" content="Let Claude and other MCP clients read and search your Telegram chats after your review, and send a message only when you approve it. No administrator setup needed.">
+  <meta name="pf-content-group" content="connector">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/telegram/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/telegram/">
+  <meta property="og:title" content="PrivacyFence for Telegram">
+  <meta property="og:description" content="Telegram for AI assistants: chats read after review, messages sent only with approval, personal data checked locally. Sign in with your own account.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connector · Telegram</p>
+      <h1>Your Telegram chats for your AI assistant, read only after you look.</h1>
+      <p class="lede">PrivacyFence connects an AI assistant to Telegram as your own account, not as a bot, so it can work with the chats, groups and channels you are in. It lists your chats straight away, reads messages only after you have reviewed them, and sends nothing until you approve.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="can-do-heading">
+      <div class="section-heading">
+        <p class="kicker">What the assistant can do</p>
+        <h2 id="can-do-heading">List, read after review, send after approval.</h2>
+        <p>Every Telegram tool has a gate fixed in code. The <a href="/docs/tools-reference/#telegram">Tools reference</a> lists each one.</p>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Without a card</h3>
+          <p>Your chat list: each chat's name, type and unread count. The call is still audited.</p>
+        </article>
+        <article class="card stack">
+          <h3>Reviewed before release</h3>
+          <p>Recent messages in a chat, and a keyword search across your chats. You see exactly which messages would be released.</p>
+        </article>
+        <article class="card stack">
+          <h3>Needs your approval</h3>
+          <p>Sending a message to a chat or a person. The card shows the recipient and the full text before anything is sent.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="pii-heading">
+      <div class="section-heading">
+        <p class="kicker">Personal data</p>
+        <h2 id="pii-heading">Message text is checked before you see the card.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Before a reviewed read is shown to you, PrivacyFence scans the <strong>message text</strong> locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Sender and chat names are not scanned, and email addresses and phone numbers are deliberately not flagged.</p>
+        <p>A match sends the read to a card even if an always-allow rule covers the chat, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
+        <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="routine-heading">
+      <div class="section-heading">
+        <p class="kicker">Routine requests</p>
+        <h2 id="routine-heading">Trust the chats you choose.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>An always-allow rule can name the chats the assistant may read, or send to, without a card. A search runs without a card only when every result comes from one of those chats. Each request is still audited, and likely personal data in a read still goes to a card. Every scope is in <a href="/docs/approvals-and-policy/#scope-catalogue">the scope catalogue</a>.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">No administrator setup. Sign in with your phone.</h2>
+      </div>
+      <ol class="steps page-copy">
+        <li>Nothing to register: every PrivacyFence installer and the PyPI package carry PrivacyFence's Telegram app credentials, which identify the application, not you.</li>
+        <li>In PrivacyFence's Settings page, enter your phone number, the code Telegram sends you and, if you use one, your two-step verification password. You type them into PrivacyFence's own page, never into a terminal or the AI client.</li>
+        <li>The Telegram tools appear to the assistant. You stay connected until the session expires or you end it, for example from <strong>Settings → Devices</strong> in a Telegram app.</li>
+      </ol>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/telegram-setup/">Set it up</a>
+        <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
+      </p>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Try it on your own computer.</h2>
+          <p>Install PrivacyFence on macOS, Windows or Linux and connect Telegram with your phone number.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/download/">Download PrivacyFence</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

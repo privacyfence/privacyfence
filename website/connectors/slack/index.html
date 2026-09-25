@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure AI access to Slack — PrivacyFence</title>
+  <meta name="description" content="Let Claude and other MCP clients read and search Slack as you, with channel history reviewed before release and every message approved before it is sent.">
+  <meta name="pf-content-group" content="connector">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/slack/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/slack/">
+  <meta property="og:title" content="PrivacyFence for Slack">
+  <meta property="og:description" content="Slack for AI assistants: channel history and search reviewed before release, every message approved before it is sent, personal data checked locally.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connector · Slack</p>
+      <h1>Slack for your AI assistant, with nothing posted in your name unseen.</h1>
+      <p class="lede">PrivacyFence connects an AI assistant to Slack with your own user token, so it sees the channels, direct messages and group chats you can see, and nothing more. There is no bot to invite. The assistant can find conversations straight away; it reads messages only after you have looked at them, and it sends nothing until you approve.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="can-do-heading">
+      <div class="section-heading">
+        <p class="kicker">What the assistant can do</p>
+        <h2 id="can-do-heading">Find, read after review, send after approval.</h2>
+        <p>Every Slack tool has a gate fixed in code. The <a href="/docs/tools-reference/#slack">Tools reference</a> lists each one.</p>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Without a card</h3>
+          <p>Listing channels, direct messages and group chats, and resolving a message link someone pasted into the conversation. These calls are still audited.</p>
+        </article>
+        <article class="card stack">
+          <h3>Reviewed before release</h3>
+          <p>A channel's recent history, a thread's replies, and message search. You see exactly which messages would be released, then allow or deny.</p>
+        </article>
+        <article class="card stack">
+          <h3>Needs your approval</h3>
+          <p>Sending a message to a channel or direct message, and starting a group chat. The card shows the conversation and the full text before anything is posted.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="pii-heading">
+      <div class="section-heading">
+        <p class="kicker">Personal data</p>
+        <h2 id="pii-heading">Message text is checked before you see the card.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Before a reviewed read is shown to you, PrivacyFence scans the <strong>message text</strong> locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Sender names and channel names are not scanned. Email addresses and phone numbers are deliberately not flagged, because nearly every signature has them.</p>
+        <p>A match sends the read to a card even if an always-allow rule covers the channel, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
+        <p>The privacy filter can also withhold whole kinds of Slack data from the assistant: message content, thread content, people's identities, and the channel, direct-message and group-chat lists. Each is set in <strong>Settings → Privacy Filter → Slack</strong>.</p>
+        <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="routine-heading">
+      <div class="section-heading">
+        <p class="kicker">Routine requests</p>
+        <h2 id="routine-heading">Trust a channel, not the whole workspace.</h2>
+        <p>An always-allow rule lets matching requests run without a card, and each one is still audited. For Slack, a rule can trust:</p>
+      </div>
+      <div class="card-grid four grid-auto">
+        <article class="card stack"><h3>Named channels</h3><p>Reading, or posting to, the channels and people you list. A search runs without a card only when every result is from one of them.</p></article>
+        <article class="card stack"><h3>Public channels only</h3><p>A search whose results all come from public channels.</p></article>
+        <article class="card stack"><h3>Direct messages</h3><p>One-to-one direct messages. This matches any one-to-one conversation, not only notes to yourself.</p></article>
+        <article class="card stack"><h3>Group chats</h3><p>Group direct messages, and starting one.</p></article>
+      </div>
+      <p class="page-copy">Likely personal data in a read still goes to a card. Every scope is in <a href="/docs/approvals-and-policy/#scope-catalogue">the scope catalogue</a>.</p>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">One Slack app per workspace, then each person approves it.</h2>
+      </div>
+      <ol class="steps page-copy">
+        <li>An administrator creates a Slack app once per workspace, with user token scopes only, and packages its client ID and secret into an organization config bundle. The app is never publicly distributed.</li>
+        <li>Each person installs the bundle, connects Slack from PrivacyFence's Settings page, and approves the app in the browser.</li>
+        <li>The Slack tools appear to the assistant. The token stays with PrivacyFence and is never given to the AI client.</li>
+      </ol>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/slack-setup/">Set it up</a>
+        <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
+      </p>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>See how a request is approved.</h2>
+          <p>Follow a read and a write through PrivacyFence, card by card.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/how-it-works/">How it works</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

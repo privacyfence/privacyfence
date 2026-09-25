@@ -43,6 +43,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A website page per connector, and an FAQ:** `/connectors/google-workspace/`, `/slack/`,
+  `/salesforce/`, `/jira-confluence/` and `/telegram/` each say what an AI client can do there,
+  what is reviewed and what needs approval, what the PII check scans in that service's content,
+  and how to set it up. `/faq/` answers the questions people ask before installing: where data
+  goes, which AI clients work, what the AI sees before approval, automating routine requests,
+  certification, local or organization mode, cost, and verifying a download. The site's menu
+  links the FAQ, and `/connectors/` links each connector's page.
+
 ## [4.6.1] — 2026-09-25
 
 ### Added
