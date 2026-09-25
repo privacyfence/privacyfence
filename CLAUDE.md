@@ -82,11 +82,9 @@ to move the release forward onto a new commit, or to delete the unwanted tag bef
 retagging. A version that has already published artifacts stays published; cut the next one. See
 [ADR 0022](docs/adr/0022-one-release-tag-per-commit.md).
 
-**macOS ships one file.** `scripts/build_dmg.sh` builds the app bundle, the `.mcpb` and (by
-calling `scripts/build_pkg.sh`) the `.pkg`, then puts the `.pkg` and the `.mcpb` on the DMG and
-nothing else — no app bundle, no `/Applications` symlink. The `.pkg` is never uploaded or attached
-on its own; releasing the DMG releases all three. See `scripts/build_dmg.sh`'s own header and
-`docs/platform-support.md`.
+**macOS ships one file.** The DMG carries the `.pkg` and the `.mcpb` and nothing else; the `.pkg` is
+never uploaded or attached on its own, so releasing the DMG releases all three. How each artifact
+is built and signed is [`docs/packaging.md`](docs/packaging.md).
 
 That tag push is what `.github/workflows/build.yml` **and** `.github/workflows/publish-pypi.yml`
 both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
@@ -173,40 +171,23 @@ what is being built.
 
 ### Packaged-artifact release gating
 
-Phase 6.4 of the CI test-suite buildout (see [`docs/testing-policy.md`](docs/testing-policy.md)):
-every published DMG/installer/`.deb` is started and exercised, automatically, before it (or
-anything else from the same tag) actually ships.
+Every published DMG/installer/`.deb` is started and exercised, automatically, before it (or
+anything else from the same tag) ships. Which test covers which artifact is
+[`docs/testing-policy.md`'s layer 6](docs/testing-policy.md#layer-6-packaged-artifact); the
+process guarantees are:
 
-Within `build.yml`, this needs no cross-workflow trickery — each of the `build` (macOS),
-`build-windows`, and `build-deb` jobs runs its own packaged-artifact test
-(`tests/integration/test_macos_packaged_smoke.py` and, for the `.pkg` inside that same DMG,
-`test_macos_pkg_smoke.py`; `test_windows_packaged_smoke.py`;
-`test_deb_packaged_lifecycle.py` — all `pytest.mark.packaged`) as an ordinary step, right after
-that job builds its own artifact and before that same job's own R2-upload and
-workflow-artifact-upload (`actions/upload-artifact`) steps. An ordinary failed step stops the job
-there, so a broken DMG (or the `.pkg` inside it)/installer/`.deb` never reaches its own upload steps — no `needs:`
-needed for this part, since it's all sequencing within one job.
-
-The GitHub Release attachment is a separate guarantee, and it *does* need `needs:` (privacyfence/
-privacyfence#373): `build`/`build-windows`/`build-deb`/`sbom` each only upload their own artifact
-as a workflow artifact now, never straight to the release, so a job failing after a sibling has
-already succeeded can no longer leave the public GitHub Release with only some of a stable
-release's files. `finalize-release` — gated by `needs: [build, build-windows, build-deb, sbom]`,
-the same job that promotes R2's `latest.json` — downloads every workflow artifact and makes the
-one `softprops/action-gh-release` call itself, after all four jobs have already succeeded. The
-GitHub Release ends up exactly as atomic as the R2 promotion: either it gets the complete file set,
-or it doesn't get touched at all.
-
-Getting the same guarantee into `publish-pypi.yml` is the part that actually needs wiring: that
-workflow's sdist/wheel has no packaged-artifact test of its own to gate on, but a broken macOS/
-Windows/Linux build should still block *its* publish too — a release isn't good just because the
-one artifact this workflow happens to build is fine. GitHub Actions has no `needs:` across separate
-workflow files, so `publish-pypi.yml`'s `wait_for_build` job (its own first job, gating
-`publish-testpypi`/`publish-pypi`/`publish-r2`) polls the REST API for `build.yml`'s own run against
-the exact same commit and fails loudly, without publishing anything, unless that run completed
-successfully. See that job's own comment for the reasoning, including how a `workflow_dispatch`
-rerun is gated the same way (keyed on commit SHA, not run recency, so a rerun after a fixed and
-re-run `build.yml` finds the new result immediately).
+- **Within a build job:** each of `build`, `build-windows` and `build-deb` runs its own
+  `pytest.mark.packaged` test as an ordinary step, right after building its artifact and before its
+  own R2 and workflow-artifact uploads. A failed step stops the job there; no `needs:` involved.
+- **The GitHub Release is all-or-nothing:** the build jobs and `sbom` only upload workflow
+  artifacts. `finalize-release` (`needs: [build, build-windows, build-deb, sbom]`, the same job that
+  promotes R2's `latest.json`) downloads them all and makes the one `softprops/action-gh-release`
+  call, so a release gets the complete file set or is not touched at all.
+- **PyPI waits for `build.yml`:** GitHub Actions has no `needs:` across workflow files, so
+  `publish-pypi.yml`'s first job, `wait_for_build`, polls for `build.yml`'s run on the same commit
+  and fails, publishing nothing, unless it succeeded. It is keyed on commit SHA, not run recency,
+  so a `workflow_dispatch` rerun after a fixed `build.yml` finds the new result immediately (see
+  that job's own comment).
 
 ### Publishing to PyPI
 
