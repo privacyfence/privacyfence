@@ -1094,6 +1094,10 @@ class SettingsController:
             return
 
         self.error = ""
+        # The live connectors were built from the previous bundle's client
+        # credentials and download settings; rebuild them now, or they keep
+        # serving the old values until the next restart.
+        self.refresh_connectors()
 
     def would_pin_new_org_signing_key(self, raw: bytes) -> bool:
         """Read-only precheck for web/routes_settings.py's org_config_
