@@ -73,7 +73,7 @@ def test_footer_links(path):
 @pytest.mark.parametrize("path", PAGES)
 def test_consent_code_on_every_page_and_no_google_tag(path):
     page = PAGES[path]
-    assert '<script src="/site.js" defer></script>' in page
+    assert re.search(r'<script src="/site\.js\?v=[0-9a-f]{12}" defer></script>', page)
     assert "googletagmanager" not in page
     assert "gtag(" not in page
     assert MEASUREMENT_ID not in page

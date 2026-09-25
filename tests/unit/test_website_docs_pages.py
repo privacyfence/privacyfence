@@ -60,9 +60,9 @@ def test_site_chrome_consent_and_canonical(path):
     footer = page.split('<footer class="site-footer', 1)[1]
     assert '<a href="/privacy/" data-privacy-link>Privacy</a>' in footer
     assert '<a href="/privacy/#your-choice" data-cookie-settings>Cookie settings</a>' in footer
-    assert '<script src="/site.js" defer></script>' in page
+    assert re.search(r'<script src="/site\.js\?v=[0-9a-f]{12}" defer></script>', page)
     for stylesheet in ("/tokens.css", "/chrome.css", "/docs-theme.css"):
-        assert f'<link rel="stylesheet" href="{stylesheet}">' in page
+        assert re.search(rf'<link rel="stylesheet" href="{re.escape(stylesheet)}\?v=[0-9a-f]{{12}}">', page)
     for third_party in (
         "googletagmanager",
         "gtag(",
