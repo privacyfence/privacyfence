@@ -1,5 +1,5 @@
 """Pure-function HTML for the ``/approvals`` list page
-(docs/approval-list-ui-ux.md §2, the P1-compatible slice its own §6 says
+(5deef1d8:docs/approval-list-ui-ux.md §2, the P1-compatible slice its own §6 says
 can land ahead of P3's full design -- the row shape, the empty state, and
 the central asymmetry of §2.2: **Deny is on the row; Allow is never on the
 row.** Denying without reading the card cannot leak anything; approving
@@ -56,7 +56,7 @@ docstring for exactly which approvals that covers. This phase ships:
   ``frame-ancestors 'none'`` and this page's own ``frame-src`` admits
   ``data:`` only).
 
-Approving still opens the card through Phase 2 -- docs/approval-list-ui-ux.md's
+Approving still opens the card through Phase 2 -- 5deef1d8:docs/approval-list-ui-ux.md's
 own claim ("no Allow on the list") stays literally true up to there.
 
 **Phase 3 of the binder plan** is what finally breaks that claim: an

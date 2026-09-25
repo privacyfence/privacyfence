@@ -1,102 +1,117 @@
-# Salesforce Setup
+# Salesforce setup
 
-PrivacyFence connects to Salesforce via OAuth 2.0 (the Web Server Flow), through a **Connected App**. No username, password, or security token is ever entered into PrivacyFence — users sign in through Salesforce's own login page in their browser.
+PrivacyFence signs in to Salesforce with OAuth 2.0 (the web server flow with PKCE). Nobody types a
+Salesforce password, security token or API key into PrivacyFence. One administrator registers an
+app in Salesforce once per org and puts its consumer key and secret into the organization config
+bundle; users then sign in on Salesforce's own page from PrivacyFence.
 
-The Connected App is organization-level config: **one IT admin creates it once**, packages the consumer key/secret into PrivacyFence's organization config bundle, and distributes it. Individual users just click **Authenticate…** in PrivacyFence Settings.
+## What you need
 
----
+- A Salesforce administrator who can create an **External Client App** or a **Connected App**.
+- Your org's login URL: `https://login.salesforce.com` (production), `https://test.salesforce.com`
+  (sandbox), or your **My Domain** URL (see [Values](#values)).
+- Python 3 to run `scripts/build_org_bundle.py`.
 
-## For IT admins (once per organization)
+## Register the app
 
-### 1. Create a Connected App
+Salesforce offers two kinds of app registration, and either works:
 
-1. In Salesforce, go to **Setup → App Manager → New Connected App**.
-2. Fill in **Connected App Name** (e.g. `PrivacyFence`) and **Contact Email**.
-3. Check **Enable OAuth Settings**.
-4. Set **Callback URL** to:
-   ```
-   http://localhost:53683/callback
-   ```
-   Salesforce requires callback URLs to use HTTPS, with one exception: `http://`
-   is allowed for testing when the host is literally `localhost`. PrivacyFence's
-   redirect URI for Salesforce always uses `localhost` (not `127.0.0.1`, unlike
-   PrivacyFence's other OAuth connectors) specifically so it qualifies for this
-   exception — enter it exactly as `http://localhost:53683/callback` or
-   Salesforce's console will reject the value.
+- **External Client App** (**Setup → External Client App Manager → New External Client App**),
+  which Salesforce recommends for new integrations. Set **Distribution State** to **Local**.
+- **Connected App** (**Setup → App Manager → New Connected App**), if your org still creates
+  those.
 
-   > **Deploying [`org` mode](org-mode-setup-guide.md) instead of (or in addition to) local desktop
-   > installs?** Salesforce's Callback URL field accepts more than one URL — enter each on its own
-   > line. Add a second line with `https://your-server-hostname/oauth/callback/salesforce` (org
-   > mode's server-side redirect, `web/routes_connect.py`), substituting your own hostname. Both can
-   > coexist in the same Connected App; the same consumer key/secret you build below work for either
-   > deployment. See [`org-mode-setup-guide.md`
-   > §4.2](org-mode-setup-guide.md#42-the-google-connector-client-optional) for the general pattern
-   > this follows.
-5. Under **Selected OAuth Scopes**, add:
-   - `Manage user data via APIs (api)`
-   - `Perform requests at any time (refresh_token, offline_access)`
-6. Save.
+In either:
 
-> **New Connected Apps can take 2–10 minutes to become active.** If sign-in fails immediately after creating the app, wait a few minutes and try again.
+1. Enter a name (for example `PrivacyFence`) and a contact email.
+2. Enable **OAuth** and enter the **Callback URL**: the local redirect, and for an organization
+   server the org redirect on a second line. One app can carry both, and the same consumer key and
+   secret serve both kinds of deployment.
+3. Add the two **OAuth scopes** from the [values table](#values).
+4. Leave the web server (authorization code) flow enabled. PrivacyFence sends PKCE and the consumer
+   secret, so the **Require PKCE** and **Require secret for Web Server Flow** options can stay on.
+5. **Refresh token rotation** (an External Client App option): on or off, PrivacyFence works — with
+   rotation on, it stores the new refresh token Salesforce issues at each refresh. This guide
+   recommends turning it **on**, so a leaked refresh token is useless once PrivacyFence has used
+   it.
+6. **Refresh token policy:** *Refresh token is valid until revoked* keeps users signed in. A shorter
+   policy works too; users then **Reconnect…** when it expires.
+7. Save, then copy the **Consumer Key** and **Consumer Secret** (in a Connected App: **View →
+   Manage Consumer Details**; in an External Client App: **Settings → OAuth Settings → Consumer Key
+   and Secret**). Salesforce may ask you to verify your identity first.
 
-### 2. Get the consumer key and secret
+A new app can take **2–10 minutes** to become active; a sign-in straight after saving may fail.
 
-1. Open the Connected App you just created (**Setup → App Manager → \[your app\] → View**).
-2. Click **Manage Consumer Details** (you may need to verify your identity again).
-3. Copy the **Consumer Key** and **Consumer Secret**.
+If the app's policy is **Admin approved users are pre-authorized**, also assign the profiles or
+permission sets whose users may use it.
 
-### 3. Add it to the organization config bundle
+## Values
+
+| Item | Value |
+|---|---|
+| Local redirect (desktop installs) | `http://localhost:53683/callback` — exactly this. Salesforce accepts `http://` only when the host is literally `localhost`, which is why this redirect uses `localhost` rather than `127.0.0.1`. |
+| Org redirect (organization server) | `https://<server>/oauth/callback/salesforce`, with `<server>` your server's `--server-issuer-url` |
+| OAuth scopes | **Manage user data via APIs (`api`)** and **Perform requests at any time (`refresh_token`, `offline_access`)**. PrivacyFence requests `api refresh_token`. |
+| Login URL | `https://login.salesforce.com` (default), `https://test.salesforce.com` for a sandbox, or your My Domain URL, e.g. `https://acme.my.salesforce.com` or, for a sandbox, `https://acme--uat.sandbox.my.salesforce.com` |
+| Bundle flags | `--salesforce-consumer-key <Consumer Key>` and `--salesforce-consumer-secret <Consumer Secret>` (both required together); `--salesforce-login-url <URL>` (default `https://login.salesforce.com`) |
+
+**Use your My Domain URL** when your org turns on **Prevent login from https://login.salesforce.com**
+(or the test.salesforce.com equivalent) in its My Domain settings, or when users sign in through
+single sign-on configured on My Domain. The login URL is used both for sign-in and for refreshing
+tokens; give the bare origin, with no path.
+
+## Build and distribute the bundle
+
+`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
+stable GitHub Release. It needs only Python 3; no PrivacyFence install is required.
 
 ```bash
 python3 scripts/build_org_bundle.py \
   --salesforce-consumer-key 3MVG9... \
   --salesforce-consumer-secret abcdef0123456789 \
-  --salesforce-login-url https://login.salesforce.com \
+  --salesforce-login-url https://acme.my.salesforce.com \
   -o org_config.json --merge
 ```
 
-Use `--salesforce-login-url https://test.salesforce.com` if your users authenticate against a sandbox instead of production. Distribute the resulting `org_config.json` to your users.
+`--merge` adds Salesforce to an existing `org_config.json`; drop it if this is the first service in
+the bundle. A bundle holds one login URL, so users of a sandbox and of production need separate
+bundles. Distribute the bundle to desktop users, or build it with the server flags and install it
+on your organization server — see [org-mode-setup-guide.md](org-mode-setup-guide.md) for signing
+and the server flags.
 
----
+## Users connect
 
-## For users
+Users install the bundle and click **Authenticate…** next to Salesforce (desktop) or **Connect**
+(organization server), sign in on Salesforce's page and click **Allow**. The shared flow is
+described in [connecting-a-service.md](connecting-a-service.md).
 
-**Local desktop install:**
-
-1. Get `org_config.json` from your IT team and install it via **Organization Config…** in PrivacyFence Settings (if you haven't already for another service — if a config is already installed, click **Update…** in the status prompt).
-2. **Connectors → Salesforce → Authenticate…**. Your browser opens to Salesforce's login page — sign in and click **Allow**.
-3. Quit and reopen PrivacyFence to activate the connector.
-
-**[`org` mode](org-mode-setup-guide.md) deployment** (a server your IT team runs, not a desktop
-install — ask them which applies to you):
-
-1. Visit `https://your-server-hostname/login` and sign in with your organization identity provider.
-2. On the `/connect` page, click **Connect** next to Salesforce. Your browser opens to Salesforce's
-   login page — sign in and click **Allow**.
-3. You land back on `/connect` showing Salesforce as connected — nothing to quit/reopen, since
-   there's no local app. See [`org-mode-setup-guide.md`
-   §8](org-mode-setup-guide.md#8-first-sign-in-and-connecting-a-service).
-
-Your access token is refreshed automatically in the background as needed — no re-entering credentials.
-
----
+After that, PrivacyFence refreshes the access token by itself: when Salesforce reports an expired
+session, it refreshes once and retries the call.
 
 ## Troubleshooting
 
-**"redirect_uri_mismatch" or "invalid client credentials"** (IT admin)
-The Connected App's **Callback URL** must include `http://localhost:53683/callback` exactly (local desktop installs), and, for an [`org` mode](org-mode-setup-guide.md) deployment, `https://your-server-hostname/oauth/callback/salesforce` on its own line too. Also double-check the Consumer Key/Secret went into the bundle correctly.
+**`redirect_uri_mismatch`** — the Callback URL on the app must include
+`http://localhost:53683/callback` for desktop installs, and
+`https://<server>/oauth/callback/salesforce` on its own line for an organization server.
 
-**Salesforce won't let me save an `http://` Callback URL** (IT admin)
-Salesforce requires callback URLs to use HTTPS except when the host is exactly `localhost` — `http://127.0.0.1:...` or any other host will be rejected. Use `http://localhost:53683/callback` exactly as shown above.
+**Salesforce will not save an `http://` Callback URL** — only `http://localhost:…` is accepted
+without HTTPS. Enter `http://localhost:53683/callback` exactly; `127.0.0.1` is rejected.
 
-**Sign-in fails right after creating the Connected App**
-New Connected Apps take a few minutes to propagate — wait and retry.
+**`invalid_client_id` or `invalid client credentials`** — check that the consumer key and secret in
+the bundle match the app. A brand-new app can also return this for its first few minutes.
 
-**"REQUEST_LIMIT_EXCEEDED" or API limit errors**
-Salesforce enforces a daily API call limit per org. Reduce query frequency or switch to a Salesforce org with a higher limit.
+**The login page says you cannot log in here, or points you to your My Domain** — the org blocks
+login from `login.salesforce.com`. Rebuild the bundle with `--salesforce-login-url` set to your My
+Domain URL.
 
-**Sandbox vs. production**
-If your org authenticates against a sandbox, make sure the bundle was built with `--salesforce-login-url https://test.salesforce.com` (IT admin) — the sign-in flow is otherwise identical.
+**Sandbox users cannot sign in** — the bundle's login URL is the production one. Use
+`https://test.salesforce.com` or the sandbox's My Domain URL.
 
-**Token expired mid-session**
-PrivacyFence retries once with a refreshed token automatically. If it still fails, click **Reconnect…** in PrivacyFence Settings to sign in again.
+**`OAUTH_APP_ACCESS_DENIED` or "user hasn't approved this consumer"** — the app admits only
+pre-authorized users. Assign the user's profile or permission set to the app.
+
+**The connector stops working, and the log shows `invalid_grant: expired access/refresh token`** —
+the refresh token expired under the app's refresh token policy, or was revoked. **Reconnect…**.
+
+**`REQUEST_LIMIT_EXCEEDED`** — your org hit Salesforce's daily API request limit. It resets over
+the following 24 hours; the limit itself is set by your Salesforce edition and licences.

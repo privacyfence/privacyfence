@@ -20,7 +20,7 @@ full PrivacyFence install.
 
 --enable-unattended-sessions turns on privacyfence_begin_unattended_session
 for every install of this bundle — a deliberate per-organization choice, see
-docs/TECHNICAL_REFERENCE.md's "Scheduled / unattended Cowork tasks" section.
+docs/how-it-works.md's "Unattended sessions" section.
 
 Example:
     python3 scripts/build_org_bundle.py \\
@@ -325,7 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Let Claude Cowork declare a connection unattended (privacyfence_"
              "begin_unattended_session) for scheduled/triggered runs with no human "
              "present. Off by default -- a deliberate per-organization opt-in, see "
-             "docs/TECHNICAL_REFERENCE.md's \"Scheduled / unattended Cowork tasks\" section.",
+             "docs/how-it-works.md's \"Unattended sessions\" section.",
     )
     unattended_toggle.add_argument(
         "--disable-unattended-sessions", action="store_true",

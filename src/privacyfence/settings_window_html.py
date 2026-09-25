@@ -533,7 +533,7 @@ _JS = r"""
   // General
   // -------------------------------------------------------------------- //
 
-  // Approval-notification permission (docs/approval-list-ui-ux.md §4.4) is
+  // Approval-notification permission (5deef1d8:docs/approval-list-ui-ux.md §4.4) is
   // browser state, not anything SettingsController tracks or this window's
   // Python side could toggle -- Notification.permission lives per-origin in
   // the browser itself, so this reads it live off `window` at render time
@@ -558,7 +558,7 @@ _JS = r"""
   // the web surface, where that flag is always set.
   //
   // web.notifications.detail (settings.yaml.example, docs/
-  // approval-list-ui-ux.md §4.3) -- unlike the enabled flag above, this one
+  // 5deef1d8:docs/approval-list-ui-ux.md §4.3) -- unlike the enabled flag above, this one
   // *is* a real control: set_notifications_detail persists straight to
   // config (settings_controller.py) and the returned snapshot's own
   // general.notifications_detail is what drives this segmented control's

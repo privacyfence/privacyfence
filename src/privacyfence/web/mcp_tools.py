@@ -42,7 +42,7 @@ from ..connector import ToolSpec
 # in the calling client. Advertising every tool uniformly as read-only/
 # non-destructive keeps the client from throwing its own redundant
 # confirmation prompt in front of gate.py's real one (see
-# TECHNICAL_REFERENCE.md's "Why every tool is advertised as read-only",
+# 5deef1d8:docs/TECHNICAL_REFERENCE.md's "Why every tool is advertised as read-only",
 # referenced by §8.1 of the refactor plan).
 _UNIFORM_READ_ONLY_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True,

@@ -512,7 +512,7 @@ img { display: block; max-width: 100%; }
   /* Nothing in the header may be nowrap once the viewport is real:
      "Create Gmail Reply-All Draft" at 25px overflows a 360px screen
      horizontally, and a horizontally scrolled decision surface is the one
-     thing approval-list-ui-ux.md's "Responsive behavior" rules out. */
+     thing 5deef1d8:docs/approval-list-ui-ux.md's "Responsive behavior" rules out. */
   .pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }
   .pf-head-title { flex-wrap: wrap; gap: 8px; }
   .pf-head { gap: 12px; margin-bottom: 16px; }

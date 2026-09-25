@@ -168,7 +168,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
 # those too.
 #
 # This is the single source of truth the connector tables in
-# docs/TECHNICAL_REFERENCE.md are checked against (see
+# 5deef1d8:docs/TECHNICAL_REFERENCE.md are checked against (see
 # tests/unit/connectors/test_readme_manifest_alignment.py) -- keep it in sync
 # with the gate= argument each connectors/*.py call site actually passes to
 # gated_call(), not just with the docs.

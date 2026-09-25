@@ -1,91 +1,96 @@
-# Telegram Setup
+# Telegram setup
 
-PrivacyFence uses **Telethon** (the MTProto user client) to access Telegram. This means Claude sees exactly what you see — every chat, group, and channel you are a member of — as your personal account, not a bot.
+PrivacyFence reaches Telegram as **your own account** (through Telegram's MTProto user API), not as
+a bot: your AI client sees the chats, groups and channels you are in. Telegram has no browser
+sign-in for this kind of access, so connecting means entering your phone number, the code Telegram
+sends you and, if you have one, your two-step verification password — in PrivacyFence's own page,
+never in a terminal.
 
-Telegram is the one deliberate exception to PrivacyFence's "browser OAuth everywhere" rule: MTProto has no browser-redirect OAuth equivalent for full user-session access, so signing in still means entering your phone number and a verification code (and your two-step-verification password, if you have one set). That per-user step happens through PrivacyFence Settings' own in-page prompts instead of a Terminal window — you're never asked for a password to type into a text field you can't verify.
+Unlike the other providers, Telegram needs **no administrator setup**: no app to register, no
+redirect URL, and no section in the organization config bundle.
 
-Unlike Google/Slack/Salesforce/Atlassian, the Telegram **application** (`api_id` / `api_hash`) is not organization-level config. Telegram has no concept of an "organization" the way OAuth providers do — `api_id`/`api_hash` just identify the PrivacyFence app itself, the same for every user. They're baked into the official PrivacyFence release build; there's nothing for an IT admin to register or distribute, and no Organization Config step for Telegram.
+## What you need
 
-> **This also means Telegram needs no [`org` mode](org-mode-setup-guide.md)-specific setup at all** —
-> unlike every other connector in this repo, there's no separate app registration, no redirect URI to
-> register anywhere, and no `org_config.json` section for it (`_is_configured`/`_build_authorize_url`
-> in `web/routes_connect.py` don't apply to Telegram; `telegram_app_credentials()` in
-> `app_credentials.py` is read directly instead). The org-mode server carries the exact same baked-in
-> `api_id`/`api_hash` as any other PrivacyFence build, since it's the same package. Only the sign-in
-> *flow* differs — see below.
+- A Telegram account and access to the phone number or Telegram app that receives its sign-in
+  codes.
+- A PrivacyFence install. Every distribution — the macOS, Windows and Linux installers and the
+  PyPI package — carries PrivacyFence's Telegram app credentials (see
+  [ADR 0040](adr/0040-telegram-app-credentials-ship-in-every-distribution.md)).
 
----
+## Register the app
 
-## For users
+Nothing to register. Telegram's `api_id` and `api_hash` identify the PrivacyFence application, not
+a user or an organization; they are the same for everyone and ship inside PrivacyFence.
 
-**Local desktop install:**
+**Building PrivacyFence from source** is the one case without them. Register your own application
+at [my.telegram.org/apps](https://my.telegram.org/apps) (**Create new application**, platform
+**Desktop**) and either:
 
-1. **Connectors → Telegram → Authenticate…** in PrivacyFence Settings.
-2. Enter your phone number (with country code, e.g. `+1 555 000 0000`) when prompted.
-3. Telegram sends a confirmation code to your Telegram app (or by SMS) — enter it when prompted.
-4. If your account has two-step verification enabled, you'll be asked for your password too.
-5. PrivacyFence saves a session file locally and does not ask again until it expires or is revoked.
+- set `PRIVACYFENCE_TELEGRAM_API_ID` and `PRIVACYFENCE_TELEGRAM_API_HASH` in the environment
+  PrivacyFence runs in, or
+- set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` and run `python3 scripts/telegram_credentials.py
+  write` before packaging, which writes them into the build (the installer build scripts do this
+  themselves). Without both variables it builds without Telegram.
 
-**[`org` mode](org-mode-setup-guide.md) deployment** (a server your IT team runs, not a desktop
-install — ask them which applies to you):
+Keep the values private: anyone holding them can act as that Telegram application, and abuse of it
+can get it rate-limited or blocked for every user of the build.
 
-1. Visit `https://your-server-hostname/login` and sign in with your organization identity provider,
-   then go to `/connect`.
-2. Enter your phone number in the **Telegram** box and click **Connect Telegram** — same phone/code/
-   (optional 2FA-password) steps as the local flow, just as web form fields on `/connect` instead of
-   PrivacyFence Settings dialogs (`web/routes_connect.py`'s `telegram_start`/`telegram_code`/
-   `telegram_2fa` routes).
-3. Your session is saved server-side, under your own principal — nothing to quit/reopen, since
-   there's no local app.
+## Values
 
----
+| Item | Value |
+|---|---|
+| Local redirect | None — Telegram does not use a browser redirect |
+| Org redirect | None |
+| Scopes | None — the session has your account's full access; PrivacyFence's tools and approvals decide what is used |
+| Bundle flags | None — Telegram is not part of `org_config.json` |
+| Where the session is stored | `credentials/telegram.session` in PrivacyFence's data folder (see [platform-support.md](platform-support.md)); on an organization server, in each user's own folder on the server |
 
-## For maintainers (building PrivacyFence from source or cutting a release)
+## Build and distribute the bundle
 
-The release build reads `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from the environment at package time and bakes them into a git-ignored module — see `scripts/build_dmg.sh` and `src/privacyfence/app_credentials.py`. In CI (`.github/workflows/build.yml`), these come from the `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` repository secrets.
+Nothing to add. Telegram is available on every install that carries the app credentials, with or
+without an organization config bundle, and on an organization server without any Telegram-specific
+setup.
 
-To register your own application (e.g. for a fork, or local development):
+## Users connect
 
-1. Go to [https://my.telegram.org/apps](https://my.telegram.org/apps) and sign in with a phone number.
-2. Click **Create new application**.
-3. Fill in the required fields:
-   - **App title:** `PrivacyFence` (or any name you prefer)
-   - **Short name:** `privacyfence` (lowercase, no spaces)
-   - **Platform:** Desktop
-   - **Description:** optional
-4. Click **Create application**.
-5. Copy the **App api_id** (a number) and **App api_hash** (a hex string) shown on the page.
+The shared flow is described in [connecting-a-service.md](connecting-a-service.md). For Telegram:
 
-> **Keep these secret.** This repo is public — never commit real values into source, `.env` files, or test fixtures. Anyone with the `api_id`/`api_hash` can build an app that impersonates a Telegram client, and abusive use of a shared `api_id` can get it rate-limited or flagged by Telegram, affecting every user of that build.
+**Desktop install:** **Settings → Connectors → Telegram → Authenticate…** opens a dialog in the
+page.
 
-For a local dev build, export them before running the daemon:
+1. Enter your phone number with its country code (for example `+1 555 000 0000`).
+2. Enter the code Telegram sends — usually as a message from **Telegram** in your Telegram app, or
+   by SMS if you have no app signed in.
+3. If your account has two-step verification, enter your password.
 
-```bash
-export PRIVACYFENCE_TELEGRAM_API_ID=12345678
-export PRIVACYFENCE_TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
-```
+**Organization server:** on `https://<your-server>/connect`, enter your phone number in the
+**Telegram** box and click **Connect Telegram**, then the code, then your password if asked.
+**Cancel** abandons the attempt. The session is saved on the server, for your account only.
 
----
+You stay connected until the session expires or is ended — for example from **Settings → Devices**
+in a Telegram app.
 
 ## Troubleshooting
 
-**"Telegram app credentials are missing from this build"**
-You're running a build without `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` baked in (or set as env vars for a dev build). If you downloaded the official DMG, this shouldn't happen — please file an issue.
+**The pill says "App credentials missing", or Settings shows "Telegram app credentials are missing
+from this build."** — this build carries no Telegram app credentials. Official installers and the
+PyPI package always do; for a build from source, see [Register the app](#register-the-app). On an
+organization server, the Telegram row then reads **Not set up by your organization**.
 
-**"Session is not authorized" on startup**
-The session file is missing or expired. Click **Reconnect…** on Telegram in PrivacyFence Settings (or run `privacyfence-app --telegram-setup` from source) for a local install; on [`org` mode](org-mode-setup-guide.md), click **Reconnect Telegram** on the `/connect` page instead.
+**Telegram shows "Not connected" after working before** — the session was ended (from another
+device, or by Telegram). Click **Authenticate…** (desktop) or **Reconnect Telegram**
+(organization server) and sign in again.
 
-**"Two-step verification required"**
-Enter your Telegram cloud password when prompted during sign-in — PrivacyFence Settings for a local install, the `/connect` page's password field for [`org` mode](org-mode-setup-guide.md).
+**`PHONE_CODE_INVALID` or `PHONE_CODE_EXPIRED`** — the code was mistyped or is too old. Start again
+to get a new code.
 
-**"PHONE_NUMBER_BANNED" or "AUTH_KEY_UNREGISTERED"**
-Telegram has invalidated your session. For a local install, delete `credentials/telegram.session` —
-under `~/.privacyfence/` for a bundled install, or the repo root if running from source (see
-[dev-vs-live-setup.md](dev-vs-live-setup.md)) — and click **Authenticate…** again. On
-[`org` mode](org-mode-setup-guide.md) you have no filesystem access to the server; just click
-**Reconnect Telegram** on `/connect` and go through the phone/code flow again — that overwrites your
-old session under `~/.privacyfence/users/<your-principal-id>/credentials/` on the server. If that
-alone doesn't clear it, ask an administrator to delete that file by hand.
+**`PASSWORD_HASH_INVALID`** — wrong two-step verification password.
 
-**Verification code arrives in the Telegram app, not by SMS**
-This is expected for accounts that already have the Telegram app installed. Open Telegram on your phone or desktop and look for the code in the official **Telegram** system message.
+**`PHONE_NUMBER_BANNED` or `AUTH_KEY_UNREGISTERED`** — Telegram invalidated the session. Sign in
+again; if that fails on a desktop install, delete `credentials/telegram.session` from PrivacyFence's
+data folder (see [platform-support.md](platform-support.md); on a privilege-separated install that
+needs administrator rights) and click **Authenticate…**. On an organization server, ask an
+administrator to delete your session file on the server.
+
+**The code never arrives by SMS** — Telegram sends it to your Telegram app when one is signed in.
+Look for a message from **Telegram** there.

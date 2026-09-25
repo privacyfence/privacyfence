@@ -1,49 +1,67 @@
-# Atlassian Setup (Jira & Confluence)
+# Atlassian setup (Jira and Confluence)
 
-PrivacyFence connects to **Jira Cloud** and **Confluence Cloud** via Atlassian's OAuth 2.0 (3LO). One OAuth grant covers both products — a user authenticates once and both connectors work.
+PrivacyFence connects to **Jira Cloud** and **Confluence Cloud** through one Atlassian OAuth 2.0
+(3LO) app: a single sign-in covers both connectors. One administrator creates the app once per
+organization and puts its client ID and secret into the organization config bundle; users then
+approve it in their browser from PrivacyFence.
 
-> **Cloud only.** PrivacyFence supports Atlassian Cloud (`.atlassian.net` domains) only, not Jira/Confluence Data Center or Server.
+PrivacyFence supports Atlassian Cloud (`*.atlassian.net` sites) only, not Jira or Confluence Data
+Center or Server.
 
-The OAuth app is organization-level config: **one IT admin creates it once**, packages the client id/secret into PrivacyFence's organization config bundle, and distributes it. Individual users just click **Authenticate…** in PrivacyFence Settings — no API tokens to generate or paste.
+## What you need
 
----
+- An Atlassian account that can create apps in the
+  [developer console](https://developer.atlassian.com/console/myapps/).
+- Python 3 to run `scripts/build_org_bundle.py`.
+- Which deployment you are building for. An Atlassian app has a single callback URL, so desktop
+  installs and an organization server each need **their own app** (and their own bundle). If you
+  run only one kind, you need only one app.
 
-## For IT admins (once per organization)
+## Register the app
 
-### 1. Create an OAuth 2.0 app
+1. In the [developer console](https://developer.atlassian.com/console/myapps/), **Create → OAuth
+   2.0 integration**. Name it (for example `PrivacyFence`, or `PrivacyFence (server)` for the
+   organization server's app) and click **Create**.
+2. **Authorization → OAuth 2.0 (3LO) → Add/Configure:** set the **Callback URL** to the local
+   redirect (desktop installs' app) or the org redirect (the server's app) from the
+   [values table](#values).
+3. **Permissions:** add the **Jira API** and **Confluence API**, then their scopes from the values
+   table. The two products need different kinds of scope:
+   - **Jira: classic scopes.** Jira works with them, and Atlassian recommends classic scopes for
+     Jira where they exist. Granular Jira scopes do not map one-to-one and fail with 401 *"scope
+     does not match"*.
+   - **Confluence: granular scopes.** The Confluence v2 API that PrivacyFence uses to list spaces
+     accepts only granular-scoped tokens and returns 401 *"scope does not match"* for classic ones.
 
-1. Go to [https://developer.atlassian.com/console/myapps/](https://developer.atlassian.com/console/myapps/) and sign in.
-2. Click **Create → OAuth 2.0 integration**.
-3. Give it a name (e.g. `PrivacyFence`) and click **Create**.
+   Classic and granular scopes are separate per product, so mixing them in one app is fine.
+   `offline_access` (which lets PrivacyFence refresh the token without a new sign-in) is not in the
+   Permissions picker; PrivacyFence adds it to the sign-in request itself.
+4. **Settings:** copy the **Client ID** and **Secret**.
 
-### 2. Configure authorization
+Changing an app's scopes later does not change existing tokens: each user must **Reconnect…** Jira
+or Confluence to get a token with the new scopes.
 
-1. In the left sidebar, go to **Authorization**.
-2. Next to **OAuth 2.0 (3LO)**, click **Add**/**Configure**.
-3. Set the **Callback URL** to:
-   ```
-   http://127.0.0.1:53684/callback
-   ```
-   Atlassian requires an exact string match — `localhost` will not match PrivacyFence's actual redirect URI even though it resolves to the same address.
+## Values
 
-### 3. Add permissions (scopes)
+| Item | Value |
+|---|---|
+| Local redirect (desktop installs' app) | `http://127.0.0.1:53684/callback` — exactly this; Atlassian matches the string literally, so `localhost` does not match |
+| Org redirect (organization server's app) | `https://<server>/oauth/callback/atlassian`, with `<server>` your server's `--server-issuer-url`. The same URL serves both Jira and Confluence. |
+| Jira scopes (classic) | `read:jira-work`, `write:jira-work`, `read:jira-user` |
+| Confluence scopes (granular) | `read:space:confluence`, `read:page:confluence`, `write:page:confluence`, `read:content:confluence`, `read:content-details:confluence`, `write:content:confluence`, `read:attachment:confluence` |
+| Added automatically | `offline_access` |
+| Bundle flags | `--atlassian-client-id <Client ID>` and `--atlassian-client-secret <Secret>` (both required together) |
 
-Jira and Confluence need **different scope types** here — this isn't a typo:
+What the Confluence scopes gate: `read:content-details:confluence` covers CQL and text search and
+content details; `write:content:confluence` is needed with `write:page:confluence` to create pages;
+`read:attachment:confluence` covers both listing (`confluence_list_attachments`) and downloading
+(`confluence_download_attachment`) attachments. PrivacyFence requests no delete scope: no connector
+can delete Jira or Confluence content.
 
-- **Jira API** — add these as **classic** scopes: `read:jira-work`, `write:jira-work`, `read:jira-user`. Jira's endpoints work fine with classic scopes, and Atlassian's own guidance is to prefer classic for Jira where available.
-- **Confluence API** — add these as **granular** scopes: `read:space:confluence`, `read:page:confluence`, `write:page:confluence`, `read:content:confluence`, `read:content-details:confluence`, `write:content:confluence`, `read:attachment:confluence`. Confluence Cloud's newer v2 API (which PrivacyFence uses to list spaces) only accepts granular-scoped tokens — a classic-scoped token 401s on those endpoints ("scope does not match") even with `read:confluence-space.summary` granted. `read:content-details:confluence` gates CQL/text search and content-detail reads; `write:content:confluence` is needed for page creation alongside `write:page:confluence`; `read:attachment:confluence` gates both listing a page's attachments (`confluence_list_attachments`) and downloading one (`confluence_download_attachment`) — Confluence's legacy attachment download link (what the v2 attachments list itself returns) is browser-session-only and 401s for an OAuth 3LO token regardless of scope, so PrivacyFence uses the dedicated download-redirect endpoint that scope actually covers. (Note: `search:confluence` is a **classic**-only scope name and won't appear in the granular picker — don't look for it there.)
+## Build and distribute the bundle
 
-Classic and granular are independent scope namespaces per product, so mixing classic Jira scopes with granular Confluence scopes in the same app/token is fine — Atlassian tracks them separately (visible as separate entries in the token's `accessible-resources` response). Don't switch Jira's scopes to granular "for consistency" — that breaks Jira with the same "scope does not match" 401, since Jira's classic-to-granular scope names aren't a reliable 1:1 mapping.
-
-You won't find `offline_access` (needed so PrivacyFence can refresh the token without asking users to sign in again) anywhere in the Permissions picker — it isn't tied to a product API, so the console never lists it as a checkbox. PrivacyFence's code adds it directly to the `scope` parameter of the authorization request, so there's nothing to configure here for it.
-
-> **Changing scopes on an app your team already uses?** Everyone needs to click **Reconnect…** on Jira or Confluence in PrivacyFence Settings afterward — existing tokens keep whatever scopes they were issued with until re-authenticated.
-
-### 4. Get the client id and secret
-
-In the left sidebar, go to **Settings**. Copy the **Client ID** and **Secret**.
-
-### 5. Add it to the organization config bundle
+`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
+stable GitHub Release. It needs only Python 3; no PrivacyFence install is required.
 
 ```bash
 python3 scripts/build_org_bundle.py \
@@ -52,86 +70,47 @@ python3 scripts/build_org_bundle.py \
   -o org_config.json --merge
 ```
 
-Distribute the resulting `org_config.json` to your users.
+`--merge` adds Atlassian to an existing `org_config.json`; drop it if this is the first service in
+the bundle. A bundle's `atlassian` section holds one app, so the desktop installs' bundle gets the
+desktop app's credentials and the organization server's bundle gets the server app's. Build the
+server's bundle with the server flags and install it on the server — see
+[org-mode-setup-guide.md](org-mode-setup-guide.md) for signing and the server flags.
 
-### 6. Org mode needs a *second*, dedicated app
+## Users connect
 
-Unlike Slack/Salesforce/Google, an Atlassian OAuth 2.0 (3LO) app accepts only **one** registered
-Callback URL, full stop — there's no "add one more line" option here. That one URL is already spoken
-for by the loopback callback in step 2 (`http://127.0.0.1:53684/callback`, local desktop installs),
-so an [`org` mode](org-mode-setup-guide.md) deployment
-(`https://your-server-hostname/oauth/callback/atlassian` — see `web/routes_connect.py`'s
-`_GRANT_KEY`, which sends the *same* callback URL for both Jira and Confluence since they're one
-underlying grant) needs an **app of its own**:
+Users install the bundle and click **Authenticate…** next to Jira or Confluence (desktop) or
+**Connect** (organization server), then sign in and click **Accept** on Atlassian's page. Either
+button connects both products. The shared flow is described in
+[connecting-a-service.md](connecting-a-service.md). Atlassian-specific points:
 
-1. Repeat steps 1–4 above to create a second app (e.g. `PrivacyFence (org)`), with its Callback URL
-   set to `https://your-server-hostname/oauth/callback/atlassian` instead.
-2. Build a **separate** `org_config.json` for the server from this second app's client id/secret —
-   don't `--merge` it into the same bundle you hand out to local desktop users, since that bundle's
-   one `atlassian` section can only ever carry one app's credentials, and the server's own bundle
-   also needs the `--mode org`/`--server-*`/`--idp-*` flags from
-   [`org-mode-setup-guide.md` §5](org-mode-setup-guide.md#5-build-the-organization-config-bundle)
-   that a local-install bundle doesn't carry.
-
-If you're only ever running `org` mode (no local desktop installs), you don't need two apps or two
-bundles — just point step 2's Callback URL at the org-mode one from the start.
-
----
-
-## For users
-
-**Local desktop install:**
-
-1. Get `org_config.json` from your IT team and install it via **Organization Config…** in PrivacyFence Settings (if you haven't already for another service — if a config is already installed, click **Update…** in the status prompt).
-2. **Connectors → Jira → Authenticate…** (or **Confluence** — either one triggers the same sign-in and activates both). Your browser opens to Atlassian's consent screen — sign in and click **Accept**.
-3. If your account has access to more than one Atlassian site, PrivacyFence asks you to pick one.
-4. Quit and reopen PrivacyFence to activate the connectors.
-
-**[`org` mode](org-mode-setup-guide.md) deployment** (a server your IT team runs, not a desktop
-install — ask them which applies to you):
-
-1. Visit `https://your-server-hostname/login` and sign in with your organization identity provider.
-2. On the `/connect` page, click **Connect** next to Jira or Confluence (either one triggers the same
-   sign-in and activates both). Your browser opens to Atlassian's consent screen — sign in and click
-   **Accept**.
-3. If your account has access to more than one Atlassian site, the first one is used automatically
-   (org mode doesn't prompt — see `web/routes_connect.py`'s module docstring); ask IT for a
-   differently-scoped account if you need a specific one.
-4. You land back on `/connect` showing both as connected — nothing to quit/reopen, since there's no
-   local app. See [`org-mode-setup-guide.md`
-   §8](org-mode-setup-guide.md#8-first-sign-in-and-connecting-a-service).
-
----
+- **More than one site:** a desktop install asks which site to connect; an organization server
+  connects the first site the account can reach. A user who needs a different site on an
+  organization server needs an Atlassian account limited to that site.
+- The token refreshes itself; users sign in again only when it is revoked or the app's scopes
+  change.
 
 ## Troubleshooting
 
-**"The app's callback URL is invalid" during sign-in** (IT admin)
-For a local desktop install, the Callback URL in the Atlassian app must be exactly
-`http://127.0.0.1:53684/callback` — not `http://localhost:53684/callback`. Atlassian matches the
-redirect URI as a literal string, and PrivacyFence's loopback server always sends `127.0.0.1`. For an
-[`org` mode](org-mode-setup-guide.md) deployment it must instead be exactly
-`https://your-server-hostname/oauth/callback/atlassian` (see [§6](#6-org-mode-needs-a-second-dedicated-app))
-— an Atlassian app can only have one Callback URL, so it's one or the other, never both, on a given
-app.
+**"The app's callback URL is invalid" during sign-in** — the app's Callback URL does not match the
+deployment it is used for: exactly `http://127.0.0.1:53684/callback` for desktop installs, or
+`https://<server>/oauth/callback/atlassian` for an organization server. An app holds only one, so
+check that the bundle contains the right app's credentials.
 
-**"401 Unauthorized" right after authenticating** (IT admin)
-Double-check the **Callback URL** matches the deployment mode this app is for (see the previous
-entry), and that both the Jira API and Confluence API scopes were added under **Permissions**.
+**401 right after connecting** — check the Callback URL (above) and that both the Jira API and the
+Confluence API, with their scopes, are on the app.
 
-**Confluence connects but space/page calls fail with 401 ("scope does not match")** (IT admin)
-The Confluence scopes were added as **classic** scopes instead of **granular**. Confluence's v2 API (used for space listing) rejects classic-scoped tokens outright — re-add the scopes listed above using the granular picker, then have users **Reconnect…** to get a token with the new scopes.
+**Confluence connects, but space or page calls fail with 401 "scope does not match"** — the
+Confluence scopes were added as classic scopes. Add the granular ones listed above, then have users
+**Reconnect…**.
 
-**Jira fails with 401 ("scope does not match") after re-authenticating** (IT admin)
-Jira's scopes were added as **granular** instead of **classic** — or the OAuth app's `scope` request was changed to send granular Jira scope names. Jira needs classic scopes (`read:jira-work`, `write:jira-work`, `read:jira-user`); granular Jira scope names don't map cleanly and reliably 401 even when scopes look "equivalent." Switch Jira back to classic in **Permissions**, then **Reconnect…**.
+**Jira fails with 401 "scope does not match"** — the Jira scopes were added as granular scopes.
+Switch Jira back to the classic scopes listed above, then have users **Reconnect…**.
 
-**`confluence_list_attachments`/`confluence_download_attachment` fail with 401** (IT admin)
-Either the `read:attachment:confluence` scope wasn't added to the OAuth app yet (see step 3 above), or it was, but existing users haven't clicked **Reconnect…** on Confluence yet — a token issued before this scope existed keeps whatever scopes it was issued with. Add the scope if missing, then have affected users **Reconnect…**.
+**`confluence_list_attachments` or `confluence_download_attachment` fail with 401** — the
+`read:attachment:confluence` scope is missing from the app, or the user's token predates it. Add
+the scope if needed, then have the user **Reconnect…**.
 
-**"403 Forbidden" on specific projects or spaces**
-Your Atlassian account does not have access to that project or space. Check your Jira/Confluence permissions in the Atlassian admin console.
+**403 on specific projects or spaces** — the user's Atlassian account has no access to that project
+or space. Check permissions in Jira or Confluence.
 
-**Wrong Atlassian site connected**
-Click **Reconnect…** on Jira or Confluence in PrivacyFence Settings to sign in again and pick a different site.
-
-**Token expired mid-session**
-PrivacyFence refreshes the token automatically in the background. If it still fails, click **Reconnect…** in PrivacyFence Settings.
+**Wrong site connected** — on a desktop install, **Reconnect…** and pick the other site.
