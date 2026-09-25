@@ -363,7 +363,8 @@ class TestSystemRootOverride:
         # session -- exactly the boundary privilege separation exists to
         # hold. Once a real install is provisioned at the platform's actual
         # root, a user-session process redirecting itself elsewhere is the
-        # attack this guards against, not the test hatch the variable is for.
+        # attack this guards against, not the test hatch the variable is for
+        # (ADR 0060).
         real_root = tmp_path / "real"
         _write_marker(real_root, platform_name)
         monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: real_root)
@@ -729,11 +730,11 @@ class TestAuditLayoutBestEffort:
 
 
 class TestPosixImageAudit:
-    """B1: nothing previously verified the daemon/companion image was not
-    user-writable before privilege separation elevated to it. ADR 0002 §5a
-    used to claim ``/Applications`` was root-owned the same way ``/opt`` is
-    -- it's actually ``root:admin drwxrwxr-x``, and a drag-installed ``.app``
-    is normally owned by the installing user. This is the POSIX counterpart
+    """The daemon/companion image must not be user-writable before
+    privilege separation elevates to it. ``/Applications`` is not root-owned
+    the way ``/opt`` is -- it's ``root:admin drwxrwxr-x``, and a
+    drag-installed ``.app`` is normally owned by the installing user -- so
+    this is checked rather than assumed. This is the POSIX counterpart
     of ``TestWindowsLayoutAudit``'s image tests and of
     ``windows_acl.image_problems()`` itself: a ``stat`` walk rather than an
     ACL read, since a mode bit has no inheritance to lean on the way an ACL
@@ -848,7 +849,7 @@ class TestPosixImageAudit:
         assert privilege_separation._posix_image_problems((image,)) == []
 
     def test_checks_every_directory_on_the_way_to_the_image(self, fake_stats):
-        # The other half of B1's "or any directory on the path to it": a
+        # The other half of the check, "or any directory on the path to it": a
         # root-owned, unwritable executable still isn't safe if the bundle
         # holding it can be deleted and replaced wholesale.
         image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
@@ -1571,7 +1572,7 @@ class TestAutoEnableMacos:
         script = tmp_path / "macos_privilege_separation.sh"
         script.write_text("#!/bin/sh\n", encoding="utf-8")
         monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
-        # B2's script-safety check is covered by its own TestMacosAutoEnableScriptProblem
+        # The script-safety check is covered by its own TestMacosAutoEnableScriptProblem
         # below; a script this test writes itself is never root-owned, so it is bypassed
         # here to keep this test about the dispatch behavior alone.
         monkeypatch.setattr(privilege_separation, "_macos_auto_enable_script_problem", lambda _script: None)

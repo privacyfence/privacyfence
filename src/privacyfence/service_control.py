@@ -33,7 +33,7 @@ anything but SYSTEM/Administrators) -- the identical check ``complete_
 per_user_separation()`` already applies before *its* elevation. Skipping
 that check here would make this module a one-shot local privilege
 escalation: an admin-password prompt that a compromised agent could aim at
-a file it can still rewrite.
+a file it can still rewrite (ADR 0058).
 """
 from __future__ import annotations
 

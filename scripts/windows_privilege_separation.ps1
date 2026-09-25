@@ -762,7 +762,7 @@ function Install-DaemonService {
     # the SCM materializes it with the service, gives it its own SID, and
     # grants it the "log on as a service" right itself -- none of which is
     # true for an ordinary account, which would need a password stored
-    # somewhere and a separate LsaAddAccountRights call.
+    # somewhere and a separate LsaAddAccountRights call. See ADR 0059.
     #
     # The spaces after each `=` are sc.exe's own (genuinely strange) syntax,
     # not a typo: the separator is "name= value", and "name=value" is parsed

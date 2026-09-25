@@ -149,7 +149,7 @@ LINUX_SERVICE_ACCOUNT_NAME = "privacyfence"
 # ``tests/unit/test_privilege_separation.py`` asserts they agree. Preferred
 # over ``LocalService`` because that account is shared
 # with every other service that picked it, so ACLs naming it would grant
-# those services access to PrivacyFence's authority files too.
+# those services access to PrivacyFence's authority files too (ADR 0059).
 WINDOWS_SERVICE_NAME = "PrivacyFence"
 WINDOWS_SERVICE_ACCOUNT_NAME = f"NT SERVICE\\{WINDOWS_SERVICE_NAME}"
 # The Windows stand-in for the POSIX service *group*: a local group the
@@ -208,7 +208,7 @@ MARKER_VERSION = 1
 # system_root() below only honours it when the platform's real default root
 # has no marker of its own; once a real install is provisioned there, a
 # user-session process redirecting itself elsewhere is not a test, it's the
-# attack.
+# attack (ADR 0060).
 SYSTEM_ROOT_ENV_VAR = "PRIVACYFENCE_SYSTEM_ROOT"
 
 HANDOFF_DIR_NAME = "handoff"
@@ -392,20 +392,20 @@ class SeparationHandover(PrivilegeSeparationError):
     for; ``daemon_main.main()`` catches this one first and exits *0*,
     because nothing went wrong -- see that call site.
 
-    Why this exists at all: before it, a packaged daemon that repaired its
-    own install went on to serve from the layout it had just separated,
-    **as the human**. ``check_runtime_identity()`` -- the gate that exists
-    to stop precisely that -- had already run and passed, several steps
-    earlier, when the install was still unseparated. So the process carried
-    on into a root whose ``authority/`` is now ``0700`` to the service
-    account, could not read ``config/settings.yaml`` through it, and
-    ``load_config()``'s first-run behaviour seeded a fresh default policy
-    over the real one: the silent policy reset ``check_runtime_identity()``
-    is written to prevent, arrived at by a route it could not see. On
-    Windows it also raced the service ``enable`` had just started for the
-    same port and the same control pipe, which is the collision
-    ``tests/integration/test_windows_packaged_smoke.py`` gave up its
-    unseparated scenario over.
+    Without it, a packaged daemon that repaired its own install would go on
+    to serve from the layout it had just separated, **as the human**.
+    ``check_runtime_identity()`` -- the gate that exists to stop precisely
+    that -- has already run and passed, several steps earlier, while the
+    install was still unseparated. The process would carry on into a root
+    whose ``authority/`` is now ``0700`` to the service account, fail to
+    read ``config/settings.yaml`` through it, and ``load_config()``'s
+    first-run behaviour would seed a fresh default policy over the real
+    one: the silent policy reset ``check_runtime_identity()`` is written to
+    prevent, arrived at by a route it cannot see. On Windows it would also
+    race the service ``enable`` has just started for the same port and the
+    same control pipe, which is why
+    ``tests/integration/test_windows_packaged_smoke.py`` has no unseparated
+    scenario.
     """
 
 
@@ -776,8 +776,8 @@ def service_account_uid() -> int | None:
     ``_current_user_security_attributes()`` skips a missing Windows trustee
     rather than crashing).
 
-    Why this exists: ``web/control_channel.py``'s companion
-    channel is the one place ``SO_PEERCRED``/``LOCAL_PEERCRED``'s uid is
+    ``web/control_channel.py``'s companion channel needs it: that channel
+    is the one place ``SO_PEERCRED``/``LOCAL_PEERCRED``'s uid is
     actually meaningful (ADR 0002 decision 6 is explicit that it is *not*,
     everywhere else, while the companion and the agent share a uid) --
     once separated, the daemon is the one end of that channel that has
@@ -842,8 +842,8 @@ def check_runtime_identity() -> None:
             if layout is not None
             else ""
         )
-        # Explicitly quoted rather than ``!r``: every account name here is a
-        # Windows one on Windows (``NT SERVICE\PrivacyFence``), and
+        # Explicitly quoted rather than ``!r``: on Windows every account name
+        # here contains a backslash (``NT SERVICE\PrivacyFence``), and
         # repr would double each backslash -- so the message would name an
         # account that does not exist for the one reader most likely to paste
         # it into a command.
@@ -1205,7 +1205,7 @@ def _macos_auto_enable_script_problem(script: Path) -> str | None:
     special, and a source checkout is never root-owned. Running whatever is
     at that path as root on the strength of a routine-looking password
     dialog would hand an agent that can edit either of those a one-shot
-    local privilege escalation, so this refuses unless the resolved script
+    local privilege escalation (ADR 0058), so this refuses unless the resolved script
     itself is owned by root and not group- or world-writable, and -- for a
     packaged install, where there is a signature to check at all -- unless
     the app bundle's signature still verifies. A source checkout can never
@@ -2066,7 +2066,7 @@ def _windows_script_elevation_problem(script: Path) -> str | None:
     to compare, so the question is the one ``windows_acl.image_problems()``
     asks of the daemon's own image and for the same reason: whether anything
     outside SYSTEM and Administrators can rewrite what is about to run
-    elevated."""
+    elevated (ADR 0058)."""
     from . import windows_acl
 
     aces = windows_acl.read_dacl(script)
