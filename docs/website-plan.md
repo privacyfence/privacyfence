@@ -31,7 +31,7 @@ questionnaire answers (2026-09-23); a source-code audit of every document (2026-
 - [Responsive layout](#responsive-layout)
 - [Analytics](#analytics-google-analytics-4-behind-consent)
 - [Guardrails](#guardrails)
-- [Canonical product description](#canonical-product-description-draft-for-review)
+- [Canonical product description](#canonical-product-description)
 - [Waves](#waves)
 - [Release history page](#release-history-page-releases-365)
 - [Measurement](#measurement)
@@ -48,7 +48,7 @@ question is answered. The PR says which placeholders are waiting.
 
 | # | Question | Blocks | Default if unanswered |
 |---|---|---|---|
-| Q1 | Approve the [canonical product description](#canonical-product-description-draft-for-review), homepage `<title>` and H1, or edit them. | Wave 0 merge | The draft as written. |
+| Q1 | ~~Approve the canonical product description, homepage `<title>` and H1.~~ **Answered 2026-09-25:** new wording, H1 and tagline, see [Canonical product description](#canonical-product-description). | — | — |
 | Q2 | **Imprint:** your name as it should appear, and a postal or service address. | Wave 0 merge | None. `/imprint/` cannot ship without it. |
 | Q3 | **GA4 measurement ID** (`G-…`, from M4). | GA going live, not the Wave 0 merge | The consent banner and GA wiring ship with the ID empty and GA disabled; the banner is not shown until an ID is set. Setting the ID later is a one-line PR. |
 | Q4 | **Repository description** for GitHub's About box (M6). Proposed: *"Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more."* | Nothing in the repo | The proposal. |
@@ -165,7 +165,7 @@ only so a later reader can tell a deliberate choice from a default.
 | A3 | Success = **installer downloads** (already counted), **search impressions/clicks**, **GitHub stars**. |
 | A4 | Minimal maintainer writing time. **Claude drafts all copy and all doc rewrites; the maintainer reviews.** |
 | B1 | Category: **"privacy and approval gateway for AI assistants"** (not "AI governance"). |
-| B2 | "Give AI assistants access. Not authority." becomes the **tagline**; the H1 names the category. |
+| B2 | H1 **"AI access without giving AI the keys."**, tagline **"Approve the sensitive. Automate the routine."** (Q1, 2026-09-25; replaces the earlier "Give AI assistants access. Not authority."). The category (B1) is carried by the `<title>`, the description's first sentence and the JSON-LD. |
 | B3 | Limitations (ADR 0025) get a **named section on `/security/`**, linked from `/enterprise/` and the footer. |
 | B4 | Organization mode is presented as **production-ready, first-class**. |
 | B5 | **English only.** |
@@ -518,23 +518,33 @@ Also: no third-party resources on the site apart from Google Analytics, which lo
 consent (see [Analytics](#analytics-google-analytics-4-behind-consent)). Fonts, images, scripts and
 the consent banner itself stay self-hosted, as today. Guardrail 13 enforces both halves.
 
-## Canonical product description (draft for review)
+## Canonical product description
+
+Approved by the maintainer 2026-09-25 (Q1). Guardrail 1 holds README and the homepage to this
+text verbatim; change it here first.
 
 > PrivacyFence is an open-source privacy and approval gateway between AI assistants and your
 > business systems. It connects MCP-compatible assistants such as Claude Desktop and Claude Code to
-> Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram and more, and decides
-> independently of the AI what the assistant may see and do: sensitive reads and consequential
-> actions wait for a person's approval, routine requests can be automated by policy, optional PII
-> detection runs locally before personal data reaches the AI, and every decision is audited.
+> Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram, and more.
 >
-> It runs on an employee's own computer (macOS, Windows, Linux) or as a central deployment on
-> infrastructure the organization controls, which also lets web clients such as claude.ai connect.
-> Connector credentials stay with PrivacyFence, never with the AI client, and no data passes through
-> PrivacyFence-operated servers — there are none.
+> PrivacyFence enforces, independently of the AI, what an assistant may see and do. Sensitive reads
+> and consequential actions require human approval, while routine requests can be automated by
+> policy. Optional PII detection runs locally before personal data reaches the AI, and every
+> decision is audited.
+>
+> PrivacyFence runs on an employee’s own computer (macOS, Windows, or Linux) or as a central
+> deployment on infrastructure the organization controls, allowing web clients such as claude.ai
+> to connect as well. Connector credentials stay with PrivacyFence, never with the AI client, and
+> no data passes through PrivacyFence-operated servers — there are none.
 
-Homepage: `<title>PrivacyFence — privacy and approval gateway for AI assistants (MCP)</title>`,
-H1 "The approval gateway between AI assistants and your business systems.", tagline
-"Give AI assistants access. Not authority."
+Homepage:
+
+- `<title>`: `PrivacyFence — privacy and approval gateway for AI assistants (MCP)`. The title
+  carries the B1 category and the search terms, because the H1 no longer does.
+- H1: **"AI access without giving AI the keys."**
+- Tagline: **"Approve the sensitive. Automate the routine."**
+- "Give AI assistants access. Not authority." is retired. Its only copy is today's homepage H1
+  (`website/index.html`), which Wave 0 replaces.
 
 ## Waves
 
