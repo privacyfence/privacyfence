@@ -2710,6 +2710,26 @@ class TestWindowsServiceHost:
         assert "$process.StandardError.ReadToEndAsync()" in script
         assert script.index("ReadToEndAsync") < script.index("$process.WaitForExit()")
 
+    def test_a_refused_start_puts_the_reason_in_the_event_log_message(self):
+        # A service has no stderr, and the refusals that matter happen before
+        # the daemon has a log file: the Event Log entry is the one place left.
+        message = windows_service.startup_failure_message(1, "Configuration error: bad settings.yaml")
+        assert message == "PrivacyFence exited with status 1: Configuration error: bad settings.yaml"
+        assert "see the daemon's own log" in windows_service.startup_failure_message(1, None)
+
+    def test_the_installer_registers_and_removes_the_event_log_source(self):
+        # `sc create` registers no Event Log source, so every entry the service
+        # wrote read as empty and Get-WinEvent refused to filter on it.
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        assert r"Services\EventLog\Application\$ServiceName" in script
+        assert "'servicemanager*.pyd'" in script
+        assert "-Name 'EventMessageFile'" in script
+        enable = script[script.index("function Invoke-Enable"):]
+        assert "\n    Register-EventSource\n    Start-DaemonService\n" in enable
+        uninstall = script[script.index("function Invoke-Uninstall"):]
+        assert "Unregister-EventSource" in uninstall[: uninstall.index("if (-not $Purge)")]
+
     def test_the_module_imports_without_pywin32(self):
         # Deliberate: the ServiceFramework subclass is built inside a
         # function, so importing this module (from a test, or from

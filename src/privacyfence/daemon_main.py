@@ -325,6 +325,40 @@ def _bootstrap_config(resolved: str) -> None:
     atomic_write_bytes(resolved, example.read_bytes())
 
 
+# Warnings raised before setup_logging() has given the root logger a handler: the local principal's
+# load_config() runs first, and a warning logged then would reach no file. setup_logging() logs and
+# clears these; a caller that runs after it (_load_principal_settings) flushes them itself.
+_deferred_warnings: list[str] = []
+
+
+def _flush_deferred_warnings() -> None:
+    while _deferred_warnings:
+        logger.warning("%s", _deferred_warnings.pop(0))
+
+
+def _drop_converted_v1_sections(config: dict[str, Any], resolved: str) -> None:
+    """Remove the v1 policy sections an earlier release already converted, and persist that.
+
+    4.1 through 4.4 converted ``auto_accept_rules``/``auto_accept_grants`` into ``auto_accept:`` on
+    startup and left the originals on disk, so every install that ran one of them would otherwise
+    be refused by ``reject_v1_sections`` below. A failed write is not fatal: the in-memory config is
+    already clean, and the next start tries again (ADR 0047).
+    """
+    removed = policy_store.drop_converted_v1_sections(config)
+    if not removed:
+        return
+    names = ", ".join(removed)
+    try:
+        atomic_write_text(resolved, yaml.safe_dump(config, default_flow_style=False, allow_unicode=True))
+    except OSError as exc:
+        _deferred_warnings.append(f"{resolved}: ignoring already-converted {names}; could not rewrite the file: {exc}")
+        return
+    _deferred_warnings.append(
+        f"{resolved}: removed {names}, left behind by an earlier version's conversion to the "
+        "auto_accept: section, which already holds those rules"
+    )
+
+
 def load_config(config_path: str) -> dict[str, Any]:
     resolved = _resolve_path(config_path)
     if not os.path.exists(resolved):
@@ -333,6 +367,7 @@ def load_config(config_path: str) -> dict[str, Any]:
         config = yaml.safe_load(fh) or {}
     if not isinstance(config, dict):
         raise ValueError(f"Config file {resolved} did not parse to a mapping")
+    _drop_converted_v1_sections(config, resolved)
     policy_store.reject_v1_sections(config, resolved)
     return config
 
@@ -602,6 +637,7 @@ def setup_logging(config: dict[str, Any]) -> None:
         root.addHandler(h)
 
     logger.info("Logging initialized → %s", log_file)
+    _flush_deferred_warnings()
 
 
 # ---------------------------------------------------------------------------- #
@@ -977,6 +1013,7 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     """
     resolved_path = _resolve_authority_path("config/settings.yaml")
     cfg = load_config(resolved_path)
+    _flush_deferred_warnings()
     init_config_path(resolved_path)
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
     install_wide = install_wide_config if install_wide_config is not None else cfg
@@ -2050,6 +2087,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+# Why main() last returned 1, for a caller with no stderr to read it from: a Windows service has
+# none, so windows_service puts this in the Event Log entry for the failed start.
+_last_startup_error: str | None = None
+
+
+def last_startup_error() -> str | None:
+    return _last_startup_error
+
+
+def _note_startup_error(message: str) -> None:
+    global _last_startup_error
+    _last_startup_error = message
+
+
+def _refuse_to_start(message: str, *, logged: bool = False) -> int:
+    """Record ``message`` as the reason main() is returning 1, and print it to stderr.
+
+    ``logged`` once setup_logging() has run, to put it in the log file too -- the same pair the
+    "Fatal error" path writes. Before that there is no log file to write to (settings.yaml names
+    it), which is why the recorded reason is what a Windows service reports instead.
+    """
+    _note_startup_error(message)
+    if logged:
+        logger.error("%s", message)
+    print(message, file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     # A windowed Windows build started with no console has no std streams
     # at all -- see std_streams.py. src/_daemon_entry.py already calls this
@@ -2091,8 +2156,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         privilege_separation.check_runtime_identity()
     except privilege_separation.PrivilegeSeparationError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return 1
+        return _refuse_to_start(f"Configuration error: {exc}")
 
     oauth_flag = (
         args.gmail_oauth or args.drive_oauth or args.contacts_oauth
@@ -2104,8 +2168,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
     except (FileNotFoundError, ValueError) as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return 1
+        return _refuse_to_start(f"Configuration error: {exc}")
 
     setup_logging(config)
 
@@ -2156,8 +2219,7 @@ def main(argv: list[str] | None = None) -> int:
             print(str(handover))
             return 0
         except privilege_separation.PrivilegeSeparationError as exc:
-            print(f"Configuration error: {exc}", file=sys.stderr)
-            return 1
+            return _refuse_to_start(f"Configuration error: {exc}", logged=True)
         # ADR 0003 decision 7's startup-log half of the developer-path
         # disclosure -- see privilege_separation.dev_unseparated_notice()'s
         # own docstring; the /security page half is
@@ -2169,6 +2231,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         logger.error("Fatal error: %s", exc, exc_info=True)
         print(f"Fatal error: {exc}", file=sys.stderr)
+        _note_startup_error(f"Fatal error: {exc}")
         return 1
 
 

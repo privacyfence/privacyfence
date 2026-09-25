@@ -382,6 +382,40 @@ def _service_config(name: str = WINDOWS_SERVICE_NAME) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+EVENT_SOURCE_KEY = rf"SYSTEM\CurrentControlSet\Services\EventLog\Application\{WINDOWS_SERVICE_NAME}"
+
+
+def _event_message_file() -> str | None:
+    """The EventMessageFile `enable` registered for the service's Event Log
+    source, or None if the source is not registered."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, EVENT_SOURCE_KEY) as key:
+            return str(winreg.QueryValueEx(key, "EventMessageFile")[0])
+    except FileNotFoundError:
+        return None
+
+
+def _service_event_messages() -> list[str]:
+    """The rendered text of the service's recent Application-log entries.
+
+    Filtering by provider name is itself part of the check: Get-WinEvent
+    rejects a -FilterHashtable naming a provider Windows has no registration
+    for, which is how an unregistered source first showed up on a real
+    install."""
+    result = subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "Get-WinEvent -FilterHashtable @{LogName='Application'; "
+            f"ProviderName='{WINDOWS_SERVICE_NAME}'}} -MaxEvents 20 | ForEach-Object {{ $_.Message }}",
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, f"Get-WinEvent failed:\n{result.stdout}\n{result.stderr}"
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def _local_group_members(group: str) -> list[str]:
     result = subprocess.run(["net", "localgroup", group], capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
@@ -1265,6 +1299,16 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
             f"the {WINDOWS_SERVICE_NAME} service does not run as {WINDOWS_SERVICE_ACCOUNT_NAME}:\n{config}"
         )
 
+        # ── The service's Event Log source (Register-EventSource). Without
+        # it every entry the service writes -- including why it refused to
+        # start -- reads as an empty message. ─────────────────────────────
+        message_file = _event_message_file()
+        assert message_file is not None, f"HKLM\\{EVENT_SOURCE_KEY} was not registered"
+        assert message_file.lower().startswith(str(install_dir).lower()), (
+            f"the Event Log source names a message file outside the install: {message_file}"
+        )
+        assert Path(message_file).is_file(), f"the registered message file does not exist: {message_file}"
+
         # ── The per-user half (ADR 0003 decision 3), closed at install time
         # because Setup had a real account to resolve. ──────────────────────
         members = [member.lower() for member in _local_group_members(WINDOWS_SERVICE_GROUP_NAME)]
@@ -1315,10 +1359,17 @@ async def test_windows_uninstall_keeps_data_and_purge_deletes_it(tmp_path):
     base_url, mcp_token_before = _wait_for_separated_service()
     await _assert_separated_service_serves_mcp(base_url, mcp_token_before)
     settings_before = SEPARATED_SETTINGS_PATH.read_text(encoding="utf-8")
+    # The service has started, so it has written at least its start event,
+    # and with the source registered that event reads as text.
+    messages = _service_event_messages()
+    assert any(WINDOWS_SERVICE_NAME in message for message in messages), (
+        f"the {WINDOWS_SERVICE_NAME} service's Event Log entries render no text: {messages}"
+    )
 
     # ── Remove: data, marker and group stay ──────────────────────────────
     _silent_uninstall(install_dir)
     assert _service_config() is None, f"the {WINDOWS_SERVICE_NAME} service survived uninstall"
+    assert _event_message_file() is None, "the Event Log source outlived the program files it names"
     assert SEPARATED_SETTINGS_PATH.read_text(encoding="utf-8") == settings_before
     assert SEPARATED_MCP_TOKEN_PATH.read_text(encoding="utf-8").strip() == mcp_token_before
     assert MARKER_PATH.is_file(), f"{MARKER_PATH} is gone after a plain uninstall"
