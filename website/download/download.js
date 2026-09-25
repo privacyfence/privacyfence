@@ -140,6 +140,15 @@
     // The filename is the manifest's, not a guess -- and naming it in the accessible label means
     // a screen-reader user knows what they are about to get, not just "Download".
     link.setAttribute('aria-label', `Download ${spec.name}: ${artifact.filename}`);
+    // Which platform people pick, for GA4 (site.js). A no-op unless the visitor accepted
+    // analytics; the Worker's own cookieless counter stays the full count either way.
+    link.addEventListener('click', () => {
+      window.pfAnalytics?.event('download_click', {
+        platform: artifact.platform || artifact.id,
+        architecture: artifact.architecture || '',
+        channel,
+      });
+    });
     card.append(link);
 
     const meta = document.createElement('p');

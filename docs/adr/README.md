@@ -153,3 +153,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0045](0045-the-windows-installer-ends-its-own-processes-and-force-closes-the-rest.md) | The Windows installer ends its own processes, and RestartManager force-closes whatever is left | Accepted |
 | [0046](0046-release-ci-pins-codesigntool-by-version-and-sha256.md) | Release CI pins eSigner CodeSignTool to one version and its SHA-256, not "latest" | Accepted |
 | [0047](0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md) | v1 policy sections an earlier release already converted are removed at startup, not refused | Accepted |
+| [0048](0048-every-crawler-is-allowed-including-ai-training.md) | privacyfence.eu allows every crawler, AI search and AI training included | Accepted |
+| [0049](0049-website-css-is-plain-modern-css-without-a-framework.md) | The website's CSS is plain modern CSS, with no framework | Accepted |
+| [0050](0050-website-analytics-is-ga4-behind-consent.md) | Website analytics is GA4, loaded only after consent; Google is the only search tooling | Accepted |
