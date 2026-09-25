@@ -39,3 +39,27 @@ export function channelForVersion(version: string): Channel {
   const stage = match[4];
   return stage ? STAGE_TO_CHANNEL[stage]! : "stable";
 }
+
+const STAGE_RANK: Record<string, number> = { a: 0, b: 1, rc: 2 };
+
+/**
+ * Orders two release versions: negative if `a` is older, positive if newer, 0 if equal.
+ * major.minor.patch first, then stage (a stable version above its own rc, beta and alpha), then
+ * stage number -- the same order as website/releases/releases.js and download.js. Both must be
+ * versions `channelForVersion` accepts; it throws the same way for anything else.
+ */
+export function compareVersions(a: string, b: string): number {
+  const keyA = versionKey(a);
+  const keyB = versionKey(b);
+  for (let i = 0; i < keyA.length; i += 1) {
+    if (keyA[i] !== keyB[i]) return keyA[i]! - keyB[i]!;
+  }
+  return 0;
+}
+
+function versionKey(version: string): number[] {
+  channelForVersion(version); // throws for a non-release version, with the same messages
+  const match = VERSION_RE.exec(version.trim())!;
+  const stage = match[4];
+  return [Number(match[1]), Number(match[2]), Number(match[3]), stage ? STAGE_RANK[stage]! : 3, Number(match[5] ?? 0)];
+}

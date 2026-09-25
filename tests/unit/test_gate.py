@@ -3235,50 +3235,61 @@ class TestPiiAndAuditWorkOffTheEventLoop:
     used to run inline on
     gated_call's own coroutine -- synchronous, CPU-bound-ish work that
     blocked every other concurrently-dispatched request on the IPC server's
-    single event loop for however long it took. Proven here the standard
-    way: a slow stand-in for each, run concurrently with a ticker coroutine
-    that must keep making progress throughout -- if the slow call still ran
-    inline, the ticker would freeze for its whole duration instead.
+    single event loop for however long it took.
+
+    Proven without wall-clock thresholds, which a stalled CI runner can miss
+    either way: the slow stand-in waits for a ticker coroutine on the event
+    loop to run while the stand-in is in progress. Off the loop, the ticker
+    runs and releases it at once. Inline, nothing else can run on the loop
+    while it waits, so it always times out.
     """
 
     @staticmethod
-    async def _ticks_while(coro) -> list[float]:
-        ticks: list[float] = []
+    async def _loop_ran_during_call(monkeypatch, target, name, returns) -> list[bool]:
+        """Replaces `target.name` with a stand-in that returns `returns` once
+        the event loop has run concurrently with it (or after a timeout),
+        runs gated_call, and returns whether each call saw the loop run."""
+        started = threading.Event()
+        loop_ran = threading.Event()
+        results: list[bool] = []
+
+        def stand_in(*args, **kwargs):
+            started.set()
+            results.append(loop_ran.wait(timeout=2.0))
+            return returns
+
+        monkeypatch.setattr(target, name, stand_in)
 
         async def ticker():
+            # Only a tick after the stand-in started counts: gated_call may
+            # yield to the loop earlier, before it reaches the stand-in.
             while True:
-                ticks.append(time.monotonic())
+                if started.is_set():
+                    loop_ran.set()
                 await asyncio.sleep(0.01)
 
         ticker_task = asyncio.create_task(ticker())
         try:
-            await coro
+            await gate.gated_call(**base_kwargs(gate="review"))
         finally:
             ticker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await ticker_task
-        return ticks
+        return results
 
     async def test_detect_pii_categories_does_not_block_concurrent_tasks(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "rule")))
-        monkeypatch.setattr(gate, "detect_pii_categories", lambda text: time.sleep(0.15) or [])
 
-        ticks = await self._ticks_while(gate.gated_call(**base_kwargs(gate="review")))
+        results = await self._loop_ran_during_call(monkeypatch, gate, "detect_pii_categories", [])
 
-        # >5 ticks in 0.15s (a 0.01s ticker interval) means the event loop
-        # kept running throughout -- inline, blocked for the whole sleep, it
-        # would show at most one or two.
-        assert len(ticks) > 5
+        assert results and all(results)
 
     async def test_recent_matches_does_not_block_concurrent_tasks(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "rule")))
-        monkeypatch.setattr(
-            get_audit_logger(), "recent_matches", lambda *a, **k: time.sleep(0.15) or 0
-        )
 
-        ticks = await self._ticks_while(gate.gated_call(**base_kwargs(gate="review")))
+        results = await self._loop_ran_during_call(monkeypatch, get_audit_logger(), "recent_matches", 0)
 
-        assert len(ticks) > 5
+        assert results and all(results)
 
 
 class TestCancellation:
