@@ -39,7 +39,7 @@ under a key derived from the token itself rather than one this daemon keeps.
 "Just sign in again" is a fair price for a human at a browser, but a
 *scheduled* tool call has nobody present to complete an IdP redirect, so
 losing the refresh chain turned a restart into an outage for exactly the
-callers that cannot recover on their own. See that module's docstring for
+callers that cannot recover on their own (ADR 0072). See that module's docstring for
 why sealing to the bearer is not the same trade as encrypting at rest under
 a daemon-held key, and for what is deliberately left in the clear.
 

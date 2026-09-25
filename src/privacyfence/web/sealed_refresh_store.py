@@ -15,7 +15,7 @@ buys nothing the refresh token doesn't already buy. Browser sessions
 (``org_session.py``) stay in memory too: their whole point is that a human
 is sitting in front of them, and that human can sign in again. What survives
 a restart here is exactly the credential whose loss needs a human who isn't
-there.
+there (ADR 0072).
 
 Sealed, not encrypted-at-rest
 -----------------------------
@@ -23,7 +23,7 @@ The obvious implementation -- one store encrypted under a key the daemon
 holds -- does not actually buy what it appears to. The natural place for
 that key is next to the data (an env var, the same ``org_dir()``, the host
 keyring), so anyone who can read the token file can typically also read the
-key. It moves the secret; it doesn't protect it.
+key. It moves the secret; it doesn't protect it (ADR 0072).
 
 So no key is stored at all. Each record is encrypted with AES-256-GCM under
 a key derived by HKDF-SHA256 from *the refresh token itself* -- the same

@@ -35,10 +35,10 @@ strong as that secret's file permissions -- and a chain doesn't get
 stronger by hardening its middle (ADR 0002's own framing): anything on the
 machine that could read the file could reach the endpoint too, agent
 included. So ``web/control_channel.py``'s ``ControlChannelServer`` -- a Unix domain
-socket on macOS/Linux, an ACL'd named pipe on Windows -- is now the only way
+socket on macOS/Linux, an ACL'd named pipe on Windows -- is the only way
 to mint a code on demand, and it isn't reachable over the loopback port a
-browser (or a page's own ``fetch()``) can speak at all. See that module's
-own docstring for the full reasoning.
+browser (or a page's own ``fetch()``) can speak at all (ADR 0002 decision
+2). See that module's own docstring for the full reasoning.
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ DEFAULT_ABSOLUTE_TIMEOUT_SECONDS = 24 * 60 * 60
 # is everything else: a bare ``MINT``, or a code that reached a browser by
 # some route this daemon cannot attribute to a person. Viewing is unchanged
 # either way; approving a decision, and every _SENSITIVE_ACTIONS settings
-# change, requires ``human``.
+# change, requires ``human`` (ADR 0062).
 #
 # What this is not: authentication of the companion. Companion and agent
 # share an OS user, so an agent that binds the companion's own address before
@@ -263,8 +263,8 @@ def authenticated(request: Request, sessions: LocalSessionStore) -> bool:
 
 
 def resolve_principal(request: Request, sessions: LocalSessionStore) -> Principal | None:
-    """The small resolve-or-reject helper alongside ``authenticated()`` above
-    (PSC-2b): ``current_principal()`` when the session cookie is live, else
+    """The small resolve-or-reject helper alongside ``authenticated()`` above:
+    ``current_principal()`` when the session cookie is live, else
     ``None`` -- the same ``Principal | None`` shape web/org_session.py's own
     ``authenticated()`` already returns, so web/routes_approvals.py's merged
     route builder can treat both modes' auth gate identically (``resolve_principal(request)``,
