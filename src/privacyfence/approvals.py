@@ -1,36 +1,30 @@
-"""Deferred-approval registry: the domain object P3 adds on top of gate.py's
-existing decision loop.
+"""Deferred-approval registry: the domain object on top of gate.py's
+decision loop.
 
-Principal dimension (P9, not P6/P7/P8): ``approval_ui.py``'s own module
-docstring already promised this -- "``WebApprovalUI`` stays a true
-singleton deliberately ... in org mode one instance still serves every
-principal (its ``PendingApprovalRegistry`` gains the principal dimension
-internally instead)" -- but nothing actually needed it until now, since
-``/approvals`` was never mounted in org mode through P8 (web/server.py's
-own module docstring). web/routes_approvals.py's org-mode routes (P9) are
-what finally reach this registry from more than one principal at once, so every
-``PendingApproval`` now stamps ``principal_id`` at registration time (from
-``current_principal()`` -- the same contextvar pattern every other
-per-principal registry in this codebase already uses, so gate.py's own
-call sites into ``register_or_coalesce``/``register_confirm`` need no
-signature change), and every read/write method below takes an optional
-``principal_id`` to filter or authorize against. ``None`` (the default
-everywhere) means "no filter" -- gate.py's own internal calls, and every
-pre-P9 caller/test, keep seeing every approval regardless of principal,
-which is also exactly correct for local mode's single implicit principal.
-web/routes_approvals.py's org-mode routes are the one real caller that ever
-passes a real ``principal_id``, and they do so on every method they call (§10.5: "every
-approval, card, preview, decision ... read is authorized against
-current_principal()").
+Principal dimension: ``WebApprovalUI`` stays a true singleton deliberately
+(``approval_ui.py``'s own module docstring) -- in org mode one instance
+serves every principal, so this registry carries the principal dimension
+internally instead. web/routes_approvals.py's org-mode routes reach it from
+more than one principal at once, so every ``PendingApproval`` stamps
+``principal_id`` at registration time (from ``current_principal()`` -- the
+same contextvar pattern every other per-principal registry in this codebase
+uses, so gate.py's own call sites into
+``register_or_coalesce``/``register_confirm`` need no principal argument),
+and every read/write method below takes an optional ``principal_id`` to
+filter or authorize against. ``None`` (the default everywhere) means "no
+filter" -- gate.py's own internal calls keep seeing every approval
+regardless of principal, which is also exactly correct for local mode's
+single implicit principal. web/routes_approvals.py's org-mode routes are the
+one real caller that ever passes a real ``principal_id``, and they do so on
+every method they call: every approval, card, preview or decision read is
+authorized against ``current_principal()``.
 
-The coalescing/ledger key also gained a principal dimension for the same
-reason web/mcp_dispatch.py's retry-dedupe cache did at P7: ``(connector,
-tool, canonical(args))`` alone collides across two principals who happen to
-call the same tool with the same arguments, which P7's own fix note
-already named as exactly this codebase's recurring failure mode once a
-second principal
-becomes real. ``_by_key`` is keyed on ``(principal_id, dedupe_key)`` here
-for the same reason.
+The coalescing/ledger key carries the principal too, for the same reason
+web/mcp_dispatch.py's retry-dedupe cache does: ``(connector, tool,
+canonical(args))`` alone collides across two principals who happen to call
+the same tool with the same arguments, and one would be handed the other's
+decision. ``_by_key`` is keyed on ``(principal_id, dedupe_key)`` here for
+the same reason.
 
 Two kinds of caller reach this module:
 
@@ -43,10 +37,8 @@ Two kinds of caller reach this module:
   ``consume_ledger`` and releases without a second prompt.
 - web_approval_ui.py, for *every* card and confirmation dialog it shows
   (whether or not it's the "main" decision for some gated call) -- see
-  ``register_confirm``/``answer``/``get``/``list_pending``, which is the
-  multi-item store P1's own module docstring already named as this module's
-  future job ("``current()`` below is a single slot, not a registry... it
-  becomes a real per-principal registry (approvals.py) in P3").
+  ``register_confirm``/``answer``/``get``/``list_pending``, the multi-item
+  store behind every card the browser shows.
 
 One registry instance backs both uses (``WebApprovalUI.deferred_registry``),
 so a card gate.py is waiting on and a card a human is looking at in the
@@ -60,12 +52,13 @@ confirmation -- see gate.py's own module docstring):
 - ``answer()`` resolves one *UI step* -- whatever card or confirmation is
   currently on screen. It never touches the ledger; it only wakes up
   whichever thread is blocked showing that one dialog (WebApprovalUI's
-  ``show_popup``/``show_read_popup``/the two confirmation methods, exactly
-  as blocking as they were pre-P3 -- see that module).
+  ``show_popup``/``show_read_popup``/the two confirmation methods, which
+  block until answered -- see that module).
 - ``finalize()`` resolves the *whole approval* -- the outcome gate.py's own
   interaction driver arrives at after however many UI steps it took. Only
   finalize() writes the decision ledger (keyed by
-  ``(connector, tool, canonical(args))``, single-use for writes per D3) and
+  ``(connector, tool, canonical(args))``, single-use for writes, so one
+  approval never releases a second identical write) and
   wakes ``wait_async()`` -- the thing gate.py's hold window actually awaits.
 
 Both events are ``threading.Event`` rather than ``asyncio.Event``: this
@@ -95,9 +88,8 @@ from .principal import current_principal
 
 logger = logging.getLogger(__name__)
 
-# Defaults per D3 -- "what P3's
-# beta measures against", all overridable by daemon_main.py from
-# settings.yaml's web.approvals.* keys.
+# Defaults, all overridable by daemon_main.py from settings.yaml's
+# web.approvals.* keys.
 DEFAULT_HOLD_WINDOW_SECONDS = 30.0
 DEFAULT_PENDING_TTL_SECONDS = 15 * 60.0
 DEFAULT_LEDGER_TTL_SECONDS = 5 * 60.0
@@ -118,7 +110,7 @@ DEFAULT_MAX_PENDING = 50
 # at once, which is harmless since it's the only principal there is.
 DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 
-# Approval binder, Phase 4: on by default. A sequential agent that issues
+# Adaptive hold, on by default. A sequential agent that issues
 # gated calls one at a time never fills the binder -- it stalls the full
 # hold_window on call #1, gets a pending result, and only issues call #2
 # after relaying that and waiting on a human. Once this principal already
@@ -132,8 +124,7 @@ DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 DEFAULT_ADAPTIVE_HOLD = True
 
 # Every UI-step decision a card/confirmation can resolve to -- the same
-# vocabulary approval_popup.py's native bridge and approval_window_html.py's
-# own JS already use. "auto_accepted" is never produced by a UI step (no
+# vocabulary approval_window_html.py's own JS uses. "auto_accepted" is never produced by a UI step (no
 # button says that); it's finalize()'s own sentinel for "a rule appeared
 # that already covers this, so no human ever needed to answer" -- gate.py's
 # interaction driver returns it directly to finalize() without going through
@@ -141,16 +132,14 @@ DEFAULT_ADAPTIVE_HOLD = True
 CARD_RESULTS = ("accept", "deny", "accept_all")
 CONFIRM_RESULTS = ("confirm", "cancel")
 
-# The approval binder's own batch decide endpoint (Phase 2 of the binder
-# plan): a deliberately narrower vocabulary than CARD_RESULTS above --
+# The approval binder's own batch decide endpoint: a deliberately narrower vocabulary than CARD_RESULTS above --
 # "accept_all" needs its own scoped rule-creation confirmation (a second UI
 # step that only exists per-item), and is never offered from the list, so a
 # batch item is decided as a plain accept or a deny only. See
 # PendingApprovalRegistry.answer_batch's own docstring.
 BATCH_RESULTS = ("accept", "deny")
 
-# Approval binder (Phase 1 of 5deef1d8:docs/approval-list-ui-ux.md's future batching
-# work): every value PendingApproval.kind can take -- "card" (web_prompt.
+# Every value PendingApproval.kind can take -- "card" (web_prompt.
 # block_on_card), "confirm" (block_on_confirm), "choice" (block_on_choice).
 # PendingApproval.is_batchable()/blocked_reason() below classify by explicit
 # membership in _BATCHABLE_KINDS/_NON_BATCHABLE_KINDS, never by complement
@@ -188,8 +177,7 @@ class TooManyPendingApprovalsError(RuntimeError):
 def canonical_key(connector: str, tool: str, args: dict[str, Any] | None) -> str:
     """The decision-ledger / coalescing key: ``(connector, tool,
     canonical(args))``. Same shape mcp_dispatch.py's own retry-dedupe key
-    uses (and ipc_server.py's did, before P5 retired it) -- already
-    retry-stable, since every
+    uses -- already retry-stable, since every
     caller into gate.gated_call() has "reason" popped out of ``args`` before
     it gets here (see gate.py's ``reason_scope`` docstring), so re-issuing
     the identical tool call always reproduces the identical key.
@@ -201,12 +189,10 @@ def is_pending_result(result: Any) -> bool:
     """True for exactly the shape gate.py's ``_pending_result()`` returns
     (``{"status": "approval_pending", ...}``) -- the one gated_call() result
     shape that is not a real answer yet. mcp_dispatch.py's own retry-dedupe
-    cache (a pre-P3 mechanism, built for "reuse the answer to an identical
-    in-flight or just-finished call" -- ipc_server.py's had the same check
-    before P5 retired it) checks this before caching a completed result:
-    caching a *pending*
-    result would mean the identical re-call Claude is supposed to make to
-    actually collect the decision (§5.2 point 6) just gets handed the same
+    cache ("reuse the answer to an identical in-flight or just-finished
+    call") checks this before caching a completed result: caching a
+    *pending* result would mean the identical re-call Claude is supposed to
+    make to actually collect the decision just gets handed the same
     stale "still pending" blob back for up to that cache's own TTL, instead
     of ever reaching gate.gated_call() again to check the decision ledger.
     """
@@ -223,9 +209,9 @@ def _iso(ts: float | None) -> str:
 class PendingApproval:
     id: str
     kind: str                      # "card" | "confirm"
-    # P9: whichever principal's request context was active at registration
+    # Whichever principal's request context was active at registration
     # time (see module docstring) -- "local" for every approval in local
-    # mode, unchanged from before this field existed.
+    # mode.
     principal_id: str = field(default_factory=lambda: current_principal().id)
     connector: str = ""
     tool: str = ""
@@ -250,7 +236,8 @@ class PendingApproval:
     # that wants to disclose what's pending (a fragment endpoint, a future
     # binder row) can read this without waiting on that worker at all.
     preview: dict[str, Any] = field(default_factory=dict)
-    # Re-evaluation context for the rules-changed broadcast (§6, Job 2).
+    # Re-evaluation context for the rules-changed broadcast (see
+    # reevaluate_all()).
     operation_key: str | None = None
     review_ctx: Any = None
     pii_forces_confirmation: bool = False
@@ -284,8 +271,7 @@ class PendingApproval:
     ledger_expires_at: float | None = None
     ledger_consumed: bool = False
     # Audit provenance for the approval binder's batch decide endpoint
-    # (Phase 2) -- "" for every ordinary single-decide answer, unchanged
-    # from before these fields existed. Stamped by answer() itself (not a
+    # -- "" for every ordinary single-decide answer. Stamped by answer() itself (not a
     # separate setter) so it can never be set without also resolving the
     # UI step it describes. Carried forward into LedgerHit by
     # consume_ledger() below, and from there into the audit entry that
@@ -296,9 +282,8 @@ class PendingApproval:
     def answer(
         self, result: str, chosen_index: int | None = None, *, decided_via: str = "", batch_id: str = "",
     ) -> bool:
-        """Resolve this UI step. Idempotent: the first answer wins (mirrors
-        WebApprovalUI's pre-P3 ``resolve()``/§7.1's "first accepted decision
-        wins")."""
+        """Resolve this UI step. Idempotent: the first answer wins, so two
+        concurrent answers to the same card can't both take effect."""
         if self.event.is_set():
             return False
         self.result = result
@@ -312,7 +297,7 @@ class PendingApproval:
         return self.finalize_event.is_set()
 
     def is_batchable(self) -> bool:
-        """The approval binder's own gate (Phase 1): a ``kind == "card"``
+        """The approval binder's own gate: a ``kind == "card"``
         approval that isn't itself PII-forced. Excluded, each for a
         different reason (see this module's own ``_NON_BATCHABLE_KINDS``/
         ``pii_forces_confirmation`` field docstrings): "confirm"/"choice"
@@ -351,14 +336,13 @@ class PendingApproval:
             # "review" (read) | "popup" (write) | "" for a bare confirm
             # dialog -- safe to expose unconditionally (it names a category,
             # never gated content) and is exactly the "direction" field
-            # web_shell.py's notification-detail allowlist needs (P5,
-            # 5deef1d8:docs/approval-list-ui-ux.md §4.3): never derived from
+            # web_shell.py's notification-detail allowlist needs: never derived from
             # ``summary``, which is the one field that can carry real gated
             # content (see that field's own docstring below).
             "gate_kind": self.gate_kind,
             # A settings.yaml rule-scoped key (e.g. "drive.read_file_contents"),
             # never gated content -- the approval binder's own grouping key
-            # (Phase 1: groups by (connector, operation_key)). "" for a bare
+            # (it groups by (connector, operation_key)). "" for a bare
             # confirm/choice dialog, which has none.
             "operation_key": self.operation_key or "",
             # Category-level fact already shown on the card itself (a tinted
@@ -367,7 +351,7 @@ class PendingApproval:
             # "was anything flagged at all", which the binder needs to
             # explain a PII-forced row's own blocked_reason.
             "pii_detected": self.pii_detected,
-            # Whether the approval binder (Phase 1) may offer this approval
+            # Whether the approval binder may offer this approval
             # for selection at all -- see is_batchable()'s own docstring.
             "batchable": self.is_batchable(),
             # Human-readable reason there's no checkbox on this row -- ""
@@ -394,14 +378,12 @@ class PendingApproval:
 
 @dataclass(frozen=True)
 class LedgerHit:
-    """consume_ledger()'s return value -- replaces a bare
-    ``(decision, rule_name, decided_at)`` 3-tuple so a fourth field could
-    be added (Phase 2 of the approval binder plan: ``decided_via``/
-    ``batch_id``, audit provenance for a decision released through the
-    binder's batch decide endpoint) without every existing positional
-    consumer silently misreading a field. ``decided_via``/``batch_id``
+    """consume_ledger()'s return value -- a named record rather than a bare
+    tuple, so adding a field can never make a positional consumer silently
+    misread one. ``decided_via``/``batch_id`` are audit provenance for a
+    decision released through the binder's batch decide endpoint, and
     default to "" -- the ordinary decided-inline-or-via-single-decide
-    case's own shape, unchanged from before these two fields existed."""
+    case's own shape."""
 
     decision: str
     rule_name: str
@@ -449,7 +431,7 @@ class PendingApprovalRegistry:
         return f"{self.base_url}/approvals/{approval_id}"
 
     def binder_url(self) -> str | None:
-        """The list page itself (Approval binder, Phase 4) -- what gate.py's
+        """The list page itself -- what gate.py's
         _pending_result() points Claude at instead of N separate approval_
         url()s once more than one of this principal's approvals is waiting
         at once."""
@@ -482,13 +464,13 @@ class PendingApprovalRegistry:
         """Returns ``(approval, created)``. ``created=False`` means an
         identical, not-yet-finalized approval was already outstanding for
         this exact ``(connector, tool, args)`` and the caller is coalescing
-        onto it (§6's "New coalescing case") -- the caller must not show a
+        onto it -- the caller must not show a
         second card, only await the existing one.
 
         Raises TooManyPendingApprovalsError if either cap is reached and
         this is a genuinely new key (never raised for a coalescing hit --
         that doesn't grow the pending set for either cap). The per-
-        principal cap (SEC-15) is checked first, since it's the one meant
+        principal cap is checked first, since it's the one meant
         to actually bind day to day; the whole-registry cap is the
         secondary backstop -- see DEFAULT_MAX_PENDING_PER_PRINCIPAL's own
         comment.
@@ -540,7 +522,7 @@ class PendingApprovalRegistry:
         short-lived follow-up to a card someone is already looking at, not
         a new gated call), never ledgered.
 
-        ``sensitive`` (the self-approval review's Phase 4) marks the one
+        ``sensitive`` marks the one
         kind of confirm dialog that sentence is *not* true of: the one an
         MCP meta-tool raises (``gate.propose_policy_change``), where no card came first and confirming is
         the whole of the gate on a change to what auto-accepts in future.
@@ -580,14 +562,12 @@ class PendingApprovalRegistry:
         ``principal_id``, when given (web/routes_approvals.py's org-mode
         routes always pass one -- see module docstring), rejects a
         decision on an approval belonging to a *different* principal exactly as if it
-        didn't exist -- §10.5's "every ... decision ... is authorized
-        against current_principal()", defense in depth on top of the
+        didn't exist -- every decision is authorized against
+        ``current_principal()``, defense in depth on top of the
         approval id's own 128 bits of entropy.
 
-        ``decided_via``/``batch_id`` (Phase 2 of the approval binder plan)
-        are "" for every ordinary single-decide caller, unchanged from
-        before these parameters existed -- only answer_batch() below
-        passes real values."""
+        ``decided_via``/``batch_id`` are "" for every ordinary single-decide
+        caller -- only answer_batch() below passes real values."""
         with self._lock:
             approval = self._pending.get(approval_id)
         if approval is None:
@@ -600,7 +580,7 @@ class PendingApprovalRegistry:
         self, items: list[tuple[str, str]], *, principal_id: str | None = None,
         decided_via: str = "", batch_id: str = "",
     ) -> list[dict[str, str]]:
-        """The approval binder's own batch decide endpoint (Phase 2),
+        """The approval binder's own batch decide endpoint,
         shared between web/routes_approvals.py's local-mode and org-mode
         routes so neither reimplements this classify-then-
         answer sequence. ``items`` is ``(approval_id, result)`` pairs, each
@@ -617,7 +597,7 @@ class PendingApprovalRegistry:
         - ``"unknown"`` -- no such approval, *or* it belongs to a
           different principal (``principal_id`` given and mismatched) --
           the two are indistinguishable, per every other read/write here
-          (module docstring, §10.5).
+          (module docstring).
         - ``"not_batchable"`` -- exists, belongs to this principal, but
           isn't a plain batchable card (PendingApproval.is_batchable()) --
           a confirm/choice dialog or a PII-forced card. Never silently
@@ -646,7 +626,8 @@ class PendingApprovalRegistry:
         interaction driver, when the full multi-step dance (main popup, any
         PII/rule confirmation) has concluded, and by reevaluate_all() below
         for a rule that appeared while nobody had answered yet. Writes the
-        decision ledger (single-use for gate_kind="popup", per D3) and
+        decision ledger (single-use for gate_kind="popup" -- see module
+        docstring) and
         wakes wait_async(). Idempotent, same "first decision wins" contract
         as answer()."""
         with self._lock:
@@ -664,8 +645,9 @@ class PendingApprovalRegistry:
             # reevaluate_all() below finding a rule that now covers this)
             # otherwise leaves any thread blocked in web_prompt.block_on_card
             # -- gate.py's _run_in_popup_executor worker showing this exact
-            # card -- waiting on card.event.wait() forever, since only
-            # PendingApproval.answer() ever set that event before this fix.
+            # card -- waiting on card.event.wait() forever, since
+            # PendingApproval.answer() is otherwise the only thing that sets
+            # that event.
             # block_on_card already maps a result outside CARD_RESULTS to
             # "deny", and finalize() is idempotent, so the woken worker's own
             # eventual finalize() call is a harmless no-op: this call's real
@@ -679,16 +661,15 @@ class PendingApprovalRegistry:
         ``(connector, tool, args)``, *for the calling principal*? Returns a
         LedgerHit or None. Single-use entries
         (writes) are removed on the read that consumes them; read-gate
-        entries stay reusable until ``ledger_ttl`` (§5.4: "Read decisions...
-        stay TTL-bounded and reusable... unchanged").
+        entries stay reusable until ``ledger_ttl``: re-reading data a human
+        already released discloses nothing new.
 
         Scoped to ``current_principal()`` implicitly (module docstring) --
         gate.py's own call site needs no change, and this is the one method
         where that scoping isn't optional: without it, two principals
         issuing the identical tool call with identical arguments would
         share one ledger entry, releasing one principal's approved decision
-        to the other's re-issued call (P9's own fix for the P7-precedented
-        cross-principal dedupe-key collision -- see module docstring)."""
+        to the other's re-issued call (see module docstring)."""
         principal_id = current_principal().id
         key = (principal_id, dedupe_key)
         with self._lock:
@@ -725,7 +706,7 @@ class PendingApprovalRegistry:
 
     def has_other_live(self, principal_id: str, exclude_id: str) -> bool:
         """True if some *other* not-yet-finalized approval already exists
-        for ``principal_id`` -- gate.py's adaptive hold window (Phase 4):
+        for ``principal_id`` -- gate.py's adaptive hold window:
         when this is true for a call that just registered, waiting the full
         ``hold_window`` on it buys nothing, since this principal already has
         something else waiting on a decision. Same "not finalized" test
@@ -746,9 +727,9 @@ class PendingApprovalRegistry:
         """``principal_id``, when given, makes a mismatched approval
         indistinguishable from a nonexistent one -- the authorization check
         web/routes_approvals.py's card/preview routes and
-        web/mcp_dispatch.py's ``privacyfence_await_approval`` (P9) rely on.
-        ``None`` (every pre-P9 caller, and gate.py's own internal use) means
-        "no filter", unchanged from before this parameter existed."""
+        web/mcp_dispatch.py's ``privacyfence_await_approval`` rely on.
+        ``None`` (local mode, and gate.py's own internal use) means
+        "no filter"."""
         with self._lock:
             approval = self._pending.get(approval_id)
         if approval is None:
@@ -760,12 +741,10 @@ class PendingApprovalRegistry:
     def list_pending(self, principal_id: str | None = None) -> list[PendingApproval]:
         """Every card/confirmation not yet answered at the UI-step level --
         newest first. Used by web/routes_approvals.py's/web/routes_org_
-        approvals.py's list view (§7.1). ``principal_id`` restricts the
-        result to that principal's own approvals only (P9) -- ``None``
-        (local mode's own call, and every pre-P9 caller) returns every
-        approval regardless of principal, correct for local mode's single
-        implicit principal and unchanged from before this parameter
-        existed."""
+        approvals.py's list view. ``principal_id`` restricts the
+        result to that principal's own approvals only -- ``None``
+        (local mode's own call) returns every approval regardless of
+        principal, correct for local mode's single implicit principal."""
         with self._lock:
             items = [
                 a for a in self._pending.values()
@@ -776,9 +755,10 @@ class PendingApprovalRegistry:
 
     def await_status(self, approval_id: str, *, principal_id: str | None = None) -> str:
         """One of "approved"/"denied"/"pending"/"expired"/"unknown" -- the
-        vocabulary privacyfence_await_approval reports back to Claude (§5.2
-        point 7): status only, never content. ``principal_id`` is P9's own
-        cross-principal check (§10.5) -- an id belonging to another
+        vocabulary privacyfence_await_approval reports back to Claude:
+        status only, never content, since the only path to gated data is the
+        original gated call. ``principal_id`` is the cross-principal check
+        -- an id belonging to another
         principal reads as "unknown", never leaking that it exists at all."""
         approval = self.get(approval_id, principal_id=principal_id)
         if approval is None:
@@ -792,7 +772,7 @@ class PendingApprovalRegistry:
         return "approved"  # accept | accept_all | auto_accepted
 
     # ------------------------------------------------------------------ #
-    # Rules-changed re-evaluation broadcast (§6, Job 2)
+    # Rules-changed re-evaluation broadcast
     # ------------------------------------------------------------------ #
 
     def reevaluate_all(self, should_auto_accept: Callable[[str, Any], tuple[bool, str]]) -> list[PendingApproval]:
@@ -805,7 +785,7 @@ class PendingApprovalRegistry:
         approvals this call resolved, so the caller (gate.py) can audit each
         one and wake anything still awaiting it.
 
-        Scoped to ``current_principal()`` (P9): ``should_auto_accept`` is
+        Scoped to ``current_principal()``: ``should_auto_accept`` is
         itself one principal's own evaluator (auto_accept.py's own
         ``_REGISTRY``, resolved via ``current_principal()`` inside gate.py's
         ``_on_rules_changed`` at the moment *that* principal's rules
@@ -864,9 +844,9 @@ class PendingApprovalRegistry:
 
     def pop_expired_events(self) -> list[PendingApproval]:
         """Un-finalized approvals whose pending TTL has lapsed -- gate.py
-        calls this opportunistically and audits each as "expired" (§10.5:
-        "No decision = pending, then expired = denied. Never
-        auto-approved."). Each is reported at most once (finalized here, as
+        calls this opportunistically and audits each as "expired" (no
+        decision means pending, then expired, which counts as denied --
+        never auto-approved). Each is reported at most once (finalized here, as
         "expired", so a later human click on the same stale link is
         rejected the same way any late decision is)."""
         now = time.time()
