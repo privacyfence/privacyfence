@@ -45,6 +45,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A website page per connector, and an FAQ:** `/connectors/google-workspace/`, `/slack/`,
+  `/salesforce/`, `/jira-confluence/` and `/telegram/` each say what an AI client can do there,
+  what is reviewed and what needs approval, what the PII check scans in that service's content,
+  and how to set it up. `/faq/` answers the questions people ask before installing: where data
+  goes, which AI clients work, what the AI sees before approval, automating routine requests,
+  certification, local or organization mode, cost, and verifying a download. The site's menu
+  links the FAQ, and `/connectors/` links each connector's page.
+
 - **A release history page, `privacyfence.eu/releases/`,** lists the newest release on every
   channel (stable, release candidate, beta and alpha), each with its release date, its installers
   and their SHA-256 checksums, and a link to its release notes. It works without JavaScript. The

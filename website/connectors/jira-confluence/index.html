@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure AI access to Jira and Confluence — PrivacyFence</title>
+  <meta name="description" content="Let Claude and other MCP clients search Jira and Confluence, read issues and pages after your review, and create or update them only with your approval.">
+  <meta name="pf-content-group" content="connector">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/jira-confluence/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/jira-confluence/">
+  <meta property="og:title" content="PrivacyFence for Jira and Confluence">
+  <meta property="og:description" content="Jira and Confluence Cloud for AI assistants: search freely, read issues and pages after review, create and update only with approval. Nothing can be deleted.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connector · Jira and Confluence</p>
+      <h1>Jira and Confluence for your AI assistant, with every change approved.</h1>
+      <p class="lede">PrivacyFence connects an AI assistant to Jira Cloud and Confluence Cloud through one Atlassian sign-in. The assistant can search issues and pages straight away, reads their full content only after you have looked at it, and creates or updates nothing until you approve. It cannot delete anything: PrivacyFence does not even ask Atlassian for a delete permission.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="can-do-heading">
+      <div class="section-heading">
+        <p class="kicker">What the assistant can do</p>
+        <h2 id="can-do-heading">Two connectors, one sign-in.</h2>
+        <p>Every tool has a gate fixed in code. The Tools reference lists each <a href="/docs/tools-reference/#jira">Jira</a> and <a href="/docs/tools-reference/#confluence">Confluence</a> tool.</p>
+      </div>
+      <div class="card-grid connector-grid grid-auto">
+        <article class="card stack">
+          <h3>Jira</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Projects, issue search with JQL, and an issue's available transitions.</dd>
+            <dt>Reviewed before release</dt><dd>An issue's full details, including its description and comments.</dd>
+            <dt>Needs your approval</dt><dd>Creating and updating issues, commenting, and moving an issue to a new status.</dd>
+          </dl>
+        </article>
+        <article class="card stack">
+          <h3>Confluence</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Spaces, page lists, search, and a page's attachment names.</dd>
+            <dt>Reviewed before release</dt><dd>A page's content, and its attachments.</dd>
+            <dt>Needs your approval</dt><dd>Creating and updating pages.</dd>
+          </dl>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="pii-heading">
+      <div class="section-heading">
+        <p class="kicker">Personal data</p>
+        <h2 id="pii-heading">Tickets and pages are checked before you see them.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Before a reviewed read is shown to you, PrivacyFence scans it locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. It scans a Jira issue's description and comments, a Confluence page's body, and the text it can extract from an attachment (up to 20,000 characters; files over 5 MB and images are not scanned).</p>
+        <p>A match sends the read to a card even if an always-allow rule covers it, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
+        <p>The privacy filter, separately, decides what may leave PrivacyFence at all. Out of the box it blocks Confluence search excerpts and attachments until you allow them in <strong>Settings → Privacy Filter → Confluence</strong>.</p>
+        <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="routine-heading">
+      <div class="section-heading">
+        <p class="kicker">Routine requests</p>
+        <h2 id="routine-heading">Trust a project or a space.</h2>
+        <p>An always-allow rule lets matching requests run without a card, and each one is still audited. A rule can trust, for example:</p>
+      </div>
+      <div class="card-grid four grid-auto">
+        <article class="card stack"><h3>A Jira project</h3><p>Reading or changing issues in the projects you name, by project key.</p></article>
+        <article class="card stack"><h3>Your own issues</h3><p>Issues you reported, or issues assigned to you.</p></article>
+        <article class="card stack"><h3>A Confluence space</h3><p>Reading or editing pages in the spaces you name.</p></article>
+        <article class="card stack"><h3>Your own pages</h3><p>Pages you wrote.</p></article>
+      </div>
+      <p class="page-copy">Likely personal data in a read still goes to a card. Every scope is in <a href="/docs/approvals-and-policy/#scope-catalogue">the scope catalogue</a>.</p>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">One Atlassian app, then each person approves it.</h2>
+      </div>
+      <ol class="steps page-copy">
+        <li>An administrator creates one Atlassian OAuth 2.0 (3LO) app in the developer console and packages its client ID and secret into an organization config bundle. Desktop installs and an organization server each need their own app, because an Atlassian app has a single callback URL.</li>
+        <li>Each person installs the bundle, connects from PrivacyFence's Settings page, and approves the app in the browser. One sign-in covers both Jira and Confluence.</li>
+        <li>The tools appear to the assistant. The sign-in stays with PrivacyFence and is never given to the AI client.</li>
+      </ol>
+      <p class="page-copy">Atlassian Cloud sites (<code>*.atlassian.net</code>) only; Jira and Confluence Data Center or Server are not supported.</p>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/atlassian-setup/">Set it up</a>
+        <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
+      </p>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>See how a request is approved.</h2>
+          <p>Follow a read and a write through PrivacyFence, card by card.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/how-it-works/">How it works</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

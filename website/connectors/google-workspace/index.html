@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure AI access to Gmail, Google Drive and Calendar — PrivacyFence</title>
+  <meta name="description" content="Let Claude and other MCP clients work in Gmail, Google Drive, Docs, Sheets, Calendar, Contacts, Tasks and Apps Script, with every content read reviewed and every change approved by you.">
+  <meta name="pf-content-group" content="connector">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/google-workspace/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/google-workspace/">
+  <meta property="og:title" content="PrivacyFence for Google Workspace">
+  <meta property="og:description" content="Gmail, Drive, Docs, Sheets, Calendar, Contacts, Tasks and Apps Script for AI assistants: content reads reviewed, changes approved, personal data checked locally.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connector · Google Workspace</p>
+      <h1>Gmail and Drive for your AI assistant, without handing it your inbox.</h1>
+      <p class="lede">PrivacyFence connects an AI assistant to Gmail, Google Drive, Docs, Sheets, Calendar, Contacts, Tasks and Apps Script through one Google sign-in that stays with PrivacyFence. The assistant can search and list straight away. It sees an email, a document or an event's details only after you have looked at them, and nothing in your Google account changes until you approve it.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="can-do-heading">
+      <div class="section-heading">
+        <p class="kicker">What the assistant can do</p>
+        <h2 id="can-do-heading">Six Google connectors, each tool with a fixed gate.</h2>
+        <p>What runs straight away, what is <strong>reviewed</strong> before the result is released, and what <strong>needs your approval</strong> before it happens. The <a href="/docs/tools-reference/#gmail">Tools reference</a> lists every tool.</p>
+      </div>
+      <div class="card-grid connector-grid grid-auto">
+        <article class="card stack">
+          <h3>Gmail</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Searching messages and threads (subject, sender, date, snippet), labels, filters, and attachment names.</dd>
+            <dt>Reviewed before release</dt><dd>A message, a whole thread, or an attachment's content.</dd>
+            <dt>Needs your approval</dt><dd>Drafts and reply drafts, with or without attachments; adding and removing labels; archiving; creating and changing filters.</dd>
+          </dl>
+          <p class="connector-note">No tool sends an email: the assistant can only prepare drafts for you to send.</p>
+        </article>
+        <article class="card stack">
+          <h3>Drive, Docs and Sheets</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>File search and metadata, folder listings, shared drives, a spreadsheet's tabs, and creating a new blank file or spreadsheet.</dd>
+            <dt>Reviewed before release</dt><dd>A file's content, a download, and spreadsheet cell values.</dd>
+            <dt>Needs your approval</dt><dd>Writing or editing a document, writing and formatting spreadsheet ranges, adding, renaming and resizing tabs, uploads, moves and comments.</dd>
+          </dl>
+        </article>
+        <article class="card stack">
+          <h3>Calendar</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Your calendars, event lists (title and time), colleagues' free/busy, meeting rooms, colours and an event's visibility.</dd>
+            <dt>Reviewed before release</dt><dd>An event's full details: attendees, description, conferencing links and attachments.</dd>
+            <dt>Needs your approval</dt><dd>Creating, changing and deleting events, out-of-office entries, working location, and an event's colour or visibility.</dd>
+          </dl>
+        </article>
+        <article class="card stack">
+          <h3>Contacts</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Listing, searching and reading contacts.</dd>
+            <dt>Needs your approval</dt><dd>Creating and changing contacts, and adding or removing labels. Out of the box, an edit that changes no email address or phone number runs without a card.</dd>
+          </dl>
+        </article>
+        <article class="card stack">
+          <h3>Tasks</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Task lists and the tasks in them.</dd>
+            <dt>Needs your approval</dt><dd>Creating and changing tasks, completing or reopening them, and moving them between lists.</dd>
+          </dl>
+        </article>
+        <article class="card stack">
+          <h3>Apps Script</h3>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>The list of your script projects.</dd>
+            <dt>Reviewed before release</dt><dd>A project's source, and the result of a run you started yourself.</dd>
+            <dt>Needs your approval</dt><dd>Writing new source to a project.</dd>
+          </dl>
+          <p class="connector-note">PrivacyFence never runs a script.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section proof-section" aria-labelledby="pii-heading">
+      <div class="shell walkthrough split">
+        <div class="stack">
+          <p class="kicker">Personal data</p>
+          <h2 id="pii-heading">Checked on your machine before a card is shown.</h2>
+          <div class="page-copy stack">
+            <p>Before a reviewed read reaches its card, PrivacyFence scans the content locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. What it scans for each Google connector:</p>
+            <ul>
+              <li><strong>Gmail:</strong> the message body, every body in a thread. The From, To, Subject and Date headers are not scanned.</li>
+              <li><strong>Drive:</strong> a document's text, all of what the assistant would receive (at most 100 KB), and the first 50 rows of a sheet read.</li>
+              <li><strong>Calendar:</strong> the event description.</li>
+              <li><strong>Attachments, downloads and uploads:</strong> the text PrivacyFence can extract, up to 20,000 characters. Files over 5 MB are not scanned, and images are not read.</li>
+            </ul>
+            <p>A match sends the read to a card even when an always-allow rule covers it, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text. Writes are not held by the check, except a Drive upload, which may be a file the assistant never read.</p>
+            <p>The privacy filter, separately, decides what may leave PrivacyFence at all. Out of the box it blocks Gmail attachments and the notes on contacts and tasks until you allow them in <strong>Settings → Privacy Filter</strong>.</p>
+          </div>
+          <a class="text-link" href="/docs/approvals-and-policy/#the-pii-check">How the PII check works →</a>
+        </div>
+        <figure class="screenshot-frame">
+          <a href="/assets/gmail-read-thread.png"><img src="/assets/gmail-read-thread.png" width="2000" height="2020" alt="PrivacyFence approval card for reading a Gmail thread: the requesting AI system marked Not verified, its stated reason, a possible-PII warning listing a personal data reference, an IBAN and salary information, the matches highlighted in the message text, and what will be provided to the AI system" loading="lazy"></a>
+          <figcaption>Reading a Gmail thread: the PII check's findings are highlighted before anything is released. Example data only.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="page-section proof-section alternate" aria-labelledby="write-heading">
+      <div class="shell walkthrough split">
+        <div class="stack">
+          <p class="kicker">Changes</p>
+          <h2 id="write-heading">You see the change before it happens.</h2>
+          <div class="page-copy stack">
+            <p>A write card names the file, its owner and exactly what will change. For a spreadsheet write it shows the values and formulas as a table, and says that every cell in the range is overwritten. Nothing is written to Google until you approve, and on a packaged install approving a write asks for your passkey.</p>
+            <p>A draft's card shows its recipients and text exactly as it will be saved, including your Gmail signature if you have turned that setting on. Sending stays with you, in Gmail.</p>
+          </div>
+          <a class="text-link" href="/how-it-works/#write-heading">A write, step by step →</a>
+        </div>
+        <figure class="screenshot-frame">
+          <a href="/assets/sheets-write.png"><img src="/assets/sheets-write.png" width="2000" height="1560" alt="PrivacyFence approval card for writing a spreadsheet range: the spreadsheet, its owner, the range and the effect of the write, the AI system's stated reason, an informational financial-figures note, and a preview table of the values to be written" loading="lazy"></a>
+          <figcaption>A spreadsheet write, before anything is written. Example data only.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="routine-heading">
+      <div class="section-heading">
+        <p class="kicker">Routine requests</p>
+        <h2 id="routine-heading">Let the routine run without a card.</h2>
+        <p>An always-allow rule lets matching requests run without asking you, and each one is still audited. Rules are narrow on purpose. For Google, a rule can trust, for example:</p>
+      </div>
+      <div class="card-grid four grid-auto">
+        <article class="card stack"><h3>Mail from a domain</h3><p>Reading messages from your own company's sender domain, or messages carrying a label you choose.</p></article>
+        <article class="card stack"><h3>A Drive folder</h3><p>Reading or writing the files directly in one folder, files you own, or files PrivacyFence created in this session.</p></article>
+        <article class="card stack"><h3>Your own events</h3><p>Reading or changing events you organize, or anything on one calendar.</p></article>
+        <article class="card stack"><h3>A task list</h3><p>Changing and moving tasks within the lists you name.</p></article>
+      </div>
+      <p class="page-copy">Likely personal data in a read still goes to a card. Every scope and condition is in <a href="/docs/approvals-and-policy/#scope-catalogue">the scope catalogue</a>.</p>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">One Google Cloud app, then each person signs in.</h2>
+      </div>
+      <ol class="steps page-copy">
+        <li>An administrator creates an OAuth client in a Google Cloud project once, enables the APIs of the connectors you want to offer, and packages the client into an organization config bundle. With a Workspace account, an <strong>Internal</strong> app needs no Google verification.</li>
+        <li>Each person installs the bundle, then connects each Google connector from PrivacyFence's Settings page and signs in to Google in the browser.</li>
+        <li>The connector's tools appear to the assistant. The Google sign-in stays with PrivacyFence and is never given to the AI client.</li>
+      </ol>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/google-cloud-setup/">Set it up</a>
+        <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
+      </p>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Try it with your own Google account.</h2>
+          <p>Install PrivacyFence on macOS, Windows or Linux and approve your first Gmail read.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/download/">Download PrivacyFence</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

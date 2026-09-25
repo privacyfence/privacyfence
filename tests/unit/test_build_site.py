@@ -126,7 +126,7 @@ def test_header_nav_lists_the_target_site_in_both_places():
     header = build_site.render_partial("header")
     inline = re.findall(r'<a href="([^"]+)">', header.split('<div class="nav-links">', 1)[1].split("</div>", 1)[0])
     menu = re.findall(r'<a href="([^"]+)">', header.split('<div class="nav-menu-panel">', 1)[1].split("</div>", 1)[0])
-    assert inline == menu == ["/how-it-works/", "/security/", "/enterprise/", "/connectors/", "/docs/"]
+    assert inline == menu == ["/how-it-works/", "/security/", "/enterprise/", "/connectors/", "/docs/", "/faq/"]
 
 
 def test_clients_include_is_rendered_from_the_data_file():

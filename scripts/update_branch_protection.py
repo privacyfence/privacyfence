@@ -84,6 +84,10 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # reports one check per leg, named from that job's own `name:` template -- both legs are listed
 # individually below; add/remove an entry here if that matrix ever changes.
 #
+# One entry is not from tests.yml: `website-build`, website-build.yml's only job, which also runs on
+# every pull request with no `paths:` filter. The job sets `name: website-build` so the context is
+# unique -- its id is `build`, which build.yml and publish-pypi.yml also use.
+#
 # Deliberately NOT included: the packaged-artifact jobs (Phase 6) and the graphical-session jobs
 # (Phase 7) -- both live in build.yml / their own scheduled workflows and never run on
 # `pull_request`, so they can't be a per-PR required check at all.
@@ -107,6 +111,7 @@ REQUIRED_STATUS_CHECKS = [
     "Test (Python 3.14, core suite)",
     "static-analysis",
     "org-mode-smoke",
+    "website-build",
 ]
 
 
