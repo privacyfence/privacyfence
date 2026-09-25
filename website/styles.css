@@ -181,6 +181,15 @@ main { container-type: inline-size; }
 .connector-links { --cluster-gap: 0 18px; font-size: 14px; }
 .connector-links a { display: inline-flex; align-items: center; min-height: var(--tap); }
 .section-heading a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.page-copy ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+
+/* /faq/: visible questions and answers, one article each, with a jump list above them. */
+.faq-index ul { --cluster-gap: 8px 10px; margin: 0 0 20px; padding: 0; list-style: none; }
+.faq-index a { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--accent-dark); font-size: 14px; font-weight: 650; }
+.faq-item { padding-block: clamp(26px, 3vw, 36px); border-top: 1px solid var(--line); scroll-margin-top: 90px; }
+.faq-item h2 { margin: 0; font-size: clamp(24px, 1.4vw + 16px, 30px); }
+.faq-item .works-with { margin: 0; }
+.faq-item .verify-commands { margin: 0; }
 
 /* ---- Legal and prose pages (/privacy/, /imprint/) -------------------------------------- */
 

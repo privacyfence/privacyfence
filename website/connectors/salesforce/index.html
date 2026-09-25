@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure, read-only AI access to Salesforce — PrivacyFence</title>
+  <meta name="description" content="Let Claude and other MCP clients look up Salesforce records, search and run reports, read-only, with every result reviewed by you before the assistant sees it.">
+  <meta name="pf-content-group" content="connector">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/salesforce/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/salesforce/">
+  <meta property="og:title" content="PrivacyFence for Salesforce">
+  <meta property="og:description" content="Salesforce for AI assistants, read-only: records, search and reports reviewed before release, customer data checked locally for personal information.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connector · Salesforce</p>
+      <h1>Customer data for your AI assistant, one reviewed record at a time.</h1>
+      <p class="lede">PrivacyFence gives an AI assistant read-only access to Salesforce: records, search and reports. It changes nothing in your org, because PrivacyFence offers no Salesforce write. Every record and every report result is shown to you before the assistant gets it.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="can-do-heading">
+      <div class="section-heading">
+        <p class="kicker">What the assistant can do</p>
+        <h2 id="can-do-heading">Read-only, and reviewed.</h2>
+        <p>Every Salesforce tool has a gate fixed in code. The <a href="/docs/tools-reference/#salesforce">Tools reference</a> lists each one.</p>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Without a card</h3>
+          <p>The list of reports you can run. The call is still audited.</p>
+        </article>
+        <article class="card stack">
+          <h3>Reviewed before release</h3>
+          <p>A record by object type and id, a search across one or more object types (the same search as Salesforce's own search bar), and a report's results.</p>
+        </article>
+        <article class="card stack">
+          <h3>Needs your approval</h3>
+          <p>Nothing, because there is nothing to change: the connector has no write tools. The assistant sees only what your own Salesforce user can see.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="pii-heading">
+      <div class="section-heading">
+        <p class="kicker">Personal data</p>
+        <h2 id="pii-heading">Customer records are checked before you see them.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>CRM data is where personal data lives. Before a record or a report is shown to you, PrivacyFence scans the field values and report rows on the card locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Email addresses and phone numbers are deliberately not flagged, because they are in almost every record.</p>
+        <p>A match sends the read to a card even if an always-allow rule covers it, highlights what was found, and asks for a second confirmation. On a packaged install, approving a flagged read also asks for your passkey. The audit log records the category, never the matched text.</p>
+        <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="routine-heading">
+      <div class="section-heading">
+        <p class="kicker">Routine requests</p>
+        <h2 id="routine-heading">Trust an object type or a report.</h2>
+        <p>An always-allow rule lets matching reads run without a card, and each one is still audited. For Salesforce, a rule can trust:</p>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack"><h3>Object types</h3><p>Records and searches of the object types you name, for example Opportunity, when every requested type is one of them.</p></article>
+        <article class="card stack"><h3>Named reports</h3><p>Running the reports you list by id.</p></article>
+      </div>
+      <p class="page-copy">Likely personal data in a read still goes to a card. Every scope is in <a href="/docs/approvals-and-policy/#scope-catalogue">the scope catalogue</a>.</p>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">One Salesforce app per org, then each person signs in.</h2>
+      </div>
+      <ol class="steps page-copy">
+        <li>A Salesforce administrator registers an External Client App or a Connected App once per org and packages its consumer key and secret into an organization config bundle.</li>
+        <li>Each person installs the bundle, connects Salesforce from PrivacyFence's Settings page, and signs in on Salesforce's own page. Nobody types a Salesforce password, security token or API key into PrivacyFence.</li>
+        <li>The Salesforce tools appear to the assistant. The sign-in stays with PrivacyFence and is never given to the AI client.</li>
+      </ol>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/salesforce-setup/">Set it up</a>
+        <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
+      </p>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Deploy it for your team.</h2>
+          <p>Run PrivacyFence on each person's computer, or centrally on a server your organization controls.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/enterprise/">Organization deployment</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

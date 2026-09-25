@@ -7,7 +7,7 @@ claim" section of /security/ (`id="what-privacyfence-does-not-claim"`). Every ot
 page, as built (tests/website_site.py), is held to none of "certified", "compliant with", "SLA"
 or "guarantee". The /docs/ pages are the published docs, which carry the same limitations in
 their own words and are reviewed as docs. `ALLOWED` lists the few phrases that use one of the
-words about someone else.
+words without making a claim: about someone else, or as the FAQ's question.
 """
 
 from __future__ import annotations
@@ -23,9 +23,12 @@ pytestmark = pytest.mark.unit
 FORBIDDEN = re.compile(r"\b(certified|compliant with|SLAs?|guarantee[sd]?)\b", re.IGNORECASE)
 LIMITATIONS_ID = "what-privacyfence-does-not-claim"
 PAGES = {path: read_page(path) for path in build_site.PAGES}
-# Uses that are about someone else, not a claim PrivacyFence makes: the privacy policy names the
-# certification Google's data transfer relies on.
-ALLOWED = {"/privacy/": [r"certified\s+under\s+the\s+EU–US\s+Data\s+Privacy\s+Framework"]}
+# Uses that are not a claim PrivacyFence makes: the privacy policy names the certification
+# Google's data transfer relies on, and the FAQ asks the question its answer says no to.
+ALLOWED = {
+    "/privacy/": [r"certified\s+under\s+the\s+EU–US\s+Data\s+Privacy\s+Framework"],
+    "/faq/": [r"Is\s+PrivacyFence\s+certified\?"],
+}
 
 
 def _without_limitations(page: str) -> str:
