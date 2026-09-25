@@ -103,11 +103,11 @@ def _read_local_attachment(path: str, *, download_mode: str) -> tuple[str, bytes
     ADR 0007 is Claude-Desktop-only: org mode's daemon runs on a different
     machine than the user entirely, and a local attachment path there has
     always meant "read from PrivacyFence's own server filesystem" --
-    unaffected by this phase, same reasoning as connectors/drive.py's
+    the file bridge does not apply, same reasoning as connectors/drive.py's
     _upload_file ``is_org_local_path`` branch. Only local mode routes
     through the file bridge.
 
-    Phase 4 ("Clients without the bridge"): a ``local_files.
+    Capability uploads (ADR 0028): a ``local_files.
     UPLOAD_REF_PREFIX``-prefixed path is never a filesystem path, in *any*
     mode -- it's bytes already staged by privacyfence_create_upload_slot,
     claimed via local_files.read_local_file() exactly like a bridge-fetched

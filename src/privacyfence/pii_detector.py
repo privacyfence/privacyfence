@@ -273,11 +273,10 @@ _OPTIONAL_CATEGORIES: dict[str, str] = {
 
 
 class _PiiState:
-    """Everything below used to be four bare module globals (_enabled,
-    _changed_listener, _audit_match_details_enabled, _disabled_categories)
-    -- one PII-detection posture per *process*. P6 makes it one per
-    *principal* instead: each user's own PII settings, isolated the same way their
-    auto-accept rules already are."""
+    """One PII-detection posture per *principal*, not per process: each user's
+    own PII settings (_enabled, _changed_listener, _audit_match_details_enabled,
+    _disabled_categories), isolated the same way their auto-accept rules are
+    (ADR 0008)."""
 
     def __init__(self) -> None:
         self.enabled = True
@@ -333,7 +332,7 @@ def init_pii_detection(
 def reload_for_all_principals(pii_config: dict) -> list[str]:
     """Re-run ``init_pii_detection`` from an install-wide ``pii_detection``
     settings.yaml section for every principal this process has already
-    built a state object for, returning the ids refreshed (#400 C3e).
+    built a state object for, returning the ids refreshed.
 
     Org mode's PII gate is install-wide, exactly like the privacy filter's
     policy (see ``privacy_filter.reload_for_all_principals``, whose

@@ -8,11 +8,11 @@ already reveals) -- block means none of it, matching what
 settings.yaml.example has always documented even though nothing enforced it
 before this module existed.
 
-SEC-07: a group section that's genuinely absent from settings.yaml is the
-one case this module still tolerates (backward compat with installs that
-predate it); anything present but malformed -- an unrecognised
+A group section that's genuinely absent from settings.yaml is the
+one case this module tolerates (settings files that do not carry it);
+anything present but malformed -- an unrecognised
 default_policy, a non-dict group or categories mapping, an unrecognised
-category policy -- now fails closed via PrivacyFilterConfigError instead of
+category policy -- fails closed via PrivacyFilterConfigError instead of
 silently downgrading to "allow".
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ class TestInitAndResolution:
         assert category_policy("privacy", "unknown_category") == "allow"
 
     def test_absent_group_defaults_to_block_when_org_managed(self):
-        # SEC-07: an org-managed install is expected to state its own
+        # An org-managed install is expected to state its own
         # privacy policy explicitly rather than silently inherit the
         # permissive local-mode default.
         init_privacy_filter({}, org_managed=True)

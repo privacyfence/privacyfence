@@ -97,8 +97,8 @@ def build_authorize_url(
     consumer_key: str, redirect_uri: str, state: str, code_challenge: str,
     login_url: str = DEFAULT_LOGIN_URL,
 ) -> str:
-    """Salesforce's OAuth 2.0 Web Server flow authorize URL -- factored out
-    of ``authorize_interactive`` (P8) so ``web/routes_connect.py``'s
+    """Salesforce's OAuth 2.0 Web Server flow authorize URL -- separate
+    from ``authorize_interactive`` so ``web/routes_connect.py``'s
     org-mode server-redirect flow can build the same URL without going
     through ``oauth_loopback.run_browser_oauth``'s local listener."""
     login_url = (login_url or DEFAULT_LOGIN_URL).rstrip("/")
@@ -121,9 +121,8 @@ def exchange_code(
     """Exchanges an authorization code for a Salesforce token and returns
     the normalized token record -- *not* yet saved to disk (see
     ``save_token_file`` below). Shared by ``authorize_interactive``'s
-    local-mode loopback flow and org mode's server-redirect flow (P8);
-    raises ``SalesforceClientError`` on any failure, same as before this
-    split."""
+    local-mode loopback flow and org mode's server-redirect flow;
+    raises ``SalesforceClientError`` on any failure."""
     login_url = (login_url or DEFAULT_LOGIN_URL).rstrip("/")
     try:
         resp = requests.post(

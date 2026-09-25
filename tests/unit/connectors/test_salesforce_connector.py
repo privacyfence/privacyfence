@@ -112,7 +112,7 @@ class TestGetRecord:
 
         kwargs = gated_call_spy[0]
         # Name isn't known via any auto tool (Salesforce has no auto search
-        # at all), so it's a new_info (§3) field, not preview.
+        # at all), so it's a new_info field, not preview.
         assert kwargs["new_info"]["Name"] == "Acme Corp"
         assert kwargs["new_info"]["Name"] != "001xx0000012345"
         assert kwargs["summary"] == "Read Account: Acme Corp"
@@ -152,7 +152,7 @@ class TestGetRecord:
         assert kwargs["args"] == {"object_type": "Contact", "record_id": "003xx"}
         assert kwargs["raw_data"] == client.get_record.return_value
         assert result == {"object_type": "Contact", "id": "003xx", "fields": {"Name": "Bob Smith", "Email": "bob@example.com"}}
-        # §3 names which fields are actually on this record (alphabetized);
+        # new_info names which fields are actually on this record (alphabetized);
         # the right-pane table carries the real values.
         assert kwargs["new_info"]["Field values"] == "Email, Name"
         assert kwargs["preview_tables"] == [

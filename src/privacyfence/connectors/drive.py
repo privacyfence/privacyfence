@@ -833,7 +833,7 @@ class DriveConnector(Connector):
         render_label = "" if value_render_option == "FORMATTED_VALUE" else f" ({value_render_option.lower()})"
         format_label = " + formatting" if include_formatting else ""
         # Spreadsheet/Owner are known via drive_get_file_metadata; Range is
-        # Claude's own input to this very call (kept in §1 as identifying
+        # Claude's own input to this very call (kept in the preview as identifying
         # context, not "new," since Claude already knows what it asked for
         # -- same reasoning as Salesforce's own-input record id). Cell
         # values is the actual new content, covered by the visibility row.
@@ -987,12 +987,11 @@ class DriveConnector(Connector):
         # content -- since no file content ever reaches Claude for this
         # tool, showing the human the real content here is strictly more
         # useful than a visual-only thumbnail ever was.
-        # B4: a >100KB file used to always hit get_file_content()'s default
-        # 100KB prefetch cap, so extract_text() ran on a truncated prefix --
+        # A >100KB file would hit get_file_content()'s default
+        # 100KB prefetch cap, so extract_text() would run on a truncated prefix --
         # fine for text, but pypdf needs a PDF's trailer, at the *end* of
         # the file, so a truncated prefix throws instead of returning
-        # anything usable (the "EOF marker not found" tracebacks the bug
-        # report showed). Below a sane size, fetch the whole file instead
+        # anything usable ("EOF marker not found"). Below a sane size, fetch the whole file instead
         # of guessing at a cap; above it, skip extract_text() on a
         # truncated result rather than feed it something it can't parse.
         # `full_bytes` is reused below for the actual delivery when this
@@ -1259,11 +1258,11 @@ class DriveConnector(Connector):
         # the .mcpb shim runs on the user's own machine): org mode's own
         # daemon runs wherever PrivacyFence's server runs, not the user's
         # machine, and local_path there has always meant "read from the
-        # server's own filesystem" -- unaffected by this phase, exactly
-        # like drive_download_file's own org-mode branch stays unchanged.
+        # server's own filesystem" -- the file bridge does not apply, exactly
+        # like drive_download_file's own org-mode branch.
         is_org_local_path = local_path.strip() and self.download_mode == "org"
 
-        # Phase 4 ("Clients without the bridge"): upload_id names bytes
+        # Capability uploads (ADR 0028): upload_id names bytes
         # already staged by privacyfence_create_upload_slot, via the
         # local_files.py ``upload:`` convention -- this works in every
         # mode, org mode included, since a capability slot needs neither
@@ -1276,10 +1275,9 @@ class DriveConnector(Connector):
         effective_local_path = local_path if (local_path.strip() and not is_org_local_path) else upload_ref
 
         if effective_local_path:
-            # ADR 0007/B2: raises immediately -- LocalFileAccessError if
+            # ADR 0007: raises immediately -- LocalFileAccessError if
             # there's no way to reach this path at all, or LocalFilesNeeded
-            # to start the upload handshake -- instead of the old
-            # os.path.getsize()/os.path.isfile() below silently reporting
+            # to start the upload handshake -- rather than reporting
             # "0 bytes" for a file this process can't read and only failing
             # once the human has already approved the upload.
             local_files.require_local_files(

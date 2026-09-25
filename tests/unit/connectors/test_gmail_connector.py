@@ -144,9 +144,9 @@ class TestGetMessagePreviewMinimization:
         await connector.call("gmail_get_message", {"message_id": "m1"})
 
         kwargs = gated_call_spy[0]
-        # §1 ("What Claude already knows"): only fields gmail_list_messages
+        # The preview ("What Claude already knows"): only fields gmail_list_messages
         # itself returns -- From/Date/Subject. To (recipients) isn't known
-        # for free, so it's a new_info (§3) field instead, not preview.
+        # for free, so it's a new_info field instead, not preview.
         assert kwargs["preview"] == {
             "From": "alice@example.com",
             "Date": "Mon, 01 Jul 2026 10:00:00 +0000",
@@ -280,9 +280,9 @@ class TestGetThread:
         kwargs = gated_call_spy[0]
         # Subject is conditionally known -- gmail_list_messages returns
         # thread_id per message, and a thread's replies conventionally
-        # share its subject, so kept in §1 (same reasoning as Drive's
+        # share its subject, so kept in the preview (same reasoning as Drive's
         # file metadata). Messages (count) has no equivalent free source
-        # and stays new. Participants/Dates are kept in §1 as identifying
+        # and stays new. Participants/Dates are kept in the preview as identifying
         # context even though they're never sent to Claude at all (see
         # connectors/gmail.py's comment at this call site).
         assert kwargs["preview"]["Subject"] == "Re: budget"
@@ -428,7 +428,7 @@ class TestGmailPrivacyFilter:
         visibility = gated_call_spy[0]["visibility"]
         assert visibility["Message body"] == "block"
         assert visibility["Attachments"] == "redact"
-        # No "Sender & metadata" row -- From/Date/Subject are already §1 and
+        # No "Sender & metadata" row -- From/Date/Subject are already in the preview and
         # To is already a concrete value in new_info, so an abstract policy
         # row here would just restate them.
         assert "Sender & metadata" not in visibility
@@ -875,8 +875,8 @@ class TestOrgModeDownloadDelivery:
 
         assert result["delivery"] == "link"
         assert result["size_bytes"] == 5000
-        # Phase 4: agent_links defaults to True -- the capability route,
-        # not the older cookie-authenticated browser one.
+        # agent_links defaults to True -- the capability route,
+        # not the cookie-authenticated browser one.
         assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
         assert get_download_staging_store().pending_count == 1
 
@@ -1370,8 +1370,7 @@ class TestBodyMarkdownRichText:
 
 class TestWriteToolsWithAttachmentsGateAndPreview:
     """gmail_create_draft_with_attachments/gmail_reply_draft_with_attachments/
-    gmail_reply_all_draft_with_attachments -- the additive tools from issue
-    #113. Parallel to TestWriteToolsGateAndPreview's plain-draft coverage,
+    gmail_reply_all_draft_with_attachments. Parallel to TestWriteToolsGateAndPreview's plain-draft coverage,
     plus: the attachments arg is a JSON array of local file paths, stat'd
     (not read) before gating so the popup shows real filenames/sizes without
     the connector reading file content pre-approval.
@@ -1715,7 +1714,7 @@ class TestDraftSignatureAndSendAs:
 
 
 class TestWriteToolsWithUploadRefAttachments:
-    """Phase 4 ("Clients without the bridge"): an 'upload:<id>' entry in
+    """Capability uploads (ADR 0028): an 'upload:<id>' entry in
     attachments claims bytes already staged by
     privacyfence_create_upload_slot -- works in every mode, org mode
     included, unlike a plain local_path attachment."""

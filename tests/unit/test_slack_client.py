@@ -1051,7 +1051,7 @@ class TestListGroupChats:
 
 # ---------------------------------------------------------------------------- #
 # Participant resolution helpers (the users.conversations fast path) and the
-# other small P0-performance pieces underneath list_channels/list_group_chats/
+# other small performance pieces underneath list_channels/list_group_chats/
 # _search_by_participant.
 # ---------------------------------------------------------------------------- #
 

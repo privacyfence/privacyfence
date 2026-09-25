@@ -835,10 +835,9 @@ class TestOrgModeDownloadDelivery:
     async def test_local_mode_return_shape_is_unchanged(self, gated_call_spy):
         """Regression pin: local mode's drive_download_file must keep
         calling DriveClient.download_file (the disk-writing path) and
-        returning exactly its dict shape, byte-identical to before Phase 2
-        -- connector.download_mode defaults to "local" (make_connector's
-        own default), so this is the pre-Phase-2 behavior with no org-mode
-        wiring involved at all."""
+        returning exactly its dict shape -- connector.download_mode defaults
+        to "local" (make_connector's own default), so this is local mode's
+        behavior with no org-mode wiring involved at all."""
         connector, client = make_connector()
         client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=100)
         client.download_file.return_value = {"name": "f.pdf", "path": "/tmp/f.pdf", "size_bytes": 100}
@@ -889,8 +888,8 @@ class TestOrgModeDownloadDelivery:
         assert result["delivery"] == "link"
         assert result["name"] == "big.bin"
         assert result["size_bytes"] == 5000
-        # Phase 4: DownloadDeliveryConfig.agent_links defaults to True, so
-        # the staged link is the capability route, not the older cookie-
+        # DownloadDeliveryConfig.agent_links defaults to True, so
+        # the staged link is the capability route, not the cookie-
         # authenticated browser one -- see test_agent_links_false_keeps_
         # the_browser_link below for the opt-out.
         assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
@@ -902,8 +901,8 @@ class TestOrgModeDownloadDelivery:
         assert "one-time link" in kwargs["new_info"]["Content returned to {agent}"]
 
     async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
-        """An org that opts out of Phase 4's default (org_config.json's
-        download_delivery.agent_links: false) keeps the pre-Phase-4,
+        """An org that opts out of capability links (org_config.json's
+        download_delivery.agent_links: false) keeps the
         cookie-authenticated /downloads/{token} link -- see
         DownloadDeliveryConfig.staged_link_path's own docstring."""
         connector, client = self._org_connector(inline_max_bytes=10, agent_links=False)
@@ -1114,7 +1113,7 @@ class TestUploadFile:
         assert kwargs["preview"]["Source"] == "uploaded via privacyfence_create_upload_slot"
 
     async def test_upload_id_works_in_org_mode_too(self, gated_call_spy):
-        """Phase 4's whole point: org mode has no filesystem to read a
+        """The point of capability uploads (ADR 0028): org mode has no filesystem to read a
         local_path from, but an upload_id claim needs neither
         can_access_user_files() nor a bridge -- see local_files.
         require_local_files' own ``upload:`` handling."""
@@ -1273,10 +1272,8 @@ class TestUploadFile:
         assert kwargs["preview_mime_type"] == ""
 
     async def test_local_path_missing_file_raises_before_any_approval(self, tmp_path, gated_call_spy):
-        # B2: reported before the human is ever asked to approve anything
-        # -- supersedes the old "0 bytes, still gates, still 'uploads'"
-        # behavior, which only worked because the actual upload call was
-        # fully mocked out and never touched the real (missing) file.
+        # Reported before the human is ever asked to approve anything,
+        # rather than gating a "0 bytes" upload of a file that is not there.
         connector, client = make_connector()
         client.upload_file.return_value = {"id": "uploaded7"}
 

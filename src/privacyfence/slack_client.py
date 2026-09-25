@@ -152,8 +152,8 @@ class SlackClientError(Exception):
 def build_authorize_url(
     client_id: str, redirect_uri: str, state: str, user_scopes: list[str] | None = None,
 ) -> str:
-    """Slack's OAuth v2 authorize URL -- factored out of ``authorize_interactive``
-    (P8) so ``web/routes_connections.py``'s org-mode server-redirect flow
+    """Slack's OAuth v2 authorize URL -- separate from ``authorize_interactive``
+    so ``web/routes_connections.py``'s org-mode server-redirect flow
     can build the same URL without going through
     ``oauth_loopback.run_browser_oauth``'s local
     listener. ``state`` is a CSRF token the caller generates and later
@@ -174,8 +174,8 @@ def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: s
     """Exchanges an authorization code for a Slack user token and returns
     the normalized token record -- *not* yet saved to disk (see
     ``save_token_record`` below). Shared by ``authorize_interactive``'s
-    local-mode loopback flow and org mode's server-redirect flow (P8);
-    raises ``SlackClientError`` on any failure, same as before this split.
+    local-mode loopback flow and org mode's server-redirect flow;
+    raises ``SlackClientError`` on any failure.
     """
     client = WebClient()
     try:
