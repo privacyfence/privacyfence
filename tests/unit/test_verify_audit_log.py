@@ -110,3 +110,21 @@ class TestMain:
         monkeypatch.setenv("USERPROFILE", str(tmp_path.parent))
         rc = verify_audit_log.main([f"~/{tmp_path.name}"])
         assert rc == 0
+
+
+class TestExamplePaths:
+    """The daemon writes the local-mode log under ``authority/``; an example
+    without it names a directory no install has."""
+
+    def test_help_and_docstring_name_the_authority_log_directory(self):
+        # The argument's own help string: format_help() wraps to the terminal
+        # width and could split a path across lines.
+        (log_dir,) = [a for a in verify_audit_log.build_parser()._actions if a.dest == "log_dir"]
+        help_text = log_dir.help
+        doc = verify_audit_log.__doc__
+
+        for text in (help_text, doc):
+            assert "~/.privacyfence/logs/audit" not in text
+            assert "authority/logs/audit" in text
+        assert "sudo python3 scripts/verify_audit_log.py /var/lib/privacyfence/authority/logs/audit" in doc
+        assert "Audit log integrity" in doc

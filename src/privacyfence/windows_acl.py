@@ -27,8 +27,8 @@ directory and the daemon has to be able to connect to it, and ``connect(2)``
 on a socket node needs write permission. Windows' companion channel is a
 named pipe in the ``\\\\.\\pipe\\`` namespace (``web/control_channel.py``),
 not a file, so nothing in the user's session ever needs to create anything
-under ``handoff/`` -- only to read ``mcp_token``, ``mcp_url`` and the
-discovery files. Granting less is free here, so it is granted.
+under ``handoff/`` -- only to read ``mcp_url``, ``web_base_url`` and the
+other discovery files. Granting less is free here, so it is granted.
 
 ## Two kinds of function
 
@@ -327,9 +327,11 @@ def handoff_problems(
 ) -> list[str]:
     """``handoff/`` is deliberately not a boundary (ADR 0002 decision 6), so
     this checks that it is *open enough* as much as that it is not open too
-    far: the agent has to be able to read its own ``mcp_token`` there, and
-    the companion has to be able to read ``web_base_url``, or a separated
-    install is simply broken in a way no error message would explain.
+    far: the ``.mcpb`` shim has to be able to read ``mcp_url`` there, and
+    the companion ``web_base_url``, or a separated install is simply broken
+    in a way no error message would explain. (The MCP token itself is not
+    there on a separated install: it lives under the authority directory
+    and clients mint it over the control channel.)
 
     Write is the one thing the group must not have. Nothing in the user's
     session creates anything here on Windows -- both control channels are
@@ -357,8 +359,8 @@ def handoff_problems(
     ):
         problems.append(
             f"{path} grants the '{service_group}' group no read access -- the companion app "
-            "and the MCP client cannot reach mcp_token or the discovery files, so this install "
-            "will look like a daemon that is not running."
+            "and the MCP extension cannot read mcp_url, web_base_url or the other discovery "
+            "files, so the daemon will look like it is not running."
         )
     return problems
 

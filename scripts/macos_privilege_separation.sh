@@ -463,10 +463,10 @@ apply_layout() {
   chmod "$SYSTEM_ROOT_MODE" "$SYSTEM_ROOT"
   chmod "$AUTHORITY_DIR_MODE" "${SYSTEM_ROOT}/authority"
   chmod "$HANDOFF_DIR_MODE" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
-  # The discovery files the daemon rewrites on every start would fix
-  # themselves, but mcp_token is reused across restarts -- one left at 0600
-  # (by a hand-edited tree, or a daemon started before this re-run) would
-  # stay that way and the agent would never read its own credential again.
+  # The daemon rewrites the discovery files (mcp_url, web_base_url) on every
+  # start, but until then one left at 0600 (by a hand-edited tree, or a
+  # daemon started before this re-run) keeps the companion and the .mcpb shim
+  # from finding a daemon that is running.
   # (privilege_separation.ensure_handoff_file_mode() re-asserts this too; doing
   # it here as well means a correct install doesn't depend on that fix-up.)
   find "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" -type f -exec chmod "$HANDOFF_FILE_MODE" {} +
@@ -1118,8 +1118,17 @@ cmd_uninstall() {
 
   To delete the data (connector sign-ins, policy, audit log) and the
   account as well:
-    sudo $0 uninstall --purge
 DONE
+    # On a .pkg install the bundle removal above just deleted this script,
+    # so repeating $0 would name a file that is gone.
+    if [ -f "$0" ]; then
+      echo "    sudo $0 uninstall --purge"
+    else
+      cat <<DONE
+    install PrivacyFence again, then run
+    sudo ${DEFAULT_APP}/Contents/Resources/scripts/macos_privilege_separation.sh uninstall --purge
+DONE
+    fi
     return 0
   fi
 

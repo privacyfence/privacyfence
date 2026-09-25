@@ -682,13 +682,14 @@ owned by that account would make every permission below advisory. Re-run
     # group rwx because the companion creates its own socket there and
     # connect(2) needs write on the node; here both control channels are named
     # pipes, so nothing in the user's session ever creates anything in this
-    # directory -- it only reads mcp_token and the discovery files.
+    # directory -- it only reads the discovery files (mcp_url, web_base_url).
     Invoke-Icacls @($handoff, '/inheritance:r', '/q')
     Invoke-Icacls @($handoff, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", "${ServiceGroup}:(OI)(CI)(RX)", '/q')
     # Files already in handoff\ -- a reinstall's, left by `uninstall` -- are
     # reset to inherit the grants above rather than trusted to still carry
-    # them. mcp_token in particular is reused across restarts and would
-    # otherwise stay unreadable to the agent if its ACL had drifted. This is
+    # them. The daemon rewrites them on every start, but until then a drifted
+    # ACL would keep the companion and the .mcpb shim from finding a daemon
+    # that is running. This is
     # the Windows counterpart of the POSIX scripts' find -exec chmod 640.
     Get-ChildItem -Path $handoff -Force -ErrorAction SilentlyContinue | ForEach-Object {
         Invoke-Icacls @($_.FullName, '/reset', '/q')
@@ -1325,7 +1326,7 @@ function Invoke-Status {
         $groupRules = @(Get-PathAccessRules -LiteralPath $handoff |
             Where-Object { $_.IdentityReference.Value -like "*\$ServiceGroup" -or $_.IdentityReference.Value -ieq $ServiceGroup })
         if ($groupRules.Count -eq 0) {
-            Write-Host "  NO HANDOFF       $handoff grants $ServiceGroup nothing -- your MCP client cannot read mcp_token"
+            Write-Host "  NO HANDOFF       $handoff grants $ServiceGroup nothing -- the companion app and MCP extension cannot read mcp_url/web_base_url (the daemon will look like it is not running)"
             $problems = 1
         } elseif (@($groupRules | Where-Object { Test-RuleGrantsWrite -Rule $_ }).Count -gt 0) {
             Write-Host "  TOO OPEN         $handoff grants $ServiceGroup write access -- it only needs to read"
