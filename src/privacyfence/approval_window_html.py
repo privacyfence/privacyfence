@@ -824,8 +824,8 @@ def build_card_stack_html(
     whenever the pinned block above it takes up most of the available
     height. This module takes the one-shared-scrollbar trade-off instead,
     matching the right pane's own full-height scrollbar treatment. The
-    risk card still renders *before* the disclosure card (not after) for the same reason as
-    always: it's the highest-consequence card, so it's the first thing
+    risk card renders *before* the disclosure card (not after) because it's the
+    highest-consequence card, so it's the first thing
     scrolled past on the way down, not the last.
 
     Exactly one of ``pii_categories``/``write_content_flags`` is ever
@@ -869,20 +869,22 @@ def build_card_stack_html(
         agent_label = UNKNOWN_AGENT_LABEL
     agent_display_name = agent_label.subject
     width = CONTENT_WIDTH[layout]
-    pinned_html = []  # header, action card, reason card, risk card -- always fully visible
-    scrollable_html = []  # the disclosure card alone -- the only card that ever scrolls
+    # Two ordering groups inside the one shared scroll region: the cards read first, then the
+    # disclosure card after them. Neither group is pinned; the whole column scrolls together.
+    lead_html = []  # action card, reason card, risk card
+    disclosure_html = []  # the disclosure card
 
     sec1 = _section_1_html(is_read, preview, agent_display_name)
     if sec1:
-        pinned_html.append(sec1)
+        lead_html.append(sec1)
 
     sec2 = _section_2_html(is_read, claude_reason, agent_display_name)
     if sec2:
-        pinned_html.append(sec2)
+        lead_html.append(sec2)
 
-    # Pinned, and placed *before* the disclosure card -- the highest-consequence card must
-    # never end up scrolled out of view, and reads that way too: right
-    # after "why Claude needs this," before the disclosure detail.
+    # Placed *before* the disclosure card: it is the highest-consequence card, so the reviewer
+    # reads it right after "why Claude needs this," and it is the first card scrolled past on the
+    # way down, not the last.
     if pii_categories:
         risk_html = _risk_section_html(pii_categories, variant="read")
     elif write_content_flags:
@@ -891,20 +893,20 @@ def build_card_stack_html(
     else:
         risk_html = ""
     if risk_html:
-        pinned_html.append(risk_html)
+        lead_html.append(risk_html)
 
     if is_read:
         # Write-gate calls never get a disclosure card at all.
         sec3 = _section_3_html(disclosure_rows, agent_display_name)
         if sec3:
-            scrollable_html.append(sec3)
+            disclosure_html.append(sec3)
 
     header_html = _header_html(
         title, connector_icon_data_uri, shield_icon_data_uri, seen_count_text, is_read,
         agent_html=_agent_html(agent_label, agent_icon_data_uri),
     )
-    pinned_joined = "".join(pinned_html)
-    scrollable_joined = "".join(scrollable_html)
+    lead_joined = "".join(lead_html)
+    disclosure_joined = "".join(disclosure_html)
     # The whole left column -- header, action, reason and risk cards *and*
     # the disclosure card together -- is one shared scroll region, not
     # split into an always-visible pinned part plus a separately-scrolling
@@ -914,7 +916,7 @@ def build_card_stack_html(
     # for one scrollbar that visually spans the whole column, matching the
     # right pane's own full-height one, instead of a short one confined to
     # just the disclosure card.
-    left_column_content = header_html + pinned_joined + scrollable_joined
+    left_column_content = header_html + lead_joined + disclosure_joined
 
     if layout == WIDE:
         # Fixed left column width (_WIDE_LEFT_COLUMN_WIDTH -- baked directly

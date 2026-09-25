@@ -18,8 +18,10 @@ modified time), mirroring drive_list_shared_drives. ``apps_script_get_content``
 and ``apps_script_get_execution_log`` are review-gated reads (script source
 can embed sensitive constants/URLs; execution results came from a run the
 user triggered, not from Claude). ``apps_script_write_content`` is a
-popup-gated write with no configurable auto-accept rule (Allow once only),
-matching most other write tools.
+popup-gated write. An auto-accept rule for these three tools can be set
+deliberately, from Settings or ``privacyfence_propose_policy_change`` (the
+``apps_script.project`` scope), but never from the popup's Always allow
+(ADR 0077).
 """
 
 from __future__ import annotations

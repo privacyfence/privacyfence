@@ -61,6 +61,14 @@ confirmation -- see gate.py's own module docstring):
   approval never releases a second identical write -- ADR 0073) and
   wakes ``wait_async()`` -- the thing gate.py's hold window actually awaits.
 
+A decided outcome reaches a caller one of two ways: through the ledger
+(``consume_ledger()``, a re-issued call), or directly, when the human
+decides within the hold window while the original call is still waiting
+(gate.py then calls ``mark_collected()``). Both mark the entry
+``ledger_collected``, and for a write both consume it, so single-use holds
+on every path that releases a write, and ``pop_expired_ledger_events()``
+reports only an outcome that no call ever collected (ADR 0073).
+
 Both events are ``threading.Event`` rather than ``asyncio.Event``: this
 registry is touched from the asyncio event loop (gate.py, the web routes'
 request handlers) *and* from plain OS threads (WebApprovalUI's blocking
@@ -162,6 +170,16 @@ _NON_BATCHABLE_KIND_REASON: dict[str, str] = {
     "confirm": "This is a confirmation dialog, not an approval — it can't be decided from the list.",
     "choice": "This is a selection dialog, not an approval — it can't be decided from the list.",
 }
+
+
+class IdenticalWriteAwaitingApprovalError(RuntimeError):
+    """Raised by register_or_coalesce() for a write (``gate_kind ==
+    "popup"``) whose identical twin is still being waited on by another call
+    -- that call collects the decision, and coalescing onto it would let one
+    human decision release two writes (ADR 0073). Fail-closed: nothing is
+    registered or released for the refused call. Composed only of static
+    text, so safe_errors.public_message() forwards it verbatim, like
+    TooManyPendingApprovalsError below."""
 
 
 class TooManyPendingApprovalsError(RuntimeError):
@@ -269,7 +287,22 @@ class PendingApproval:
     final_rule_name: str = ""
     decided_at: float | None = None
     ledger_expires_at: float | None = None
+    # True once no later call may take this entry from the ledger: a write
+    # whose outcome was released (single-use), or an entry the expiry sweep
+    # has already drained. A read's entry stays unconsumed until its TTL.
     ledger_consumed: bool = False
+    # True once this approval's outcome reached any caller, by the ledger or
+    # directly through the hold window -- separate from ledger_consumed
+    # because a collected read still replays. pop_expired_ledger_events()
+    # drops a collected entry silently: the release is already audited, so
+    # "expired" is kept for an outcome nobody ever collected (ADR 0073).
+    ledger_collected: bool = False
+    # How many gated calls are waiting on this approval in wait_async() right
+    # now. Counted under the registry lock by register_or_coalesce(waiting=
+    # True) and released by release_waiter(). A write is never coalesced onto,
+    # or taken from the ledger, while this is non-zero: the waiting call
+    # collects its outcome (ADR 0073).
+    waiters: int = 0
     # Audit provenance for the approval binder's batch decide endpoint
     # -- "" for every ordinary single-decide answer. Stamped by answer() itself (not a
     # separate setter) so it can never be set without also resolving the
@@ -460,12 +493,27 @@ class PendingApprovalRegistry:
         pii_detected: bool = False,
         pii_categories: list[str] | None = None,
         claude_reason: str = "",
+        waiting: bool = False,
     ) -> tuple[PendingApproval, bool]:
         """Returns ``(approval, created)``. ``created=False`` means an
         identical, not-yet-finalized approval was already outstanding for
         this exact ``(connector, tool, args)`` and the caller is coalescing
         onto it -- the caller must not show a
         second card, only await the existing one.
+
+        ``waiting=True`` counts the caller as a waiter on the returned
+        approval (``PendingApproval.waiters``) inside the same critical
+        section that registered or found it, so no second call can slip in
+        between registration and the wait. A caller that passes it must call
+        release_waiter() once it stops waiting, whatever the outcome.
+
+        Raises IdenticalWriteAwaitingApprovalError for a write (``gate_kind
+        == "popup"``) whose identical outstanding approval already has a
+        waiter: that waiter collects the decision, and one decision never
+        releases two writes (ADR 0073). A write re-issued after its first
+        call returned ``approval_pending`` (no waiter left) still coalesces,
+        which is how a deferred write collects its decision. Reads coalesce
+        however many calls are waiting.
 
         Raises TooManyPendingApprovalsError if either cap is reached and
         this is a genuinely new key (never raised for a coalescing hit --
@@ -482,7 +530,16 @@ class PendingApprovalRegistry:
             existing_id = self._by_key.get(key)
             if existing_id is not None:
                 existing = self._pending.get(existing_id)
+                if existing is not None and existing.gate_kind == "popup" and existing.waiters > 0:
+                    # Finalized or not: a finalized write with a waiter is
+                    # about to be collected by that waiter (mark_collected).
+                    raise IdenticalWriteAwaitingApprovalError(
+                        "An identical write is already awaiting approval -- wait for that "
+                        "call's result instead of issuing it again."
+                    )
                 if existing is not None and not existing.is_finalized():
+                    if waiting:
+                        existing.waiters += 1
                     return existing, False
             live_for_principal = sum(
                 1 for a in self._pending.values()
@@ -511,6 +568,7 @@ class PendingApprovalRegistry:
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=pii_detected,
                 pii_categories=list(pii_categories or []), claude_reason=claude_reason,
                 agent=current_agent(),
+                waiters=1 if waiting else 0,
             )
             self._pending[approval.id] = approval
             self._by_key[key] = approval.id
@@ -682,6 +740,12 @@ class PendingApprovalRegistry:
                 return None
             if approval.ledger_expires_at is not None and time.time() > approval.ledger_expires_at:
                 return None
+            if approval.gate_kind == "popup" and approval.waiters > 0:
+                # The call still waiting on this write collects it through
+                # mark_collected(); handing it out here as well would
+                # release one decision twice.
+                return None
+            approval.ledger_collected = True
             if approval.gate_kind == "popup":
                 approval.ledger_consumed = True
                 del self._by_key[key]
@@ -703,6 +767,36 @@ class PendingApprovalRegistry:
         import asyncio
 
         return await asyncio.to_thread(approval.finalize_event.wait, timeout)
+
+    def mark_collected(self, approval: PendingApproval) -> None:
+        """Record that ``approval``'s outcome reached a caller directly: the
+        human decided within the hold window while that caller was still in
+        wait_async(). The hold-window counterpart of consume_ledger(), with
+        the same effect: the entry is ``ledger_collected`` (so its TTL lapse
+        is not audited as "expired"), and a write is also consumed, so an
+        identical write afterwards goes back through the gate instead of
+        replaying this decision (ADR 0073). A read stays replayable, and
+        every other call coalesced onto it still gets the same result.
+
+        Must be called before release_waiter(): while the caller is still
+        counted as a waiter, consume_ledger() and register_or_coalesce()
+        refuse to hand this write to anyone else."""
+        with self._lock:
+            if not approval.is_finalized():
+                return
+            approval.ledger_collected = True
+            if approval.gate_kind == "popup" and not approval.ledger_consumed:
+                approval.ledger_consumed = True
+                self._drop_key_locked(approval)
+                self._pending.pop(approval.id, None)
+
+    def release_waiter(self, approval: PendingApproval) -> None:
+        """Undo one ``register_or_coalesce(waiting=True)``: the caller has
+        stopped waiting on ``approval``, whether it collected an outcome,
+        timed out into ``approval_pending`` or was cancelled."""
+        with self._lock:
+            if approval.waiters > 0:
+                approval.waiters -= 1
 
     def has_other_live(self, principal_id: str, exclude_id: str) -> bool:
         """True if some *other* not-yet-finalized approval already exists
@@ -821,6 +915,17 @@ class PendingApprovalRegistry:
     # not on a background timer).
     # ------------------------------------------------------------------ #
 
+    def _drop_key_locked(self, approval: PendingApproval) -> None:
+        """Must be called with self._lock held. Removes ``approval``'s
+        ``_by_key`` entry, but only while it still points at ``approval``:
+        once a key has been freed, a newer approval for the same call may
+        own it."""
+        if approval.dedupe_key is None:
+            return
+        key = (approval.principal_id, approval.dedupe_key)
+        if self._by_key.get(key) == approval.id:
+            del self._by_key[key]
+
     def _expire_stale_locked(self) -> None:
         """Must be called with self._lock held. Frees dedupe keys whose
         approval expired (pending TTL) or whose ledger entry did (ledger
@@ -870,14 +975,19 @@ class PendingApprovalRegistry:
         return expired
 
     def pop_expired_ledger_events(self) -> list[PendingApproval]:
-        """Finalized approvals whose decision was never reclaimed (no
-        re-issued call ever consumed it) before the ledger TTL lapsed --
-        the "decided but nobody came back for it" case. gate.py audits each
-        of these as "expired" too (see this module's own docstring on why
-        there is no separate vocabulary for it: the human's real decision
-        was already made, but nothing was ever released on the strength of
-        it, which is exactly what "expired" already means for a pending
-        approval that ran out the clock)."""
+        """Drains every finalized approval whose ledger TTL has lapsed, and
+        returns the ones whose outcome no call ever collected -- the
+        "decided but nobody came back for it" case. gate.py audits each of
+        those as "expired" too: the human's real decision was made, but
+        nothing was released on the strength of it, which is exactly what
+        "expired" already means for a pending approval that ran out the
+        clock.
+
+        An entry whose outcome did reach a caller (``ledger_collected``: a
+        replayed read, or any decision delivered within the hold window) is
+        removed silently. Its release is already audited as that call's own
+        row, and reporting it here would record data that was released as
+        "expired" (ADR 0073)."""
         now = time.time()
         events: list[PendingApproval] = []
         with self._lock:
@@ -885,11 +995,13 @@ class PendingApprovalRegistry:
                 if (
                     approval.is_finalized() and not approval.ledger_consumed
                     and approval.final_decision != "expired"
+                    # A call still in wait_async() is about to collect it.
+                    and approval.waiters == 0
                     and approval.ledger_expires_at is not None and now > approval.ledger_expires_at
                 ):
                     approval.ledger_consumed = True
-                    if approval.dedupe_key is not None:
-                        self._by_key.pop((approval.principal_id, approval.dedupe_key), None)
+                    self._drop_key_locked(approval)
                     self._pending.pop(approval.id, None)
-                    events.append(approval)
+                    if not approval.ledger_collected:
+                        events.append(approval)
         return events

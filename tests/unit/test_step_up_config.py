@@ -293,6 +293,10 @@ class TestLocalEnrollmentBanner:
         banner = config.local_enrollment_banner(has_credentials=False)
         assert banner is not None
         assert "/security" in banner
+        # Only what step-up covers is blocked (ADR 0069) -- an approval
+        # outside ``scope`` is still released, so the banner must not
+        # claim every approving decision is.
+        assert "approvals that need step-up" in banner
 
 
 class TestOffNotice:
@@ -359,6 +363,10 @@ class TestLiveStepUpConfig:
         banner = live.local_enrollment_banner(has_credentials=False)
         assert banner is not None
         assert "/security" in banner
+        # Only what step-up covers is blocked (ADR 0069) -- an approval
+        # outside ``scope`` is still released, so the banner must not
+        # claim every approving decision is.
+        assert "approvals that need step-up" in banner
 
     def test_off_notice_reflects_the_current_value(self):
         live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig())

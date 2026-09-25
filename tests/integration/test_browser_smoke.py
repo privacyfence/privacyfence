@@ -1840,7 +1840,7 @@ class TestSettingsPageRendering:
     this drives all three in a real headless browser and saves a full-page
     screenshot of each, as evidence a reviewer can look at."""
 
-    _SCREENSHOT_DIR = Path(__file__).resolve().parents[2] / "test-results" / "psc5-settings-screenshots"
+    _SCREENSHOT_DIR = Path(__file__).resolve().parents[2] / "test-results" / "settings-screenshots"
 
     def _screenshot(self, page, name: str) -> None:
         self._SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)

@@ -484,7 +484,7 @@ class McpDispatcher:
             "Windows, the PrivacyFence entry in the applications menu on Linux -- and choose "
             "Open Settings, then authenticate at least one connector (Gmail, Slack, etc.). "
             "There is no link for you to hand them: a sign-in link is exactly the credential "
-            "that governs this process, so PrivacyFence no longer issues one to it. "
+            "that governs this process, so PrivacyFence never issues one to it. "
             "PrivacyFence-governed tools stay unavailable until they finish."
         )
         self._audit_status_check("status_checked", claude_reason)
