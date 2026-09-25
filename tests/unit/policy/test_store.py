@@ -50,25 +50,22 @@ class TestRuleIdFor:
 
 
 class TestRuleIdForRule:
-    """Rule attribution: the canonical id for an already-compiled rule,
-    independent of whatever its own ``.id`` happens to be -- gate.py's ``_evaluate_auto_accept``
-    needs this to attribute a decision made against a rule whose ``.id`` is not canonical (one
-    built in memory) to the same row Settings' Auto-accept page lists."""
+    """``rule_id_for_rule`` derives a compiled rule's canonical id from its content
+    (``predicate``, ``value``, ``conditions``), never from its ``.id`` (ADR 0074). These tests pin
+    it to agree with ``rule_id_for`` and with the ids ``merge_rules`` keeps."""
 
     def test_matches_rule_id_for_of_the_same_fields(self):
         rule = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F1"])
         assert store.rule_id_for_rule(rule) == store.rule_id_for("approved_sandbox_folder", ["F1"], ())
 
     def test_ignores_the_rules_own_id(self):
-        # Same (predicate, value, conditions) as above, but a completely different, made-up `.id`
-        # -- exactly the shape a v1-compiled rule has (compat.compile_rule_entry sets id=rule_name)
-        # and exactly why this function recomputes rather than trusting `.id`.
+        # Same (predicate, value, conditions) as above, but a completely different, made-up `.id`:
+        # the id comes from the content alone.
         rule = _rule(id_="some ambiguous v1 name", predicate="approved_sandbox_folder", value=["F1"])
         assert store.rule_id_for_rule(rule) == store.rule_id_for("approved_sandbox_folder", ["F1"], ())
 
     def test_two_rules_with_the_same_id_but_different_values_get_different_canonical_ids(self):
-        # Two v1-compiled rules sharing one ambiguous name (`.id`) because
-        # they came from the same predicate, but naming two different resources.
+        # Two rules sharing one `.id` but naming two different resources.
         a = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F1"])
         b = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F2"])
         assert store.rule_id_for_rule(a) != store.rule_id_for_rule(b)

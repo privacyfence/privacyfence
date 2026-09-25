@@ -32,7 +32,7 @@ always had is something the user is shown and chooses, rather than something one
 
 **What the popup deliberately does not propose.** Three operation groups are configurable only
 deliberately, from the Settings page or the bridge's ``privacyfence_propose_policy_change`` (see
-``policy/catalogue.EXTRA_SCOPES``), never reactively off one gated call:
+``policy/catalogue.EXTRA_SCOPES``), never reactively off one gated call (ADR 0077):
 
 * ``apps_script.read_content``/``write_content``/``read_execution_log`` are governed by
   ``apps_script.project``, a scope with no entry here.

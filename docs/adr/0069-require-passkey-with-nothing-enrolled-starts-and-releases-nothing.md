@@ -4,8 +4,8 @@
 
 Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-17 in `2fc760aa`, merged as
 [#471](https://github.com/privacyfence/privacyfence/pull/471) under
-[#426](https://github.com/privacyfence/privacyfence/issues/426)). The banner wording below is
-decided but not yet implemented, tracked in https://github.com/privacyfence/privacyfence/issues/741.
+[#426](https://github.com/privacyfence/privacyfence/issues/426)). The banner wording below
+followed as part of fixing https://github.com/privacyfence/privacyfence/issues/741.
 
 ## Context
 

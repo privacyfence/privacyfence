@@ -3,20 +3,12 @@
 # privacyfence` (see CLAUDE.md's "Publishing to PyPI" section for how the
 # package gets onto PyPI in the first place).
 #
-# ================================================================
-# The daemon has no native AppKit UI layer to import: `daemon_main.
-# run_app()` ends by blocking on a plain threading.Event (see that module's
-# own `_wait_for_shutdown`), not by entering a macOS menu-bar run loop.
-# `rumps`/`pyobjc-framework-*` are optional extras now (pyproject.toml's
-# `macos-native` group) that this install path never pulls in.
-#
-# Verified on a real Linux install: this systemd unit, a real `pipx install
-# privacyfence`, and a live connector's OAuth flow (`webbrowser.open()`-based)
-# have all been exercised end to end. Nothing in src/privacyfence/ imports a
-# platform-specific module (grep for `sys.platform`/`darwin` turns up nothing
-# outside this comment and its own history), and the daemon also starts and
-# runs headlessly in this repo's own Linux CI leg (`.github/workflows/tests.yml`).
-# ================================================================
+# The daemon has no native UI layer to import: `daemon_main.run_app()` ends
+# by blocking on a plain threading.Event (`_wait_for_shutdown`), not by
+# entering a macOS menu-bar run loop, so it runs the same on Linux. `rumps`
+# and `pyobjc-framework-*` are not declared as dependencies of any kind
+# (ADR 0001), and the daemon starts and runs headlessly in this repo's Linux
+# CI legs (`.github/workflows/tests.yml`).
 #
 # Install:
 #   mkdir -p ~/.config/systemd/user

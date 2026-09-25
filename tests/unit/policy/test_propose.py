@@ -258,11 +258,10 @@ class TestProposalsAgainstTheV1Tables:
         assert propose.proposals_for("drive_list_files", make_ctx()) == []
         assert propose.proposals_for("not_a_tool", make_ctx()) == []
 
-    def test_the_ungovernable_operations_stay_unproposed(self):
-        """Deliberate: no rule, label or grant capability reaches these operation keys. Two of
-        them have no scope in the scope catalogue at all, and an `always_allow` rule on
-        `gmail.create_filter` is a rule no surface can render. Making them governable belongs to
-        the v2 store as the write target, not to a proposal."""
+    def test_the_extra_scope_operations_stay_unproposed(self):
+        """ADR 0077: the operations policy/catalogue.py's EXTRA_SCOPES governs are configured
+        deliberately, from Settings or privacyfence_propose_policy_change, and the popup never
+        proposes a rule for them."""
         for tool, ctx in (
             ("gmail_create_filter", make_ctx(args={"criteria": "x"})),
             ("gmail_update_filter", make_ctx(args={"filter_id": "f"})),
