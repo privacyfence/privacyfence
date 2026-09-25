@@ -5,6 +5,11 @@
 meet the ADR bar (the framework choice and its rejected alternatives, the push-notification trust
 question) are extracted into ADRs first.
 
+**To run it:** start a Claude Code session with `/implement <GitHub URL of this file>`. If that
+session's checkout has no `/implement` command yet (it is added on the same branch as this plan),
+start it with `implement <URL>` instead: the session should read `.claude/commands/implement.md`
+from the same ref as this file and follow it.
+
 ## Goal
 
 A signed-in org-mode user can do everything they would do at a desk from a phone browser: sign in
@@ -172,55 +177,243 @@ greps for concatenated class names (below) enforces the rule.
 
 ## Phases
 
-Each phase is one PR into `main` with a `CHANGELOG.md` `[Unreleased]` line. Phases 1, 2, 4 and 5
-are layout. Phase 3 is the most urgent, because it is the one where a reviewer approves something
-they could not read, and it does not depend on the framework, so it can go first. Phases 6–7 are
-independent of the rest.
+The work lands as **one pull request** built from phase branches. Run it with
+`/implement <URL of this file>` (see [`.claude/commands/implement.md`](../.claude/commands/implement.md)):
+an orchestrator session starts one child session per phase, merges each finished phase into the
+feature branch, and opens the single PR to `main` at the end. The manifest below is what it runs.
+The prose above is the context each child reads first.
 
-1. **Toolchain.** Add the pinned Tailwind build: `web-ui/tailwind.css` (the `@theme` mapped to
-   `tokens.css`, the utilities layer only, `@source` on `src/privacyfence`) compiled to
-   `src/privacyfence/resources/ui.css`, committed. Add a CI check that rebuilding produces no diff
-   (the same pattern as a lockfile check), and a `MANIFEST.in`/package-data entry. Embed it
-   next to `tokens.css` in `web_shell.py`, `settings_window_html.py`, `approval_window_html.py` and
-   `dialog_window_html.py`. No visual change.
-2. **Settings (the actual bug).** Below the `md` breakpoint, `.pf-nav` becomes a horizontal
-   scrollable tab strip, or a `<details>`-based section picker; either needs no JavaScript beyond
-   the existing `data-nav` handler. The Privacy Filter `.pf-subnav` collapses the same way, and
-   the detail pane gets the full width. Card rows (`.pf-card-row`) stack label above control, and
-   all controls get 44px targets. Remove the matching hand-written width rules as each one is
-   replaced.
-3. **Review content on phones.** PDF page-image rendering, stacked tables, and the download-link
-   `next` fix, as described in "Review cards with documents" (adds an ADR for the server-side PDF
-   rasteriser).
-4. **Card and dialog on container queries.** Replace the `@media (max-width: 700px)` blocks in
-   `styles.css`, `approval_window_html.py` and `dialog_window_html.py` with `@container` variants
-   on the card root, so the inline-row rendering also stacks correctly.
-5. **Everything else.** Move the shell, the approval list, `/connect` (including the Telegram form)
-   and `/security` onto the same utilities. Add viewport meta to the three bare fallback pages.
-   Replace hover-only affordances.
-6. **Installable app plus web push.** Manifest, icons, VAPID, subscription store and `sw.js` push
-   handler, as described in "Beyond layout" item 1. This phase adds an ADR for the
-   off-server notification channel. Org mode only; local mode keeps tiers 0–1.
-7. **Real-device verification.** Items 2 and 3 of "Beyond layout" on physical iOS and Android.
-   Add the result to `release-testing.md`'s manual checklist.
+Order and parallelism, from the manifest's `depends_on`:
 
-## Tests
+```
+wave 1   p1-toolchain        (framework, test harness, xfail baseline)
+wave 2   p2-settings    ∥    p3-review-content
+wave 3   p4-card-containers ∥ p5-remaining-pages
+wave 4   p6-push
+wave 5   p7-retire           (ADRs checked, real-device checklist, plan deleted)
+```
 
-- Extend `TestMobileLayoutViewport` in `tests/integration/test_browser_smoke.py`, parametrized over
-  every org route (`/approvals`, `/approvals/{id}`, `/settings` with each section, `/settings/privacy`,
-  `/connect`, `/security`), both admin and non-admin, plus a WIDE read card for each preview kind
-  (PDF, image, Markdown, a 10-column record table). Assert no horizontal overflow; assert the
-  main content element is at least 90% of the viewport width (this catches the Privacy Filter bug,
-  which the overflow check alone misses because nothing overflows); assert every visible
-  interactive element is at least 44×44 CSS px.
-- Give the `org_server` fixture a bundle with at least one configured service so `/connect`
-  renders instead of 404ing.
-- Add a unit test that fails when a Python or JavaScript source builds a class attribute by
-  concatenating strings.
-- Add the CI rebuild-no-diff check from phase 1.
-- Only Chromium is available to CI today. iOS Safari runs WebKit, so phase 6's manual pass is
-  the only WebKit coverage until Playwright WebKit is added to the browser test job. That is worth
-  doing, but it is a separate decision about CI cost.
+Phases in the same wave touch disjoint files. The one shared file is `CHANGELOG.md`, and
+`[Unreleased]` additions merge mechanically.
+
+**How the phases prove they are done.** p1 adds the phone-layout test harness and marks every case
+that fails today `xfail(strict=True, reason="<phase id>")`, naming the phase that owns the fix. A
+phase is done when it has removed every xfail carrying its own id and those tests pass. Because
+the xfails are strict, a phase cannot fix another phase's case by accident without the suite
+noticing. By p7 no xfail from this plan may remain.
+
+**ADR numbers are pre-assigned**, so parallel phases do not collide: 0047 (p1), 0048 (p3),
+0049 (p4), 0050 (p6). If `main` has taken a number by the time the final PR opens, the
+orchestrator renumbers in its last merge of `main`.
+
+## Implementation manifest
+
+```yaml
+plan_slug: org-mode-mobile
+feature_branch: feature/org-mode-mobile
+max_parallel: 2
+verify_after_merge:
+  - python3 -m pytest tests/integration/test_browser_smoke.py -q
+  - python3 scripts/check_ui_css_fresh.py        # exists from p1 on
+final_checks:
+  - "grep -rn 'reason=\"p[1-7]-' tests/ returns nothing: no xfail this plan added is left"
+  - docs/org-mode-mobile-plan.md is deleted, and docs/README.md no longer points to it
+  - ADRs 0047-0050 exist, are listed in docs/adr/README.md, and are Accepted
+  - CHANGELOG.md has [Unreleased] entries for every user-visible change and no version heading
+manual:
+  - "Real iPhone (Safari and the installed Home Screen app) and real Android Chrome: sign in through the IdP, approve a write with passkey step-up, approve with the IdP step-up fallback, read a PDF review card, open a staged download link from inside the Claude app, receive a push notification"
+  - "Subjective look in light and dark at phone width (qa_web_smoke.py), per docs/release-testing.md"
+
+phases:
+  - id: p1-toolchain
+    title: Tailwind build, phone test harness, xfail baseline
+    depends_on: []
+    brief: |
+      1. Add a pinned Tailwind CSS v4 build. Put `web-ui/package.json` next to `mcpb/shim`,
+         with `@tailwindcss/cli` at an exact version (no ^ or ~) and a committed
+         package-lock.json. The entry file is `web-ui/tailwind.css`:
+         `@import "tailwindcss/theme.css" layer(theme); @import "tailwindcss/utilities.css" layer(utilities);`
+         No Preflight. An `@theme` block maps colours, radii and the spacing base onto the
+         existing `resources/tokens.css` variables, with `--color-*: initial` so no default
+         Tailwind palette leaks in. Point `@source` at `../src/privacyfence`. The compiled output
+         is `src/privacyfence/resources/ui.css`, minified and committed.
+      2. Add `scripts/check_ui_css_fresh.py`: rebuild into a temporary file, diff it against the
+         committed file, exit 1 on any difference. Wire it into tests.yml's lint job, which needs
+         Node (it already has it for the shim), and make sure the package data ships `ui.css`
+         (check MANIFEST.in and pyproject's package-data).
+      3. Embed ui.css immediately after tokens.css wherever tokens.css is embedded today:
+         web_shell.py, settings_window_html.py, approval_window_html.py, dialog_window_html.py.
+         Use the same read-once module constant, in the same nonce'd <style>.
+      4. Cascade-layer gotcha, so it is documented once: Tailwind v4's utilities live in
+         `@layer utilities`, and **unlayered** CSS beats any layered rule regardless of
+         specificity. A utility class therefore cannot override an existing hand-written rule; a
+         migrating phase must delete or narrow the hand-written rule it replaces. Write this in
+         ADR 0047 and as a comment at the top of web-ui/tailwind.css.
+      5. Find out whether any native WKWebView/WebView2 host still loads these documents. The
+         settings_controller.py docstring says the native settings window was retired after P9.
+         If one does, check that Tailwind v4's browser floor (Safari 16.4) fits
+         docs/platform-support.md's macOS 13 minimum. If it does not, stop and report status=blocked.
+      6. Test harness in tests/integration/test_browser_smoke.py. Build a phone context from the
+         existing `_MOBILE_EMULATION`. Give the `org_server` fixture's bundle at least one
+         configured connector service, so /connect renders instead of 404ing. Add parametrized
+         tests over: /approvals; /settings for each section, both admin and non-admin;
+         /settings/privacy; /connect; /security; the three bare fallback pages
+         (routes_approvals.py:507/522, session_auth.py:461); and a WIDE read card for each preview
+         kind (PDF, image, Markdown, a 10-column record table), both full-page and expanded
+         inline in an /approvals list row. Assertions: (a) no horizontal document overflow;
+         (b) the main content region is at least 90% of the viewport width; (c) every visible
+         interactive element is at least 44x44 CSS px; (d) viewport meta is in effect
+         (innerWidth == 393); (e) for the PDF card, the preview shows document pixels, i.e. an
+         <img> of a rendered page, not an <embed>; (f) for table cards, no single word is broken
+         across lines. Every case that fails today gets `xfail(strict=True, reason="<owning
+         phase id>")`, assigned like this: settings → p2-settings; PDF, table and download →
+         p3-review-content; the card inline in a list row → p4-card-containers; shell, list,
+         connect, security and fallback pages → p5-remaining-pages. A case that already passes
+         gets no marker.
+      7. Unit test: fail when a class attribute is built by string concatenation in
+         src/privacyfence (Python f-string or JS `+` inside a class="..." value) outside an
+         explicit allow-list. Seed the allow-list with today's offenders, each naming the phase
+         that will clean it up.
+      8. Write ADR 0047 (Tailwind v4, utilities-only, compiled and inlined), using this plan's
+         "Constraints" and "Alternatives considered" sections.
+      This phase changes nothing visually. Screenshots before and after of /settings,
+      /approvals and a card at desktop width must be identical.
+    acceptance:
+      - web-ui builds reproducibly and check_ui_css_fresh.py passes in CI's lint job
+      - the new browser tests all pass or xfail strictly with an owning phase id
+      - no visual change at desktop width (screenshots in the report)
+      - ADR 0047 is written and listed in docs/adr/README.md
+
+  - id: p2-settings
+    title: Settings usable at phone width
+    depends_on: [p1-toolchain]
+    brief: |
+      Fix settings_window_html.py, both the org and the local rendering. Below Tailwind's `md`
+      breakpoint, `.pf-nav` becomes a horizontally scrollable tab strip above the content, and
+      the Privacy Filter `.pf-subnav` becomes a second strip (or a native <select>), so the
+      detail pane gets the full width. Keep the existing `data-nav`/`data-privacy-nav` click
+      handling and the role=tablist ARIA; add no new JS framework. `.pf-card-row` stacks the
+      label above its control at narrow widths. Every control gets a 44px target on coarse
+      pointers (`pointer-coarse:` variant). Replace the hand-written rules you are replacing,
+      because of the cascade-layer note in ADR 0047. Remove every xfail with
+      reason="p2-settings", and the p2 entries from the class-concatenation allow-list.
+    acceptance:
+      - all p2-settings xfails removed and passing
+      - desktop-width settings screenshots are unchanged, or any change is intended and noted
+      - phone screenshots of each settings section and Privacy Filter in the report
+
+  - id: p3-review-content
+    title: PDF, tables and download links readable on a phone
+    depends_on: [p1-toolchain]
+    brief: |
+      See "Review cards with documents" above.
+      1. PDF. Add `pypdfium2` (exact pin) to pyproject and regenerate the locks with
+         scripts/update_dependency_locks.sh. Where card_builder.py builds pdf_data_uri, also
+         rasterise the first N pages (N=5, configurable, width about 1000px, PNG) in a helper
+         module with a page limit, a time limit and a byte limit, and the same failure handling
+         text_extraction.py uses: if rendering fails, the card falls back to the text
+         extraction, never to nothing. build_preview_body_html emits both: the <embed> inside a
+         container shown only at `@md` container width and up, and the page images plus a
+         "Showing pages 1–N of M" note otherwise. The card stays self-contained (data: URIs),
+         so CSP needs no change. Check the card's size budget and say in the report how big a
+         5-page card gets.
+      2. Tables. _table_html becomes stacked label/value blocks below the `@md` container
+         width. Use `overflow-wrap:anywhere` instead of breaking at every character.
+      3. Downloads. When GET /downloads/{token} finds no session, redirect to
+         `/login?next=/downloads/<token>` through the existing _safe_next_path allow-list. Add a
+         unit test that the claim still requires the same principal after sign-in, and a test
+         that `next` cannot be turned into an open redirect.
+      4. Write ADR 0048: server-side rasterisation, rejecting pdf.js and an open-in-new-tab
+         route. Include the threat note that this is a new parser of untrusted input.
+      Remove every xfail with reason="p3-review-content".
+    acceptance:
+      - all p3-review-content xfails removed and passing
+      - a malformed or encrypted PDF falls back to text, with a unit test
+      - dependency locks regenerated and committed; bandit clean
+      - ADR 0048 written
+
+  - id: p4-card-containers
+    title: Approval card and dialogs on container queries
+    depends_on: [p1-toolchain, p3-review-content]
+    brief: |
+      Replace the viewport `@media (max-width: 700px)` layout rules in
+      resources/approval_window/styles.css, approval_window_html.py and dialog_window_html.py
+      with container queries. Make the card root `@container`, and use `@md:`-style variants or
+      `@container` rules in ui.css's source. The card must stack correctly when it is inline in
+      an expanded /approvals list row on a desktop, not only on a phone. Keep the existing
+      TestMobileLayoutViewport and TestResponsiveLayout tests green unchanged. Move the 3
+      hover-only rules and 7 title= tooltips in the three renderers onto visible or tap
+      equivalents. Write ADR 0049 (container queries for components rendered in more than one
+      host). Remove every xfail with reason="p4-card-containers".
+    acceptance:
+      - all p4-card-containers xfails removed and passing
+      - existing responsive and mobile tests unchanged and green
+      - ADR 0049 written
+
+  - id: p5-remaining-pages
+    title: Shell, list, connect, security and fallback pages
+    depends_on: [p1-toolchain, p2-settings]
+    brief: |
+      Move web_shell.py's header/nav, approval_list_html.py, routes_connect.py (including the
+      Telegram phone/code/password form; set inputmode and autocomplete correctly for a phone
+      keyboard) and routes_security.py onto the same utilities, with 44px targets on coarse
+      pointers. On a phone the shell nav must fit on one row or scroll horizontally, never wrap
+      into a second header row. Add viewport meta to the three bare fallback pages (better:
+      render them through one small shared helper). Remove every xfail with
+      reason="p5-remaining-pages" and every remaining class-concatenation allow-list entry.
+    acceptance:
+      - all p5-remaining-pages xfails removed and passing
+      - the class-concatenation allow-list is empty
+      - desktop screenshots unchanged, or any change is intended and noted
+
+  - id: p6-push
+    title: Installable org app and web push
+    depends_on: [p5-remaining-pages]
+    brief: |
+      Org mode only; local mode keeps notification tiers 0–1 exactly as today.
+      1. Web App Manifest (name, icons from resources/, display standalone, start_url
+         /approvals), served on an unauthenticated route classified per ADR 0014, and linked
+         from web_shell.py when org mode is active. Check the CSP `manifest-src`.
+      2. VAPID: a key pair generated on first start and stored with the org state that holds the
+         other server secrets (0600, service account). Never put it in the bundle.
+      3. Per-principal push subscriptions: POST/DELETE /api/push/subscription (session + CSRF,
+         classified). Store them per principal under users/<principal>/. Drop a subscription on
+         404/410 from the push service.
+      4. On a new pending approval for a principal, send a push with the payload at most
+         notifications_detail=minimal ("1 approval waiting"). No tool name, no content, no
+         requester. Add an org config bundle switch (build_org_bundle.py flag) to turn push off
+         for the whole org; default on. Rate-limit per principal, the same as tier 1.
+      5. sw.js gets `push` and `notificationclick` handlers. The click opens or focuses /approvals.
+      6. web_shell's existing permission pre-prompt subscribes in org mode. On iOS, when not
+         installed, show an "Add to Home Screen to get notifications" hint instead.
+      7. Write ADR 0050: the first time approval metadata leaves the org server (via Apple and
+         Google push services), the payload limit, the org-wide off switch, and why local mode
+         does not get it. Update docs/org-mode-setup-guide.md (egress to the push services, the
+         switch) and docs/approval-list-ui-ux.md §4 (tier 2 now exists for org mode).
+      Tests: unit tests for payload minimisation, subscription auth, 410 cleanup, the switch
+      off, and local mode having no route; a browser test that the manifest is served and linked.
+      A real push delivery is manual (see manual in this manifest).
+    acceptance:
+      - payload content is test-proven to be minimal
+      - local mode route set is unchanged (test)
+      - ADR 0050 written; setup guide and approval-list-ui-ux.md updated
+
+  - id: p7-retire
+    title: Retire the plan
+    depends_on: [p2-settings, p3-review-content, p4-card-containers, p5-remaining-pages, p6-push]
+    brief: |
+      1. Confirm ADRs 0047–0050 cover every item in this plan's "Decisions to extract into ADRs"
+         list; add whatever is missing. Set each to Accepted and list them in docs/adr/README.md.
+      2. Add this manifest's `manual` items to docs/release-testing.md as a standing "org mode on
+         a phone" checklist, and describe the new phone-layout tests in docs/testing-policy.md.
+      3. Update docs/approval-list-ui-ux.md's responsive section to point at ui.css, container
+         queries and the new tests instead of hand-written breakpoints.
+      4. Delete docs/org-mode-mobile-plan.md and restore docs/README.md's "no active plan"
+         sentence. Keep .claude/commands/implement.md; it is reusable.
+      5. Consolidate this plan's CHANGELOG [Unreleased] lines into a coherent group.
+    acceptance:
+      - every final_check in this manifest passes
+```
 
 ## Decisions to extract into ADRs when this plan retires
 

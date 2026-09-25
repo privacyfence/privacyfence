@@ -355,6 +355,11 @@ and source files, never to a plan document, which will not outlive it.
   CHANGELOG.md" above.
 - Definition of done for a PR is the checklist in
   [`docs/coding-and-testing-guidelines.md` §2.7](docs/coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo).
+- A plan with an `## Implementation manifest` can be run with `/implement <plan URL>`
+  (`.claude/commands/implement.md`). The orchestrator session builds the manifest's
+  `feature/<name>` branch out of `feature/<name>--<phase id>` branches, one child session each,
+  merged with `--no-ff` and a `Plan-Phase:` trailer, and opens a single PR to `main` at the end.
+  Phase branches are never PR'd on their own.
 - `releases/*` (e.g. `releases/4.1-dev`) is a long-lived, cross-cycle integration branch, cut from
   `main` when a batch of work for the next release needs to accumulate somewhere other than `main`
   while `main` stays frozen for a prior release's remaining blockers (renamed from the original,
