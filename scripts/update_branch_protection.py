@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Keep a protected branch's required-status-checks list in sync with the `.github/workflows/
-tests.yml` jobs that actually run on every PR and are meant to gate correctness
-(added by Phase 11 of the CI test-suite buildout -- see `docs/testing-policy.md`).
+tests.yml` jobs that actually run on every PR and are meant to gate correctness (see
+`docs/testing-policy.md`).
 
 Targets `main` by default, but `--branch` also accepts a glob pattern such as `releases/**` --
 CLAUDE.md's "Branching & PRs" section documents `releases/*` as a long-lived, cross-cycle
@@ -73,8 +73,8 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # Every job in tests.yml that runs on every PR (no job- or step-level `if:` restricts any of
 # these to a schedule or a path) and is meant to gate correctness. Requiring a job by name
 # requires its overall conclusion -- static-analysis's whole-tree mypy step still uses
-# `continue-on-error: true` and so never turns the job red (Phase 11 exit criteria confirms this
-# is a job-level, not step-level, mechanism), but its `ruff check .`, `bandit` and
+# `continue-on-error: true` and so never turns the job red (a required check sees only the job's
+# conclusion, never an individual step's), but its `ruff check .`, `bandit` and
 # `scripts/mypy_strict_modules.py` steps are all blocking, so requiring the job means "require
 # ruff, bandit, and mypy over every module the ratchet has promoted" (the rest of the tree stays
 # informational until it gets the same per-module treatment -- see [tool.mypy] and its
@@ -84,8 +84,8 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # reports one check per leg, named from that job's own `name:` template -- both legs are listed
 # individually below; add/remove an entry here if that matrix ever changes.
 #
-# Deliberately NOT included: the packaged-artifact jobs (Phase 6) and the graphical-session jobs
-# (Phase 7) -- both live in build.yml / their own scheduled workflows and never run on
+# Deliberately NOT included: the packaged-artifact jobs and the graphical-session jobs
+# (docs/testing-policy.md's layer 6) -- both live in build.yml / their own scheduled workflows and never run on
 # `pull_request`, so they can't be a per-PR required check at all.
 #
 # Also deliberately NOT included, for a different reason: `lockfile-freshness`, `pip-audit` and

@@ -11,11 +11,12 @@ browser (Playwright/Chromium), seeded with synthetic demo data only:
   highlighting, the "AI will receive" checklist, the stated reason and the calling AI system
   included. Nothing is hand-edited or mocked up.
 
-Requires ``playwright`` (``pip install playwright`` -- not a project dependency, install it
-locally) and a Chromium binary; see qa_web_smoke.py's own docstring for where to point
---chromium-path if none is auto-discovered.
+Requires ``playwright``, which comes with the ``[test]`` extra (``pip install -e '.[test]'``),
+and a Chromium binary for it (``playwright install chromium``); see qa_web_smoke.py's own
+docstring for where to point --chromium-path if you'd rather use one already on disk.
 
-    .venv/bin/pip install playwright   # once, locally -- not committed
+    .venv/bin/pip install -e '.[test]'           # once; brings playwright
+    .venv/bin/playwright install chromium        # once; the browser it drives
     .venv/bin/python scripts/qa_readme_screenshots.py                  # all four
     .venv/bin/python scripts/qa_readme_screenshots.py --only approvals # just the two cards
 
@@ -79,9 +80,8 @@ _FAKE_CONNECTED = ["gmail", "drive", "slack", "calendar"]
 def _sign_in_url(server, path: str) -> str:
     """A one-time sign-in link for this in-process server.
 
-    ``WebServer.mint_bootstrap_url()`` used to hand one back; the
-    self-approval plan's Phase 2 removed it along with the discovery files it
-    wrote (web/server.py). Minting now belongs to the control channel, and an
+    ``WebServer`` does not mint sign-in links itself (web/server.py): minting
+    belongs to the control channel, and an
     *attested* mint needs a companion process to call back to -- which this
     script has no reason to start, so it mints from the store directly, the
     same way the daemon's own bootstrap middleware consumes from it.
@@ -346,7 +346,7 @@ def main() -> None:
     try:
         _run(args.chromium_path, args.only)
     except ImportError as exc:
-        print(f"qa_readme_screenshots.py: {exc} -- `pip install playwright` first.", file=sys.stderr)
+        print(f"qa_readme_screenshots.py: {exc} -- `pip install -e '.[test]'` first.", file=sys.stderr)
         sys.exit(2)
 
 
