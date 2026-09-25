@@ -191,8 +191,8 @@ class TestSingleton:
 
 
 class TestDeferredRegistry:
-    """P3: card/confirmation storage moved out of this class's own single
-    slot into approvals.PendingApprovalRegistry (see this module's own
+    """Card/confirmation storage lives in
+    approvals.PendingApprovalRegistry (see this module's own
     docstring) -- exposed here for gate.py's deferred protocol, and reused
     for this class's own multi-item current()/resolve() contract."""
 

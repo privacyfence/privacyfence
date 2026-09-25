@@ -1,27 +1,19 @@
-"""The Streamable HTTP MCP endpoint -- what took over the original
-``privacyfence-bridge``'s four jobs (find/launch the daemon, fetch the
-manifest, register one MCP tool per ``ToolSpec``, forward calls) for a
-client that talks to PrivacyFence directly, no intermediate process
-required. The bridge itself was retired at P5, once this transport had
-shipped a stable release.
+"""The Streamable HTTP MCP endpoint: fetches the manifest, registers one MCP
+tool per ``ToolSpec`` and forwards calls, for a client that talks to
+PrivacyFence directly, with no intermediate process required.
 
-P2 scope only: this is a hosting change for the *transport*, not the
-approval protocol. A gated call reaching a connector here still blocks on
-whichever ``ApprovalUI`` ``approval_ui.init_approval_ui()`` currently
-resolves to (the web approval UI, unconditionally since P10 -- through P9
-this could also be the native one, selected by ``web.approval_ui``, a
-config key P10 removed along with the native implementation itself),
-exactly like a call arriving over the bridge's IPC socket used to before P5
-retired it. Deferred approvals, concurrent pending approvals, and
-``privacyfence_await_approval`` are P3's ``_popup_lock`` retirement, not
-this module's ("P2 before P3" is deliberate: the deferred protocol is
-written once, on the transport it ships on, instead of being added to the
-bridge/IPC protocol first and thrown away one phase later).
+This module hosts the *transport*, not the approval protocol. A gated call
+reaching a connector here blocks on whichever ``ApprovalUI``
+``approval_ui.init_approval_ui()`` resolves to (the web approval UI).
+Deferred approvals, concurrent pending approvals, and
+``privacyfence_await_approval`` belong to the approval layer (gate.py,
+approvals.py), not this module; the deferred protocol is written once, on
+the transport it ships on.
 
 Built on the official MCP Python SDK's low-level ``Server`` (dynamic tool
 registration -- the tool set depends on which connectors are currently
 built, so it can't be the decorator-per-tool ``FastMCP`` surface) plus
-``StreamableHTTPSessionManager`` (D2/D10).
+``StreamableHTTPSessionManager`` (ADR 0009).
 """
 from __future__ import annotations
 
@@ -73,11 +65,10 @@ MCP_PATH = "/mcp"
 # redefined here.
 _FILE_BRIDGE_HEADER = "x-privacyfence-file-bridge"
 
-# Part A of issue #396: server instructions returned in the `initialize`
-# result (Server.instructions -> InitializationOptions.instructions,
-# confirmed against a real mcp==1.30.0 install -- no Server subclass needed
-# for this part, unlike the NotificationOptions(tools_changed=True) override
-# Part C's tools/list_changed support needs at this same construction site).
+# Server instructions returned in the `initialize` result
+# (Server.instructions -> InitializationOptions.instructions -- no Server
+# subclass needed for this, unlike the NotificationOptions(tools_changed=True)
+# override tools/list_changed support needs at this same construction site).
 # Deliberately short and factual, not "call privacyfence_status at the start
 # of every conversation": most conversations have nothing to do with
 # PrivacyFence, and every meta-tool call is a round trip a client pays for.
@@ -253,7 +244,7 @@ def _need_uploads_result(principal: Any, needed: local_files.LocalFilesNeeded) -
 
 class _PrivacyFenceServer(MCPServer):
     """Overrides ``create_initialization_options()`` to always advertise
-    ``tools.list_changed = True`` (issue #396 Part C).
+    ``tools.list_changed = True``.
 
     ``StreamableHTTPSessionManager`` (``mcp/server/streamable_http_manager.py``,
     what this module's ``mount_mcp`` actually uses) drives each session with
@@ -307,7 +298,7 @@ def build_mcp_server(
     bare list for it.
     """
 
-    # issue #396 Part C: every currently-open Streamable HTTP session's own
+    # Every currently-open Streamable HTTP session's own
     # live ``Connection`` -- the SDK object ``send_tool_list_changed()``
     # lives on, and the one that outlives a single request (unlike
     # ``ServerSession``, which mcp 2.x rebuilds per request) -- keyed by the
@@ -403,12 +394,12 @@ def build_mcp_server(
         name = params.name
         arguments = dict(params.arguments or {})
         # Entered once per tool call, in the one place this surface
-        # dispatches one (P6) --
+        # dispatches one --
         # every per-principal registry downstream (auto_accept.py,
         # audit_log.py, pii_detector.py, privacy_filter.py,
         # resource_names.py) resolves against whatever this sets for the
         # rest of the call, including everything gate.py's gated_call()
-        # does. LOCAL_PRINCIPAL in local mode; in org mode (P7 onwards) the
+        # does. LOCAL_PRINCIPAL in local mode; in org mode the
         # real signed-in human -- see
         # mcp_auth.principal_from_access_token's own docstring for how each
         # is resolved.
@@ -445,7 +436,7 @@ def build_mcp_server(
             except Exception as exc:  # noqa: BLE001 -- surfaced to the client as a tool error, not a
                 # transport-level failure, exactly like ipc_server.py's own
                 # `{"id": ..., "error": str(exc)}` response to a "call" request.
-                # SEC-10: the full exception (redacted for local logging by
+                # The full exception (redacted for local logging by
                 # SecretRedactingFormatter, installed on the root logger by
                 # daemon_main.setup_logging) goes to the log; the client
                 # only ever sees safe_errors.public_message(exc) -- a fixed
@@ -518,7 +509,7 @@ async def _dispatch_meta_tool(
     if name == mcp_tools.PRIVACYFENCE_STATUS_TOOL.name:
         return dispatcher.status(reason)
     if name == mcp_tools.CREATE_UPLOAD_SLOT_TOOL.name:
-        # Phase 4: no gate/approval here -- see the tool's own description.
+        # No gate/approval here -- see the tool's own description.
         # local_files.build_upload_slot raises LocalFileAccessError
         # (a ValueError -- safe_errors.public_message() shows it verbatim)
         # for a size_bytes already over the slot cap.
@@ -766,11 +757,12 @@ def build_mcp_asgi_app(
     pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> tuple[ASGIApp, StreamableHTTPSessionManager]:
     """Builds the ``/mcp`` endpoint app -- bearer-token authenticated,
-    audience-separated from the approval surface's session cookie (§10.3).
+    audience-separated from the approval surface's session cookie, so a
+    credential for one surface is never accepted by the other.
     Returns the app alongside its session manager so server.py can fold
     ``mcp_lifespan`` into the combined app's own lifespan.
 
-    ``verifier`` is the seam P7 plugs org mode into: pass
+    ``verifier`` is the seam org mode plugs into: pass
     ``web/oauth_provider.py``'s ``OrgOAuthProvider`` (which satisfies
     ``TokenVerifier`` via its own ``verify_token``) instead of building a
     one-off single-token ``PerUserTokenVerifier`` for a caller with no
@@ -826,12 +818,12 @@ def mount_mcp(
 
 def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Route]:
     """Org mode's OAuth 2.1 authorization-server + resource-metadata
-    surface (P7): the SDK's own
+    surface (ADR 0011): the SDK's own
     ``create_auth_routes`` builds ``/.well-known/oauth-authorization-
     server``, ``/authorize``, ``/token``, ``/register`` (DCR) and
     ``/revoke`` against ``provider`` -- see that function's own module for
-    why none of that protocol machinery is hand-rolled here (same D2
-    reasoning as the MCP SDK itself). ``create_protected_resource_routes``
+    why none of that protocol machinery is hand-rolled here (same
+    reasoning as ADR 0009 gives for the MCP SDK itself). ``create_protected_resource_routes``
     builds the RFC 9728 ``/.well-known/oauth-protected-resource/mcp``
     document pointing at this same issuer. The one route the SDK has no
     opinion on -- ``provider``'s own IdP-facing callback -- is added
