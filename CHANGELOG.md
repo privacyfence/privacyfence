@@ -100,6 +100,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mean in words, or name the ADR that explains it. The daemon's insecure-storage warning now reads
   "Insecure storage permissions: …". See
   [ADR 0056](docs/adr/0056-code-carries-no-project-history.md).
+- **The "Not authorized" page describes how sign-in works today instead of what changed.** It now
+  reads "PrivacyFence never gives a sign-in link to the program it governs." and "The link is not
+  written to any file either, where every program running as you could read it."
 
 ### Fixed
 
