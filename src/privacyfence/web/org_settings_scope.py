@@ -1,5 +1,4 @@
-"""Per-action mode/authorization declaration for the settings surface (#400,
-PSC-4b).
+"""Per-action mode/authorization declaration for the settings surface.
 
 Through PSC-4a, `web/routes_settings.py`'s `_ALLOWED_ACTIONS` was the
 primary list (every action the local desktop-app-shaped `SettingsController`
@@ -19,9 +18,8 @@ Each action declares, in one place:
 
 - which modes (`LOCAL_MODE`/`ORG_MODE`) it has an actual route in -- not
   merely "meaningful in", the same distinction the old
-  `PER_PRINCIPAL_ACTIONS`/`PER_PRINCIPAL_ACTIONS_UNROUTED` split drew (#B20
-  in the 4.1 security review: an allow-list claiming an action no route
-  consumes is the bug -- see the per-action comments below for exactly
+  `PER_PRINCIPAL_ACTIONS`/`PER_PRINCIPAL_ACTIONS_UNROUTED` split drew (an
+  allow-list claiming an action no route consumes is the bug -- see the per-action comments below for exactly
   which actions are "meaningful per-principal/admin-wide in concept" but
   still `LOCAL_MODE`-only because no org route exists for them yet);
 - whether it's `admin_only` -- gated on `Principal.is_admin` in org mode.
@@ -98,7 +96,7 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     # flow is just as meaningful per-principal in org mode in principle as
     # add_policy_rule/remove_policy_rule above -- but no org-mode route
     # wires any of them yet, so is_action_permitted denies them until one
-    # does (#B20: an allow-list entry with no route behind it is the bug
+    # does (an allow-list entry with no route behind it is the bug
     # this table exists to make impossible to reintroduce by construction
     # -- move an action's ORG_MODE membership in the same PR that adds its
     # route, never ahead of it).
@@ -137,7 +135,7 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     "pin_agent_client": ActionScope(modes=frozenset({ORG_MODE}), admin_only=True),
     "unpin_agent_client": ActionScope(modes=frozenset({ORG_MODE}), admin_only=True),
 
-    # B9: hardcodes LOCAL_PRINCIPAL throughout (the credential check, the
+    # enable_step_up hardcodes LOCAL_PRINCIPAL throughout (the credential check, the
     # config/settings.yaml section it writes, the LiveStepUpConfig it
     # updates) -- local mode's own single-principal, file-based step_up
     # model, not org mode's per-principal-credential, org_config.json-
