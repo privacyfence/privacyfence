@@ -8,7 +8,7 @@
  * holds it to that on every page.
  *
  * The choice lives in localStorage under CONSENT_KEY, never in a cookie, and is reopened from the
- * footer's "Cookie settings" button. /privacy/ describes what GA collects once accepted.
+ * footer's "Cookie settings" link. /privacy/ describes what GA collects once accepted.
  *
  * Also exposes `window.pfAnalytics.event(name, params)` for page scripts (download.js sends
  * `download_click`). It is a no-op until the visitor has accepted.
@@ -152,9 +152,13 @@
     if (choice === GRANTED) loadAnalytics();
     else if (choice === null) showBanner();
 
-    for (const button of document.querySelectorAll('[data-cookie-settings]')) {
-      button.hidden = false;
-      button.addEventListener('click', showBanner);
+    // A plain link to /privacy/'s cookie section, so it looks like the footer's other links
+    // and still leads somewhere useful without JavaScript; with it, it reopens the banner.
+    for (const link of document.querySelectorAll('[data-cookie-settings]')) {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        showBanner();
+      });
     }
 
     // A same-page link in the open mobile menu scrolls the page but would leave the menu open

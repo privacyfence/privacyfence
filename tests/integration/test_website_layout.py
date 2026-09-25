@@ -225,6 +225,21 @@ def test_the_menu_works_by_keyboard(browser, site_url):
         context.close()
 
 
+def test_skip_link_is_not_rendered_until_focused(browser, site_url):
+    # It used to sit at top: -100px, which macOS/iOS elastic overscroll revealed at the top of
+    # the page. Unfocused it must have no visible box at all; focused it must be on screen.
+    context, page = _open(browser, site_url, "/", 1440)
+    try:
+        page.mouse.wheel(0, -400)
+        box = page.locator(".skip-link").bounding_box()
+        assert box is None or (box["width"] <= 1 and box["height"] <= 1)
+        page.keyboard.press("Tab")
+        box = page.locator(".skip-link").bounding_box()
+        assert box and box["width"] > 40 and box["y"] >= 0
+    finally:
+        context.close()
+
+
 def test_screenshots_directory_is_under_test_results():
     # tests.yml uploads test-results/website-layout/ as the review artifact; keep the two in step.
     workflow = (REPO / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")

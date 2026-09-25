@@ -70,7 +70,7 @@ def test_footer_links(path):
     for needle in (
         'href="/privacy/"',
         'href="/imprint/"',
-        "data-cookie-settings",
+        '<a href="/privacy/#your-choice" data-cookie-settings>Cookie settings</a>',
         'href="https://github.com/privacyfence/privacyfence"',
         "/blob/main/LICENSE",
         'href="mailto:info@privacyfence.eu"',
