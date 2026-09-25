@@ -509,7 +509,7 @@ class TestSensitiveActionStepUp:
 
 
 class TestEnableStepUpAction:
-    """B9: the dispatcher-level half of SettingsController.enable_step_up --
+    """The dispatcher-level half of SettingsController.enable_step_up --
     ``create_app``'s own ``step_up`` and ``controller._step_up`` (wired via
     ``wire_step_up``) are two independently-passed things; daemon_main.py's
     real boot path always hands the *same* LiveStepUpConfig to both (see
@@ -745,10 +745,9 @@ class TestConnectorAuthenticationEndToEnd:
 
 
 class TestConnectorToggleDirectional:
-    """F6 of the self-approval review: toggle_connector split into
-    enable_connector (sensitive) and disable_connector (not) -- see
-    SettingsController.enable_connector's own docstring for why the two
-    directions aren't symmetric."""
+    """Connector toggling is two actions, enable_connector (sensitive)
+    and disable_connector (not) -- see
+    ADR 0070 for why the two directions aren't symmetric."""
 
     def test_toggle_connector_no_longer_exists_as_a_dispatchable_action(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -862,7 +861,7 @@ def _signed_org_bundle():
 
 
 class TestOrgConfigUploadPinConfirmation:
-    """F5 of the self-approval review: install_org_config_bytes still
+    """install_org_config_bytes
     pins a first signed bundle's key unconditionally -- daemon_main.
     load_org_config's own hand-edited-file path needs that -- but this
     route, the only one reachable by an unsupervised local process, asks
@@ -947,7 +946,7 @@ def _org_config_step_up_client(controller, sessions, *, step_up: StepUpConfig) -
 
 
 class TestOrgConfigUploadStepUp:
-    """F5/3.1 of the self-approval review: org_config_upload is the one
+    """org_config_upload is the one
     path in _BESPOKE_SENSITIVE_ROUTE_PATHS -- with step_up.require_passkey
     on, it needs a fresh WebAuthn assertion the same two-round-trip way a
     _SENSITIVE_ACTIONS action does (mirrors TestSensitiveActionStepUp

@@ -296,7 +296,7 @@ class TestLocalEnrollmentBanner:
 
 
 class TestOffNotice:
-    """B23 of the 4.1.0 action plan: the fallback for the state neither of
+    """The fallback for the state neither of
     the other two banners cover -- an install that has simply never turned
     step-up on. Fires exactly when step-up is *not* actually "required"
     (the same ``enabled and require_passkey`` pairing ``observe_step_up_
@@ -324,7 +324,7 @@ class TestOffNotice:
 
 
 class TestLiveStepUpConfig:
-    """B9: ``LiveStepUpConfig`` mirrors every read a plain ``StepUpConfig``
+    """``LiveStepUpConfig`` mirrors every read a plain ``StepUpConfig``
     offers, off whatever value it currently holds, so every consumer that
     was written against a bare ``StepUpConfig`` (web/routes_approvals.py,
     web/routes_settings.py, web/routes_security.py) keeps working unchanged

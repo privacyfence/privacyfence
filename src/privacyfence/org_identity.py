@@ -96,7 +96,7 @@ class IdpConfig:
     # ask for -- web/routes_org_stepup.py's IdP step-up flow still works
     # (it always sends prompt=login/max_age=0, and OIDC re-auth alone is the
     # fallback for a user with no passkey enrolled), it just
-    # never adds an acr_values hint the IdP might not support.
+    # never adds an acr_values hint the IdP might not support. See ADR 0066.
     step_up_acr_values: tuple[str, ...] = ()
 
     @staticmethod

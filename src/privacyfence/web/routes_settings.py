@@ -101,8 +101,7 @@ key``), rather than letting that TOFU pin happen as a side effect of an
 upload. Connector toggling is directional: the reasoning "an agent that
 already has connector access gains nothing new" only holds for
 *disabling* one, so ``enable_connector`` is sensitive and
-``disable_connector`` is not, see ``SettingsController.enable_connector``'s
-own docstring. ``_BESPOKE_SENSITIVE_ROUTE_PATHS``/``_BESPOKE_EXEMPT_
+``disable_connector`` is not (ADR 0070). ``_BESPOKE_SENSITIVE_ROUTE_PATHS``/``_BESPOKE_EXEMPT_
 ROUTE_PATHS`` below widen ``TestSensitiveActionsCoverAllAllowedActions``'s
 own ratchet from action names to actual ``Route`` objects, so a route
 added here cannot bypass the gate just by existing (ADR 0014).
@@ -110,7 +109,8 @@ added here cannot bypass the gate just by existing (ADR 0014).
 **Turning step-up on:** ``enable_step_up`` is the one
 ``_ALLOWED_ACTIONS`` entry that can turn ``step_up.require_passkey`` on in
 the first place; otherwise only a hand edit of ``config/settings.yaml``
-plus a daemon restart can. It's listed in ``_SENSITIVE_ACTIONS`` for the
+plus a daemon restart can, and turning it off has no action at all
+(ADR 0068). It's listed in ``_SENSITIVE_ACTIONS`` for the
 same reason every rule/grant/policy/PII action is, but ``_needs_step_up``
 below never gates its own *first* call: that check only fires once
 ``step_up.enabled``/``require_passkey`` are already both true, which by
@@ -197,8 +197,8 @@ MAX_ORG_CONFIG_BYTES = 1_000_000
 # ---------------------------------------------------------------------------- #
 
 # Projected from web/org_settings_scope.py's ACTION_SCOPES -- every action
-# naming LOCAL_MODE, which is every action there is except AGT-5's two
-# org-only AI-system pin actions (local mode's own dispatcher predates that
+# naming LOCAL_MODE, which is every action there is except the two
+# org-only AI-system pin actions (ADR 0035 decision 3) (local mode's own dispatcher predates that
 # module's mode split and was never gated by it). That module is now the primary declaration; this is the
 # view of it local mode's own dispatch below actually consults.
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
@@ -236,7 +236,7 @@ _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # Re-enabling a connector a human
     # deliberately switched off is access an agent did not already have
     # -- unlike disable_connector below, this is not a no-op change of
-    # nothing.
+    # nothing (ADR 0070).
     "enable_connector",
 })
 
@@ -244,8 +244,8 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
     "skip_update", "remind_later_update",
     # An agent that already has connector access gains nothing new by
-    # disabling one -- see SettingsController.enable_connector's own
-    # docstring for the asymmetry with the sensitive direction above.
+    # disabling one -- see ADR 0070 for the asymmetry with the sensitive
+    # direction above.
     "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_log_level", "set_notifications_detail",
@@ -254,7 +254,7 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "toggle_gmail_signature",
 })
 
-# AGT-5 (ADR 0035 decision 3): the org-only actions, classified the same
+# The org-only actions (ADR 0035 decision 3), classified the same
 # explicit way. Pinning a DCR client to an AI system creates attested
 # identity -- the only kind a rule may key on (ADR 0006 decision 3) -- and
 # unpinning takes it away, so both are sensitive: step-up gated in org mode
@@ -578,7 +578,7 @@ def _record_settings_audit(principal: Principal, summary: str) -> None:
 
 
 def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
-    """Shared by both modes (PSC-4b) -- identical once parameterized by
+    """Shared by both modes (ADR 0033) -- identical once parameterized by
     ``step_up``: local mode's own is optional (``None`` until web/server.py
     resolves one), org mode's is always given, but "no config yet" and "a
     config that hasn't turned require_passkey on" both mean the same thing
@@ -594,7 +594,7 @@ def _settings_step_up_response(
     principal: Principal, action: str, fingerprint_body: dict[str, Any], *,
     step_up: StepUpConfig, challenges: StepUpChallengeStore,
 ) -> JSONResponse:
-    """Shared by both modes (PSC-4b, formerly one near-identical copy each:
+    """Shared by both modes (ADR 0033; formerly one near-identical copy each:
     local mode's own hardcoded ``LOCAL_PRINCIPAL``, the former
     web/routes_org_settings.py's already took ``principal`` as a parameter --
     this is that shape, made the only one). With no enrolled
@@ -620,7 +620,7 @@ def _apply_step_up_gate(
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
 ) -> JSONResponse | None:
     """The one settings-action step-up check both modes' dispatch reduces
-    to (PSC-4b): ``None`` when ``action`` doesn't need a fresh assertion at
+    to (ADR 0033): ``None`` when ``action`` doesn't need a fresh assertion at
     all, or (org mode's own former ``_guard_step_up``) once
     ``approval_step_up._verify_or_challenge`` -- the same ceremony
     primitive web/routes_approvals.py's own ``decide()`` already
@@ -697,7 +697,7 @@ def build_routes(
     session web/session_auth.py cannot attribute to a person. Unlike
     ``_needs_step_up`` it does not wait on ``step_up.require_passkey``: an
     install with no passkey requirement still has a policy an agent should
-    not be able to rewrite on its own say-so. See web/routes_approvals.py's
+    not be able to rewrite on its own say-so (ADR 0062). See web/routes_approvals.py's
     own ``require_human_session`` paragraph for why web/server.py turns this
     on for privilege-separated installs only.
     """
@@ -1065,7 +1065,7 @@ def build_org_routes(
     than leaving a default that would silently leave org-mode settings
     writes ungated for a caller that forgets to pass it.
 
-    ``oauth_provider`` (AGT-5, ADR 0035 decision 3) backs the admin-only
+    ``oauth_provider`` (ADR 0035 decision 3) backs the admin-only
     "AI systems" page: its DCR registrations are what an admin pins to a
     registry AI system (``pin_agent_client``/``unpin_agent_client``, both
     admin-only and step-up gated), and its ``agent_pins`` store is where the
@@ -1102,7 +1102,7 @@ def build_org_routes(
         dispatch always needed it.
 
         ``form_body`` is, despite the name, a JSON body's already-decoded
-        dict (PSC-5 -- ``settings_action`` below, this function's only
+        dict (ADR 0032 -- ``settings_action`` below, this function's only
         caller since the four bespoke form-POST routes it used to serve
         are gone) -- ``webauthn_assertion``, if present, is already a
         ``dict``, the same as local mode's own ``payload.get(
@@ -1133,7 +1133,7 @@ def build_org_routes(
         _load_principal_settings(install_wide_config=install_wide_settings)
 
     def _org_state(principal: Principal) -> dict[str, Any]:
-        """PSC-5's own org-mode counterpart of ``_snapshot(controller)``
+        """Org mode's counterpart of ``_snapshot(controller)`` (ADR 0032)
         above -- the exact same settings_window_html.build_html() shape,
         built fresh per request (org mode is stateless per request, unlike
         local mode's single long-lived ``SettingsController``) rather than
@@ -1142,8 +1142,8 @@ def build_org_routes(
         fail-closed ``"block"`` default for an unconfigured group --
         unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
         Auto-accept reads this principal's own on-disk rules; Audit Log
-        (AGT-5) this principal's own recent decisions; AI systems (AGT-5,
-        admin only) the OAuth provider's registrations and pins. Sections
+        this principal's own recent decisions; AI systems (admin only,
+        ADR 0035 decision 3) the OAuth provider's registrations and pins. Sections
         this mode never shows at all (Connectors) get an inert
         placeholder -- settings_window_html._capabilities_for is what
         actually keeps them from ever rendering, not the shape of a
@@ -1168,7 +1168,7 @@ def build_org_routes(
 
         resolver = get_resolver()
         rules = auto_accept.get_policy_v2_rules()
-        # AGT-5: the viewing principal's own recent decisions -- per-principal, exactly like
+        # The viewing principal's own recent decisions -- per-principal, exactly like
         # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
         # with the same agent column local mode's page gets.
         # A log that cannot be read costs the page its list, never the request -- the same
@@ -1200,7 +1200,7 @@ def build_org_routes(
         }
 
     def _agents_state() -> dict[str, Any]:
-        """The admin's "AI systems" page (AGT-5): every current DCR registration with its
+        """The admin's "AI systems" page: every current DCR registration with its
         claimed name and pin, every pin whose registration the TTL prune removed (stale --
         inert, shown so an admin can clear it; ADR 0035 decision 3), and the registry an admin
         can pin to. ``client_name`` is the caller's own string: sanitized here, escaped by the
@@ -1311,7 +1311,7 @@ def build_org_routes(
             # Org mode has no per-request settings push to subscribe a
             # live stream to (state_stream.py's own StateStream.push_
             # settings is wired to one local SettingsController's own
-            # on_change, module docstring) -- unchanged from before PSC-5.
+            # on_change, module docstring).
             live_updates=False, notifications_enabled=False,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
@@ -1358,8 +1358,8 @@ def build_org_routes(
         ``principal`` (already entered by the caller), returning the exact
         summary string to audit-log, or ``None`` when nothing actually
         changed -- the same "only audit a real change" behavior the former
-        per-action routes kept before PSC-5 folded them into this one
-        dispatcher. May raise ``org_install_policy.PolicyChangeRejected``/
+        per-action routes kept before they were folded into this one
+        dispatcher (ADR 0032). May raise ``org_install_policy.PolicyChangeRejected``/
         ``OSError``, left for the caller to map to a response the same way
         the former ``_apply_install_wide`` did.
         """
@@ -1418,8 +1418,8 @@ def build_org_routes(
         )
 
     async def settings_action(request: Request) -> Response:
-        """The generic ``POST /api/settings/{action}`` dispatcher PSC-5
-        gives org mode -- the same path and JSON body shape local mode's
+        """The generic ``POST /api/settings/{action}`` dispatcher org
+        mode shares (ADR 0032) -- the same path and JSON body shape local mode's
         own ``settings_action`` above answers (this SPA's shared bridge,
         settings_window_html.py's own ``pfSettingsPost``, posts the same
         way regardless of mode), restricted to ``_ORG_ALLOWED_ACTIONS``.

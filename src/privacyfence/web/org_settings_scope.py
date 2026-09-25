@@ -1,16 +1,16 @@
 """Per-action mode/authorization declaration for the settings surface.
 
-Through PSC-4a, `web/routes_settings.py`'s `_ALLOWED_ACTIONS` was the
+Originally `web/routes_settings.py`'s `_ALLOWED_ACTIONS` was the
 primary list (every action the local desktop-app-shaped `SettingsController`
 exposes) and this module held four frozensets that filtered it for org
 mode -- a filter bolted onto local's own list, checked against it by this
 module's own test so a newly added local-mode action couldn't silently go
-unclassified. PSC-4b merges `web/routes_settings.py` and the former
-`web/routes_org_settings.py` into one dispatcher (`routes_settings.py`'s
+unclassified. Merging `web/routes_settings.py` and the former
+`web/routes_org_settings.py` into one dispatcher (ADR 0033) (`routes_settings.py`'s
 `build_routes`/`build_org_routes`), and that inverts the relationship:
 `ACTION_SCOPES` below is now the primary declaration, and `_ALLOWED_ACTIONS`
 is *projected* from it (every action whose scope names `LOCAL_MODE` -- every
-action there is except AGT-5's two org-only AI-system pin actions, which
+action there is except the two org-only AI-system pin actions, which
 have no local-mode meaning at all; local mode's own dispatcher predates this
 split and was never itself gated by it).
 
@@ -124,7 +124,7 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     "telegram_cancel_auth": ActionScope(modes=frozenset({LOCAL_MODE})),
     "set_notifications_detail": ActionScope(modes=frozenset({LOCAL_MODE})),
     # ---------------------------------------------------------------- #
-    # ORG_MODE-only, admin-only (AGT-5, ADR 0035 decision 3): pin a DCR
+    # ORG_MODE-only, admin-only (ADR 0035 decision 3): pin a DCR
     # registration's client_id to a registry AI system, or remove the pin.
     # A pin creates attested identity -- the only kind a rule may key on --
     # so both are also sensitive (routes_settings._ORG_ONLY_SENSITIVE_
@@ -146,7 +146,7 @@ ACTION_SCOPES: dict[str, ActionScope] = {
 }
 
 
-# PSC-5: the shared settings renderer's own read of the table above -- every
+# The shared settings renderer's own read of the table above (ADR 0032) -- every
 # action with no real ORG_MODE route at all, i.e. exactly the controls
 # settings_window_html.build_html() must never draw when rendering for a
 # principal in org mode (there is no dispatcher on the other end for a click

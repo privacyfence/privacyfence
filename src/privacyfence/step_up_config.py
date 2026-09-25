@@ -50,7 +50,8 @@ _SCOPE_CHOICES_TEXT = ", ".join(f'"{name}"' for name in STEP_UP_SCOPES)
 # a human about, so the default is one rung wider. The widest
 # rung ("writes_and_reads", every gated read, flagged or not) stays opt-in:
 # it asks for a passkey on reads nothing has any reason to think are
-# sensitive, which is the kind of prompt people learn to click through.
+# sensitive, which is the kind of prompt people learn to click through
+# (ADR 0067).
 #
 # One value for both modes, deliberately -- see this module's own docstring
 # on why a key that means two different things by mode is the thing this
@@ -68,6 +69,7 @@ DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes_and_pii_reads"
 # assertion per item within the same request -- see web/routes_approvals.py's
 # own batch_decide for exactly what that refusal looks like. Deny-only
 # batches are unaffected either way, since denying never needs step-up.
+# See ADR 0065.
 DEFAULT_STEP_UP_BATCH_MODE: StepUpBatchMode = "single_assertion"
 DEFAULT_RP_NAME = "PrivacyFence"
 # WebAuthn treats "localhost" as a secure context even over plain HTTP
@@ -229,7 +231,7 @@ class StepUpConfig:
         web/routes_approvals.py's decide() and web/routes_settings.py's
         sensitive actions both hard-fail (403) rather than release
         anything, so this string says exactly that rather than merely
-        "step-up is on"."""
+        "step-up is on". See ADR 0069."""
         if self.enabled and self.require_passkey and not has_credentials:
             return (
                 "Passkey required: no passkey is enrolled, so approving decisions and sensitive "
@@ -368,7 +370,7 @@ class LiveStepUpConfig:
     Deliberately one-directional in what it's used for: only ``enable_step_
     up`` ever calls ``update()``, always turning step-up *on* (see that
     method's own docstring for why turning it back *off* stays a config-
-    file-plus-restart operation on purpose). Org mode has no equivalent of
+    file-plus-restart operation on purpose, and ADR 0068). Org mode has no equivalent of
     this class -- its own ``StepUpConfig`` is re-derived from
     ``org.org_config`` on every ``_build_org_app`` call instead (web/
     server.py), which already has no restart problem to solve.
