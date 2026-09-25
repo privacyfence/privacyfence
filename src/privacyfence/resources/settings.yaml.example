@@ -200,22 +200,18 @@ web:
   # Port the embedded HTTP server listens on -- shared by the approval
   # surface, /mcp below, and /settings, one server either way. Always
   # bound to localhost only in this (local) mode -- see web/server.py's
-  # module docstring. The embedded server itself always runs in local mode
-  # since P10, decision D6: the web approval UI is the only one there is,
-  # so there's no "off" switch for it the way there used to be a
-  # native/web choice (`web.approval_ui`, removed at P10 -- this key is
-  # simply gone now, not just defaulted).
+  # module docstring. The web approval UI is the only approval UI there
+  # is, so the embedded server has no "off" switch (the old
+  # `web.approval_ui` native/web choice is gone, not just defaulted).
   port: 8765
   mcp:
-    # Turns on the /mcp Streamable HTTP endpoint (P2) -- Claude talks to
-    # PrivacyFence directly over HTTP. On by default as of D11/P4b:
+    # Turns on the /mcp Streamable HTTP endpoint -- Claude talks to
+    # PrivacyFence directly over HTTP. On by default because
     # PrivacyFence.mcpb installs a thin stdio shim for Claude Desktop that
     # only speaks /mcp, so a fresh install needs this on for that
     # extension's zero-config promise ("no config file edited") to
-    # actually hold -- P4b's own exit criterion. Since P5 retired the
-    # original bridge/IPC-socket transport, this is no longer "additive
-    # alongside the bridge" -- it's the only way Claude reaches this
-    # daemon at all. Flip to false only if you want this daemon completely
+    # actually hold. It is also the only way Claude reaches this daemon
+    # at all. Flip to false only if you want this daemon completely
     # unreachable from Claude for a while (a full stop, not a fallback to
     # something else that still works). Once enabled, point a Streamable
     # HTTP MCP client at http://localhost:<port>/mcp with
@@ -223,12 +219,11 @@ web:
     enabled: true
   settings:
     # Serve /settings and its POST /api/settings/{action} dispatcher.
-    # Through P9 this defaulted to false, since a native settings window
-    # covered the same ground; P10 deleted that window (decision D6), so
-    # this now defaults to true -- without it there is no interactive way
-    # at all to install an organization config bundle, authenticate a
-    # connector, or edit a rule (hand-editing this file and
-    # org_config.json directly still works regardless of this setting).
+    # On by default: there is no native settings window, so without it
+    # there is no interactive way at all to install an organization
+    # config bundle, authenticate a connector, or edit a rule
+    # (hand-editing this file and org_config.json directly still works
+    # regardless of this setting).
     # Flip to false only if you're deliberately editing config by hand and
     # want /settings unreachable too.
     enabled: true
@@ -244,7 +239,7 @@ web:
     # "Notifications") -- tiers 0 (title badge, aria-live announcement) and 1
     # (registration.showNotification(), no push service involved, nothing
     # leaves the machine) only. Tier 2 (web push, a closed tab, a phone) is
-    # org mode/P7+ work and has no key here yet.
+    # not built yet and has no key here.
     enabled: true
     # How much a tier-1 notification is allowed to say, when it's for
     # exactly one new pending approval (grouped/multi-approval
@@ -261,7 +256,7 @@ web:
     #             "Notifications")
     detail: standard # minimal | standard | detailed
 
-# WebAuthn passkey step-up (#426 Phase 1/2) -- enrolling a passkey here
+# WebAuthn passkey step-up -- enrolling a passkey here
 # mounts /security (linked from the Settings page) and lets you register a
 # Face ID/Touch ID/Windows Hello credential against this install.
 # Enrolled credentials live under a service-owned subdirectory of the data
@@ -289,8 +284,8 @@ step_up:
   #
   # You don't have to hand-edit this file to turn it on: once a passkey is
   # enrolled at /security, the Settings page's Security card has a "Turn
-  # on" button that sets `enabled` and `require_passkey` together (B9 of
-  # the 4.1.0 action plan) and takes effect immediately, no restart. Editing
+  # on" button that sets `enabled` and `require_passkey` together and
+  # takes effect immediately, no restart. Editing
   # this file directly still works too, and is the only way back to
   # `false` -- there's no UI control that turns step-up back off.
   #
@@ -320,7 +315,7 @@ step_up:
   # Shown to your platform authenticator's own passkey picker/prompt.
   rp_name: PrivacyFence
   # Whether a passkey assertion is *mandatory*, not merely offered when one
-  # happens to be enrolled (#426 Phase 3). With this on: an approving
+  # happens to be enrolled. With this on: an approving
   # decision with nothing enrolled is refused outright (a 403 naming
   # /security), not silently released; the same is true for a sensitive
   # subset of the settings actions (rule/grant/policy/PII changes -- see
@@ -343,7 +338,7 @@ step_up:
   # Unset: on for a packaged install, off otherwise (see the note above
   # this section). Uncomment to decide for yourself.
   # require_passkey: false
-  # The approval binder's own batch decide endpoint (/approvals, Phase 3):
+  # The approval binder's own batch decide endpoint (/approvals):
   # "single_assertion" -- the default -- lets one passkey prompt release a
   # whole selected batch of approvals at once, bound to the exact set you
   # selected (adding, dropping, or flipping any one item invalidates it).

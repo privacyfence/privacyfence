@@ -1,23 +1,18 @@
-"""Rule proposals and the one writer -- P5 of the policy v2 redesign.
+"""Rule proposals and the one writer.
 
-P5's job is F2: today the popup's **Always allow** button and Settings' **Write auto-accept**
-toggle are described to the user in the same words and mean different things. Clicking the button on
-a Sheets write creates a rule for that one operation key; turning on the toggle for the same folder
-covers thirteen. Neither surface can say which it is, because they are built out of different
-tables -- five of them on the popup side alone (``auto_accept.SUGGESTION_FAMILIES``,
-``auto_accept._MULTI_CANDIDATE_FAMILIES``, ``auto_accept.WRITE_RULE_SUGGESTIONS`` with its
-``_SANDBOX_WRITE_VALUE_BUILDERS``, ``auto_accept._RULE_SHORT_HINTS`` and
-``auto_accept._RULE_DESCRIPTIONS``) against ``resource_grants.GRANT_RESOURCE_TYPES`` on the
-Settings side.
+The popup's **Always allow** button and the Settings page once described the same intent in the
+same words and meant different things: the button created a rule for one operation key, a Settings
+folder grant covered thirteen, and neither surface could say which it was, because they were built
+out of different tables.
 
-This module replaces all of them with one catalogue and one question -- *which scopes contain this
-item?* -- answered by P2's selector registry itself:
+This module replaces those tables with one catalogue and one question -- *which scopes contain this
+item?* -- answered by the selector registry (`policy/scopes.py`) itself:
 
-* ``PROPOSABLE_SCOPES`` declares, once, each scope a surface may offer: its v2 scope type, which
+* ``PROPOSABLE_SCOPES`` declares, once, each scope a surface may offer: its scope type, which
   **verbs** it can govern, and how to derive its value from the call under review. Which *operation
-  keys* a (scope, verb) pair reaches is not declared -- it is derived from P1's tool registry, so
+  keys* a (scope, verb) pair reaches is not declared -- it is derived from the tool registry, so
   adding a Drive write tool widens the folder scope's "update" verb automatically instead of needing
-  an edit to ``DRIVE_SANDBOX_WRITE_TARGETS`` and everything built from it (F10).
+  a hand edit to every table built from a list of targets.
 * A candidate is only proposed when the scope selector for it **confirms the item it was derived
   from** (``scopes.SCOPE_SELECTORS[...].matches(value, ctx)``). A popup can therefore never propose
   a rule that would not have accepted the very item it was proposed from -- the selectors are the
@@ -25,46 +20,36 @@ item?* -- answered by P2's selector registry itself:
 * ``rules_for_proposal`` (the popup's intent: one scope, the verb just gated, plus whichever
   widenings the user explicitly took) and ``rules_for_scope_group`` (Settings' intent: one scope, a
   set of verbs) both build their rule set out of the same ``_rules_from_pairs``. Given the same
-  intent they produce byte-identical rules because it is the same function -- P5's exit criterion,
-  asserted directly in ``tests/unit/policy/test_propose.py``.
+  intent they produce byte-identical rules because it is the same function, which
+  ``tests/unit/policy/test_propose.py`` asserts directly.
 
 **Narrowest first, widening is explicit.** A proposal's own rule covers exactly the one operation
-key that was just gated -- the same blast radius ``auto_accept.add_auto_accept_rule`` has today, so
-a proposal accepted as-is can never be wider than v1's equivalent. Everything beyond that is a
-named ``Widening``: one per verb the same scope can govern, ordered narrowest family first, each
-carrying exactly the ``(predicate, operation)`` pairs it adds. Taking every write-family widening on
-a ``drive.folder`` proposal reproduces the sandbox-folder grant's thirteen operation keys exactly --
-which is the point: the width a grant always had is now something the user is shown and chooses,
-rather than something one boolean hides.
+key that was just gated. Everything beyond that is a named ``Widening``: one per verb the same scope
+can govern, ordered narrowest family first, each carrying exactly the ``(predicate, operation)``
+pairs it adds. Taking every write-family widening on a ``drive.folder`` proposal reproduces the
+sandbox-folder grant's thirteen operation keys exactly -- which is the point: the width a grant
+always had is something the user is shown and chooses, rather than something one boolean hides.
 
-**What this phase deliberately does not propose.** F5's three ungovernable operation groups stay
-that way here, each for its own reason, and none of them is an oversight:
+**What the popup deliberately does not propose.** Three operation groups are configurable only
+deliberately, from the Settings page or the bridge's ``privacyfence_propose_policy_change`` (see
+``policy/catalogue.EXTRA_SCOPES``), never reactively off one gated call:
 
-* ``apps_script.read_content``/``write_content``/``read_execution_log`` do have a v2 scope --
-  ``apps_script.project``, which P2 already implements -- but it is not a *v1* predicate, and the v1
-  ``auto_accept_rules`` section is still the write target. A rule naming it would be one the v1
-  evaluator cannot evaluate, which is the same dead rule from the other direction.
-* ``slack.create_group_chat`` has no scope in the redesign proposal's §04 catalogue at all: its
-  verb's subject is an audience, and no scope type measures one.
-* ``gmail.create_filter``/``update_filter`` could only be scoped by ``gmail.anything``, and an
-  ``always_allow`` rule under those keys is precisely P0·3's security hole -- a live, unconditional
-  rule that no surface can render or remove, for an operation that can silently archive or forward
-  mail indefinitely. It needs P7's write-time validation before it needs a proposal.
-
-All three become proposable once the v2 store is the write target and a rule the UI cannot render
-is rejected at write time (P6, P7). Until then this module's writer refuses outright to persist a
-predicate the v1 evaluator cannot evaluate (``v1_entries``) rather than quietly creating one.
+* ``apps_script.read_content``/``write_content``/``read_execution_log`` are governed by
+  ``apps_script.project``, a scope with no entry here.
+* ``slack.create_group_chat``'s subject is an audience, and no scope type measures one.
+* ``gmail.create_filter``/``update_filter`` could only be scoped by "anything in Gmail", and an
+  unconditional rule for an operation that can silently archive or forward mail indefinitely must be
+  a considered choice with its width shown, not a one-click reaction to a popup.
 
 Separately, a scope is told which operation keys it *cannot* address (``ProposableScope.excludes``)
 where deriving over a shared verb would over-reach: ``calendar.out_of_office`` and
 ``calendar.working_location`` carry no ``calendar_id`` at all, so a ``calendar.calendar`` rule
-naming them could never match, and the redesign proposal's §07 is explicit that such a rule is
-rejected rather than stored.
+naming them could never match, and such a rule is rejected rather than stored.
 
-``gate.py``'s two "Always allow" call sites (P9) build their button/confirmation-dialog choices from
+``gate.py``'s two "Always allow" call sites build their button/confirmation-dialog choices from
 ``proposals_for``/``rules_for_proposal`` directly and write the result through
-``auto_accept.add_policy_v2_rules`` -- the same one-shape write path Settings (P6) and the MCP
-bridge (P7) already share.
+``auto_accept.add_policy_v2_rules`` -- the same one-shape write path the Settings page and the MCP
+bridge share.
 """
 from __future__ import annotations
 
@@ -157,7 +142,7 @@ def _slack_channel(ctx: ReviewContext) -> Any:
 def _slack_result_channels(ctx: ReviewContext) -> Any:
     """Every channel present across a search's results -- ``approved_channel_all_results``' value.
     A search has no single ``channel_id`` argument to scope to, which is the whole reason that twin
-    predicate exists (F7); in v2 it is the ``search`` verb of the same ``slack.channel`` scope."""
+    predicate exists; it is the ``search`` verb of the same ``slack.channel`` scope."""
     items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
     channel_ids = sorted({cid for item in items if (cid := getattr(item, "channel_id", None))})
     return channel_ids or NO_VALUE
@@ -224,17 +209,15 @@ class ProposableScope:
     """One scope a surface may offer, and everything either surface needs to know about it.
 
     ``verbs`` is what makes a width explicit: a scope declares the verbs it can govern, and the
-    operation keys follow from P1's registry (``operations_for``). ``excludes`` names the operation
-    keys that derivation over-reaches -- an operation whose arguments cannot carry this scope's
-    identity at all, so a rule naming it could never match and must not be written (the "rejected at
-    write time, not silently stored as a rule that can never match" invariant of the redesign
-    proposal's §07).
+    operation keys follow from the tool registry (``operations_for``). ``excludes`` names the
+    operation keys that derivation over-reaches -- an operation whose arguments cannot carry this
+    scope's identity at all, so a rule naming it could never match and must be rejected at write
+    time rather than silently stored.
 
-    ``condition`` is set only for the two *condition* scopes v1's calendar read family offered as
+    ``condition`` is set only for the two *condition* scopes the calendar read family offers as
     plain rules ("any event with no external attendees"). They have no resource identity to scope
-    to, so their v2 shape is the honestly-unconditional ``<connector>.anything`` scope carrying one
-    ``when:``. ``v1_rule`` is the v1 rule name such a scope persists under, which for a
-    condition scope is the condition's own v1 name rather than ``always_allow``.
+    to, so their shape is the honestly-unconditional ``<connector>.anything`` scope carrying one
+    ``when:``.
     """
 
     id: str
@@ -266,7 +249,7 @@ def _scope(
 ) -> ProposableScope:
     """``id`` and ``widening_group`` default to the two things that are almost always right: the
     predicate identifies the entry, and every entry of one scope type widens into the others of that
-    type. Both are overridden where v1's names force it -- see ``PROPOSABLE_SCOPES`` -- and a
+    type. Both are overridden where the predicate names force it -- see ``PROPOSABLE_SCOPES`` -- and a
     condition scope always gets its own id and group, since every one of them shares the predicate
     ``always_allow`` and differs only in the condition it carries."""
     resolved_id = entry_id or (predicate if condition is None else f"{scope_type}/{condition[0]}")
@@ -279,16 +262,14 @@ def _scope(
 
 
 # Declaration order is proposal order within a connector, and it is deliberately **identity scopes
-# before attribute scopes before condition scopes** -- narrowest first, per P5's brief. That is a
-# change from v1's hand-declared ``SUGGESTION_FAMILIES`` order (which put ``i_am_owner`` ahead of
-# ``approved_folder``, i.e. "every file you own" ahead of "this one folder"); the set of proposals
-# is unchanged or larger, only which one the popup offers first differs.
+# before attribute scopes before condition scopes** -- narrowest first, so the popup never offers
+# "every file you own" ahead of "this one folder".
 PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     # ── Drive (with Sheets/Docs, which address a Drive file) ───────────────────────────────────
     #
-    # One scope type, four v1 predicate names, because v1 named the same folder check once per verb
-    # that needed it (F1). The three that read the item's own parents share a value; the upload's
-    # own name reads the destination out of args, since the file does not exist yet.
+    # One scope type, four predicate names, because the old rule model named the same folder check
+    # once per verb that needed it. Reads and edits read the item's own parents; the upload reads the
+    # destination out of args, since the file does not exist yet; the move needs both ends.
     _scope("approved_folder", "drive.folder", "drive", (Verb.READ, Verb.DOWNLOAD), _folder_ids, "this folder"),
     _scope(
         "approved_sandbox_folder", "drive.folder", "drive",
@@ -305,7 +286,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
         (Verb.READ, Verb.DOWNLOAD, Verb.ARCHIVE), _sender_domain, "this sender domain",
     ),
     _scope("label_name_allowlist", "gmail.label", "gmail", (Verb.LABEL,), _args_values("label_name"), "this label"),
-    # D4: Gmail drafting is unconditional today (``always_allow`` under ``gmail.create_draft``), and
+    # Gmail drafting is unconditional (``always_allow`` under ``gmail.create_draft``), and
     # modelling it as an explicit "anything in Gmail" scope is the point -- an unconditional grant
     # that reads as unconditional. It is never widenable: a scope with no resource identity must not
     # be offered a one-click width increase, and ``draft`` is a send-family verb.
@@ -326,7 +307,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     _scope("i_am_organizer", "calendar.organized_by_me", "calendar", (Verb.READ,), _no_value_needed, "if I organize it"),
     # ── Slack ─────────────────────────────────────────────────────────────────────────────────
     #
-    # ``read`` and ``search`` are two verbs of one scope, not two allowlists (F7): they share the
+    # ``read`` and ``search`` are two verbs of one scope, not two allowlists: they share the
     # ``slack.read_messages`` operation key, and each carries the predicate whose value that verb
     # can actually be measured from -- args for a single channel, every result for a search.
     _scope("approved_channel", "slack.channel", "slack", (Verb.READ,), _slack_channel, "this channel"),
@@ -407,7 +388,7 @@ def _by_group(entries: tuple[ProposableScope, ...]) -> dict[str, tuple[Proposabl
 
 _SCOPES_BY_GROUP: dict[str, tuple[ProposableScope, ...]] = _by_group(PROPOSABLE_SCOPES)
 
-# Public alias -- P6's Settings page builds its "add a rule" scope picker directly off this (one
+# Public alias -- the Settings page builds its "add a rule" scope picker directly off this (one
 # entry per widening group, the same grouping `rules_for_scope_group` itself keys on), rather than
 # re-deriving the grouping from `PROPOSABLE_SCOPES` a second time.
 SCOPES_BY_GROUP: dict[str, tuple[ProposableScope, ...]] = _SCOPES_BY_GROUP
@@ -427,7 +408,7 @@ def verb_sort_key(verb: Verb) -> tuple[int, int]:
 
 def scope_needs_value(scope: ProposableScope) -> bool:
     """Whether ``scope`` has a resource identity to type in, or is a value-less attribute/condition
-    scope ("if I own it", "no external attendees") that only ever needs a verb selection. P6's
+    scope ("if I own it", "no external attendees") that only ever needs a verb selection. The
     Settings page uses this to decide whether its "add a rule" form shows a value field for a given
     scope group -- a group is homogeneous on this (every member of one widening group shares a
     value shape), so checking the group's first entry is enough."""
@@ -435,7 +416,7 @@ def scope_needs_value(scope: ProposableScope) -> bool:
 
 
 def operations_for(scope: ProposableScope, verb: Verb) -> frozenset[str]:
-    """Every operation key ``scope`` can govern for ``verb`` -- derived from P1's registry, not
+    """Every operation key ``scope`` can govern for ``verb`` -- derived from the tool registry, not
     declared. ``registry.operation_verbs`` is what makes the three double-verb keys
     (``slack.read_messages``, ``telegram.read_chat_messages``, ``calendar.create_modify_event``)
     resolve correctly: each appears under both of its verbs, so a rule for one verb of such a key
@@ -478,9 +459,8 @@ class Widening:
 class RuleProposal:
     """One rule a surface may offer for the call under review, at its narrowest.
 
-    ``operations`` is always exactly the one operation key that was gated -- the same width
-    ``auto_accept.add_auto_accept_rule`` writes today, which is what makes accepting a proposal
-    as-is provably no wider than v1's own "Always allow". ``widenings`` is everything beyond that,
+    ``operations`` is always exactly the one operation key that was gated, so accepting a proposal
+    as-is never allows more than the call it came from. ``widenings`` is everything beyond that,
     each named and chosen separately.
     """
 
@@ -504,8 +484,8 @@ def _candidate_value(scope: ProposableScope, ctx: ReviewContext) -> Any:
 
     The value builder only finds the field; whether the scope actually contains this item is the
     **selector's** own answer (``scopes.SCOPE_SELECTORS``, or ``conditions.CONDITION_SELECTORS`` for
-    a condition scope). That is what collapses the five v1 suggestion tables into P2's registry:
-    a value-less attribute scope has nothing to derive and is decided entirely by its selector, and
+    a condition scope). That is what lets one registry replace separate suggestion tables: a
+    value-less attribute scope has nothing to derive and is decided entirely by its selector, and
     a valued scope is only proposed when the value derived from the item would have accepted that
     same item. A selector that raises is a non-match, never a crash in a popup -- the same
     fail-closed posture ``policy.engine.evaluate`` takes.
@@ -549,13 +529,11 @@ def _widenings_for(scope: ProposableScope, verb: Verb, operation: str) -> tuple[
 def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
     """Every rule a surface may offer for a gated call on ``tool``, narrowest scope first.
 
-    Replaces ``auto_accept.suggest_rule``/``suggest_rule_choices``/``suggest_write_rule`` and the
-    five tables behind them with one pass over ``PROPOSABLE_SCOPES``: the candidates are the scopes
-    of this tool's own connector that can govern the verb this tool performs, and the survivors are
-    the ones whose selector confirms the item. An ungoverned tool (no operation key), an unknown
-    tool, or one whose verb no scope of its connector governs yields nothing -- the popup's "Always
-    allow" button then simply doesn't render, exactly as it doesn't today when ``suggest_rule``
-    returns ``None``.
+    One pass over ``PROPOSABLE_SCOPES``: the candidates are the scopes of this tool's own connector
+    that can govern the verb this tool performs, and the survivors are the ones whose selector
+    confirms the item. An ungoverned tool (no operation key), an unknown tool, or one whose verb no
+    scope of its connector governs yields nothing -- the popup's "Always allow" button then simply
+    doesn't render.
     """
     entry = TOOL_REGISTRY.get(tool)
     if entry is None or entry.operation is None or entry.verb is None:
@@ -628,7 +606,7 @@ def rules_for_scope_group(group: str, value: Any, verbs: Iterable[Verb]) -> list
     ``resource_grants.GrantCapability`` toggle has always had, now expressed in the same vocabulary
     the popup uses.
 
-    ``group`` is a widening group, which is a scope type except where v1's value-less attribute
+    ``group`` is a widening group, which is a scope type except where value-less attribute
     predicates are mutually exclusive variants of one type (``slack.channel_kind``, ``jira.
     my_issues``) -- see ``ProposableScope.widening_group``. An unknown group yields no rules rather
     than raising: fail closed, the same way an unrecognised predicate does everywhere else here.
