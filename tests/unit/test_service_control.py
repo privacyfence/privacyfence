@@ -52,6 +52,33 @@ class TestNotEligibleToElevate:
         # own script -- not a dead end.
         assert f"sudo {shlex.quote(str(script))} enable" in detail
 
+    def test_windows_names_the_elevated_powershell_command(self, monkeypatch, tmp_path):
+        script = tmp_path / "privilege-separation.ps1"
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: script)
+
+        detail = service_control._unseparated_detail()  # noqa: SLF001
+
+        assert f'-File "{script}" enable' in detail
+        assert "elevated PowerShell" in detail
+
+    def test_with_no_script_on_disk_falls_back_to_the_documented_command(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: None)
+
+        detail = service_control._unseparated_detail()  # noqa: SLF001
+
+        assert detail.endswith(privilege_separation.PLATFORM_LAYOUTS["linux"].enable_command)
+
+    def test_with_no_layout_at_all_says_so_without_a_command(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: None)
+        monkeypatch.setattr(privilege_separation, "platform_layout", lambda: None)
+
+        detail = service_control._unseparated_detail()  # noqa: SLF001
+
+        assert "isn't set up on this machine" in detail
+        assert "run:" not in detail
+
     def test_an_unreadable_marker_is_still_a_separated_install(self, monkeypatch, separated):
         # A separated root whose mode drifted to 0700 hides its own marker
         # from the logged-in user. That is not an unseparated install, and
