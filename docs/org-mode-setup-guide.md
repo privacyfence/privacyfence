@@ -338,9 +338,9 @@ proxy in front of it that:
 - does not buffer responses: the approvals page and `/mcp` stream events;
 - allows request bodies of at least 50 MB, the size of an upload slot ([section 13](#13-file-delivery)).
 
-The daemon trusts forwarded headers from every address you list with `--server-trusted-proxy`, and
-also from `127.0.0.1` and `::1`, which its web server trusts by default. List the proxy explicitly
-anyway. A proxy on another host is trusted only when listed.
+The daemon trusts forwarded headers only from the addresses you list with
+`--server-trusted-proxy`, and from nowhere by default. A proxy on the same host must be listed as
+`127.0.0.1` (or `::1`) like any other.
 
 Rate-limit `/register`, `/authorize` and `/token` at the proxy. `/register` accepts anonymous
 requests by design (that is dynamic client registration). The daemon caps registered clients at

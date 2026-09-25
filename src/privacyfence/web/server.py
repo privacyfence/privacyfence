@@ -1337,9 +1337,14 @@ class WebServer:
             # §10.2: honored only when this explicit list is non-empty --
             # never by default, in either mode.
             wrapped = ProxyHeadersMiddleware(wrapped, trusted_hosts=list(trusted_proxies))
+        # proxy_headers=False: uvicorn otherwise applies its own
+        # ProxyHeadersMiddleware, trusting 127.0.0.1/::1 (or
+        # $FORWARDED_ALLOW_IPS) whatever trusted_proxies says -- the wrap
+        # above must be the only one.
         config = uvicorn.Config(
             wrapped, host=host, port=port, log_level="warning",
             ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
+            proxy_headers=False,
         )
         self._server = uvicorn.Server(config)
         self._thread: threading.Thread | None = None

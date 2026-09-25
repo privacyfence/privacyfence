@@ -413,3 +413,38 @@ class TestWebServerOrgMode:
         org = _org_auth(tmp_path, monkeypatch)
         server = WebServer(WebApprovalUI(), org=org)
         assert not isinstance(server._server.config.app, ProxyHeadersMiddleware)
+
+    def test_uvicorn_does_not_add_its_own_proxy_headers_middleware(self, tmp_path, monkeypatch):
+        # uvicorn.Config defaults to proxy_headers=True with 127.0.0.1/::1
+        # (or $FORWARDED_ALLOW_IPS) trusted, which would honour forwarded
+        # headers without any trusted_proxies configured.
+        monkeypatch.setenv("FORWARDED_ALLOW_IPS", "*")
+        org = _org_auth(tmp_path, monkeypatch)
+        server = WebServer(WebApprovalUI(), org=org)
+        assert server._server.config.proxy_headers is False
+
+    async def test_forwarded_proto_from_loopback_is_ignored_without_trusted_proxies(self, tmp_path, monkeypatch):
+        org = _org_auth(tmp_path, monkeypatch)
+        config = WebServer(WebApprovalUI(), org=org)._server.config
+        seen: dict[str, object] = {}
+
+        async def probe(scope, receive, send):
+            seen["scheme"] = scope["scheme"]
+            seen["client"] = scope["client"]
+
+        async def noop(*_args):  # pragma: no cover - the probe never calls it
+            return None
+
+        # Swap in a probe as the app, so config.load() wraps it in exactly
+        # the middleware uvicorn itself would add at serve time.
+        config.app = probe
+        config.load()
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "GET", "scheme": "http", "path": "/", "raw_path": b"/",
+            "query_string": b"", "root_path": "",
+            "headers": [(b"x-forwarded-proto", b"https"), (b"x-forwarded-for", b"203.0.113.9")],
+            "client": ("127.0.0.1", 50000), "server": ("127.0.0.1", 8765),
+        }
+        await config.loaded_app(scope, noop, noop)
+        assert seen == {"scheme": "http", "client": ("127.0.0.1", 50000)}
