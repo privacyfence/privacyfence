@@ -241,8 +241,9 @@ class V1Reference:
     # ── Slack ─────────────────────────────────────────────────────────────
 
     def _rule_dm_with_myself(self, _v, ctx):
-        cid = ctx.args.get("channel_id", "") or ""
-        return cid.startswith("D")
+        # Deliberately not verbatim: v1 matched any "D"-prefixed id, i.e. every 1:1 DM. Both
+        # engines now read the connector's self-DM verdict and fail closed without it.
+        return ctx.args.get("is_self_dm") is True
 
     def _rule_send_to_myself(self, v, ctx):
         return self._rule_dm_with_myself(v, ctx)

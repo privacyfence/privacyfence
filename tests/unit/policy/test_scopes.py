@@ -42,10 +42,14 @@ def _old(predicate: str):
 # and the new selector's matches().
 FIXTURES: dict[str, list] = {
     "dm_with_myself": [
+        (None, make_ctx(args={"channel_id": "D12345", "is_self_dm": True})),
+        (None, make_ctx(args={"channel_id": "D67890", "is_self_dm": False})),
         (None, make_ctx(args={"channel_id": "D12345"})),
         (None, make_ctx(args={"channel_id": "C12345"})),
     ],
     "send_to_myself": [
+        (None, make_ctx(args={"channel_id": "D12345", "is_self_dm": True})),
+        (None, make_ctx(args={"channel_id": "D67890", "is_self_dm": False})),
         (None, make_ctx(args={"channel_id": "D12345"})),
         (None, make_ctx(args={"channel_id": "C12345"})),
     ],
@@ -327,6 +331,30 @@ class TestKindIsAssignedToEverySelector:
     @pytest.mark.parametrize("predicate,selector", sorted(SCOPE_SELECTORS.items()))
     def test_kind_is_a_scope_kind(self, predicate, selector):
         assert isinstance(selector.kind, ScopeKind)
+
+
+class TestSelfDmFailsClosed:
+    """Every IM id starts with "D"; only the connector's resolved verdict may make a DM "mine"."""
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_dm_with_someone_else_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D67890", "is_self_dm": False})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_dm_with_no_verdict_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345"})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_truthy_non_bool_verdict_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345", "is_self_dm": "true"})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_the_self_dm_matches(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345", "is_self_dm": True})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is True
 
 
 class TestNewScopeSelectors:

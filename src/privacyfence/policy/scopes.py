@@ -99,8 +99,10 @@ def _values_of(value: Any) -> list[Any]:
 
 
 def _dm_with_myself_matches(_value: Any, ctx: ReviewContext) -> bool:
-    cid = ctx.args.get("channel_id", "") or ""
-    return cid.startswith("D")
+    # Every IM id starts with "D", so the channel id cannot tell the self-DM from a DM with anyone
+    # else. The Slack connector resolves the IM's counterpart against the signed-in user and passes
+    # the verdict; a call that carries no verdict must not match.
+    return ctx.args.get("is_self_dm") is True
 
 
 def _group_dm_matches(_value: Any, ctx: ReviewContext) -> bool:

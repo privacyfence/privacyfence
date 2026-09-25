@@ -357,7 +357,7 @@ class TestNarrowestVerbFirst:
 
     def test_mutually_exclusive_attributes_do_not_widen_into_each_other(self):
         """"My own DM" must never offer "…and every group DM" as a widening of itself."""
-        ctx = make_ctx(connector="slack", args={"channel_id": "D123"},
+        ctx = make_ctx(connector="slack", args={"channel_id": "D123", "is_self_dm": True},
                        raw_data=[SimpleNamespace(channel_id="D123", is_private=True, files=[])])
         dm = next(p for p in propose.proposals_for("slack_get_channel_history", ctx)
                   if p.scope.id == "dm_with_myself")

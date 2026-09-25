@@ -328,8 +328,8 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Gmail label | identity | label names | `label_match`, `label_name_allowlist` | the message carries one of the labels; the label being applied or removed is one of these |
 | Gmail / Calendar — anything | attribute | — | `always_allow` | always (unconditional) |
 | Gmail — anything | attribute | — | `gmail.anything` | always (used for Gmail filters) |
-| Slack channel | identity | channel or user ids | `approved_channel`, `approved_channel_all_results`, `approved_recipient`, `send_to_myself` | the channel is one of these; for a search, every result is in one of them |
-| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is a direct message (any 1:1 DM, not only your self-DM); a group DM; every result is from a public channel |
+| Slack channel | identity | channel or user ids | `approved_channel`, `approved_channel_all_results`, `approved_recipient`, `send_to_myself` | the channel is one of these; for a search, every result is in one of them; `send_to_myself` takes no ids and holds only for your DM with yourself |
+| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is your DM with yourself (a DM with anyone else, or one PrivacyFence could not confirm as yours, never matches); a group DM; every result is from a public channel |
 | Slack — anything | attribute | — | `slack.anything` | always (used for creating group chats) |
 | Telegram chat | identity | chat ids | `approved_chats`, `approved_chats_all_results` | the chat is one of these; for a search, every result is in one of them |
 | Calendar | identity | calendar ids | `personal_calendar` | the call's calendar is one of these |
