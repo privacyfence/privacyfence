@@ -1,12 +1,10 @@
 """Policy v2 vocabulary -- see the "Scope and Verbs" redesign proposal.
 
-This package is being built up in independently-reviewable phases (P0-P9); each phase's exit
-criterion is "no behaviour change" until the engine swap (P3) lands, and even then the change is
-opt-in (`policy.engine: v2`, default `v1`) until a later phase flips the default. `gate.py` (P3,
-shadow-mode evaluation, plus P6's own always-on v2-store check -- see `auto_accept.
-_AutoAcceptState.policy_v2_store_rules`), `daemon_main.py` (P4, the one-time on-disk migration; P6,
-hot-loading that same v2-store check), `settings_controller.py`/`web/routes_settings.py` (P4, the
-post-migration Settings notice) are consumers outside this package and its tests.
+`policy/engine.py` is the only rule evaluator: the old one, and the `policy.engine` switch that
+once chose between them, are gone (ADR 0004). Its consumers outside this package are `gate.py`,
+which evaluates every gated call against the rules in `auto_accept._AutoAcceptState.
+policy_v2_store_rules`, `daemon_main.py`, which loads those rules from the `auto_accept:` section
+when it loads a principal's settings, and `settings_controller.py`/`web/routes_settings.py`.
 
 P5 (`policy/propose.py`, `policy/describe.py`) landed the one writer both "Always allow" surfaces
 will share -- the scope catalogue that replaces the five v1 suggestion tables, and the rendering

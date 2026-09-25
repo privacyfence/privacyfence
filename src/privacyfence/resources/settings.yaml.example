@@ -355,17 +355,6 @@ step_up:
   # unaffected either way -- denying never needs step-up.
   batch: single_assertion
 
-# P3 of the auto-accept policy redesign: which evaluator decides an auto-accept call. Both the
-# existing evaluator and the new policy/engine.py one run on every call regardless of this
-# setting -- this only decides which answer is acted on, and which is shadowed (logged at
-# WARNING on a disagreement, never at the content level). Leave unset, or "v1", to keep today's
-# evaluator load-bearing; this is the default for a reason -- nothing on disk changes yet, and no
-# auto-accept rule you've configured needs touching for this release. Setting "v2" makes the new
-# evaluator authoritative instead; switching back to "v1" is the documented rollback if that
-# regresses something, no release needed.
-policy:
-  engine: v1
-
 # ADR 0007 (docs/adr/0007-local-file-bridge.md): the local file bridge --
 # how a privilege-separated daemon moves bytes to/from a path an agent
 # named (drive_upload_file's local_path, drive_download_file's
