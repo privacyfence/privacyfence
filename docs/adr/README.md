@@ -170,8 +170,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0062](0062-only-a-companion-attested-session-may-approve.md) | Only a companion-attested session may approve | Accepted (retroactive) |
 | [0063](0063-the-web-ui-csp-uses-per-response-nonces-not-unsafe-inline.md) | The web UI's CSP uses nonces, not `'unsafe-inline'` | Accepted (retroactive) |
 | [0064](0064-browser-notifications-stay-on-the-machine.md) | Browser notifications stay on the machine | Accepted (retroactive) |
-| [0065](0065-approving-from-the-list-is-a-batch-bound-to-one-step-up-assertion.md) | Approving from the list is a batch bound to one step-up assertion | Accepted (retroactive); implemented in part |
-| [0066](0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md) | Step-up falls back by mode, and `require_passkey` closes the fallback | Accepted (retroactive); implemented in part |
+| [0065](0065-approving-from-the-list-is-a-batch-bound-to-one-step-up-assertion.md) | Approving from the list is a batch bound to one step-up assertion | Accepted (retroactive) |
+| [0066](0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md) | Step-up falls back by mode, and `require_passkey` closes the fallback | Accepted (retroactive) |
 | [0067](0067-the-default-step-up-scope-is-writes-and-pii-reads.md) | The default step-up scope is writes and PII-flagged reads | Accepted (retroactive) |
 | [0068](0068-step-up-is-turned-on-from-the-ui-and-off-only-by-a-config-edit.md) | Step-up is turned on from the UI and off only by a config edit | Accepted (retroactive) |
 | [0069](0069-require-passkey-with-nothing-enrolled-starts-and-releases-nothing.md) | With `require_passkey` on and nothing enrolled, the daemon starts and releases nothing step-up covers | Accepted (retroactive) |

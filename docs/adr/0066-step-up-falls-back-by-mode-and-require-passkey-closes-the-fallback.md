@@ -12,8 +12,7 @@ landed in `40f45600`, merged as [#218](https://github.com/privacyfence/privacyfe
 landed in `87361dce` ([#469](https://github.com/privacyfence/privacyfence/pull/469)), and its
 `require_passkey` hard fail in `2fc760aa` ([#471](https://github.com/privacyfence/privacyfence/pull/471)),
 both under [#426](https://github.com/privacyfence/privacyfence/issues/426). The org-mode batch
-refusal below is decided but not yet implemented, tracked in
-https://github.com/privacyfence/privacyfence/issues/741.
+refusal below is implemented, fixing https://github.com/privacyfence/privacyfence/issues/741.
 
 ## Context
 
@@ -78,8 +77,11 @@ approving decision without a ceremony. Sensitive settings actions are gated only
   `TestRequirePasskeyHardFail`, and `TestStepUpWebAuthnFlow`'s check that local mode never offers
   an IdP URL.
 - `tests/unit/web/test_routes_org_approvals.py`: `TestStepUpWebAuthnFlow` (the IdP link with and
-  without a credential), `TestStepUpRequirePasskey`, and `TestIdpStepUp`
-  (`test_callback_requires_configured_acr_values_when_set`).
+  without a credential), `TestStepUpRequirePasskey`, `TestIdpStepUp`
+  (`test_callback_requires_configured_acr_values_when_set`), and `TestBatchStepUp`'s
+  `test_require_passkey_off_with_nothing_enrolled_refuses_the_batch_with_nothing_applied`. Local
+  mode's batch fall-through is `tests/unit/web/test_routes_approvals.py`'s `TestBatchStepUp`
+  `test_require_passkey_off_with_nothing_enrolled_lets_it_through`.
 
 ## Related
 
