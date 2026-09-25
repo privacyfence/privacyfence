@@ -45,8 +45,8 @@ SCHEMA_VERSION = 2
 V1_SECTION_KEYS: tuple[str, ...] = ("auto_accept_rules", "auto_accept_grants")
 
 
-# Written at the top level of ``settings.yaml`` by the v1 -> v2 conversion that 4.1 through 4.4
-# ran on startup, next to the ``auto_accept:`` section it produced. That conversion left the v1
+# Written at the top level of ``settings.yaml`` by the v1 -> v2 conversion an earlier release ran
+# on startup, next to the ``auto_accept:`` section it produced. That conversion left the v1
 # sections on disk, and nothing after it read them.
 CONVERTED_V1_MARKER = "migrated_to_policy_v2"
 

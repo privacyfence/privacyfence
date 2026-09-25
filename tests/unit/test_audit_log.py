@@ -152,7 +152,7 @@ class TestClaudeReasonField:
 
 
 class TestRuleIdField:
-    """P8 (rule attribution and staleness): the canonical v2 rule id a matched "auto_accepted"
+    """Rule attribution: the canonical v2 rule id a matched "auto_accepted"
     decision resolves to -- see AuditEntry.rule_id's own docstring."""
 
     def test_defaults_to_empty_string(self):
@@ -415,7 +415,7 @@ class TestRecentMatches:
 
 
 class TestRuleUsage:
-    """P8 (rule attribution and staleness): AuditLogger.rule_usage() -- the Settings Auto-accept
+    """Rule attribution and staleness: AuditLogger.rule_usage() -- the Settings Auto-accept
     page's "Matched Nx, last <when>" line for each rule, grouped by AuditEntry.rule_id."""
 
     def test_no_entries_gives_empty_usage(self, tmp_path):
@@ -534,8 +534,8 @@ class TestComputeSecurityConfigHash:
 
 class TestSchemaVersionField:
     def test_defaults_to_one_for_legacy_reconstruction(self):
-        # An entry reconstructed from a pre-SEC-23 .jsonl line (no
-        # "schema_version" key at all) must report the legacy version, not
+        # An entry reconstructed from a .jsonl line with no
+        # "schema_version" key at all must report the legacy version, not
         # the current one -- see AuditEntry.schema_version's own docstring.
         assert make_entry().schema_version == 1
 
@@ -617,7 +617,7 @@ class TestSecurityConfigHashField:
 
 
 class TestHashChain:
-    """SEC-23's append-integrity mechanism: each entry is HMAC-chained to
+    """The audit log's append-integrity mechanism: each entry is HMAC-chained to
     the one before it, so an edit/insertion/removal after the fact is
     detectable via verify_chain()."""
 
@@ -890,7 +890,7 @@ class TestForwarding:
         logger.close()  # no forwarder configured -- must not raise
 
 
-class TestExportIncludesSec23Columns:
+class TestExportIncludesIntegrityColumns:
     def test_new_columns_present_with_expected_values(self, tmp_path):
         pytest.importorskip("openpyxl")
         import openpyxl

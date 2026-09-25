@@ -1,20 +1,18 @@
-"""Tests for privacyfence.policy.propose (P5 of the policy v2 redesign).
+"""Tests for privacyfence.policy.propose.
 
-Two things are being proved here, in the order the redesign proposal's P5 asks for them:
+Two things are being proved here:
 
 1. **The catalogue is a faithful join, not a sixth hand-kept table.** Every one of the 21 grant
    capabilities in `resource_registry.GRANT_RESOURCE_TYPES` is reproduced exactly by deriving
-   `(operation_key, rule_name)` pairs from the catalogue's declared verbs plus P1's registry --
-   including the Drive sandbox folder's thirteen, which is the width F2 is about.
+   `(operation_key, rule_name)` pairs from the catalogue's declared verbs plus the verb registry
+   (`policy.registry`) -- including the Drive sandbox folder's thirteen, the width one toggle
+   stands for.
 2. **One writer.** The popup's intent and Settings' intent, for the same scope and the same verbs,
    produce byte-identical rules.
 
-(P9 removed the v1-persistence path this file used to also check here -- `propose.v1_rule_name`,
-`ProposableScope.v1_rule`, `propose.apply_rules`, `propose.v1_entries`, and the v1 suggestion
-tables (`auto_accept.suggest_rule_choices`/`suggest_write_rule`/`known_rule_names`) this file used
-to cross-check against are all gone; every rule now lives in the v2 `auto_accept:` store instead,
-and `rules_for_proposal`/`rules_for_scope_group`/`proposals_for` -- what's left under test here --
-are unchanged.)
+(There is no v1-persistence path or v1 suggestion table to cross-check against: every rule lives
+in the v2 `auto_accept:` store (ADR 0004), and `rules_for_proposal`/`rules_for_scope_group`/
+`proposals_for` are what's under test here.)
 """
 from __future__ import annotations
 
@@ -139,8 +137,8 @@ def _sorted_dicts(rules) -> list[dict]:
 
 
 class TestCatalogueIsDerived:
-    """The catalogue declares verbs; operation keys come from P1's registry. These assertions are
-    what stop it becoming a sixth table that drifts (F10)."""
+    """The catalogue declares verbs; operation keys come from the verb registry. These assertions
+    are what stop it becoming a sixth table that drifts."""
 
     @pytest.mark.parametrize(
         "resource_type,capability",
@@ -154,8 +152,8 @@ class TestCatalogueIsDerived:
     def test_every_grant_capability_is_reproduced_exactly(self, resource_type, capability):
         """A grant capability is a verb set in disguise. Deriving that verb set from the catalogue
         and expanding it back must give the capability's own targets, with no pair added and none
-        dropped -- notably the sandbox folder's thirteen, whose `delete` (F4) and whose upload/move
-        predicate aliases (F1) are the easiest things to get wrong."""
+        dropped -- notably the sandbox folder's thirteen, whose `delete` and whose upload/move
+        predicate aliases are the easiest things to get wrong."""
         targets = set(resource_type.capabilities[capability].targets)
         predicates = {
             predicate
@@ -260,10 +258,11 @@ class TestProposalsAgainstTheV1Tables:
         assert propose.proposals_for("drive_list_files", make_ctx()) == []
         assert propose.proposals_for("not_a_tool", make_ctx()) == []
 
-    def test_the_f5_operations_stay_unproposed(self):
-        """Deliberate: two of them have no scope in the §04 catalogue at all, and an
-        `always_allow` rule on `gmail.create_filter` is exactly P0·3's unrenderable rule. Making
-        them governable is P6/P7's job, with the v2 store as the write target."""
+    def test_the_ungovernable_operations_stay_unproposed(self):
+        """Deliberate: no rule, label or grant capability reaches these operation keys. Two of
+        them have no scope in the scope catalogue at all, and an `always_allow` rule on
+        `gmail.create_filter` is a rule no surface can render. Making them governable belongs to
+        the v2 store as the write target, not to a proposal."""
         for tool, ctx in (
             ("gmail_create_filter", make_ctx(args={"criteria": "x"})),
             ("gmail_update_filter", make_ctx(args={"filter_id": "f"})),
@@ -327,7 +326,7 @@ class TestProposalsAgainstTheV1Tables:
 class TestNarrowestVerbFirst:
 
     def test_a_proposal_covers_exactly_the_gated_operation_key(self):
-        """The whole no-widening argument for P5: accepting a proposal as offered writes one
+        """The whole no-widening argument: accepting a proposal as offered writes one
         operation key, which is what `add_auto_accept_rule` writes today."""
         for tool, ctx in CORPUS:
             for proposal in propose.proposals_for(tool, ctx):
@@ -349,7 +348,7 @@ class TestNarrowestVerbFirst:
     def test_a_widening_can_add_a_predicate_for_an_operation_key_already_covered(self):
         """A Slack read widened to search is the same operation key under its all-results
         predicate -- the reason a widening's unit is a `(predicate, operation)` pair and not an
-        operation key (F7)."""
+        operation key."""
         ctx = make_ctx(connector="slack", args={"channel_id": "C123"},
                        raw_data=[SimpleNamespace(channel_id="C123", is_private=False, files=[])])
         proposal = next(p for p in propose.proposals_for("slack_get_channel_history", ctx)
@@ -380,8 +379,7 @@ class TestNarrowestVerbFirst:
 
 
 class TestOneWriter:
-    """P5's exit criterion: popup and Settings, given the same intent, produce byte-identical
-    rules."""
+    """Popup and Settings, given the same intent, produce byte-identical rules."""
 
     SANDBOX_WRITE_VERBS = (
         Verb.UPDATE, Verb.FORMAT, Verb.RESTRUCTURE, Verb.COMMENT, Verb.DELETE, Verb.CREATE, Verb.MOVE,

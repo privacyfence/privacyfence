@@ -1,16 +1,16 @@
-"""Tests for web/org_settings_scope.py -- the #400 design decision splitting
-settings actions by which mode(s) they have a real route in, plus the
-``is_admin`` authorization decision built on top of it (PSC-4b: this table
-is now the primary declaration both web/routes_settings.py's
-``build_routes``/``build_org_routes`` project from, rather than a filter
-bolted onto local mode's own action list -- see that module's own
-docstring). The bucket-shaped tests are invariant checks, not behavior
-tests: what needs guarding is that every action web/routes_settings.py's
-local dispatcher recognizes is classified here, and that a mode gains an
-action only in the same PR that gives it a real route (#B20 in the 4.1
-security review -- the allow-list used to claim actions no route
-consumed). The ``is_action_permitted`` tests are real behavior tests --
-that function *is* an authorization decision.
+"""Tests for web/org_settings_scope.py -- the split of settings actions by
+which mode(s) they have a real route in, plus the ``is_admin``
+authorization decision built on top of it (this table is the primary
+declaration both web/routes_settings.py's ``build_routes``/
+``build_org_routes`` project from, rather than a filter bolted onto local
+mode's own action list -- see ADR 0033 and that module's own docstring).
+The bucket-shaped tests are invariant checks, not behavior tests: what
+needs guarding is that every action web/routes_settings.py's local
+dispatcher recognizes is classified here, and that a mode gains an action
+only in the same PR that gives it a real route -- an allow-listed action
+with no route behind it is denied until it is routed. The
+``is_action_permitted`` tests are real behavior tests -- that function
+*is* an authorization decision.
 """
 from __future__ import annotations
 
@@ -86,11 +86,10 @@ def test_org_routed_per_principal_actions_are_permitted_for_any_signed_in_princi
 
 @pytest.mark.parametrize("action", sorted(_LOCAL_ONLY_ACTIONS))
 def test_local_only_actions_are_never_permitted_in_org_mode(action):
-    # #B20: some of these are per-principal or admin-wide in concept, but
-    # org mode has no route for any of them yet -- is_action_permitted must
-    # deny them even so, the same way an allow-list entry with no route
-    # behind it was the bug this table exists to make impossible to
-    # reintroduce by construction.
+    # Some of these are per-principal or admin-wide in concept, but org
+    # mode has no route for any of them -- is_action_permitted must deny
+    # them even so: an allow-list entry with no route behind it is what
+    # this table exists to make impossible by construction.
     assert is_action_permitted(action, _ADMIN, mode=ORG_MODE) is False
     assert is_action_permitted(action, _NON_ADMIN, mode=ORG_MODE) is False
 

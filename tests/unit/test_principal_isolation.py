@@ -52,8 +52,7 @@ class TestAutoAcceptIsolation:
         assert bob_rules == []  # bob never saw it
 
     def test_two_principals_get_different_state_instances(self):
-        # Stands in for the pre-P9 "different AutoAcceptEvaluator instances" check: what's
-        # per-principal now is the _AutoAcceptState the registry hands back (config path,
+        # What's per-principal is the _AutoAcceptState the registry hands back (config path,
         # temp-accept store, hot-reloaded v2 rule cache, listeners), not a rule-engine object.
         alice, bob = Principal(id="alice"), Principal(id="bob")
         with principal_scope(alice):

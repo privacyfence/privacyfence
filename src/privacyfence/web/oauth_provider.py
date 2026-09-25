@@ -1,11 +1,11 @@
 """``OrgOAuthProvider`` -- PrivacyFence's own minimal OAuth 2.1 authorization
-server (P7), implementing the official MCP SDK's ``OAuthAuthorizationServerProvider``
+server (ADR 0011), implementing the official MCP SDK's ``OAuthAuthorizationServerProvider``
 protocol. Wired into web/routes_mcp.py's ``/mcp`` (via ``verify_token``,
 satisfying the SDK's separate ``TokenVerifier`` protocol too) and into
 ``mcp.server.auth.routes.create_auth_routes`` (which builds ``/authorize``,
 ``/token``, ``/register``, ``/revoke`` and the AS metadata document against
 whatever provider it's given -- see that module's own docstring for why
-none of that protocol machinery needed hand-rolling, same reasoning as D2).
+none of that protocol machinery needed hand-rolling, same reasoning as ADR 0009).
 
 The diagram in ``OAuthAuthorizationServerProvider.authorize``'s own
 docstring is exactly this class's shape:
@@ -29,13 +29,12 @@ Storage: registered OAuth clients (DCR) are persisted to disk
 every installed Claude connector has to re-register, which is real user
 friction DCR is supposed to spare people. Pending authorizations,
 authorization codes and access tokens are in-memory only -- short-lived by
-design (§5.4's decision-ledger precedent: state that's supposed to expire
-soon anyway doesn't need to survive a restart), so losing them on restart
+design (the same posture as approvals.py's decision ledger: state that's
+supposed to expire soon anyway doesn't need to survive a restart), so losing them on restart
 just means signing in again, not a security gap.
 
-Refresh tokens are the one exception (#402), and only since
-``sealed_refresh_store.py`` existed to hold them in a shape worth having:
-they are persisted to ``org_dir()/oauth_refresh.json``, each record sealed
+Refresh tokens are the one exception, held by ``sealed_refresh_store.py``
+in a shape worth persisting: they are persisted to ``org_dir()/oauth_refresh.json``, each record sealed
 under a key derived from the token itself rather than one this daemon keeps.
 "Just sign in again" is a fair price for a human at a browser, but a
 *scheduled* tool call has nobody present to complete an IdP redirect, so
@@ -44,7 +43,7 @@ callers that cannot recover on their own. See that module's docstring for
 why sealing to the bearer is not the same trade as encrypting at rest under
 a daemon-held key, and for what is deliberately left in the clear.
 
-Resource controls (SEC-16): ``/register`` is unauthenticated by design -- that's what "dynamic"
+Resource controls: ``/register`` is unauthenticated by design -- that's what "dynamic"
 means in DCR -- so this class, not the reverse proxy in front of it, is
 the only thing standing between an anonymous POST loop and an unbounded
 ``oauth_clients.json``. ``register_client`` enforces a total-client cap
@@ -103,12 +102,12 @@ _AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60
 _ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 _PENDING_AUTHORIZATION_TTL_SECONDS = 5 * 60
 
-# SEC-16: DCR's
+# DCR's
 # ``/register`` endpoint is unauthenticated by design (RFC 7591 -- that's
-# the whole point of *dynamic* registration) and, before this fix, had no
-# resource controls at all: no cap on how many clients could pile up in
-# ``oauth_clients.json``, no cap on how large one registration's metadata
-# could be, and no way for a long-abandoned client to ever leave the store.
+# the whole point of *dynamic* registration), so it needs resource controls
+# of its own: a cap on how many clients can pile up in
+# ``oauth_clients.json``, a cap on how large one registration's metadata
+# can be, and a way for a long-abandoned client to leave the store.
 # These four constants are that hardening's knobs -- all in-process,
 # same-process defenses, complementary to (not a replacement for) the
 # reverse-proxy rate-limiting the org setup guide now recommends in front
@@ -146,7 +145,7 @@ _STALE_CLIENT_TTL_SECONDS = 180 * 24 * 60 * 60
 # for up to _PENDING_AUTHORIZATION_TTL_SECONDS before the next prune.
 _MAX_PENDING_AUTHORIZATIONS = 1000
 
-# SEC-12: a hard cap
+# A hard cap
 # on how long one continuous refresh-token *chain* may be used, regardless
 # of how many times it's rotated. Rotation alone (see _mint_tokens'
 # ``refresh_issued_at`` below) isn't an expiry -- a client that keeps
@@ -156,7 +155,7 @@ _MAX_PENDING_AUTHORIZATIONS = 1000
 # 30 days: long enough that an MCP client (Claude Desktop et al.) held open
 # across normal use doesn't force a re-login through the IdP every session,
 # short enough that a refresh token exfiltrated once doesn't stay a usable
-# credential indefinitely the way it did before this fix.
+# credential indefinitely.
 _REFRESH_TOKEN_ABSOLUTE_LIFETIME_SECONDS = 30 * 24 * 60 * 60
 
 
@@ -167,7 +166,7 @@ class _OrgRefreshToken(RefreshToken):
     wouldn't be enough on its own -- email/display_name/is_admin aren't
     derivable from a bare subject string).
 
-    ``issued_at`` (SEC-12) is the refresh-token *chain's* original mint
+    ``issued_at`` is the refresh-token *chain's* original mint
     time -- set once, when the chain starts (``exchange_authorization_
     code``), and carried forward unchanged by every later rotation
     (``exchange_refresh_token``'s own ``refresh_issued_at`` argument to
@@ -193,8 +192,8 @@ class RegisteredClient:
 
 @dataclass
 class _StoredClient:
-    """A DCR-registered client plus the bookkeeping SEC-16's stale-client
-    pruning needs. ``last_used_at`` starts at registration time and is
+    """A DCR-registered client plus the bookkeeping stale-client pruning
+    needs. ``last_used_at`` starts at registration time and is
     bumped by ``get_client`` -- called by the SDK's own handlers on every
     ``/authorize``, ``/token`` and ``/revoke`` request that names this
     client -- so it tracks actual use, not just how long ago DCR happened
@@ -222,8 +221,9 @@ class _PendingAuthorization:
 class _IssuedCode:
     """PrivacyFence's own authorization code, bound to the principal the
     IdP leg resolved -- exchanged exactly once (``exchange_authorization_
-    code`` pops it), per §5.4's single-consumption precedent for anything
-    that releases on the strength of a one-time decision."""
+    code`` pops it), the same single-consumption rule approvals.py's decision
+    ledger applies to anything that releases on the strength of a one-time
+    decision."""
 
     client_id: str
     principal: Principal
@@ -242,7 +242,8 @@ class OrgOAuthProvider:
     def __init__(self, idp: IdpConfig, *, idp_callback_url: str, policy: AuthzPolicyConfig | None = None) -> None:
         self._idp = idp
         self._idp_callback_url = idp_callback_url
-        # SEC-22: layered on top of the IdP dance below, same as web/
+        # The org's own sign-in policy (allowed domains, required groups):
+        # layered on top of the IdP dance below, same as web/
         # routes_org_identity.py's browser login -- see org_identity.
         # check_authz_policy's own docstring. Absent/disabled by default.
         self._policy = policy or AuthzPolicyConfig()
@@ -262,7 +263,7 @@ class OrgOAuthProvider:
         self._refresh_for_access: dict[str, str] = {}
         self._access_for_refresh: dict[str, str] = {}
         self._sealed = SealedRefreshStore(_refresh_store_path())
-        # #402: the one restart-visible fact an operator cannot otherwise
+        # Logged because this is the one restart-visible fact an operator cannot otherwise
         # tell apart -- "every client reconnects silently" and "everybody is
         # signing in again through the IdP" look identical from outside.
         logger.info(
@@ -282,8 +283,8 @@ class OrgOAuthProvider:
             raw = json.loads(self._clients_path.read_text(encoding="utf-8"))
             clients: dict[str, _StoredClient] = {}
             for client_id, data in raw.items():
-                # Only the current (SEC-16) format is read:
-                # {"client": {...}, "last_used_at": ...}. The pre-SEC-16 flat
+                # Only the current format is read:
+                # {"client": {...}, "last_used_at": ...}. The older flat
                 # format (the client's own fields at the top level) is not
                 # converted -- there is no upgrade path to support (ADR 0041).
                 # Such an entry is skipped, not fatal, so one leftover entry
@@ -310,7 +311,7 @@ class OrgOAuthProvider:
         atomic_write_json(self._clients_path, raw, indent=2, sort_keys=True)
 
     def _prune_stale_clients_locked(self) -> bool:
-        """SEC-16: a client nobody has authenticated as in
+        """A client nobody has authenticated as in
         ``_STALE_CLIENT_TTL_SECONDS`` is dropped -- called from
         ``register_client`` (mirroring ``authorize``'s own
         ``_prune_pending`` precedent: pruning piggybacks on the operation
@@ -408,7 +409,7 @@ class OrgOAuthProvider:
         idp_nonce = secrets.token_urlsafe(16)
         idp_code_verifier, idp_code_challenge = org_identity.generate_pkce_pair()
         with self._lock:
-            # SEC-16: the TTL-based prune above bounds how long a pending
+            # The TTL-based prune above bounds how long a pending
             # authorization survives, not how many can accumulate *within*
             # that window -- this bounds that too, so a burst of
             # /authorize calls can't grow this dict without limit before
@@ -462,7 +463,7 @@ class OrgOAuthProvider:
             raise ValueError("IdP token response carried no id_token")
         claims = await asyncio.to_thread(org_identity.verify_id_token, self._idp, id_token, nonce=pending.idp_nonce)
         principal = org_identity.principal_from_claims(claims, self._idp)
-        # SEC-22: raises AuthorizationDenied (a plain exception, like every
+        # check_authz_policy raises AuthorizationDenied (a plain exception, like every
         # other failure in this IdP leg) when the org's own allowlist
         # rejects an otherwise-legitimate IdP-authenticated principal --
         # web/routes_mcp.py's idp_callback route already wraps this whole
@@ -504,7 +505,7 @@ class OrgOAuthProvider:
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode,
     ) -> OAuthToken:
         with self._lock:
-            issued = self._codes.pop(authorization_code.code, None)  # single-use (§5.4 precedent)
+            issued = self._codes.pop(authorization_code.code, None)  # single-use, like the decision ledger
         if issued is None:
             raise TokenError(error="invalid_grant", error_description="authorization code already used or unknown")
         return self._mint_tokens(
@@ -522,13 +523,13 @@ class OrgOAuthProvider:
         with self._lock:
             rt = self._refresh_tokens.get(refresh_token)
             if rt is None:
-                # #402: an empty in-memory map is the ordinary state right
+                # An empty in-memory map is the ordinary state right
                 # after a restart, not evidence the token is bad -- consult
                 # the sealed store before concluding otherwise.
                 rt = self._rehydrate_refresh_token_locked(refresh_token)
             if rt is None or rt.client_id != client.client_id:
                 return None
-            # SEC-12: absolute lifetime, checked against the chain's
+            # Absolute lifetime, checked against the chain's
             # original issuance (see _OrgRefreshToken.issued_at), not this
             # particular token's own mint time -- same fail-closed-and-
             # revoke posture as load_access_token's expiry check below.
@@ -571,7 +572,7 @@ class OrgOAuthProvider:
         That decision is deliberate. The grant's whole point is letting an
         enterprise IdP mint an assertion a client trades for an access token
         without the human ever seeing this server; PrivacyFence's org mode is
-        built the other way round (P7): the human authenticates *at* the IdP
+        built the other way round (ADR 0011): the human authenticates *at* the IdP
         through this server's own ``/authorize``, and the principal that
         every downstream gate, audit entry and approval is scoped to comes
         from that round trip -- see ``handle_idp_callback``.
@@ -605,8 +606,8 @@ class OrgOAuthProvider:
     def revoke_all_for_principal(self, principal_id: str) -> int:
         """Every token chain belonging to one principal, in memory *and* on
         disk -- the OAuth half of ``OrgSessionStore.destroy_all_for``'s "sign
-        out everywhere", and the reason #402's persistence doesn't quietly
-        outlive a revocation. Returns how many refresh chains were removed.
+        out everywhere", and the reason refresh-token persistence doesn't
+        quietly outlive a revocation. Returns how many refresh chains were removed.
 
         Not part of the SDK's provider protocol; this is PrivacyFence's own,
         same as ``handle_idp_callback``.
@@ -635,7 +636,7 @@ class OrgOAuthProvider:
     def _rehydrate_refresh_token_locked(self, refresh_token: str) -> _OrgRefreshToken | None:
         """Caller already holds ``self._lock``. Rebuilds one in-memory refresh
         token from the sealed store and files it in ``_refresh_tokens``, so
-        every path downstream (the SEC-12 check below, the rotation in
+        every path downstream (the absolute-lifetime check, the rotation in
         ``exchange_refresh_token``, ``_revoke_pair_locked``'s cascade) finds
         it exactly where it would have found a token this process minted
         itself -- nothing else in this class has to know disk exists.
@@ -666,7 +667,7 @@ class OrgOAuthProvider:
         # A fresh chain (exchange_authorization_code) starts its own clock
         # now; a rotation (exchange_refresh_token) passes the chain's
         # original issuance through unchanged -- see _OrgRefreshToken's
-        # own docstring for why that's what SEC-12's absolute cap needs.
+        # own docstring for why that's what the absolute lifetime cap needs.
         issued_at = time.time() if refresh_issued_at is None else refresh_issued_at
         claims = {"email": principal.email, "display_name": principal.display_name, "is_admin": principal.is_admin}
         with self._lock:
@@ -681,7 +682,7 @@ class OrgOAuthProvider:
             )
             self._refresh_for_access[access_token_str] = refresh_token_str
             self._access_for_refresh[refresh_token_str] = access_token_str
-        # #402: outside the lock deliberately -- this is the one disk write on
+        # Outside the lock deliberately -- this is the one disk write on
         # the token path, and nothing above needs to be serialized with it.
         # Only the refresh token is persisted; see the module docstring.
         self._sealed.put(
@@ -712,9 +713,9 @@ class OrgOAuthProvider:
         if refresh_token_str is not None:
             self._refresh_tokens.pop(refresh_token_str, None)
             self._access_for_refresh.pop(refresh_token_str, None)
-            # #402: the single choke point that keeps "revoked in memory" and
+            # The single choke point that keeps "revoked in memory" and
             # "revoked on disk" from drifting apart. Every revocation path in
-            # this class -- /revoke, rotation, access-token expiry, the SEC-12
+            # this class -- /revoke, rotation, access-token expiry, the chain's
             # absolute-lifetime lapse -- already funnels through here, which
             # is why persistence needed no new bookkeeping in any of them.
             self._sealed.discard(refresh_token_str)

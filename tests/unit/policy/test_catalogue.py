@@ -1,8 +1,8 @@
-"""Tests for privacyfence.policy.catalogue (P7 of the policy v2 redesign).
+"""Tests for privacyfence.policy.catalogue.
 
-This module is the P6 Auto-accept Settings page's own scope catalogue
+This module is the Auto-accept Settings page's own scope catalogue
 (``_policy_scope_catalogue``/``_POLICY_EXTRA_SCOPES``/``_rules_for_catalogue_entry``, all originally
-private to ``settings_controller.py``), promoted here so the P7 bridge writer
+private to ``settings_controller.py``), promoted here so the bridge writer
 (``gate.propose_policy_change``) can share it instead of re-deriving it a second time -- see this
 module's own docstring. ``tests/unit/test_settings_controller.py``'s ``TestPolicyScopeCatalogue``/
 ``TestAddPolicyRule`` already prove the re-exported names behave identically; these tests exercise
@@ -48,7 +48,7 @@ class TestRulesForCatalogueEntry:
         assert catalogue.rules_for_catalogue_entry("not.a.real.group", None, [Verb.READ]) == []
 
     def test_a_verb_the_group_cannot_govern_yields_no_rules(self):
-        # drive.folder's "download"/"read"/... verbs never include "send" -- this is P7's write-time
+        # drive.folder's "download"/"read"/... verbs never include "send" -- this is the bridge's write-time
         # validation surfacing as an empty result, which gate.propose_policy_change turns into a
         # clear ValueError before any popup.
         assert catalogue.rules_for_catalogue_entry("drive.folder", ["folder1"], [Verb.SEND]) == []

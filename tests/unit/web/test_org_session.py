@@ -55,7 +55,7 @@ class TestOrgSessionStore:
         assert store.get(session_id) is not None
 
     def test_absolute_expired_session_returns_none_and_is_dropped(self, monkeypatch):
-        # SEC-13: hits the absolute cap even though every access was inside
+        # Hits the absolute cap even though every access was inside
         # the idle window -- an attacker (or a script) that keeps a session
         # "active" by polling must not get an unbounded lifetime out of it.
         store = os_.OrgSessionStore(idle_timeout_seconds=60, absolute_timeout_seconds=100)

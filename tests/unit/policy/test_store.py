@@ -1,4 +1,4 @@
-"""Tests for privacyfence.policy.store (P4 of the policy v2 redesign): the on-disk v2 schema.
+"""Tests for privacyfence.policy.store: the on-disk v2 schema.
 
 Covers the serialization round trip (``rule_to_dict``/``rule_from_dict``/``compile_rules_from_config``),
 ``merge_rules``'s union-by-meaning behaviour and its stable, content-derived ids, and
@@ -50,7 +50,7 @@ class TestRuleIdFor:
 
 
 class TestRuleIdForRule:
-    """P8 (rule attribution and staleness): the canonical id for an already-compiled rule,
+    """Rule attribution: the canonical id for an already-compiled rule,
     independent of whatever its own ``.id`` happens to be -- gate.py's ``_evaluate_auto_accept``
     needs this to attribute a decision made against a rule whose ``.id`` is not canonical (one
     built in memory) to the same row Settings' Auto-accept page lists."""
@@ -67,7 +67,7 @@ class TestRuleIdForRule:
         assert store.rule_id_for_rule(rule) == store.rule_id_for("approved_sandbox_folder", ["F1"], ())
 
     def test_two_rules_with_the_same_id_but_different_values_get_different_canonical_ids(self):
-        # The exact F9 shape: two v1-compiled rules sharing one ambiguous name (`.id`) because
+        # Two v1-compiled rules sharing one ambiguous name (`.id`) because
         # they came from the same predicate, but naming two different resources.
         a = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F1"])
         b = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F2"])

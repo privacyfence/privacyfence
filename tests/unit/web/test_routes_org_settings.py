@@ -1,47 +1,41 @@
-"""Tests for org mode's settings surface (#400): every signed-in principal's
+"""Tests for org mode's settings surface: every signed-in principal's
 own auto-accept rules (read + add + remove), and the admin-only install-wide
-PII/privacy policy, read (C3d) and edited (C3e). Exercises
-web/routes_settings.py's ``build_org_routes`` (PSC-4b folded the former
-web/routes_org_settings.py's routes in there; PSC-5 folds its page
-*rendering* into the exact same settings_window_html.build_html() local
-mode's own settings page uses, and its four bespoke POST routes into one
-generic ``POST /api/settings/{action}`` -- see that function's own
-docstring) rather than the module this file is still named for.
+PII/privacy policy, read and edited. Exercises web/routes_settings.py's
+``build_org_routes``, which renders its pages with the exact same
+settings_window_html.build_html() local mode's own settings page uses and
+takes every write through one generic ``POST /api/settings/{action}``
+(ADR 0032; see that function's own docstring). There is no
+web/routes_org_settings.py module, despite this file's name.
 
-PSC-5's own behavior changes from the four-bespoke-route shape this file
-used to test:
+What an org-mode settings write looks like:
 
-- Every write is now ``POST /api/settings/<action>`` with a JSON body
+- Every write is ``POST /api/settings/<action>`` with a JSON body
   (``{**payload, "csrf": csrf}``), the exact same path/shape local mode's
-  own dispatcher answers -- not a form POST to
-  ``/api/settings/rules/add``/``/api/settings/rules/remove``/
-  ``/api/settings/privacy/policy``/``/api/settings/privacy/pii``.
+  own dispatcher answers.
 - A successful write returns ``200`` with the fresh page state as JSON
-  (matching local mode's own dispatcher), not a ``303`` redirect back to a
-  form-POST page.
+  (matching local mode's own dispatcher), not a ``303`` redirect.
 - ``add_policy_rule`` takes ``{group, value, verbs: [...]}`` (a list of
   verbs, matching the shared JS's own multi-verb-checkbox "Add a rule"
-  form) rather than a single ``rule_choice`` ("{group}|{verb}") pair.
+  form).
 - ``toggle_pii_detection``/``toggle_pii_category`` flip the *current*
   value server-side (matching local mode's own toggle semantics, and what
   the shared JS's toggle control actually posts -- an empty payload) --
-  they no longer take an explicit ``enabled`` field the way
-  ``org_install_policy.apply_change``'s own contract otherwise requires;
+  they take no explicit ``enabled`` field, unlike
+  ``org_install_policy.apply_change``'s own contract;
   see ``routes_settings.py``'s own ``_current_pii_flag``.
-- An unauthenticated write now gets a JSON ``401`` (the generic dispatcher
+- An unauthenticated write gets a JSON ``401`` (the generic dispatcher
   is driven by ``fetch()``, not a real browser navigation, so a redirect
   to an HTML login page would break the bridge's own ``.json()`` parse) --
-  the GET pages (``/settings``/``/settings/privacy``) still redirect to
-  ``/login`` exactly as before.
+  the GET pages (``/settings``/``/settings/privacy``) redirect to
+  ``/login``.
 
-P9 of the policy v2 redesign rebuilt the rules half of this page onto the v2
-``auto_accept:`` on-disk section (``policy/store.py``) exclusively, via
+The rules half of this page reads and writes the v2 ``auto_accept:``
+on-disk section (``policy/store.py``) exclusively, via
 ``auto_accept.get_policy_v2_rules``/``add_policy_v2_rules``/
 ``remove_policy_v2_rule`` and the shared scope+verb catalogue
-(``policy/catalogue.py``). The v1-era "Trusted resources" (grants) section
-and its ``/api/settings/grants/remove`` route are gone entirely, not
-adapted -- every resource type it covered is a ``policy/scopes.py`` scope
-now. The privacy/PII half of the page is untouched by any of this.
+(``policy/catalogue.py``). There is no "Trusted resources" (grants)
+section and no ``/api/settings/grants/remove`` route -- every resource
+type is a ``policy/scopes.py`` scope.
 """
 from __future__ import annotations
 
@@ -194,10 +188,10 @@ class TestPrivacyPageAdminGating:
 
 
 class TestPrivacyStateFromConfig:
-    """PSC-5: org mode's own Privacy Filter state now comes from the exact
-    same ``_privacy_state_from_config`` local mode's page uses (see
+    """Org mode's own Privacy Filter state comes from the exact same
+    ``_privacy_state_from_config`` local mode's page uses (see
     settings_controller.py), called with ``fail_safe_default="block"`` --
-    #400's own fail-closed posture for an install-wide group nobody
+    org mode's fail-closed posture for an install-wide group nobody
     configured, kept distinct from local mode's own ``"allow"`` default."""
 
     def test_a_group_absent_from_install_wide_settings_falls_back_to_block(self):
@@ -217,11 +211,11 @@ class TestPrivacyStateFromConfig:
 
     def test_a_malformed_group_fails_closed_to_allow_rather_than_500ing(self):
         # settings_controller._privacy_state_from_config's own defensive
-        # posture (init_privacy_filter/SEC-07 already refused to start the
-        # daemon on a malformed group, so reaching this only happens if
+        # posture (init_privacy_filter already refuses to start the daemon
+        # on a malformed group, so reaching this only happens if
         # settings.yaml was hand-edited after that) renders "allow" rather
-        # than raising, regardless of fail_safe_default -- unchanged by
-        # this phase, kept here as the org-mode-shaped regression guard.
+        # than raising, regardless of fail_safe_default -- kept here as the
+        # org-mode-shaped regression guard.
         state = _privacy_state_from_config(
             {"privacy": {"default_policy": "not_a_real_policy"}}, fail_safe_default="block",
         )
@@ -683,7 +677,7 @@ class TestRemoveRule:
 
 
 class TestInstallWidePolicyEditing:
-    """#400 C3e -- the admin-only write surface on /settings/privacy."""
+    """The admin-only write surface on /settings/privacy."""
 
     @staticmethod
     def _editable(tmp_path, monkeypatch, settings: dict):
@@ -885,17 +879,16 @@ class TestWriteFailures:
 
 
 class TestStepUpRequirePasskey:
-    """#579: closes the gap where every org-routed ``_SENSITIVE_ACTIONS``
-    member (``add_policy_rule``, ``remove_policy_rule``, and the four
-    install-wide privacy/PII writes) bypassed step-up entirely, unlike local
-    mode's own generic dispatcher (gated since #426 Phase 3). An agent that
-    cannot forge a WebAuthn assertion could otherwise add an always-allow
-    rule, or flip the install-wide PII/privacy policy, once step-up is
-    supposed to be in force. PSC-5 additionally gives this page the same
-    PF_WEBAUTHN_JS/bridge-shim ceremony UI local mode's own settings page
-    carries, so a 428/403 here shows the same passkey prompt instead of a
+    """Every org-routed ``_SENSITIVE_ACTIONS`` member (``add_policy_rule``,
+    ``remove_policy_rule``, and the four install-wide privacy/PII writes)
+    requires step-up, the same as local mode's own generic dispatcher
+    (ADR 0034). An agent that cannot forge a WebAuthn assertion could
+    otherwise add an always-allow rule, or flip the install-wide PII/privacy
+    policy, while step-up is supposed to be in force. This page carries the
+    same PF_WEBAUTHN_JS/bridge-shim ceremony UI local mode's own settings
+    page does, so a 428/403 here shows the same passkey prompt instead of a
     raw JSON body -- TestStepUpBridgeShim below covers that the shim is
-    present; this class stays server-side only, same as before."""
+    present; this class is server-side only."""
 
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):
@@ -1057,11 +1050,10 @@ class TestStepUpRequirePasskey:
 
 
 class TestStepUpBridgeShim:
-    """PSC-5: closes PSC-4a/PSC-4b's own flagged follow-up -- org mode's
-    settings pages had no WebAuthn ceremony UI wired in, so a step-up
-    refusal returned raw JSON where local mode's own page shows a passkey
-    prompt. Both pages now carry the exact same shim local mode's
-    _render_settings_page does; this only asserts the shim itself is
+    """Org mode's settings pages carry the WebAuthn ceremony UI, so a
+    step-up refusal shows the same passkey prompt local mode's own page
+    does rather than raw JSON. Both pages carry the exact same shim local
+    mode's _render_settings_page does; this only asserts the shim itself is
     present (its own behavior -- retry-on-428, alert-on-403 -- is already
     covered by routes_settings.py's TestStepUpBridgeShim-equivalent for
     local mode and isn't mode-specific)."""

@@ -6,8 +6,8 @@ formerly accurate, description) was "a local file on that server, not
 forwarded anywhere (e.g. to a SIEM)" -- an organization that wanted its
 audit trail to survive a compromise of the daemon's own host, or to feed an
 existing SIEM/log pipeline, had nothing to plug into. This module is the
-"centralized forwarding" half of SEC-23; ``audit_log.py``'s per-entry HMAC
-hash chain is the other half (append-integrity for the local file itself).
+off-host copy of the audit trail; ``audit_log.py``'s per-entry HMAC hash
+chain is the on-host half (append-integrity for the local file itself).
 
 Design:
   - **Best-effort, off the decision path.** ``audit_log.AuditLogger.record()``

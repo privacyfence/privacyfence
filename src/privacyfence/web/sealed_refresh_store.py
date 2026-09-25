@@ -1,5 +1,5 @@
 """``SealedRefreshStore`` -- the on-disk half of org mode's OAuth refresh
-tokens (#402), sealed to the bearer that presents them.
+tokens, sealed to the bearer that presents them.
 
 Before this module, every store backing org-mode auth was in-process only,
 so restarting the daemon forced every connected MCP client through a full
@@ -56,7 +56,7 @@ principal's claims, the chain's issuance) is inside the ciphertext.
 Revocation
 ----------
 ``OrgOAuthProvider`` cascades every revocation path -- logout, explicit
-``/revoke``, access-token expiry, refresh rotation, the SEC-12 absolute-
+``/revoke``, access-token expiry, refresh rotation, the chain's absolute-
 lifetime lapse -- through its own ``_revoke_pair_locked``, which calls
 ``discard`` here. That single choke point is what keeps "gone from memory"
 and "gone from disk" from drifting apart; a new revocation path that skips
@@ -207,7 +207,7 @@ class SealedRefreshStore:
             atomic_write_json(self._path, payload)
         except OSError as exc:
             # A refresh that can't be written down still works for this
-            # process's lifetime -- degrading to the pre-#402 behavior beats
+            # process's lifetime -- degrading to in-memory-only tokens beats
             # failing a sign-in over a full or read-only disk.
             logger.warning("Could not persist OAuth refresh-token store to '%s': %s", self._path, exc)
 
@@ -282,7 +282,7 @@ class SealedRefreshStore:
         authenticated", not a 500.
 
         The chain-expiry check here is deliberately redundant with
-        ``OrgOAuthProvider.load_refresh_token``'s own SEC-12 check. That one
+        ``OrgOAuthProvider.load_refresh_token``'s own absolute-lifetime check. That one
         is the authority; this one exists so a store file that outlived its
         contents can't hand back a chain the provider would then have to
         reject.

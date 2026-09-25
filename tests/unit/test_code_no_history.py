@@ -71,6 +71,12 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("web/routes_connect.py", "#555"): "a CSS hex colour in the connect page's stylesheet",
     ("web/routes_connect.py", "#888"): "a CSS hex colour in the connect page's stylesheet",
     ("", "§2.7"): "the definition of done in docs/coding-and-testing-guidelines.md, cited by number everywhere",
+    ("scripts/verify_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
+    ("tests/unit/test_verify_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
+    ("tests/unit/test_verify_audit_log.py", "W29"): "an ISO week in an audit log file name (2026-W29.jsonl)",
+    ("tests/unit/test_audit_log.py", "W01"): "an ISO week in an audit log file name (2026-W01.jsonl)",
+    ("tests/unit/test_audit_log.py", "W02"): "an ISO week in an audit log file name (2026-W02.xlsx)",
+    ("tests/unit/test_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
 }
 
 # Embedded base64 (fonts in the approval window's stylesheet) is data that spells anything.
