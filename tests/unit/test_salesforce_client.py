@@ -4,8 +4,7 @@ is the most bug-prone part of this client -- it's what keeps a long-running
 daemon from forcing re-authentication every time a session token expires --
 so it gets the deepest coverage here.
 
-``authorize_interactive`` (the browser-loopback Web Server + PKCE flow, a
-different shape from the Google clients' InstalledAppFlow) is tested by
+``authorize_interactive`` (the browser-loopback Web Server + PKCE flow) is tested by
 mocking ``run_browser_oauth`` -- the ``oauth_loopback`` module boundary --
 rather than mocking ``authorize_interactive`` itself or skipping straight to
 a canned token response. The fake ``run_browser_oauth`` invokes the real

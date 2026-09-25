@@ -36,10 +36,10 @@ from dataclasses import dataclass, field
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -130,8 +130,7 @@ class AppsScriptClient:
                 "Organization Config from PrivacyFence Settings first."
             )
         logger.info("Starting Apps Script interactive OAuth flow")
-        flow = InstalledAppFlow.from_client_config(self._client_config, SCOPES)
-        creds = flow.run_local_server(port=0)
+        creds = authorize_local(self._client_config, SCOPES)
         self._save_token(creds)
         logger.info("Apps Script OAuth token saved to '%s'", self._token_file)
 
