@@ -9,8 +9,7 @@ only ever worked when the browser and the daemon were the same machine.
 
 **Not** a port of settings_window_html.py/routes_settings.py's ~30-action
 surface into org mode -- that's real, separate follow-up work (see web/
-server.py's own module docstring, and the "Deliberately out of scope for
-P7" paragraph at the top of the plan document): this page does exactly one
+server.py's own module docstring): this page does exactly one
 thing, authorizing a principal's own connectors, using org mode's session
 cookie (``pf_org_session``) for its own small CSRF model (``org_session.
 check_csrf``/``check_origin``) rather than reusing local mode's shared-

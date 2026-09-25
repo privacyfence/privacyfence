@@ -3,8 +3,7 @@ palette, one session, links both ways) -- one pure function, ``wrap()``,
 that both ``/approvals`` and
 ``/settings`` wrap themselves in at the route layer (web/routes_approvals.py,
 web/routes_settings.py), so the two pages read as one application instead of
-"two applications bolted together" (§16.2.3's own wording for the problem
-this fixes).
+two applications bolted together.
 
 Deliberately **not** used by:
 
@@ -18,8 +17,7 @@ Deliberately **not** used by:
   cross-page nav bar at all.
 - an individual approval card's own page (``GET /approvals/{id}``) -- that
   page *is* the decision screen, full-window, same as the native dialog it
-  replaces; the list it returns to (§3 of 5deef1d8:docs/approval-list-ui-ux.md) is
-  where the shell belongs, not the card itself.
+  replaces; the list it returns to is where the shell belongs, not the card itself.
 
 Owns the one thing every shell-wrapped page needs and none of them should
 reimplement: the ``/api/state/stream`` SSE connection (web/state_stream.py)
@@ -151,19 +149,19 @@ body {
 # own page's markup entirely, same separation settings_window_html.py's own
 # bridge already has between "receive a message" and "render it".
 #
-# Notifications (5deef1d8:docs/approval-list-ui-ux.md §4), tiers 0-1 only -- no
-# push, no VAPID, nothing leaving the machine (tier 2 is org mode/P7+):
+# Notifications, tiers 0-1 only -- no push, no VAPID, nothing leaving the
+# machine (a push tier would be org mode's):
 #   - tier 0: the document title gains a "(N) " badge and a visually
 #     hidden aria-live region announces the count, whenever the approvals
 #     event's row count changes -- works with no permission at all.
 #   - tier 1: registration.showNotification() via resources/sw.js, fired
-#     only when the tab is not focused, rate-limited to one per 5s (§4.2),
+#     only when the tab is not focused, rate-limited to one per 5s,
 #     grouped into a single "N approvals pending" notification rather than
-#     one per row. **Content invariant (§4.3), enforced by construction,
-#     via notificationBody()'s own per-level field allowlist (P5)**: at
+#     one per row. **Content invariant, enforced by construction,
+#     via notificationBody()'s own per-level field allowlist**: at
 #     `minimal`, or whenever more than one approval fired at once (there is
-#     no "several different named things" copy -- §4.2's own grouping
-#     case), the body is always the bare count -- "N approval(s) pending".
+#     no "several different named things" copy -- the grouping case
+#     above), the body is always the bare count -- "N approval(s) pending".
 #     `standard` adds exactly two fields off the single pending row's own
 #     summary dict -- connector and gate_kind (read/write direction), both
 #     safe by construction: gate_kind names a category, never gated
@@ -177,8 +175,8 @@ body {
 #     level rather than shown at `standard` or below.
 #   - the permission pre-prompt only ever fires from window.__pfNotifPrompt,
 #     called by approval_list_html.py's own script right after a decision
-#     is made (never on page load -- §4.4: "never on page load, a cold
-#     Notification.requestPermission() is what browsers now penalize").
+#     is made (never on page load: a cold
+#     Notification.requestPermission() is what browsers now penalize).
 _STREAM_JS = """
 (function () {
   // web.notifications.enabled (settings.yaml.example) -- config wiring for
@@ -187,8 +185,8 @@ _STREAM_JS = """
   // registration, and the permission pre-prompt alike; the live-connection
   // indicator above is unaffected (it isn't a notification).
   var NOTIFICATIONS_ENABLED = %(notifications_enabled)s;
-  // web.notifications.detail -- "minimal" | "standard" | "detailed" (P5,
-  // 5deef1d8:docs/approval-list-ui-ux.md §4.3). See notificationBody() below for
+  // web.notifications.detail -- "minimal" | "standard" | "detailed". See
+  // notificationBody() below for
   // what each level is allowed to read off a pending-approval row.
   var NOTIFICATIONS_DETAIL = %(notifications_detail)s;
   // __pfNotificationsEnabled is exposed globally so the settings page's own
@@ -232,10 +230,10 @@ _STREAM_JS = """
     return count === 1 ? '1 approval pending' : count + ' approvals pending';
   }
 
-  // The notification-detail allowlist (P5, 5deef1d8:docs/approval-list-ui-ux.md
-  // §4.3) -- see this file's own comment above _STREAM_JS for what each
-  // level is allowed to read off `row`. Only ever called with exactly the
-  // one row a count-increase-to-1 identifies unambiguously (see
+  // The notification-detail allowlist -- see this file's own comment above
+  // _STREAM_JS for what each level is allowed to read off `row`. Only ever
+  // called with exactly the one row a count-increase-to-1 identifies
+  // unambiguously (see
   // maybeNotify below); anything else falls back to the plain count, which
   // is always safe at any level.
   function notificationBody(count, rows) {
@@ -306,7 +304,7 @@ _STREAM_JS = """
     setTimeout(function () { if (bar.parentNode) { bar.remove(); } }, 10000);
   };
 
-  // B23 of the 4.1.0 action plan: the dismissible notice strip is
+  // The dismissible notice strip is
   // rendered fresh on every request just like the banner above it, but
   // unlike the banner it's an invitation, not a live state indicator --
   // once a viewer dismisses it in a given browser, it stays gone there
@@ -338,7 +336,7 @@ _STREAM_JS = """
   var es = new EventSource(%(stream_url)s);
   es.onopen = function () { setState('live', 'live'); };
   es.onerror = function () {
-    // Issue #423: readyState CLOSED means the browser gave up for good --
+    // readyState CLOSED means the browser gave up for good --
     // a non-2xx response (this route's own 401 once the session has
     // idle-/absolute-expired) never gets an automatic retry per the
     // EventSource spec, unlike a transient network error, which leaves
@@ -408,8 +406,8 @@ def wrap(
     off tiers 0 and 1 together (title badge, aria-live announcement,
     service worker registration, the permission pre-prompt), per that
     config key's own comment. ``notifications_detail`` is that same config
-    block's ``detail`` (``"minimal"``/``"standard"``/``"detailed"``, P5 --
-    5deef1d8:docs/approval-list-ui-ux.md §4.3) -- see _STREAM_JS's own
+    block's ``detail`` (``"minimal"``/``"standard"``/``"detailed"``) -- see
+    _STREAM_JS's own
     notificationBody() for exactly what each level is allowed to say.
 
     ``nonce``: the
@@ -423,7 +421,7 @@ def wrap(
     header, one nonce. Defaults to a fresh one when omitted (every real
     caller passes the actual per-request value explicitly).
 
-    ``banner_html`` (#426 Phase 3): an already-escaped fragment shown as a
+    ``banner_html``: an already-escaped fragment shown as a
     full-width, non-dismissable strip between the header and ``<main>`` --
     ``None`` (the default) renders nothing. The one real caller today is
     web/routes_approvals.py's/web/routes_settings.py's own
@@ -440,7 +438,7 @@ def wrap(
     disappears the moment a passkey is enrolled, with no separate
     acknowledgement step.
 
-    ``dismissible_notice_html`` (B23 of the 4.1.0 action plan): a second,
+    ``dismissible_notice_html``: a second,
     lower-priority strip below ``banner_html`` for a fact that's worth
     surfacing once but isn't itself a live problem -- today, step_up_
     config.py's own ``off_notice()``: an install that has simply never
@@ -455,8 +453,8 @@ def wrap(
     distinct keys or dismissing one silently dismisses the other too.
 
     ``nav_items``/``principal_label``/``live_updates`` are what let org
-    mode share this shell rather than serve a bare document (F9). Local
-    mode passes none of them and is byte-for-byte unchanged.
+    mode share this shell rather than serve a bare document. Local
+    mode passes none of them.
 
     ``nav_items`` is ``(key, label, href)`` per item, matched against
     ``active`` -- ``ORG_NAV_ITEMS`` above is org mode's set.

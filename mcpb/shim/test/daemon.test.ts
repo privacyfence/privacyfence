@@ -301,7 +301,7 @@ describe("ensureDaemonRunning", () => {
   });
 
   it("survives a spawn failure (missing/corrupted binary) instead of crashing the process", async () => {
-    // Reproduces privacyfence/privacyfence#431's failure mode: a Finder
+    // Reproduces a failure seen in the field: a Finder
     // upgrade interrupted mid-drag (or a Gatekeeper-quarantined bundle) can
     // leave findDaemonCmd() pointing at a binary that no longer runs. Before
     // the fix, spawn()'s async ENOENT surfaced as an unhandled 'error' event
@@ -436,7 +436,7 @@ describe("describeTarget", () => {
   });
 });
 
-describe("ensureDaemonRunning on a privilege-separated install (#428 Phase 4)", () => {
+describe("ensureDaemonRunning on a privilege-separated install", () => {
   it("never spawns the daemon -- the service manager owns it, and this process is the wrong account", async () => {
     // Spawning here would start the daemon as the logged-in user, where
     // privilege_separation.check_runtime_identity() refuses to run rather
@@ -468,13 +468,13 @@ describe("ensureDaemonRunning on a privilege-separated install (#428 Phase 4)", 
     }
   });
 
-  it("names each platform's own service manager in the wait message (#428 P4 B5c)", async () => {
+  it("names each platform's own service manager in the wait message", async () => {
     // Diagnostics, but load-bearing diagnostics: this message is the only
     // thing a user sees when a separated daemon has not come up, and it is
     // what sends them to `sc.exe query` rather than to launchctl on a
-    // machine that has no launchd. B5c is what made the previous
-    // two-way branch (linux, else macOS) wrong rather than merely
-    // incomplete -- before it, win32 could never reach this code at all.
+    // machine that has no launchd. Windows has a separated install too, so
+    // a two-way branch (linux, else macOS) would be wrong, not merely
+    // incomplete.
     const original = Object.getOwnPropertyDescriptor(process, "platform")!;
     const originalError = console.error;
     const lines: string[] = [];
@@ -499,7 +499,7 @@ describe("ensureDaemonRunning on a privilege-separated install (#428 Phase 4)", 
       console.error = originalError;
       cleanup();
     }
-    const waiting = lines.find((line) => line.includes("#428 Phase 4"));
+    const waiting = lines.find((line) => line.includes("under its own account"));
     assert.ok(waiting, `no wait message was logged; got ${JSON.stringify(lines)}`);
     assert.match(waiting, /a Windows service/);
     assert.match(waiting, /sc\.exe query PrivacyFence/);

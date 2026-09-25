@@ -68,6 +68,8 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("privilege_separation.py", "§5.8"): "FHS 3.0 §5.8, the Filesystem Hierarchy Standard's /var/lib",
     ("installer/privacyfence.iss", "#13"): "Pascal's #13 character literal (CR, as in #13#10), not an issue",
     ("tests/unit/test_paths.py", "W01"): "ISO week 01 in an audit log file name (2026-W01.jsonl), not a plan item",
+    ("web/routes_connect.py", "#555"): "a CSS hex colour in the connect page's stylesheet",
+    ("web/routes_connect.py", "#888"): "a CSS hex colour in the connect page's stylesheet",
     ("", "§2.7"): "the definition of done in docs/coding-and-testing-guidelines.md, cited by number everywhere",
 }
 
