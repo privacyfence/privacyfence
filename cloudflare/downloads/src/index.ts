@@ -10,6 +10,7 @@
  *   GET/HEAD /download/version/<version>/<artifact-id>    -- pin to an exact, possibly older, version
  *   GET      /api/releases                                -- latest manifest per channel
  *   GET      /api/releases/<channel>                       -- latest manifest for one channel
+ *   GET      /api/releases/history                         -- every published version, newest first
  *   GET      /api/stats/downloads                          -- aggregated D1 counters
  *   GET      /health                                       -- liveness probe, touches no binding
  *
@@ -22,6 +23,7 @@ import { findArtifact, resolveLatestManifest, resolveVersionManifest, type Manif
 import { recordDownload, queryStats } from "./counters.js";
 import { artifactHeaders, isDownloadStart, parseRangeHeader } from "./artifacts.js";
 import { corsPreflight, jsonResponse, methodNotAllowed, notFound, withCors } from "./http.js";
+import { listReleaseHistory } from "./history.js";
 
 // `Env` (RELEASES/DB bindings) is declared globally in ../worker-configuration.d.ts, matching
 // wrangler.toml -- no import needed, same as any other Workers project's generated types.
@@ -119,13 +121,43 @@ async function handleStats(env: Env): Promise<Response> {
   }
 }
 
-async function routeApi(path: string, env: Env): Promise<Response> {
+// How long the release history may be reused, by the edge cache below and by browsers. Short, so
+// a new release shows up within minutes; long enough that page views cannot drive the R2 list and
+// manifest reads behind every uncached response.
+const HISTORY_MAX_AGE_SECONDS = 300;
+
+async function handleHistory(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  // One cache entry for everyone: the key has no query string and no Origin (CORS is added by the
+  // caller, after the cache), so neither can be used to bypass it.
+  const cacheKey = new Request(new URL("/api/releases/history", request.url).toString());
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+
+  let releases;
+  try {
+    releases = await listReleaseHistory(env.RELEASES);
+  } catch (err) {
+    console.error("privacyfence-downloads: release history failed", err);
+    // Not cached: the website falls back to /api/releases, and the next request retries.
+    return jsonResponse({ error: "release history temporarily unavailable" }, 503, { "Cache-Control": "no-store" });
+  }
+  const response = jsonResponse({ releases }, 200, {
+    "Cache-Control": `public, max-age=${HISTORY_MAX_AGE_SECONDS}`,
+  });
+  ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+  return response;
+}
+
+async function routeApi(path: string, request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (path === "/api/releases") {
     const entries = await Promise.all(
       CHANNELS.map(async (channel) => [channel, await resolveLatestManifest(env.RELEASES, channel)] as const),
     );
     return jsonResponse({ channels: Object.fromEntries(entries) });
   }
+
+  // Before the channel route, which would otherwise read "history" as an unknown channel.
+  if (path === "/api/releases/history") return handleHistory(request, env, ctx);
 
   const channelMatch = /^\/api\/releases\/([^/]+)$/.exec(path);
   if (channelMatch) {
@@ -155,7 +187,7 @@ export default {
     if (pathname.startsWith("/api/")) {
       if (request.method === "OPTIONS") return corsPreflight(request);
       if (request.method !== "GET") return withCors(request, methodNotAllowed(["GET", "OPTIONS"]));
-      return withCors(request, await routeApi(pathname, env));
+      return withCors(request, await routeApi(pathname, request, env, ctx));
     }
 
     if (pathname.startsWith("/download/")) {

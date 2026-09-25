@@ -38,7 +38,7 @@ export function manifestKey(channel: Channel, version: string): string {
   return `releases/${channel}/${version}/manifest.json`;
 }
 
-async function getJson<T>(bucket: R2Bucket, key: string): Promise<T | null> {
+export async function getJson<T>(bucket: R2Bucket, key: string): Promise<T | null> {
   const object = await bucket.get(key);
   if (!object) return null;
   return object.json<T>();

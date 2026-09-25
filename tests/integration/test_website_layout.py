@@ -83,6 +83,12 @@ def _stub_network(page, site_url):
             route.continue_()
         elif url == f"{API_ORIGIN}/api/releases/stable":
             route.fulfill(status=200, content_type="application/json", body=json.dumps(STABLE_MANIFEST))
+        elif url == f"{API_ORIGIN}/api/releases/history":
+            # /releases/'s full history: a dozen rows, so the longer table is what gets measured.
+            releases = [
+                {**STABLE_MANIFEST, "version": f"4.{minor}.{patch}"} for minor in range(6, 2, -1) for patch in (2, 1, 0)
+            ]
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"releases": releases}))
         elif url == f"{API_ORIGIN}/api/releases":
             # /releases/'s table, filled so its scroll container is what gets measured.
             body = {"channels": {"stable": STABLE_MANIFEST, "alpha": None, "beta": None, "rc": None}}

@@ -5,8 +5,9 @@
  * docs/downloads-and-release-kpi.md "Counting semantics".
  */
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
+import stableOldManifest from "./fixtures/stable/old-manifest.json";
 
 const ORIGIN = "https://downloads.privacyfence.eu";
 
@@ -138,6 +139,7 @@ describe("download counting", () => {
     const before = await statsTotal();
     await call("/api/releases");
     await call("/api/releases/stable");
+    await call("/api/releases/history");
     await call("/api/stats/downloads");
     expect(await statsTotal()).toBe(before);
   });
@@ -174,6 +176,132 @@ describe("GET /api/releases/:channel", () => {
 
   it("404s for an unknown channel", async () => {
     expect((await call("/api/releases/nightly")).status).toBe(404);
+  });
+});
+
+interface HistoryBody {
+  releases: { version: string; channel: string; artifacts: { id: string; kind: string }[] }[];
+}
+
+// R2 writes here outlive the test (the Cache API does too, see beforeEach below), so an object a
+// test adds is removed again whatever the outcome.
+async function withTemporaryObject(key: string, body: string, check: () => Promise<void>): Promise<void> {
+  await env.RELEASES.put(key, body);
+  try {
+    await check();
+  } finally {
+    await env.RELEASES.delete(key);
+  }
+}
+
+// A stable version between 4.2.0 and the current 4.3.0, published after the history was cached.
+const NEW_MANIFEST_KEY = "releases/stable/4.2.1/manifest.json";
+const NEW_MANIFEST = JSON.stringify({ ...stableOldManifest, version: "4.2.1", published_at: "2026-07-01T12:00:00Z" });
+
+async function history(init?: RequestInit): Promise<HistoryBody> {
+  const response = await call("/api/releases/history", init);
+  expect(response.status).toBe(200);
+  return (await response.json()) as HistoryBody;
+}
+
+describe("GET /api/releases/history", () => {
+  // Each test starts without the cached history an earlier one left behind.
+  beforeEach(async () => {
+    await caches.default.delete(new Request(`${ORIGIN}/api/releases/history`));
+  });
+
+  it("lists every published version on every channel, newest first", async () => {
+    const body = await history();
+    expect(body.releases.map((release) => [release.version, release.channel])).toEqual([
+      ["4.4.0rc1", "rc"],
+      ["4.4.0b1", "beta"],
+      ["4.4.0a1", "alpha"],
+      ["4.3.0", "stable"],
+      ["4.3.0rc1", "rc"],
+      ["4.2.0", "stable"],
+    ]);
+  });
+
+  it("leaves out a manifest newer than the channel's latest.json, and a directory that is not a version", async () => {
+    const versions = (await history()).releases.map((release) => release.version);
+    expect(versions).not.toContain("4.4.0");
+    expect(versions).not.toContain("not-a-version");
+  });
+
+  it("passes on installers only", async () => {
+    const rc = (await history()).releases.find((release) => release.version === "4.3.0rc1");
+    expect(rc?.artifacts.map((artifact) => [artifact.id, artifact.kind])).toEqual([["macos-arm64", "installer"]]);
+  });
+
+  it("never exposes an R2 key or path", async () => {
+    const text = await (await call("/api/releases/history")).text();
+    expect(text).not.toMatch(/"key"/);
+    expect(text).not.toMatch(/releases\//);
+    expect(text).not.toMatch(/r2\.|cloudflarestorage/);
+  });
+
+  it("is cacheable and served from the cache, so page views cannot drive R2 reads", async () => {
+    const first = await call("/api/releases/history");
+    expect(first.headers.get("Cache-Control")).toBe("public, max-age=300");
+    await first.text();
+
+    await withTemporaryObject(NEW_MANIFEST_KEY, NEW_MANIFEST, async () => {
+      const versions = (await history()).releases.map((release) => release.version);
+      expect(versions).not.toContain("4.2.1");
+    });
+  });
+
+  it("shares one cache entry whatever the query string", async () => {
+    await (await call("/api/releases/history?nocache=1")).text();
+    await withTemporaryObject(NEW_MANIFEST_KEY, NEW_MANIFEST, async () => {
+      const versions = (await history()).releases.map((release) => release.version);
+      expect(versions).not.toContain("4.2.1");
+    });
+  });
+
+  it("lists a newly published older version once the cache entry is gone", async () => {
+    await withTemporaryObject(NEW_MANIFEST_KEY, NEW_MANIFEST, async () => {
+      const versions = (await history()).releases.map((release) => release.version);
+      expect(versions).toContain("4.2.1");
+    });
+  });
+
+  it("skips an unreadable manifest instead of failing the whole list", async () => {
+    await withTemporaryObject("releases/beta/4.3.0b1/manifest.json", "{not json", async () => {
+      const versions = (await history()).releases.map((release) => release.version);
+      expect(versions).not.toContain("4.3.0b1");
+      expect(versions).toContain("4.4.0b1");
+    });
+  });
+
+  it("returns an uncached 503 when R2 itself is broken", async () => {
+    const realReleases = env.RELEASES;
+    // @ts-expect-error -- intentionally swapping in a broken stand-in for this one test
+    env.RELEASES = {
+      get() {
+        throw new Error("R2 is down");
+      },
+      list() {
+        throw new Error("R2 is down");
+      },
+    };
+    try {
+      const response = await call("/api/releases/history");
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    } finally {
+      env.RELEASES = realReleases;
+    }
+    expect((await history()).releases.length).toBeGreaterThan(0);
+  });
+
+  it("allows privacyfence.eu through CORS", async () => {
+    const response = await call("/api/releases/history", { headers: { Origin: "https://privacyfence.eu" } });
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://privacyfence.eu");
+  });
+
+  it("rejects POST", async () => {
+    expect((await call("/api/releases/history", { method: "POST" })).status).toBe(405);
   });
 });
 

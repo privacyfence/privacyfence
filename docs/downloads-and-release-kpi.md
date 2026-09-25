@@ -90,7 +90,7 @@ no Custom Domain.
   which is what makes the download count a full count rather than a sample.
 - **It does not** restrict who can download a pre-release. The Worker serves
   `/download/<channel>/<artifact-id>` for every channel it knows, unauthenticated, and
-  `/api/releases` lists them all. That is deliberate; see
+  `/api/releases` and `/api/releases/history` list them all. That is deliberate; see
   [ADR 0024](adr/0024-pre-releases-are-publicly-downloadable.md) for the decision and for how to
   reverse it (Worker routes and website together).
 
@@ -159,6 +159,7 @@ itself:
 | `/download/version/<version>/<artifact-id>` | `GET`, `HEAD` | same, from that version's own manifest (older versions stay downloadable) |
 | `/api/releases` | `GET` | `{"channels": {stable, alpha, beta, rc}}`, each the latest manifest or `null` |
 | `/api/releases/<channel>` | `GET` | that channel's latest manifest; 404 if unknown or unpublished |
+| `/api/releases/history` | `GET` | `{"releases": [...]}`: every published version on every channel, newest first (see below) |
 | `/api/stats/downloads` | `GET` | `{total, by_channel, by_platform}` from D1; 503 on a D1 error, never a fake zero |
 | `/health` | `GET`, `HEAD` | `{"status":"ok"}`; touches neither binding |
 
@@ -172,6 +173,22 @@ Download responses carry `Content-Type` (by extension: `.dmg`, `.exe`, `.deb`, `
 `Content-Disposition: attachment; filename="…"`. A single `bytes=` range is honored with a 206 and
 `Content-Range`; malformed or multi-range headers get the full object. Conditional requests go to
 R2 (`onlyIf`), and a failed precondition returns 304.
+
+**Release history.** `/api/releases/history` lists `releases/<channel>/` in R2 and reads each
+version's `manifest.json` (`src/history.ts`). A version is listed when its manifest exists and it
+is not newer than the version the channel's `latest.json` points at: `finalize` writes the
+manifest before it verifies and promotes, so a newer manifest is a release that never finished
+publishing, or one rolled back by promoting an older version. A channel with no `latest.json`
+lists nothing, and a manifest that cannot be read is skipped rather than failing the list. Each
+entry is the manifest reduced to `schema`, `version`, `channel`, `published_at` and its
+`kind: "installer"` artifacts, **without `key`**: the route never names an R2 key or URL, and
+downloads stay on `/download/version/<version>/<artifact-id>`. Ordering is major.minor.patch, then
+stable > rc > beta > alpha, then stage number (`compareVersions` in `src/channel.ts`). The
+response carries `Cache-Control: public, max-age=300` and is kept in the Worker's edge cache
+(`caches.default`) for the same five minutes, under one key whatever the query string or
+`Origin`, so page views cannot drive R2 list and read operations. An R2 failure returns 503 with
+`Cache-Control: no-store`, which is never cached. The route serves metadata only and counts
+nothing.
 
 CORS applies to `/api/*` only: `Access-Control-Allow-Origin` is reflected for
 `https://privacyfence.eu` and `https://www.privacyfence.eu`, never for other origins and never on
@@ -271,15 +288,21 @@ outranks a leftover rc from an older cycle. A manifest whose version does not pa
 The section names the channel from the manifest and stays hidden if nothing is published or the
 winning manifest has no artifacts.
 
-**Release history** (`website/releases/`, `privacyfence.eu/releases/`). One table row per channel
-with a published release, from `GET /api/releases`, newest version first (the same order as the
-pre-release pick). Each row has the version, channel, the manifest's `published_at` date, the
-installers and a link to the version's GitHub Release. Download links pin the exact version
+**Release history** (`website/releases/`, `privacyfence.eu/releases/`). One table row per
+published version on every channel, from `GET /api/releases/history`, newest version first (the
+same order as the pre-release pick). Each row has the version, channel, the manifest's
+`published_at` date, the installers and a link to the version's GitHub Release. **Current** marks
+the newest stable release only. Download links pin the exact version
 (`/download/version/<version>/<id>`), so a row never serves a newer file after its channel moves
-on. Only `kind: "installer"` artifacts are offered, and a channel with none is left out. A
-pre-release older than the current stable one is marked superseded. The route returns only the
-newest manifest per channel, so older versions are not listed. `/download/`'s header and its
-pre-release section link here, and so does the site footer. The header nav does not.
+on. Only `kind: "installer"` artifacts are offered, and a release with none is left out. A
+pre-release older than the current stable one is marked superseded by it. `/download/`'s header
+and its pre-release section link here, and so does the site footer. The header nav does not.
+
+The Worker (`deploy-download-worker.yml`) and the site (`pages.yml`) deploy independently, so the
+page never assumes the history route exists. If it is missing, failing or empty, `releases.js`
+falls back to `GET /api/releases`, the newest release per channel, and keeps rows the build
+pre-rendered unless that list has a version they lack (one published since the build). The build
+falls back the same way.
 
 The failure paths are independent: a failed stable fetch shows a fallback linking to GitHub
 Releases' latest release; an empty pre-release set renders nothing; a stats failure hides one
@@ -293,8 +316,9 @@ fails if any file under `website/` is missing from them; add new website files t
 The build also pre-renders `/download/` from `/api/releases/stable` at deploy time, so the page
 lists the current installers without JavaScript; `download.js` replaces those cards with the live
 manifest, and keeps them (instead of showing the GitHub fallback) if the fetch fails. `/releases/`
-is pre-rendered from `/api/releases` the same way and behaves the same when its fetch fails:
-pre-rendered rows stay, and an empty table shows a link to GitHub Releases.
+is pre-rendered from `/api/releases/history` (or `/api/releases`, as above) the same way and
+behaves the same when its fetches fail: pre-rendered rows stay, and an empty table shows a link to
+GitHub Releases.
 `tests/integration/test_releases_page.py` covers it in Chromium.
 
 ## Cloudflare resources

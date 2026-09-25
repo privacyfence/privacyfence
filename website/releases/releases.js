@@ -1,6 +1,9 @@
 /**
- * Builds the release history table (/releases/) from the download Worker's `GET /api/releases`,
- * which returns the newest manifest on every channel. Nothing about a release is hardcoded here:
+ * Builds the release history table (/releases/) from the download Worker's
+ * `GET /api/releases/history`, which returns every published version on every channel. The
+ * Worker deploys independently of this site, so when that route is missing or failing the page
+ * falls back to `GET /api/releases`, the newest manifest per channel. Nothing about a release is
+ * hardcoded here:
  * versions, dates, filenames, sizes, checksums and which platforms exist all come from the
  * manifests, so a new release needs no website change. See docs/downloads-and-release-kpi.md.
  *
@@ -23,13 +26,13 @@
     'linux-x64': { name: 'Linux', detail: 'Debian / Ubuntu, 64-bit' },
   };
 
-  // The channels /api/releases reports, with their display names. Mirrors build_site.py's
-  // CHANNEL_NAMES.
+  // The channels the Worker reports, with their display names. Mirrors build_site.py's
+  // CHANNEL_NAMES; a release on any other channel is left out.
   const CHANNEL_NAMES = { stable: 'Stable', rc: 'Release candidate', beta: 'Beta', alpha: 'Alpha' };
 
   // The version order download.js uses (major.minor.patch, then stable > rc > beta > alpha, then
   // stage number), for a list rather than a single pick. A version that does not parse -- a
-  // between-tags dev build, say -- drops that channel instead of breaking the table.
+  // between-tags dev build, say -- drops that release instead of breaking the table.
   const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?$/;
   const STAGE_RANK = { a: 0, b: 1, rc: 2 };
 
@@ -47,16 +50,26 @@
     return 0;
   }
 
-  /** The releases to list, newest first: one per channel with a published manifest that has at
-   * least one installer. */
-  function publishedReleases(data) {
+  /** [channel, manifest] pairs from either response: the history's `releases` list, or
+   * /api/releases's one manifest (or null) per channel. */
+  function listedManifests(data) {
+    if (data && Array.isArray(data.releases)) {
+      return data.releases.map((manifest) => [manifest && manifest.channel, manifest]);
+    }
     const channels = (data && data.channels) || {};
+    return Object.keys(CHANNEL_NAMES).map((channel) => [channel, channels[channel]]);
+  }
+
+  /** The releases to list, newest first: every one with a published manifest that has at least
+   * one installer. The same rules as build_site.py's published_releases. */
+  function publishedReleases(data) {
     const releases = [];
-    for (const channel of Object.keys(CHANNEL_NAMES)) {
-      const manifest = channels[channel];
+    for (const [listedChannel, manifest] of listedManifests(data)) {
       if (!manifest || !versionKey(manifest.version)) continue;
+      const channel = manifest.channel || listedChannel;
+      if (!Object.hasOwn(CHANNEL_NAMES, channel)) continue;
       const installers = (manifest.artifacts || []).filter((artifact) => artifact && artifact.kind === 'installer');
-      if (installers.length) releases.push({ ...manifest, channel: manifest.channel || channel, artifacts: installers });
+      if (installers.length) releases.push({ ...manifest, channel, artifacts: installers });
     }
     return releases.sort((a, b) => compareKeys(versionKey(b.version), versionKey(a.version)));
   }
@@ -127,6 +140,7 @@
 
     const row = element('tr', {}, version, channel, date, element('td', {}, installers), notes);
     row.dataset.channel = release.channel;
+    row.dataset.version = release.version;
     return row;
   }
 
@@ -136,6 +150,17 @@
     if (!releases.length) throw new Error('no published release');
     const stable = releases.find((release) => release.channel === 'stable') || null;
     document.getElementById('releases-body')?.replaceChildren(...releases.map((release) => releaseRow(release, stable)));
+  }
+
+  /** /api/releases's newest-per-channel list, used when the history is unavailable. Rows the
+   * build pre-rendered (possibly the full history) stay unless this list has a release they lack,
+   * such as one published since the site was built. */
+  function renderLatest(data) {
+    const shown = new Set(
+      Array.from(document.querySelectorAll('#releases-body tr[data-version]'), (row) => row.dataset.version),
+    );
+    if (shown.size && publishedReleases(data).every((release) => shown.has(release.version))) return;
+    render(data);
   }
 
   function showFallback() {
@@ -148,11 +173,17 @@
     if (fallback) fallback.hidden = false;
   }
 
-  fetch(`${API}/api/releases`, { cache: 'no-store' })
-    .then((response) => {
-      if (!response.ok) throw new Error(`/api/releases responded ${response.status}`);
+  function load(path) {
+    return fetch(`${API}${path}`, { cache: 'no-store' }).then((response) => {
+      if (!response.ok) throw new Error(`${path} responded ${response.status}`);
       return response.json();
-    })
+    });
+  }
+
+  // The full history first; a Worker without it (not deployed yet, or failing) still gives the
+  // newest release per channel. An empty history counts as failing too.
+  load('/api/releases/history')
     .then(render)
+    .catch(() => load('/api/releases').then(renderLatest))
     .catch(showFallback);
 })();

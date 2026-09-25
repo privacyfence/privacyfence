@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PrivacyFence releases: stable and pre-release versions</title>
-  <meta name="description" content="The newest PrivacyFence release on every channel, stable and pre-release: version, release date, installers for macOS, Windows and Linux with SHA-256 checksums, and release notes.">
+  <meta name="description" content="Every PrivacyFence release on every channel, stable and pre-release, newest first: version, release date, installers for macOS, Windows and Linux with SHA-256 checksums, and release notes.">
   <meta name="pf-content-group" content="download">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/releases/">
@@ -16,14 +16,14 @@
   <meta property="og:site_name" content="PrivacyFence">
   <meta property="og:url" content="https://privacyfence.eu/releases/">
   <meta property="og:title" content="PrivacyFence releases">
-  <meta property="og:description" content="The newest PrivacyFence release on every channel, with installers, checksums and release notes.">
+  <meta property="og:description" content="Every PrivacyFence release, stable and pre-release, with installers, checksums and release notes.">
   <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="PrivacyFence: AI access without giving AI the keys. Approve the sensitive. Automate the routine.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="PrivacyFence releases">
-  <meta name="twitter:description" content="The newest PrivacyFence release on every channel, with installers, checksums and release notes.">
+  <meta name="twitter:description" content="Every PrivacyFence release, stable and pre-release, with installers, checksums and release notes.">
   <meta name="twitter:image" content="https://privacyfence.eu/assets/og.png">
 </head>
 <body>
@@ -34,19 +34,20 @@
       <span class="kicker">Releases</span>
       <h1>Release history</h1>
       <p class="lede">
-        The newest PrivacyFence release on every channel, with its installers and release notes.
-        Most people want the current stable release, which is also on the
+        PrivacyFence releases on every channel, newest first, each with its installers and release
+        notes. Most people want the current stable release, which is also on the
         <a href="/download/">download page</a>.
       </p>
     </section>
 
-    <!-- Rows come from the download Worker's GET /api/releases, never from hardcoded versions or
-         filenames. scripts/build_site.py replaces the loading row with the releases published at
-         deploy time, so the table works without JavaScript; releases.js then renders the live
-         list over it. Each download link pins its row's exact version, so a channel moving on
+    <!-- Rows come from the download Worker's GET /api/releases/history (every published version),
+         or GET /api/releases (the newest per channel) when that route is unavailable, never from
+         hardcoded versions or filenames. scripts/build_site.py replaces the loading row with the
+         releases published at deploy time, so the table works without JavaScript; releases.js
+         then renders the live list over it. Each download link pins its row's exact version, so a channel moving on
          never hands out a different file than the row names. -->
     <section aria-labelledby="releases-heading">
-      <h2 id="releases-heading" class="visually-hidden">Releases by channel</h2>
+      <h2 id="releases-heading" class="visually-hidden">All releases</h2>
       <div class="table-scroll wide releases-table" id="releases-table">
         <table>
           <thead>
