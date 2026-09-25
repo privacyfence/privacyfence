@@ -83,6 +83,10 @@ def _stub_network(page, site_url):
             route.continue_()
         elif url == f"{API_ORIGIN}/api/releases/stable":
             route.fulfill(status=200, content_type="application/json", body=json.dumps(STABLE_MANIFEST))
+        elif url == f"{API_ORIGIN}/api/releases":
+            # /releases/'s table, filled so its scroll container is what gets measured.
+            body = {"channels": {"stable": STABLE_MANIFEST, "alpha": None, "beta": None, "rc": None}}
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
         elif url.startswith(f"{API_ORIGIN}/api/"):
             route.fulfill(status=404, content_type="application/json", body='{"error":"not found"}')
         else:
