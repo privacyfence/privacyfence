@@ -1,6 +1,7 @@
 # Plan: remove project-history tags from code (issue #715)
 
-Temporary plan document. It exists so that the parallel sessions working on #715 share one contract,
+Temporary plan document. It sits in a subdirectory of `docs/` so that the site build's
+docs allowlist (`test_website_docs_allowlist.py`) never has to classify it. It exists so that the parallel sessions working on #715 share one contract,
 and it is deleted by the last step of the same PR (see `CLAUDE.md`, "Decisions, plans and ADRs").
 Nothing may link to it.
 
@@ -35,7 +36,8 @@ change:
   CSS/HTML hex colours such as `#333`, bytes inside `.woff2` fonts.
 
 Out of scope: `docs/adr/` (accepted ADRs are frozen and are history by design), `CHANGELOG.md`,
-`tests/fixtures/`, lockfiles, binary files, and git history.
+`tests/fixtures/`, lockfiles, binary files, git history, and `docs/code-history-tags/` itself
+(this plan and its ledgers).
 
 ## Done means
 
