@@ -289,12 +289,12 @@ class TestGetPage:
 
     async def test_storage_format_markup_is_converted_to_markdown(self, gated_call_spy):
         # confluence_get_page's details_text/pii_scan_text must not be raw
-        # Confluence storage-format XHTML (with unstripped <ac:*> macro tags)
-        # in the approval popup and the PII scanner. body must be run through html_to_markdown() first
-        # so the reviewer sees readable, rendered content (not raw tag soup)
-        # and the scanner sees the actual text rather than XML markup. Also
-        # covers the "markdown" preview_blocks entry that renders that
-        # content richly (see approval_window_html.py).
+        # Confluence storage-format XHTML (with unstripped <ac:*> macro tags) in
+        # the approval popup and the PII scanner. body must be run through
+        # html_to_markdown() first so the reviewer sees readable, rendered
+        # content (not raw tag soup) and the scanner sees the actual text rather
+        # than XML markup. Also covers the "markdown" preview_blocks entry that
+        # renders that content richly (see approval_window_html.py).
         connector, client = make_connector()
         client.get_page.return_value = make_page(
             body='<p>Confidential steps here</p>'

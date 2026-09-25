@@ -131,11 +131,7 @@ def _file_hits(rel: str) -> list[str]:
 
 
 def _in_scope(rel: str) -> bool:
-    return not (
-        rel.startswith(_EXEMPT)
-        or Path(rel).suffix.lower() in _BINARY_SUFFIXES
-        or Path(rel).name in _LOCKFILES
-    )
+    return not (rel.startswith(_EXEMPT) or Path(rel).suffix.lower() in _BINARY_SUFFIXES or Path(rel).name in _LOCKFILES)
 
 
 def test_code_carries_no_history():

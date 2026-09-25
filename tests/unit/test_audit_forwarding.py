@@ -203,10 +203,10 @@ class TestBuildSender:
 class TestAuditForwarder:
     @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
     def test_submit_delivers_payload_to_sender(self):
-        # An Event the worker thread itself sets, waited on with a generous timeout,
-        # rather than polling calls in a fixed-interval loop for up to 1s --
+        # An Event the worker thread itself sets, waited on with a generous
+        # timeout, rather than polling calls in a fixed-interval loop --
         # this resolves the instant the sender actually runs instead of on
-        # whichever of the 50 polls happens to land after it.
+        # whichever poll happens to land after it.
         calls = []
         delivered = threading.Event()
 
@@ -223,12 +223,12 @@ class TestAuditForwarder:
     @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
     def test_full_queue_drops_without_raising(self, caplog):
         # The "picked up immediately by the worker thread" assumption below
-        # used to be a blind time.sleep(0.05) -- on a slow enough CI runner,
-        # nothing guaranteed the worker had actually dequeued "a" (freeing
-        # the size-1 queue's one slot) before "b" was submitted, which would
-        # make "b" (not "c") the one silently dropped. picked_up is set from
-        # inside the sender itself, the same synchronization point the old
-        # sleep was only ever guessing at.
+        # is waited on, not slept on: on a slow enough CI runner, a fixed
+        # sleep guarantees nothing about the worker having actually dequeued
+        # "a" (freeing the size-1 queue's one slot) before "b" is submitted,
+        # which would make "b" (not "c") the one silently dropped. picked_up
+        # is set from inside the sender itself, the synchronization point a
+        # sleep could only ever guess at.
         picked_up = threading.Event()
 
         def slow_sender(payload):

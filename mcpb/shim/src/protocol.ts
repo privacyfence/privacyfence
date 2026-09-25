@@ -16,9 +16,8 @@
  * ``DEV_DATA_DIR_ENV``).
  *
  * Privilege separation adds one more branch, and it is the reason this path goes
- * through ``handoffDir()`` rather than ``dataDir()`` directly: on an install
- * that has opted into privilege separation -- any of the three platforms --
- * the daemon runs as its own account and its data directory
+ * through ``handoffDir()`` rather than ``dataDir()`` directly: on a
+ * privilege-separated install -- any of the three platforms -- the daemon runs as its own account and its data directory
  * moves to a system location that account owns (``%ProgramData%\PrivacyFence``
  * on Windows, which is also why the ``%LOCALAPPDATA%`` branch above is not
  * the whole answer there). ``mcp_url`` is one of the files

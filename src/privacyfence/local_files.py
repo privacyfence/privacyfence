@@ -74,8 +74,9 @@ META_KEY = "privacyfence.eu/file-bridge"
 
 # deliver_file() is synchronous and fully in memory (both the bridge and
 # no-bridge-link paths stage the whole file before anything is written), so
-# this is a real memory cap, not just a transfer-size guideline. Configurable via settings.yaml's `file_bridge:
-# max_download_bytes:` -- see daemon_main.py's own local-mode setup, which
+# this is a real memory cap, not just a transfer-size guideline.
+# Configurable via settings.yaml's `file_bridge: max_download_bytes:` -- see
+# daemon_main.py's own local-mode setup, which
 # calls configure_file_bridge() once at startup with whatever that section
 # resolves to. 200MB: generous for anything a Drive/Gmail/Confluence tool
 # plausibly downloads, small enough that holding one in memory on a
@@ -192,8 +193,9 @@ def can_access_user_files(download_mode: str) -> bool:
     """True only when the daemon runs as the same OS user as its client:
     local mode (``download_mode != "org"``) and privilege separation is not
     enabled. Dev checkouts and unseparated pip/pipx installs keep direct
-    file I/O -- see ADR 0007. Org mode is not a file-bridge case at all: it already has its own delivery path
-    (org_mode.DownloadDeliveryConfig / staged links), and its daemon does
+    file I/O -- see ADR 0007. Org mode is not a file-bridge case at all: it
+    already has its own delivery path (org_mode.DownloadDeliveryConfig /
+    staged links), and its daemon does
     not run on the agent's machine in the first place, so a local path
     would be meaningless there regardless of privilege separation."""
     if _force_bridge_for_tests:
@@ -473,8 +475,9 @@ def _deliver_link(state: "_CallState | None", name: str, data: bytes, mime_type:
     """A capability link (``/mcp-files/fetch/<token>``, no bearer
     header needed -- the token in the URL is the credential; ADR 0028)
     rather than the shim's bearer-authenticated
-    ``/mcp-files/downloads/<token>``, since the whole point of this branch is a caller with no bridge and,
-    frequently, no way to attach a custom header either (a sandboxed agent
+    ``/mcp-files/downloads/<token>``, since the whole point of this branch
+    is a caller with no bridge and, frequently, no way to attach a custom
+    header either (a sandboxed agent
     `curl`-ing a URL it was handed). See web/routes_file_bridge.py and
     local_files.build_upload_slot's own docstring for the upload-side
     counterpart of this same capability-URL shape."""

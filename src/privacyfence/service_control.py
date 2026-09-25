@@ -1,5 +1,5 @@
-"""The companion as daemon manager (ADR 0026): start/stop/restart the separated daemon's system service, with a real
-elevation prompt.
+"""The companion as daemon manager (ADR 0026): start/stop/restart the
+separated daemon's system service, with a real elevation prompt.
 
 The counterpart to ``daemon_status.py`` -- see that module's own docstring
 for why the two are split: status needs no privileges, and everything in

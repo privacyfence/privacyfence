@@ -1,9 +1,9 @@
 """Packaged-artifact lifecycle test for the Linux ``.deb``.
 
 This module proves the lifecycle -- install/validate/remove/purge/upgrade --
-as a repeatable CI job, the same role
-``tests/integration/test_macos_packaged_smoke.py`` already plays for
-the DMG: install the actual built artifact, not a source checkout or an
+in a repeatable CI job, playing the same role for the ``.deb`` that
+``tests/integration/test_macos_packaged_smoke.py`` plays for the DMG:
+install the actual built artifact, not a source checkout or an
 editable dev install, and exercise it as closely as possible to how a real
 user would.
 
@@ -22,34 +22,33 @@ user would.
 3. **Start the real installed daemon** (``/usr/bin/privacyfence-app``, the
    wrapper ``debian/install`` puts on ``PATH`` -- not the PyInstaller onedir
    output directly, so this also proves the wrapper script itself works) and
-   run the local-mode system test's (``tests/system/test_local_mode_system.py``)
-   daemon → MCP → approval → audit contract's own shape against it: a real bootstrap
-   session, an MCP tool call resolved through the real HTTP decide route
+   run the local-mode system test's
+   (``tests/system/test_local_mode_system.py``) daemon → MCP → approval →
+   audit contract's own shape against it: a real bootstrap session, an MCP
+   tool call resolved through the real HTTP decide route
    both Allow and Deny, the audit log read back from disk, and a graceful
    shutdown via the real "Quit PrivacyFence" action.
 
    **One deliberate substitution** from the system test's own scenario, for
-   the same reason ``test_macos_packaged_smoke.py`` already made it: the
-   system test injects a
-   synthetic ``Connector`` by monkeypatching ``daemon_main.build_connectors``
-   *before* ``daemon_main`` is ever imported -- only possible when the test
-   controls the Python import itself. A packaged, frozen daemon started as
-   its own binary offers no such hook. This module instead drives
-   ``privacyfence_propose_policy_change``, the one built-in meta-tool that
-   "ALWAYS blocks on a native confirmation dialog" with no
-   connector/credential of any kind behind it (see that tool's own
+   the same reason ``test_macos_packaged_smoke.py`` already makes it: the
+   system test injects a synthetic ``Connector`` by monkeypatching
+   ``daemon_main.build_connectors`` *before* ``daemon_main`` is ever imported
+   -- only possible when the test controls the Python import itself. A
+   packaged, frozen daemon started as its own binary offers no such hook. This
+   module instead drives ``privacyfence_propose_policy_change``, the one
+   built-in meta-tool that "ALWAYS blocks on a native confirmation dialog"
+   with no connector/credential of any kind behind it (see that tool's own
    description in ``web/mcp_tools.py``) -- same reasoning
    ``test_macos_packaged_smoke.py``'s own docstring gives for the identical
-   choice. The call itself, and the audit vocabulary to read back on the
-   far side of it, come from ``tests/packaged_policy_probe.py``, which all
-   four packaged-artifact smoke tests share. Unlike that module (which
-   drives a real headless-Chromium click), this one resolves the pending
-   card the same way the system test itself does: a
-   direct HTTP POST to ``/api/approvals/<id>/decide`` with the bootstrap-
-   minted session cookie doubling as the CSRF token -- no Node/Playwright
-   dependency needed here, keeping this job's prerequisites to exactly what
-   ``scripts/build_deb.sh`` itself already needs (Python + ``dpkg``/
-   ``lintian``).
+   choice. The call itself, and the audit vocabulary to read back on the far
+   side of it, come from ``tests/packaged_policy_probe.py``, which all four
+   packaged-artifact smoke tests share. Unlike that module (which drives a
+   real headless-Chromium click), this one resolves the pending card the same
+   way the system test itself does: a direct HTTP POST to
+   ``/api/approvals/<id>/decide`` with the bootstrap-minted session cookie
+   doubling as the CSRF token -- no Node/Playwright dependency needed here,
+   keeping this job's prerequisites to exactly what ``scripts/build_deb.sh``
+   itself already needs (Python + ``dpkg``/``lintian``).
 4. **Remove, then reinstall** (``dpkg -r``, ADR 0042): package-owned files
    gone (``/opt/privacyfence``, ``/usr/bin/privacyfence-app``); ``prerm``'s
    ``uninstall`` has stopped the daemon and removed its unit and the
@@ -409,14 +408,13 @@ def _clean_package_state(request):
 # like that module's own helpers -- except _sudo_mint_attested_bootstrap_
 # code() and _sudo_companion_stand_in(), which dial the control/companion
 # sockets as this account (`sudo -u <this account> -g ${SERVICE_GROUP}`)
-# rather than as root. Connecting as root used to be harmless, because every
-# peer mapped to the same principal; ADR 0008 changed that
-# (control_channel.principal_id_for_peer() maps a root peer's uid 0 to its
+# rather than as root. Under ADR 0008 connecting as root is not harmless:
+# control_channel.principal_id_for_peer() maps a root peer's uid 0 to its
 # own os-0 principal, not the install's owner, so its CONFIRM MINT would
-# dial a companion-0.sock nothing here binds), so these two now have to run
-# as the owner to keep landing on LOCAL_PRINCIPAL_ID -- matching what a real,
-# human-run companion connects as. HANDOFF_DIR's own group grant is enough
-# for the socket I/O itself; nothing about it needs root.
+# dial a companion-0.sock nothing here binds. So these two run as the owner
+# to land on LOCAL_PRINCIPAL_ID -- matching what a real, human-run
+# companion connects as. HANDOFF_DIR's own group grant is enough for the
+# socket I/O itself; nothing about it needs root.
 # --------------------------------------------------------------------------- #
 
 def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None:
@@ -498,7 +496,7 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
 
 
 def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
-    """Mints the one thing a bare ``MINT`` can no longer buy: a
+    """Mints the one thing a bare ``MINT`` cannot buy: a
     ``human``-provenance session, the only kind web/routes_approvals.py lets
     release a sensitive confirm on a separated install. Runs through an
     inline stdlib-only script, for the same reason every other helper in
@@ -506,9 +504,8 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     no ``privacyfence`` (nor ``tests``) package importable -- but as this
     account, not root: ADR 0008 makes the daemon key ``CONFIRM MINT``'s
     companion address off the connecting peer's own principal
-    (``control_channel.principal_id_for_peer()``), and a root peer no longer
-    maps to the install's owner the way every peer used to pre-ADR-0008 --
-    it maps to its own ``os-0`` principal, with its own, different companion
+    (``control_channel.principal_id_for_peer()``), and a root peer does not
+    map to the install's owner -- it maps to its own ``os-0`` principal, with its own, different companion
     address, which nothing here binds. ``_sudo_capture_as_owner`` keeps the
     peer uid the one the daemon's marker actually names as owner, so it
     still resolves to ``LOCAL_PRINCIPAL_ID`` and dials the address
@@ -996,8 +993,8 @@ def _synthetic_next_version_deb(src_deb: Path, dst_deb: Path) -> str:
     ``scripts/build_deb.sh``'s own version-string handling comment). This is
     the same *bytes* as version N, just relabeled -- deliberately: what needs
     proving is that ``dpkg -i``-over-an-existing-install (a real version
-    transition, not a same-version reinstall) never reaches into ``$HOME``, which doesn't depend
-    on anything actually changing *inside* the package. Building a second
+    transition, not a same-version reinstall) never reaches into ``$HOME``,
+    which doesn't depend on anything actually changing *inside* the package. Building a second
     genuine PyInstaller bundle just for a "real" code change would multiply
     this module's already-heavy setup cost for no additional coverage of
     that claim.

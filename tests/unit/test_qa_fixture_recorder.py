@@ -1695,8 +1695,8 @@ class _FakeCalendarClient:
 
     def delete_event(self, calendar_id, event_id, scope="this", send_updates=""):
         # lifecycle_calendar/_lifecycle_calendar_recurrence both clean up
-        # through this now (see qa_fixture_recorder.py's own comment on why
-        # calendar no longer needs the raw events().delete() bypass jira/
+        # through this (see qa_fixture_recorder.py's own comment on why
+        # calendar does not need the raw events().delete() bypass jira/
         # tasks still do) -- scope/send_updates are accepted but unused
         # here since this fake never has more than one event in a "series".
         self._do_delete(event_id)

@@ -112,13 +112,12 @@ Source: "{#McpbPath}"; DestDir: "{app}"; Flags: ignoreversion
 ; (`uninstall`), and the template is what a later re-run of `enable` renders
 ; the companion task from.
 ;
-; This used to be the whole of it -- the script shipped, nothing ran it, and a
-; Windows install stayed unseparated until somebody typed `enable` into an
-; elevated PowerShell. ADR 0003 decision 4 withdraws that: [Code]'s
+; Shipping the script is not enough on its own: nothing would run it, and a
+; Windows install would stay unseparated until somebody typed `enable` into
+; an elevated PowerShell. Per ADR 0003 decision 4, [Code]'s
 ; CurStepChanged(ssPostInstall) below runs `enable` itself, with Setup's own
 ; elevated token, and a failure of that step fails the install. The .deb's
-; postinst is the same shape; the difference was never a design, only which
-; platform had an installer hook wired up.
+; postinst has the same shape.
 ;
 ; Renamed to privilege-separation.ps1 on the way in, and the template lands
 ; beside it: the script resolves its template directory as "the checkout's
@@ -134,8 +133,8 @@ Source: "windows\privacyfence-companion-task.xml.tmpl"; DestDir: "{app}"; Flags:
 ; ADR 0031: opens Approvals through the companion (--launch), which starts
 ; the tray icon first if it isn't running -- the same thing a double-click on
 ; the macOS app does. Not the daemon executable (a headless service; nothing
-; to show), and no longer the bare settings URL it used to be, which only
-; worked for a browser that already had a session cookie.
+; to show), and not a bare settings URL, which only works for a browser
+; that already has a session cookie.
 Name: "{group}\{#AppName}"; Filename: "{app}\{#CompanionExeName}"; Parameters: "--launch"; \
     IconFilename: "{app}\{#AppExeName}"
 ; The companion app (ADR 0002), as a thing a human can

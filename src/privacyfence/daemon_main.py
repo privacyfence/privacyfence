@@ -7,15 +7,12 @@ Runs as a system service under its own account (the LaunchDaemon
 Windows -- see ADR 0003 and ADR 0026). Only one instance is allowed
 (enforced via a lock file). Claude reaches this process over the embedded
 ``/mcp`` Streamable HTTP endpoint (see web/mcp_dispatch.py's module
-docstring) -- the original bridge/IPC-socket transport is gone;
-``connector_host.py``'s ``ConnectorHost`` is what's left of
-``ipc_server.py``'s own role once the socket and its dispatch logic were
-removed. A human reaches it the same way: over the embedded web approval/
-settings surfaces (``/approvals``, and ``/settings`` when
-``web.settings.enabled``). There used to be a native macOS AppKit UI too (a
-menu bar tray icon, native approval dialogs, a native webview settings
-window); it was deleted because two approval surfaces means two places for
-a security fix to land (see ADR 0001), so the web surface is now the only
+docstring), the only transport there is; ``connector_host.py``'s
+``ConnectorHost`` holds the connectors that endpoint dispatches to. A human
+reaches it the same way: over the embedded web approval/settings surfaces
+(``/approvals``, and ``/settings`` when ``web.settings.enabled``). There is
+no native UI in this process: two approval surfaces would mean two places
+for a security fix to land (see ADR 0001), so the web surface is the only
 one, on every platform this process runs on.
 
 Threading model:

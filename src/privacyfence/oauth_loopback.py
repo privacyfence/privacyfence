@@ -25,8 +25,9 @@ settings page says so in its own copy next to a connector's Authenticate button
 (settings_window_html.py's `renderConnectors`) rather than leaving it implicit
 -- a cheap, honest statement of a real limitation beats a silent one.
 
-``org`` mode doesn't use this module's loopback listener at all. ``web/routes_connect.py``'s ``GET /oauth/start/
-{service}``/``GET /oauth/callback/{service}`` build the same authorize
+``org`` mode doesn't use this module's loopback listener at all.
+``web/routes_connect.py``'s ``GET /oauth/start/{service}``/``GET
+/oauth/callback/{service}`` build the same authorize
 URL/exchange the code server-side, against a real public redirect_uri
 (``{issuer_url}/oauth/callback/{service}``), with the browser doing the
 provider round trip instead of a loopback port on this machine. That's
@@ -35,8 +36,9 @@ module-level functions in each of slack_client.py/salesforce_client.py/
 atlassian_oauth.py rather than private to ``authorize_interactive``: this
 module's ``run_browser_oauth`` is what drives them in ``local`` mode, but
 ``org`` mode calls the same functions directly and drives the provider
-round trip over real HTTP redirects instead. Google's equivalent functions live in ``google_oauth.py``, whose
-``authorize_local()`` drives them through this module's loopback flow too.
+round trip over real HTTP redirects instead. Google's equivalent functions
+live in ``google_oauth.py``, whose ``authorize_local()`` drives them through
+this module's loopback flow too.
 """
 
 from __future__ import annotations

@@ -396,9 +396,9 @@ class TestDegradedApi:
 class TestUnknownArtifactId:
     """download.js hardcodes nothing about a release: an artifact id its own PLATFORMS map has no
     display name for still gets a card (falling back to the id itself) rather than being silently
-    dropped while it waits for a website deploy. This is the property that used to be exercised by
-    a second macOS card for the `.pkg` -- which is no longer a download of its own, since the DMG
-    now carries it (see scripts/build_dmg.sh) -- so it is asserted directly here instead."""
+    dropped while it waits for a website deploy. No real artifact exercises this -- the `.pkg` is
+    not a download of its own, since the DMG carries it (see scripts/build_dmg.sh) -- so it is
+    asserted directly here."""
 
     MAC_UA = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

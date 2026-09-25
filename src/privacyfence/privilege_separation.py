@@ -959,7 +959,7 @@ def _posix_image_problems(paths: tuple[Path, ...]) -> list[str]:
     (source checkouts, the current Linux ``.deb``), so in practice this
     only ever finds something to say about a packaged macOS build.
 
-    ADR 0002 §5a used to claim ``/Applications`` was root-owned the same way
+    ADR 0002 §5a assumes ``/Applications`` is root-owned the same way
     ``/opt`` is, which is false: it is ``root:admin drwxrwxr-x``, and a
     drag-installed ``.app`` is normally owned by the installing user -- the
     same account the agent runs as. So this checks the same thing Windows
@@ -1585,14 +1585,14 @@ def _data_dir_log_files_released() -> Iterator[None]:
     ``enforce_separation()`` runs from inside a packaged daemon that has
     already called ``daemon_main.setup_logging()``, so ``logs/privacyfence.log``
     is open for append in this very process for the whole elevated run.
-    ``enable`` used to *move* that directory, and on Windows, which has no
-    POSIX rename-over-open-files escape hatch, that was a sharing violation
-    every time (``Move-Item : The process cannot access the file because it
-    is being used by another process``), after which ``Undo-PartialEnable``
-    rolled the whole thing back and decision 6 refused to serve. ``enable``
-    no longer moves anything (ADR 0041), but releasing the handles costs
-    nothing and keeps the elevated run from depending on what this process
-    has open.
+    ``enable`` moves nothing (ADR 0041), but on Windows, which has no POSIX
+    rename-over-open-files escape hatch, a step in it that moved that
+    directory would hit a sharing violation every time (``Move-Item : The
+    process cannot access the file because it is being used by another
+    process``), after which ``Undo-PartialEnable`` would roll the whole
+    thing back and decision 6 would refuse to serve. Releasing the handles
+    costs nothing and keeps the elevated run from depending on what this
+    process has open.
 
     Nothing is lost while the window is open: ``FileHandler.emit()``
     reopens ``baseFilename`` by itself whenever ``stream`` is ``None`` --

@@ -53,10 +53,9 @@
 
   Adding the owner to $ServiceGroup is the only step here that needs to know
   *which human* this install is for, and ADR 0003 decision 3 splits it out
-  for that reason: an MDM push or
-  a SYSTEM-context install resolves no owner account, and that used to leave
-  the whole install unseparated. It no longer does. `enable` with no
-  resolvable owner does everything an administrator can do alone and records
+  for that reason: an MDM push or a SYSTEM-context install resolves no owner
+  account, and that must not leave the whole install unseparated. `enable`
+  with no resolvable owner does everything an administrator can do alone and records
   the group membership as pending; `enable -ForUser <name>` closes that half
   later, idempotently, and is what the companion app runs by itself at the
   first real sign-in.
