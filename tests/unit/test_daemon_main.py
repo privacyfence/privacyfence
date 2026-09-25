@@ -252,6 +252,61 @@ class TestLoadConfig:
         err = capsys.readouterr().err
         assert "Configuration error:" in err
         assert "'auto_accept_grants'" in err
+        # And kept for a caller with no stderr: windows_service puts it in the Event Log.
+        assert "'auto_accept_grants'" in daemon_main.last_startup_error()
+
+    def test_main_keeps_a_runtime_identity_refusal_for_the_event_log(self, monkeypatch, capsys):
+        def refuse():
+            raise daemon_main.privilege_separation.PrivilegeSeparationError("wrong account")
+
+        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", refuse)
+        assert daemon_main.main([]) == 1
+        assert daemon_main.last_startup_error() == "Configuration error: wrong account"
+        assert "wrong account" in capsys.readouterr().err
+
+    def test_v1_sections_an_earlier_release_converted_are_removed(self, tmp_path):
+        # 4.1-4.4 converted auto_accept_rules into auto_accept: on startup, set the marker, and
+        # left the v1 section on disk. Refusing that file refused every upgrade from those
+        # releases, silently, on Windows (ADR 0047).
+        current = policy_store.rules_to_config(
+            policy_store.compile_rules_from_config(daemon_main.load_config(str(tmp_path / "seed.yaml")))
+        )
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.safe_dump({
+            "auto_accept": current,
+            "auto_accept_rules": {"contacts.edit": [{"rule": "no_contact_info_change"}]},
+            "migrated_to_policy_v2": True,
+            "logging": {"level": "INFO"},
+        }))
+
+        config = daemon_main.load_config(str(config_path))
+
+        expected = {"auto_accept": current, "logging": {"level": "INFO"}}
+        assert config == expected
+        assert yaml.safe_load(config_path.read_text()) == expected
+        assert len(daemon_main._deferred_warnings) == 1
+        assert "auto_accept_rules" in daemon_main._deferred_warnings[0]
+
+    def test_a_failed_rewrite_still_starts_with_the_sections_ignored(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "settings.yaml"
+        original = yaml.safe_dump({"auto_accept_grants": {}, "migrated_to_policy_v2": True})
+        config_path.write_text(original)
+
+        def fail(*_args, **_kwargs):
+            raise PermissionError("read-only")
+
+        monkeypatch.setattr(daemon_main, "atomic_write_text", fail)
+
+        assert daemon_main.load_config(str(config_path)) == {}
+        assert config_path.read_text() == original
+        assert "could not rewrite" in daemon_main._deferred_warnings[0]
+
+    def test_deferred_warnings_reach_the_log_once_logging_is_up(self, caplog):
+        daemon_main._deferred_warnings.append("left over")
+        with caplog.at_level(logging.WARNING, logger=daemon_main.logger.name):
+            daemon_main._flush_deferred_warnings()
+        assert "left over" in caplog.text
+        assert daemon_main._deferred_warnings == []
 
 
 class TestLoadOrgConfig:

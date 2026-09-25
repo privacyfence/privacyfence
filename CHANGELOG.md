@@ -157,6 +157,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which can open behind the browser window. Adding a passkey a device already has enrolled says
   so too, instead of the raw `InvalidStateError`.
 
+- **Upgrading from 4.1–4.4 no longer stops PrivacyFence from starting.** Those versions converted
+  your auto-accept rules to the current format but left the old `auto_accept_rules` section in
+  `settings.yaml`. 4.5 refused to start on that section, even though your rules were already in
+  effect from the new one. It now removes the leftover section and starts. On Windows the service
+  stopped within seconds of every start and nothing said why (ADR 0047).
+
+- **Windows: a service that refuses to start now says why in the event log.** The reason used to
+  go to a console the service doesn't have, before the daemon had opened its own log file. It is
+  now part of the "PrivacyFence exited with status 1" entry in the Application event log.
+
+- **Windows: PrivacyFence's event log entries show their text.** The installer never registered
+  PrivacyFence as an event log source, so Event Viewer showed every PrivacyFence entry with an
+  empty message, and `Get-WinEvent -FilterHashtable @{ProviderName='PrivacyFence'}` failed with
+  "The parameter is incorrect". The installer now registers the source, and uninstalling removes
+  it.
+
 - **Salesforce stays signed in past its first token refresh.** With refresh token rotation on
   (an option on Salesforce's External Client Apps), each refresh returns a new refresh token and
   spends the old one; PrivacyFence kept the old one, so the connector worked for a few hours after

@@ -72,6 +72,8 @@ def _reset() -> None:
     # for the next test's own _wait_for_shutdown() call to find already
     # signaled.
     daemon_main._shutdown_event.clear()
+    daemon_main._deferred_warnings.clear()
+    daemon_main._last_startup_error = None
     # gate._popup_executor (Phase 0 of the approval-binder plan): sized
     # against the real PendingApprovalRegistry's own max_pending by
     # daemon_main.py's configure_popup_executor() call -- a test that

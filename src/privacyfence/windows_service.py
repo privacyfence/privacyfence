@@ -114,19 +114,26 @@ def _service_class():  # noqa: ANN202 -- the base class only exists on Windows
 
             code = daemon_main.main([])
             if code:
-                # The one place a service has to say something a terminal
-                # would have printed to stderr. Every reason main() returns
-                # non-zero here is a refusal to start rather than a crash
-                # -- an unreadable config, or check_runtime_identity()
-                # finding this process is not the service account -- and
-                # without this the Event Log would show a service that
-                # started and stopped again with no explanation at all.
-                servicemanager.LogErrorMsg(
-                    f"PrivacyFence exited with status {code}; see the daemon's own log under "
-                    "%ProgramData%\\PrivacyFence for the reason."
-                )
+                servicemanager.LogErrorMsg(startup_failure_message(code, daemon_main.last_startup_error()))
 
     return PrivacyFenceService
+
+
+def startup_failure_message(code: int, reason: str | None) -> str:
+    """The Event Log text for a service start that ``daemon_main.main()`` refused.
+
+    The one place a service has to say what a terminal would have printed to
+    stderr: a service has no stderr, and the refusals that matter most -- an
+    unreadable or rejected settings.yaml, check_runtime_identity() finding the
+    wrong account -- happen before the daemon has a log file to write to. So
+    the reason goes here, where ``Get-WinEvent`` and Event Viewer show it.
+    """
+    if reason:
+        return f"PrivacyFence exited with status {code}: {reason}"
+    return (
+        f"PrivacyFence exited with status {code}; see the daemon's own log under "
+        "%ProgramData%\\PrivacyFence for the reason."
+    )
 
 
 def run_service() -> int:
@@ -160,4 +167,10 @@ def run_service() -> int:
     return 0
 
 
-__all__ = ["SERVICE_DESCRIPTION", "SERVICE_DISPLAY_NAME", "WINDOWS_SERVICE_NAME", "run_service"]
+__all__ = [
+    "SERVICE_DESCRIPTION",
+    "SERVICE_DISPLAY_NAME",
+    "WINDOWS_SERVICE_NAME",
+    "run_service",
+    "startup_failure_message",
+]
