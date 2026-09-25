@@ -66,6 +66,9 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("CLAUDE.md", "D1"): "Cloudflare D1, the Worker's database",
     ("privilege_separation.py", "since 4.3"): "4.3BSD, the Unix release, not a PrivacyFence version",
     ("", "§2.7"): "the definition of done in docs/coding-and-testing-guidelines.md, cited by number everywhere",
+    ("web/routes_security.py", "#555"): "a CSS hex colour in the /security page's stylesheet",
+    ("web/routes_security.py", "#888"): "a CSS hex colour in the /security page's stylesheet",
+    ("tests/unit/test_settings_window_html.py", "W31"): "an ISO week number in an audit log file name",
 }
 
 # Embedded base64 (fonts in the approval window's stylesheet) is data that spells anything.
