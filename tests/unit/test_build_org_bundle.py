@@ -1,4 +1,4 @@
-"""Tests for scripts/build_org_bundle.py's SEC-05 (full signing) support.
+"""Tests for scripts/build_org_bundle.py's bundle signing support.
 
 This script deliberately doesn't import the ``privacyfence`` package (see
 its own module docstring -- it's meant to be runnable standalone, without
@@ -521,3 +521,84 @@ class TestAgentLinksFlag:
     def test_summary_line_reports_agent_links(self, tmp_path, capsys):
         self._build(tmp_path, "--no-agent-links")
         assert "download_delivery.agent_links=False" in capsys.readouterr().out
+
+
+class TestInstructionsPrintedAfterWriting:
+    """The closing instructions depend on the bundle's mode: an org-mode
+    bundle is installed on the server by hand (Settings has no install
+    button in org mode), a local-mode bundle through Settings."""
+
+    def _org_args(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        return [
+            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com/",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path),
+        ]
+
+    def test_org_bundle_says_to_copy_it_to_the_server_and_restart(self, tmp_path, capsys):
+        build_org_bundle.main(self._org_args(tmp_path))
+
+        out = capsys.readouterr().out
+        assert "<data>/org/org_config.json" in out
+        assert "restart" in out
+        assert "Install/Update" not in out
+
+    def test_local_bundle_says_to_install_it_from_settings(self, tmp_path, capsys):
+        build_org_bundle.main([
+            "-o", str(tmp_path / "org_config.json"), "--slack-client-id", "id", "--slack-client-secret", "s",
+        ])
+
+        out = capsys.readouterr().out
+        assert "Install/Update Organization Config" in out
+        assert "<data>/org/org_config.json" not in out
+
+    def test_org_bundle_lists_all_three_idp_redirect_uris(self, tmp_path, capsys):
+        build_org_bundle.main(self._org_args(tmp_path))
+
+        out = capsys.readouterr().out
+        for path in ("/oauth/idp/callback", "/oauth/idp/login-callback", "/oauth/stepup/callback"):
+            assert f"https://pf.example.com{path}" in out
+        assert "'cid'" in out
+        assert "/oauth/callback/" not in out  # no connector configured, nothing to list
+
+    def test_org_bundle_lists_each_configured_connectors_callback(self, tmp_path, capsys):
+        secret = tmp_path / "client_secret.json"
+        secret.write_text(json.dumps({"web": {"client_id": "g", "client_secret": "gs"}}))
+
+        build_org_bundle.main([
+            *self._org_args(tmp_path),
+            "--google-client-secret", str(secret),
+            "--atlassian-client-id", "a", "--atlassian-client-secret", "as",
+        ])
+
+        out = capsys.readouterr().out
+        for name in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script", "atlassian"):
+            assert f"https://pf.example.com/oauth/callback/{name}" in out
+        assert "/oauth/callback/slack" not in out
+
+    def test_merge_without_mode_flags_reads_the_issuer_from_the_existing_bundle(self, tmp_path, capsys):
+        build_org_bundle.main(self._org_args(tmp_path))
+        capsys.readouterr()
+
+        build_org_bundle.main([
+            "-o", str(tmp_path / "org_config.json"), "--merge",
+            "--slack-client-id", "id", "--slack-client-secret", "s",
+            "--sign-key", str(tmp_path / "key.pem"),
+        ])
+
+        out = capsys.readouterr().out
+        assert "https://pf.example.com/oauth/stepup/callback" in out
+        assert "https://pf.example.com/oauth/callback/slack" in out
+        assert "None/" not in out
+
+    def test_help_names_the_step_up_callback_and_apps_script(self, capsys):
+        with pytest.raises(SystemExit):
+            build_org_bundle.main(["--help"])
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert out.count("/oauth/stepup/callback") == 2
+        assert "Contacts, Tasks, Apps Script)" in out

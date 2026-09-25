@@ -1,81 +1,60 @@
-# Slack Setup
+# Slack setup
 
-PrivacyFence uses a **Slack user token** (`xoxp-…`) obtained via Slack's OAuth v2 browser flow. This means Claude sees exactly what you see — every channel, DM, and private group you are a member of — with no bot to invite and no footprint visible to others.
+PrivacyFence uses a Slack **user token**: your AI client sees exactly the channels, direct messages
+and private groups you can see, as you. There is no bot to invite. One administrator creates a
+Slack app once per workspace and puts its client ID and secret into the organization config
+bundle; users then approve the app in their browser from PrivacyFence.
 
-The Slack app itself is organization-level config: **one IT admin creates it once**, packages the client id/secret into PrivacyFence's organization config bundle, and distributes it. Individual users never see a token to copy/paste — they click **Authenticate…** in PrivacyFence Settings and approve in their browser.
+## What you need
 
----
+- Permission to create apps in your Slack workspace (and, if your workspace requires it, an admin
+  who approves app installs).
+- Python 3 to run `scripts/build_org_bundle.py`.
 
-## For IT admins (once per organization)
+## Register the app
 
-### 1. Create a Slack app
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**.
+   Name it (for example `PrivacyFence`), pick your workspace and click **Create App**.
+2. **OAuth & Permissions → Scopes → User Token Scopes** (not Bot Token Scopes): add every scope
+   in the [values table](#values). Add no bot scopes.
+3. **OAuth & Permissions → Redirect URLs:** add the local redirect, and for an organization server
+   the org redirect too, then **Save URLs**. One app can carry both, and the same client ID and
+   secret serve both kinds of deployment.
+4. **Basic Information → App Credentials:** copy the **Client ID** and **Client Secret**.
 
-1. Go to [https://api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**.
-2. Choose **From scratch**.
-3. Give it a name (e.g. `PrivacyFence`) and select your workspace.
-4. Click **Create App**.
+**Never activate public distribution** (**Manage Distribution → Activate Public Distribution**),
+and never share the bundle outside your workspace. An app created from scratch and left
+undistributed is an internal app. Slack restricts apps distributed outside the Slack Marketplace
+to 1 request per minute and 15 messages per call on `conversations.history` and
+`conversations.replies`, which `slack_get_channel_history`, `slack_get_thread_replies` and
+single-message lookups (permalinks, thread previews on approval cards) rely on. Nothing fails outright; reads just become very slow and
+truncated.
 
-> **Never click "Activate Public Distribution"** (Manage Distribution, in the left sidebar) — and
-> never distribute the resulting `org_config.json` outside your own organization/workspace.
-> Creating the app "From scratch" in your workspace and stopping there keeps it an **internal**
-> app, which every rate-limit assumption in this codebase's Slack code depends on. Slack treats an
-> app distributed outside the Marketplace differently: as of 2025-09-02, `conversations.history` and
-> `conversations.replies` — the calls behind `slack_get_channel_history`/`slack_get_thread_replies`/
-> `slack_search_messages` — drop to **1 request per minute with a hard 15-message cap** for such
-> apps. An internal app has none of that; there is no reason to ever activate distribution here, and
-> doing so is very hard to notice after the fact (existing users keep working, just far slower, with
-> individual message reads silently truncated to 15 lines).
+If your workspace requires admin approval for app installs, an admin approves each user's first
+sign-in on Slack's side. That is a Slack workspace setting, not a PrivacyFence one.
 
-### 2. Add user token scopes
+## Values
 
-1. In the left sidebar, go to **OAuth & Permissions**.
-2. Scroll down to **Scopes → User Token Scopes** (not Bot Token Scopes).
-3. Click **Add an OAuth Scope** and add each of the following:
+| Item | Value |
+|---|---|
+| Local redirect (desktop installs) | `http://127.0.0.1:53682/callback` — exactly this; Slack requires an exact match |
+| Org redirect (organization server) | `https://<server>/oauth/callback/slack`, with `<server>` your server's `--server-issuer-url` |
+| User token scopes | `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `users:read.email`, `search:read`, `chat:write`, `im:write`, `channels:write`, `groups:write`, `mpim:write` |
+| Bundle flags | `--slack-client-id <Client ID>` and `--slack-client-secret <Client Secret>` (both required together); optional `--slack-scopes <scope> …` |
 
-| Scope | Purpose |
-|-------|---------|
-| `channels:read` | List public channels |
-| `groups:read` | List private channels you're in |
-| `im:read` | List your direct messages |
-| `mpim:read` | List your group direct messages |
-| `channels:history` | Read public channel messages |
-| `groups:history` | Read private channel messages |
-| `im:history` | Read direct message history |
-| `mpim:history` | Read group DM history |
-| `users:read` | Resolve user display names |
-| `users:read.email` | Resolve user email addresses |
-| `search:read` | Search messages across the workspace |
-| `chat:write` | Send messages as you |
-| `im:write` / `mpim:write` | Create a new 1:1 or group DM (`slack_create_group_chat`) |
-| `im:write` / `channels:write` / `groups:write` / `mpim:write` | Mark a conversation unread (`mark_unread` option on `slack_send_message`) |
+What the less obvious scopes are for: `users:read.email` resolves authors' email addresses;
+`im:write` and `mpim:write` open a new direct or group message (`slack_create_group_chat`);
+`im:write`, `channels:write`, `groups:write` and `mpim:write` mark a conversation unread (the
+`mark_unread` option of `slack_send_message`), depending on the conversation type.
 
-> **Do not add Bot Token Scopes.** Only the User Token Scopes section is needed.
+`--slack-scopes` replaces the requested scope list with your own. It applies to desktop installs
+only — an organization server always requests the list above — and a scope you leave out breaks
+the tools that need it. Leave it unset unless you have a reason.
 
-### 3. Set the redirect URL
+## Build and distribute the bundle
 
-Still on **OAuth & Permissions**, scroll to **Redirect URLs** and add:
-
-```
-http://127.0.0.1:53682/callback
-```
-
-This is PrivacyFence's loopback OAuth callback — it only listens during an active sign-in, on every user's own machine.
-
-> **Deploying [`org` mode](org-mode-setup-guide.md) instead of (or in addition to) local desktop
-> installs?** Slack lets one app carry more than one Redirect URL — click **Add New Redirect URL**
-> again and also add `https://your-server-hostname/oauth/callback/slack` (org mode's server-side
-> redirect, `web/routes_connect.py`), substituting your own hostname. Both URLs can coexist on the
-> same app; the same client id/secret you build below work for either deployment. See
-> [`org-mode-setup-guide.md` §4.2](org-mode-setup-guide.md#42-the-google-connector-client-optional)
-> for the general pattern this follows.
-
-### 4. Get the client id and secret
-
-Go to **Basic Information** in the left sidebar → **App Credentials**. Copy the **Client ID** and **Client Secret**.
-
-> If your workspace requires admin approval for app installs, an admin will need to approve each user's first sign-in from Slack's side — this is a workspace policy setting, not something PrivacyFence controls.
-
-### 5. Add it to the organization config bundle
+`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
+stable GitHub Release. It needs only Python 3; no PrivacyFence install is required.
 
 ```bash
 python3 scripts/build_org_bundle.py \
@@ -84,47 +63,35 @@ python3 scripts/build_org_bundle.py \
   -o org_config.json --merge
 ```
 
-(Drop `--merge` if this is the first service you're adding to the bundle.) Distribute the resulting `org_config.json` to your users.
+`--merge` adds Slack to an existing `org_config.json`; drop it if this is the first service in the
+bundle. Distribute the bundle to desktop users, or build it with the server flags and install it on
+your organization server — see [org-mode-setup-guide.md](org-mode-setup-guide.md) for signing and
+the server flags.
 
----
+## Users connect
 
-## For users
-
-**Local desktop install:**
-
-1. Get `org_config.json` from your IT team and install it via **Organization Config…** in PrivacyFence Settings (if you haven't already for another service — if a config is already installed, click **Update…** in the status prompt).
-2. **Connectors → Slack → Authenticate…**. Your browser opens to Slack's consent screen — review the permissions and click **Allow**.
-3. Quit and reopen PrivacyFence to activate the connector.
-
-**[`org` mode](org-mode-setup-guide.md) deployment** (a server your IT team runs, not a desktop
-install — ask them which applies to you):
-
-1. Visit `https://your-server-hostname/login` and sign in with your organization identity provider.
-2. On the `/connect` page, click **Connect** next to Slack. Your browser opens to Slack's consent
-   screen — review the permissions and click **Allow**.
-3. You land back on `/connect` showing Slack as connected — nothing to quit/reopen, since there's no
-   local app. See [`org-mode-setup-guide.md` §8](org-mode-setup-guide.md#8-first-sign-in-and-connecting-a-service).
-
----
+Users install the bundle and click **Authenticate…** next to Slack (desktop) or **Connect**
+(organization server), then review the permissions on Slack's page and click **Allow**. The shared
+flow is described in [connecting-a-service.md](connecting-a-service.md).
 
 ## Troubleshooting
 
-**`missing_scope` errors** (IT admin)
-A scope wasn't added before users signed in. Add the missing scope under **OAuth & Permissions → User Token Scopes**, then have each user click **Reconnect…** in PrivacyFence Settings to re-consent.
+**`missing_scope` errors** — a scope was not on the app when the user signed in. Add it under
+**User Token Scopes**, then have each user **Reconnect…** to get a token that includes it.
 
-**`not_in_channel` on history reads**
-The token only sees channels you are a member of. Join the channel in Slack first.
+**`not_in_channel` on history reads** — the token sees only conversations the user is a member of.
+Join the channel in Slack first.
 
-**`invalid_auth` errors**
-The token has been revoked (e.g. you removed the app from your Slack account, or an admin uninstalled it). Click **Reconnect…** in PrivacyFence Settings.
+**`invalid_auth` or `token_revoked`** — the token was revoked (the user removed the app, or an
+admin uninstalled it). **Reconnect…**.
 
-**Browser doesn't return to PrivacyFence after clicking Allow**
-Make sure the redirect URL in the Slack app's **OAuth & Permissions** page is exactly `http://127.0.0.1:53682/callback` for a local desktop install, or `https://your-server-hostname/oauth/callback/slack` for an [`org` mode](org-mode-setup-guide.md) deployment (IT admin) — Slack requires an exact match.
+**Slack shows an error about the redirect URL, or the browser does not come back** — the Redirect
+URL on the app must be exactly `http://127.0.0.1:53682/callback` for desktop installs, or
+`https://<server>/oauth/callback/slack` for an organization server. `localhost` in place of
+`127.0.0.1` does not match.
 
-**Slack reads got slow, or a channel history looks truncated at 15 messages** (IT admin)
-Check **Manage Distribution** on the Slack app — if **Activate Public Distribution** was ever clicked
-(even briefly, even if turned back off), the app may be treated as distributed outside the
-Marketplace, which caps `conversations.history`/`conversations.replies` at 1 request/minute and 15
-messages (see the note under **1. Create a Slack app** above). Deactivating distribution should
-restore internal-app limits; if this keeps recurring, contact Slack support to confirm the app's
-current distribution status.
+**Reads became slow, or channel history stops at 15 messages** — check **Manage Distribution**.
+If public distribution was ever activated, Slack may treat the app as distributed outside the
+Marketplace and apply the reduced limits described under
+[Register the app](#register-the-app). Deactivate it; if the limits persist, ask Slack support to
+confirm the app's distribution status.

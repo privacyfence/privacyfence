@@ -1,20 +1,19 @@
 """PrivacyFence daemon: persistent background process that owns credentials,
 connectors, and the embedded web approval/config UI.
 
-Started at login (LaunchAgent on macOS: com.privacyfence.app.plist), or
-automatically by Claude Desktop's ``.mcpb`` shim on first use. Only one
-instance is allowed (enforced via a lock file). Claude reaches this process
-over the embedded ``/mcp`` Streamable HTTP endpoint (see
-web/mcp_dispatch.py's module docstring) -- the original bridge/IPC-socket
-transport was retired at P5; ``connector_host.py``'s ``ConnectorHost`` is what's left of
-``ipc_server.py``'s own role once the socket and its dispatch logic are
-gone. A human reaches it the same way: over the embedded web approval/
-settings surfaces (``/approvals``, and ``/settings`` when
-``web.settings.enabled``) -- through P9 there was also a native macOS
-AppKit UI (a menu bar tray icon, native approval dialogs, a native webview
-settings window); P10 deleted all of it (§12, decision D6 in §15: "two
-approval surfaces means two places for a security fix to land"), so the
-web surface is now the only one, on every platform this process runs on.
+Runs as a system service under its own account (the LaunchDaemon
+``system/com.privacyfence.daemon`` on macOS, the system unit
+``privacyfence-daemon.service`` on Linux, the ``PrivacyFence`` service on
+Windows -- see ADR 0003 and ADR 0026). Only one instance is allowed
+(enforced via a lock file). Claude reaches this process over the embedded
+``/mcp`` Streamable HTTP endpoint (see web/mcp_dispatch.py's module
+docstring), the only transport there is; ``connector_host.py``'s
+``ConnectorHost`` holds the connectors that endpoint dispatches to. A human
+reaches it the same way: over the embedded web approval/settings surfaces
+(``/approvals``, and ``/settings`` when ``web.settings.enabled``). There is
+no native UI in this process: two approval surfaces would mean two places
+for a security fix to land (see ADR 0001), so the web surface is the only
+one, on every platform this process runs on.
 
 Threading model:
   - Main thread:   waits on ``_wait_for_shutdown()`` (below) until
@@ -50,20 +49,19 @@ Configuration is split into two files (see paths.py):
     and docs/google-cloud-setup.md. It's plain data, not a credential, and is
     handed straight to CalendarConnector; the Calendar OAuth client itself
     never carries Workspace-admin directory scope. ``mode``/``server``/
-    ``idp`` (P7) switch this daemon into org mode — a real OAuth 2.1 authorization
+    ``idp`` switch this daemon into org mode — a real OAuth 2.1 authorization
     server on ``/mcp`` instead of the local shared-secret token, human
-    identity resolved via the org's own OIDC IdP. Absent (every install
-    before this phase, and every one that hasn't opted in) means local
-    mode, byte-identical to before. See org_mode.py and org_identity.py
+    identity resolved via the org's own OIDC IdP (see ADR 0011). Absent
+    (every install that hasn't opted in) means local mode. See org_mode.py and org_identity.py
     for the schema, or build a bundle with ``scripts/build_org_bundle.py
     --mode org ...``.
   - ``config/settings.yaml``   — per-user settings: privacy policy,
     connectors{enabled}, auto_accept (the policy rules),
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
     audit_match_details}, step_up{enabled, scope, rp_id, rp_name,
-    require_passkey} (#426 Phase 1 -- local mode's own WebAuthn passkey
-    enrollment config, see step_up_config.py). No secrets live here. Lives
-    under ``paths.authority_dir()`` (#428 Phase 1), not the user-dir root
+    require_passkey} (local mode's own WebAuthn passkey enrollment config,
+    see step_up_config.py). No secrets live here. Lives under
+    ``paths.authority_dir()``, not the user-dir root
     directly -- see that function's own docstring.
 Per-user credentials (OAuth tokens, Telegram session) live under
 ``credentials/``, one file per connector -- ``paths.user_dir()`` itself,
@@ -221,12 +219,9 @@ def _release_instance_lock() -> None:
 
 
 # ---------------------------------------------------------------------------- #
-# Shutdown wait (P10): through P9
-# the main thread blocked inside menu_bar.run_menu_bar()'s own AppKit run
-# loop until the tray icon's "Quit PrivacyFence" (or the web settings page's
-# own quit action, wired to the same rumps.quit_application()) ended it. P10
-# deleted that host, so run_app() below now blocks on this plain
-# threading.Event instead -- request_shutdown() (called by SettingsController
+# Shutdown wait: the main thread used to block inside an AppKit menu bar's
+# run loop until its "Quit PrivacyFence" ended it. That host is gone, so
+# run_app() below now blocks on this plain threading.Event instead -- request_shutdown() (called by SettingsController
 # .quit_app(), the direct successor of that same "Quit PrivacyFence" action)
 # sets it, same as SIGINT/Ctrl-C raising KeyboardInterrupt out of the wait.
 # ---------------------------------------------------------------------------- #
@@ -253,9 +248,8 @@ def _wait_for_shutdown() -> None:
 # deliberately shorter than update_checker.CHECK_INTERVAL_SECONDS (24h).
 # SettingsController.on_update_check_timer() re-derives whether 24h have
 # actually passed from its own on-disk timestamp, so this is robust to
-# sleep/wake and doesn't need to match the real interval exactly. Through
-# P9 this pulse came from menu_bar.py's own rumps.Timer; P10 deleted that
-# host, so _run_update_check_timer (started as its own daemon thread by
+# sleep/wake and doesn't need to match the real interval exactly.
+# _run_update_check_timer (started as its own daemon thread by
 # run_app(), below) is now what fires it.
 UPDATE_CHECK_TIMER_INTERVAL_SECONDS = 6 * 60 * 60
 
@@ -277,10 +271,10 @@ def _run_update_check_timer(controller: Any) -> None:
 # ---------------------------------------------------------------------------- #
 
 def _resolve_path(path: str) -> str:
-    """Relative to ``PROJECT_ROOT`` for the local principal -- exactly as
-    before this phase, including for the tests that monkeypatch
+    """Relative to ``PROJECT_ROOT`` for the local principal -- including
+    for the tests that monkeypatch
     ``PROJECT_ROOT`` directly to sandbox where a test run reads/writes --
-    or to that *other* principal's own storage root (P6) when this runs
+    or to that *other* principal's own storage root when this runs
     inside a ``principal_scope()`` block for someone else (only
     connector_registry.py's ``ConnectorRegistry.get()`` does that today).
 
@@ -325,6 +319,40 @@ def _bootstrap_config(resolved: str) -> None:
     atomic_write_bytes(resolved, example.read_bytes())
 
 
+# Warnings raised before setup_logging() has given the root logger a handler: the local principal's
+# load_config() runs first, and a warning logged then would reach no file. setup_logging() logs and
+# clears these; a caller that runs after it (_load_principal_settings) flushes them itself.
+_deferred_warnings: list[str] = []
+
+
+def _flush_deferred_warnings() -> None:
+    while _deferred_warnings:
+        logger.warning("%s", _deferred_warnings.pop(0))
+
+
+def _drop_converted_v1_sections(config: dict[str, Any], resolved: str) -> None:
+    """Remove the v1 policy sections an earlier release already converted, and persist that.
+
+    Some earlier releases converted ``auto_accept_rules``/``auto_accept_grants`` into ``auto_accept:``
+    on startup and left the originals on disk, so every install that ran one of them would otherwise
+    be refused by ``reject_v1_sections`` below. A failed write is not fatal: the in-memory config is
+    already clean, and the next start tries again (ADR 0047).
+    """
+    removed = policy_store.drop_converted_v1_sections(config)
+    if not removed:
+        return
+    names = ", ".join(removed)
+    try:
+        atomic_write_text(resolved, yaml.safe_dump(config, default_flow_style=False, allow_unicode=True))
+    except OSError as exc:
+        _deferred_warnings.append(f"{resolved}: ignoring already-converted {names}; could not rewrite the file: {exc}")
+        return
+    _deferred_warnings.append(
+        f"{resolved}: removed {names}, left behind by an earlier version's conversion to the "
+        "auto_accept: section, which already holds those rules"
+    )
+
+
 def load_config(config_path: str) -> dict[str, Any]:
     resolved = _resolve_path(config_path)
     if not os.path.exists(resolved):
@@ -333,6 +361,7 @@ def load_config(config_path: str) -> dict[str, Any]:
         config = yaml.safe_load(fh) or {}
     if not isinstance(config, dict):
         raise ValueError(f"Config file {resolved} did not parse to a mapping")
+    _drop_converted_v1_sections(config, resolved)
     policy_store.reject_v1_sections(config, resolved)
     return config
 
@@ -340,7 +369,7 @@ def load_config(config_path: str) -> dict[str, Any]:
 def load_org_config() -> dict[str, Any]:
     """Load the installed organization config bundle.
 
-    Three states (SEC-04), not two: absent entirely → {} (local mode, same
+    Three states, not two: absent entirely → {} (local mode, same
     "missing config → connector skipped" philosophy used for every
     connector below); a valid JSON object → parsed and returned as
     configured; present but broken (unreadable, malformed JSON, or a
@@ -353,12 +382,14 @@ def load_org_config() -> dict[str, Any]:
     downgrade to no IdP-backed auth at all (org_mode.resolve_mode({})
     resolves to "local"), triggerable by anything that can truncate or
     corrupt the file — not a state this daemon should ever paper over.
-    Installed via PrivacyFence Settings' "Install/Update Organization
-    Config…" (or by hand-editing this file).
+    A local-mode bundle is installed via PrivacyFence Settings'
+    "Install/Update Organization Config…"; an org-mode bundle is copied to
+    this path by hand and the daemon restarted, since org mode mounts no
+    local Settings page.
 
-    SEC-05 (full signing): a well-formed-but-hostile *replacement* of
+    Bundle signing (ADR 0016): a well-formed-but-hostile *replacement* of
     this file (as opposed to the malformed-file cases above) is a
-    separate, more dangerous failure mode SEC-04 alone can't catch —
+    separate, more dangerous failure mode the checks above can't catch —
     parses fine, just carries someone else's IdP/app credentials. Every
     load here also runs the bundle through org_bundle_signing.verify_
     and_maybe_pin(): a bundle that fails to verify against a previously
@@ -406,15 +437,15 @@ def load_org_config() -> dict[str, Any]:
 
 
 def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
-    """SEC-05 (interim): record a hash of the installed org_config.json at
+    """Record a hash of the installed org_config.json at
     every daemon startup, both to the regular log and to the audit trail,
     so tampering between one startup and the next is detectable by
     comparing hashes -- even for an install that hasn't adopted full
-    signing (org_bundle_signing.py, SEC-05 full) at all, and as a
+    signing (org_bundle_signing.py, ADR 0016) at all, and as a
     belt-and-suspenders record alongside it for one that has. Called once
     by run_app() on the same org_config load_org_config() already returned
-    earlier in that function (SEC-07 needs it sooner, to pick
-    init_privacy_filter()'s fail-safe default) -- deferred until after
+    earlier in that function (init_privacy_filter() needs it sooner, to
+    pick its fail-safe default) -- deferred until after
     init_audit_logger() so there's an audit logger to record to, and still
     not called from inside load_org_config() itself, which is also called
     from places that aren't "daemon startup" (e.g. settings_controller.py
@@ -456,7 +487,7 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
 
 
 def _audit_step_up_requirement_change(change: StepUpRequirementChange) -> None:
-    """#426 Phase 4: the audit half of ``observe_step_up_requirement`` --
+    """The audit half of ``observe_step_up_requirement`` --
     called from ``_maybe_start_web_server()`` right after that function
     reports a change. By the time that function runs, ``run_app()`` has
     already called ``init_audit_logger()``, so there's an audit logger to
@@ -489,7 +520,7 @@ def _audit_step_up_requirement_change(change: StepUpRequirementChange) -> None:
 
 
 def get_or_create_deployment_id() -> str:
-    """SEC-23: a stable, opaque identifier for *this installation* -- not per-principal,
+    """A stable, opaque identifier for *this installation* -- not per-principal,
     and not re-generated across restarts -- stamped onto every audit entry
     (audit_log.AuditEntry.deployment_id, filled in by AuditLogger.record())
     so a centralized collection of entries -- forwarded (audit_forwarding.py)
@@ -522,7 +553,7 @@ def get_or_create_deployment_id() -> str:
 
 
 def check_storage_permissions(org_mode_active: bool) -> None:
-    """SEC-09's startup check: warn (or, in org mode, refuse to start) if
+    """Startup permission check: warn (or, in org mode, refuse to start) if
     any of this install's own data directories grant group/other access --
     e.g. an install that predates ``paths.py``'s ``secure_mkdir`` adoption,
     upgraded in place, or a directory hand-created (or restored from a
@@ -537,12 +568,12 @@ def check_storage_permissions(org_mode_active: bool) -> None:
     them ran.
 
     Local mode logs every finding at ``warning`` and keeps starting -- the
-    same "detectable, not necessarily preventable" posture SEC-05's interim
-    hash-logging takes. Org mode -- centrally managed, and the posture this
-    whole phase is meant to bring up to enterprise-production-ready -- fails
-    closed: ``InsecurePermissionsError`` propagates out of ``run_app()``
-    through the same top-level "print and refuse to start" path SEC-04's
-    ``ConfigurationError`` already uses (main()'s own ``except Exception``).
+    same "detectable, not necessarily preventable" posture the bundle
+    hash-logging above takes. Org mode -- centrally managed, and held to a
+    stricter standard -- fails closed: ``InsecurePermissionsError``
+    propagates out of ``run_app()`` through the same top-level "print and
+    refuse to start" path a broken org config's ``ConfigurationError``
+    already uses (main()'s own ``except Exception``).
     """
     # dict.fromkeys dedupes without disturbing order -- user_dir() with no
     # principal in scope resolves to data_dir() itself (the local
@@ -551,7 +582,7 @@ def check_storage_permissions(org_mode_active: bool) -> None:
     # directory twice; no need to warn about it twice too.
     dirs = list(dict.fromkeys([data_dir(), org_dir(), user_dir()]))
     if privilege_separation.is_enabled():
-        # #428 Phase 4 deliberately makes two of those directories looser
+        # Privilege separation deliberately makes two of those directories looser
         # than 0700 -- the system root is 0711 so the logged-in user can
         # traverse to handoff_dir(), and handoff_dir() itself is 3770 so the
         # companion and the daemon (two accounts now) can still hand each
@@ -564,7 +595,7 @@ def check_storage_permissions(org_mode_active: bool) -> None:
         dirs = [d for d in dirs if d not in (data_dir(), handoff_dir())]
     problems = audit_directory_permissions(dirs) + privilege_separation.audit_layout()
     for problem in problems:
-        logger.warning("SEC-09: %s", problem)
+        logger.warning("Insecure storage permissions: %s", problem)
     if problems and org_mode_active:
         raise InsecurePermissionsError(
             "Refusing to start in organization mode: " + " ".join(problems)
@@ -578,8 +609,7 @@ def setup_logging(config: dict[str, Any]) -> None:
     log_file = _resolve_path(log_cfg.get("file", "logs/privacyfence.log"))
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
-    # SEC-10: every logger in
-    # the process inherits the root logger's handlers, so this is the one
+    # Every logger in the process inherits the root logger's handlers, so this is the one
     # place that needs to redact token-shaped substrings for the whole
     # daemon rather than at each individual `except Exception` -- see
     # safe_errors.py's module docstring for what this catches and why the
@@ -602,13 +632,14 @@ def setup_logging(config: dict[str, Any]) -> None:
         root.addHandler(h)
 
     logger.info("Logging initialized → %s", log_file)
+    _flush_deferred_warnings()
 
 
 # ---------------------------------------------------------------------------- #
-# Web approval UI + MCP-over-HTTP (P1/P2). Through P9, config/settings.yaml's
-# web.approval_ui selected native (AppKit, the default) or web; P10 deleted
-# the native implementation (D6), so the web approval UI is now
-# unconditionally installed in local mode -- there is nothing left to
+# Web approval UI + MCP-over-HTTP. config/settings.yaml's web.approval_ui
+# used to select native (AppKit) or web; the native implementation is gone
+# (ADR 0001), so the web approval UI is now unconditionally installed in
+# local mode -- there is nothing left to
 # select. web.mcp.enabled independently turns the /mcp endpoint on (a
 # transport change, separate from the approval surface), and
 # web.settings.enabled independently turns /settings on -- either can be
@@ -626,25 +657,23 @@ def _maybe_start_web_server(
     org_config: dict[str, Any] | None = None,
     config_path: str = "",
 ) -> Any:
-    """Returns the started WebServer -- always, in local mode, since P10
-    made the web approval UI the only one there is (see this section's own
-    comment above); org mode still returns None if ``mcp.enabled`` is off,
-    unchanged from before this phase (there is no approval surface to fall
-    back to there either, but org mode has never had a way to reach one
+    """Returns the started WebServer -- always, in local mode, since the
+    web approval UI is the only one there is (see this section's own
+    comment above); org mode still returns None if ``mcp.enabled`` is off
+    (there is no approval surface to fall back to there either, but org mode has never had a way to reach one
     without ``/mcp`` in the first place -- see ``_start_org_web_server``'s
     own docstring). ``web.mcp.enabled``/``web.settings.enabled`` remain
     independent rollback levers for those two surfaces specifically --
     turning both off still leaves the server running for ``/approvals``
-    alone, since P10 left that with no off switch of its own ("it deletes
-    the fallback"). Since P5 retired
-    the bridge, turning ``mcp.enabled`` off also leaves this install with
-    no way for Claude to reach it at all -- ``web.mcp.enabled: true``
-    (settings.yaml.example's default since D11/P4b) is no longer "additive
-    alongside the bridge", it is the only transport there is; the key
+    alone, since that has no off switch of its own: there is no other
+    approval surface to fall back to. With the old bridge gone, turning
+    ``mcp.enabled`` off also leaves this install with no way for Claude to
+    reach it at all -- ``web.mcp.enabled: true`` (settings.yaml.example's
+    default) is the only transport there is; the key
     survives as a deliberate full-stop kill switch, not as a rollback to
     some other still-working path. Imports the web/starlette/uvicorn/mcp
     stack lazily so constructing it is deferred to the one place that
-    actually needs it, same posture this module has taken since P1.
+    actually needs it, same posture as every other web/ import here.
 
     ``connector_host`` is already built and holds the real connector set by
     the time this is called (see run_app's ordering) -- the MCP dispatcher
@@ -652,13 +681,9 @@ def _maybe_start_web_server(
     snapshot, so a connector rebuild pushed by SettingsController.
     refresh_connectors (-> ConnectorHost.set_connectors) reaches the
     ``/mcp`` endpoint too, with nothing here needing a second push. Note
-    that this connector set is the *local* principal's own (org mode's
-    real per-user connectors are P8's job, per `git show 96cd5af4^:docs/https-
-    connector-refactor-plan.md`'s own phase dependency chart -- P7 delivers identity,
-    P8 the per-user service authorization that makes a second principal's
-    connectors buildable at all); every principal authenticated via org
-    mode's OAuth 2.1 AS dispatches against this same shared connector set
-    until then.
+    that this connector set is the *local* principal's own; any other
+    principal dispatches against its own set from the ``ConnectorRegistry``
+    built below.
 
     ``controller``, when given, is the SettingsController instance
     run_app() built for this daemon's whole lifetime -- passed through here
@@ -667,12 +692,11 @@ def _maybe_start_web_server(
     and one changed via a gated call's own "Always allow" button stay in
     sync with no separate plumbing.
 
-    ``org_config`` (P7, §4) is where ``"mode"`` lives -- ``org`` switches
+    ``org_config`` is where ``"mode"`` lives -- ``org`` switches
     this into web/server.py's own org-mode wiring (a real OAuth 2.1
     authorization server on ``/mcp``, no local-token approval/settings
     surface at all -- see that module's own docstring for why). Defaults
-    to ``{}`` (local mode, byte-identical to before this phase) when
-    omitted, which no real caller does -- run_app() always passes the
+    to ``{}`` (local mode) when omitted, which no real caller does -- run_app() always passes the
     result of ``load_org_config()``.
     """
     web_config = config.get("web", {}) or {}
@@ -712,9 +736,8 @@ def _maybe_start_web_server(
     from .web.server import DEFAULT_PORT, WebServer
     from .web_approval_ui import init_web_approval_ui
 
-    # web.approvals.* overrides D3's defaults (docs/https-connector-refactor-
-    # plan.md §15: "hold 30s, pending TTL 15 min, ledger TTL 5 min" --
-    # "these defaults are what P3's beta measures against"). One registry
+    # web.approvals.* overrides the registry's defaults (hold 30s, pending
+    # TTL 15 min, ledger TTL 5 min). One registry
     # backs both the web approval surface and privacyfence_await_approval
     # (below), whether or not mcp_enabled is actually on -- constructing it
     # unconditionally here costs nothing (it's just an empty dict-backed
@@ -726,11 +749,11 @@ def _maybe_start_web_server(
         pending_ttl=float(approvals_config.get("pending_ttl_seconds", 15 * 60.0)),
         ledger_ttl=float(approvals_config.get("ledger_ttl_seconds", 5 * 60.0)),
         max_pending=int(approvals_config.get("max_pending", 50)),
-        # SEC-15: see approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL's own
-        # comment for why this exists alongside max_pending above.
+        # See approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL's own comment for
+        # why this exists alongside max_pending above.
         max_pending_per_principal=int(approvals_config.get("max_pending_per_principal", 20)),
-        # Approval binder, Phase 4: see approvals.DEFAULT_ADAPTIVE_HOLD's own
-        # comment for what this collapses and why it's on by default.
+        # See approvals.DEFAULT_ADAPTIVE_HOLD's own comment for what this
+        # collapses and why it's on by default.
         adaptive_hold=bool(approvals_config.get("adaptive_hold", True)),
     )
     # See gate.py's own _popup_executor comment: it must never hold fewer
@@ -790,13 +813,13 @@ def _maybe_start_web_server(
             # all now depends on mcp_enabled, which SettingsController's own
             # constructor has no visibility into.
             controller.wire_unattended_listener(mcp_dispatcher)
-            # privacyfence_status's own per-connector view (issue #396
-            # Phase 2): SettingsController already tracks
-            # exactly the enabled/authenticated/blocked_by state that tool
-            # needs (Phase 1), so this dispatcher just asks for it rather
+            # privacyfence_status's own per-connector view:
+            # SettingsController already tracks exactly the
+            # enabled/authenticated/blocked_by state that tool needs, so
+            # this dispatcher just asks for it rather
             # than re-deriving it from the built connectors alone.
             mcp_dispatcher.set_connectors_state_provider(controller.status_connectors)
-            # issue #396 Part C: refresh_connectors() (toggle/authenticate/
+            # refresh_connectors() (toggle/authenticate/
             # explicit refresh) fans a real tools/list_changed notification
             # out to every open MCP session through this same dispatcher --
             # see McpDispatcher.notify_tools_changed's own docstring for why
@@ -807,14 +830,14 @@ def _maybe_start_web_server(
             # there).
             controller.set_connectors_changed_listener(mcp_dispatcher.notify_tools_changed)
 
-    # #426 Phase 1: config's own "step_up" section, not web_config's, since
+    # config's own "step_up" section, not web_config's, since
     # this is the human's privacy/security policy (settings.yaml), not a
     # web server transport setting. Read once here, not inline in the
     # WebServer(...) call below, so the require_passkey startup check right
     # after server.start() reads the exact same config this daemon actually
     # booted with.
     #
-    # B9: wrapped in LiveStepUpConfig, not passed as a bare StepUpConfig,
+    # Wrapped in LiveStepUpConfig, not passed as a bare StepUpConfig,
     # so SettingsController.enable_step_up (wired in just below) can flip
     # require_passkey on for every consumer of this same object -- web/
     # server.py's WebServer, and everything it mounts -- without a daemon
@@ -822,12 +845,10 @@ def _maybe_start_web_server(
     local_step_up = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig.from_local_config(config))
     if controller is not None:
         controller.wire_step_up(local_step_up)
-    # #426 Phase 4: through B9, the only place a require_passkey/step_up.
-    # enabled *change* could be observed at all was a startup-time
-    # comparison against what the previous startup last saw, since there
-    # was no UI path to flip it. B9 added one (SettingsController.
-    # enable_step_up, wired above) that observes its own change itself,
-    # right when it happens -- this call remains for every other case: an
+    # SettingsController.enable_step_up (wired above) observes a
+    # require_passkey/step_up.enabled change made through the UI itself,
+    # right when it happens. This startup-time comparison against what the
+    # previous startup last saw covers every other case: an
     # existing install's config already had it on at boot, or a human hand-
     # edited the file between runs. webauthn_stepup.observe_step_up_
     # requirement does the comparison and persists the new state; this
@@ -846,23 +867,22 @@ def _maybe_start_web_server(
         allow_quit=bool(settings_config.get("allow_quit", True)),
         notifications_enabled=bool(notifications_config.get("enabled", True)),
         notifications_detail=str(notifications_config.get("detail", "minimal")),
-        # #426 Phase 1: mounts /security for local-mode passkey enrollment.
+        # Mounts /security for local-mode passkey enrollment.
         step_up=local_step_up,
         # ADR 0006 option D / ADR 0037: a relabel only, never an attested source.
         agent_overrides=agent_overrides.from_config(config),
     )
     server.start()
-    # The pending-result URL gate.py hands back to Claude (§5.2 point 4) is
+    # The pending-result URL gate.py hands back to Claude is
     # only meaningful once the server is actually listening -- set here,
     # not at registry construction.
     registry.set_base_url(server.base_url)
-    # #426 Phase 3: "start, release nothing, and show a loud persistent
-    # banner -- rather than refusing to boot" (issue #426's own Phase 3
-    # text). Refusing to start here would remove the one path (/security)
+    # Start, release nothing, and show a loud persistent banner -- rather
+    # than refusing to boot. Refusing to start here would remove the one path (/security)
     # that fixes this misconfiguration, so this is a log line, not a raised
     # ConfigurationError -- web_shell.wrap()'s own banner (StepUpConfig.
     # local_enrollment_banner) is what actually makes this loud for a human
-    # who isn't reading the daemon's own log.
+    # who isn't reading the daemon's own log. See ADR 0069.
     if local_step_up.local_enrollment_banner(has_credentials=has_webauthn_credentials(LOCAL_PRINCIPAL)) is not None:
         logger.warning(
             "step_up.require_passkey is set but no passkey is enrolled yet -- approving decisions and "
@@ -870,7 +890,7 @@ def _maybe_start_web_server(
             "/security page (open PrivacyFence's companion app, or run "
             "`privacyfence-app --print-sign-in-link`, and follow the Passkeys link)",
         )
-    # #426 Phase 4: the persistent half of the same banner posture -- a
+    # The persistent half of the same banner posture -- a
     # human reading only this log, not the web UI, should still see that
     # the requirement was turned off, not just that it currently is off.
     if step_up_disabled_notice(LOCAL_PRINCIPAL) is not None:
@@ -909,8 +929,8 @@ def _maybe_start_web_server(
 def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load ``settings.yaml`` for whichever principal is currently scoped,
     and make it *live* for that principal -- three halves of what run_app()
-    does once for the local principal (auto-accept rules, and, since #400's
-    Phase 0 fix, the privacy/PII filter too).
+    does once for the local principal (auto-accept rules, and the
+    privacy/PII filter too).
 
     Called from org mode's per-principal ``ConnectorRegistry`` factory,
     under the ``principal_scope`` that factory is already run inside. The
@@ -918,8 +938,8 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     ``load_config``'s own bootstrap-a-default-on-first-use behavior)
     resolve against that principal's own
     ``users/<id>/authority/config/settings.yaml`` rather than the local
-    principal's, per §9.2's storage layout and #428 Phase 1's authority
-    split.
+    principal's -- every principal's human-authority files live under its
+    own ``authority`` directory (see paths.py's own docstring).
 
     All side effects below exist because ``ConnectorRegistry.get()``
     never goes through ``run_app()`` for any principal other than local, so
@@ -931,11 +951,11 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       rule for that principal -- ``add_policy_v2_rules``/``remove_policy_v2_rule``
       (gate.py's "Always allow"/propose-policy-change paths) would raise
       "auto_accept config path not initialized" instead.
-    - ``set_policy_v2_store_rules()`` (P6 of the policy v2 redesign) -- without it, every org
+    - ``set_policy_v2_store_rules()`` -- without it, every org
       principal's ``_AutoAcceptState.policy_v2_store_rules`` stayed at its dataclass default
       (``[]``), so no rule -- migrated or authored directly against the v2 schema -- would ever
       auto-accept anything for that principal.
-    - ``init_privacy_filter()`` (#400 Phase 0) -- without it, ``privacy_
+    - ``init_privacy_filter()`` -- without it, ``privacy_
       filter._REGISTRY`` (also a ``PrincipalRegistry``, see that module's
       docstring) kept its default empty-dict entry for every principal but
       whichever one happened to be scoped when a local-mode ``run_app()``
@@ -947,8 +967,9 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       default nobody configured. ``org_managed=True`` unconditionally: this
       function only ever runs from org mode's own ``ConnectorRegistry``
       factory (see this function's own docstring above), never local
-      mode's. Install-wide, per the design docs/org-mode-setup-guide.md §9
-      states ("there is no per-user override") -- so this uses
+      mode's. The policy is install-wide, with no per-user override (see
+      docs/org-mode-setup-guide.md's "Install-wide and per-user policy")
+      -- so this uses
       ``install_wide_config`` (the server's own settings.yaml, threaded
       down from ``_start_org_web_server``), not this principal's own
       per-user ``cfg``, for exactly the same reason ``cfg`` is right for
@@ -957,7 +978,7 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       they actually do edit. Falls back to ``cfg`` only when no install-wide
       config is given at all (a bare ``principal_scope()`` call in a test
       that doesn't care about privacy-filter behavior specifically).
-    - ``init_pii_detection()`` (#400 C3e) -- the exact same omission as the
+    - ``init_pii_detection()`` -- the exact same omission as the
       one above, one module over, found while making the PII gate editable
       from org mode's admin settings page. ``pii_detector._REGISTRY`` is a
       ``PrincipalRegistry`` too, and ``run_app()``'s own call is the only
@@ -977,6 +998,7 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     """
     resolved_path = _resolve_authority_path("config/settings.yaml")
     cfg = load_config(resolved_path)
+    _flush_deferred_warnings()
     init_config_path(resolved_path)
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
     install_wide = install_wide_config if install_wide_config is not None else cfg
@@ -996,31 +1018,30 @@ def _start_org_web_server(
     *, unattended_sessions_enabled: bool, install_wide_config: dict[str, Any],
     install_wide_config_path: str = "",
 ) -> Any:
-    """org mode's own boot path (P7) -- a real OAuth 2.1 authorization server on ``/mcp``
+    """org mode's own boot path -- a real OAuth 2.1 authorization server on ``/mcp``
     instead of the local shared-secret ``StaticTokenVerifier``. The
-    settings surface (#400, web/routes_settings.py's build_org_routes) is
+    settings surface (web/routes_settings.py's build_org_routes) is
     mounted here too now -- see web/server.py's own module docstring for
     exactly what it does and does not cover. Raises ``org_mode.
-    ConfigurationError`` (SEC-04; surfaced as a startup failure, the same
+    ConfigurationError`` (surfaced as a startup failure, the same
     posture a missing/invalid settings.yaml already has) if org_config.json
     is missing the ``idp``/``server`` sections org mode requires -- there is
     no silent partial-org-mode fallback.
 
     ``connector_host`` (the local principal's own connector set, built once
     at startup by run_app()) is accepted for signature parity with local
-    mode's own call but is otherwise unused here as of P8: every org
+    mode's own call but is otherwise unused here: every org
     principal's connectors now come from ``ConnectorRegistry`` below,
     built lazily per principal instead of shared off the local principal's
-    set (see connector_registry.py's own docstring for why this was left
-    unwired until now).
+    set (see connector_registry.py's own docstring).
 
-    ``install_wide_config_path`` (#400 C3e) is where that dict came from,
+    ``install_wide_config_path`` is where that dict came from,
     resolved -- carried on ``OrgAuth`` so the admin privacy page can write
     the policy back to the same file. Empty when a caller has no real
     settings.yaml behind the dict, which leaves that page read-only rather
     than guessing at a path to overwrite.
 
-    ``install_wide_config`` (#400 Phase 0) is run_app()'s own ``config`` --
+    ``install_wide_config`` is run_app()'s own ``config`` --
     the *server's own* settings.yaml, already loaded once at startup for
     the local/launcher principal's own ``init_privacy_filter()`` call.
     Threaded down into ``_connectors_for_principal``'s
@@ -1056,11 +1077,11 @@ def _start_org_web_server(
         pending_ttl=float(approvals_config.get("pending_ttl_seconds", 15 * 60.0)),
         ledger_ttl=float(approvals_config.get("ledger_ttl_seconds", 5 * 60.0)),
         max_pending=int(approvals_config.get("max_pending", 50)),
-        # SEC-15: see approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL's own
-        # comment for why this exists alongside max_pending above.
+        # See approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL's own comment for
+        # why this exists alongside max_pending above.
         max_pending_per_principal=int(approvals_config.get("max_pending_per_principal", 20)),
-        # Approval binder, Phase 4: see approvals.DEFAULT_ADAPTIVE_HOLD's own
-        # comment for what this collapses and why it's on by default.
+        # See approvals.DEFAULT_ADAPTIVE_HOLD's own comment for what this
+        # collapses and why it's on by default.
         adaptive_hold=bool(approvals_config.get("adaptive_hold", True)),
     )
     # See gate.py's own _popup_executor comment: it must never hold fewer
@@ -1072,7 +1093,7 @@ def _start_org_web_server(
     configure_popup_executor(approval_registry.max_pending)
     web_ui = init_web_approval_ui(registry=approval_registry)
     # WebApprovalUI is unconditionally the ApprovalUI here, same as local
-    # mode's own _maybe_start_web_server above since P10 -- org mode never
+    # mode's own _maybe_start_web_server above -- org mode never
     # had a native option to begin with (there is no GUI on a server).
     init_approval_ui(web_ui)
 
@@ -1096,8 +1117,7 @@ def _start_org_web_server(
 
     connector_registry = ConnectorRegistry(factory=_connectors_for_principal)
 
-    # SEC-22: layered
-    # on top of the IdP's own authentication above -- see org_identity.
+    # Layered on top of the IdP's own authentication above -- see org_identity.
     # check_authz_policy's own docstring for what this does and doesn't
     # change. Absent "authz" section in org_config.json -> disabled,
     # every IdP-authenticated principal is admitted, unchanged from before.
@@ -1161,7 +1181,7 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 
 def _classify_connector_failure(exc: BaseException) -> str:
     """Turns a per-connector build failure into one of the three states
-    issue #396 needs told apart -- "never set up", "auth expired/revoked",
+    status surfaces need told apart -- "never set up", "auth expired/revoked",
     or an actual runtime error -- so a later surface (SettingsController's
     connector rows now, a status meta-tool later) can say which, instead of
     every un-built connector looking identical.
@@ -1184,7 +1204,7 @@ def _classify_connector_failure(exc: BaseException) -> str:
 
     Anything else falls back to ``safe_errors.public_message()``, which is
     where a connector's own ``*ClientError`` (routinely wrapping a
-    third-party HTTP body -- SEC-10) gets redacted before it can reach a
+    third-party HTTP body) gets redacted before it can reach a
     client-facing surface."""
     msg = str(exc)
     if isinstance(exc, FileNotFoundError) or "Use Authenticate…" in msg:
@@ -1196,14 +1216,12 @@ def _classify_connector_failure(exc: BaseException) -> str:
 
 def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tuple[list, dict[str, str]]:
     """Builds every enabled, currently-authenticated connector for the
-    *current principal* (P6): every credential/cache path below resolves through ``_resolve_path()``/
-    ``user_dir()``, which is the local principal's own storage root (i.e.
-    unchanged from before this phase) unless this is called from inside a
+    *current principal*: every credential/cache path below resolves through ``_resolve_path()``/
+    ``user_dir()``, which is the local principal's own storage root unless this is called from inside a
     ``principal_scope()`` block for someone else -- see
     connector_registry.py's ``ConnectorRegistry``, which is what actually
-    does that once a second principal's connectors are buildable at all
-    (P8). ``run_app()`` below still calls this directly, once, for the local
-    principal only -- that's what keeps local mode byte-identical.
+    does that for every other principal. ``run_app()`` below still calls
+    this directly, once, for the local principal only.
 
     Returns ``(connectors, failures)``: ``failures`` maps the name of every
     *enabled* connector that didn't get built to why, via
@@ -1750,12 +1768,11 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     init_config_path(_resolve_path(config_path))
 
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(config))
-    # Issue #151 retired the settings.yaml-configurable rule_suggestion_priority
+    # The settings.yaml-configurable rule_suggestion_priority is retired
     # (every matching auto-accept rule now gets its own "Always allow" button, so
     # there's nothing left to prioritize or exclude) and this function logged an
     # explicit "ignoring this key" notice for anyone with a pre-existing config
-    # block for it. That notice has served its purpose (`git show ba1ec76e^:docs/
-    # security-remediation-plan.md` Phase 3 PR3.9, ORP-04) and is gone -- a leftover
+    # block for it. That notice has served its purpose and is gone -- a leftover
     # rule_suggestion_priority block in an old settings.yaml now falls through to
     # the same silent "unknown key is inert" handling as any other retired
     # settings.yaml key, per auto_accept.py's SUGGESTION_FAMILIES comment.
@@ -1767,20 +1784,20 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
         audit_match_details=pii_config.get("audit_match_details", False),
     )
     # Loaded here, ahead of its previous spot just before build_connectors(),
-    # so init_privacy_filter (SEC-07) knows whether this install is org-
+    # so init_privacy_filter knows whether this install is org-
     # managed before it picks a fail-safe default for a genuinely absent
     # privacy group -- still the one load_org_config() call for this whole
-    # function, its ConfigurationError (SEC-04) still surfacing through the
+    # function, its ConfigurationError still surfacing through the
     # same top-level "print and refuse to start" path in main().
     org_config = load_org_config()
-    # SEC-09: same "org mode fails closed, local mode warns" posture as the
+    # Same "org mode fails closed, local mode warns" posture as the
     # rest of this function's fail-safe defaults now that mode is known.
     check_storage_permissions(org_mode.resolve_mode(org_config) == "org")
     init_privacy_filter(config, org_managed=org_mode.resolve_mode(org_config) == "org")
     for warning in check_consistency_warnings():
         logger.warning(warning)
 
-    # SEC-23: centralized forwarding is org-mode-only (see
+    # Centralized audit forwarding is org-mode-only (see
     # org_mode.AuditForwardingConfig's own docstring) -- a local-mode
     # install's org_config.json could theoretically carry an
     # "audit_forwarding" section, but there is no "centralize" to speak of
@@ -1808,7 +1825,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     # log_org_config_bundle_hash() needs the audit logger initialized above
     # (it records to it, see its own docstring) -- org_config itself was
-    # already loaded earlier, ahead of init_privacy_filter(), so SEC-07's
+    # already loaded earlier, ahead of init_privacy_filter(), so its
     # org_managed fail-safe default is known before that call.
     log_org_config_bundle_hash(org_config)
     connectors, connector_failures = build_connectors(config, org_config)
@@ -1819,8 +1836,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     connector_host = ConnectorHost(connectors)
 
     # Built once, here, and handed to *both* the web settings surface
-    # (_maybe_start_web_server, below) -- through P9 also handed to the
-    # native menu bar/settings window, which P10 deleted. One
+    # (_maybe_start_web_server, below). One
     # SettingsController instance for this daemon's whole lifetime, rather
     # than each surface building its own and drifting out of sync with the
     # other's in-memory state (_busy_connectors, _telegram_auth, the
@@ -1839,7 +1855,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     server = _maybe_start_web_server(
         config, connector_host, unattended_sessions_enabled=unattended_enabled, controller=settings_controller,
         org_config=org_config,
-        # #400 C3e: resolved, not the raw --config argument -- org mode's
+        # Resolved, not the raw --config argument -- org mode's
         # admin privacy page writes this file back, and it must land on the
         # same path run_app() read `config` from. Local mode ignores it;
         # its own settings.yaml writes go through SettingsController, which
@@ -1853,7 +1869,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # that needs a live loop, not just a thread -- see
     # _warm_connector_caches' own docstring) waits for that loop to be
     # captured instead. None when this daemon never starts the web server
-    # at all -- since P10, that's only org mode with mcp.enabled off (see
+    # at all -- that's only org mode with mcp.enabled off (see
     # _maybe_start_web_server's own docstring); local mode always starts
     # one now, so there's always a loop to wait for there.
     web_loop = server.wait_until_ready(timeout=5) if server is not None else None
@@ -1885,9 +1901,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
 def run_print_sign_in_link() -> int:
     """The break-glass way in: a sign-in link printed in the human's own
-    terminal, never handed to the agent (the self-approval plan's Phase 2,
-    which retires ``privacyfence_get_sign_in_link`` -- the tool that used to
-    hand exactly this credential to the party it governs).
+    terminal, never handed to the agent (ADR 0013: no MCP tool mints a
+    sign-in credential, since that would hand exactly this credential to the
+    party it governs).
 
     The ordinary way into the web UI is the companion's own Open Approvals
     item. This exists for when that is not reachable: an SSH session, a
@@ -2015,7 +2031,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--salesforce-oauth", action="store_true")
     parser.add_argument("--atlassian-oauth", action="store_true")
     parser.add_argument("--telegram-setup", action="store_true")
-    # The self-approval plan's Phase 2 break-glass path -- see
+    # The break-glass path from ADR 0013 -- see
     # run_print_sign_in_link() for what it does and what it deliberately does
     # not claim. Documented in --help rather than hidden: it is what the
     # not-authorized page and the docs now point a locked-out human at, in
@@ -2039,7 +2055,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "For a direct HTTP MCP client with no PrivacyFence extension of its own."
         ),
     )
-    # #428 Phase 4 (B5c): how the Windows Service Control Manager starts the
+    # How the Windows Service Control Manager starts the
     # daemon on a privilege-separated install -- see windows_service.py for
     # why Windows needs an argv flag where macOS and Linux needed only a
     # different service manager pointed at the same unchanged executable.
@@ -2050,6 +2066,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+# Why main() last returned 1, for a caller with no stderr to read it from: a Windows service has
+# none, so windows_service puts this in the Event Log entry for the failed start.
+_last_startup_error: str | None = None
+
+
+def last_startup_error() -> str | None:
+    return _last_startup_error
+
+
+def _note_startup_error(message: str) -> None:
+    global _last_startup_error
+    _last_startup_error = message
+
+
+def _refuse_to_start(message: str, *, logged: bool = False) -> int:
+    """Record ``message`` as the reason main() is returning 1, and print it to stderr.
+
+    ``logged`` once setup_logging() has run, to put it in the log file too -- the same pair the
+    "Fatal error" path writes. Before that there is no log file to write to (settings.yaml names
+    it), which is why the recorded reason is what a Windows service reports instead.
+    """
+    _note_startup_error(message)
+    if logged:
+        logger.error("%s", message)
+    print(message, file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     # A windowed Windows build started with no console has no std streams
     # at all -- see std_streams.py. src/_daemon_entry.py already calls this
@@ -2058,7 +2102,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_std_streams()
     args = parse_args(argv)
 
-    # #428 Phase 4 (B5c), before anything else: this process is not the
+    # Before anything else: this process is not the
     # daemon, it is the shell the Service Control Manager expects to talk
     # to. It hands itself to the SCM, which calls back into this same
     # function with no arguments at all -- so every check below, the
@@ -2080,7 +2124,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_mcp_token:
         return run_print_mcp_token()
 
-    # #428 Phase 4, before load_config() below -- which is the first thing
+    # Before load_config() below -- which is the first thing
     # that would read settings.yaml out of the (now service-account-owned)
     # authority directory, and whose own first-run behavior is to seed a
     # fresh default from the packaged example when it can't. On a separated
@@ -2091,8 +2135,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         privilege_separation.check_runtime_identity()
     except privilege_separation.PrivilegeSeparationError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return 1
+        return _refuse_to_start(f"Configuration error: {exc}")
 
     oauth_flag = (
         args.gmail_oauth or args.drive_oauth or args.contacts_oauth
@@ -2104,8 +2147,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
     except (FileNotFoundError, ValueError) as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return 1
+        return _refuse_to_start(f"Configuration error: {exc}")
 
     setup_logging(config)
 
@@ -2156,8 +2198,7 @@ def main(argv: list[str] | None = None) -> int:
             print(str(handover))
             return 0
         except privilege_separation.PrivilegeSeparationError as exc:
-            print(f"Configuration error: {exc}", file=sys.stderr)
-            return 1
+            return _refuse_to_start(f"Configuration error: {exc}", logged=True)
         # ADR 0003 decision 7's startup-log half of the developer-path
         # disclosure -- see privilege_separation.dev_unseparated_notice()'s
         # own docstring; the /security page half is
@@ -2169,6 +2210,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         logger.error("Fatal error: %s", exc, exc_info=True)
         print(f"Fatal error: {exc}", file=sys.stderr)
+        _note_startup_error(f"Fatal error: {exc}")
         return 1
 
 

@@ -1206,7 +1206,8 @@ class DriveClient:
     def _load_credentials(self) -> Credentials:
         """Load cached credentials, refreshing them if expired.
 
-        Raises if no usable token exists - the user must run `--oauth-setup`.
+        Raises if no usable token exists - the user must authenticate Google Drive
+        from Settings (Connectors), or from ``/connect`` in org mode.
         """
         # Guards concurrent refresh/save of the shared token file when
         # multiple threads hit an expired token at the same time.
@@ -1214,7 +1215,7 @@ class DriveClient:
             if not os.path.exists(self._token_file):
                 raise DriveClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Run the application once with '--oauth-setup' to authorize."
+                    "Authenticate Google Drive from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
                 )
 
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
@@ -1229,14 +1230,14 @@ class DriveClient:
                 except Exception as exc:  # noqa: BLE001 - surface a clear message
                     raise DriveClientError(
                         f"Failed to refresh OAuth token: {exc}. "
-                        "Re-run with '--oauth-setup' to re-authorize."
+                        "Reconnect Google Drive from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
 
             raise DriveClientError(
                 "Cached OAuth token is invalid and cannot be refreshed. "
-                "Re-run with '--oauth-setup' to re-authorize."
+                "Reconnect Google Drive from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:
@@ -1538,8 +1539,7 @@ class DriveClient:
 
     def download_file_bytes(self, file_id: str) -> dict[str, Any]:
         """Org-mode inline/staged delivery entry point (connectors/
-        drive.py's ``_download_file``, docs/org-mode-download-delivery-
-        plan.md Phase 2): the same complete-file fetch ``download_file``
+        drive.py's ``_download_file``, ADR 0017): the same complete-file fetch ``download_file``
         does, returned as bytes instead of written to disk --
         ``download_file``'s own ``destination_dir`` doesn't correspond to
         anything reachable on an org-mode server. Returns a dict with

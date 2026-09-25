@@ -1,5 +1,4 @@
-"""Shared atomic-write and permission helpers for credential/config storage
-(SEC-09).
+"""Shared atomic-write and permission helpers for credential/config storage.
 
 Before this module existed, every credential/token/config writer in this
 codebase followed the same pattern: truncate-and-write the destination file
@@ -10,8 +9,8 @@ umask left it with, and a failed ``chmod`` was silently swallowed at
 ``debug`` level rather than surfaced. The directories holding these files
 (``~/.privacyfence`` and its subdirectories) were created with the process's
 default umask rather than deliberately restricted, too -- see
-``docs/security-and-compliance.md``'s "Storage format and permissions"
-section for the threat this closes.
+``docs/security-and-compliance.md``'s "Privilege separation" section for
+the directory layout and modes this enforces.
 
 ``atomic_write_text``/``atomic_write_json`` fix the file-write half: the
 real content is written to a freshly ``O_CREAT|O_EXCL``-created sibling temp
@@ -21,10 +20,11 @@ from the instant the file exists, then swapped into place. A reader can only
 ever see the old complete file or the new complete file, never a partial
 one. ``secure_mkdir`` fixes the directory half: it creates -- or re-tightens
 -- a directory to ``0700`` rather than trusting the umask, including for a
-directory that already existed (e.g. one created by a pre-SEC-09 install).
+directory that already existed (e.g. one created by an older install).
 
 A permissions failure that used to be logged at ``debug`` (effectively
-invisible) is now a ``warning`` in both helpers below, per SEC-09.
+invisible) is now a ``warning`` in both helpers below, so a directory that
+cannot be restricted is visible rather than silently trusted.
 
 The final ``os.replace`` itself gets a short Windows-only retry (see
 ``_replace_with_retries``): unlike POSIX ``rename``, Windows' replace can
@@ -64,7 +64,7 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
     own permissions to ``mode``.
 
     Unlike ``Path.mkdir(mode=...)``, this is applied even when ``path``
-    already existed -- e.g. a directory created by a pre-SEC-09 install
+    already existed -- e.g. a directory created by an older install
     under the process's default umask -- and isn't itself subject to
     umask. Parent directories created along the way (``parents=True``)
     keep whatever the umask leaves them with; only the leaf directory this
@@ -75,15 +75,15 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
     permissions) is logged at ``warning`` and otherwise non-fatal -- the
     directory is still created and usable, just not provably restricted.
 
-    ``foreign_owner_ok`` is for the directories #428 Phase 4's privilege
-    separation deliberately shares between two accounts (``paths.py``'s
+    ``foreign_owner_ok`` is for the directories privilege separation
+    deliberately shares between two accounts (``paths.py``'s
     ``data_dir()`` and ``handoff_dir()`` on a separated install): there, a
     process running as the logged-in user resolves a directory *owned by the
     daemon's service account*, and ``chmod`` on it is guaranteed to fail with
     ``EPERM`` every single time. Skipping the attempt when this process isn't
     the owner keeps that from becoming a warning on every path resolution --
-    which would train a reader to ignore exactly the warnings SEC-09 added
-    this logging for. The owner's own process still re-asserts the mode, so
+    which would train a reader to ignore exactly the permission warnings this
+    logging exists for. The owner's own process still re-asserts the mode, so
     the self-healing property is unchanged; and the separated layout gets a
     check of its own regardless, in ``privilege_separation.audit_layout()``.
     On Windows it skips the attempt outright, for the related-but-distinct
@@ -94,6 +94,15 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
     path.mkdir(parents=True, exist_ok=True)
     if foreign_owner_ok and not _is_owned_by_this_process(path):
         return path
+    # A separated install's root and handoff/ are shared with the user's
+    # session on purpose, so their installer-set mode wins over whatever this
+    # caller asked for -- see privilege_separation.shared_dir_mode(). Imported
+    # here, not at the top: privilege_separation imports this module.
+    from . import privilege_separation
+
+    shared_mode = privilege_separation.shared_dir_mode(path)
+    if shared_mode is not None:
+        mode = shared_mode
     try:
         path.chmod(mode)
     except OSError as exc:  # pragma: no cover -- best effort on non-POSIX
@@ -105,7 +114,7 @@ def _is_owned_by_this_process(path: Path) -> bool:
     """True when ``path``'s owning uid is this process's effective uid.
 
     Only ever consulted for a ``foreign_owner_ok`` call -- i.e. for the two
-    directories #428 Phase 4 deliberately shares between two accounts -- so
+    directories privilege separation deliberately shares between two accounts -- so
     "I cannot tell" has to answer for that case specifically rather than in
     general.
 
@@ -113,7 +122,7 @@ def _is_owned_by_this_process(path: Path) -> bool:
     opposite of what an "unknown, so assume yes" default would give. There is
     no POSIX ownership to compare there, but there is also nothing for the
     ``chmod`` to do: it is the documented no-op this module's own docstring
-    describes, and #428 Phase 4's Windows layout is NTFS ACLs the installer
+    describes, and the separated Windows layout is NTFS ACLs the installer
     writes and ``windows_acl.py`` audits instead. Attempting it anyway is not
     merely useless -- the companion and the MCP client resolve
     ``paths.handoff_dir()`` constantly and hold *read* access to it, so
@@ -141,7 +150,7 @@ def atomic_write_bytes(
 
     ``dir_mode`` exists because ``secure_mkdir`` re-asserts that mode on an
     *existing* directory too, which is the right default everywhere except
-    the one directory #428 Phase 4 deliberately shares between two accounts:
+    the one directory privilege separation deliberately shares between two accounts:
     writing ``mcp_token`` into ``paths.handoff_dir()`` with the ``0700``
     default would silently re-tighten the ``3770`` the installer set, and
     lock the agent out of its own credential on the next read. Callers that
@@ -162,7 +171,7 @@ def atomic_write_bytes(
         # style request is nothing -- umask only ever clears group/other
         # bits that such a request doesn't set in the first place). This
         # explicit chmod exists so a permissions problem is surfaced at
-        # warning rather than silently trusted, per SEC-09.
+        # warning rather than silently trusted.
         try:
             os.chmod(tmp_path, mode)
         except OSError as exc:  # pragma: no cover -- best effort on non-POSIX
@@ -258,6 +267,6 @@ def audit_directory_permissions(directories: Iterable[Path | str], mode: int = D
 
 class InsecurePermissionsError(RuntimeError):
     """Raised by daemon startup (org mode only) when a data directory's
-    on-disk permissions are broader than SEC-09 requires -- see
+    on-disk permissions are broader than ``0700`` -- see
     daemon_main.py's ``check_storage_permissions``. Local mode logs the
     same finding as a warning instead of refusing to start."""

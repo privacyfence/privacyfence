@@ -1,5 +1,5 @@
 """Tests for web/org_install_policy.py -- applying an install-wide
-privacy/PII policy change from org mode's admin settings surface (#400 C3e).
+privacy/PII policy change from org mode's admin settings surface.
 
 The behaviour these pin down is mostly "the change reaches everyone": a
 policy with no per-user dimension, edited by one admin, has to become true
@@ -46,7 +46,7 @@ def _seed_registries(settings: dict, *principals: Principal) -> None:
 class TestActionSurface:
     def test_every_supported_action_is_one_the_scope_split_calls_admin_only(self):
         # The whole point of routing these through the same action names
-        # local mode dispatches (#400 C3b/C3c): a route authorizes with
+        # local mode dispatches (ADR 0032): a route authorizes with
         # is_action_permitted and applies with apply_change, using one
         # string. An action this module could apply but that split doesn't
         # gate on is_admin would be a hole.
@@ -153,7 +153,7 @@ class TestCategoryPolicy:
             assert privacy_filter.category_policy("privacy", "metadata") == "allow"
 
     def test_rejects_a_group_section_that_is_not_a_mapping(self, tmp_path):
-        # init_privacy_filter (SEC-07) refuses to start the daemon on this,
+        # init_privacy_filter refuses to start the daemon on this,
         # so it only exists if settings.yaml was hand-edited afterwards --
         # reject rather than crash on `setdefault` against a string.
         settings = {"privacy": "not a mapping"}

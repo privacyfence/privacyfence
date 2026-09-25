@@ -45,6 +45,188 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **New website pages explain PrivacyFence before you install it:** `/how-it-works/` (the request
+  flow as a diagram, and one read and one write approved step by step), `/security/` (the security
+  model in brief, ending with what PrivacyFence does not claim), `/enterprise/` (local mode and an
+  organization deployment side by side, with prerequisites and limits) and `/connectors/` (what
+  an AI client can read, what is reviewed and which writes need approval, per connector). The
+  site's menu links them and the docs. The README is shorter and links the docs on the website.
+
+- **A website page per connector, and an FAQ:** `/connectors/google-workspace/`, `/slack/`,
+  `/salesforce/`, `/jira-confluence/` and `/telegram/` each say what an AI client can do there,
+  what is reviewed and what needs approval, what the PII check scans in that service's content,
+  and how to set it up. `/faq/` answers the questions people ask before installing: where data
+  goes, which AI clients work, what the AI sees before approval, automating routine requests,
+  certification, local or organization mode, cost, and verifying a download. The site's menu
+  links the FAQ, and `/connectors/` links each connector's page.
+
+- **A release history page, `privacyfence.eu/releases/`,** lists every published version on
+  every channel (stable, release candidate, beta and alpha), newest first, each with its release
+  date, its installers and their SHA-256 checksums, and a link to its release notes. It works
+  without JavaScript. The download page's "All releases" link and the site footer point to it.
+  The list comes from a new download-server endpoint, `GET /api/releases/history`, which returns
+  release metadata only and never counts as a download.
+
+### Security
+
+- **An auto-accept rule for your own Slack DM matched every one-to-one DM.** `dm_with_myself` and
+  `send_to_myself` checked only that the channel was a DM, so reads of, and messages to, a DM with
+  anyone else went through without a card. They now match only your DM with yourself, as Slack
+  reports it; a DM PrivacyFence cannot confirm as yours asks as before.
+
+- **A Drive folder rule for moves checked only the folder a file was moved out of.**
+  `move_within_approved_folders` auto-approved moving a file out of an approved folder to anywhere
+  else. A move now auto-accepts only when both the current folder and the destination are in the
+  rule, and an "Always allow" offered for a move names both folders.
+
+### Changed
+
+- **You can now add a passkey with a security key or your phone, not only one built into the
+  computer.** The Security page used to ask the browser for a built-in authenticator only (Touch
+  ID, Windows Hello), which most Linux desktops don't have, so with passkey step-up on by default
+  a Linux user could be left unable to approve anything. The browser now also offers a USB or NFC
+  security key, or your phone over its QR-code flow. Whatever you use still has to check your PIN,
+  fingerprint or face. See [ADR 0055](docs/adr/0055-step-up-passkey-enrollment-accepts-any-authenticator.md).
+
+- **The Windows installer now refuses anything but 64-bit x64 Windows.** It used to install on
+  32-bit and arm64 Windows too, which are not supported: on Windows 11 on arm64 it ran under
+  emulation, and elsewhere it installed in 32-bit mode, where the service could not start. See
+  [ADR 0054](docs/adr/0054-the-windows-installer-refuses-anything-but-native-x64.md).
+
+- **Messages no longer cite internal tracker and plan references.** Log lines, refusal and error
+  messages, the Windows service description, the macOS installer's welcome screen, the Linux
+  service's documentation link, the `.mcpb` shim's "daemon not running" message, and the `--help`
+  text of `build_org_bundle.py`, `verify_audit_log.py` and the other scripts now say what they
+  mean in words, or name the ADR that explains it. The daemon's insecure-storage warning now reads
+  "Insecure storage permissions: …". See
+  [ADR 0056](docs/adr/0056-code-carries-no-project-history.md).
+
+### Fixed
+
+- The `not_shared_drive` condition read Drive's "shared with someone" flag, so it rejected My
+  Drive files you had shared and let files in a shared drive through. It now holds only for files
+  that are not in a shared drive.
+
+- Installing or updating an organization config bundle from Settings now takes effect straight
+  away: connectors that were already running, and the tools they offer to AI clients, switch to
+  the new bundle's settings without a restart.
+
+- In organization mode, connecting Slack from the Connect page now requests the Slack scopes the
+  administrator set in the bundle (`--slack-scopes`) instead of always requesting the defaults.
+
+- `build_org_bundle.py` now gives the correct install steps for an organization-mode bundle (copy
+  it to the server and restart; Settings has no install button in that mode). It also lists the
+  step-up redirect URI (`/oauth/stepup/callback`) alongside the two sign-in URIs, prints each
+  configured connector's `/oauth/callback/<service>` URI, and includes Apps Script in its Google
+  options heading.
+
+- Google connector credential errors (Gmail, Drive, Calendar, Contacts, Tasks) no longer tell you
+  to re-run PrivacyFence with a command-line flag: `--oauth-setup` never existed, and the
+  per-connector OAuth flags are refused on a packaged install. They now tell you to authenticate
+  or reconnect the connector from Settings (Connectors), or from `/connect` in org mode.
+
+- On macOS, the message after `uninstall` no longer tells you to re-run a script the uninstall
+  just deleted. It now says to install PrivacyFence again, then run `uninstall --purge`.
+
+- On macOS, privilege-separation errors now give the full
+  `sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh …`
+  command, not a path that only works inside a source checkout.
+
+- The Windows `status` check and the install audit now say what an unreadable handoff directory
+  actually breaks: the companion app and the MCP extension cannot find the daemon. The old wording
+  blamed the MCP token.
+
+- `scripts/verify_audit_log.py`'s examples now name the real audit log directory
+  (`<data>/authority/logs/audit`) and show the separated-install paths with `sudo`.
+
+- The nginx configuration in the organization deployment guide now works on the nginx 1.24 that
+  Ubuntu 24.04 ships: it enables HTTP/2 with `listen 443 ssl http2` instead of an `http2 on;` line
+  that nginx 1.24 rejects.
+
+### Removed
+
+- The seeded `settings.yaml` no longer contains `policy.engine: v1`, a setting nothing has read
+  since the old rule evaluator was removed. An existing copy of the key is still ignored and can
+  be deleted.
+
+## [4.6.1] — 2026-09-25
+
+### Added
+
+- **The documentation is on the website,** at `privacyfence.eu/docs/`, with navigation, search
+  and a layout for phones. It shows the docs of the latest stable release and says which version
+  that is; contributor docs and design records stay on GitHub. The download page lists the
+  current release's installers even without JavaScript, and the site offers `llms.txt` and
+  `llms-full.txt` for AI assistants.
+
+### Fixed
+
+- **The companion no longer says a separated install "is not privilege-separated".** Whenever
+  the daemon wrote a file directly into its data directory (`/Library/Application
+  Support/PrivacyFence` on macOS, `/var/lib/privacyfence` on Linux), it also tightened that
+  directory from `0711` to `0700`. Your own account could then no longer look inside, so the
+  menu-bar companion took the install for an unseparated one and refused **Start**, **Restart**
+  and **Stop**. The directory now keeps the mode the installer gave it. If it is already wrong,
+  the next write puts it back. On an install that really has no background service yet, those
+  items now show the command that finishes setting it up instead of a dead end.
+
+## [4.6.0] — 2026-09-25
+
+### Added
+
+- **privacyfence.eu has a privacy policy and an imprint** (`/privacy/`, `/imprint/`), linked from
+  every page's footer together with the contact address, `info@privacyfence.eu`.
+
+- **The website uses Google Analytics, only if you accept it.** A banner asks first, with
+  *Accept* and *Decline* side by side. Until you accept, nothing is sent to Google and no cookie
+  is set; *Cookie settings* in the footer changes the answer at any time. Download counts are
+  still made without cookies, whatever you choose.
+
+### Changed
+
+- **The website works on phones:** below tablet width the header links are in a menu instead of
+  hidden, and links and buttons are large enough to tap. Pages now carry search and social-card
+  metadata, and `robots.txt` and `sitemap.xml` welcome every crawler, AI crawlers included.
+
+- **New product description** on the homepage and in the README: an open-source privacy and
+  approval gateway between AI assistants and your business systems.
+
+- **The user documentation is rewritten against the current code.** Installation is split into a
+  short `docs/getting-started.md` and one page per platform (`install-macos.md`,
+  `install-windows.md`, `install-linux.md`). New pages cover how PrivacyFence works
+  (`how-it-works.md`), approvals and policy (`approvals-and-policy.md`), every connector tool and
+  its gate (`tools-reference.md`, generated from the code), every configuration key
+  (`configuration-reference.md`) and the connect flow shared by all services
+  (`connecting-a-service.md`). The three organization-mode docs are one guide,
+  `org-mode-setup-guide.md`. `docs/TECHNICAL_REFERENCE.md`, `migration-guide.md`,
+  `approval-list-ui-ux.md`, `approval-window-content-reference.md`, `file-type-support.md`,
+  `claude-knowledge-boundary.md`, `org-mode-operational-readiness.md` and
+  `org-mode-download-delivery.md` are removed; their content is in the pages above. The approval
+  screenshots show the current approval list.
+
+### Security
+
+- **An organization server trusts `X-Forwarded-For`/`X-Forwarded-Proto` only from the addresses
+  given with `--server-trusted-proxy`.** Before, its web server also trusted them from
+  `127.0.0.1` and `::1` (or from `$FORWARDED_ALLOW_IPS`) by default, so any local process could
+  change the scheme and client address a request appeared to have. A reverse proxy on the same
+  host now has to be listed, as `--server-trusted-proxy 127.0.0.1`, which the setup guide's
+  example already does.
+
+- **Reading a Drive document shows and PII-checks everything the AI system receives.** The
+  approval card and the PII check used to see only the first 2,000 characters, while approving
+  released up to 100 KB of text, so an IBAN or ID number further into a document raised no
+  warning.
+
+- **Organization mode forwards each person's audit entries too.** With audit forwarding enabled,
+  only the install's own log reached syslog or the HTTPS endpoint. The approve and deny decisions
+  in each person's log were never sent, and they carried no `deployment_id`. They now reach the
+  same destination with the install's `deployment_id`.
+
+## [4.5.0] — 2026-09-25
+
+### Added
+
 - **Apps Script can be connected from Settings**, like the other Google connectors: *Connectors →
   Apps Script → Authenticate…* on a desktop install, and a *Connect* button on an organization
   server's `/connect` page. Before, the only way to authorize it was running the app with
@@ -61,6 +243,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Linux: the `.deb` declares `amd64` only.** Its package metadata listed `arm64` too, but no
   arm64 `.deb` has ever been built or tested; `scripts/build_deb.sh` now refuses to package on a
   host architecture the package doesn't declare (#679, ADR 0044).
+
 - **Linux: `apt remove` keeps your data, `apt purge` deletes it.** Removing the `.deb` now stops
   PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
   reinstall picks them up; it no longer moves them into your home directory. `apt purge` deletes
@@ -110,35 +293,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `privacyfence-privilege-separation enable` no longer moves `~/.privacyfence` into
   `/var/lib/privacyfence` or disables a pip install's `--user` unit (ADR 0041).
 
-- **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
-  still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
-  startup with a configuration error naming the section, instead of being converted to the
-  `auto_accept:` section on first start. Remove the section and recreate its rules on the Settings
+- **The v1 auto-accept settings format is no longer read or converted.** An install upgrading
+  from 4.1–4.4 needs no change: those versions already converted your rules to the `auto_accept:`
+  section and left the old `auto_accept_rules:`/`auto_accept_grants:` sections behind, and 4.5
+  removes those leftovers on its first start and logs a warning naming what it removed. A
+  `settings.yaml` whose v1 sections were never converted (one edited by hand, or last started
+  before 4.1) now stops PrivacyFence at startup with a configuration error naming the section,
+  instead of being converted. Remove the section and recreate its rules on the Settings
   Auto-accept page. The one-time conversion, its `settings.yaml.bak` backup and the "your
   auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
   `settings.yaml` is written in the current format. See
-  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md) and
+  [ADR 0047](docs/adr/0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md).
+
 - **Org mode: the old registered-clients format is no longer read.** An entry in
   `oauth_clients.json` that uses the format from before registered clients recorded their last use
   is now skipped, with a warning in the log, and that client has to register again. Entries in the
   current format still load. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 - **Files from earlier data-directory layouts are no longer moved or deleted at startup.** The
   daemon no longer moves a `config/settings.yaml`, `webauthn_credentials.json`, `web_token`,
   `web_token_version` or `logs/audit/` it finds directly under the data directory into
   `authority/`, no longer deletes a leftover shared `handoff/mcp_token` on a privilege-separated
   install, and no longer deletes old `approvals_url`/`settings_url`/`security_url` files. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 - **The Claude Desktop extension gets its MCP token only from the running PrivacyFence.** It no
   longer falls back to reading an `mcp_token` file when it cannot get a token over PrivacyFence's
   control channel. Instead it stops with an error asking you to check that PrivacyFence and the
   extension are the same version. On Windows it also no longer looks for PrivacyFence under
   `%LOCALAPPDATA%\Programs`, where no current installer puts it.
+
 - **The macOS installer no longer moves data from an earlier layout.** `enable` (and so the `.pkg`)
   no longer moves `~/.privacyfence` into `/Library/Application Support/PrivacyFence`, no longer
   moves files into `handoff/` from the root of the data directory, and no longer disables a
   per-user `com.privacyfence.app` LaunchAgent. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 - **The Windows installer no longer registers a daemon sign-in task or moves data from an earlier
   layout.** The daemon is a Windows service, and the companion's `PrivacyFenceCompanion` task is
   now the only Scheduled Task an install has (the `PrivacyFence` task the installer used to
@@ -148,6 +340,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
 
 ### Fixed
+
+- **"Could not add a passkey: The operation either timed out or was not allowed" now says why.**
+  That is the browser's own wording for two different problems -- the prompt was cancelled or
+  timed out, or the device has no built-in authenticator ready (on Windows: Windows Hello has no
+  PIN or fingerprint set up). The Security page now tells them apart and says what to do: set up
+  Windows Hello under *Settings → Accounts → Sign-in options*, or retry and finish the prompt,
+  which can open behind the browser window. Adding a passkey a device already has enrolled says
+  so too, instead of the raw `InvalidStateError`.
+
+- **Windows: a service that refuses to start now says why in the event log.** A configuration
+  error found at startup used to go to a console the service doesn't have, before the daemon had
+  opened its own log file, so the service stopped within seconds and nothing said why. The reason
+  is now part of the "PrivacyFence exited with status 1" entry in the Application event log.
+
+- **Windows: PrivacyFence's event log entries show their text.** The installer never registered
+  PrivacyFence as an event log source, so Event Viewer showed every PrivacyFence entry with an
+  empty message, and `Get-WinEvent -FilterHashtable @{ProviderName='PrivacyFence'}` failed with
+  "The parameter is incorrect". The installer now registers the source, and uninstalling removes
+  it.
 
 - **Salesforce stays signed in past its first token refresh.** With refresh token rotation on
   (an option on Salesforce's External Client Apps), each refresh returns a new refresh token and
@@ -2617,7 +2828,10 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...HEAD
+[4.6.1]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...v4.6.1
+[4.6.0]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...v4.6.0
+[4.5.0]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.1

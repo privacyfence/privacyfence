@@ -1,4 +1,4 @@
-"""Tests for privacyfence.policy.store (P4 of the policy v2 redesign): the on-disk v2 schema.
+"""Tests for privacyfence.policy.store: the on-disk v2 schema.
 
 Covers the serialization round trip (``rule_to_dict``/``rule_from_dict``/``compile_rules_from_config``),
 ``merge_rules``'s union-by-meaning behaviour and its stable, content-derived ids, and
@@ -50,7 +50,7 @@ class TestRuleIdFor:
 
 
 class TestRuleIdForRule:
-    """P8 (rule attribution and staleness): the canonical id for an already-compiled rule,
+    """Rule attribution: the canonical id for an already-compiled rule,
     independent of whatever its own ``.id`` happens to be -- gate.py's ``_evaluate_auto_accept``
     needs this to attribute a decision made against a rule whose ``.id`` is not canonical (one
     built in memory) to the same row Settings' Auto-accept page lists."""
@@ -67,7 +67,7 @@ class TestRuleIdForRule:
         assert store.rule_id_for_rule(rule) == store.rule_id_for("approved_sandbox_folder", ["F1"], ())
 
     def test_two_rules_with_the_same_id_but_different_values_get_different_canonical_ids(self):
-        # The exact F9 shape: two v1-compiled rules sharing one ambiguous name (`.id`) because
+        # Two v1-compiled rules sharing one ambiguous name (`.id`) because
         # they came from the same predicate, but naming two different resources.
         a = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F1"])
         b = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F2"])
@@ -223,6 +223,40 @@ class TestRulesToConfig:
 
     def test_carries_schema_version(self):
         assert store.rules_to_config([])["version"] == store.SCHEMA_VERSION
+
+
+class TestDropConvertedV1Sections:
+    """ADR 0047: 4.1-4.4 converted the v1 sections and left them on disk under a marker."""
+
+    def test_removes_both_sections_and_the_marker(self):
+        current = store.rules_to_config([_rule()])
+        cfg = {
+            store.AUTO_ACCEPT_CONFIG_KEY: current,
+            "auto_accept_rules": {"contacts.edit": [{"rule": "no_contact_info_change"}]},
+            "auto_accept_grants": {},
+            store.CONVERTED_V1_MARKER: True,
+            "logging": {},
+        }
+        removed = store.drop_converted_v1_sections(cfg)
+        assert removed == ["auto_accept_rules", "auto_accept_grants", store.CONVERTED_V1_MARKER]
+        assert cfg == {store.AUTO_ACCEPT_CONFIG_KEY: current, "logging": {}}
+        store.reject_v1_sections(cfg, "cfg")
+
+    def test_a_marker_alone_is_removed(self):
+        cfg = {store.CONVERTED_V1_MARKER: True}
+        assert store.drop_converted_v1_sections(cfg) == [store.CONVERTED_V1_MARKER]
+        assert cfg == {}
+
+    @pytest.mark.parametrize("marker", [None, False])
+    def test_an_unconverted_v1_section_is_left_for_the_refusal(self, marker):
+        cfg = {"auto_accept_rules": {}}
+        if marker is not None:
+            cfg[store.CONVERTED_V1_MARKER] = marker
+        before = dict(cfg)
+        assert store.drop_converted_v1_sections(cfg) == []
+        assert cfg == before
+        with pytest.raises(store.V1PolicyConfigError):
+            store.reject_v1_sections(cfg, "cfg")
 
 
 class TestRejectV1Sections:

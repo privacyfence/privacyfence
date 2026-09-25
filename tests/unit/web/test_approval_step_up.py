@@ -1,4 +1,4 @@
-"""Tests for web/approval_step_up.py (PSC-2a): the one step-up orchestration
+"""Tests for web/approval_step_up.py: the one step-up orchestration
 web/routes_approvals.py's local-mode and org-mode routes both call now,
 exercised directly against the module rather than through either mode's
 HTTP surface -- test_routes_approvals.py's and test_routes_org_approvals.py's

@@ -1,41 +1,38 @@
 # "Always allow" — per-tool reference
 
-What clicking **Always allow** proposes, tool by tool. **Generated** by
+Which **Always allow** buttons an approval card can offer, tool by tool. This page is an appendix
+to [Approvals and policy](approvals-and-policy.md#always-allow-and-policy-rules), which explains
+how rules work and where else you can create them.
+
+**Generated** by
 [`scripts/generate_always_allow_reference.py`](../scripts/generate_always_allow_reference.py) from
 [`src/privacyfence/policy/registry.py`](../src/privacyfence/policy/registry.py) and
-[`src/privacyfence/policy/propose.py`](../src/privacyfence/policy/propose.py) — the same scope
-catalogue the popup, the Auto-accept Settings page, and the MCP bridge's
-`privacyfence_propose_policy_change` all write through
-([`docs/TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#auto-accept) has the schema and the three
-surfaces). Don't hand-edit this file — run the generator and commit its output; a CI test fails if
-the checked-in copy and a fresh run disagree.
+[`src/privacyfence/policy/propose.py`](../src/privacyfence/policy/propose.py). Don't hand-edit this
+file — run the generator and commit its output; a CI test fails if the checked-in copy and a fresh
+run disagree.
 
-## How this doc is organized
+## How to read this page
 
-Every gated tool has a **gate**: `auto`, `review`, or `popup`. `auto` tools never show a popup or
-any button — nothing to allow — so they're **left out of this doc entirely**. What remains splits
-into two sections:
+Every connector tool has a **gate**: `auto` (runs without asking), `review` (a read you approve
+before its content is released) or `popup` (a write you confirm before it happens). `auto` tools
+never show a card, so they are left out of this page. The rest are split into
+[read tools](#read-tools) (`review`) and [write tools](#write-tools) (`popup`).
 
-- **[Read tools](#read-tools)** (`review` gate) — the popup offers **Always allow** whenever at
-  least one scope in the catalogue below plausibly contains the item just read; otherwise the
-  button doesn't appear, and the row's own column is empty.
-- **[Write tools](#write-tools)** (`popup` gate) — most write popups never offer Always allow at
-  all; the ones that do propose a rule scoped to the one folder/label/calendar/project/space/task
-  list the call just touched, narrowest first — never a bare "accept every future write of this
-  type" toggle.
+The **Always allow buttons** column lists every rule scope the card can propose for that tool.
+A scope is only offered when it actually contains the item on the card — "this folder" appears
+only when the file has a parent folder, "if I own it" only when you own the file — and **every
+scope that matches gets its own button**, so a file you own that also sits in a folder can show
+both "Always allow — this folder" and "Always allow — if I own it". When no scope matches, or the
+column is empty, the card offers only **Deny** and **Allow once**.
 
-Where a tool's row lists more than one candidate, only the first whose scope actually contains the
-item under review becomes a button — narrowest declared first (identity scopes before attribute
-scopes before condition scopes), per
-[`policy/propose.py`](../src/privacyfence/policy/propose.py)'s own declaration order. When two or
-more candidates genuinely match the same item at once (e.g. a file you own that's also in an
-approved folder), the popup renders one button per match instead of picking one.
+"unconditional" means the button has no scope at all: the rule it writes accepts every future call
+of that operation (Gmail drafting is the one case).
 
-**Always allow always writes a v2 rule to the `auto_accept:` section** — one row, scoped to
-exactly the operation just gated at first; the confirmation dialog then offers further verbs as
-named widening chips (e.g. "also allow format") before anything is written. See
-[Auto-accept](TECHNICAL_REFERENCE.md#auto-accept) for the schema and the other two surfaces that
-write the identical shape.
+Clicking a button opens a confirmation dialog that states the rule as a sentence and lists every
+tool it covers. Confirming writes one rule to the `auto_accept:` section of `settings.yaml`. That
+rule covers the scope's value (the folder, label, calendar, …) and only the one operation you just
+approved — other operations on the same resource still ask. Cancelling the dialog still approves
+the request on the card, once.
 
 ---
 
@@ -43,50 +40,50 @@ write the identical shape.
 
 ### Apps Script
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `apps_script_get_content` |  |
 | `apps_script_get_execution_log` |  |
 
 ### Calendar
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
-| `calendar_get_event_details` | this calendar, else if I organize it, else no external attendees, else non-private events |
+| `calendar_get_event_details` | this calendar, if I organize it, no external attendees, non-private events |
 
 ### Confluence
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
-| `confluence_download_attachment` | this space, else if I'm author |
-| `confluence_get_page` | this space, else if I'm author |
-| `confluence_get_page_by_title` | this space, else if I'm author |
+| `confluence_download_attachment` | this space, if I'm author |
+| `confluence_get_page` | this space, if I'm author |
+| `confluence_get_page_by_title` | this space, if I'm author |
 
 ### Drive
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
-| `drive_download_file` | this folder, else if I own it |
-| `drive_get_file_content` | this folder, else if I own it |
-| `drive_sheets_get_values` | this folder, else if I own it |
+| `drive_download_file` | this folder, if I own it |
+| `drive_get_file_content` | this folder, if I own it |
+| `drive_sheets_get_values` | this folder, if I own it |
 
 ### Gmail
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
-| `gmail_download_attachment` | if I'm sender, else this sender domain |
-| `gmail_get_message` | if I'm sender, else this sender domain |
-| `gmail_get_thread` | if I'm sender, else this sender domain |
+| `gmail_download_attachment` | if I'm sender, this sender domain |
+| `gmail_get_message` | if I'm sender, this sender domain |
+| `gmail_get_thread` | if I'm sender, this sender domain |
 
 ### Jira
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
-| `jira_get_issue` | this project, else if I'm reporter, else if I'm assignee |
+| `jira_get_issue` | this project, if I'm reporter, if I'm assignee |
 
 ### Salesforce
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `salesforce_get_record` | this object type |
 | `salesforce_run_report` | this report |
@@ -94,15 +91,15 @@ write the identical shape.
 
 ### Slack
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
-| `slack_get_channel_history` | this channel, else my own DM, else this group DM |
-| `slack_get_thread_replies` | this channel, else my own DM, else this group DM |
+| `slack_get_channel_history` | this channel, my own DM, this group DM |
+| `slack_get_thread_replies` | this channel, my own DM, this group DM |
 | `slack_search_messages` | this channel |
 
 ### Telegram
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `telegram_get_messages` | this chat |
 | `telegram_search_messages` | this chat |
@@ -111,24 +108,22 @@ write the identical shape.
 
 ## Write tools
 
-Most write tools never offer **Always allow** — auto-accepting a write silently is a materially
-bigger blast radius than auto-accepting a read. Every write tool below with a non-empty column is
-a narrow, deliberate exception, scoped to the one resource the call just touched. Every other
-gated write tool offers exactly Deny / Allow once, with an empty **Always allow proposes** column.
-A handful of tools also have a separate, non-persisted grace-window behavior tucked into their
-"Allow once" instead — see
-[Related but distinct mechanisms](TECHNICAL_REFERENCE.md#auto-accept) for what that is; it isn't
-an Always-allow rule and doesn't belong in this column.
+A write tool with a non-empty column can offer a rule scoped to the resource the call touched —
+the folder, label, calendar, project, list, channel or chat — except the six Gmail draft tools,
+whose rule is unconditional. Every other write tool offers only **Deny** and **Allow once**.
+A few Drive, Docs and Sheets tools also start a short same-file grace window when you click
+**Allow once**; that is not a rule, see
+[Same-file grace window](approvals-and-policy.md#same-file-grace-window).
 
 ### Apps Script
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `apps_script_write_content` |  |
 
 ### Calendar
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `calendar_create_event` | this calendar |
 | `calendar_create_out_of_office` |  |
@@ -140,14 +135,14 @@ an Always-allow rule and doesn't belong in this column.
 
 ### Confluence
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `confluence_create_page` | this space |
 | `confluence_update_page` | this space |
 
 ### Contacts
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `contacts_add_label` | this label |
 | `contacts_create` |  |
@@ -156,12 +151,12 @@ an Always-allow rule and doesn't belong in this column.
 
 ### Drive
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `drive_add_comment` | this folder |
 | `drive_docs_edit_content` | this folder |
 | `drive_docs_format_content` | this folder |
-| `drive_move_file` | this folder |
+| `drive_move_file` | these folders |
 | `drive_sheets_add_sheet` | this folder |
 | `drive_sheets_delete_dimensions` | this folder |
 | `drive_sheets_format_range` | this folder |
@@ -174,10 +169,10 @@ an Always-allow rule and doesn't belong in this column.
 
 ### Gmail
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `gmail_add_label` | this label |
-| `gmail_archive_message` | if I'm sender, else this sender domain |
+| `gmail_archive_message` | if I'm sender, this sender domain |
 | `gmail_create_draft` | unconditional |
 | `gmail_create_draft_with_attachments` | unconditional |
 | `gmail_create_filter` |  |
@@ -191,7 +186,7 @@ an Always-allow rule and doesn't belong in this column.
 
 ### Jira
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `jira_add_comment` | this project |
 | `jira_create_issue` | this project |
@@ -200,14 +195,14 @@ an Always-allow rule and doesn't belong in this column.
 
 ### Slack
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `slack_create_group_chat` |  |
 | `slack_send_message` | this channel |
 
 ### Tasks
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `tasks_complete_task` | this list |
 | `tasks_create_task` | this list |
@@ -217,26 +212,14 @@ an Always-allow rule and doesn't belong in this column.
 
 ### Telegram
 
-| Tool | Always allow proposes |
+| Tool | Always allow buttons |
 |---|---|
 | `telegram_send_message` | this chat |
 
-## Related but distinct mechanisms
+## Rules you can't create from a card
 
-These are easy to conflate with Always allow because they sit in the same popups or touch the same
-config, but none of them are the "Always allow" button covered above.
-
-**Temp-accept grace window** — an in-memory, non-persisted acceptance for six `popup`-gate writes
-expected to fire repeatedly against the same file in a burst
-(`privacyfence.auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS`), scoped to one file/spreadsheet for 5
-minutes and gone on daemon restart. There's no separate button for it: these popups show only
-Deny / Allow once, with a plain disclosure caption above the buttons explaining that Allow once
-also arms the grace window.
-
-**Bridge-proposed policy changes** (`privacyfence_propose_policy_change`) — lets Claude itself
-propose adding/updating/removing a rule for *any* operation, including tools that never get an
-Always-allow button of their own (a Gmail filter, a Slack group chat, an Apps Script project).
-Every call still blocks on the same confirmation dialog Always allow uses — there's no way for a
-rule to land without a human confirming it. See `privacyfence_list_policy`/
-`privacyfence_propose_policy_change` in `src/privacyfence/web/mcp_tools.py` (or the tool's own MCP
-description) for the exact request/response shape.
+Some operations never offer an **Always allow** button because nothing on the card names a
+resource to scope the rule to: Apps Script projects, Gmail filters, and creating a Slack group
+chat. You can still allow them from **Settings → Auto-accept → Add a rule**, or by letting the AI
+system propose a rule with `privacyfence_propose_policy_change`. Either way the rule is written
+only after you confirm it. See [Approvals and policy](approvals-and-policy.md#always-allow-and-policy-rules).

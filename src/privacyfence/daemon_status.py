@@ -1,5 +1,5 @@
-"""The local-mode-fixes plan's Phase 2 (companion-as-daemon-manager): read
-the daemon's run state without asking for a password.
+"""The companion as daemon manager (ADR 0026): read the daemon's run state
+without asking for a password.
 
 ``docs/adr/0002-local-mode-trust-boundary-and-companion-app.md``'s Amendment
 (2026, "the companion becomes the daemon manager") is the design this
@@ -19,7 +19,7 @@ answering its control channel is a state this module has to describe, not
 a failure to propagate:
 
 1. **Ask the daemon itself** (``web/control_channel.py``'s ``STATUS``
-   command, this plan's Phase 2). If it answers, the daemon is unambiguously
+   command). If it answers, the daemon is unambiguously
    ``running`` -- there is nothing more authoritative than the daemon
    saying so over its own control channel.
 2. **Ask the platform's service manager**, unprivileged

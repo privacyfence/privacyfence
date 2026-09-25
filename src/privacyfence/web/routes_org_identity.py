@@ -1,4 +1,4 @@
-"""Browser login for org mode (P7) -- PrivacyFence acting as its own OIDC relying party against the
+"""Browser login for org mode -- PrivacyFence acting as its own OIDC relying party against the
 org's IdP, for a human visiting the web approval/settings surface
 directly. This is a *separate* IdP-facing redirect_uri from web/
 oauth_provider.py's ``OrgOAuthProvider`` (which does the same IdP dance,
@@ -125,21 +125,17 @@ def build_routes(
     presents to the IdP has to be this fixed, pre-registered value, never
     derived from a request's own (spoofable) Host header.
 
-    ``default_next_path`` (P8)
-    is where a sign-in with no explicit ``?next=`` lands -- ``DEFAULT_
-    NEXT_PATH`` ("/approvals") was never reachable in org mode to begin
-    with (``/approvals`` isn't mounted there at all, see web/server.py's
-    own module docstring), a gap only visible once something org mode
-    *does* mount is around to redirect to. ``web/server.py``'s
-    ``_build_org_app`` passes ``"/connect"`` (P8's own new per-principal
-    connections page) here; every other/older caller keeps the original
-    default unchanged.
+    ``default_next_path``
+    is where a sign-in with no explicit ``?next=`` lands. ``web/server.py``'s
+    ``_build_org_app`` passes ``"/connect"`` (the per-principal connections
+    page) here whenever it mounts that page; every other caller keeps
+    ``DEFAULT_NEXT_PATH`` ("/approvals").
 
-    ``policy`` (SEC-22) is checked against every claims/principal a login
-    attempt resolves, on top of the IdP's own authentication -- absent
-    (the default, an unconfigured/disabled ``AuthzPolicyConfig``), every
-    IdP-authenticated principal is admitted, exactly as before this
-    landed.
+    ``policy`` (the org's sign-in policy: allowed domains, required groups)
+    is checked against every claims/principal a login attempt resolves, on
+    top of the IdP's own authentication -- absent (the default, an
+    unconfigured/disabled ``AuthzPolicyConfig``), every IdP-authenticated
+    principal is admitted.
     """
     policy = policy or AuthzPolicyConfig()
     attempts = _LoginAttemptStore()
@@ -174,7 +170,7 @@ def build_routes(
             claims = await asyncio.to_thread(org_identity.verify_id_token, idp, id_token, nonce=attempt.nonce)
             principal = org_identity.principal_from_claims(claims, idp)
             org_identity.check_authz_policy(principal, claims, policy)
-        except Exception as exc:  # noqa: BLE001 -- an IdP failure or SEC-22 policy denial: sign-in didn't complete
+        except Exception as exc:  # noqa: BLE001 -- an IdP failure or sign-in policy denial: sign-in didn't complete
             logger.warning("Org sign-in failed: %s", exc)
             return PlainTextResponse("Sign-in failed. Please try again.", status_code=400)
         session_id = sessions.create(principal)

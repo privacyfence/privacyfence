@@ -1,29 +1,24 @@
-"""Per-principal connector registry (P6's "Connectors become per-principal
-too" paragraph).
+"""Per-principal connector registry: org mode's connectors are per-principal,
+like everything else a principal owns.
 
 ``connector_host.py``'s ``ConnectorHost`` holds one process-wide
 ``{name: Connector}`` map, built once by ``daemon_main.build_connectors()``
 at daemon startup -- correct for local mode, where there is exactly one
 principal for the life of the process. Org mode needs a *set* of these, one
 per principal, built lazily (a principal's connectors can't exist before
-that principal has authorized the underlying services -- P8) and evicted
+that principal has authorized the underlying services) and evicted
 when idle, since "N users x up to 12 authenticated API clients" is "the
 main memory-scaling question."
 
 ``ConnectorRegistry`` is that: a lazy, bounded, principal-keyed cache of
-``ConnectorHost`` instances. P6 built it but deliberately did **not** wire it
-into daemon_main.py's own single-process boot sequence -- that still built
-exactly one ``ConnectorHost`` for the local principal directly, unchanged,
-which is what kept local mode byte-identical (P6's own exit criterion). This
-class was the seam a later phase's real per-request serving would plug into
-once there's a second principal whose connectors can actually be built: P7
-supplied the identity, P8 the per-user service authorization that makes a
-second principal's connectors
-buildable at all.
+``ConnectorHost`` instances. It is deliberately **not** part of
+daemon_main.py's local-mode boot sequence, which builds exactly one
+``ConnectorHost`` for the local principal directly, so local mode does not
+depend on this class at all.
 
-**P8 wires this in.** ``daemon_main.py``'s ``_start_org_web_server`` now
+In org mode, ``daemon_main.py``'s ``_start_org_web_server``
 builds one ``ConnectorRegistry`` per daemon and the ``/mcp`` dispatcher's
-``connectors_provider`` becomes ``lambda: registry.get(current_principal()).
+``connectors_provider`` is ``lambda: registry.get(current_principal()).
 connectors`` -- ``local`` mode's own single ``ConnectorHost``, built once at
 startup for the local principal, is completely unaffected (this class is
 still never touched on that path). ``web/routes_connect.py``'s OAuth
@@ -39,8 +34,8 @@ files via ``_resolve_path``, the Slack/Telegram cache files) now goes
 through ``paths.user_dir()``, which resolves against whichever principal
 ``ConnectorRegistry.get()`` below has entered via ``principal_scope`` at the
 time ``factory`` runs -- see paths.py's own ``user_dir()`` and
-daemon_main.py's ``_resolve_path``. (Issue #396 Phase 1 did add a second
-return value, a per-connector failure-reason map -- ``factory`` itself is
+daemon_main.py's ``_resolve_path``. (``build_connectors`` also returns a
+per-connector failure-reason map -- ``factory`` itself is
 still just ``list[Connector]``, so daemon_main.py's own
 ``_connectors_for_principal`` unpacks and discards that map; see its
 docstring for why org mode has nowhere to surface it yet.)
@@ -60,8 +55,7 @@ logger = logging.getLogger(__name__)
 
 # Conservative defaults -- an org operator who actually needs different
 # numbers has the constructor arguments to change them; these just need to
-# be "some real bound", not a tuned production value, since nothing calls
-# this class outside of tests until P7/P8 give it live traffic.
+# be "some real bound", not a tuned production value.
 DEFAULT_MAX_PRINCIPALS = 200
 DEFAULT_IDLE_EVICT_SECONDS = 30 * 60
 
@@ -70,7 +64,7 @@ class TooManyPrincipalsError(RuntimeError):
     """Raised by ``ConnectorRegistry.get()`` when serving one more principal
     would exceed ``max_principals`` and evicting idle entries first didn't
     make room. Fail closed -- the same "reject further ... rather than
-    queueing" posture §7.1 takes for a per-principal pending-approval cap --
+    queueing" posture the per-principal pending-approval cap takes --
     rather than let one busy install's connector memory grow without bound."""
 
 
@@ -147,7 +141,7 @@ class ConnectorRegistry:
 
     @property
     def principal_count(self) -> int:
-        """The metric §9.2 asks for alongside the bound: how many
+        """The metric that goes alongside the bound: how many
         principals' connector sets are currently live in memory."""
         with self._lock:
             return len(self._hosts)

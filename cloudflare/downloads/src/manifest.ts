@@ -2,7 +2,7 @@
  * Release manifest types and R2 lookups. Schema matches exactly what
  * `scripts/r2_release.py finalize` writes (schema `1`) -- see docs/downloads-and-release-kpi.md
  * "Publication is transactional". This Worker only ever reads manifests; the test suite reads
- * hand-written fixtures of the same shape (see test/fixtures.ts).
+ * hand-written fixtures of the same shape (see the test/fixtures/ directory).
  */
 import { channelForVersion, type Channel } from "./channel.js";
 
@@ -38,7 +38,7 @@ export function manifestKey(channel: Channel, version: string): string {
   return `releases/${channel}/${version}/manifest.json`;
 }
 
-async function getJson<T>(bucket: R2Bucket, key: string): Promise<T | null> {
+export async function getJson<T>(bucket: R2Bucket, key: string): Promise<T | null> {
   const object = await bucket.get(key);
   if (!object) return null;
   return object.json<T>();
@@ -64,6 +64,37 @@ export async function resolveVersionManifest(
   const manifest = await getJson<Manifest>(bucket, manifestKey(channel, version));
   if (!manifest) return null;
   return { channel, manifest };
+}
+
+/** A manifest artifact as the `/api/*` routes publish it: everything but its R2 `key`. */
+export type PublicArtifact = Omit<ManifestArtifact, "key">;
+
+export interface PublicManifest extends Omit<Manifest, "artifacts"> {
+  artifacts: PublicArtifact[];
+}
+
+/**
+ * The manifest as the `/api/*` routes return it. No R2 key or URL ever leaves the Worker (the
+ * browser has no use for one: downloads go through `/download/...`, which resolves the key
+ * itself). Fields are copied one by one rather than by dropping `key`, so a field added to the
+ * manifest later is not published until it is listed here.
+ */
+export function publicManifest(manifest: Manifest): PublicManifest {
+  return {
+    schema: manifest.schema,
+    version: manifest.version,
+    channel: manifest.channel,
+    published_at: manifest.published_at,
+    artifacts: (manifest.artifacts ?? []).map(({ id, kind, platform, architecture, filename, size, sha256 }) => ({
+      id,
+      kind,
+      platform,
+      architecture,
+      filename,
+      size,
+      sha256,
+    })),
+  };
 }
 
 export function findArtifact(manifest: Manifest, artifactId: string): ManifestArtifact | undefined {

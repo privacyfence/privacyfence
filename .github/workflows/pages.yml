@@ -6,6 +6,9 @@ on:
     paths:
       - "website/**"
       - "docs/images/**"
+      - "scripts/build_site.py"
+      - "scripts/r2_release.py"
+      - "requirements/docs.lock.txt"
       - "src/privacyfence/resources/icon_512.png"
       - ".github/workflows/pages.yml"
   release:
@@ -48,31 +51,38 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every tag: /docs/ is published from the newest stable tag, not from main (see
+          # docs/adr/0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md), so the
+          # build has to see them all to find it.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # The docs generator only, hash-locked; the build never installs the package itself.
+      - name: Install the docs generator
+        run: pip install --require-hashes -r requirements/docs.lock.txt
 
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
-      - name: Build static site
+      # scripts/build_site.py is the whole site: the hand-written pages from their partials, the
+      # files its manifest names (nothing else under website/ is published -- guardrail 7,
+      # tests/unit/test_website_download_cta.py), /download/ pre-rendered from the download
+      # Worker, /docs/ at the newest stable tag (skipped while that tag predates the published doc
+      # set), and the generated sitemap.xml, robots.txt, llms.txt and llms-full.txt. It fails on a
+      # broken internal link. The release -> redispatch-to-main path above reruns it after every
+      # release, which is what moves /docs/ to a new stable version.
+      - name: Build site
+        run: python3 scripts/build_site.py --out _site --report site-report.json
+
+      - name: Add release stats
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          rm -rf _site
-          mkdir -p _site/assets _site/download
-          # Named explicitly rather than `cp -r website/ _site/` so nothing lands on the public
-          # site by accident. The cost of that is that a new website file is invisible until it is
-          # added here -- which is exactly how the download page shipped as a 404 once the homepage
-          # CTAs already pointed at it. tests/unit/test_website_download_cta.py now asserts every
-          # file under website/ appears in this step, so that cannot happen silently again.
-          cp website/index.html website/styles.css website/stats.js _site/
-          cp website/download/index.html website/download/download.js _site/download/
-          cp src/privacyfence/resources/icon_512.png _site/assets/icon.png
-          cp docs/images/screenshots/gmail-read-thread.png _site/assets/
-          cp docs/images/screenshots/sheets-write.png _site/assets/
-          touch _site/.nojekyll
-
-          python3 scripts/release_stats.py --repo "$REPOSITORY" --output _site/release-stats.json
+        run: python3 scripts/release_stats.py --repo "$REPOSITORY" --output _site/release-stats.json
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

@@ -1,5 +1,5 @@
 """Tests for scripts/qa_fixture_recorder.py -- the local-only fixture
-recorder (see docs/testing-policy.md §2.1). Everything here runs
+recorder (see docs/testing-policy.md, "Layer 5: live connector"). Everything here runs
 offline, with no live credentials and no network:
 
 - redact()/redact_gmail_message() are pure functions, tested directly.
@@ -1695,8 +1695,8 @@ class _FakeCalendarClient:
 
     def delete_event(self, calendar_id, event_id, scope="this", send_updates=""):
         # lifecycle_calendar/_lifecycle_calendar_recurrence both clean up
-        # through this now (see qa_fixture_recorder.py's own comment on why
-        # calendar no longer needs the raw events().delete() bypass jira/
+        # through this (see qa_fixture_recorder.py's own comment on why
+        # calendar does not need the raw events().delete() bypass jira/
         # tasks still do) -- scope/send_updates are accepted but unused
         # here since this fake never has more than one event in a "series".
         self._do_delete(event_id)
@@ -1957,7 +1957,7 @@ class TestLifecycleCalendar:
         assert result.cleanup_ok is None  # nothing was ever created
 
     def test_recurring_event_is_also_created_and_cleaned_up(self, monkeypatch):
-        # Issue #415's own round trip, alongside the plain event above.
+        # The recurring-event delete round trip, alongside the plain event above.
         fake = _FakeCalendarClient()
         monkeypatch.setattr(recorder, "_build_calendar_client", lambda: fake)
 

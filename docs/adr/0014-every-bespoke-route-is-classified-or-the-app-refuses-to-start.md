@@ -5,7 +5,7 @@
 Accepted (recorded retroactively on 2026-09-23; decided around 2026-09-19 in the self-approval
 review's Phase 3, item 3.3: commit `151d6994` added the test and commit `4420453d` made
 `build_routes()` enforce it). Implemented. The mechanism is described in
-[`docs/TECHNICAL_REFERENCE.md`](../TECHNICAL_REFERENCE.md)'s settings-page section.
+[`docs/TECHNICAL_REFERENCE.md`](https://github.com/privacyfence/privacyfence/blob/5deef1d8/docs/TECHNICAL_REFERENCE.md)'s settings-page section.
 
 ## Context
 

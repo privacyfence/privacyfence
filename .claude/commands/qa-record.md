@@ -25,7 +25,7 @@ is explicit that the real QA grants live only on the self-hosted runner. So this
 
 4. **When it finishes**, `git pull` so the committed fixture reaches this checkout, then **read the
    fixture diff** and confirm no real account identifier, tenant URL, access token or private
-   content entered the repository. The recorder redacts, but `docs/qa-environment-setup.md` says to
+   content entered the repository. The recorder redacts, but `docs/connector-qa.md` ("Reviewing recorded fixtures") says to
    review the diff anyway — a fixture that arrived by dispatch gets exactly the same read as one
    recorded by hand.
 

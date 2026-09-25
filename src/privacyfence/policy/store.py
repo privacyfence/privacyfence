@@ -26,7 +26,8 @@ rule entry missing a required field, an ``operations``/``conditions`` value of t
 never raises and never invents a match -- it's dropped. The one thing that *does* raise is a config
 still carrying the pre-``auto_accept:`` sections (``reject_v1_sections``): those are refused
 outright rather than silently ignored, because ignoring them would turn every rule the person wrote
-into an approval popup with no hint why (ADR 0041). This module never reads or writes
+into an approval popup with no hint why (ADR 0041) -- unless an earlier release already converted
+them (``drop_converted_v1_sections``, ADR 0047). This module never reads or writes
 ``settings.yaml`` itself; ``daemon_main.load_config`` and ``auto_accept``'s writers do.
 """
 from __future__ import annotations
@@ -42,6 +43,27 @@ SCHEMA_VERSION = 2
 # Top-level ``settings.yaml`` keys of the policy format this schema replaced. Nothing reads them;
 # ``reject_v1_sections`` refuses a config that still has one (ADR 0041).
 V1_SECTION_KEYS: tuple[str, ...] = ("auto_accept_rules", "auto_accept_grants")
+
+
+# Written at the top level of ``settings.yaml`` by the v1 -> v2 conversion an earlier release ran
+# on startup, next to the ``auto_accept:`` section it produced. That conversion left the v1
+# sections on disk, and nothing after it read them.
+CONVERTED_V1_MARKER = "migrated_to_policy_v2"
+
+
+def drop_converted_v1_sections(cfg: dict[str, Any]) -> list[str]:
+    """Remove, in place, the v1 sections an earlier release already converted, and its marker.
+
+    Returns the keys removed, empty when ``cfg`` carries no ``CONVERTED_V1_MARKER``. Those sections'
+    rules are already in ``auto_accept:``, so removing them changes no decision; a v1 section with
+    no marker was never converted and is left for ``reject_v1_sections`` to refuse (ADR 0047).
+    """
+    if not cfg.get(CONVERTED_V1_MARKER):
+        return []
+    removed = [key for key in (*V1_SECTION_KEYS, CONVERTED_V1_MARKER) if key in cfg]
+    for key in removed:
+        del cfg[key]
+    return removed
 
 
 class V1PolicyConfigError(ValueError):
@@ -98,9 +120,8 @@ def merge_rules(rules: list[PolicyRule]) -> list[PolicyRule]:
     """Union rules that share a ``(predicate, value, conditions)`` key into one rule spanning every
     operation any of them covered, preserving first-seen order. This changes nothing about *whether*
     a call matches -- ``policy.engine.evaluate`` already treats ``rule.operations`` as an unordered
-    set membership test -- it only makes the on-disk config as compact as the redesign proposal's
-    "Model" section describes ("one sentence... Allow read, update and format on the folder...")
-    instead of one row per v1 operation key.
+    set membership test -- it only makes the on-disk config read as one sentence per intent ("allow
+    read, update and format on the folder") instead of one row per operation key.
     """
     merged: dict[tuple[str, Any, tuple[tuple[str, Any], ...]], PolicyRule] = {}
     order: list[tuple[str, Any, tuple[tuple[str, Any], ...]]] = []
@@ -189,10 +210,12 @@ def compile_rules_from_config(cfg: dict[str, Any]) -> list[PolicyRule]:
 
 __all__ = [
     "AUTO_ACCEPT_CONFIG_KEY",
+    "CONVERTED_V1_MARKER",
     "SCHEMA_VERSION",
     "V1PolicyConfigError",
     "V1_SECTION_KEYS",
     "compile_rules_from_config",
+    "drop_converted_v1_sections",
     "merge_rules",
     "reject_v1_sections",
     "rule_from_dict",

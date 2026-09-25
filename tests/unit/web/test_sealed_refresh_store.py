@@ -1,5 +1,6 @@
 """Tests for web/sealed_refresh_store.py -- the on-disk half of org mode's
-OAuth refresh tokens (#402).
+OAuth refresh tokens, persisted so a restart does not force a fresh sign-in
+(ADR 0011).
 
 The property that matters most here isn't "a record round-trips" but what the
 file is worth *without* the token: every test that touches the raw JSON checks
@@ -110,7 +111,7 @@ class TestExpiry:
         # Backdating the held entry rather than storing an already-lapsed one:
         # put() prunes on the way in, so the only way to reach get()'s own
         # expiry check is for the chain to lapse after it was stored. Same
-        # white-box idiom test_oauth_provider.py uses for SEC-12.
+        # white-box idiom test_oauth_provider.py uses for the chain's absolute cap.
         store = _store(tmp_path)
         _put(store)
         store._entries[srs._lookup_id(TOKEN)].chain_expires_at = 1

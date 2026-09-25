@@ -156,7 +156,7 @@ class TestCall:
         assert len(connector.calls) == 1
 
     async def test_dedupe_is_scoped_per_principal_not_shared_across_them(self):
-        # P7: McpDispatcher is one shared instance for the whole process,
+        # McpDispatcher is one shared instance for the whole process,
         # so its dedupe cache has to
         # key on the current principal too -- otherwise a second principal
         # calling the exact same tool with the exact same arguments within
@@ -183,13 +183,13 @@ class TestCall:
         assert len(connector.calls) == 1
 
     async def test_a_pending_approval_result_is_never_cached_for_reuse(self):
-        # P3: a gated call that returned {"status": "approval_pending", ...}
+        # A gated call that returned {"status": "approval_pending", ...}
         # must be
         # re-runnable immediately -- Claude re-issuing the identical call
         # is exactly how it collects the real decision from gate.py's
         # ledger, and that re-issue has to actually reach the connector
         # again, not be handed the same stale pending blob back by this
-        # dispatcher's own (pre-P3) completed-result cache.
+        # dispatcher's own completed-result cache.
         class OnceThenRealDataConnector(FakeConnector):
             def __init__(self):
                 super().__init__("gmail")
@@ -226,7 +226,7 @@ class TestCall:
         assert len(connector.calls) == 3  # read, write, read again (not reused)
 
     async def test_a_write_by_one_principal_does_not_stale_another_principals_cached_read(self):
-        # P7: the same staleness check above, but the write and the
+        # The same staleness check above, but the write and the
         # cached read belong to two different principals -- one user's
         # write to their own connector account has nothing to say about
         # whether another user's already-cached read of theirs is stale.
@@ -258,7 +258,7 @@ class TestCall:
         assert len(connector.calls) == 1
 
     async def test_a_failed_call_is_not_reused_by_a_later_sequential_call(self):
-        # B3 (`git show 453ae02e:local-mode-fixes-plan.md`): a failed call is popped from
+        # A failed call is popped from
         # _inflight once its exception is set, so a *new*, sequential call
         # in the same dedupe window re-runs instead of replaying the same
         # failure -- unlike a concurrent retry racing the original call
@@ -275,7 +275,7 @@ class TestCall:
         assert len(connector.calls) == 2
 
     async def test_a_result_with_bridge_deliveries_is_not_reused(self, monkeypatch):
-        # B3: a result that staged a file-bridge download carries a
+        # A result that staged a file-bridge download carries a
         # single-use download_staging token -- reusing it from the dedupe
         # cache would hand a second caller a token the first claim already
         # consumed. local_files.call_context() is entered here exactly the
@@ -387,6 +387,16 @@ class TestCheckPolicy:
         assert result["matched_rule"] == rules[0].id
         assert result["matched_rule_id"] == rules[0].id
 
+    def test_agent_supplied_self_dm_flag_cannot_predict_an_auto_accept(self):
+        from privacyfence import auto_accept
+
+        auto_accept.set_policy_v2_store_rules(policy_rules({"slack.send_message": [{"predicate": "send_to_myself"}]}))
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        result = dispatcher.check_policy(
+            "slack", "slack_send_message", {"channel_id": "D0OTHER", "text": "hi", "is_self_dm": True},
+        )
+        assert result["verdict"] == "requires_review"
+
     def test_matched_rule_id_is_none_when_no_rule_configured_at_all(self):
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
         result = dispatcher.check_policy("gmail", "gmail_get_message", {})
@@ -413,11 +423,9 @@ class TestCheckPolicy:
 
 
 # --------------------------------------------------------------------------- #
-# list_policy / propose_policy_change -- P7 of the policy v2 redesign. Their
-# v1-shaped predecessors, list_rules/propose_rule_change, were deleted in
-# PSC-3 once ADR 0004 decision 3's one-minor-release grace period was
-# honoured; these two are the sole meta-tools for reading/writing auto-accept
-# policy now, with the same "list before you propose" contract.
+# list_policy / propose_policy_change -- the sole meta-tools for
+# reading/writing auto-accept policy (ADR 0004), with a "list before you
+# propose" contract.
 # --------------------------------------------------------------------------- #
 
 class TestListPolicy:
@@ -493,10 +501,8 @@ class TestProposePolicyChangeDispatch:
 
 
 # --------------------------------------------------------------------------- #
-# status -- privacyfence_status's handler (issue #396 Phase 2). No
-# bridge-era equivalent; the meta-tool that used to stand beside it,
-# privacyfence_get_sign_in_link, is retired (the self-approval plan's
-# Phase 2) and its tests with it.
+# status -- privacyfence_status's handler. No meta-tool mints a sign-in
+# link (ADR 0013), so there is none to test beside it.
 # --------------------------------------------------------------------------- #
 
 class TestStatus:
@@ -552,12 +558,10 @@ class TestStatus:
         assert "sign_in_url" not in result
 
     def test_never_hands_a_sign_in_url_to_the_caller(self):
-        """issue #396's threat-model follow-up asked that this tool not mint
-        a live sign-in credential unprompted, since it is called because a
-        model decided to check rather than because a human asked. The
-        self-approval plan's Phase 2 widened that from "not this tool" to
-        "nothing on this server": the tool that did mint one is retired, so
-        the field stays null and the message names the companion."""
+        """This tool must not mint a live sign-in credential, since it is
+        called because a model decided to check rather than because a human
+        asked -- and nothing on this server mints one (ADR 0013), so the
+        field stays null and the message names the companion."""
         dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
         result = dispatcher.status("checking")
@@ -634,7 +638,7 @@ class TestUnattendedSessions:
 
 
 # --------------------------------------------------------------------------- #
-# notify_tools_changed -- issue #396 Part C. The actual notification send is
+# notify_tools_changed -- the actual notification send is
 # web/routes_mcp.py's own concern (its live ServerSession registry); this
 # dispatcher is just the wired seam SettingsController.refresh_connectors()
 # calls into, same shape as every other set_*_provider/listener above.
@@ -663,8 +667,7 @@ class TestToolsChangedBroadcast:
 
 
 class TestAwaitApproval:
-    """privacyfence_await_approval's handler (P3, `git show 96cd5af4^:docs/https-
-    connector-refactor-plan.md` §5.2 point 7): long-poll the registry, status only."""
+    """privacyfence_await_approval's handler: long-poll the registry, status only."""
 
     async def test_no_registry_reports_every_id_as_unknown(self):
         dispatcher = _dispatcher({})  # registry=None, the default
@@ -734,7 +737,7 @@ class TestAwaitApproval:
         assert result == {approval.id: "denied", "not-a-real-id": "unknown"}
 
     async def test_a_foreign_principals_approval_id_reads_as_unknown(self):
-        # P9, §10.5: the same cross-principal check every other approval
+        # The same cross-principal check every other approval
         # read gets -- an id belonging to a different principal must not
         # even confirm it exists.
         registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)

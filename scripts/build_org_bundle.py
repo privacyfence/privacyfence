@@ -3,9 +3,13 @@
 
 Run this once per organization after registering each cloud app (see the
 "For IT admins" section of docs/google-cloud-setup.md, docs/slack-setup.md,
-docs/salesforce-setup.md, and docs/atlassian-setup.md). The output file is
-what you distribute to your users — they install it via "Install/Update
-Organization Config…" on the General page of PrivacyFence Settings (the embedded web page).
+docs/salesforce-setup.md, and docs/atlassian-setup.md). For a local-mode
+bundle, the output file is what you distribute to your users — they install
+it via "Install/Update Organization Config…" on the General page of
+PrivacyFence Settings (the embedded web page). An org-mode bundle (--mode org)
+is installed on the server instead: copy it to <data>/org/org_config.json
+and restart the daemon (see docs/org-mode-setup-guide.md) — Settings has no
+install button in org mode.
 
 Telegram is not part of this bundle: its api_id/api_hash identify the
 PrivacyFence app itself (not your organization) and are baked into the
@@ -14,13 +18,13 @@ release build — see docs/telegram-setup.md and src/privacyfence/app_credential
 Only pass the flags for services you've set up; a connector is offered to
 users only if its section is present in the bundle. Stdlib only — no
 PrivacyFence install required to run this -- except --sign-key/
---generate-signing-key (SEC-05 full signing, below), which need the
+--generate-signing-key (bundle signing, below), which need the
 `cryptography` package (pip install cryptography) specifically, not a
 full PrivacyFence install.
 
 --enable-unattended-sessions turns on privacyfence_begin_unattended_session
 for every install of this bundle — a deliberate per-organization choice, see
-docs/TECHNICAL_REFERENCE.md's "Scheduled / unattended Cowork tasks" section.
+docs/how-it-works.md's "Unattended sessions" section.
 
 Example:
     python3 scripts/build_org_bundle.py \\
@@ -41,6 +45,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Each bundle section's org-mode connector callbacks
+# (<issuer-url>/oauth/callback/<name>); Jira and Confluence share one
+# Atlassian app and therefore one callback.
+_CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
+    "google": ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"),
+    "slack": ("slack",),
+    "salesforce": ("salesforce",),
+    "atlassian": ("atlassian",),
+}
 
 
 def _canonical_payload_bytes(bundle: dict[str, Any]) -> bytes:
@@ -154,13 +168,13 @@ def build_parser() -> argparse.ArgumentParser:
              "(useful for adding one more service to an already-distributed bundle).",
     )
 
-    google = parser.add_argument_group("Google (Gmail, Drive, Calendar, Contacts, Tasks)")
+    google = parser.add_argument_group("Google (Gmail, Drive, Calendar, Contacts, Tasks, Apps Script)")
     google.add_argument(
         "--google-client-secret", metavar="PATH",
         help="Path to the client_secret.json downloaded from Google Cloud Console "
              "(OAuth client of type 'Desktop app' for local mode, or 'Web "
              "application' for org mode -- see docs/org-mode-setup-guide.md's "
-             "§4.2).",
+             "\"Connector apps\" section).",
     )
 
     slack = parser.add_argument_group("Slack")
@@ -184,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     atlassian.add_argument("--atlassian-client-secret")
 
     mode = parser.add_argument_group(
-        "Deployment mode (P7)",
+        "Deployment mode",
     )
     mode.add_argument(
         "--mode", choices=["local", "org"], default=None,
@@ -197,8 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--server-issuer-url", metavar="URL",
         help="This daemon's own externally-reachable origin, e.g. https://pf.acme.example.com "
              "-- required with --mode org. Used to build the fixed OAuth/OIDC redirect URIs "
-             "you register with your IdP below (<issuer-url>/oauth/idp/callback and "
-             "<issuer-url>/oauth/idp/login-callback).",
+             "you register with your IdP below (<issuer-url>/oauth/idp/callback, "
+             "<issuer-url>/oauth/idp/login-callback and <issuer-url>/oauth/stepup/callback).",
     )
     mode.add_argument(
         "--server-bind-host", default="127.0.0.1",
@@ -217,8 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--server-trusted-proxy", action="append", default=[], metavar="IP", dest="server_trusted_proxies",
         help="An X-Forwarded-For/X-Forwarded-Proto-trusted reverse proxy's own IP address -- "
-             "repeat for more than one. §10.2: honored only when at least one is given here, "
-             "never by default.",
+             "repeat for more than one. Forwarded headers are honored only when at least one is "
+             "given here, never by default.",
     )
     mode.add_argument(
         "--idp-issuer", metavar="URL",
@@ -229,8 +243,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--idp-client-id", metavar="ID",
         help="The client_id PrivacyFence is registered under with your IdP -- required with "
-             "--mode org. Register it with two redirect URIs: <server-issuer-url>/oauth/idp/"
-             "callback and <server-issuer-url>/oauth/idp/login-callback.",
+             "--mode org. Register it with three redirect URIs: <server-issuer-url>/oauth/idp/"
+             "callback, <server-issuer-url>/oauth/idp/login-callback and "
+             "<server-issuer-url>/oauth/stepup/callback.",
     )
     mode.add_argument("--idp-client-secret", metavar="SECRET", help="Paired with --idp-client-id.")
     mode.add_argument(
@@ -247,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     authz = parser.add_argument_group(
-        "App-level authorization policy (SEC-22)",
+        "App-level authorization policy",
     )
     authz.add_argument(
         "--authz-allowed-domain", action="append", default=[], metavar="DOMAIN", dest="authz_allowed_domains",
@@ -269,14 +284,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     step_up = parser.add_argument_group(
-        "WebAuthn step-up (P9, D7)",
+        "WebAuthn step-up",
     )
     step_up_toggle = step_up.add_mutually_exclusive_group()
     step_up_toggle.add_argument(
         "--step-up-enabled", action="store_true",
         help="Require a fresh passkey (or IdP re-authentication) before releasing a write "
-             "approval -- off by default. Only meaningful with --mode org (§10.6: local mode's "
-             "own trust model is physical possession of the machine, which this doesn't add to).",
+             "approval -- off by default. Only meaningful with --mode org; local mode reads its "
+             "step-up settings from settings.yaml's step_up: section instead.",
     )
     step_up_toggle.add_argument(
         "--step-up-disabled", action="store_true", help="Explicitly turn step-up back off (useful with --merge).",
@@ -295,21 +310,21 @@ def build_parser() -> argparse.ArgumentParser:
     step_up.add_argument(
         "--step-up-rp-id", metavar="DOMAIN",
         help="WebAuthn Relying Party ID -- must be --server-issuer-url's own registrable domain "
-             "(a secure-context requirement, see §10.6). Defaults to that hostname, derived "
+             "(WebAuthn only runs in a secure context). Defaults to that hostname, derived "
              "automatically -- only set this to override it.",
     )
     step_up.add_argument("--step-up-rp-name", metavar="NAME", help='Shown in the OS passkey prompt. Default: "PrivacyFence".')
     step_up.add_argument(
         "--idp-step-up-acr-value", action="append", default=[], metavar="ACR", dest="idp_step_up_acr_values",
         help="An acr_values your IdP accepts to request stronger authentication on step-up's "
-             "IdP re-auth path (§10.6's \"IdP acr_values step-up ... where the IdP already does "
-             "this well\") -- repeat for more than one. Omit to fall back to plain re-"
+             "IdP re-auth path, for an IdP that already enforces stronger authentication "
+             "itself -- repeat for more than one. Omit to fall back to plain re-"
              "authentication (prompt=login) with no acr_values hint.",
     )
     step_up_require_passkey_toggle = step_up.add_mutually_exclusive_group()
     step_up_require_passkey_toggle.add_argument(
         "--step-up-require-passkey", action="store_true",
-        help="Close the IdP-reauth fallback (#406): a principal with no enrolled passkey gets a "
+        help="Close the IdP-reauth fallback: a principal with no enrolled passkey gets a "
              "hard failure pointing at /security instead of a silent downgrade to plain IdP "
              "re-authentication. Off by default -- only meaningful with --step-up-enabled.",
     )
@@ -325,7 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Let Claude Cowork declare a connection unattended (privacyfence_"
              "begin_unattended_session) for scheduled/triggered runs with no human "
              "present. Off by default -- a deliberate per-organization opt-in, see "
-             "docs/TECHNICAL_REFERENCE.md's \"Scheduled / unattended Cowork tasks\" section.",
+             "docs/how-it-works.md's \"Unattended sessions\" section.",
     )
     unattended_toggle.add_argument(
         "--disable-unattended-sessions", action="store_true",
@@ -362,8 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     audit_forwarding = parser.add_argument_group(
-        "Centralized audit-log forwarding (org mode, SEC-23, "
-        "src/privacyfence/audit_forwarding.py)",
+        "Centralized audit-log forwarding (org mode, src/privacyfence/audit_forwarding.py)",
     )
     audit_forwarding.add_argument(
         "--audit-forwarding-kind", choices=("syslog", "http"), default=None,
@@ -412,7 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     signing = parser.add_argument_group(
-        "Bundle signing (SEC-05 full signing, src/privacyfence/org_bundle_signing.py)",
+        "Bundle signing (src/privacyfence/org_bundle_signing.py)",
     )
     signing.add_argument(
         "--generate-signing-key", metavar="PATH",
@@ -681,21 +695,37 @@ def main(argv: list[str] | None = None) -> int:
     summary += f", signed={'signature' in bundle}"
     print(f"Wrote {out_path} with: {summary}")
     if bundle.get("mode") == "org":
+        # Read from the bundle, not args: a --merge run without --mode org
+        # keeps the existing server/idp sections and has none of those flags set.
+        issuer = bundle["server"]["issuer_url"].rstrip("/")
         print(
-            f"Org mode: register {args.server_issuer_url}/oauth/idp/callback and "
-            f"{args.server_issuer_url}/oauth/idp/login-callback as redirect URIs for client_id "
-            f"{args.idp_client_id!r} with your IdP, if you haven't already."
+            f"Org mode: register {issuer}/oauth/idp/callback, {issuer}/oauth/idp/login-callback and "
+            f"{issuer}/oauth/stepup/callback as redirect URIs for client_id "
+            f"{bundle['idp']['client_id']!r} with your IdP, if you haven't already."
         )
+        connector_uris = [
+            f"{issuer}/oauth/callback/{name}" for section in services for name in _CONNECTOR_CALLBACKS[section]
+        ]
+        if connector_uris:
+            print("Register these redirect URIs with each connector's own app:")
+            for uri in connector_uris:
+                print(f"  {uri}")
     if "signature" in bundle:
         print(
             "This bundle is signed. The first install that reads it will trust and pin its "
             "signing key (trust-on-first-use) -- every bundle installed on that machine "
             "afterwards, including any future unsigned one, must verify against that same key."
         )
-    print(
-        'Distribute this file to your users. They install it via "Install/Update '
-        'Organization Config…" on the General page of PrivacyFence Settings.'
-    )
+    if bundle.get("mode") == "org":
+        print(
+            "Install it on the server: copy it to <data>/org/org_config.json (owner-only, mode 0600) "
+            "and restart the daemon. Settings has no install button in org mode."
+        )
+    else:
+        print(
+            'Distribute this file to your users. They install it via "Install/Update '
+            'Organization Config…" on the General page of PrivacyFence Settings.'
+        )
     return 0
 
 

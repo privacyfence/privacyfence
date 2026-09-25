@@ -1,4 +1,4 @@
-"""Org identity: OIDC against the organization's IdP (P7, decision B).
+"""Org identity: OIDC against the organization's IdP (ADR 0011).
 
 PrivacyFence never asks a human for a password of its own. Every org-mode
 sign-in -- whether it's a browser visiting ``/login`` (web/routes_org_
@@ -6,9 +6,9 @@ identity.py) or Claude's own OAuth 2.1 dance completing through the org
 authorization server (web/oauth_provider.py's ``OrgOAuthProvider``) -- goes
 through the exact same four functions below: build an authorization URL,
 exchange the code the IdP redirects back with, verify the ID token it
-returns, and turn its claims into a ``Principal``. That's deliberate: §9.4's
-"the browser session and the MCP token are then provably the same
-identity" argument for decision B only holds if both paths resolve identity
+returns, and turn its claims into a ``Principal``. That's deliberate: ADR
+0011's "the browser session and the MCP token are then provably the same
+identity" argument only holds if both paths resolve identity
 through literally the same code, not two implementations that happen to
 agree today.
 
@@ -49,7 +49,7 @@ DEFAULT_SCOPE = "openid email profile"
 _HTTP_TIMEOUT_SECONDS = 10
 ID_TOKEN_ALGORITHMS = ["RS256", "ES256"]
 
-# SEC-11: the escape hatch for local development against an IdP that only
+# The escape hatch for local development against an IdP that only
 # speaks plain HTTP (a devcontainer Keycloak, a loopback OIDC test server,
 # ...). Never set this in a real deployment -- everything it bypasses
 # (discover_idp's own issuer fetch, and every endpoint the discovery
@@ -86,17 +86,17 @@ class IdpConfig:
     authorization_endpoint: str
     token_endpoint: str
     jwks_uri: str
-    # §9.4: "Group/claim mapping decides who is an admin ... versus a plain
-    # user." Empty admin_group_claim means "nobody is admin via this
+    # Group/claim mapping decides who is an admin versus a plain user.
+    # Empty admin_group_claim means "nobody is admin via this
     # mechanism" -- not "everybody is", the fail-closed direction.
     admin_group_claim: str = ""
     admin_group_values: tuple[str, ...] = ()
-    # P9, §10.6/§15 D7: "IdP acr_values step-up ... where the IdP already
-    # does this well." Empty means the IdP has no configured step-up ACR to
+    # Step-up can ask the IdP for stronger authentication through
+    # acr_values, where the IdP already supports it. Empty means the IdP has no configured step-up ACR to
     # ask for -- web/routes_org_stepup.py's IdP step-up flow still works
-    # (it always sends prompt=login/max_age=0, OIDC re-auth alone is D7's
-    # documented fallback for a user with no passkey enrolled), it just
-    # never adds an acr_values hint the IdP might not support.
+    # (it always sends prompt=login/max_age=0, and OIDC re-auth alone is the
+    # fallback for a user with no passkey enrolled), it just
+    # never adds an acr_values hint the IdP might not support. See ADR 0066.
     step_up_acr_values: tuple[str, ...] = ()
 
     @staticmethod
@@ -107,14 +107,14 @@ class IdpConfig:
         not silently falling back to local mode (mode is its own explicit
         key -- see org_mode.py).
 
-        SEC-11: this is the only place ``discover_idp``'s result feeds an
+        This is the only place ``discover_idp``'s result feeds an
         ``IdpConfig`` that every subsequent OIDC call trusts, so
         ``discover_idp`` itself is where the discovery document gets
         validated (shape, issuer cross-check, HTTPS-only endpoints) --
         raises ``org_mode.ConfigurationError`` rather than returning
         ``None`` for those, since unlike a genuinely absent ``idp`` section
-        this is a *broken* config, the same distinction SEC-04 draws for
-        ``org_config.json`` itself."""
+        this is a *broken* config, the same distinction startup draws between
+        an absent and a malformed ``org_config.json``."""
         idp = org_config.get("idp")
         if not isinstance(idp, dict):
             return None
@@ -144,7 +144,7 @@ def discover_idp(issuer: str) -> dict[str, Any]:
     so there's exactly one way this ever goes wrong, not two to keep in
     sync when the IdP rotates an endpoint URL.
 
-    SEC-11: ``issuer`` itself must be HTTPS (an org-mode IdP config that
+    ``issuer`` itself must be HTTPS (an org-mode IdP config that
     somehow ends up plain-HTTP means everything downstream -- the
     discovery fetch below, the authorization redirect, the token exchange,
     JWKS fetch -- is interceptable/spoofable on the network path), and the
@@ -153,7 +153,7 @@ def discover_idp(issuer: str) -> dict[str, Any]:
     before this returns -- see ``_validate_discovery_metadata``'s
     docstring for why that cross-check specifically matters. Both checks
     raise ``org_mode.ConfigurationError``, same as every other "broken
-    org-mode config" case (SEC-04)."""
+    org-mode config" case."""
     _require_https(issuer, what="idp.issuer")
     url = issuer.rstrip("/") + DISCOVERY_PATH
     resp = requests.get(url, timeout=_HTTP_TIMEOUT_SECONDS)
@@ -162,7 +162,7 @@ def discover_idp(issuer: str) -> dict[str, Any]:
 
 
 def _validate_discovery_metadata(metadata: Any, *, expected_issuer: str) -> dict[str, Any]:
-    """SEC-11: validate the discovery document's shape and provenance
+    """Validate the discovery document's shape and provenance
     before any of it is trusted to build an ``IdpConfig`` -- a document
     that merely happens to be well-formed JSON is not the same as one
     that's actually authoritative for this IdP.
@@ -213,7 +213,7 @@ def build_authorization_url(
     one to hand (see PendingAuthorization/LoginAttempt in oauth_provider.py/
     org_session.py, both of which generate one alongside state/PKCE).
 
-    ``extra_params`` (P9) is
+    ``extra_params`` is
     how web/routes_org_stepup.py's IdP step-up flow layers ``prompt``/
     ``max_age``/``acr_values`` onto the same authorization request this
     function already builds for an ordinary sign-in, rather than a second
@@ -279,7 +279,7 @@ def verify_id_token(idp: IdpConfig, id_token: str, *, nonce: str) -> dict[str, A
 def principal_from_claims(claims: dict[str, Any], idp: IdpConfig) -> Principal:
     """The one place OIDC claims become a ``Principal`` -- shared by
     web/oauth_provider.py's IdP-callback handler and web/routes_org_
-    identity.py's browser ``/login/callback``, which is what makes §9.4's
+    identity.py's browser ``/login/callback``, which is what makes ADR 0011's
     "the browser session and the MCP token are then provably the same
     identity" true by construction rather than by two implementations
     happening to agree.
@@ -303,7 +303,7 @@ def principal_from_claims(claims: dict[str, Any], idp: IdpConfig) -> Principal:
 class AuthorizationDenied(PermissionError):
     """Raised by ``check_authz_policy`` when a principal the IdP itself
     already authenticated fails PrivacyFence's own app-level policy
-    (SEC-22) -- unlike
+    (allowed domains, required groups) -- unlike
     every other exception this module raises (a bad code, an unverifiable
     token, a discovery document that doesn't check out), this one means the
     IdP leg *succeeded*; PrivacyFence itself is the one declining.
@@ -317,7 +317,7 @@ class AuthorizationDenied(PermissionError):
     log. Deliberately not surfaced to the browser/OAuth client itself: an
     unauthenticated caller should not learn from the response alone
     whether they failed identity verification or an org-specific allowlist
-    (SEC-10's safe-error-taxonomy posture, applied here too)."""
+    (errors never tell an unauthenticated caller more than it needs)."""
 
 
 def check_authz_policy(principal: Principal, claims: dict[str, Any], policy: AuthzPolicyConfig) -> None:

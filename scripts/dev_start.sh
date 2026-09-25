@@ -5,13 +5,12 @@
 # otherwise edits Claude Desktop's own config file directly.
 #
 # The daemon (privacyfence-app) is still Python, run from .venv. The shim
-# (mcpb/shim/, the stdio<->/mcp Streamable HTTP proxy that replaced the
-# bridge at P5, decision D11) is Node/TypeScript and is rebuilt on every
-# run so it always reflects the current checkout. Unlike the old bridge,
-# the shim carries no protocol version of its own to keep in sync with
-# the daemon's (it has no schema knowledge at all -- see mcpb/shim/'s own
-# README/module comments), so there's no version pinning to do here
-# beyond a plain build.
+# (mcpb/shim/, the stdio<->/mcp Streamable HTTP proxy, ADR 0012) is
+# Node/TypeScript and is rebuilt on every run so it always reflects the
+# current checkout. The shim carries no protocol version of its own to keep
+# in sync with the daemon's (it has no schema knowledge at all -- see
+# mcpb/shim/'s own README/module comments), so there's no version pinning
+# to do here beyond a plain build.
 #
 # Usage:
 #   ./scripts/dev_start.sh
@@ -43,19 +42,26 @@ echo "Building the dev shim (mcpb/shim/dist/shim.js)..."
 ( cd mcpb/shim && npm install --silent && npm run build --silent )
 
 SHIM_ENTRY="$(pwd)/mcpb/shim/dist/shim.js"
+# A source daemon's data dir is the checkout root, not the per-user directory
+# a packaged shim looks in, so the shim is told where the daemon writes
+# mcp_url and its control socket. Asked of paths.py itself so the two can't
+# disagree (the Windows pipe name is a hash of this exact string).
+DEV_DATA_DIR="$(.venv/bin/python -c 'from privacyfence import paths; print(paths.data_dir())')"
 DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 USE_CLI=0
 USE_DESKTOP_CONFIG=0
 
 set_desktop_mcp_entry() {
   # $1: "add" or "remove"
-  python3 - "$DESKTOP_CONFIG" "$SHIM_ENTRY" "$1" <<'PYEOF'
+  python3 - "$DESKTOP_CONFIG" "$SHIM_ENTRY" "$DEV_DATA_DIR" "$1" <<'PYEOF'
 import json, sys
-path, shim_entry, action = sys.argv[1], sys.argv[2], sys.argv[3]
+path, shim_entry, dev_data_dir, action = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(path) as f:
     config = json.load(f)
 if action == "add":
-    config.setdefault("mcpServers", {})["privacyfence"] = {"command": "node", "args": [shim_entry]}
+    config.setdefault("mcpServers", {})["privacyfence"] = {
+        "command": "node", "args": [shim_entry], "env": {"PRIVACYFENCE_DEV_DATA_DIR": dev_data_dir},
+    }
 else:
     config.get("mcpServers", {}).pop("privacyfence", None)
 with open(path, "w") as f:
@@ -68,7 +74,7 @@ if command -v claude >/dev/null 2>&1; then
   USE_CLI=1
   echo "Registering dev shim with the Claude Code CLI (privacyfence -> node $SHIM_ENTRY)..."
   claude mcp remove privacyfence >/dev/null 2>&1 || true
-  claude mcp add privacyfence node "$SHIM_ENTRY"
+  claude mcp add privacyfence -e "PRIVACYFENCE_DEV_DATA_DIR=$DEV_DATA_DIR" -- node "$SHIM_ENTRY"
 elif [ -f "$DESKTOP_CONFIG" ]; then
   USE_DESKTOP_CONFIG=1
   echo "No 'claude' CLI on PATH — registering directly in Claude Desktop's config instead:"
@@ -81,9 +87,11 @@ elif [ -f "$DESKTOP_CONFIG" ]; then
 else
   echo "claude CLI not found on PATH, and no Claude Desktop config found at:"
   echo "  $DESKTOP_CONFIG"
-  echo "Register manually with: claude mcp add privacyfence node \"$SHIM_ENTRY\""
-  echo "or add a \"privacyfence\": {\"command\": \"node\", \"args\": [\"$SHIM_ENTRY\"]} entry under"
-  echo "\"mcpServers\" in Claude Desktop's config yourself."
+  echo "Register manually with:"
+  echo "  claude mcp add privacyfence -e \"PRIVACYFENCE_DEV_DATA_DIR=$DEV_DATA_DIR\" -- node \"$SHIM_ENTRY\""
+  echo "or add a \"privacyfence\": {\"command\": \"node\", \"args\": [\"$SHIM_ENTRY\"],"
+  echo "\"env\": {\"PRIVACYFENCE_DEV_DATA_DIR\": \"$DEV_DATA_DIR\"}} entry under \"mcpServers\" in"
+  echo "Claude Desktop's config yourself."
 fi
 
 cleanup() {

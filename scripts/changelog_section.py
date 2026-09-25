@@ -5,10 +5,9 @@ This is what makes the GitHub Release body and the changelog the same text. `.gi
 build.yml`'s `finalize-release` job runs this script once -- after `needs:` has proven every build
 job succeeded -- and hands the result to `softprops/action-gh-release` as `body_path:` in the same
 call that attaches the files, so the notes are written once, reviewed in the pull request that
-writes them, and tag day involves no writing at all. (Through privacyfence/privacyfence#373 this
-ran four times, once per attaching job, each rendering identical text.) Before this, the release
-body was whatever GitHub's "generate release notes" button produced -- a list of every merged pull
-request, which for 4.0.0 would have been about 127 lines nobody reads.
+writes them, and tag day involves no writing at all. The alternative, GitHub's "generate release
+notes" button, produces a list of every merged pull request -- for 4.0.0 about 127 lines nobody
+reads (ADR 0023).
 
 Direction of the dependency matters: this reads a version *out of* the changelog, it never
 determines one. setuptools_scm remains the only version source (see this repo's CLAUDE.md

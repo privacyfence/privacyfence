@@ -124,7 +124,7 @@ pii_detection:
   # popup for likely personal data (Hungarian, English, and German — IBANs,
   # credit card numbers, national ID/tax/social-security numbers, and
   # similar; email addresses and phone numbers are deliberately not
-  # detected, see docs/TECHNICAL_REFERENCE.md). When something is flagged,
+  # detected, see docs/pii-detection-keywords.md). When something is flagged,
   # the popup is tinted red and a second "Are you sure?" dialog is required
   # before Allow once (or Always allow) takes effect. Toggled automatically
   # when you use "PII Detection Gate" in PrivacyFence Settings.
@@ -141,8 +141,8 @@ pii_detection:
   # PII-refinement trial capture -- OFF by default, and not meant to stay on
   # indefinitely. When true, the audit log's "PII Match Details" column also
   # records the literal matched text (redacted for value-bearing categories
-  # like IBAN/credit card/national IDs -- see docs/TECHNICAL_REFERENCE.md's
-  # "PII detection gate" section) for a request that was actually approved,
+  # like IBAN/credit card/national IDs -- see docs/approvals-and-policy.md's
+  # "The PII check" section) for a request that was actually approved,
   # or a fixed "details hidden" placeholder for one that was denied. There's
   # no Settings-page toggle for this one deliberately -- set it for a bounded
   # trial window (restart required to pick it up), review the weekly Excel
@@ -167,8 +167,8 @@ update_check:
 # opt-in gate) is NOT set here. It's a deliberate per-organization choice,
 # not a per-user setting, so it lives in the organization config bundle
 # (org_config.json, installed via "Install/Update Organization Config…" in
-# PrivacyFence Settings) — see docs/TECHNICAL_REFERENCE.md's "Scheduled /
-# unattended Cowork tasks" section.
+# PrivacyFence Settings) — see docs/how-it-works.md's "Unattended
+# sessions" section.
 
 # Auto-accept rules: requests PrivacyFence approves without showing you a
 # card. Managed from PrivacyFence Settings' "Auto-accept" page, the approval
@@ -177,8 +177,8 @@ update_check:
 # rule and mint its "id" from (predicate, value, conditions), which is what
 # the Auto-accept page's usage counts are keyed on. Each rule is a scope
 # ("predicate" + "value": which resources it trusts), the operations it
-# covers, and optional conditions that must also hold. See "Auto-accept" in
-# docs/TECHNICAL_REFERENCE.md for every predicate and condition.
+# covers, and optional conditions that must also hold. See "Always-allow and
+# policy rules" in docs/approvals-and-policy.md for every scope and condition.
 auto_accept:
   version: 2
   rules:
@@ -200,22 +200,18 @@ web:
   # Port the embedded HTTP server listens on -- shared by the approval
   # surface, /mcp below, and /settings, one server either way. Always
   # bound to localhost only in this (local) mode -- see web/server.py's
-  # module docstring. The embedded server itself always runs in local mode
-  # since P10, decision D6: the web approval UI is the only one there is,
-  # so there's no "off" switch for it the way there used to be a
-  # native/web choice (`web.approval_ui`, removed at P10 -- this key is
-  # simply gone now, not just defaulted).
+  # module docstring. The web approval UI is the only approval UI there
+  # is, so the embedded server has no "off" switch (the old
+  # `web.approval_ui` native/web choice is gone, not just defaulted).
   port: 8765
   mcp:
-    # Turns on the /mcp Streamable HTTP endpoint (P2) -- Claude talks to
-    # PrivacyFence directly over HTTP. On by default as of D11/P4b:
+    # Turns on the /mcp Streamable HTTP endpoint -- Claude talks to
+    # PrivacyFence directly over HTTP. On by default because
     # PrivacyFence.mcpb installs a thin stdio shim for Claude Desktop that
     # only speaks /mcp, so a fresh install needs this on for that
     # extension's zero-config promise ("no config file edited") to
-    # actually hold -- P4b's own exit criterion. Since P5 retired the
-    # original bridge/IPC-socket transport, this is no longer "additive
-    # alongside the bridge" -- it's the only way Claude reaches this
-    # daemon at all. Flip to false only if you want this daemon completely
+    # actually hold. It is also the only way Claude reaches this daemon
+    # at all. Flip to false only if you want this daemon completely
     # unreachable from Claude for a while (a full stop, not a fallback to
     # something else that still works). Once enabled, point a Streamable
     # HTTP MCP client at http://localhost:<port>/mcp with
@@ -223,12 +219,11 @@ web:
     enabled: true
   settings:
     # Serve /settings and its POST /api/settings/{action} dispatcher.
-    # Through P9 this defaulted to false, since a native settings window
-    # covered the same ground; P10 deleted that window (decision D6), so
-    # this now defaults to true -- without it there is no interactive way
-    # at all to install an organization config bundle, authenticate a
-    # connector, or edit a rule (hand-editing this file and
-    # org_config.json directly still works regardless of this setting).
+    # On by default: there is no native settings window, so without it
+    # there is no interactive way at all to install an organization
+    # config bundle, authenticate a connector, or edit a rule
+    # (hand-editing this file and org_config.json directly still works
+    # regardless of this setting).
     # Flip to false only if you're deliberately editing config by hand and
     # want /settings unreachable too.
     enabled: true
@@ -240,11 +235,11 @@ web:
     allow_quit: true
   notifications:
     # Desktop notifications for a new pending approval while the
-    # /approvals tab is open but not focused (docs/approval-list-ui-ux.md
-    # §4) -- tiers 0 (title badge, aria-live announcement) and 1
+    # /approvals tab is open but not focused (docs/approvals-and-policy.md's
+    # "Notifications") -- tiers 0 (title badge, aria-live announcement) and 1
     # (registration.showNotification(), no push service involved, nothing
     # leaves the machine) only. Tier 2 (web push, a closed tab, a phone) is
-    # org mode/P7+ work and has no key here yet.
+    # not built yet and has no key here.
     enabled: true
     # How much a tier-1 notification is allowed to say, when it's for
     # exactly one new pending approval (grouped/multi-approval
@@ -257,11 +252,11 @@ web:
     #   detailed  adds the row's own title/summary line too (e.g. "Send
     #             email to alice@example.com") -- the one level that can
     #             put gated content on a lock screen/watch/meeting-room
-    #             mirror; never the default (docs/approval-list-ui-ux.md
-    #             §4.3)
+    #             mirror; never the default (docs/approvals-and-policy.md's
+    #             "Notifications")
     detail: standard # minimal | standard | detailed
 
-# WebAuthn passkey step-up (#426 Phase 1/2) -- enrolling a passkey here
+# WebAuthn passkey step-up -- enrolling a passkey here
 # mounts /security (linked from the Settings page) and lets you register a
 # Face ID/Touch ID/Windows Hello credential against this install.
 # Enrolled credentials live under a service-owned subdirectory of the data
@@ -289,8 +284,8 @@ step_up:
   #
   # You don't have to hand-edit this file to turn it on: once a passkey is
   # enrolled at /security, the Settings page's Security card has a "Turn
-  # on" button that sets `enabled` and `require_passkey` together (B9 of
-  # the 4.1.0 action plan) and takes effect immediately, no restart. Editing
+  # on" button that sets `enabled` and `require_passkey` together and
+  # takes effect immediately, no restart. Editing
   # this file directly still works too, and is the only way back to
   # `false` -- there's no UI control that turns step-up back off.
   #
@@ -320,7 +315,7 @@ step_up:
   # Shown to your platform authenticator's own passkey picker/prompt.
   rp_name: PrivacyFence
   # Whether a passkey assertion is *mandatory*, not merely offered when one
-  # happens to be enrolled (#426 Phase 3). With this on: an approving
+  # happens to be enrolled. With this on: an approving
   # decision with nothing enrolled is refused outright (a 403 naming
   # /security), not silently released; the same is true for a sensitive
   # subset of the settings actions (rule/grant/policy/PII changes -- see
@@ -343,7 +338,7 @@ step_up:
   # Unset: on for a packaged install, off otherwise (see the note above
   # this section). Uncomment to decide for yourself.
   # require_passkey: false
-  # The approval binder's own batch decide endpoint (/approvals, Phase 3):
+  # The approval binder's own batch decide endpoint (/approvals):
   # "single_assertion" -- the default -- lets one passkey prompt release a
   # whole selected batch of approvals at once, bound to the exact set you
   # selected (adding, dropping, or flipping any one item invalidates it).
@@ -354,17 +349,6 @@ step_up:
   # one at a time from their own card instead. A deny-only batch is
   # unaffected either way -- denying never needs step-up.
   batch: single_assertion
-
-# P3 of the auto-accept policy redesign: which evaluator decides an auto-accept call. Both the
-# existing evaluator and the new policy/engine.py one run on every call regardless of this
-# setting -- this only decides which answer is acted on, and which is shadowed (logged at
-# WARNING on a disagreement, never at the content level). Leave unset, or "v1", to keep today's
-# evaluator load-bearing; this is the default for a reason -- nothing on disk changes yet, and no
-# auto-accept rule you've configured needs touching for this release. Setting "v2" makes the new
-# evaluator authoritative instead; switching back to "v1" is the documented rollback if that
-# regresses something, no release needed.
-policy:
-  engine: v1
 
 # ADR 0007 (docs/adr/0007-local-file-bridge.md): the local file bridge --
 # how a privilege-separated daemon moves bytes to/from a path an agent

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Local-only QA connector smoke-check and fixture recorder.
 
-Run this on a developer's own machine only -- never in CI, never with any
-credential provisioned to GitHub Actions or any other cloud service. It
+Run this on a developer's own machine or on the self-hosted QA runner only
+(``connector-live-check.yml``, ``qa-record-fixture.yml``) -- never on a
+GitHub-hosted runner, never with any credential provisioned to GitHub Actions
+or any other cloud service (ADR 0019). It
 reuses the exact OAuth token files ``privacyfence-app --<connector>-oauth``
 already writes to the git-ignored ``credentials/`` directory
 (``daemon_main.TOKEN_FILES``), and talks to your real, already-authenticated
-accounts -- the same ones set up per ``docs/qa-environment-setup.md``.
+accounts -- the same ones set up per ``docs/connector-qa.md``.
 
 Run with the project's own venv, not whatever ``python3`` is first on PATH --
 this imports the same ``privacyfence`` package and third-party clients
@@ -38,12 +40,12 @@ this imports the same ``privacyfence`` package and third-party clients
         after itself instead of accumulating QA-account clutter forever.
 
 Both --check/--record accept ``--report-file PATH`` to also save the printed
-report, ready to paste into a PR description (see ``docs/testing-policy.md``
-§2.1); so does --lifecycle.
+report, ready to paste into a PR description (see ``docs/testing-policy.md``'s
+live-connector layer); so does --lifecycle.
 
 Only reads from ``tests/fixtures/qa_environment.yaml`` -- a small, non-secret
-manifest of your seed artifacts' IDs/keys/tags (see
-``docs/qa-environment-setup.md``) -- ever decide *which* real object this
+manifest of your seed artifacts' IDs/keys/tags (see ``docs/connector-qa.md``'s
+"Seed data" section) -- ever decide *which* real object this
 script is allowed to touch. If a fetched object's title/summary doesn't
 carry the ``[QATEST]`` tag that manifest expects, recording is refused for
 that item rather than silently capturing whatever was fetched.
@@ -94,13 +96,13 @@ QATEST_TAG = "[QATEST]"
 # eventually-consistent-delete retries below -- every *_client.py already
 # gets its own logger this way and logs its own request/response at
 # info/debug level (e.g. jira_client.py's "create_issue created %s",
-# "update_issue %s: updated fields %s"); this script itself never had one
-# until now because it otherwise only ever prints its report to stdout.
+# "update_issue %s: updated fields %s"); this script otherwise only ever
+# prints its report to stdout.
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------- #
 # Identity-field redaction -- runs unconditionally on every recording, never
-# optional. Content being synthetic (docs/qa-environment-setup.md) does not
+# optional. Content being synthetic (docs/connector-qa.md) does not
 # make an API response's structural identity fields synthetic too: a page
 # you wrote yourself still says *you* wrote it, in your real account id and
 # real name, regardless of what the page says.
@@ -565,7 +567,7 @@ def load_manifest() -> dict[str, Any]:
             f"error: manifest not found at {MANIFEST_PATH}\n"
             "It's git-ignored (not committed -- see tests/fixtures/qa_environment.yaml.example).\n"
             f"cp {MANIFEST_PATH}.example {MANIFEST_PATH}\n"
-            "then work through docs/qa-environment-setup.md and fill in your seed artifacts'\n"
+            "then work through docs/connector-qa.md's \"Seed data\" section and fill in your seed artifacts'\n"
             "IDs/keys in that file.",
             file=sys.stderr,
         )
@@ -936,7 +938,7 @@ def check_salesforce(record: bool, manifest: dict[str, Any]) -> list[CheckResult
     report_name = cfg.get("report_name", "PrivacyFence QA Report")
     object_type = cfg.get("object_type", "Account")
     seed_record_id = cfg.get("seed_record_id", "")
-    # No separate seed artifact here -- qa-environment-setup.md §8 already
+    # No separate seed artifact here -- connector-qa.md's "Seed: Salesforce" already
     # has you create sample records tagged [QATEST]; the recorder just
     # targets one of those instead of adding a new one.
     seed_record_name = cfg.get("seed_record_name", f"PrivacyFence QA — Acme Test Co {QATEST_TAG}")
@@ -1025,7 +1027,7 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
             "gmail", "get_message", "(unconfigured)", False,
             "gmail.seed_message_id is not set in tests/fixtures/qa_environment.yaml -- "
             "Gmail has no by-subject resolve fallback, fill this in from the seed thread "
-            "in qa-environment-setup.md §1",
+            "in docs/connector-qa.md's \"Seed: Gmail\" section",
         )]
 
     results: list[CheckResult] = []
@@ -1050,7 +1052,7 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except GmailClientError as exc:
         results.append(CheckResult("gmail", "get_message", seed_message_id, False, str(exc)))
 
-    # The draft tools' signature/send_as source (#643). Account-level, so no
+    # The draft tools' signature/send_as source. Account-level, so no
     # seed artifact: every account has at least its primary address here.
     try:
         with RawCaptureExecute() as cap:
@@ -1085,7 +1087,7 @@ def check_drive(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # here, so this only proves the raw-response -> DriveFile mapping
     # stays correct (contract drift), not popup-preview completeness. No
     # new seed artifact needed: targets the QA Sandbox folder
-    # qa-environment-setup.md §2 already has you create, identified by its
+    # connector-qa.md's "Seed: Drive" already has you create, identified by its
     # exact name rather than a [QATEST] body tag (a folder has no body,
     # and this one is already unique/durable by construction).
     cfg = manifest.get("drive") or {}
@@ -1191,7 +1193,7 @@ def check_contacts(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # deliberately NOT applied: doing so would scrub the very field
     # mapping this check exists to verify (a real displayName/value would
     # come back as a placeholder either way, masking a genuine parsing
-    # bug). See qa-environment-setup.md §5.
+    # bug). See connector-qa.md's "Seed: Contacts".
     cfg = manifest.get("contacts") or {}
     seed_contact_resource_name = cfg.get("seed_contact_resource_name", "")
     seed_contact_display_name = cfg.get("seed_contact_display_name", f"PrivacyFence QA Test Contact {QATEST_TAG}")
@@ -1372,7 +1374,7 @@ def _build_slack_client() -> SlackClient:
 
 
 def check_slack(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
-    # No new seed artifact needed -- qa-environment-setup.md §3 already has
+    # No new seed artifact needed -- connector-qa.md's "Seed: Slack" already has
     # you create the privacyfence-qa-control channel with a durable,
     # [QATEST]-tagged seed message and threaded reply (it exists precisely
     # so it does *not* match the approved-channel grant); the recorder just
@@ -1470,7 +1472,7 @@ def check_telegram(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
 
 async def _check_telegram_async(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
-    # No separate seed artifact here -- qa-environment-setup.md §7 already
+    # No separate seed artifact here -- connector-qa.md's "Seed: Telegram" already
     # has you send yourself one durable, [QATEST]-tagged message in Saved
     # Messages. The recorder finds that chat via the is_self flag, the same
     # way the test prompt itself does (Saved Messages has no fixed name to
@@ -1547,7 +1549,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
 # Static manifest of the tests/fixtures/live/<connector>/*.json file(s) each
 # CONNECTOR_CHECKS entry's own CheckResult(...) calls above are wired to
 # (re-)write in --record mode against the highest-risk read path(s) for
-# that connector (TST-08).
+# that connector.
 # Kept as a plain dict here, independent of ever actually calling a live
 # API, so tests/unit/test_qa_fixture_recorder.py's TestFixturePresence can
 # assert every entry's file(s) exist and are non-empty valid JSON on every
@@ -1605,7 +1607,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #   - gmail -- create_draft() has no matching get_draft()/update_draft() in
 #     GmailClient, so there is no read/update step to exercise; creating and
 #     immediately deleting a draft is not the create/read/update/delete
-#     cycle this phase asks for.
+#     cycle this section checks.
 #   - drive, slack -- both have write methods (create_blank_file/
 #     write_sheet_values, send_message) but neither exposes the kind of
 #     update-in-place-then-read-it-back pair the four connectors above do.
@@ -1641,12 +1643,12 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 # after itself was considered and rejected. lifecycle_confluence() verifies
 # create/get/update only and leaves the page behind; see its own docstring.
 #
-# Calendar is no longer in that "reaches past the boundary" group: issue
-# #415 added a real, gated (popup-approved) calendar_delete_event tool and
-# CalendarClient.delete_event(), so lifecycle_calendar() below now cleans up
+# Calendar is not in that "reaches past the boundary" group: it has a real,
+# gated (popup-approved) calendar_delete_event tool and
+# CalendarClient.delete_event(), so lifecycle_calendar() below cleans up
 # through the same client method a real MCP call would use, not a raw
-# events().delete() service call the way it (and jira/tasks, which still
-# have no such method) still have to.
+# events().delete() service call the way jira/tasks, which have no such
+# method, still have to.
 # ---------------------------------------------------------------------------- #
 
 LIFECYCLE_TAG = "[QATEST-LIFECYCLE]"
@@ -1835,8 +1837,8 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
             # Cleans up through the same client method a real
             # calendar_delete_event MCP call would use (default scope=
             # "this") -- see this section's own module comment above for
-            # why calendar no longer needs the raw events().delete()
-            # service call jira/tasks still do.
+            # why calendar does not need the raw events().delete() service
+            # call jira/tasks still do.
             delete_note = _attempt_delete(
                 lambda: client.delete_event(calendar_id, event_id),
                 request_desc=f"calendar_id={calendar_id!r}, event_id={event_id!r}",
@@ -1860,9 +1862,9 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
                 if confirm_note:
                     note = f"{note}; {confirm_note}" if note else confirm_note
 
-    # Issue #415's own round trip, a second and independent check alongside
-    # the plain event above -- see _lifecycle_calendar_recurrence's own
-    # docstring for why it's split out and what it does and doesn't cover.
+    # The recurring-event delete round trip, a second and independent check
+    # alongside the plain event above -- see _lifecycle_calendar_recurrence's
+    # own docstring for why it's split out and what it does and doesn't cover.
     # Its own cleanup failure folds into cleanup_ok (same meaning as the
     # plain event's: "something this run created didn't get cleaned up"),
     # never into ok -- ok stays "the create/read/update assertions

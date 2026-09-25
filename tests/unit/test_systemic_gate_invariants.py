@@ -25,15 +25,15 @@ guard before this module existed:
   layer to strip -- documented rather than silently excluded, per this
   repo's own "where the codebase is inconsistent, call it out explicitly"
   convention (docs/coding-and-testing-guidelines.md).
-- All ten remaining credential/token-file writers across the
+- All ten credential/token-file writers across the
   ``*_client.py``/``*_oauth.py`` modules go through ``secure_files.py``'s
   ``atomic_write_text``/``atomic_write_json`` rather than a hand-rolled
-  ``open()``/``.write()`` -- the SEC-09 invariant (secure_files.py's own
-  module docstring) checked per call site here, rather than trusted to have
-  been done once at each site and stay that way. (Eleven at the time the
-  review was written; see ``TOKEN_WRITE_SITES``'s own comment for why
-  ``room_directory_client.py``'s site doesn't count against this specific
-  check anymore -- it's still covered, just separately.)
+  ``open()``/``.write()`` -- the restrictive-file-permissions invariant
+  (secure_files.py's own module docstring) checked per call site here,
+  rather than trusted to have been done once at each site and stay that
+  way. (See ``TOKEN_WRITE_SITES``'s own comment for why
+  ``scripts/sync_room_directory.py``'s write doesn't count against this
+  specific check -- it's still covered, just separately.)
 - Nothing that decides a gated call -- a ``CONDITION_SELECTORS`` entry,
   ``auto_accept.ReviewContext``, any ``policy/`` module -- reads agent
   identity: ADR 0006 Invariant 1, a claimed identity never changes an
@@ -44,6 +44,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import inspect
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -51,30 +52,23 @@ import pytest
 
 from privacyfence.auto_accept import TOOL_TO_GATE, ReviewContext
 from privacyfence.connector import ToolSpec
-from privacyfence.connectors.apps_script import AppsScriptConnector
-from privacyfence.connectors.calendar import CalendarConnector
-from privacyfence.connectors.confluence import ConfluenceConnector
-from privacyfence.connectors.contacts import ContactsConnector
-from privacyfence.connectors.drive import DriveConnector
-from privacyfence.connectors.gmail import GmailConnector
-from privacyfence.connectors.jira import JiraConnector
-from privacyfence.connectors.salesforce import SalesforceConnector
-from privacyfence.connectors.slack import SlackConnector
-from privacyfence.connectors.tasks import TasksConnector
-from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.policy.conditions import CONDITION_SELECTORS
 
 # Source-scanning assertions over real code, no I/O -- unit per
 # testing-policy.md's seven-layer taxonomy.
 pytestmark = pytest.mark.unit
 
-CONNECTOR_CLASSES = [
-    GmailConnector, DriveConnector, SlackConnector, CalendarConnector,
-    ContactsConnector, SalesforceConnector, JiraConnector, ConfluenceConnector,
-    TasksConnector, TelegramConnector, AppsScriptConnector,
-]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
-SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "privacyfence"
+# The connectors come from the tools-reference generator's package discovery rather than a list
+# written out here, so a new connector falls under these invariants the moment it exists instead of
+# only once someone remembers to add it.
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import generate_tools_reference  # noqa: E402
+
+CONNECTOR_CLASSES = generate_tools_reference._connector_classes()
+
+SRC_ROOT = REPO_ROOT / "src" / "privacyfence"
 
 
 def _all_tool_specs() -> dict[str, ToolSpec]:
@@ -171,16 +165,13 @@ _PII_SCAN_TEXT_EXEMPT = {
 # real writer (_save_token_file -- save_token_file is a thin public wrapper
 # around it, not a second independent write site).
 #
-# TST-13 named eleven at the time the review was written; room_directory_
-# client.py's own _save_token (once counted here) was retired along with
-# the rest of that module once scripts/sync_room_directory.py became its
-# only caller -- that script now carries its own standalone copy of the
+# scripts/sync_room_directory.py carries its own standalone copy of the
 # atomic-write pattern (deliberately, same as build_org_bundle.py: it must
 # not import the privacyfence package at all, see its own module
-# docstring), so it was never a fair fit for *this* check (which is
+# docstring), so it isn't a fair fit for *this* check (which is
 # specifically "does it call the shared helper" -- a script that can't
-# import that helper by design isn't a violation of the invariant). Ten
-# real sites remain here; the standalone script's own copy is checked
+# import that helper by design isn't a violation of the invariant). The
+# standalone script's own copy is checked
 # separately below for the pattern it stands in for, not for calling the
 # helper it deliberately can't reach.
 TOKEN_WRITE_SITES: tuple[tuple[str, str | None, str], ...] = (
@@ -200,6 +191,12 @@ TOKEN_WRITE_SITES: tuple[tuple[str, str | None, str], ...] = (
 # TOKEN_WRITE_SITES's own comment above for why it's checked separately
 # rather than folded into that tuple/parametrize.
 _SYNC_ROOM_DIRECTORY_PATH = SRC_ROOT.parent.parent / "scripts" / "sync_room_directory.py"
+
+
+def test_discovered_connectors_offer_every_tool_in_the_gate_table():
+    # Guards the discovery itself: if it ever came back short, every parametrized check below would
+    # quietly run over fewer tools and still pass.
+    assert set(TOOL_TO_GATE) <= set(_all_tool_specs())
 
 
 class TestReasonParamOnEveryGatedTool:

@@ -42,7 +42,7 @@ CACHE_TTL_SECONDS = 15 * 60
 
 
 def _cache_file() -> Path:
-    # Per-principal (P6): a
+    # Per-principal (ADR 0008): a
     # grant resource id only resolves to a name through *that* principal's
     # own connectors (a Drive folder id means nothing in another user's
     # Drive), so the cache has to be per-principal too, not just the

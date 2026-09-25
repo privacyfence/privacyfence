@@ -339,10 +339,10 @@ class TestGetFileContent:
             client.get_file_content("")
 
     def test_google_doc_is_read_via_docs_api_as_markdown(self):
-        # Regression test: a Google Doc used to be exported through the
-        # Drive API's plain-text export, dropping all formatting -- it now
-        # goes through the structured Docs API instead, same call the
-        # docs_* write tools already use, and comes back as Markdown.
+        # A Google Doc goes through the structured Docs API, same call the
+        # docs_* write tools already use, and comes back as Markdown -- not
+        # through the Drive API's plain-text export, which drops all
+        # formatting.
         service = MagicMock()
         service.files.return_value.get.return_value.execute.return_value = {
             "id": "f1", "name": "Doc", "mimeType": "application/vnd.google-apps.document",
@@ -1296,8 +1296,8 @@ class TestDocsStructureToMarkdown:
     def test_non_text_paragraph_element_contributes_no_text(self):
         # An image or footnote reference is a paragraph element with no
         # textRun and no dedicated handling (unlike a horizontal rule,
-        # phase 2 below) -- for now it's simply skipped, same as the old
-        # plain-text export already lost anything that wasn't a textRun.
+        # below) -- it's simply skipped, same as a plain-text export
+        # loses anything that isn't a textRun.
         doc = {"body": {"content": [
             doc_para([doc_run("above\n")]),
             {"paragraph": {"elements": [{"inlineObjectElement": {"inlineObjectId": "kix.abc"}}]}},
@@ -1358,8 +1358,8 @@ class TestDocsStructureToMarkdown:
 
     def test_horizontal_rule_inside_a_table_cell_does_not_crash(self):
         # Edge case with no real-world precedent worth optimizing for --
-        # just confirm the recursive cell renderer doesn't choke on it. As
-        # of phase 5 a one-row table's row is the GFM header, so the
+        # just confirm the recursive cell renderer doesn't choke on it. A
+        # one-row table's row is the GFM header, so the
         # literal "---" text lands in both the header and separator rows.
         doc = {"body": {"content": [{"table": {"tableRows": [
             {"tableCells": [{"content": [doc_horizontal_rule()]}]},
@@ -1640,7 +1640,7 @@ class TestDocsListRendering:
     def test_list_inside_a_table_cell_gets_the_doc_lists_map_too(self):
         # Regression guard: the table-cell recursion must thread doc_lists
         # through, or a list inside a cell would silently default to
-        # unordered even when it's really numbered. As of phase 5 a
+        # unordered even when it's really numbered. A
         # one-row table's row is the GFM header (see TestDocsTableToMarkdown
         # for dedicated multi-row table coverage).
         doc = {"body": {"content": [{"table": {"tableRows": [
@@ -2391,8 +2391,9 @@ class TestDownloadFile:
         # A disk-level failure writing to destination_dir (permission denied,
         # a read-only/synthetic mount point that rejects mkdir, etc.) must
         # surface as DriveClientError like every other failure in this
-        # method -- not a bare OSError, which coding-and-testing-guidelines.md
-        # §1.4 requires every *_client.py public method to never leak.
+        # method -- not a bare OSError, which
+        # coding-and-testing-guidelines.md §1.4 requires every *_client.py
+        # public method to never leak.
         service = MagicMock()
         service.files.return_value.get.return_value.execute.return_value = {
             "id": "f1", "name": "f.bin", "mimeType": "application/octet-stream",

@@ -2,12 +2,12 @@
 whether it can be taken back.
 
 A read card ends with "What will be provided to Claude" -- a straight
-statement of the consequence of approving. A write card had no equivalent:
-it showed the payload (§1) and Claude's stated reason (§2), and nothing
-anywhere said what would actually happen. That is the difference between
-approving a *payload* and approving an *outcome*, and it matters most
-exactly where the payload looks harmless: "Add Gmail Label" and "Send Slack
-Message" present almost identically, and only one of them is irreversible.
+statement of the consequence of approving. Without this sentence a write
+card shows only the payload (the action card) and Claude's stated reason
+(the reason card), and nothing says what will actually happen. That is the
+difference between approving a *payload* and approving an *outcome*, and it
+matters most exactly where the payload looks harmless: "Add Gmail Label"
+and "Send Slack Message" present almost identically, and only one of them is irreversible.
 
 The sentence is a property of the operation, not of the call, so it lives
 here as a table keyed by tool id rather than being passed in from each of

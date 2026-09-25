@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Runs the local, per-connector OAuth authentication steps that
-`docs/connector-live-check-setup.md` Phase A calls for once per service
-(A.1.8 Google, A.2.7 Slack, A.3.5 Atlassian, A.4.6 Salesforce) -- so instead
-of typing up to nine separate `privacyfence-app --<connector>-oauth`
-commands by hand against the four dedicated QA accounts from Phase A.1-A.4,
-one command drives all of them in order.
+"""Runs the local, per-connector OAuth authentication steps for the dedicated
+QA accounts described in `docs/connector-qa.md` ("QA accounts and
+organization config", "Authenticating connectors") -- so instead of typing up
+to nine separate `privacyfence-app --<connector>-oauth` commands by hand, one
+command drives all of them in order.
 
 This is purely an orchestration wrapper around the daemon's own OAuth
 entrypoints (`daemon_main.parse_args`'s `--<connector>-oauth` flags) -- it
@@ -14,25 +13,22 @@ unattended. Run it on a developer machine only, the same posture as
 `scripts/qa_fixture_recorder.py` -- never in CI, never with a credential
 provisioned to GitHub Actions or any other cloud service.
 
-Telegram is deliberately not included: Phase A's dedicated-account budget
-and exit criteria (A.5) cover Google, Slack, Atlassian, and Salesforce only
--- Telegram authenticates against your own already-existing personal
-account (`docs/telegram-setup.md`), not a Phase A test account, and uses a
-different flag (`--telegram-setup`) with a different (phone/code) prompt
-shape. Run that one by hand if/when you need it.
+Telegram is deliberately not included: it authenticates against your own
+existing account (`docs/telegram-setup.md`), not a dedicated QA account, and
+uses a different flag (`--telegram-setup`) with a different (phone/code)
+prompt shape. Run that one by hand if/when you need it.
 
-Prerequisites (see `docs/qa-environment-setup.md`'s "Prerequisites"
-checklist and `connector-live-check-setup.md` Phase A.1-A.4, steps 1-7 of
-each): the org config bundle (`org_config.qa.json`, built by
-`scripts/build_org_bundle.py` per A.1.7/A.2.6/A.3.4/A.4.5) must already be
-installed at `org/org_config.json` -- `--org-config` below can do that copy
-for you, or do it by hand (or via PrivacyFence Settings' "Install/Update
-Organization Config...").
+Prerequisite: the QA org config bundle (`org_config.qa.json`, built by
+`scripts/build_org_bundle.py --merge` from each provider's "For IT admins"
+setup, see `docs/connector-qa.md`'s "QA accounts and organization config")
+must already be installed at `org/org_config.json` -- `--org-config` below
+can do that copy for you, or do it by hand (or via PrivacyFence Settings'
+"Install/Update Organization Config...").
 
     .venv/bin/python scripts/qa_authenticate_connectors.py
-        Runs every Phase A connector's OAuth flow, in the order Phase A
-        lists them: Gmail, Drive, Calendar, Contacts, Tasks, Apps Script,
-        Slack, Atlassian (Jira + Confluence share one flow), Salesforce.
+        Runs every QA connector's OAuth flow, in this order: Gmail, Drive,
+        Calendar, Contacts, Tasks, Apps Script, Slack, Atlassian (Jira +
+        Confluence share one flow), Salesforce.
 
     .venv/bin/python scripts/qa_authenticate_connectors.py --only slack salesforce
         Runs just the named services/connectors. Accepts either a group
@@ -68,13 +64,13 @@ DEFAULT_ORG_CONFIG_PATH = REPO_ROOT / "org" / "org_config.json"
 @dataclass(frozen=True)
 class OAuthStep:
     connector: str  # matches daemon_main.TOKEN_FILES's keys
-    group: str  # A.1-A.4's service grouping -- what --only also accepts
+    group: str  # the QA account/provider grouping -- what --only also accepts
     flag: str  # daemon_main's --<flag>-oauth CLI argument
     label: str  # printed to the user
 
 
-# Phase A order: A.1 (Google, six connectors), A.2 (Slack), A.3 (Atlassian --
-# one flow activates both Jira and Confluence), A.4 (Salesforce).
+# One entry per OAuth flow, grouped by QA account: Google (six connectors),
+# Slack, Atlassian (one flow activates both Jira and Confluence), Salesforce.
 STEPS: list[OAuthStep] = [
     OAuthStep("gmail", "google", "--gmail-oauth", "Gmail"),
     OAuthStep("drive", "google", "--drive-oauth", "Drive"),
@@ -93,7 +89,7 @@ CONNECTOR_NAMES = {step.connector for step in STEPS}
 
 def resolve_steps(only: list[str] | None) -> list[OAuthStep]:
     """Expands --only's group/connector names into an ordered step list,
-    preserving Phase A's own ordering regardless of the order --only names
+    preserving STEPS' own ordering regardless of the order --only names
     were given in. Raises ValueError on an unknown name so a typo fails
     loudly rather than silently running nothing for it."""
     if not only:
@@ -128,7 +124,7 @@ def install_org_config(source: Path) -> None:
 
 def run_step(step: OAuthStep, config_path: str) -> bool:
     print(f"\n=== {step.label} ({step.flag}) ===")
-    print("A browser tab will open -- sign in with the Phase A test account and approve.")
+    print("A browser tab will open -- sign in with the dedicated QA account and approve.")
     result = subprocess.run(
         [sys.executable, "-m", "privacyfence.daemon_main", "--config", config_path, step.flag],
         cwd=REPO_ROOT,
@@ -144,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--org-config", metavar="PATH", help="Install this bundle as org/org_config.json before authenticating.")
     parser.add_argument(
         "--only", nargs="+", metavar="NAME",
-        help=f"Limit to these groups/connectors instead of all of Phase A. Groups: {sorted(GROUPS)}. "
+        help=f"Limit to these groups/connectors instead of all of them. Groups: {sorted(GROUPS)}. "
              f"Individual connectors: {sorted(CONNECTOR_NAMES)}.",
     )
     parser.add_argument("--continue-on-error", action="store_true", help="Run every requested step even after one fails.")
@@ -166,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Warning: {DEFAULT_ORG_CONFIG_PATH} not found. Each step below will likely fail its "
             "provider-config lookup. Pass --org-config, or install one first -- see "
-            "docs/connector-live-check-setup.md Phase A.1.7/A.2.6/A.3.4/A.4.5.",
+            "docs/connector-qa.md's \"QA accounts and organization config\" section.",
             file=sys.stderr,
         )
 
@@ -190,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "\nAll requested connectors authenticated. Next: "
             ".venv/bin/python scripts/qa_fixture_recorder.py --check "
-            "(Phase A.5 exit criteria, connector-live-check-setup.md)."
+            "(see docs/connector-qa.md's \"Running the recorder\" section)."
         )
     else:
         print("\nOne or more steps did not complete. Re-run with --only to retry just those.")

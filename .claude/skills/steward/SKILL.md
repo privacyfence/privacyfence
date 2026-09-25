@@ -45,14 +45,14 @@ Three things about dispatching, so they are not rediscovered at runtime:
   persistent credential store into their checkout and copy refreshed tokens back out, so
   overlapping runs could write a stale token over a fresh one. A queued run is correct behaviour,
   not a hang. Wait; do not re-dispatch.
-- **A recorded fixture is still a diff to read.** `docs/qa-environment-setup.md` says to review
-  fixture diffs before committing them regardless of how they were produced. A fixture that
-  arrived by dispatch gets the same read: no real account identifier, tenant URL, token or private
-  content may enter the repository.
+- **A recorded fixture is still a diff to read.** `docs/connector-qa.md` ("Reviewing recorded
+  fixtures") says to review fixture diffs before committing them regardless of how they were
+  produced. A fixture that arrived by dispatch gets the same read: no real account identifier,
+  tenant URL, token or private content may enter the repository.
 
 Two things that look local-only but may not be, in this container specifically:
 
-- `scripts/qa_web_smoke.py` needs a real browser, which is why `docs/testing-policy.md` §2.2 lists
+- `scripts/qa_web_smoke.py` needs a real browser, which is why `docs/testing-policy.md` ("`qa_web_smoke.py` (layer 4, by hand)") lists
   it as local-only. The web container ships Chromium and Playwright already (see the
   `PLAYWRIGHT_BROWSERS_PATH` note in `.claude/hooks/session-start.sh`), so try it before declaring
   it impossible.

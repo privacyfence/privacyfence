@@ -1,7 +1,6 @@
 name: Linux graphical-session autostart
 
-# docs/testing-policy.md's Phase 7 item 1 (`git show be78e7ee^:docs/linux-local-deb-
-# packaging-plan.md` P7.2): a real systemd --user login-equivalent session
+# docs/testing-policy.md's layer 6 (packaged artifact): a real systemd --user login-equivalent session
 # actually starting the packaged daemon via XDG autostart, plus (where
 # practical) the real OAuth loopback browser-opening flow under a real
 # Xvfb $DISPLAY -- see tests/integration/test_linux_graphical_session_
@@ -11,9 +10,9 @@ name: Linux graphical-session autostart
 #
 # Deliberately its own workflow, not a step added to build.yml's build-deb
 # job or tests.yml's per-PR jobs: this is the most expensive tier in this
-# repo's whole test taxonomy by design (Phase 7's own objective), so it's
+# repo's whole test taxonomy by design, so it's
 # too heavy to run on every PR or sit on an actual release's critical path
-# the way build.yml's own packaged .deb lifecycle test (Phase 6.3) correctly
+# the way build.yml's own packaged .deb lifecycle test correctly
 # does. Scheduled instead on
 # packaging-related `main` changes, a weekly cadence (same reasoning as
 # connector-live-check.yml's own schedule -- matched to how often this
@@ -28,7 +27,7 @@ on:
       - 'debian/**'
       - 'resources/linux/**'
       - 'scripts/build_deb.sh'
-      # #428 Phase 4 (B5b): build_deb.sh installs this next to the daemon as
+      # build_deb.sh installs this next to the daemon as
       # /usr/sbin/privacyfence-privilege-separation, along with the two unit
       # templates it renders -- so a change to either is a change to what
       # the .deb ships, and the packaged smoke test below is the only thing
@@ -79,10 +78,10 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: bash scripts/build_deb.sh
 
-      - name: Run Linux graphical-session/autostart test (Phase 7, P7.2)
+      - name: Run Linux graphical-session/autostart test
         run: pytest tests/integration/test_linux_graphical_session_autostart.py -v
 
-      # docs/testing-policy.md's Phase 10: same tests/
+      # Same tests/
       # diagnostics.py capture as tests.yml/build.yml's own steps -- this
       # module carries `pytest.mark.packaged`, and its own $HOME (systemd
       # --user login-equivalent session) lives under each test's own

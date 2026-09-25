@@ -1,15 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for PrivacyFenceApp.exe on Windows (the now-removed docs/windows-support-
-# plan.md Phase 2, B4 in the now-removed docs/windows-linux-support-plan.md).
+# PyInstaller spec for PrivacyFenceApp.exe on Windows, packaged into the installer by
+# scripts/build_installer.ps1 (see docs/packaging.md).
 #
 # Produces:
 #   dist/PrivacyFenceApp/
 #     PrivacyFenceApp.exe        <- daemon (main app; headless background
 #                                   process, reachable only over its own
 #                                   embedded web approval/settings UI --
-#                                   same P10-retired-native-UI story as the
-#                                   macOS build, see PrivacyFenceApp.spec)
+#                                   no native UI, same as the macOS build,
+#                                   see PrivacyFenceApp.spec)
 #     privacyfence-app.exe        <- copy of PrivacyFenceApp.exe (for daemon
 #                                   auto-start; see scripts/build_installer.
 #                                   ps1 step 4 for why this is a copy, not a
@@ -101,7 +101,7 @@ daemon_exe = EXE(
     icon=ICON,
 )
 
-# ── companion (#428 Phase 3, ADR 0002) ────────────────────────────────────────
+# ── companion (ADR 0002) ────────────────────────────────────────────────
 # A second entry point in the same onedir output -- PrivacyFenceCompanion.exe alongside
 # PrivacyFenceApp.exe. build_installer.ps1 signs it explicitly, the same optional step it already
 # runs on PrivacyFenceApp.exe/privacyfence-app.exe -- not a second build/signing path (ADR 0002

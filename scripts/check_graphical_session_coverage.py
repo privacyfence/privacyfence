@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Report whether the graphical-session/autostart workflows have a green run behind this release
-tag, and (stable channel only) actually gate on it -- privacyfence/privacyfence#374, options 1
-("Report, don't gate") and 3 ("Gate stable tags only").
+tag: report a gap on every channel, and gate on it for stable tags only.
 
 `linux-graphical-session.yml`, `windows-graphical-session.yml` and `macos-graphical-session.yml`
 are the only automated coverage for the thing every desktop user depends on and nobody notices
@@ -24,18 +23,18 @@ yet reachable from this tag, or a reachable run that failed -- is a coverage gap
 
 What happens with a gap depends on `--channel` (the same value `scripts/r2_release.py channel`
 already resolves for the tag): on every channel it prints a `::warning::` per gap and nothing
-more (option 1); on `stable` specifically, a gap additionally fails this script, which
+more; on `stable` specifically, a gap additionally fails this script, which
 `finalize-release` runs as an ordinary step ahead of anything that attaches or publishes
-anything -- so a stable tag with broken or stale autostart coverage never ships (option 3).
-Pre-release tags stay ungated on purpose, per the issue's own reasoning: that's where a flake is
-cheapest to absorb, and this is still not a live wait -- a stable tag with a real coverage gap
-fails immediately rather than blocking on a fresh run, so the "off the release's critical path"
+anything -- so a stable tag with broken or stale autostart coverage never ships.
+Pre-release tags stay ungated on purpose: that's where a flake is cheapest to absorb. And this is
+still not a live wait -- a stable tag with a real coverage gap fails immediately rather than
+blocking on a fresh run, so the "off the release's critical path"
 property this tier was built around never breaks. One re-run allowance: a run this finds red is
 not necessarily this release's fault -- if a maintainer judges it a flake, re-running that
 workflow's own failed jobs (not this script) updates the same run in place, and the next
 `finalize-release` attempt picks up the improved conclusion automatically, since this always reads
 the *latest* completed run reachable from the commit being released. A second red run on the same
-commit is real and must not be re-run away.
+commit is real and must not be re-run away. See ADR 0057.
 
 Usage (matches scripts/release_stats.py's own conventions -- reads GH_TOKEN/GITHUB_TOKEN, and
 keeps the pure decision (`evaluate`) separate from the network fetch and the `git` ancestor check
@@ -64,7 +63,7 @@ from typing import Any
 
 API_ROOT = "https://api.github.com"
 
-# The three workflows privacyfence/privacyfence#374 is about -- see module docstring.
+# The three graphical-session/autostart workflows -- see module docstring.
 WORKFLOWS = ("linux-graphical-session.yml", "windows-graphical-session.yml", "macos-graphical-session.yml")
 
 
@@ -132,19 +131,19 @@ def evaluate(workflow: str, run: dict[str, Any] | None, run_is_ancestor: bool) -
     if run is None:
         return (
             f"{workflow} has no completed run at all -- no autostart coverage exists for this "
-            "release (privacyfence/privacyfence#374)."
+            "release (see docs/testing-policy.md's layer 6)."
         )
     if not run_is_ancestor:
         return (
             f"{workflow}'s most recent completed run ({run.get('html_url')}) is not an ancestor "
             "of this release's commit -- no autostart coverage exists for this exact release yet "
-            "(privacyfence/privacyfence#374)."
+            "(see docs/testing-policy.md's layer 6)."
         )
     conclusion = run.get("conclusion")
     if conclusion != "success":
         return (
             f"{workflow}'s most recent run reachable from this release did not succeed "
-            f"(conclusion={conclusion}): {run.get('html_url')} (privacyfence/privacyfence#374)."
+            f"(conclusion={conclusion}): {run.get('html_url')} (see docs/testing-policy.md's layer 6)."
         )
     return None
 
@@ -174,8 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "the release channel this commit resolves to (scripts/r2_release.py channel's own "
             "output). A coverage gap only fails this script -- rather than just warning -- when "
-            "this is exactly 'stable' (privacyfence/privacyfence#374, option 3); left empty or "
-            "anything else, this always exits 0, same as before --channel existed."
+            "this is exactly 'stable'; left empty or anything else, this always exits 0."
         ),
     )
     args = parser.parse_args(argv)
@@ -201,12 +199,12 @@ def main(argv: list[str] | None = None) -> int:
             "graphical-session workflow -- see the warnings above. If a failure looks like a "
             "flake, re-run that workflow's own failed jobs once and re-run this release; a "
             "second red run on the same commit is real and must not be re-run away "
-            "(privacyfence/privacyfence#374)."
+            "(see docs/testing-policy.md's layer 6)."
         )
         return 1
 
     # Any other channel (pre-release, or none resolved at all): report only, never gate -- see
-    # module docstring's option 1.
+    # module docstring.
     return 0
 
 

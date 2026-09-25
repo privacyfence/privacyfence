@@ -102,7 +102,7 @@ class TestLoopbackHTTPServer:
             server.server_close()
 
     def test_address_reuse_is_disabled(self):
-        # B13: HTTPServer.allow_reuse_address defaults to True, which is
+        # HTTPServer.allow_reuse_address defaults to True, which is
         # harmless on POSIX but lets a *new* bind() steal a port an existing
         # socket is still actively listening on on Windows -- exactly what
         # would let an agent process that squatted this fixed OAuth redirect

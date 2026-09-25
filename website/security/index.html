@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrivacyFence security model — trust boundary, approvals, audit and limitations</title>
+  <meta name="description" content="What PrivacyFence protects and where each protection stops: the trust boundary, human approval and passkeys, privilege separation, the audit log, and what PrivacyFence does not claim.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/security/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/security/">
+  <meta property="og:title" content="PrivacyFence security model">
+  <meta property="og:description" content="The trust boundary, human approval and passkeys, privilege separation, the audit log, and what PrivacyFence does not claim.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Security</p>
+      <h1>What PrivacyFence protects, and where that stops.</h1>
+      <p class="lede">A summary for security reviewers and IT. Each part links to the full technical reference, <a href="/docs/security-and-compliance/">Security and compliance</a>, which states every default and limit.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="model-heading">
+      <div class="section-heading">
+        <p class="kicker">The model</p>
+        <h2 id="model-heading">The AI client is not the authorization boundary.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack" id="deployment-modes">
+          <h3>Where it runs</h3>
+          <p>On one person's own computer (local mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). There is no PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian or Telegram.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#deployment-modes">Deployment modes →</a>
+        </article>
+        <article class="card stack" id="trust-boundary">
+          <h3>The trust boundary</h3>
+          <p>On a packaged install, an AI client with shell access still cannot approve its own request, add an always-allow rule, change the PII policy, enroll its own passkey, or rewrite the audit log without it showing. It can read what is waiting on the approvals page, but not release it.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#trust-boundary">Trust boundary →</a>
+        </article>
+        <article class="card stack" id="sessions">
+          <h3>Only a person can approve</h3>
+          <p>A web session opened through the companion app, after it asks you, can approve. A session anything else on your account starts can only look. No MCP tool can obtain a sign-in link, and every sign-in code issued is audited.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#human-and-unattested-sessions">Human and unattested sessions →</a>
+        </article>
+        <article class="card stack" id="step-up">
+          <h3>Passkey step-up</h3>
+          <p>On a packaged install, approving a write or a read flagged as personal data takes a fresh passkey assertion: Touch ID, Windows Hello or a security key. Wherever passkeys are required, the default on a packaged install, so do sensitive settings changes such as adding an always-allow rule. An organization deployment turns step-up on in its config bundle.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#passkey-step-up">Passkey step-up →</a>
+        </article>
+        <article class="card stack" id="recovery">
+          <h3>Recovery code</h3>
+          <p>A one-time recovery code gets you back in when every passkey is lost. Only a salted hash is stored, attempts are rate-limited and audited, and on a packaged install only a person's session can use it.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#recovery-code">Recovery code →</a>
+        </article>
+        <article class="card stack" id="privilege-separation">
+          <h3>Privilege separation</h3>
+          <p>Every packaged install runs PrivacyFence under a dedicated service account, with its policy, passkeys, audit key and connector credentials in a directory your own account cannot write or read. A packaged install that finds itself unseparated refuses to serve.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#privilege-separation">Privilege separation →</a>
+        </article>
+        <article class="card stack" id="audit">
+          <h3>A chained audit log</h3>
+          <p>Every gate decision, approval and security event is written to a weekly log, each entry chained to the one before with HMAC-SHA256, so an edit, insertion or deletion made without the chain key shows when the log is verified. Organization mode can also forward every entry to syslog or an HTTP endpoint, off the machine.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#audit-log-integrity">Audit log integrity →</a>
+        </article>
+        <article class="card stack" id="attribution">
+          <h3>Which AI system is asking</h3>
+          <p>Every card and audit entry names the AI system that made the request, and says how far to trust that name. The only verified identity is an OAuth client an organization administrator has pinned. A name never changes an outcome: it selects no rule and releases nothing.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#which-ai-system-the-audit-log-names">Which AI system the audit log names →</a>
+        </article>
+        <article class="card stack" id="before-approval">
+          <h3>What the AI sees before approval</h3>
+          <p>Only what it already had: the tool, the arguments it sent, and a status. PrivacyFence may fetch and scan the data first to build the card, but that stays inside PrivacyFence. On a denial the AI client gets nothing from it, and errors never carry credentials or unreleased content.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#what-the-ai-sees-before-approval">What the AI sees before approval →</a>
+        </article>
+        <article class="card stack" id="other-controls">
+          <h3>Other controls</h3>
+          <p>Session cookies, CSRF and same-origin checks, a host allowlist and a per-response Content Security Policy on the web pages; limits on the organization's OAuth server; a validated, optionally signed organization config; signed installers and CycloneDX SBOMs for every release.</p>
+          <a class="text-link" href="/docs/security-and-compliance/#other-controls">Other controls →</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="what-privacyfence-does-not-claim" aria-labelledby="limitations-heading">
+      <div class="section-heading">
+        <p class="kicker">Limitations</p>
+        <h2 id="limitations-heading">What PrivacyFence does not claim.</h2>
+        <p>Read this before you rely on PrivacyFence for production or regulated data.</p>
+      </div>
+      <div class="card limitations stack">
+        <ul>
+          <li><strong>No certification, business-continuity plan or SLA.</strong> PrivacyFence is independent open-source software. There is no PrivacyFence-operated infrastructure to certify and no service whose outage affects you: installed copies keep running without the maintainer. Reports are handled on a best-effort basis. Treat adopting it as a risk acceptance: approve it through your exception process, pin a reviewed release, and give an internal owner the job of tracking releases.</li>
+          <li><strong>No protection against root or a local Administrator</strong>, or against local code on an install that is not packaged (a source checkout or a <code>pip</code> install).</li>
+          <li><strong>No confidentiality of the local review screen</strong> against a process running as you. It can read what is pending; it cannot approve it.</li>
+          <li><strong>No verified AI-system identity in local mode.</strong> Every AI client of one OS account holds the same token.</li>
+          <li><strong>No hard stop from the unattended-session flag.</strong> It is advisory: it changes what happens when nothing authorizes a call, never what is authorized.</li>
+          <li><strong>No compliance by itself.</strong> PrivacyFence is not certified, and it does not make a deployment compliant with any regulation or contract. Whether one meets a requirement depends on its configuration, identity provider, retention and an independent assessment.</li>
+        </ul>
+        <p>The full list, with the reasons, is in <a href="/docs/security-and-compliance/#what-privacyfence-does-not-claim">Security and compliance</a>. To report a vulnerability, follow the <a href="https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md">security policy</a>.</p>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Evaluating PrivacyFence</p>
+          <h2>Read the source, then run it.</h2>
+          <p>Every control above is in the open-source code under Apache 2.0. For an organization-wide rollout, compare local mode with a central deployment.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/enterprise/">Organization deployment</a>
+          <a class="button secondary" href="https://github.com/privacyfence/privacyfence">Source on GitHub</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

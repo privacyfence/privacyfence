@@ -38,7 +38,7 @@ libraries PrivacyFence itself depends on (see pyproject.toml's
 
     pip install google-auth google-auth-oauthlib google-api-python-client
 
-SEC-05 full signing (org_bundle_signing.py): merging "rooms"/"rooms_synced_at"
+Bundle signing (org_bundle_signing.py, ADR 0016): merging "rooms"/"rooms_synced_at"
 into the bundle changes what a previous --sign-key signature covers, so any
 "signature"/"signing_public_key" already on the file is stale the moment
 this script writes to it -- see org_bundle_signing.sign_bundle's own

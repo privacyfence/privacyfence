@@ -206,8 +206,8 @@ class TestLoginCallback:
         assert cb.status_code == 400
 
     def test_authz_policy_denial_fails_cleanly_and_mints_no_session(self, monkeypatch):
-        # SEC-22: an IdP-authenticated principal PrivacyFence's own policy
-        # rejects gets the same generic failure as any other sign-in
+        # An IdP-authenticated principal PrivacyFence's own sign-in policy
+        # (allowed email domains, required groups) rejects gets the same generic failure as any other sign-in
         # failure -- no session cookie, no 500.
         policy = AuthzPolicyConfig(allowed_domains=("acme.com",))
         app, sessions = _app(policy=policy)

@@ -1,9 +1,8 @@
 """Tests for approval_ui.py: the pluggable ApprovalUI seam gate.py depends on
 instead of importing a concrete approval-surface implementation directly.
 
-WebApprovalUI (web_approval_ui.py) is the sole implementation since P10
-deleted NativeApprovalUI/approval_popup.py (docs/https-connector-refactor-
-plan.md §12, D6) -- its own tests (test_web_approval_ui.py) cover its real
+WebApprovalUI (web_approval_ui.py) is the sole implementation (ADR 0001)
+-- its own tests (test_web_approval_ui.py) cover its real
 behavior; this file stays focused on the seam itself: the singleton
 accessors and the deferred_registry contract a future implementation would
 also have to satisfy.
@@ -58,7 +57,7 @@ class TestDeferredRegistry:
     """A backend opts into gate.py's deferred/hold-window protocol purely by
     exposing a registry here -- the ABC's own default (None) is what a
     backend with nowhere to send a human a reviewable link would keep, if
-    one existed; WebApprovalUI (the only implementation since P10) always
+    one existed; WebApprovalUI (the only implementation) always
     overrides it."""
 
     def test_default_backend_has_no_deferred_registry(self):

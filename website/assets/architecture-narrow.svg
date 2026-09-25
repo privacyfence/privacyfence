@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 1060" width="360" height="1060" role="img" aria-labelledby="pf-arch-n-title pf-arch-n-desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="pf-arch-n-title">How a request travels through PrivacyFence</title>
+  <desc id="pf-arch-n-desc">An AI client (Claude Desktop through the PrivacyFence extension, Claude Code over HTTP, or claude.ai through an organization deployment) sends each tool call over MCP to PrivacyFence. PrivacyFence applies policy, runs the local PII check, asks a person for approval where needed, and audits the decision. Only then does its connector call the service (Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram and more) with credentials that stay inside PrivacyFence.</desc>
+  <!-- architecture.svg top to bottom, for screens below 600 px (/how-it-works/'s <picture>).
+       Same content; change both together. -->
+  <defs>
+    <marker id="arrow-n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#43535f"/>
+    </marker>
+  </defs>
+
+  <rect width="360" height="1060" fill="#f6f8fb"/>
+
+  <text x="16" y="30" font-size="12" font-weight="700" fill="#0e5f57" letter-spacing="1.3">AI CLIENT</text>
+  <g font-size="14" font-weight="700" fill="#14212b">
+    <rect x="16" y="44" width="328" height="52" rx="12" fill="#ffffff" stroke="#dbe3e9" stroke-width="1.5"/>
+    <text x="32" y="67">Claude Desktop</text>
+    <text x="32" y="85" font-size="12" font-weight="500" fill="#43535f">through the extension (.mcpb): stdio shim to /mcp</text>
+    <rect x="16" y="106" width="328" height="52" rx="12" fill="#ffffff" stroke="#dbe3e9" stroke-width="1.5"/>
+    <text x="32" y="129">Claude Code</text>
+    <text x="32" y="147" font-size="12" font-weight="500" fill="#43535f">HTTP /mcp + local token</text>
+    <rect x="16" y="168" width="328" height="52" rx="12" fill="#ffffff" stroke="#dbe3e9" stroke-width="1.5"/>
+    <text x="32" y="191">claude.ai <tspan font-size="12" font-weight="500" fill="#60707d">organization deployment</tspan></text>
+    <text x="32" y="209" font-size="12" font-weight="500" fill="#43535f">HTTPS /mcp + OAuth sign-in</text>
+  </g>
+  <text x="16" y="242" font-size="12" fill="#60707d">or another MCP-compatible client</text>
+
+  <line x1="180" y1="252" x2="180" y2="286" stroke="#43535f" stroke-width="1.6" marker-end="url(#arrow-n)"/>
+  <text x="192" y="274" font-size="11" fill="#43535f">MCP, to your computer or server</text>
+
+  <rect x="16" y="292" width="328" height="468" rx="20" fill="#e1f2ef" stroke="#167a70" stroke-width="2"/>
+  <text x="34" y="326" font-size="18" font-weight="800" fill="#14212b">PrivacyFence</text>
+  <text x="34" y="346" font-size="12" fill="#0e5f57">decides independently of the AI</text>
+  <g font-size="14" font-weight="700" fill="#14212b">
+    <rect x="34" y="362" width="292" height="62" rx="10" fill="#ffffff" stroke="#badbd6" stroke-width="1.5"/>
+    <text x="50" y="387">1  Policy</text>
+    <text x="50" y="408" font-size="12" font-weight="500" fill="#43535f">the tool's gate and your always-allow rules</text>
+    <rect x="34" y="442" width="292" height="62" rx="10" fill="#ffffff" stroke="#badbd6" stroke-width="1.5"/>
+    <text x="50" y="467">2  PII check</text>
+    <text x="50" y="488" font-size="12" font-weight="500" fill="#43535f">runs locally, before anything is released</text>
+    <rect x="34" y="522" width="292" height="62" rx="10" fill="#ffffff" stroke="#badbd6" stroke-width="1.5"/>
+    <text x="50" y="547">3  Human approval</text>
+    <text x="50" y="568" font-size="12" font-weight="500" fill="#43535f">you allow or deny, on the Approvals page</text>
+    <rect x="34" y="602" width="292" height="62" rx="10" fill="#ffffff" stroke="#badbd6" stroke-width="1.5"/>
+    <text x="50" y="627">4  Audit</text>
+    <text x="50" y="648" font-size="12" font-weight="500" fill="#43535f">every decision, in a chained audit log</text>
+  </g>
+  <g stroke="#167a70" stroke-width="1.6">
+    <line x1="180" y1="424" x2="180" y2="438" marker-end="url(#arrow-n)"/>
+    <line x1="180" y1="504" x2="180" y2="518" marker-end="url(#arrow-n)"/>
+    <line x1="180" y1="584" x2="180" y2="598" marker-end="url(#arrow-n)"/>
+  </g>
+  <rect x="34" y="682" width="292" height="56" rx="10" fill="#142b2b"/>
+  <text x="50" y="715" font-size="13" font-weight="700" fill="#eaf4f3">Connector credentials stay here</text>
+
+  <line x1="180" y1="760" x2="180" y2="794" stroke="#43535f" stroke-width="1.6" marker-end="url(#arrow-n)"/>
+  <text x="192" y="782" font-size="11" fill="#43535f">provider API</text>
+
+  <text x="16" y="822" font-size="12" font-weight="700" fill="#0e5f57" letter-spacing="1.3">CONNECTED SERVICES</text>
+  <rect x="16" y="834" width="328" height="210" rx="20" fill="#ffffff" stroke="#dbe3e9" stroke-width="1.5"/>
+  <g font-size="13.5" font-weight="650" fill="#14212b">
+    <text x="34" y="866">Gmail</text>
+    <text x="34" y="892">Drive, Docs, Sheets</text>
+    <text x="34" y="918">Calendar</text>
+    <text x="34" y="944">Contacts, Tasks</text>
+    <text x="34" y="970">Apps Script</text>
+    <text x="196" y="866">Slack</text>
+    <text x="196" y="892">Telegram</text>
+    <text x="196" y="918">Salesforce</text>
+    <text x="196" y="944">Jira</text>
+    <text x="196" y="970">Confluence</text>
+  </g>
+  <text x="34" y="1002" font-size="12" fill="#60707d">Straight from PrivacyFence to the provider.</text>
+  <text x="34" y="1020" font-size="12" fill="#60707d">No PrivacyFence-operated server in between.</text>
+</svg>

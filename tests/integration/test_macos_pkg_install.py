@@ -18,7 +18,7 @@ This module drives that for real:
    ``test_macos_graphical_session_autostart.py``'s own scratch-copy path, this
    needs no ``_stage_as_root`` dance: ``pkgbuild``'s default ownership already
    lays the installed ``.app`` down root:wheel, which is what makes a
-   pkg-installed app pass ``require_trusted_image()`` (B1) without the
+   pkg-installed app pass ``require_trusted_image()`` without the
    codesign-verify substitute proof the runtime prompt needs for a copy the
    user put there themselves (see ``scripts/build_pkg.sh``'s own header
    comment).
@@ -33,8 +33,8 @@ This module drives that for real:
 
 Real GUI installer double-clicks and the admin-password dialog a human would
 actually see are out of scope here, same as everywhere else in this repo's
-packaged-artifact coverage (``docs/testing-policy.md``'s "what deliberately
-remains manual"): ``sudo installer -pkg ... -target /`` is the same
+packaged-artifact coverage (``docs/release-testing.md``'s "What stays
+manual"): ``sudo installer -pkg ... -target /`` is the same
 command-line substitution ``test_deb_packaged_lifecycle.py``'s own
 ``_can_install_packages()`` and ``test_macos_graphical_session_autostart.py``'s
 own passwordless-sudo probe already make for the same reason -- nothing in CI
@@ -195,9 +195,9 @@ def _wait_for_path_as_root(path: Path, *, timeout: float, what: str, context: Ca
 
 
 def _missing_payload_report(pkg_path: Path) -> str:
-    """What ``installer`` actually did, for the one failure this module keeps
-    hitting and cannot explain: "The install was successful" with nothing at
-    ``INSTALLED_APP_PATH`` (#562).
+    """What ``installer`` actually did, for the failure that is hardest to
+    explain: "The install was successful" with nothing at
+    ``INSTALLED_APP_PATH``.
 
     The receipt says whether installd thinks it installed this package at all;
     ``--files`` says what the receipt claims it laid down and therefore whether
@@ -234,7 +234,7 @@ def _missing_payload_report(pkg_path: Path) -> str:
 def _wait_for_app_bundle(path: Path, *, timeout: float) -> float | None:
     """Poll for the installed app bundle instead of checking once.
 
-    #562: `installer(8)` was observed reporting "The install was successful"
+    `installer(8)` has been observed reporting "The install was successful"
     with the payload not yet visible at `path` roughly half the time, on
     otherwise-identical runs. Polling here turns that race -- if that's what
     it is -- into a bounded wait instead of a flaky failure, while still
@@ -420,15 +420,15 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
     # -verbose so `install.stdout`, which every assertion below already
     # quotes, records installd's own per-phase progress instead of the three
     # lines it prints by default -- the difference between "the install was
-    # successful" and knowing what it considered installing (#562).
+    # successful" and knowing what it considered installing.
     install = _sudo_run("installer", "-verbose", "-pkg", str(pkg_path), "-target", "/", timeout=120)
     assert not INSTALLED_APP_PATH.is_symlink()
-    # #562: don't assert immediately -- see _wait_for_app_bundle's own docstring.
+    # Don't assert immediately -- see _wait_for_app_bundle's own docstring.
     waited = _wait_for_app_bundle(INSTALLED_APP_PATH, timeout=10)
     if waited is not None and waited > 0.5:
         warnings.warn(
             f"{INSTALLED_APP_PATH} took {waited:.2f}s to become visible after `installer` "
-            f"reported success (#562) -- installer/installd payload-visibility race, not a "
+            f"reported success -- installer/installd payload-visibility race, not a "
             f"postinstall failure",
             stacklevel=1,
         )

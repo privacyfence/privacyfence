@@ -4,13 +4,13 @@ Entries are appended to JSON-lines files in logs/audit/YYYY-WNN.jsonl
 (one file per ISO week). A weekly Excel export (openpyxl) is generated
 at daemon startup for any week that has a .jsonl but no .xlsx yet.
 
-SEC-23 added append-integrity to that JSONL file: every entry is chained to the one
+Each JSONL file is append-integrity protected: every entry is chained to the one
 before it with a keyed hash (HMAC-SHA256, see AuditLogger._compute_entry_
 hash), so a line inserted, edited, or removed after the fact -- without
 also holding this install's own signing key (AuditLogger's
 ``.audit_chain.key``, generated on first use and never itself written
 into the log it protects) -- breaks the chain in a way ``verify_chain()``
-(or ``scripts/verify_audit_log.py``) detects. It also added: an explicit,
+(or ``scripts/verify_audit_log.py``) detects (ADR 0071). Every entry also carries an explicit,
 monotonically-increasing ``schema_version`` per entry (AuditEntry.
 schema_version); a stable ``event_id`` unique to that one JSONL line
 (distinct from ``request_id``, which is deliberately *shared* across a
@@ -21,7 +21,7 @@ forwarded or aggregated from multiple machines/servers can be told apart;
 and a per-entry ``security_config_hash`` fingerprinting the privacy
 policy (settings.yaml) in effect when that decision was recorded (see
 compute_security_config_hash() below). Centralized forwarding of these
-entries to a syslog/SIEM/OTLP collector -- SEC-23's other half, for org
+entries to a syslog/SIEM/OTLP collector -- an off-host copy, for org
 mode -- lives in audit_forwarding.py; AuditLogger.record() calls into it
 but doesn't implement any transport itself.
 """
@@ -54,17 +54,16 @@ logger = logging.getLogger(__name__)
 # Bumped whenever AuditEntry's field set changes in a way a downstream
 # consumer (the Excel export, a forwarded-log parser, a hand-rolled jq
 # pipeline over the .jsonl files) would need to know about. An entry
-# written before this field existed at all (schema_version wasn't
-# recorded until SEC-23) reconstructs with AuditEntry's own default (1)
+# with no schema_version key at all reconstructs with AuditEntry's own default (1)
 # rather than this constant -- see AuditEntry.schema_version's docstring.
 # Bump this, and add a line to the history below, the next time a field is
 # added, renamed, or repurposed.
-#   1 -- implicit, undocumented shape (every entry before SEC-23)
-#   2 -- SEC-23: + schema_version, event_id, deployment_id,
+#   1 -- implicit, undocumented shape (no schema_version key)
+#   2 -- the hash chain (ADR 0071): + schema_version, event_id, deployment_id,
 #        security_config_hash, prev_hash, entry_hash
-#   3 -- approval binder Phase 2: + decided_via, batch_id
-#   4 -- policy v2 redesign P8 (rule attribution and staleness): + rule_id
-#   5 -- agent attribution AGT-2 (ADR 0006, ADR 0035): + agent_id, agent_name,
+#   3 -- batch decisions from the approval binder: + decided_via, batch_id
+#   4 -- rule attribution and staleness (ADR 0074): + rule_id
+#   5 -- agent attribution (ADR 0006, ADR 0035): + agent_id, agent_name,
 #        agent_version, agent_source
 CURRENT_SCHEMA_VERSION = 5
 
@@ -75,7 +74,7 @@ CURRENT_SCHEMA_VERSION = 5
 # (64 lowercase hex characters) as a real SHA-256 digest so nothing
 # downstream needs a special case for "this is the start of a chain, not a
 # broken link" -- verify_chain() treats a segment starting at this value,
-# or one with no chain fields at all (pre-SEC-23 data), as valid.
+# or one with no chain fields at all (a line written before the chain), as valid.
 GENESIS_HASH = "0" * 64
 
 _CHAIN_KEY_FILENAME = ".audit_chain.key"
@@ -119,8 +118,8 @@ class AuditEntry:
                             # "webauthn_recovery_refused" |
                             # "sign_in_code_minted" |
                             # "step_up_requirement_enabled" | "step_up_requirement_disabled"
-                            # ("webauthn_credential_enrolled"/"webauthn_credential_removed": #426
-                            #  Phase 4 -- web/routes_security.py's register_verify/delete_credential,
+                            # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
+                            #  web/routes_security.py's register_verify/delete_credential,
                             #  recorded for either mode's own passkey enrollment surface. Tamper-
                             #  evidence for the credential store itself: enrolling or removing a
                             #  passkey changes what a future step-up check can be satisfied with, so
@@ -140,7 +139,7 @@ class AuditEntry:
                             #  a successful enrollment entry and nothing to distinguish it from one
                             #  the human made. A 428 asking for the assertion is not recorded -- it
                             #  is a round trip in the ordinary protocol, not a refusal.)
-                            # ("sign_in_code_minted": the self-approval plan's Phase 2 --
+                            # ("sign_in_code_minted":
                             #  web/control_channel.py's own MINT handler, recorded for *every*
                             #  bootstrap code this daemon issues, whichever shape asked for it.
                             #  Before this, exactly one of the three ways to a session wrote an
@@ -155,7 +154,7 @@ class AuditEntry:
                             #  and was turned down" is exactly the line a human scanning this log
                             #  wants to see. /security shows the recent ones, so an unexpected mint
                             #  is visible rather than merely inferable.)
-                            # ("webauthn_recovery_code_used": #426 Phase 4 -- web/routes_security.py's
+                            # ("webauthn_recovery_code_used": web/routes_security.py's
                             #  recover_credential, local mode's sanctioned way back in when the only
                             #  enrolled authenticator is lost with no IdP to fall back on: trading in
                             #  the one-time recovery code from enrollment removes every credential on
@@ -168,15 +167,15 @@ class AuditEntry:
                             #  attempt budget, or a wrong/already-used code. The summary names which;
                             #  the code itself is never recorded. Without it, guessing at a principal's
                             #  recovery code left no trace until a guess succeeded.)
-                            # ("step_up_requirement_enabled"/"step_up_requirement_disabled": #426
-                            #  Phase 4 -- daemon_main.py, recorded once per daemon startup that finds
+                            # ("step_up_requirement_enabled"/"step_up_requirement_disabled":
+                            #  daemon_main.py, recorded once per daemon startup that finds
                             #  local mode's effective ``step_up.enabled and step_up.require_passkey``
                             #  differs from what the previous startup observed. There is no UI path to
                             #  flip this (it's a config file edit plus a restart, deliberately -- see
                             #  step_up_config.py's own docstring), so a startup-time comparison is the
                             #  only place a change can be caught at all; see webauthn_stepup.py's
                             #  observe_step_up_requirement for the persisted state this diffs against.)
-                            # ("approval_pending": gate.py's deferred-approval protocol (P3)
+                            # ("approval_pending": gate.py's deferred-approval protocol
                             #  -- a human didn't decide within the registry's hold window,
                             #  so gated_call() returned a
                             #  structured pending result to Claude instead of continuing to block.
@@ -206,17 +205,17 @@ class AuditEntry:
                             #  a preflight question, not a real decision; recorded for
                             #  pattern-spotting only)
                             # ("rules_listed": web/mcp_dispatch.py's McpDispatcher.list_rules
-                            #  (deleted along with the meta-tool it backed in PSC-3, once ADR 0004
+                            #  (deleted along with the meta-tool it backed, once ADR 0004
                             #  decision 3's one-minor-release grace period was honoured) -- not a
                             #  decision either, but the full current rule/grant set was disclosed,
                             #  worth its own record for the same pattern-spotting reason as
                             #  "policy_check")
-                            # ("org_config_startup": SEC-05 interim -- daemon_main.py's
+                            # ("org_config_startup": daemon_main.py's
                             #  log_org_config_bundle_hash(), recorded once per daemon startup that
                             #  finds an org_config.json installed at all, carrying its sha256 in
                             #  `summary` so a tampered bundle between one startup and the next is
                             #  detectable by diffing hashes even on an install that hasn't adopted
-                            #  full bundle signing -- see org_bundle_signing.py)
+                            #  full bundle signing -- see org_bundle_signing.py and ADR 0016)
                             # ("unattended_session_started"/"_ended": web/mcp_dispatch.py's
                             #  McpDispatcher.begin_unattended_session/end_unattended_session, and
                             #  the same on disconnect cleanup -- this session's gate posture
@@ -231,7 +230,7 @@ class AuditEntry:
                             #  True). "rejected" is reused, not a new value, when the human declines
                             #  instead. NOTE: "bridge_proposal" here is legacy vocabulary from when
                             #  this flow really was posted by a separate Node bridge process over
-                            #  IPC (pre-P5) -- Claude now
+                            #  IPC -- Claude now
                             #  reaches propose_rule_change() via web/mcp_dispatch.py's MCP meta-tool,
                             #  over ``/mcp`` rather than the bridge socket. The four decision strings
                             #  above and "bridge_proposal_no_op" below are deliberately NOT renamed to
@@ -249,15 +248,15 @@ class AuditEntry:
                             #  proposed removing a rule/grant value that was already gone. Distinct
                             #  from "rejected" (the human said no) and from the four decisions above
                             #  (a real change happened) -- confirmed and yet a no-op is its own case)
-                            # ("policy_listed": web/mcp_dispatch.py's McpDispatcher.list_policy (P7
-                            #  of the policy v2 redesign) -- privacyfence_list_policy's own
+                            # ("policy_listed": web/mcp_dispatch.py's McpDispatcher.list_policy --
+                            #  privacyfence_list_policy's own
                             #  disclosure of the current v2 auto_accept: rule set, kept distinct from
                             #  "rules_listed" (the older v1 auto_accept_rules/auto_accept_grants
-                            #  disclosure the now-PSC-3-deleted list-rules meta-tool gave) since they
+                            #  disclosure the since-deleted list-rules meta-tool gave) since they
                             #  list two different config sections, not two names for the same event)
                             # ("policy_rule_changed_via_bridge_proposal"/
                             #  "policy_rule_removed_via_bridge_proposal"/"policy_bridge_proposal_no_op":
-                            #  gate.py's propose_policy_change() (P7) -- the v2-store counterpart of
+                            #  gate.py's propose_policy_change() -- the v2-store counterpart of
                             #  "rule_changed_via_bridge_proposal"/"rule_removed_via_bridge_proposal"/
                             #  "bridge_proposal_no_op" above, kept as distinct decision strings
                             #  (rather than reused) because they persist into a different config
@@ -304,7 +303,7 @@ class AuditEntry:
                               # to attribute.
     decided_at: str = ""     # ISO-8601 UTC timestamp of when a human actually decided, distinct from
                               # this entry's own `timestamp` -- set only on a decision that came from
-                              # the deferred-approval decision ledger (approvals.py, P3): a real click
+                              # the deferred-approval decision ledger (approvals.py): a real click
                               # that happened separately from, and possibly well before, the
                               # invocation now releasing (or expiring) on the strength of it. Empty
                               # for every ordinary decided-inline entry, where the two timestamps
@@ -322,31 +321,31 @@ class AuditEntry:
                               # tool-call args, which isn't what the audit log is for. Set by gate.py's
                               # gated_call() (its own ``delivery`` kwarg) -- never inferred here.
     decided_via: str = ""    # "binder" when this decision was released through the approval binder's
-                              # batch decide endpoint (Phase 2 of the binder plan) -- "" for every
+                              # batch decide endpoint -- "" for every
                               # ordinary single-decide entry, and for every entry recorded before
                               # this field existed. See approvals.PendingApproval.decided_via's own
                               # docstring for how a decision gets stamped with it.
-    rule_id: str = ""       # P8 (policy v2 redesign) -- the on-disk v2 auto_accept: rule's own
-                              # stable, content-derived id (policy.store.rule_id_for_rule) that
+    rule_id: str = ""       # The on-disk auto_accept: rule's own
+                              # stable, content-derived id (policy.store.rule_id_for) that
                               # matched, when this decision is "auto_accepted" and the match
-                              # resolves unambiguously to exactly one rule row. Distinct from
-                              # auto_accept_rule above: that field is a rule *name*, which (per F9)
-                              # can be the same string for several different grants/rules and so
+                              # resolves to exactly one rule row. Distinct from
+                              # auto_accept_rule above: that field has held a rule *name*, which
+                              # can be the same string for several different rules and so
                               # can never answer "which rule let this through" on its own; this
                               # field is what AuditLogger.rule_usage() below groups by to get a
                               # per-rule match count and last-matched date for the Auto-accept
-                              # Settings page. Left "" -- fail closed, never guessed -- for every
-                              # non-"auto_accepted" decision, for an entry recorded before this
-                              # field existed, for the in-memory "session_temp_accept" grace-window
-                              # pseudo-match (not a stored rule row at all), and for a real
-                              # auto-accept where the v1 and v2 engines disagree on which rule
-                              # matched (logged separately at WARNING by gate.py's
-                              # _evaluate_auto_accept -- the audit log must never attribute a
-                              # decision to a row it isn't certain about).
+                              # Settings page (ADR 0074). Left "" -- fail closed, never guessed --
+                              # for every non-"auto_accepted" decision, for an entry recorded
+                              # before this field existed, and for the in-memory
+                              # "session_temp_accept" grace-window pseudo-match (not a stored rule
+                              # row at all). There is one rule engine (ADR 0004), so a real
+                              # auto-accept always resolves to the one row gate.py's
+                              # _evaluate_auto_accept matched -- the audit log never attributes a
+                              # decision to a row it isn't certain about.
     batch_id: str = ""       # The server-minted id of the batch this decision was submitted as part
                               # of, when decided_via == "binder" -- "" otherwise. Lets a reviewer (or
                               # a compliance report) group every audit entry a single passkey
-                              # assertion released (Phase 3 of the binder plan) back into the one
+                              # assertion released back into the one
                               # human action that authorized them. Genuinely server-minted, not just
                               # documented as such: routes_approvals.py's own batch_decide only keeps a
                               # client-supplied value here when the WebAuthn challenge-store lookup
@@ -366,7 +365,7 @@ class AuditEntry:
     agent_version: str = ""  # sanitized claimed version; never verified
     agent_source: str = ""   # "override" | "oauth_client" | "client_info" | "endpoint" | ""
 
-    # ---- SEC-23 fields ----
+    # ---- Hash-chain and provenance fields ----
     # All six below default to a value meaning "not yet stamped" and are
     # filled in by AuditLogger.record() itself (see its docstring) rather
     # than at each of this dataclass's ~15 call sites -- record() is
@@ -381,7 +380,7 @@ class AuditEntry:
                               # CURRENT_SCHEMA_VERSION's docstring for the version history. Defaults
                               # to 1 (the implicit, undocumented shape every entry had before this
                               # field existed) rather than CURRENT_SCHEMA_VERSION, so an entry
-                              # reconstructed from a pre-SEC-23 .jsonl line (which has no
+                              # reconstructed from an older .jsonl line (which has no
                               # "schema_version" key at all) is correctly identified as legacy rather
                               # than misreported as schema 2. record() always overwrites this to
                               # CURRENT_SCHEMA_VERSION for an entry it's actually recording.
@@ -405,7 +404,7 @@ class AuditEntry:
                               # settings.yaml's own (unversioned) edit history. Deliberately does NOT
                               # cover org_config.json -- see compute_security_config_hash()'s own
                               # docstring for why that file's tamper-evidence is handled separately
-                              # (daemon_main.log_org_config_bundle_hash, SEC-05).
+                              # (daemon_main.log_org_config_bundle_hash, ADR 0016).
     prev_hash: str = ""      # This chain segment's previous entry's own entry_hash (or
                               # GENESIS_HASH for the first entry in a chain segment) -- see
                               # AuditLogger._compute_entry_hash and verify_chain().
@@ -431,7 +430,7 @@ class ChainVerificationResult:
 
 
 def compute_security_config_hash(config: dict[str, Any]) -> str:
-    """SEC-23: a stable fingerprint of the privacy-policy configuration in
+    """A stable fingerprint of the privacy-policy configuration in
     effect when a decision is recorded -- ``config`` is settings.yaml's own
     parsed content (see daemon_main.py's module docstring: that file
     "carries no secrets", so hashing it whole -- unlike org_config.json --
@@ -440,7 +439,7 @@ def compute_security_config_hash(config: dict[str, Any]) -> str:
     same hash; that's deliberate, this fingerprints *which policy*, not
     *which install* (deployment_id, above, is the latter).
 
-    org_config.json is deliberately NOT folded in here: SEC-05's own
+    org_config.json is deliberately NOT folded in here: its own
     startup hash (daemon_main.log_org_config_bundle_hash) already gives
     that file tamper-evidence, separately, once per daemon startup --
     re-deriving the same signal on every decision would add nothing new,
@@ -451,7 +450,7 @@ def compute_security_config_hash(config: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-# SEC-03: characters that, as the first character of a cell's string value,
+# Formula injection: characters that, as the first character of a cell's string value,
 # a spreadsheet application (or openpyxl itself, for a leading "=" -- see
 # _excel_literal's docstring) will interpret as the start of a formula
 # rather than literal text. `pii_match_details`, `claude_reason`, `summary`
@@ -498,7 +497,7 @@ class AuditLogger:
         forwarder: "AuditForwarder | None" = None,
     ) -> None:
         self._log_dir = Path(log_dir)
-        # secure_mkdir (SEC-09 posture), not a bare mkdir: this directory now
+        # secure_mkdir (owner-only permissions), not a bare mkdir: this directory now
         # also holds the hash-chain's own HMAC key (_CHAIN_KEY_FILENAME) --
         # see _load_or_create_chain_key's docstring for what that key
         # protects and, honestly, what it doesn't.
@@ -521,7 +520,7 @@ class AuditLogger:
             self._security_config_hash = value
 
     def _stamp_entry(self, entry: AuditEntry) -> None:
-        """Fill in every SEC-23 field record() owns, in place. Must be
+        """Fill in every hash-chain and provenance field record() owns, in place. Must be
         called with self._lock held -- prev_hash/entry_hash/self._last_hash
         form a single mutable chain of state that a concurrent record()
         call must never interleave with."""
@@ -588,8 +587,8 @@ class AuditLogger:
         from its own stored fields (proves that entry wasn't altered after
         AuditLogger wrote it), and each entry's ``prev_hash`` must match
         the previous entry's ``entry_hash`` (proves no entry was inserted,
-        removed, or reordered). A line with no chain fields at all (a
-        pre-SEC-23 entry) can't be verified -- it's skipped, and it resets
+        removed, or reordered). A line with no chain fields at all (one
+        written before the chain existed) can't be verified -- it's skipped, and it resets
         the "previous entry" expectation for the line after it, since the
         chain never covered it in the first place.
 
@@ -623,8 +622,8 @@ class AuditLogger:
                     )
                 stored_hash = data.get("entry_hash") or ""
                 if not stored_hash:
-                    # Pre-SEC-23 entry (or a schema_version-1 line from an
-                    # even older build) -- nothing to verify, and nothing
+                    # A line with no chain fields (schema_version 1, or no
+                    # schema_version at all) -- nothing to verify, and nothing
                     # for the *next* entry to chain against either.
                     expected_prev = None
                     checked += 1
@@ -652,8 +651,10 @@ class AuditLogger:
 
     def close(self) -> None:
         """Stop this logger's forwarder (if any) -- called once, from
-        daemon_main.run_app()'s own shutdown path. A no-op when forwarding
-        was never enabled."""
+        daemon_main.run_app()'s own shutdown path, on the install's logger.
+        Every principal's logger shares that one forwarder (see
+        ``_InstallAuditSettings``), so this stops forwarding for all of
+        them. A no-op when forwarding was never enabled."""
         if self._forwarder is not None:
             self._forwarder.stop()
 
@@ -699,14 +700,14 @@ class AuditLogger:
             "Summary", "Sender / Context", "Decision", "Auto-Accept Rule", "Latency (s)",
             "PII Detected", "PII Categories", "PII Match Details", "Claude's Reason (unverified)",
             "Delivery",
-            # SEC-23: appended, not interleaved, so column indices existing
+            # Appended, not interleaved, so column indices existing
             # tooling/tests already rely on (Decision at 8, PII Detected at
             # 11, ...) stay stable.
             "Event ID", "Deployment ID", "Security Config Hash", "Integrity Hash",
-            # Appended for the same reason as the SEC-23 block above: existing
+            # Appended for the same reason as the hash-chain block above: existing
             # column indices stay stable.
             "Decided Via", "Batch ID",
-            # P8 (policy v2 redesign): appended last, same reason again.
+            # Rule attribution: appended last, same reason again.
             "Rule ID",
             # Agent attribution (schema 5): appended last, same reason again. The
             # source column is labelled so a claimed identity reads as a claim,
@@ -888,8 +889,8 @@ class AuditLogger:
 
     def rule_usage(self) -> dict[str, dict[str, Any]]:
         """Per-rule usage, for the Auto-accept Settings page's "Matched 42x, last 3 days ago" /
-        "never matched" line (P8, resolving F9): ``{rule_id: {"count": int, "last_matched":
-        <ISO-8601 timestamp string>}}``, built from every ``"auto_accepted"`` decision this
+        "never matched" line, keyed by rule id because a rule name can repeat (ADR 0074): ``{rule_id:
+        {"count": int, "last_matched": <ISO-8601 timestamp string>}}``, built from every ``"auto_accepted"`` decision this
         install has ever recorded whose ``rule_id`` resolved to a real row (see AuditEntry.
         rule_id's own docstring for when that's empty).
 
@@ -928,7 +929,7 @@ class AuditLogger:
 
 
 def _load_or_create_chain_key(path: Path) -> bytes:
-    """SEC-23's hash-chain key: 32 random bytes, generated once per audit
+    """The hash chain's key: 32 random bytes, generated once per audit
     directory and reused for the life of that install (each principal's
     own ``logs/audit/`` gets its own key, same granularity as its own
     chain -- see AuditLogger.__init__).
@@ -945,7 +946,7 @@ def _load_or_create_chain_key(path: Path) -> bytes:
     itself. The real defense against a fully-privileged local
     administrator tampering with their own audit trail is a copy that
     leaves this trust boundary entirely -- see audit_forwarding.py's
-    centralized forwarding, SEC-23's other half.
+    centralized forwarding (ADR 0071).
     """
     try:
         if path.exists():
@@ -1012,7 +1013,7 @@ def _fallback_log_dir() -> str:
     """Used only if get_audit_logger() is ever called before daemon_main.py's
     run_app() has called init_audit_logger() -- which shouldn't happen in
     practice, but this is the same last-resort fallback the original bare
-    ``_INSTANCE`` singleton had, just principal-aware now (P6): the local
+    ``_INSTANCE`` singleton had, just principal-aware now: the local
     principal keeps the exact original hardcoded shape -- the real home
     directory's own ``.privacyfence/audit`` (an ``audit`` sibling of
     ``data_dir()`` rather than nested under ``logs/``), *not*
@@ -1037,11 +1038,35 @@ def _fallback_log_dir() -> str:
     return str(paths.user_dir(principal) / "logs" / "audit")
 
 
+@dataclass
+class _InstallAuditSettings:
+    """The install-wide values every principal's logger carries, not just
+    the one ``init_audit_logger()`` builds. In org mode each person's
+    logger is built lazily by ``_REGISTRY``'s factory; without these it
+    would have no forwarder (so that person's approve/deny decisions never
+    reach the central sink) and an empty ``deployment_id``."""
+
+    deployment_id: str = ""
+    security_config_hash: str = ""
+    forwarder: "AuditForwarder | None" = None
+
+
+_INSTALL_SETTINGS = _InstallAuditSettings()
+
+
+def _build_principal_logger() -> AuditLogger:
+    settings = _INSTALL_SETTINGS
+    return AuditLogger(
+        _fallback_log_dir(), deployment_id=settings.deployment_id,
+        security_config_hash=settings.security_config_hash, forwarder=settings.forwarder,
+    )
+
+
 # PrincipalRegistry.get() already serializes construction per principal
 # (see that class's own docstring on why it needs to be thread-safe), so
 # the double-checked-locking dance the original bare singleton needed here
 # is now the registry's job, not this module's.
-_REGISTRY: PrincipalRegistry[AuditLogger] = PrincipalRegistry(lambda: AuditLogger(_fallback_log_dir()))
+_REGISTRY: PrincipalRegistry[AuditLogger] = PrincipalRegistry(_build_principal_logger)
 
 
 def get_audit_logger() -> AuditLogger:
@@ -1050,7 +1075,7 @@ def get_audit_logger() -> AuditLogger:
 
 def set_security_config_hash_for_all_principals(value: str) -> list[str]:
     """Push a new ``security_config_hash`` onto every principal's logger,
-    returning the ids updated (#400 C3e).
+    returning the ids updated.
 
     ``AuditLogger.set_security_config_hash`` covers local mode, where
     settings_controller.py's ``_save_config`` is writing the one principal's
@@ -1058,9 +1083,12 @@ def set_security_config_hash_for_all_principals(value: str) -> list[str]:
     the policy governing *every* principal's decisions, so every
     principal's logger has to start stamping the new fingerprint -- a
     reviewer diffing a decision against the policy in force when it was
-    recorded (this field's whole purpose, SEC-23) gets a stale answer
+    recorded (this field's whole purpose) gets a stale answer
     otherwise.
     """
+    # First, so a logger built for a principal first seen during or after
+    # the sweep below starts with the new value too.
+    _INSTALL_SETTINGS.security_config_hash = value
     updated: list[str] = []
     for principal_id in _REGISTRY.principal_ids():
         with principal_scope(Principal(id=principal_id)):
@@ -1076,6 +1104,14 @@ def init_audit_logger(
     security_config_hash: str = "",
     forwarder: "AuditForwarder | None" = None,
 ) -> AuditLogger:
+    """Install the current principal's logger at ``log_dir``, and record
+    ``deployment_id``, ``security_config_hash`` and ``forwarder`` as the
+    install's, for every other principal's logger built after this."""
+    global _INSTALL_SETTINGS
+    _INSTALL_SETTINGS = _InstallAuditSettings(
+        deployment_id=deployment_id, security_config_hash=security_config_hash,
+        forwarder=forwarder,
+    )
     return _REGISTRY.set(AuditLogger(
         log_dir, deployment_id=deployment_id, security_config_hash=security_config_hash,
         forwarder=forwarder,

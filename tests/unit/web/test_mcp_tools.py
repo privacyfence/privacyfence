@@ -1,12 +1,7 @@
 """Tests for mcp_tools.py's ``ToolSpec`` -> MCP ``Tool``/``CallToolResult``
-translation, plus TST-02's coverage gap (`git show ba1ec76e^:docs/
-security-remediation-plan.md` phase 1.9) for ``privacyfence_begin_unattended_
-session`` refused when disabled. TST-02's other two original gaps -- a
-rule-change proposal denied inside an unattended session, and the v1
-rule-listing tool's disclosure being audited -- went with the deprecated v1
-tools those gaps covered when PSC-3 deleted them (ADR 0004 decision 3's
-one-minor-release grace period honoured, see that ADR for which tools); the
-same regression the first gap uncovered now lives on in
+translation, plus ``privacyfence_begin_unattended_session`` refused when
+disabled, driven over the real transport. A policy-change proposal denied
+inside an unattended session is covered by
 ``privacyfence_propose_policy_change``'s own unattended-denial coverage, see
 McpDispatcher.propose_policy_change's comment in web/mcp_dispatch.py.
 
@@ -119,11 +114,11 @@ class TestToMcpTool:
         assert tool.description == "Sends an email."
 
     def test_every_tool_is_advertised_read_only_regardless_of_the_specs_own_flag(self):
-        # §8.1: MCP tool annotations are a UI hint, not the real security
+        # MCP tool annotations are a UI hint, not the real security
         # boundary -- gate.py enforces that server-side. A write tool
         # (read_only=False) must still be advertised uniformly read-only so
         # a client doesn't throw its own redundant confirmation in front of
-        # gate.py's real one.
+        # gate.py's real one (ADR 0076).
         read_tool = mcp_tools.to_mcp_tool(ToolSpec(name="r", description="d", read_only=True))
         write_tool = mcp_tools.to_mcp_tool(ToolSpec(name="w", description="d", read_only=False))
         for tool in (read_tool, write_tool):
@@ -210,11 +205,9 @@ class TestMetaToolManifest:
         assert schema["properties"]["approval_ids"]["type"] == "array"
 
     def test_nothing_on_this_server_mints_a_sign_in_link_any_more(self):
-        """The self-approval plan's Phase 2 retired
-        ``privacyfence_get_sign_in_link``: its own justification ("nothing
-        installs or starts the companion automatically yet") expired when ADR
-        0003 made the companion mandatory on all three platforms, and a live
-        session is not something to hand the party it governs. Asserted
+        """No meta-tool mints a sign-in link (ADR 0013): ADR 0003 makes the
+        companion mandatory on all three platforms, and a live session is not
+        something to hand the party it governs. Asserted
         against the manifest as a whole rather than by name alone, so a
         differently-named tool that mints one lands here too."""
         assert not any("sign_in" in tool.name for tool in mcp_tools.META_TOOLS)
@@ -222,7 +215,7 @@ class TestMetaToolManifest:
         assert not hasattr(mcp_tools, "sign_in_link_result")
 
     def test_status_tool_requires_only_reason(self):
-        # issue #396 Phase 2: the one meta-tool guaranteed to exist even
+        # The one meta-tool guaranteed to exist even
         # with zero connectors -- no params of its own beyond the shared
         # audited "reason", same posture as list_policy.
         schema = mcp_tools.PRIVACYFENCE_STATUS_TOOL.input_schema
@@ -234,7 +227,7 @@ class TestMetaToolManifest:
         assert mcp_tools.PRIVACYFENCE_STATUS_TOOL.name in mcp_tools.META_TOOL_NAMES
 
     def test_check_policy_documents_matched_rule_id_in_its_description(self):
-        # P7: check_policy's contract gained a field: no schema to assert against (it's part of
+        # check_policy's result carries matched_rule_id: no schema to assert against (it's part of
         # the free-form result dict), so the description is the one place this is documented.
         assert "matched_rule_id" in mcp_tools.CHECK_POLICY_TOOL.description
 
@@ -268,7 +261,7 @@ class TestMetaToolManifest:
 
 
 # --------------------------------------------------------------------------- #
-# TST-02's three named behaviors, driven end to end over the real /mcp
+# Unattended-session behavior, driven end to end over the real /mcp
 # Streamable HTTP transport (mirrors test_routes_mcp.py's own fixtures).
 # --------------------------------------------------------------------------- #
 
@@ -350,9 +343,9 @@ class TestStatusOverRealTransport:
 
 
 class TestListAndProposePolicyOverRealTransport:
-    """P7's two meta-tools, driven end to end over the real /mcp transport --
-    the sole surface for reading/writing auto-accept policy since PSC-3
-    deleted their v1-shaped predecessors (see ADR 0004 for which tools)."""
+    """list_policy/propose_policy_change, driven end to end over the real /mcp
+    transport -- the sole surface for reading/writing auto-accept policy
+    (ADR 0004)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch):

@@ -167,8 +167,7 @@ class TestToggleTemplate:
         for action in (
             "toggle_pii_detection", "toggle_pii_category",
             "toggle_update_check", "toggle_update_check_beta",
-            # F6 of the self-approval review: no single toggle_connector
-            # any more -- both branches of the directional ternary are
+            # No single toggle_connector -- both branches of the directional ternary are
             # present as source text regardless of any connector's actual
             # state (see settings_window_html.py's renderConnectors).
             "enable_connector", "disable_connector",
@@ -189,7 +188,7 @@ class TestConnectorRowTemplate:
 
 
 class TestInitialSection:
-    """``initial_section`` (issue #396 Part C) -- web/routes_settings.py's
+    """``initial_section`` -- web/routes_settings.py's
     ``GET /settings/connectors`` passes this so an un-onboarded sign-in link
     lands on Connectors instead of the client-side JS's own 'general'
     default."""
@@ -203,7 +202,7 @@ class TestInitialSection:
         assert 'window.__pfInitialSection = "connectors";' in html
 
     def test_js_falls_back_to_general_when_unset(self):
-        # PSC-5: the literal fallback is now capability-aware (org mode's
+        # The literal fallback is capability-aware (org mode's
         # own non-admin principal falls back to Auto-accept instead, see
         # TestOrgCapabilities below) -- local mode's own capabilities
         # (CAPS.sections.general always true) still resolve this to
@@ -213,8 +212,8 @@ class TestInitialSection:
 
 
 class TestWelcomeBanner:
-    """The un-onboarded welcome banner on the Connectors page (issue #396
-    Part C) -- client-rendered, so this only asserts on the shipped
+    """The un-onboarded welcome banner on the Connectors page --
+    client-rendered, so this only asserts on the shipped
     template/logic, same as every other section's own tests in this file
     (see the module docstring)."""
 
@@ -235,9 +234,7 @@ class TestWelcomeBanner:
 
 
 class TestAutoAcceptTemplate:
-    """P6 of the policy v2 redesign: the single filterable Auto-accept page, replacing the old
-    per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-page surface (see git history for
-    this class's own pre-P6 shape, TestRulesAndGrantsTemplate)."""
+    """The single filterable Auto-accept page (policy v2)."""
 
     def test_rule_row_fields_wired(self):
         html = build_html(_make_state())
@@ -265,7 +262,7 @@ class TestAutoAcceptTemplate:
         assert "covered_tools" in html
 
     def test_usage_fields_wired(self):
-        # P8 (rule attribution and staleness): every row's match count/last-matched/never-matched
+        # Rule attribution and staleness: every row's match count/last-matched/never-matched
         # trio is read and rendered, with a distinct class for a rule that has never fired.
         html = build_html(_make_state())
         assert "match_count" in html
@@ -337,8 +334,7 @@ class TestAboutTemplate:
 
 class TestTelegramModalTemplate:
     """Telegram's in-webview multi-step sign-in modal (phone -> code ->
-    optional 2FA password), replacing the pre-#120 native rumps.Window
-    flow. See TestTelegramStartAuth/TestTelegramSubmitCode/
+    optional 2FA password). See TestTelegramStartAuth/TestTelegramSubmitCode/
     TestTelegramSubmit2FA in test_settings_controller.py for the Python
     side; string-level checks only here, same reasoning as this module's
     own docstring -- actual step-transition/auto-close behavior was
@@ -375,7 +371,7 @@ class TestTelegramModalTemplate:
 
 class TestNotificationsCard:
     """renderNotificationsCard's own comment: web.notifications.detail
-    (settings.yaml.example, docs/approval-list-ui-ux.md §4.3) is a real,
+    (settings.yaml.example; how much a notification body may say, ADR 0064) is a real,
     mutable setting -- set_notifications_detail persists it and the card's
     segmented control (segGroupHtml, the same primitive the Audit page's
     Log level row and the Privacy Filter's policy rows already use) is
@@ -450,8 +446,8 @@ class TestNotificationsCard:
 
 
 class TestStepUpCard:
-    """B9: the General page's Security card grows a one-directional "turn
-    step-up on" control -- string-level checks only, same reasoning as this
+    """The General page's Security card has a one-directional "turn
+    step-up on" control (ADR 0068) -- string-level checks only, same reasoning as this
     module's own docstring (no JS engine here to actually branch on
     g.step_up_on/g.step_up_has_passkey and see which of the three states
     renders)."""
@@ -486,7 +482,7 @@ class TestStepUpCard:
 
 
 class TestOrgCapabilities:
-    """PSC-5: window.__pfCapabilities is a separate embedded global from
+    """window.__pfCapabilities is a separate embedded global from
     window.__pfInitialState -- state itself must stay exactly what the
     caller passed (TestStateEmbedding.test_state_round_trips_byte_for_
     byte), so capability data can't live there. These tests read the
@@ -501,7 +497,7 @@ class TestOrgCapabilities:
         caps = self._extract_capabilities(build_html(_make_state()))
         assert caps["mode"] == "local"
         assert caps["is_admin"] is False
-        # AGT-5: AI systems is org-only (no DCR registrations to pin locally);
+        # AI systems is org-only (no DCR registrations to pin locally);
         # every other section stays.
         assert caps["sections"]["agents"] is False
         assert all(v for k, v in caps["sections"].items() if k != "agents")
@@ -536,7 +532,7 @@ class TestOrgCapabilities:
             assert caps["sections"]["connectors"] is False
 
     def test_org_mode_shows_audit_to_every_principal_without_its_local_only_controls(self):
-        # AGT-5: each principal's own recent decisions, read-only -- export and
+        # Each principal's own recent decisions, read-only -- export and
         # log level have no org route, so the page must not draw them.
         for is_admin in (True, False):
             caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=is_admin))

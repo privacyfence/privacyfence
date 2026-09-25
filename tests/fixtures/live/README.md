@@ -1,8 +1,10 @@
 # Recorded live fixtures
 
-Populated by `scripts/qa_fixture_recorder.py --record <connector>`, run locally against a real,
-already-authenticated account per [`qa-environment-setup.md`](../../../docs/qa-environment-setup.md).
-Never generated in CI, never containing anything but a `[QATEST]`-tagged seed artifact with
+Populated by `scripts/qa_fixture_recorder.py --record <connector>`, run against a real,
+already-authenticated QA account seeded per
+[`connector-qa.md`](../../../docs/connector-qa.md#seed-data) — by hand, or on the self-hosted runner
+by `connector-live-check.yml` (on drift) and `qa-record-fixture.yml`. Never generated on a
+GitHub-hosted runner, never containing anything but a `[QATEST]`-tagged seed artifact with
 identity fields and structural (non-identity) resource ids/URLs already de-identified — see the
 `redact()`/`deidentify_structural_fields()` functions and their connector-specific passes in
 `scripts/qa_fixture_recorder.py`.
@@ -14,4 +16,4 @@ pointing back at the recorder — nothing here is required for the suite to pass
 without a recorded fixture doesn't get this layer's regression coverage either.
 
 Re-record after a genuine provider API change, not routinely — see
-[`testing-policy.md` §2.1](../../../docs/testing-policy.md#21-qa_fixture_recorderpy---check----record).
+[`testing-policy.md`'s "Layer 5: live connector"](../../../docs/testing-policy.md#layer-5-live-connector).

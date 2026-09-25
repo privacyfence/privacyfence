@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
-"""Generate docs/always-allow-rules-reference.md from the live policy v2 catalogue.
+"""Generate docs/always-allow-rules-reference.md from the live policy scope catalogue.
 
-Through P8 of the policy v2 redesign this doc was hand-maintained prose, cross-checked by eye
-against ``auto_accept.py``'s v1 suggestion tables (``TOOL_TO_GATE``/``TOOL_TO_OPERATION``/
-``suggest_rule()``/``suggest_write_rule()``) -- its own header said so, and named those tables as
-"authoritative" the moment it drifted. P9 retires that whole suggestion machinery in favor of
-``policy.propose.proposals_for()``, the one scope catalogue every "Always allow" surface (the
-popup, Settings, the MCP bridge) now shares -- so this script walks that catalogue instead of a
-person walking it by hand, the same "the generator is the artefact" posture the redesign
-proposal's own Phase 0 inventory used.
+The doc lists, per gated tool, which "Always allow" buttons an approval card can offer. It is
+generated rather than hand-written so it cannot drift from ``policy/registry.py`` (which tool maps
+to which operation and verb) and ``policy/propose.py``'s ``PROPOSABLE_SCOPES`` (which scopes a card
+may propose).
 
-Run it and check the result in whenever ``policy/registry.py``'s ``TOOL_TO_VERB``/
-``VERB_SCOPE_SUBJECT`` or ``policy/propose.py``'s ``PROPOSABLE_SCOPES`` change what a tool's
-"Always allow" button would propose -- ``tests/unit/test_generate_always_allow_reference.py``
-fails CI the moment the checked-in doc and a fresh run of this script disagree, the same drift
-guard ``scripts/changelog_section.py`` and this repo's other generated-and-committed files use.
+Run it and commit the result whenever either of those changes what a tool's card would propose --
+``tests/unit/test_generate_always_allow_reference.py`` fails CI when the checked-in doc and a fresh
+run disagree.
 
-Requires PrivacyFence to be installed (``pip install -e .``) -- unlike ``scripts/changelog_section.py``,
-this reads the real ``policy`` package, not just stdlib.
+Requires PrivacyFence to be importable (``pip install -e .``): this reads the real ``policy``
+package, not just stdlib.
 """
 from __future__ import annotations
 
@@ -34,42 +28,39 @@ DOC_PATH = REPO_ROOT / "docs" / "always-allow-rules-reference.md"
 
 _HEADER = """# "Always allow" — per-tool reference
 
-What clicking **Always allow** proposes, tool by tool. **Generated** by
+Which **Always allow** buttons an approval card can offer, tool by tool. This page is an appendix
+to [Approvals and policy](approvals-and-policy.md#always-allow-and-policy-rules), which explains
+how rules work and where else you can create them.
+
+**Generated** by
 [`scripts/generate_always_allow_reference.py`](../scripts/generate_always_allow_reference.py) from
 [`src/privacyfence/policy/registry.py`](../src/privacyfence/policy/registry.py) and
-[`src/privacyfence/policy/propose.py`](../src/privacyfence/policy/propose.py) — the same scope
-catalogue the popup, the Auto-accept Settings page, and the MCP bridge's
-`privacyfence_propose_policy_change` all write through
-([`docs/TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#auto-accept) has the schema and the three
-surfaces). Don't hand-edit this file — run the generator and commit its output; a CI test fails if
-the checked-in copy and a fresh run disagree.
+[`src/privacyfence/policy/propose.py`](../src/privacyfence/policy/propose.py). Don't hand-edit this
+file — run the generator and commit its output; a CI test fails if the checked-in copy and a fresh
+run disagree.
 
-## How this doc is organized
+## How to read this page
 
-Every gated tool has a **gate**: `auto`, `review`, or `popup`. `auto` tools never show a popup or
-any button — nothing to allow — so they're **left out of this doc entirely**. What remains splits
-into two sections:
+Every connector tool has a **gate**: `auto` (runs without asking), `review` (a read you approve
+before its content is released) or `popup` (a write you confirm before it happens). `auto` tools
+never show a card, so they are left out of this page. The rest are split into
+[read tools](#read-tools) (`review`) and [write tools](#write-tools) (`popup`).
 
-- **[Read tools](#read-tools)** (`review` gate) — the popup offers **Always allow** whenever at
-  least one scope in the catalogue below plausibly contains the item just read; otherwise the
-  button doesn't appear, and the row's own column is empty.
-- **[Write tools](#write-tools)** (`popup` gate) — most write popups never offer Always allow at
-  all; the ones that do propose a rule scoped to the one folder/label/calendar/project/space/task
-  list the call just touched, narrowest first — never a bare "accept every future write of this
-  type" toggle.
+The **Always allow buttons** column lists every rule scope the card can propose for that tool.
+A scope is only offered when it actually contains the item on the card — "this folder" appears
+only when the file has a parent folder, "if I own it" only when you own the file — and **every
+scope that matches gets its own button**, so a file you own that also sits in a folder can show
+both "Always allow — this folder" and "Always allow — if I own it". When no scope matches, or the
+column is empty, the card offers only **Deny** and **Allow once**.
 
-Where a tool's row lists more than one candidate, only the first whose scope actually contains the
-item under review becomes a button — narrowest declared first (identity scopes before attribute
-scopes before condition scopes), per
-[`policy/propose.py`](../src/privacyfence/policy/propose.py)'s own declaration order. When two or
-more candidates genuinely match the same item at once (e.g. a file you own that's also in an
-approved folder), the popup renders one button per match instead of picking one.
+"unconditional" means the button has no scope at all: the rule it writes accepts every future call
+of that operation (Gmail drafting is the one case).
 
-**Always allow always writes a v2 rule to the `auto_accept:` section** — one row, scoped to
-exactly the operation just gated at first; the confirmation dialog then offers further verbs as
-named widening chips (e.g. "also allow format") before anything is written. See
-[Auto-accept](TECHNICAL_REFERENCE.md#auto-accept) for the schema and the other two surfaces that
-write the identical shape.
+Clicking a button opens a confirmation dialog that states the rule as a sentence and lists every
+tool it covers. Confirming writes one rule to the `auto_accept:` section of `settings.yaml`. That
+rule covers the scope's value (the folder, label, calendar, …) and only the one operation you just
+approved — other operations on the same resource still ask. Cancelling the dialog still approves
+the request on the card, once.
 
 ---
 
@@ -81,37 +72,23 @@ _READ_INTRO = """## Read tools
 
 _WRITE_INTRO = """## Write tools
 
-Most write tools never offer **Always allow** — auto-accepting a write silently is a materially
-bigger blast radius than auto-accepting a read. Every write tool below with a non-empty column is
-a narrow, deliberate exception, scoped to the one resource the call just touched. Every other
-gated write tool offers exactly Deny / Allow once, with an empty **Always allow proposes** column.
-A handful of tools also have a separate, non-persisted grace-window behavior tucked into their
-"Allow once" instead — see
-[Related but distinct mechanisms](TECHNICAL_REFERENCE.md#auto-accept) for what that is; it isn't
-an Always-allow rule and doesn't belong in this column.
+A write tool with a non-empty column can offer a rule scoped to the resource the call touched —
+the folder, label, calendar, project, list, channel or chat — except the six Gmail draft tools,
+whose rule is unconditional. Every other write tool offers only **Deny** and **Allow once**.
+A few Drive, Docs and Sheets tools also start a short same-file grace window when you click
+**Allow once**; that is not a rule, see
+[Same-file grace window](approvals-and-policy.md#same-file-grace-window).
 
 """
 
 _FOOTER = """
-## Related but distinct mechanisms
+## Rules you can't create from a card
 
-These are easy to conflate with Always allow because they sit in the same popups or touch the same
-config, but none of them are the "Always allow" button covered above.
-
-**Temp-accept grace window** — an in-memory, non-persisted acceptance for six `popup`-gate writes
-expected to fire repeatedly against the same file in a burst
-(`privacyfence.auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS`), scoped to one file/spreadsheet for 5
-minutes and gone on daemon restart. There's no separate button for it: these popups show only
-Deny / Allow once, with a plain disclosure caption above the buttons explaining that Allow once
-also arms the grace window.
-
-**Bridge-proposed policy changes** (`privacyfence_propose_policy_change`) — lets Claude itself
-propose adding/updating/removing a rule for *any* operation, including tools that never get an
-Always-allow button of their own (a Gmail filter, a Slack group chat, an Apps Script project).
-Every call still blocks on the same confirmation dialog Always allow uses — there's no way for a
-rule to land without a human confirming it. See `privacyfence_list_policy`/
-`privacyfence_propose_policy_change` in `src/privacyfence/web/mcp_tools.py` (or the tool's own MCP
-description) for the exact request/response shape.
+Some operations never offer an **Always allow** button because nothing on the card names a
+resource to scope the rule to: Apps Script projects, Gmail filters, and creating a Slack group
+chat. You can still allow them from **Settings → Auto-accept → Add a rule**, or by letting the AI
+system propose a rule with `privacyfence_propose_policy_change`. Either way the rule is written
+only after you confirm it. See [Approvals and policy](approvals-and-policy.md#always-allow-and-policy-rules).
 """
 
 
@@ -134,18 +111,14 @@ def _candidates_cell(tool: str) -> str:
     scopes = _scope_candidates(tool)
     if not scopes:
         return ""
-    phrases = []
-    for scope in scopes:
-        hint = scope.hint or "unconditional"
-        phrases.append(hint if not phrases else f"else {hint}")
-    return ", ".join(phrases)
+    return ", ".join(scope.hint or "unconditional" for scope in scopes)
 
 
 def _tools_by_connector(gate: str) -> dict[str, list[str]]:
     # Grouped by the same connector `_scope_candidates` resolves scopes against
     # (`propose.connector_of_operation`), not the tool's own namespace -- Sheets/Docs tools
     # address a Drive file and are governed by `drive.folder` rules, so they belong in the same
-    # section a plain Drive file's tools do, the way the pre-P9 hand-written doc grouped them too.
+    # section a plain Drive file's tools do.
     by_connector: dict[str, list[str]] = {}
     for tool, entry in TOOL_REGISTRY.items():
         if entry.gate != gate:
@@ -162,7 +135,7 @@ def _section(gate: str) -> str:
     by_connector = _tools_by_connector(gate)
     for connector in sorted(by_connector):
         lines.append(f"### {describe.connector_label(connector)}\n")
-        lines.append("| Tool | Always allow proposes |")
+        lines.append("| Tool | Always allow buttons |")
         lines.append("|---|---|")
         for tool in by_connector[connector]:
             lines.append(f"| `{tool}` | {_candidates_cell(tool)} |")

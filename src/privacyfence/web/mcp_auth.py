@@ -5,32 +5,29 @@ into.
 ``PerUserTokenVerifier`` below is a ``TokenVerifier`` (the official SDK's
 protocol, ``mcp.server.auth.provider.TokenVerifier``) checking a bearer
 token against a ``{sha256(token): principal_id}`` map rather than one fixed
-shared secret. Through ADR 0008 (``docs/adr/0008-one-principal-per-os-user.md``)
-this was ``StaticTokenVerifier``, a single shared secret every caller
-resolved to the one local principal -- the "possession of this file is the
-authority" posture ``~/.privacyfence/ipc_token`` had for the bridge, before
-P5 retired it. That was correct while local mode had exactly one principal;
-once a separated install can have one per OS user, a single shared secret
-*is* the leak (any OS user who could read the file could act as every other
-one), so each principal now gets its own token, minted over the control
-channel (``web/control_channel.py``'s ``MINT MCP``/``ROTATE MCP``) rather
-than read from a shared file. Not real OAuth 2.1 -- that's org mode
-(landed at P7 as ``OrgOAuthProvider``, which satisfies the exact same ``TokenVerifier``
-protocol via its own ``verify_token``). Using the SDK's own
+shared secret. A separated install can have one principal per OS user
+(ADR 0008, ``docs/adr/0008-one-principal-per-os-user.md``), and there a
+single shared secret *is* the leak (any OS user who could read the file
+could act as every other one), so each principal gets its own token, minted
+over the control channel (``web/control_channel.py``'s ``MINT MCP``/``ROTATE
+MCP``) rather than read from a shared file. Not real OAuth 2.1 -- that's
+org mode's ``OrgOAuthProvider``, which satisfies the exact same
+``TokenVerifier`` protocol via its own ``verify_token``. Using the SDK's own
 ``TokenVerifier``/``BearerAuthBackend``/``RequireAuthMiddleware`` here
-meant P7 only had to swap this one class for a real verifier;
-routes_mcp.py's own wiring didn't change (see that module's
+means org mode only swaps this one class for a real verifier;
+routes_mcp.py's own wiring is the same in both modes (see that module's
 ``build_mcp_asgi_app``, which takes a ``verifier: TokenVerifier`` --
 either this module's or ``OrgOAuthProvider``'s).
 
 This token is deliberately a **separate secret from the approval surface's
-own session/CSRF cookie**: §10.3's audience separation --
+own session/CSRF cookie**: audience separation --
 "the MCP access token must never be accepted on approval-decision
 endpoints, and the browser session cookie must never be accepted on
 /mcp" -- has to hold even if someone reuses one file's contents by hand, so
 the two are generated independently and never compared against each other
-anywhere in this codebase. See web/test_routes_mcp.py's audience-separation
-test, which is the one required to fail loudly if that ever changes.
+anywhere in this codebase (ADR 0061). See tests/unit/web/test_server.py's
+``TestAudienceSeparation``, which is the one required to fail loudly if
+that ever changes.
 """
 from __future__ import annotations
 
@@ -202,8 +199,8 @@ def _preload_one(verifier: PerUserTokenVerifier, principal: Principal) -> None:
 
 
 def principal_from_access_token(token: AccessToken | None) -> Principal:
-    """The ``/mcp`` endpoint's principal_scope() entry point (P6: "entered
-    once per HTTP request, in exactly one place per surface") -- routes_mcp.py calls this once per
+    """The ``/mcp`` endpoint's principal_scope() entry point (entered
+    once per HTTP request, in exactly one place per surface) -- routes_mcp.py calls this once per
     tool call, wrapping dispatch in ``principal_scope(...)`` around it.
 
     Local mode: ``PerUserTokenVerifier`` above sets ``client_id="local"``
@@ -213,7 +210,7 @@ def principal_from_access_token(token: AccessToken | None) -> Principal:
     with no email/display_name, so every existing per-principal registry
     keeps seeing the exact object it always has for the owner.
 
-    Org mode (P7): the token comes from ``web/oauth_provider.py``'s
+    Org mode: the token comes from ``web/oauth_provider.py``'s
     ``OrgOAuthProvider`` instead, whose ``AccessToken.subject`` is the
     resolved human's principal id (an OAuth client_id identifies *which
     Claude installation* registered via DCR, not *which human* is using

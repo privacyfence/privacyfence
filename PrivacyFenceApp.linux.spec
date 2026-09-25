@@ -1,14 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
 # PyInstaller spec for PrivacyFenceApp (Linux onedir build) -- the Linux equivalent of
-# PrivacyFenceApp.spec's macOS .app, packaged into a .deb by scripts/build_deb.sh (see
-# the now-removed docs/linux-local-deb-packaging-plan.md, Phase 1).
+# PrivacyFenceApp.spec's macOS .app, packaged into a .deb by scripts/build_deb.sh (see ADR 0018
+# for why the .deb is a self-contained PyInstaller bundle).
 #
 # Produces:
 #   dist/PrivacyFenceApp/
 #     PrivacyFenceApp        ← daemon (main entry point; headless background process,
 #                                reachable only over its own embedded web approval/settings UI --
-#                                P10 retired the native menu bar/dialogs)
+#                                there is no native menu bar or dialog UI)
 #     privacyfence-app       ← symlink → PrivacyFenceApp (for daemon auto-start; the mcpb shim's
 #                                findDaemonCmd() and the .deb's autostart entry both look for
 #                                this name specifically)
@@ -33,7 +33,7 @@
 #
 # Notes:
 #   - Run on the target architecture -- PyInstaller doesn't cross-compile, so an arm64 build
-#     needs an arm64 build host (the now-removed docs/linux-local-deb-packaging-plan.md P4.2).
+#     needs an arm64 build host (ADR 0044: the .deb declares only the architectures CI builds).
 #   - `.deb` packaging (debian/ metadata, dpkg-deb, lintian) is handled by scripts/build_deb.sh,
 #     not this spec -- this spec's only job is producing the onedir bundle.
 
@@ -88,17 +88,16 @@ daemon_exe = EXE(
     bootloader_ignore_signals=False,
     # Unlike PrivacyFenceApp.spec's strip=False (kept that way there to stay safe for macOS
     # codesigning), Linux binaries built here get stripped -- there's no signing step to worry
-    # about, and lintian's `unstripped-binary-or-object` check (scripts/build_deb.sh's lint gate,
-    # P4.3 in the now-removed docs/linux-local-deb-packaging-plan.md) treats leaving debug symbols in as an error
-    # for a shipped .deb. Verified this doesn't break the frozen app (see that plan's Phase 1/7
-    # notes).
+    # about, and lintian's `unstripped-binary-or-object` check (scripts/build_deb.sh's lint gate)
+    # treats leaving debug symbols in as an error for a shipped .deb. The frozen app still runs
+    # stripped: build.yml's packaged .deb lifecycle test starts it.
     strip=True,
     upx=True,
     console=False,      # no terminal window
     target_arch=None,
 )
 
-# ── companion (#428 Phase 3, ADR 0002) ────────────────────────────────────────
+# ── companion (ADR 0002) ────────────────────────────────────────────────
 # A second entry point of this same bundle, not a new build/signing path (ADR 0002 decision 4)
 # -- built from the same DATAS/HIDDEN_IMPORTS as the daemon above (pystray/Pillow aren't in
 # either list: Linux never imports them -- see companion.py's own module docstring -- so nothing

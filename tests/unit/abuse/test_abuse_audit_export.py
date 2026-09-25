@@ -1,4 +1,4 @@
-"""Adversarial payload tests for SEC-03: spreadsheet formula injection in
+"""Adversarial payload tests for spreadsheet formula injection in
 the audit log's Excel export.
 
 `summary`, `sender`, `pii_match_details`, `claude_reason` and `batch_id` are
@@ -16,8 +16,8 @@ docstring in ``audit_log.py`` for the full mechanism.
 This module exercises the payload list end to end -- through
 ``export_week_to_excel`` and back through ``openpyxl.load_workbook`` --
 rather than just unit-testing ``_excel_literal`` in isolation, matching the
-"full-chain" pattern used for SEC-01 (``markdown_to_html(html_to_markdown(x))``)
-and SEC-02's abuse tests.
+"full-chain" pattern used for the Markdown link-sanitising tests
+(``markdown_to_html(html_to_markdown(x))``) and the identity-spoof abuse tests.
 """
 from __future__ import annotations
 

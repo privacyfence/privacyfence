@@ -1,15 +1,15 @@
-"""Equivalence tests for privacyfence.policy.scopes (P2 of the policy v2 redesign).
+"""Equivalence tests for privacyfence.policy.scopes against the v1 rule engine it replaces.
 
 Every `SCOPE_SELECTORS` entry is checked against the old `AutoAcceptEvaluator._rule_*` method it
 replaces on a table of fixtures per predicate, mirroring `test_auto_accept.py`'s own edge cases
 (a match, a non-match, an empty/falsy value, and -- for a FETCHED predicate -- the shapes its old
 counterpart is known to accept: dict vs. object raw_data, a `.file`-wrapped Drive object, a
-non-list raw_data standing in for a single result). Agreement on every fixture is P2's exit
-criterion for this module: a red run here is the equivalence harness described in the redesign
-proposal's P0 catching a real behavioral drift, not a false alarm to silence.
+non-list raw_data standing in for a single result). This module must agree on every fixture: a
+red run here is the equivalence harness catching a real behavioral drift, not a false alarm to
+silence.
 
-`TestIdentitySpoofResistance` below carries the same SEC-02 payloads `test_auto_accept.py` uses to
-prove the old rules compare a parsed address rather than a substring -- reusing `_address_of`
+`TestIdentitySpoofResistance` below carries the same identity-spoof payloads `test_auto_accept.py`
+uses to prove the old rules compare a parsed address rather than a substring -- reusing `_address_of`
 (imported, not reimplemented, in `policy/scopes.py`) means every new identity selector inherits
 that fix for free, but the fixture is repeated here so a future refactor that stops reusing
 `_address_of` fails loudly in this module too.
@@ -42,10 +42,14 @@ def _old(predicate: str):
 # and the new selector's matches().
 FIXTURES: dict[str, list] = {
     "dm_with_myself": [
+        (None, make_ctx(args={"channel_id": "D12345", "is_self_dm": True})),
+        (None, make_ctx(args={"channel_id": "D67890", "is_self_dm": False})),
         (None, make_ctx(args={"channel_id": "D12345"})),
         (None, make_ctx(args={"channel_id": "C12345"})),
     ],
     "send_to_myself": [
+        (None, make_ctx(args={"channel_id": "D12345", "is_self_dm": True})),
+        (None, make_ctx(args={"channel_id": "D67890", "is_self_dm": False})),
         (None, make_ctx(args={"channel_id": "D12345"})),
         (None, make_ctx(args={"channel_id": "C12345"})),
     ],
@@ -119,6 +123,12 @@ FIXTURES: dict[str, list] = {
     "move_within_approved_folders": [
         (["folder1"], make_ctx(raw_data=SimpleNamespace(parent_ids=["folder1", "folder2"]))),
         (["folder9"], make_ctx(raw_data=SimpleNamespace(parent_ids=["folder1"]))),
+        (["folder1", "folder3"], make_ctx(
+            args={"destination_folder_id": "folder3"}, raw_data=SimpleNamespace(parent_ids=["folder1"]))),
+        (["folder1"], make_ctx(
+            args={"destination_folder_id": "folder3"}, raw_data=SimpleNamespace(parent_ids=["folder1"]))),
+        (["folder1"], make_ctx(raw_data={
+            "file": SimpleNamespace(parent_ids=["folder1"]), "destination_folder_id": "folder1"})),
     ],
     "parent_folder_allowlist": [
         (["folderA"], make_ctx(args={"parent_folder_id": "folderA"})),
@@ -246,44 +256,44 @@ class TestEverySelectorAgreesWithItsCounterpart:
             assert new_result == old_result, (predicate, value, ctx, old_result, new_result)
 
 
-# The same SEC-02 payloads test_auto_accept.py uses -- every parsed-address identity selector must
-# keep rejecting them (see this module's docstring).
-_SEC02_MY_EMAIL = "me@example.com"
+# The same identity-spoof payloads test_auto_accept.py uses -- every parsed-address identity
+# selector must keep rejecting them (see this module's docstring).
+_SPOOF_MY_EMAIL = "me@example.com"
 
-_SEC02_SPOOF_PAYLOADS = [
-    pytest.param(f"{_SEC02_MY_EMAIL} <attacker@evil.com>", id="spoofed-display-name"),
-    pytest.param(f"Notify <{_SEC02_MY_EMAIL}.attacker.net>", id="lookalike-domain-suffix"),
-    pytest.param(f"not{_SEC02_MY_EMAIL}", id="lookalike-localpart-prefix"),
-    pytest.param(f"{_SEC02_MY_EMAIL.upper()} <attacker@evil.com>", id="spoofed-display-name-mixed-case"),
+_SPOOF_PAYLOADS = [
+    pytest.param(f"{_SPOOF_MY_EMAIL} <attacker@evil.com>", id="spoofed-display-name"),
+    pytest.param(f"Notify <{_SPOOF_MY_EMAIL}.attacker.net>", id="lookalike-domain-suffix"),
+    pytest.param(f"not{_SPOOF_MY_EMAIL}", id="lookalike-localpart-prefix"),
+    pytest.param(f"{_SPOOF_MY_EMAIL.upper()} <attacker@evil.com>", id="spoofed-display-name-mixed-case"),
 ]
 
-_SEC02_IDENTITY_SELECTORS = [
+_SPOOF_IDENTITY_SELECTORS = [
     pytest.param(
         "i_am_sender",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(sender=payload)),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(sender=payload)),
         id="i_am_sender",
     ),
     pytest.param(
         "i_am_sole_recipient",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(recipients=[payload])),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(recipients=[payload])),
         id="i_am_sole_recipient",
     ),
     pytest.param(
         "i_am_owner",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
         id="i_am_owner",
     ),
     pytest.param(
         "created_by_me",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
         id="created_by_me",
     ),
 ]
 
 
 class TestIdentitySpoofResistance:
-    @pytest.mark.parametrize("predicate,build_ctx", _SEC02_IDENTITY_SELECTORS)
-    @pytest.mark.parametrize("payload", _SEC02_SPOOF_PAYLOADS)
+    @pytest.mark.parametrize("predicate,build_ctx", _SPOOF_IDENTITY_SELECTORS)
+    @pytest.mark.parametrize("payload", _SPOOF_PAYLOADS)
     def test_rejects_spoofed_identity(self, predicate, build_ctx, payload):
         selector = SCOPE_SELECTORS[predicate]
         ctx = build_ctx(payload)
@@ -329,8 +339,60 @@ class TestKindIsAssignedToEverySelector:
         assert isinstance(selector.kind, ScopeKind)
 
 
+class TestSelfDmFailsClosed:
+    """Every IM id starts with "D"; only the connector's resolved verdict may make a DM "mine"."""
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_dm_with_someone_else_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D67890", "is_self_dm": False})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_dm_with_no_verdict_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345"})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_truthy_non_bool_verdict_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345", "is_self_dm": "true"})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_the_self_dm_matches(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345", "is_self_dm": True})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is True
+
+
+class TestMoveWithinApprovedFolders:
+    """A move matches only when it starts and ends inside the approved set."""
+
+    selector = SCOPE_SELECTORS["move_within_approved_folders"]
+
+    def _ctx(self, source, destination):
+        return make_ctx(
+            args={"file_id": "f1", "destination_folder_id": destination},
+            raw_data={"file": SimpleNamespace(parent_ids=[source]), "destination_folder_id": destination},
+        )
+
+    def test_a_move_within_the_approved_folders_matches(self):
+        assert self.selector.matches(["sandbox", "sandbox/sub"], self._ctx("sandbox", "sandbox/sub")) is True
+
+    def test_a_move_out_of_the_approved_folder_does_not_match(self):
+        assert self.selector.matches(["sandbox"], self._ctx("sandbox", "elsewhere")) is False
+
+    def test_a_move_into_the_approved_folder_from_outside_does_not_match(self):
+        assert self.selector.matches(["sandbox"], self._ctx("elsewhere", "sandbox")) is False
+
+    def test_a_move_with_no_destination_does_not_match(self):
+        ctx = make_ctx(raw_data=SimpleNamespace(parent_ids=["sandbox"]))
+        assert self.selector.matches(["sandbox"], ctx) is False
+
+    def test_approved_folder_is_unchanged_and_ignores_the_destination(self):
+        assert SCOPE_SELECTORS["approved_folder"].matches(["sandbox"], self._ctx("sandbox", "elsewhere")) is True
+
+
 class TestNewScopeSelectors:
-    """drive.file and apps_script.project have no v1 predicate (redesign proposal §04) -- checked
+    """drive.file and apps_script.project have no v1 predicate -- checked
     against their own logic directly rather than an old counterpart."""
 
     def test_drive_file_matches_the_fetched_files_own_id(self):

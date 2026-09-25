@@ -103,11 +103,11 @@ def _read_local_attachment(path: str, *, download_mode: str) -> tuple[str, bytes
     ADR 0007 is Claude-Desktop-only: org mode's daemon runs on a different
     machine than the user entirely, and a local attachment path there has
     always meant "read from PrivacyFence's own server filesystem" --
-    unaffected by this phase, same reasoning as connectors/drive.py's
+    the file bridge does not apply, same reasoning as connectors/drive.py's
     _upload_file ``is_org_local_path`` branch. Only local mode routes
     through the file bridge.
 
-    Phase 4 ("Clients without the bridge"): a ``local_files.
+    Capability uploads (ADR 0028): a ``local_files.
     UPLOAD_REF_PREFIX``-prefixed path is never a filesystem path, in *any*
     mode -- it's bytes already staged by privacyfence_create_upload_slot,
     claimed via local_files.read_local_file() exactly like a bridge-fetched
@@ -366,7 +366,8 @@ class GmailClient:
     def _load_credentials(self) -> Credentials:
         """Load cached credentials, refreshing them if expired.
 
-        Raises if no usable token exists - the user must run `--oauth-setup`.
+        Raises if no usable token exists - the user must authenticate Gmail from
+        Settings (Connectors), or from ``/connect`` in org mode.
         """
         # Guards concurrent refresh/save of the shared token file when
         # multiple threads hit an expired token at the same time.
@@ -374,7 +375,7 @@ class GmailClient:
             if not os.path.exists(self._token_file):
                 raise GmailClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Run the application once with '--oauth-setup' to authorize."
+                    "Authenticate Gmail from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
                 )
 
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
@@ -389,14 +390,14 @@ class GmailClient:
                 except Exception as exc:  # noqa: BLE001 - surface a clear message
                     raise GmailClientError(
                         f"Failed to refresh OAuth token: {exc}. "
-                        "Re-run with '--oauth-setup' to re-authorize."
+                        "Reconnect Gmail from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
 
             raise GmailClientError(
                 "Cached OAuth token is invalid and cannot be refreshed. "
-                "Re-run with '--oauth-setup' to re-authorize."
+                "Reconnect Gmail from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:

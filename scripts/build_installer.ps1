@@ -1,7 +1,6 @@
 # Build PrivacyFence-<version>-setup.exe -- the Windows installer.
 #
-# Written for Phase 4 (B4 in `git show be78e7ee^:docs/windows-linux-support-
-# plan.md`). PowerShell, not bash, since this step only ever runs on a
+# PowerShell, not bash, since this step only ever runs on a
 # Windows build host -- mirrors build_dmg.sh being bash because it only
 # ever runs on macOS.
 #
@@ -12,7 +11,7 @@
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e ".[dev]"     # PrivacyFence itself + pyinstaller + Pillow
-#                                # (icon conversion, Phase 2.3), so VERSION
+#                                # (icon conversion, step 1), so VERSION
 #                                # below can read its installed metadata
 #                                # (git-tag-derived, see this repo's
 #                                # CLAUDE.md "Releasing" section)
@@ -66,7 +65,7 @@ $SetupName = "${ProductName}-${Version}-setup.exe"
 
 Write-Host "=== Building ${ProductName} ${Version} (Windows) ==="
 
-# -- 1. Convert PNG icon to a multi-resolution .ico (Phase 2.3) --------------
+# -- 1. Convert PNG icon to a multi-resolution .ico --------------------------
 # Neither sips/iconutil (macOS-only, used by build_dmg.sh) nor a Windows-
 # native equivalent is available cross-platform in CI, so this uses Pillow
 # instead (added to the `dev` extra in pyproject.toml, not a runtime
@@ -108,7 +107,7 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 $DistDir = "dist/${AppName}"
 
 # -- 4. Create privacyfence-app.exe alongside PrivacyFenceApp.exe -----------
-# The Task Scheduler task (installed by the .iss script below, Phase 3) and
+# The Task Scheduler task (installed by the .iss script below) and
 # the mcpb shim's own daemon auto-start (daemon.ts's DEFAULT_APP_PATH) both
 # look for this name; the main exe is "PrivacyFenceApp.exe". Windows has no
 # cheap equivalent NTFS behaves well with for a symlink from an unprivileged
@@ -122,18 +121,16 @@ Copy-Item -Force $MainExe $AliasExe
 # -- 5. Build the Claude Desktop extension (.mcpb) ---------------------------
 # scripts/build_mcpb.sh is plain bash + Node/TypeScript -- no macOS-specific
 # step in it -- so it runs unchanged here via Git for Windows' bash.exe
-# rather than being ported to PowerShell (Phase 4.1 flagged this as the
-# small decision to make once this script was
-# actually being written; bash it is, since Git for Windows is already a
-# near-universal Windows dev-machine prerequisite and this avoids a second,
-# drifting copy of that script's logic).
+# rather than being ported to PowerShell: Git for Windows is already a
+# near-universal Windows dev-machine prerequisite, and this avoids a second,
+# drifting copy of that script's logic.
 Write-Host "-> Building PrivacyFence's Claude Desktop extension..."
 bash scripts/build_mcpb.sh
 if ($LASTEXITCODE -ne 0) { throw "build_mcpb.sh failed" }
 $McpbPath = "dist/${ProductName}-${Version}.mcpb"
 
 # -- 6. Optional code-signing of the daemon + companion executables ---------
-# Sign PrivacyFenceApp.exe, privacyfence-app.exe, and (#428 Phase 3, ADR 0002)
+# Sign PrivacyFenceApp.exe, privacyfence-app.exe, and (ADR 0002)
 # PrivacyFenceCompanion.exe -- signing only the installer and not these would
 # still show an unrecognized-publisher warning if a user runs any of them
 # directly rather than through the installer.

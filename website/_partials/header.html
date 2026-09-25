@@ -1,0 +1,35 @@
+<!--# The site header on every page of privacyfence.eu, /docs/ included. scripts/build_site.py
+      puts it where a page has an `include: header` line, filling {{skip_target}} (default #top),
+      {{cta_href}} and {{cta_label}} (default /download/ and Download). The <details> menu
+      repeats .nav-links for widths below 900 px (website/chrome.css); keep the two lists equal.
+      Without a built /docs/, scripts/build_site.py points the Docs link at the docs on GitHub.
+      Notes like this one, starting with a hash, are dropped from the built pages. -->
+<a class="skip-link" href="{{skip_target}}">Skip to content</a>
+<header class="site-header">
+  <a class="brand" href="/" aria-label="PrivacyFence home">
+    <img src="/assets/icon.png" alt="" width="38" height="38">
+    <span>PrivacyFence</span>
+  </a>
+  <nav aria-label="Primary navigation">
+    <div class="nav-links">
+      <a href="/how-it-works/">How it works</a>
+      <a href="/security/">Security</a>
+      <a href="/enterprise/">Enterprise</a>
+      <a href="/connectors/">Connectors</a>
+      <a href="/docs/">Docs</a>
+      <a href="/faq/">FAQ</a>
+    </div>
+    <details class="nav-menu">
+      <summary><span class="nav-menu-label">Menu</span></summary>
+      <div class="nav-menu-panel">
+        <a href="/how-it-works/">How it works</a>
+        <a href="/security/">Security</a>
+        <a href="/enterprise/">Enterprise</a>
+        <a href="/connectors/">Connectors</a>
+        <a href="/docs/">Docs</a>
+        <a href="/faq/">FAQ</a>
+      </div>
+    </details>
+    <a class="nav-cta" href="{{cta_href}}">{{cta_label}}</a>
+  </nav>
+</header>

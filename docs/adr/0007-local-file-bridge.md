@@ -3,7 +3,7 @@
 ## Status
 
 Accepted; implemented (`local-mode-fixes-plan.md` Phase 1 — see Related). Amends the "Local mode"
-section of [`docs/org-mode-download-delivery.md`](../org-mode-download-delivery.md), which said a separated
+section of [`docs/org-mode-download-delivery.md`](https://github.com/privacyfence/privacyfence/blob/5deef1d8/docs/org-mode-download-delivery.md), which said a separated
 install's daemon "can write a requested download to a user-selected/local destination because the
 daemon runs on the user's machine" -- true of the machine, false of the account, since ADR 0003.
 Also records one deliberate, bounded exception to `mcpb/shim/src/proxy.ts`'s "nothing here
@@ -287,7 +287,7 @@ before this ADR).
   safely; nothing here relaxes what that ADR guarantees (see Consequences above).
 - [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) -- decision 6's "the agent cannot
   approve its own request," the guarantee D1's rejected alternatives are weighed against.
-- [`docs/org-mode-download-delivery.md`](../org-mode-download-delivery.md) -- org-mode's own
+- [`docs/org-mode-download-delivery.md`](https://github.com/privacyfence/privacyfence/blob/5deef1d8/docs/org-mode-download-delivery.md) -- org-mode's own
   delivery story, whose `DownloadStagingStore` this phase's download side reuses; its "Local mode"
   section is rewritten by the same change that adds this ADR.
 - `local-mode-fixes-plan.md` (never merged to `main`; read it with

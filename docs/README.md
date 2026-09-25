@@ -1,68 +1,116 @@
 # PrivacyFence documentation
 
-This directory documents PrivacyFence as it works in the current source tree. Runtime code, build scripts, configuration examples, and CI workflows are the source of truth when behavior changes.
+This directory documents PrivacyFence as it works in the current source tree. It has two parts:
+the **user and operator docs**, which are published on `privacyfence.eu/docs/`, and the
+**contributor docs**, which stay on GitHub. The source code, build scripts, configuration examples
+and CI workflows are the source of truth; a doc that disagrees with them is a bug.
 
-## Start here
+## User and operator docs
 
-- [`getting-started.md`](getting-started.md) — install PrivacyFence step by step on macOS, Windows, or Debian/Ubuntu, connect an MCP client, and finish first-run setup.
-- [`migration-guide.md`](migration-guide.md) — upgrading an install from 4.0 or earlier: what the mandatory privilege-separation/step-up hardening needs beyond a plain package upgrade.
-- [`../CHANGELOG.md`](../CHANGELOG.md) — release history. The history this directory deliberately doesn't carry (see "Documentation rules" below) lives there.
-- [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md) — architecture, runtime, MCP transport, configuration, state, approvals, connectors, audit logging, and packaging.
-- [`security-and-compliance.md`](security-and-compliance.md) — security boundaries, authentication, authorization, privacy controls, audit integrity, and deployment considerations.
-- [`testing-policy.md`](testing-policy.md) — test layers, CI execution, live-provider checks, and what remains manual.
-- [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — how a release reaches a user and how installer downloads are counted (the `downloads.privacyfence.eu` Worker, release manifests, and the Cloudflare resources and credentials behind them).
+### Install and first steps
 
-## User and operator guides
+- [`getting-started.md`](getting-started.md) — what you need, which install fits, your first
+  approval, and troubleshooting shared by every platform.
+- [`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md),
+  [`install-linux.md`](install-linux.md) — install, connect Claude Desktop and Claude Code,
+  troubleshoot, uninstall. One page per platform.
+- [`platform-support.md`](platform-support.md) — supported OS versions and architectures, where
+  PrivacyFence keeps its data, logs, and start/stop commands.
+- [`connecting-a-service.md`](connecting-a-service.md) — connecting Gmail, Slack and the other
+  services from Settings, and what each connector status means.
 
-- [`org-mode-setup-guide.md`](org-mode-setup-guide.md) — deploy and configure centralized org mode.
-- [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md) — backup, restore, upgrades, restart behavior, availability, and operations.
-- [`org-mode-download-delivery.md`](org-mode-download-delivery.md) — org-mode inline and staged file delivery.
-- [`platform-support.md`](platform-support.md) — macOS, Windows, and Linux packaging/support matrix, including currently-known open items.
-- [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — isolate source-development and packaged installations.
-- [`release-testing.md`](release-testing.md) — current release validation that still requires a human.
+### Using PrivacyFence
 
-## Approval, policy, and data handling
+- [`how-it-works.md`](how-it-works.md) — the daemon, the companion app, how AI clients connect,
+  and the `privacyfence_*` tools every client sees.
+- [`approvals-and-policy.md`](approvals-and-policy.md) — how requests are gated, approval cards,
+  the PII check, "Always allow" and policy rules, the privacy filter, file previews and
+  notifications.
+- [`configuration-reference.md`](configuration-reference.md) — every `settings.yaml` key and every
+  organization-bundle option, with its default.
 
-- [`always-allow-rules-reference.md`](always-allow-rules-reference.md) — standing-rule behavior and supported rule shapes.
-- [`approval-list-ui-ux.md`](approval-list-ui-ux.md) — current approval-list interaction model.
-- [`approval-window-content-reference.md`](approval-window-content-reference.md) — current approval-card and confirmation content.
-- [`claude-knowledge-boundary.md`](claude-knowledge-boundary.md) — what MCP clients can know before and after approval.
-- [`file-type-support.md`](file-type-support.md) — attachment preview, extraction, and PII-scan support.
-- [`pii-detection-keywords.md`](pii-detection-keywords.md) — PII detector categories, patterns, and language-specific keywords.
+### Organization deployment and security
 
-The primary runtime modules for this area are `src/privacyfence/gate.py`, `approvals.py`, `auto_accept.py`, `privacy_filter.py`, `pii_detector.py`, `text_extraction.py`, and `src/privacyfence/web/`.
+- [`org-mode-setup-guide.md`](org-mode-setup-guide.md) — deploy PrivacyFence centrally for an
+  organization, including claude.ai as a client.
+- [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up
+  authentication, privilege separation, audit integrity, and what PrivacyFence does not claim.
 
-## Connector setup
+### Connector setup
 
-- [`google-cloud-setup.md`](google-cloud-setup.md)
+Registering the OAuth app (or bot) each service needs, for a local install or an organization
+bundle:
+
+- [`google-cloud-setup.md`](google-cloud-setup.md) — Gmail, Drive, Docs, Sheets, Calendar,
+  Contacts, Tasks and Apps Script
 - [`slack-setup.md`](slack-setup.md)
 - [`salesforce-setup.md`](salesforce-setup.md)
-- [`atlassian-setup.md`](atlassian-setup.md)
+- [`atlassian-setup.md`](atlassian-setup.md) — Jira and Confluence
 - [`telegram-setup.md`](telegram-setup.md)
 
-Connector implementation lives under `src/privacyfence/connectors/`; daemon construction and per-principal connector lifecycle are in `daemon_main.py`, `connector_host.py`, and `connector_registry.py`.
+### Reference appendices
 
-## Development and QA
+- [`tools-reference.md`](tools-reference.md) — every connector tool and how it is gated
+  (generated).
+- [`always-allow-rules-reference.md`](always-allow-rules-reference.md) — what "Always allow"
+  proposes, tool by tool (generated).
+- [`pii-detection-keywords.md`](pii-detection-keywords.md) — what the PII detector looks for.
 
-- [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — coding and test-writing expectations.
-- [`testing-policy.md`](testing-policy.md) — what runs automatically and where.
-- [`connector-live-check-setup.md`](connector-live-check-setup.md) — self-hosted live-provider runner setup.
-- [`qa-environment-setup.md`](qa-environment-setup.md) — dedicated QA accounts and reusable seed data.
-- [`connector-qa-testing.md`](connector-qa-testing.md) — extended connector/gate exploratory QA.
-- [`release-testing.md`](release-testing.md) — manual release checks that automation cannot reliably judge.
+Release history is in [`../CHANGELOG.md`](../CHANGELOG.md).
 
-CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tests/`, and `scripts/`.
+## Contributor docs
 
-## Architecture decisions and assets
+How PrivacyFence is built, tested and released. For people changing the code; not published on
+privacyfence.eu.
 
-- [`adr/README.md`](adr/README.md) — Architecture Decision Records: the index of every recorded decision, when a decision needs one, the rules for keeping them, and the template. Standing docs here say what the code does; ADRs say why, and what was rejected.
-- [`images/screenshots/README.md`](images/screenshots/README.md) — screenshot generation and maintenance.
-- `images/` — diagrams and screenshots referenced by documentation.
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — how to propose a change: issues, forks, pull
+  requests, license.
+- [`../CLAUDE.md`](../CLAUDE.md) — release mechanics and branch hygiene: cutting a tag, release
+  notes, branch naming, `releases/*`, worktrees.
+- [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — code and test
+  conventions, adding a connector, and the definition of done for a pull request (§2.7).
+- [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — running PrivacyFence from source without
+  clashing with a packaged install.
+- [`testing-policy.md`](testing-policy.md) — the test layers, which workflow runs which layer, and
+  where.
+- [`release-testing.md`](release-testing.md) — the release gates and the manual checks every
+  release still needs.
+- [`packaging.md`](packaging.md) — how the DMG, `.pkg`, `.mcpb`, Windows installer and `.deb` are
+  built, signed and installed.
+- [`connector-qa.md`](connector-qa.md) — QA accounts and seed data, the self-hosted live-check
+  runner, recorded fixtures, and exploratory connector QA.
+- [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
+  `downloads.privacyfence.eu` Worker, and how downloads are counted.
+- [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
+  screenshots are produced.
+- [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
+  are, and what was rejected.
 
-## Documentation rules
+CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tests/` and `scripts/`.
 
-Documentation in this directory is a standing reference, not a changelog. Describe what the current implementation does and the boundaries it currently has. Do not preserve completed implementation plans, migration narratives, phase names, or “before/after” history in standing docs. (ADRs are the deliberate exception: they are records, not standing docs, and are never rewritten to match today.) That history has a home: [`../CHANGELOG.md`](../CHANGELOG.md) at the repository root, where a change is recorded once, under the release that shipped it.
+## Documentation principles
 
-The exception is an active implementation plan, intentionally a live document while its tracked work remains open. The one open today is [`org-mode-mobile-plan.md`](org-mode-mobile-plan.md). Remove or convert each once its own work is complete rather than leaving it in `docs/`, keeping the parts still worth keeping — and before deleting it, record each decision it made (anything hard to reverse, touching a trust boundary or the release path, or rejecting an alternative for a non-obvious reason) as an ADR under [`adr/`](adr/README.md). A standing reference keeps the outcome; only an ADR keeps the rejected alternatives. Earlier retirements: `automated-test-strategy-plan.md` was retired once all fourteen of its phases had landed, with the core testing principle, the seven-layer taxonomy and the full list of what deliberately stays manual folded into [`testing-policy.md`](testing-policy.md) first; `release-publishing-kpi-plan.md` went the same way once its phases had shipped, folded into [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md), with its one unimplemented phase moved to a tracking issue rather than left in `docs/` as a plan nobody was working. Standing, platform-specific open items that aren't phase-shaped implementation work belong in `platform-support.md`'s "Known open items" section instead of a dedicated plan doc.
+Every doc in this directory except the ADRs follows these rules.
 
-When behavior changes, update the nearest standing reference in the same pull request. Prefer stable module, command, route, configuration-key, and workflow names over line numbers or historical pull-request identifiers.
+1. **Current behavior only.** A doc says what the code does today. History has exactly two
+   homes: [`../CHANGELOG.md`](../CHANGELOG.md) (what changed, per release) and [`adr/`](adr/README.md)
+   (why, and what was rejected). No phase names, no issue or finding IDs, no version qualifiers
+   ("as of 4.2"), and no "used to", "no longer", "formerly" or "now" framing.
+   `tests/unit/test_docs_no_history.py` checks the published and contributor docs for the common
+   shapes.
+2. **One topic, one home.** Each fact lives in one doc; other docs link to it.
+3. **Written for the reader, not the implementer.** User and operator docs name what people see
+   and type: menu items, commands, settings keys, paths. Function and class names belong in
+   contributor docs and code.
+4. **Checked against the code, and kept that way by tests** wherever a table can be generated or
+   a claim asserted: [`tools-reference.md`](tools-reference.md) and
+   [`always-allow-rules-reference.md`](always-allow-rules-reference.md) are generated, the
+   configuration reference is checked against `settings.yaml.example`, the install pages against
+   the support matrix, and every `docs/…md` path named anywhere in the repository must exist.
+5. **Every limit and default stated** with its real value: sizes, timeouts, defaults that differ
+   between the code and the seeded `settings.yaml`, supported OS versions and architectures.
+
+ADRs are the one exception to rule 1: they are frozen records and are not rewritten (see
+[`adr/README.md`](adr/README.md)).
+
+When behavior changes, update the doc that owns it in the same pull request.

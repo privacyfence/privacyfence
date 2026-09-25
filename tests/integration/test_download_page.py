@@ -4,7 +4,7 @@ The download page is built entirely at runtime from the Cloudflare Worker's rele
 nothing meaningful about it can be asserted by reading the HTML: the platform cards, filenames,
 sizes and checksums only exist after `download.js` has fetched and rendered them. These tests run
 the real page in headless Chromium with the API responses stubbed at the network layer
-(`page.route`), which is what lets them assert the behaviours Phase 5 actually specifies --
+(`page.route`), which is what lets them assert the behaviours the page is meant to have --
 "OS detection only highlights, never hides", "stats gracefully disappear if the stats API is
 unavailable" -- rather than merely that some markup exists.
 
@@ -18,13 +18,11 @@ missing rather than failing, since CI always has both.
 
 from __future__ import annotations
 
-import http.server
 import json
-import socket
-import threading
-from pathlib import Path
 
 import pytest
+
+from tests.website_site import build_site, built_site, chromium_launch_kwargs, serve
 
 pytest.importorskip(
     "playwright.sync_api",
@@ -35,7 +33,6 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 
 pytestmark = [pytest.mark.integration, pytest.mark.browser]
 
-WEBSITE_ROOT = Path(__file__).resolve().parents[2] / "website"
 API_ORIGIN = "https://downloads.privacyfence.eu"
 
 STABLE_MANIFEST = {
@@ -120,35 +117,18 @@ BETA_MANIFEST = {
 
 @pytest.fixture(scope="module")
 def website_server():
-    """Serves website/ over a real socket -- `file://` would make the page's relative fetches and
-    its own origin behave differently from production."""
-
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(WEBSITE_ROOT), **kwargs)
-
-        def log_message(self, *args):  # noqa: A003 -- silence per-request logging
-            pass
-
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        server.shutdown()
-        server.server_close()
+    """Serves the built site (tests/website_site.py) over a real socket -- `file://` would make the
+    page's relative fetches and its own origin behave differently from production. Built offline,
+    so /download/ has no pre-rendered cards and everything on it comes from the stubbed API."""
+    with serve(built_site()) as url:
+        yield url
 
 
 @pytest.fixture(scope="module")
 def browser():
     try:
         with sync_playwright() as playwright:
-            instance = playwright.chromium.launch()
+            instance = playwright.chromium.launch(**chromium_launch_kwargs())
             try:
                 yield instance
             finally:
@@ -277,7 +257,7 @@ class TestOsDetection:
             context.close()
 
     def test_never_hides_the_platforms_it_did_not_pick(self, browser, website_server):
-        # The rule Phase 5 states outright: detection may highlight, never hide. Downloading an
+        # The rule: detection may highlight, never hide. Downloading an
         # installer for a different machine than the one you are browsing on is ordinary.
         context, page = _open_download_page(browser, website_server, user_agent=self.MAC_UA)
         try:
@@ -416,9 +396,9 @@ class TestDegradedApi:
 class TestUnknownArtifactId:
     """download.js hardcodes nothing about a release: an artifact id its own PLATFORMS map has no
     display name for still gets a card (falling back to the id itself) rather than being silently
-    dropped while it waits for a website deploy. This is the property that used to be exercised by
-    a second macOS card for the `.pkg` -- which is no longer a download of its own, since the DMG
-    now carries it (see scripts/build_dmg.sh) -- so it is asserted directly here instead."""
+    dropped while it waits for a website deploy. No real artifact exercises this -- the `.pkg` is
+    not a download of its own, since the DMG carries it (see scripts/build_dmg.sh) -- so it is
+    asserted directly here."""
 
     MAC_UA = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -454,5 +434,67 @@ class TestUnknownArtifactId:
                 ".download-card.recommended", "cards => cards.map(c => c.dataset.artifactId)"
             )
             assert highlighted == ["macos-arm64"]
+        finally:
+            context.close()
+
+
+# What the build pre-renders when it can read the Worker: an older release than the one the
+# stubbed API answers with, so a test can tell which of the two the page is showing.
+PRERENDERED_MANIFEST = {
+    **STABLE_MANIFEST,
+    "version": "4.2.0",
+    "artifacts": [
+        {**artifact, "filename": artifact["filename"].replace("4.3.0", "4.2.0")} for artifact in STABLE_MANIFEST["artifacts"]
+    ],
+}
+
+
+@pytest.fixture(scope="module")
+def prerendered_server(tmp_path_factory):
+    out = tmp_path_factory.mktemp("prerendered") / "_site"
+    build_site.build(out, docs_ref=None, manifest=PRERENDERED_MANIFEST)
+    with serve(out) as url:
+        yield url
+
+
+class TestPrerenderedPage:
+    """scripts/build_site.py writes the stable release it saw at deploy time into the page, so
+    /download/ offers working downloads and names a version without JavaScript (and to crawlers).
+    download.js then replaces that with the live manifest."""
+
+    def test_works_without_javascript(self, browser, prerendered_server):
+        context = browser.new_context(java_script_enabled=False)
+        page = context.new_page()
+        page.route("**/*", lambda route: route.continue_() if route.request.url.startswith(prerendered_server) else route.abort())
+        try:
+            page.goto(f"{prerendered_server}/download/")
+            ids = page.eval_on_selector_all(".download-grid .download-card", "cards => cards.map(c => c.dataset.artifactId)")
+            assert ids == ["macos-arm64", "windows-x64", "linux-x64"]
+            assert "Version 4.2.0" in page.inner_text("#release-meta")
+            href = page.get_attribute('.download-card[data-artifact-id="linux-x64"] .download-button', "href")
+            assert href == f"{API_ORIGIN}/download/stable/linux-x64"
+            assert "privacyfence_4.2.0_amd64.deb" in page.inner_text("#download-grid")
+            assert page.query_selector("#download-loading") is None
+        finally:
+            context.close()
+
+    def test_the_live_manifest_replaces_the_prerendered_cards(self, browser, prerendered_server):
+        context, page = _open_download_page(browser, prerendered_server)
+        try:
+            filenames = page.eval_on_selector_all(
+                ".download-grid:not(.compact) .download-meta", "nodes => nodes.map(n => n.textContent)"
+            )
+            assert len(filenames) == 3, filenames
+            assert all("4.3.0" in name for name in filenames), filenames
+            assert page.inner_text("#release-meta").count("Version") == 1
+            assert "Version 4.3.0" in page.inner_text("#release-meta")
+        finally:
+            context.close()
+
+    def test_an_api_outage_keeps_the_prerendered_cards(self, browser, prerendered_server):
+        context, page = _open_download_page(browser, prerendered_server, stable=None)
+        try:
+            assert page.locator(".download-grid:not(.compact) .download-card").count() == 3
+            assert not page.is_visible("#download-fallback")
         finally:
             context.close()

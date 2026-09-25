@@ -1,29 +1,19 @@
-"""The ten v2 `when:` conditions -- P2 of the policy v2 redesign.
+"""The ten `when:` conditions a rule can carry.
 
-A condition narrows a scope that already matched; it never widens one and never decides
-which resources a rule reaches on its own (see the redesign proposal's "Model" section,
-"Conditions only ever narrow a scope further"). This module holds the twelve predicates the
-redesign proposal's Scope catalogue (`policy/scopes.py`'s counterpart, §04) files as *conditions*
-rather than *scopes* -- they describe a property of the item already in scope (its age, whether it
-carries an attachment, whether an event is private) rather than which resource is being addressed.
+A condition narrows a scope that already matched; it never widens one and never decides which
+resources a rule reaches on its own. The predicates here describe a property of the item already in
+scope (its age, whether it carries an attachment, whether an event is private) rather than which
+resource is being addressed -- that is `policy/scopes.py`'s job.
 
-Twelve predicates collapse onto ten conditions: `no_attachments` (Gmail), `no_file_attachments`
-(Slack) and `no_media_attachments` (Telegram) are the same idea -- "this item carries nothing
-attached" -- wearing three connector-specific names purely because each connector's fetched object
-spells the field differently (`attachments`, `files`, `media_type`). One `no_attachments` condition
-here dispatches on `ctx.connector` to pick the right field instead of staying three predicates that
-happen to agree.
+Three connector-specific attachment checks collapse onto one condition: Gmail's `attachments`,
+Slack's `files` and Telegram's `media_type` are the same idea -- "this item carries nothing
+attached" -- spelled differently by each connector's fetched object, so `no_attachments` dispatches
+on `ctx.connector` to pick the right field instead of staying three predicates that happen to agree.
 
-Each `ConditionSelector.holds` is a **behavior-preserving copy** of its
-`auto_accept.AutoAcceptEvaluator._rule_*` counterpart -- same signature, same logic, including the
-quirks that make some of these `DATA_DEPENDENT_RULES` members rather than `ARGS_ONLY_RULES` (an
-absence check silently reads "not present" as `True` when `ctx.raw_data` is `None`, which is unsafe
-to preflight but is exactly what a rule that already matched during a real, fully-fetched call needs
-to check -- see `auto_accept.DATA_DEPENDENT_RULES`'s own docstring). `resolves_from` is read off
-those two existing sets, not duplicated by hand, so this module can't drift from them the way F6
-describes. `test_conditions.py` asserts every selector here agrees with its old counterpart on every
-fixture, including each absence check with `raw_data=None`. `policy.engine` resolves a rule's
-`conditions` through `CONDITION_SELECTORS` by v2 name; the old predicate names are not accepted.
+`test_conditions.py` checks every selector here against a frozen copy of the predicate it replaced
+(`tests/unit/policy/_v1_reference.py`), including each absence check with `raw_data=None`.
+`policy.engine` resolves a rule's `conditions` through `CONDITION_SELECTORS` by name; the old
+predicate names are not accepted.
 """
 from __future__ import annotations
 
@@ -39,11 +29,10 @@ from ..auto_accept import ReviewContext, _attendee_email, _file_from
 class ResolvesFrom(str, Enum):
     """Whether a condition can be decided from call arguments alone, or needs the fetched item.
 
-    Mirrors `auto_accept.ARGS_ONLY_RULES`/`DATA_DEPENDENT_RULES` -- see that module for why an
-    absence check (this condition's `no_attachments`, `no_external_attendees`,
-    `no_conferencing_link`, `not_shared_drive`) is `FETCHED` even though it degenerately *could* be
-    evaluated with `ctx.raw_data is None`: doing so would silently read "nothing fetched yet" as
-    "confirmed absent", a false match a real preflight must never produce.
+    An absence check (`no_attachments`, `no_external_attendees`, `no_conferencing_link`,
+    `not_shared_drive`) is `FETCHED` even though it degenerately *could* be evaluated with
+    `ctx.raw_data is None`: doing so would silently read "nothing fetched yet" as "confirmed
+    absent", a false match a real preflight must never produce.
     """
 
     ARGS = "args"
@@ -140,8 +129,10 @@ def _not_private_holds(_value: Any, ctx: ReviewContext) -> bool:
 
 
 def _not_shared_drive_holds(_value: Any, ctx: ReviewContext) -> bool:
+    # A shared-drive file is identified by a non-empty driveId; Drive's "shared" flag means
+    # "shared with someone" and is not set for shared-drive files.
     f = _file_from(ctx.raw_data)
-    return not getattr(f, "shared", False)
+    return not getattr(f, "drive_id", "")
 
 
 def _no_contact_info_change_holds(_value: Any, ctx: ReviewContext) -> bool:

@@ -2,9 +2,7 @@
 shown, into a page served locally over HTTP (web/routes_approvals.py)
 instead of a native AppKit dialog.
 
-P1 gave this module its own single-slot ``current()``/``PendingCard`` store,
-with a note that it "becomes a real per-principal registry (approvals.py) in
-P3" -- this is that move. Card/confirmation storage now lives entirely in
+Card/confirmation storage lives entirely in
 ``approvals.PendingApprovalRegistry`` (``self._registry``, exposed to gate.py
 via the ``deferred_registry`` property so it can apply the deferred
 protocol -- see approvals.py's and gate.py's own module docstrings); this
@@ -12,8 +10,8 @@ class is left owning only the *rendering* (building the HTML for each kind
 of dialog, via card_builder.py/dialog_window_html.py) and the *blocking
 contract* ApprovalUI's ABC specifies: show_popup/show_read_popup/the two
 confirmation methods still block the calling thread until a human decides,
-same as every ApprovalUI implementation always has -- what changed is that
-several can now be pending, decided in any order, at once.
+same as every ApprovalUI implementation -- and several can be pending,
+decided in any order, at once.
 """
 from __future__ import annotations
 
@@ -61,7 +59,7 @@ class WebApprovalUI(ApprovalUI):
         which is also what makes a decision POST idempotent ("the first
         accepted decision for an id wins; any later one is
         rejected"). ``principal_id``
-        (P9) is web/routes_approvals.py's own authorization check --
+        is web/routes_approvals.py's own authorization check --
         see approvals.PendingApprovalRegistry.answer's own docstring."""
         return self._registry.answer(card_id, result, choice, principal_id=principal_id)
 
@@ -73,8 +71,8 @@ class WebApprovalUI(ApprovalUI):
     # ``self._registry`` themselves (so they have a stable id/URL to report
     # back to Claude even before this method returns) and pass it in here;
     # this method then only has to render into it and block. Called with no
-    # ``approval`` (e.g. directly, as every pre-P3 test in this repo already
-    # does), it registers its own -- unchanged behavior for any caller that
+    # ``approval`` (e.g. directly, as many tests in this repo do), it
+    # registers its own -- unchanged behavior for any caller that
     # doesn't know about the registry.
     # ------------------------------------------------------------------ #
 
@@ -107,7 +105,7 @@ class WebApprovalUI(ApprovalUI):
             preview_tables=preview_tables, preview_blocks=preview_blocks, table_only=table_only,
             upload_forced=upload_forced, temp_accept_eligible=temp_accept_eligible,
             # Selects this card's own consequence row -- see
-            # write_effects.py. Write gate only: a read card's §3 already
+            # write_effects.py. Write gate only: a read card's disclosure section already
             # states what approving releases.
             tool=tool,
             agent=_agent_of(approval),
@@ -179,7 +177,7 @@ class WebApprovalUI(ApprovalUI):
     def _run_card(self, html: str, approval: PendingApproval | None) -> tuple[str, int | None]:
         # A caller with no pre-registered approval (any direct call that
         # bypasses gate.py's own deferred-protocol registration, including
-        # every pre-P3 test in this repo) gets a confirm-shaped registration
+        # many tests in this repo) gets a confirm-shaped registration
         # instead (see web_prompt.block_on_card): it has no dedupe_key to
         # coalesce or ledger on, which is the correct degraded behavior
         # here -- there's no gated-call context to attach one to.

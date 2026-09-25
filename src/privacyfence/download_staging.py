@@ -214,7 +214,7 @@ class DownloadStagingStore:
         return self._claim(token, principal_id)
 
     def claim_capability(self, token: bytes) -> tuple[bytes, str, str] | None:
-        """Phase 4's own claim, for the unauthenticated ``GET
+        """The capability claim, for the unauthenticated ``GET
         /mcp-files/fetch/<token>`` capability route (ADR 0007's "Clients
         without the bridge" section) and for org mode's own agent-facing
         staged-link delivery (``org_mode.DownloadDeliveryConfig.

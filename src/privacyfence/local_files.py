@@ -3,17 +3,18 @@ local path an agent named in a tool call -- a Drive upload's ``local_path``,
 a download's ``destination_dir``, a Gmail/Confluence attachment path -- gets
 turned into bytes, or bytes get turned into a file on the user's disk.
 
-Privilege separation (ADR 0003) moved the daemon onto its own OS account, so
-a plain ``open()`` against a path the agent supplied can no longer reach the
-real user's home directory. Every connector that used to call ``open()``,
-``os.path.isfile``, ``os.path.getsize`` or ``os.path.expanduser`` on an
-agent-supplied path now calls through here instead -- this module decides,
+Privilege separation (ADR 0003) runs the daemon under its own OS account, so
+a plain ``open()`` against a path the agent supplied cannot reach the real
+user's home directory. No connector calls ``open()``, ``os.path.isfile``,
+``os.path.getsize`` or ``os.path.expanduser`` on an agent-supplied path; each
+calls through here instead -- this module decides,
 per call, whether the daemon can read/write the path directly (an
 unseparated dev checkout or pip/pipx install, where the daemon *is* the
 user) or must route the bytes through the ``.mcpb`` shim, which runs as the
-user and already sits on the request path of every tool call (ADR 0007's
-D1). A client with no shim (Claude Code, any other direct HTTP client, or an
-old ``.mcpb``) gets a clearly worded fallback instead of a bare failure.
+user and already sits on the request path of every tool call
+(ADR 0007 D1). A client with no shim (Claude Code, any other direct HTTP
+client, or an old ``.mcpb``) gets a clearly worded fallback instead of a
+bare failure.
 
 State for the current ``tools/call`` dispatch -- whether the calling shim
 advertised the bridge, which paths it already uploaded, the bytes claimed
@@ -47,12 +48,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# §1.4/Phase 4: shown verbatim to the model (LocalFileAccessError is a
+# Shown verbatim to the model (LocalFileAccessError is a
 # ValueError subclass -- see safe_errors.public_message()'s passthrough
 # rule) when a tool needs to read a local path but neither a direct read
-# nor a bridge handshake is available. Phase 4 (privacyfence_create_upload_
-# slot, §4.1) is the way forward for a client with no shim at all -- Claude
-# Code, org mode, or an old .mcpb -- so this message leads with that rather
+# nor a bridge handshake is available. A capability upload slot
+# (privacyfence_create_upload_slot, ADR 0028) is the way forward for a
+# client with no shim at all -- Claude Code, org mode, or an old .mcpb -- so
+# this message leads with that rather
 # than content_base64, which still works for drive_upload_file alone and
 # stays mentioned as the no-round-trip alternative for a small file.
 NO_BRIDGE_UPLOAD_MESSAGE = (
@@ -70,18 +72,18 @@ NO_BRIDGE_UPLOAD_MESSAGE = (
 # languages to import from).
 META_KEY = "privacyfence.eu/file-bridge"
 
-# ADR 0007 SS1.2: deliver_file() stays synchronous and fully in memory for
-# Phase 1 (both the bridge and no-bridge-link paths stage the whole file
-# before anything is written), so this is a real memory cap, not just a
-# transfer-size guideline. Configurable via settings.yaml's `file_bridge:
-# max_download_bytes:` -- see daemon_main.py's own local-mode setup, which
+# deliver_file() is synchronous and fully in memory (both the bridge and
+# no-bridge-link paths stage the whole file before anything is written), so
+# this is a real memory cap, not just a transfer-size guideline.
+# Configurable via settings.yaml's `file_bridge: max_download_bytes:` -- see
+# daemon_main.py's own local-mode setup, which
 # calls configure_file_bridge() once at startup with whatever that section
 # resolves to. 200MB: generous for anything a Drive/Gmail/Confluence tool
 # plausibly downloads, small enough that holding one in memory on a
 # single-user desktop install is a non-event.
 DEFAULT_MAX_DOWNLOAD_BYTES = 200_000_000
 
-# Phase 4 ("Clients without the bridge"): a path prefixed this way in any
+# Capability uploads (ADR 0028): a path prefixed this way in any
 # require_local_files()/read_local_file()/local_file_size() call is not a
 # filesystem path at all -- it names bytes already staged in
 # UploadStagingStore by privacyfence_create_upload_slot, waiting to be
@@ -92,7 +94,7 @@ DEFAULT_MAX_DOWNLOAD_BYTES = 200_000_000
 # token itself, not the daemon's read access to anything.
 UPLOAD_REF_PREFIX = "upload:"
 
-# Phase 4: the cap privacyfence_create_upload_slot enforces on a capability
+# The cap privacyfence_create_upload_slot enforces on a capability
 # upload. A slot is created before any connector-specific tool is named, so
 # there's no per-tool ceiling to size it against the way
 # connectors/drive.py's _UPLOAD_MAX_BYTES sizes drive_upload_file's own
@@ -133,8 +135,7 @@ class LocalFileAccessError(ValueError):
     verbatim. A ``ValueError`` subclass is what makes that happen:
     ``safe_errors.public_message()`` passes a ``ValueError``'s ``str()``
     through unchanged (after secret redaction) instead of replacing it with
-    the generic "Tool call failed" message. See safe_errors.py and B1 in
-    the local-mode-fixes plan."""
+    the generic "Tool call failed" message. See safe_errors.py."""
 
 
 @dataclass
@@ -157,7 +158,7 @@ def call_context(*, bridge_available: bool, uploads: dict[str, str], base_url: s
     second-round request (empty on a first-round call); ``bridge_available``
     is whether the calling shim advertised ``X-PrivacyFence-File-Bridge`` on
     this request; ``base_url`` is the ``/mcp`` origin, used only to build an
-    absolute download URL for the no-bridge fallback (§1.4) -- a bridge-
+    absolute download URL for the no-bridge fallback -- a bridge-
     capable client never sees it, since the shim already knows its own
     daemon origin."""
     state = _CallState(bridge_available=bridge_available, base_url=base_url, uploads=dict(uploads))
@@ -192,9 +193,9 @@ def can_access_user_files(download_mode: str) -> bool:
     """True only when the daemon runs as the same OS user as its client:
     local mode (``download_mode != "org"``) and privilege separation is not
     enabled. Dev checkouts and unseparated pip/pipx installs keep direct
-    file I/O exactly as before Phase 1 -- see ADR 0007. Org mode is not a
-    file-bridge case at all: it already has its own delivery path
-    (org_mode.DownloadDeliveryConfig / staged links), and its daemon does
+    file I/O -- see ADR 0007. Org mode is not a file-bridge case at all: it
+    already has its own delivery path (org_mode.DownloadDeliveryConfig /
+    staged links), and its daemon does
     not run on the agent's machine in the first place, so a local path
     would be meaningless there regardless of privilege separation."""
     if _force_bridge_for_tests:
@@ -203,7 +204,7 @@ def can_access_user_files(download_mode: str) -> bool:
 
 
 def call_produced_deliveries() -> bool:
-    """B3: ``McpDispatcher.call()`` checks this right after a successful
+    """``McpDispatcher.call()`` checks this right after a successful
     dispatch to decide whether the result may be reused from its dedupe
     cache. A result that staged a download (bridge delivery *or* the
     no-bridge link fallback -- either way, a single-use token from
@@ -247,12 +248,12 @@ def _claim_upload(state: "_CallState", path: str, slot_b64: str) -> None:
 
 def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode: str) -> None:
     """Called by a connector at the very top of its tool method, before any
-    preview/PII-scan/gate work (B2: a missing or unreadable file is now
+    preview/PII-scan/gate work, so a missing or unreadable file is
     reported, or a bridge handshake started, before the human is ever asked
-    to approve anything).
+    to approve anything.
 
     For each path: already claimed from an upload this call -> nothing
-    more to do. A Phase 4 ``upload:<id>`` reference -> claim it from
+    more to do. A capability-slot ``upload:<id>`` reference -> claim it from
     ``UploadStagingStore`` for the current principal now, unconditionally
     -- this bypasses the direct-read/bridge decision entirely (a capability
     slot works in org mode and in every no-bridge case, precisely because
@@ -262,7 +263,7 @@ def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode
     read the user's files directly (``can_access_user_files``) -> nothing
     to do, ``read_local_file``/``local_file_size`` will open it directly. A
     bridge-capable shim is on the other end -> collect the path. None of
-    the above -> raise ``LocalFileAccessError`` immediately (B1: shown to
+    the above -> raise ``LocalFileAccessError`` immediately (shown to
     the model verbatim).
 
     Raises ``LocalFilesNeeded`` once, listing every path that needs the
@@ -299,14 +300,14 @@ def build_upload_slot(
     principal: "Principal", *, filename: str, size_bytes: int | None, base_url: str,
 ) -> dict[str, Any]:
     """Handles the ``privacyfence_create_upload_slot`` meta-tool (ADR 0007's
-    "Clients without the bridge" section, Phase 4 §4.1): mints an
+    "Clients without the bridge" section, and ADR 0028): mints an
     ``UploadStagingStore`` slot and returns a capability URL any HTTP
     client can ``PUT`` bytes to directly, with **no bearer header** -- the
     32-byte token embedded in ``upload_url`` is itself the credential,
     which is what makes this reachable from a client that has no way to
     set a custom header at all (a sandboxed agent shelling out to `curl`).
     This is deliberately a different route (``/mcp-files/slots/<token>``,
-    unauthenticated) from Phase 1's shim-only ``/mcp-files/uploads/<slot>``
+    unauthenticated) from the shim-only ``/mcp-files/uploads/<slot>``
     (bearer-authenticated, reached only by a shim that already carries the
     daemon's bearer token on every request) -- see web/routes_file_bridge.py.
 
@@ -395,8 +396,8 @@ def deliver_file(
       ``current_principal()``, records a pending delivery for
       ``handle_call_tool`` to attach as the ``deliver`` ``_meta`` op, and
       returns ``{"path": None, "delivery": "client_bridge"}`` -- the shim
-      rewrites both fields once it has actually written the file (§1.1).
-    - neither -> §1.4 fallback: stages the same way, but returns a
+      rewrites both fields once it has actually written the file.
+    - neither -> link fallback: stages the same way, but returns a
       ``download_url`` the caller can ``curl`` directly with its own
       bearer token, since there is no shim to intercept anything.
 
@@ -471,11 +472,12 @@ def _deliver_bridge(state: "_CallState", dest_dir: str, name: str, data: bytes, 
 
 
 def _deliver_link(state: "_CallState | None", name: str, data: bytes, mime_type: str) -> dict[str, Any]:
-    """Phase 4: a capability link (``/mcp-files/fetch/<token>``, no bearer
-    header needed -- the token in the URL is the credential) rather than
-    Phase 1's bearer-authenticated ``/mcp-files/downloads/<token>``, since
-    the whole point of this branch is a caller with no bridge and,
-    frequently, no way to attach a custom header either (a sandboxed agent
+    """A capability link (``/mcp-files/fetch/<token>``, no bearer
+    header needed -- the token in the URL is the credential; ADR 0028)
+    rather than the shim's bearer-authenticated
+    ``/mcp-files/downloads/<token>``, since the whole point of this branch
+    is a caller with no bridge and, frequently, no way to attach a custom
+    header either (a sandboxed agent
     `curl`-ing a URL it was handed). See web/routes_file_bridge.py and
     local_files.build_upload_slot's own docstring for the upload-side
     counterpart of this same capability-URL shape."""

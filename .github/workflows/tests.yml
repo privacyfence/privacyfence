@@ -61,8 +61,7 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
-      # tests/integration/test_browser_smoke.py (TST-06, `git show ba1ec76e^:docs/
-      # security-remediation-plan.md` Phase 2 item 2.5) drives this Chromium build
+      # tests/integration/test_browser_smoke.py drives this Chromium build
       # directly via the `playwright` package installed above --
       # `--with-deps` also installs the OS-level shared libraries the
       # ubuntu-latest runner image doesn't ship by default. Chromium only:
@@ -77,7 +76,7 @@ jobs:
 
       # mcpb/shim/'s own suite (daemon discovery/launch, the stdio<->
       # Streamable HTTP proxy) runs against mcpb/shim/src/*.ts directly via tsx. It's the
-      # only Node suite left in this repo since P5 retired the bridge.
+      # only Node suite in this repo.
       - name: Run shim test suite
         run: npm test
         working-directory: mcpb/shim
@@ -115,7 +114,7 @@ jobs:
       # coverage, has dropped below its recorded floor. See
       # scripts/check_coverage_floor.py's module docstring for the floors
       # and how to raise one.
-      - name: Enforce coverage floor (TST-03 ratchet)
+      - name: Enforce coverage floor
         run: python scripts/check_coverage_floor.py coverage.json
 
       # Always publish, even on failure above -- a coverage regression is
@@ -131,10 +130,10 @@ jobs:
             htmlcov/
           retention-days: 30
 
-      # Everything under test-results/ (docs/testing-policy.md's
-      # Phase 10): test_browser_smoke.py's own Phase 4.5
+      # Everything under test-results/ (docs/testing-policy.md's failure
+      # diagnostics): test_browser_smoke.py's own
       # _capture_failure_artifacts fixture (screenshot/DOM/console/daemon-log,
-      # under test-results/browser-smoke/) plus Phase 10's own generic
+      # under test-results/browser-smoke/) plus the generic CI-diagnostics
       # capture (tests/diagnostics.py, wired in via tests/conftest.py's
       # pytest_runtest_makereport) for any failing `packaged`/`system`-marked
       # test this job's own full-suite run reaches (tests/system/
@@ -156,6 +155,18 @@ jobs:
         with:
           name: test-failure-diagnostics
           path: test-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # tests/integration/test_website_layout.py (guardrail 12) screenshots every privacyfence.eu
+      # page at every tested width, pass or fail, so a website change can be reviewed at 360 px
+      # and 1440 px without checking the branch out.
+      - name: Upload website layout screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: website-layout-screenshots
+          path: test-results/website-layout/
           if-no-files-found: ignore
           retention-days: 30
 
@@ -205,12 +216,12 @@ jobs:
 
       # Same 100%-pass-rate/pytest-timeout guarantees as the `test` job's
       # run above, minus coverage reporting (that's `test`'s job, and
-      # TST-03's coverage ratchet, to own -- duplicating it per Python
+      # the coverage-floor ratchet's, to own -- duplicating it per Python
       # version here would just be redundant CI time).
       - name: Run test suite (100% pass rate required)
         run: pytest -v --ignore=tests/integration/test_shim_mcp_contract.py
 
-      # Same Phase 10 capture as the `test` job's identically-named step --
+      # Same failure-diagnostics capture as the `test` job's identically-named step --
       # the matrix leg's own Python version is folded into the artifact name
       # since `actions/upload-artifact` needs a unique name per matrix leg
       # in the same job (every leg would otherwise upload to the same name).
@@ -223,26 +234,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # Phase 6.2 (B5 in `git show be78e7ee^:docs/windows-linux-
-  # support-plan.md`): a real-Windows confirmation that nothing path-
-  # separator- or Path-handling-related breaks that the `test` job above
-  # (already proven platform-independent on a second POSIX platform via
-  # Linux CI) can't catch. Originally gated to workflow_dispatch only, with
-  # Phase 6.2's own text leaving "keep it permanent" vs. "rely on build.yml's
-  # release-time Windows job alone" as a decision for once it had actually
-  # been run for real. docs/testing-policy.md's Phase 2.1 makes
-  # that call: promoted to a permanent per-PR leg (renamed test-windows ->
-  # platform-windows to match) now that it's proven green.
+  # A real-Windows run on every PR: catches the path-separator and
+  # Path-handling breaks the `test` job above, on Linux, can't.
   #
-  # Deliberately still the full core suite, not narrowed to Phase 2.3's
-  # targeted tests/platform/ subset -- Phase 2.4 considered narrowing and
-  # decided against it: this job's own first real run found four genuine
-  # cross-platform bugs (`git show be78e7ee^:docs/windows-support-plan.md` Phase 6.3) in ordinary
-  # modules with no platform marker (settings_controller.py, drive.py, a
-  # shim-contract test, an audit-log test), none of which lived in
-  # tests/platform/'s own subject matter -- a subset chosen ahead of time
-  # would have missed them. See docs/testing-policy.md's Phase 2
-  # status note for the full reasoning.
+  # Deliberately the full core suite, not just the tests/platform/ subset:
+  # this job's first real run found four genuine cross-platform bugs in
+  # ordinary modules with no platform marker (settings_controller.py,
+  # drive.py, a shim-contract test, an audit-log test), none of which a
+  # subset chosen ahead of time would have included.
   platform-windows:
     runs-on: windows-latest
 
@@ -265,7 +264,7 @@ jobs:
       - name: Run test suite (100% pass rate required)
         run: pytest -v --cov=src/privacyfence --cov-report=term-missing
 
-      # Same Phase 10 capture as the `test` job's identically-named step.
+      # Same failure-diagnostics capture as the `test` job's identically-named step.
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -275,16 +274,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # docs/testing-policy.md's Phase 2.2: the macOS leg of the
-  # same "does the runtime work on every desktop OS" question 2.1's
+  # The macOS leg of the
+  # same "does the runtime work on every desktop OS" question the
   # platform-windows job already answers for Windows -- runs the identical
   # core suite (same reasoning: catch macOS-specific breakage in the Python
   # core, not re-prove the Node-runtime shim, which build.yml's real DMG
   # build already exercises on macos-latest separately). Deliberately not
   # scoped to `scripts/build_dmg.sh`/signing/notarization -- that stays
   # build.yml's job, tag-triggered only; this job runs from source, on
-  # every PR, the same way platform-windows does. Same Phase 2.4 decision as
-  # platform-windows above: full core suite, not narrowed to tests/platform/.
+  # every PR, the same way platform-windows does. Full core suite, not narrowed
+  # to tests/platform/, for the same reason platform-windows above gives.
   platform-macos:
     runs-on: macos-latest
 
@@ -305,7 +304,7 @@ jobs:
       - name: Run test suite (100% pass rate required)
         run: pytest -v --cov=src/privacyfence --cov-report=term-missing
 
-      # Same Phase 10 capture as the `test` job's identically-named step.
+      # Same failure-diagnostics capture as the `test` job's identically-named step.
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -315,14 +314,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # docs/testing-policy.md's Phase 8 item 2: tests/integration/
+  # tests/integration/
   # test_org_ubuntu_release_smoke.py gates its whole module behind
   # PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS -- unset everywhere else in this
   # file, so the `test` job's own full-suite run above always skips it
-  # instantly. Before Phase 8, the only thing that ever set that variable
-  # was build.yml's tag-triggered build-deb job -- the same dispatch/tag-
-  # only gap platform-windows had before Phase 2.1 promoted it. Promoted
-  # here the same way, as its own permanent per-PR leg: the module's own
+  # instantly. Otherwise the only thing that sets that variable is
+  # build.yml's tag-triggered build-deb job, so an org-mode break would
+  # first surface on a release tag. This job runs it as its own per-PR
+  # leg instead: the module's own
   # "Why a --target install, not the .deb" section is what keeps this
   # cheap enough to run on every PR (a `pip install --target` of this
   # package, seconds, not build.yml's real PyInstaller/.deb pipeline,
@@ -342,13 +341,24 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
+      # Without nginx and systemd-analyze the guide config test skips its parser checks; here
+      # they must run, so a missing binary fails the step instead.
+      - name: Install nginx for the org guide config check
+        run: sudo apt-get update && sudo apt-get install -y nginx
+
+      - name: Check the org guide's systemd unit and nginx configs
+        run: |
+          command -v systemd-analyze
+          command -v nginx
+          pytest -v -rs tests/integration/test_org_guide_configs.py
+
       - name: Run org-mode release-workflow smoke test
         env:
           PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS: "1"
         run: pytest -v tests/integration/test_org_ubuntu_release_smoke.py
 
-      # Same Phase 10 capture as the `test` job's identically-named step --
-      # this module carries `pytest.mark.system` (Phase 10) for exactly this.
+      # Same failure-diagnostics capture as the `test` job's identically-named step --
+      # this module carries `pytest.mark.system` for exactly this.
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrivacyFence connectors — Gmail, Drive, Slack, Salesforce, Jira and more</title>
+  <meta name="description" content="What an AI assistant can do through each PrivacyFence connector: what it can read without a card, what is reviewed before release, and which writes need your approval.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/">
+  <meta property="og:title" content="PrivacyFence connectors">
+  <meta property="og:description" content="Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram and more: what an AI assistant can read, what is reviewed, and which writes need approval.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connectors</p>
+      <h1>Eleven connectors, 114 tools, each with a fixed gate.</h1>
+      <p class="lede">PrivacyFence governs a defined set of connectors and the operations each one supports. It is not a generic proxy for arbitrary MCP tools. Every tool's gate is fixed in code: it runs straight away, its result is <strong>reviewed</strong> before release, or it <strong>needs your approval</strong> before anything changes.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="gates-heading">
+      <div class="section-heading">
+        <p class="kicker">Per connector</p>
+        <h2 id="gates-heading">What the assistant can read, and what it can change.</h2>
+        <p>Summarized from the <a href="/docs/tools-reference/">Tools reference</a>, which lists every tool. Always-allow rules can let a reviewed read or a write run without a card, within the narrow scope you give them; likely personal data in a read still goes to a card.</p>
+      </div>
+      <div class="card-grid connector-grid grid-auto">
+        <article class="card stack connector-card" id="gmail" data-connector="Gmail" data-tools="20" data-auto="5" data-review="3" data-popup="12">
+          <h3>Gmail</h3>
+          <p class="connector-counts">20 tools: 5 without a card · 3 reviewed · 12 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Searching messages and threads (subject, sender, date, snippet), labels, filters, and attachment names.</dd>
+            <dt>Reviewed before release</dt><dd>A message, a whole thread, or an attachment's content.</dd>
+            <dt>Needs your approval</dt><dd>Drafts and reply drafts, with or without attachments; adding and removing labels; archiving; creating and changing filters.</dd>
+          </dl>
+          <p class="connector-note">No tool sends an email: the assistant can only prepare drafts for you to send.</p>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#gmail">Every Gmail tool</a> <a href="/connectors/google-workspace/">Google Workspace connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="google-drive-including-sheets-and-docs" data-connector="Google Drive, Docs and Sheets" data-tools="23" data-auto="7" data-review="3" data-popup="13">
+          <h3>Google Drive, Docs and Sheets</h3>
+          <p class="connector-counts">23 tools: 7 without a card · 3 reviewed · 13 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>File search and metadata, folder listings, shared drives, a spreadsheet's tabs, and creating a new blank file or spreadsheet.</dd>
+            <dt>Reviewed before release</dt><dd>A file's content, a download, and spreadsheet cell values.</dd>
+            <dt>Needs your approval</dt><dd>Writing or editing a document, writing and formatting spreadsheet ranges, adding, renaming and resizing tabs, uploads, moves and comments.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#google-drive-including-sheets-and-docs">Every Google Drive, Docs and Sheets tool</a> <a href="/connectors/google-workspace/">Google Workspace connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="google-calendar" data-connector="Google Calendar" data-tools="14" data-auto="6" data-review="1" data-popup="7">
+          <h3>Google Calendar</h3>
+          <p class="connector-counts">14 tools: 6 without a card · 1 reviewed · 7 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Your calendars, event lists (title and time), colleagues' free/busy, meeting rooms, colours and an event's visibility.</dd>
+            <dt>Reviewed before release</dt><dd>An event's full details: attendees, description, conferencing links and attachments.</dd>
+            <dt>Needs your approval</dt><dd>Creating, changing and deleting events, out-of-office entries, working location, and an event's colour or visibility.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#google-calendar">Every Google Calendar tool</a> <a href="/connectors/google-workspace/">Google Workspace connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="google-contacts" data-connector="Google Contacts" data-tools="7" data-auto="3" data-review="0" data-popup="4">
+          <h3>Google Contacts</h3>
+          <p class="connector-counts">7 tools: 3 without a card · 0 reviewed · 4 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Listing, searching and reading contacts.</dd>
+            <dt>Reviewed before release</dt><dd>Nothing: this connector has no reviewed reads.</dd>
+            <dt>Needs your approval</dt><dd>Creating and changing contacts, and adding or removing labels.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#google-contacts">Every Google Contacts tool</a> <a href="/connectors/google-workspace/">Google Workspace connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="google-tasks" data-connector="Google Tasks" data-tools="8" data-auto="3" data-review="0" data-popup="5">
+          <h3>Google Tasks</h3>
+          <p class="connector-counts">8 tools: 3 without a card · 0 reviewed · 5 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Task lists and the tasks in them.</dd>
+            <dt>Reviewed before release</dt><dd>Nothing: this connector has no reviewed reads.</dd>
+            <dt>Needs your approval</dt><dd>Creating and changing tasks, completing or reopening them, and moving them between lists.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#google-tasks">Every Google Tasks tool</a> <a href="/connectors/google-workspace/">Google Workspace connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="apps-script" data-connector="Apps Script" data-tools="4" data-auto="1" data-review="2" data-popup="1">
+          <h3>Apps Script</h3>
+          <p class="connector-counts">4 tools: 1 without a card · 2 reviewed · 1 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>The list of your script projects.</dd>
+            <dt>Reviewed before release</dt><dd>A project's source, and the result of a run you started yourself.</dd>
+            <dt>Needs your approval</dt><dd>Writing new source to a project.</dd>
+          </dl>
+          <p class="connector-note">PrivacyFence never runs a script.</p>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#apps-script">Every Apps Script tool</a> <a href="/connectors/google-workspace/">Google Workspace connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="slack" data-connector="Slack" data-tools="11" data-auto="6" data-review="3" data-popup="2">
+          <h3>Slack</h3>
+          <p class="connector-counts">11 tools: 6 without a card · 3 reviewed · 2 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Channel, direct-message and group-chat lists, and resolving a message link.</dd>
+            <dt>Reviewed before release</dt><dd>Channel history, thread replies and message search.</dd>
+            <dt>Needs your approval</dt><dd>Sending a message, and starting a group chat.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#slack">Every Slack tool</a> <a href="/connectors/slack/">Slack connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="telegram" data-connector="Telegram" data-tools="5" data-auto="2" data-review="2" data-popup="1">
+          <h3>Telegram</h3>
+          <p class="connector-counts">5 tools: 2 without a card · 2 reviewed · 1 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Your chat list.</dd>
+            <dt>Reviewed before release</dt><dd>Messages in a chat, and message search.</dd>
+            <dt>Needs your approval</dt><dd>Sending a message.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#telegram">Every Telegram tool</a> <a href="/connectors/telegram/">Telegram connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="salesforce" data-connector="Salesforce" data-tools="4" data-auto="1" data-review="3" data-popup="0">
+          <h3>Salesforce</h3>
+          <p class="connector-counts">4 tools: 1 without a card · 3 reviewed · 0 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>The list of reports you can run.</dd>
+            <dt>Reviewed before release</dt><dd>A record, search results, and a report's results.</dd>
+            <dt>Needs your approval</dt><dd>Nothing: this connector has no writes.</dd>
+          </dl>
+          <p class="connector-note">Read-only: PrivacyFence offers no Salesforce write.</p>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#salesforce">Every Salesforce tool</a> <a href="/connectors/salesforce/">Salesforce connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="jira" data-connector="Jira" data-tools="8" data-auto="3" data-review="1" data-popup="4">
+          <h3>Jira</h3>
+          <p class="connector-counts">8 tools: 3 without a card · 1 reviewed · 4 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Projects, issue search with JQL, and an issue's available transitions.</dd>
+            <dt>Reviewed before release</dt><dd>An issue's full details, including its description and comments.</dd>
+            <dt>Needs your approval</dt><dd>Creating and updating issues, commenting, and moving an issue to a new status.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#jira">Every Jira tool</a> <a href="/connectors/jira-confluence/">Jira and Confluence connector</a></p>
+        </article>
+        <article class="card stack connector-card" id="confluence" data-connector="Confluence" data-tools="10" data-auto="5" data-review="3" data-popup="2">
+          <h3>Confluence</h3>
+          <p class="connector-counts">10 tools: 5 without a card · 3 reviewed · 2 need approval</p>
+          <dl class="connector-gates">
+            <dt>Without a card</dt><dd>Spaces, page lists, search, and a page's attachment names.</dd>
+            <dt>Reviewed before release</dt><dd>A page's content, and its attachments.</dd>
+            <dt>Needs your approval</dt><dd>Creating and updating pages.</dd>
+          </dl>
+          <p class="cluster connector-links"><a href="/docs/tools-reference/#confluence">Every Confluence tool</a> <a href="/connectors/jira-confluence/">Jira and Confluence connector</a></p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="connect-heading">
+      <div class="section-heading">
+        <p class="kicker">Connecting</p>
+        <h2 id="connect-heading">Your sign-in stays with PrivacyFence.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Each person connects their own account from PrivacyFence's Settings page, in the browser. The sign-in is stored by PrivacyFence and never given to the AI client. A connector's tools appear to the assistant only once it is connected.</p>
+        <p>Before that, an administrator registers an app with each provider once and packages its credentials into an organization config bundle; Telegram needs no registration. Each connector's page links its provider's setup guide, and <a href="/docs/connecting-a-service/">Connecting a service</a> the steps each person takes.</p>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>See a read and a write approved.</h2>
+          <p>Follow a Gmail thread and a spreadsheet write through PrivacyFence, card by card.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/how-it-works/">How it works</a>
+          <a class="button secondary" href="/download/">Download PrivacyFence</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

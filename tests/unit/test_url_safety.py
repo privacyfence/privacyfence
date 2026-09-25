@@ -1,8 +1,8 @@
 """Unit coverage for url_safety.py's shared scheme allowlist.
 
 email_markdown.py and markdown_to_html.py are covered end-to-end for the
-scheme-allowlist invariant by tests/unit/abuse/test_abuse_markdown_rendering.py
-(SEC-01/TST-01a); this module covers is_safe_url() itself directly, including
+scheme-allowlist invariant by tests/unit/abuse/test_abuse_markdown_rendering.py;
+this module covers is_safe_url() itself directly, including
 the urlsplit() ValueError path (a malformed URL, e.g. an unterminated IPv6
 literal) that abuse test's payload list doesn't happen to exercise.
 """

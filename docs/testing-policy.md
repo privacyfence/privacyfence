@@ -1,529 +1,220 @@
-# Testing Policy
+# Testing policy
 
-What runs where, and when. This repo has three tiers of testing, plus one narrow scheduled
-exception (§0) that only ever runs on infrastructure this project owns. See
-[`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) for how to *write* tests;
-this document is about which ones run automatically versus which ones a human has to run. The
-tiers below (§0–§3) are organized by *trust boundary* (what infrastructure/credentials a check
-needs); the taxonomy immediately below organizes the same checks by *what they prove* — the two
-are complementary, not competing, framings of the same suite.
+What runs where, and when. How to *write* a test is in
+[`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md); the checks a human runs
+before a release are in [`release-testing.md`](release-testing.md).
 
-## Core testing principle
+## Principle
 
 **Do not test the full Cartesian product** (`OS × connector × operation × gate × browser × package
-type`). Test each dimension independently, and cross a boundary only for a small number of
-genuinely high-value end-to-end tests. Every tier and layer below is an application of this rule;
-it is the reason the suite stays affordable while covering three operating systems, eleven
-connectors, two deployment modes, and three package formats.
+type`). Each dimension is proven on its own, in one layer below — gate logic in layers 1–2, OS
+portability in layer 3, browser behavior in layer 4, providers in layer 5, packages in layer 6 —
+and only a few high-value end-to-end tests cross a boundary.
 
-| Dimension | Proven by |
-|---|---|
-| Provider correctness | Live connector CI — §0's `connector-live-check.yml` |
-| Gate/policy correctness | Synthetic deterministic integration tests — `tests/unit/test_gate.py`, `tests/integration/` |
-| OS/runtime portability | Cross-platform core CI — `platform-windows`/`platform-macos`, `tests/platform/`, `tests/system/test_local_mode_system.py` |
-| Browser behavior | Playwright — `tests/integration/test_browser_smoke.py` |
-| Installer/package correctness | Native artifact CI — the `*_packaged_*`/`*_lifecycle`/`*_pkg_smoke` modules in `build.yml`, plus the three graphical-session workflows (macOS's own now also covering `test_macos_pkg_install.py`) |
-| Org-mode deployment shape | Synthetic OIDC system CI — `tests/integration/test_org_ubuntu_release_smoke.py` |
-| Real UX / subjective compatibility | Small manual checks — §3, [`release-testing.md`](release-testing.md) |
+## The seven layers
 
-This principle, and the taxonomy below, came from the now-removed `automated-test-strategy-plan.md`,
-which built out every row above and was retired once all of its phases had landed. This
-document is where both live now.
+Every check is exactly one layer. `pyproject.toml`'s `[tool.pytest.ini_options]` registers the markers
+below; a new test module carries the marker for its layer.
 
-## Test taxonomy: the seven layers
-
-The finer-grained taxonomy exists because "CI vs. manual" alone doesn't say what a check actually
-catches: a
-`tests/unit/` module and `tests/integration/test_mcp_daemon_contract.py` are both "automated, every
-PR" per §1 below, but they prove different things and fail for different reasons. Every check in
-this repo, present or planned, is exactly one of:
-
-| # | Layer | What it proves | Where it runs today | Pytest marker |
+| # | Layer | What it proves | Marker | Where it runs |
 |---|---|---|---|---|
-| 1 | Unit | Python logic in isolation, fully offline | §1 below — `tests/unit/`, every PR | `unit` |
-| 2 | Integration | Real internal stack (real sockets, servers, the real daemon process), no external network | §1 below — `tests/integration/`, every PR | `integration` |
-| 3 | Cross-platform system | OS path/process/locking/daemon behavior, identical on Linux/Windows/macOS | Done. `test_mcp_daemon_contract.py` (§1 below) already proves the daemon→MCP→approval→audit *transport* contract on `ubuntu-latest`; `tests/system/test_local_mode_system.py` is the canonical scenario this layer actually names — a real `daemon_main.main()` subprocess (not an in-process call) driven through startup/discovery, the real `/approvals`/`/settings` web surfaces via a real bootstrap exchange, an MCP-client tool call resolved both Allow and Deny through the real HTTP decide route, the audit log read back from disk, and a graceful shutdown via the real "Quit PrivacyFence" action — collected by every job that runs the full suite (`test`, `platform-windows`, `platform-macos`), so it's proven identical on all three OSes with no extra CI wiring. `platform-windows` (renamed from `test-windows` by Phase 2.1) and `platform-macos` (Phase 2.2) both run the full core suite on every PR, deliberately, not narrowed to a targeted subset — Phase 2.4's own grounding pass found the full-suite run itself is what catches real cross-platform bugs (2.1's first run found four that a subset defined ahead of time would have missed), so the decision was to keep it rather than narrow it. `tests/platform/` (Phase 2.3) adds targeted coverage on top of that full run for OS path/process/locking/daemon-discovery behavior the full suite didn't otherwise reach (atomic-write concurrency, cross-process single-instance locking, the browser-launch default path, and a real spawned-daemon-process lifecycle) — deliberately not duplicated by Phase 3's own module, which adds only what neither `test_mcp_daemon_contract.py` nor `tests/platform/` covers: the full contract, end to end, as a real process, identically on all three OSes. Org mode's own equivalent canonical system-layer scenario is a separate module, `tests/integration/test_org_ubuntu_release_smoke.py` (TST-16) — same real-subprocess shape, but against a signed `org_config.json` and a mocked IdP instead of local mode's bootstrap secret: strict fail-closed startup, reverse-proxy Host handling, per-principal session/MCP-identity/authz-policy resolution, an approval exercised and audited under the *correct* principal, and persisted state (a confirmed rule, its audit trail) surviving a clean restart. Runs on `ubuntu-latest` only (no Windows/macOS org-mode job exists), in its own `org-mode-smoke` CI job, promoted the same way `platform-windows` was (Phase 8 item 2) from build.yml's release-tag-only `build-deb` job (which still runs it too, unchanged). | `system` (registered, applied to `tests/system/test_local_mode_system.py`, Phase 3, and to `test_org_ubuntu_release_smoke.py`, Phase 10 — see below) and `platform` (registered, applied to every module under `tests/platform/`) |
-| 4 | Browser system | JS/CSP/rendering in a real browser | Done. `tests/integration/test_browser_smoke.py` (§1 below) drives real Chromium via Playwright on every PR — login, approval decisions (including "Always allow," live SSE refresh with multiple pending cards, and double-decision idempotency, Phase 4.1), PDF preview, CSP, org-mode WebAuthn UI, PII banner/confirmation-dialog behavior, responsive layout at three named viewports, and structural light/dark assertions. §2.2's `qa_web_smoke.py` still covers what a pytest-collected browser test structurally can't — subjective visual judgment (contrast, "does this look right" in light vs. dark, at a phone width) — and still only runs by hand; that's the genuinely layer-7 sliver Phase 4 deliberately left manual, not a residual automation gap. | `browser` (registered; not yet applied — `test_browser_smoke.py` predates this marker work, see the note below) |
-| 5 | Live connector | Provider API drift | §0 below — `connector-live-check.yml`, self-hosted runner, scheduled. Done. | `live` (registered; nothing in the pytest suite carries it today, since this tier is a standalone script invocation, `qa_fixture_recorder.py --check`/`--record`, not a pytest-collected test — see §0/§2.1) |
-| 6 | Packaged-artifact | Installer/package correctness | Done. `test_macos_packaged_smoke.py` (Phase 6.1, done) runs in `build.yml`'s tag-triggered release path — a real DMG mount, app bundle unpacked from the `.pkg` the image carries, daemon→MCP→approval round trip, code-signature/notarization chain (`codesign --verify`, `spctl --assess`), and a state-outside-package check (deleting the installed `.app` never touches `$HOME/.privacyfence`); `test_deb_packaged_lifecycle.py` (Phase 6.3, done) runs the Linux `.deb` install/validate/remove/purge and upgrade-in-place lifecycles the same way, in `build.yml`'s `build-deb` job; `test_windows_packaged_smoke.py` (Phase 6.2, done) runs a real silent install/separation/uninstall (keep data)/purge lifecycle against the Windows installer the same way, in `build.yml`'s `build-windows` job. Upgrade/state-preservation testing across all three platforms is also done (item 20) — macOS/Windows each got their own version-N→N+1 upgrade test, Linux's own having already landed inside Phase 6.3. `publish-pypi.yml` additionally gates every one of its own publish steps (TestPyPI/PyPI/R2) on `build.yml`'s run for the same commit actually succeeding (Phase 6.4) — a broken packaged artifact on any platform now blocks the whole tag's release, not just its own platform's upload. Linux's own graphical-session/autostart verification is also done — `test_linux_graphical_session_autostart.py` brings up a real `systemd --user` login-equivalent session and starts `xdg-desktop-autostart.target` (standing in for the missing physical login), then confirms the real `systemd-xdg-autostart-generator`-produced unit actually launches the packaged daemon and that "Quit PrivacyFence" stops the real unit; a second test in the same module proves the real (unmocked) OAuth loopback browser-opening flow under a genuine Xvfb `$DISPLAY`. Deliberately scheduled in its own `linux-graphical-session.yml` workflow (packaging-related `main` pushes, weekly, on demand), not per-PR or wired into `build.yml`'s release pipeline — the most expensive tier here, so its runtime cost is kept off the release's critical path rather than run inline with it. `build.yml`'s `finalize-release` job still checks, on every tag, whether the latest run of each of the three graphical-session workflows reachable from the tagged commit actually succeeded (`scripts/check_graphical_session_coverage.py`, privacyfence/privacyfence#374) — never by waiting for a fresh run, only by asking whether a reachable one already passed, so this stays off the critical path either way; a gap only ever warns on a pre-release tag, but fails the job outright on a stable one, so a stable release can no longer ship silently on top of missing, stale, or red autostart coverage. Windows' equivalent is built the same way — `test_windows_graphical_session_autostart.py` installs silently, asserts the companion sign-in task definition **Task Scheduler itself stored** (`schtasks /query /xml`, not this repo's template) element by element, has Task Scheduler itself start the packaged `PrivacyFenceCompanion.exe` as the real signed-in account (confirmed via `Win32_Process`'s `GetOwner`, not assumed) and checks it stays up; a second test kills the daemon's service process outright and asserts the SCM's `sc failure` restart brings a new one back as `NT SERVICE\PrivacyFence` — scheduled the same way, in its own `windows-graphical-session.yml` workflow. There is no daemon sign-in task any more (the daemon is a service), so the long history of that task's bugs lives in git history and in `platform-support.md`'s "Known open items"; the `LogonTrigger`'s own firing is a Windows human check in `release-testing.md` (no hosted runner can produce a session logon). The cheap half of the same coverage also runs per-PR on any OS — `tests/unit/test_privilege_separation.py` holds the shipped companion template to the same contract (`tests/windows_task_contract.py`) this module holds the registered definition to. macOS's own graphical-session/autostart verification is also done now (B19, privacyfence/privacyfence#374, closing the gap the other two platforms already had) — `test_macos_graphical_session_autostart.py` drives `scripts/macos_privilege_separation.sh enable` directly via passwordless `sudo` (the only unattended path in CI: `maybe_auto_enable_macos()`'s own real path pops a GUI admin-password dialog nothing in CI can answer) and confirms both halves of ADR 0002's inversion for real — the daemon actually running as a `system/` LaunchDaemon under the dedicated `_privacyfence` account, and the companion actually running as a LaunchAgent bootstrapped into the CI account's own already-logged-in `gui/<uid>` Aqua session, each with its own control-channel socket present under the separated `handoff/` directory, and the daemon's own `mcp_token` present under `authority/` (ADR 0008 D3) — not just "launchd thinks it's active". Deliberately narrower than the Linux/Windows modules (no second real login to prove the companion's own browser/tray behavior, no MCP round trip — that's already covered by `test_macos_packaged_smoke.py` against a directly-exec'd binary): a real GitHub-hosted `macos-latest` runner only ever gives this one already-logged-in session to work with. Scheduled the same way, in its own `macos-graphical-session.yml` workflow. See `platform-support.md`'s "Known open items" for the full history and current status — check that workflow's own run history rather than trusting this note alone. `scripts/build_pkg.sh`'s installer package (the installer the DMG carries, which provisions privilege separation from its own `postinstall` script at install time rather than leaving it to the daemon's runtime admin-password prompt) gets the same two-tier split as the DMG itself: `test_macos_pkg_smoke.py` is the fast, no-install structural check (`pkgutil --expand-full`, postinstall/payload presence, signature) that runs inline in `build.yml`'s release-critical `build` job right after `test_macos_packaged_smoke.py`; `test_macos_pkg_install.py` is the heavy half — a real `sudo installer -pkg ... -target /` with no separate `enable` call, proving the postinstall script alone wires up both the LaunchDaemon and the companion LaunchAgent the same way `test_macos_graphical_session_autostart.py` proves the manual-script path — and lives in the same `macos-graphical-session.yml` workflow for the same off-the-critical-path reason. | `packaged` (registered; applied to all three packaged-artifact modules — `test_macos_packaged_smoke.py` picked it up as part of Phase 6.1 — and to `test_linux_graphical_session_autostart.py`/`test_windows_graphical_session_autostart.py`/`test_macos_graphical_session_autostart.py`/`test_macos_pkg_smoke.py`/`test_macos_pkg_install.py`) |
-| 7 | Manual exploratory/UX | Subjective judgment, first-time auth/consent flows | §3 below, [`connector-qa-testing.md`](connector-qa-testing.md), [`release-testing.md`](release-testing.md) | — (never automated, by definition — see the governing rule below) |
+| 1 | Unit | Python logic in isolation, offline | `unit` | `tests.yml`, every PR |
+| 2 | Integration | Real internal stack (sockets, servers, the daemon process), no external network | `integration` | `tests.yml`, every PR |
+| 3 | Cross-platform system | OS path/process/locking/daemon behavior; the full daemon → MCP → approval → audit scenario | `system`, `platform` | `tests.yml`, every PR, on Linux, Windows and macOS |
+| 4 | Browser system | JS, CSP and rendering in real Chromium | `browser` | `tests.yml`, every PR; `qa_web_smoke.py` by hand |
+| 5 | Live connector | Provider API drift | `live` | `connector-live-check.yml`, self-hosted runner, weekly |
+| 6 | Packaged artifact | Installer/package correctness, autostart, upgrade, uninstall | `packaged` | `build.yml` and the graphical-session workflows |
+| 7 | Manual | Subjective judgment, first-time consent, OS-native presentation | — | [`release-testing.md`](release-testing.md) |
 
-**What a green `test_org_ubuntu_release_smoke.py` (TST-16) does and does not prove:** this module
-is layer 3's org-mode deployment-shape scenario — strict fail-closed startup, reverse-proxy Host
-handling, per-principal sessions, MCP OAuth discovery, an approval exercised and audited under the
-correct principal, and persisted state surviving a restart, all against a real `daemon_main.main()`
-subprocess. It is not, and was never meant to be, proof that a signed-in principal's own connector
-tools or auto-accept rules are actually correct — that is layer 1/2's job (the "Gate/policy
-correctness" row above: `tests/unit/test_gate.py`, `tests/integration/`), and this module's own
-synthetic `org_config.json` is deliberately zero-connector (no real Google/Slack/... credential to
-authenticate with), so connector-tool content and auto-accept-rule application are structurally
-invisible to it regardless of whether either is broken. Both were broken at once, on the same real
-install, and both shipped past a fully green run of this module before being found by hand and
-fixed (`8322c111`: `/mcp`'s tool list was built outside the signed-in principal's scope, so it
-advertised `LOCAL_PRINCIPAL`'s — empty — connectors on every org server; `cfe3716c`: a principal's
-`settings.yaml` auto-accept rules were loaded but never seeded into that principal's
-`AutoAcceptEvaluator`, so every gated call went to a human regardless of what was configured). Both
-are proven, deterministically, at the layer that actually can: `tests/unit/web/test_routes_mcp.py::
-TestListTools` for the tool-list scoping, `tests/unit/test_daemon_main.py::
-TestLoadPrincipalSettings` for the evaluator seeding — see `test_org_ubuntu_release_smoke.py`'s own
-module docstring for why proving either one *here* would need a connector client this codebase
-doesn't have (one whose external API call can be pointed at a local mock, the way `mock_idp.py`
-stands in for a real IdP) rather than a config change. Read a green TST-16 run as "org mode deploys
-and authenticates correctly," never as "org mode works" on its own.
-
-**Governing rule for what stays manual:** a test stays manual only when automated observation
-cannot reliably determine pass/fail. In this project that bar is met by exactly two recurring
-cases — visual/subjective judgment (contrast, spacing, "does this look right" in light vs. dark
-mode) and a first-time third-party consent/OAuth screen (rendered by the provider, outside this
-codebase's control, and different account-to-account) — and nothing else should be left manual on
-that basis. Anything else currently manual (§2 below) is there because it needs a real credential
-or a real browser binary CI doesn't provision, not because it can't be judged automatically — a
-cost-of-infrastructure reason, and the now-removed `automated-test-strategy-plan.md` existed to
-remove those one at a time, which it did.
-
-**What deliberately remains manual**, in full — nothing else should be added to this list without
-meeting the bar above:
-
-- visual and subjective judgment (contrast, spacing, light vs. dark at a phone width);
-- first-time OAuth/consent-screen onboarding, rendered by the provider and different
-  account-to-account;
-- one real external MCP-client compatibility smoke;
-- OS-native UX presentation (SmartScreen, Gatekeeper, UAC), when the corresponding platform
-  integration changes;
-- the Windows `LogonTrigger`'s own firing — no hosted runner can produce a Terminal Services
-  session logon (see [`release-testing.md`](release-testing.md)'s Windows human checks);
-- human review of detected-but-not-yet-judged provider drift (§0, §2.1).
-
-None of these get multiplied across every OS × connector combination.
-
-**Pytest markers**: seven markers are now registered in `pyproject.toml`'s
-`[tool.pytest.ini_options]` — the original six plus `platform`,
-added as its own marker rather than reusing `system`
-per Phase 0's own status note: `system` was reserved for, and is now applied to,
-`tests/system/test_local_mode_system.py` (Phase 3) — the canonical daemon/MCP/approval/audit
-scenario, a different concept from `tests/platform/`'s OS-level path/process/locking/daemon-
-discovery tests. `test_org_ubuntu_release_smoke.py` (Phase 8's org-mode equivalent of that same
-canonical scenario) picked up `system` too, by Phase 10 — not when it first landed, since at the
-time nothing yet selected on the marker; Phase 10's own CI-diagnostics capture
-(`tests/diagnostics.py`) is what now does, for exactly the `packaged`/`system`-marked tests it
-targets. Consistent with Phase 0's own scope note, markers are *not* retroactively applied
-across every existing test — that would be churn with no payoff until something actually needs to
-select on the marker (e.g. `pytest -m "not live"`). The five modules that landed as part of closing
-out the remediation plan's Phase 3.12 (`test_qa_fixture_recorder.py`'s
-`TestFixturePresence`, `test_deferred_approval_round_trip.py`, `test_routes_security.py`'s
-`TestCrossPrincipalIsolation`, `test_parser_properties.py`, `test_systemic_gate_invariants.py`)
-landed before this marker work existed and were the first backfill; every module under
-`tests/platform/` carries `platform` from the day it was added, per the rule below; everything else
-keeps whatever marker (none, today) it already had. New test modules should carry the marker that
-matches their layer from the day they're added.
-
-## Test ownership: failure type → layer
+Markers are applied to new modules, not backfilled across old ones. Today `system` is on
+`tests/system/test_local_mode_system.py` and `test_org_ubuntu_release_smoke.py`; `platform` on every
+module under `tests/platform/`; `packaged` on every module in layer 6; `browser` on
+`test_download_page.py` and `test_releases_page.py` (not yet on `test_browser_smoke.py`); `live` on nothing, since layer 5 is a
+script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
+`tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit
+logs) under `test-results/`, which CI uploads as an artifact of the failed job.
 
 | Failure type | Owning layer |
 |---|---|
-| Wrong business logic, parsing bug, or malformed output from a pure function | 1. Unit |
-| Regression in real internal wiring — daemon ↔ web routes ↔ gate ↔ audit — with no external network involved | 2. Integration |
-| OS-specific bug: works on Linux, breaks on Windows/macOS (path separators, locking, process spawning, daemon discovery) | 3. Cross-platform system |
-| Bug only a real browser exposes: script-order/DOM-timing, a CSP directive that silently blocks something, real rendering at a given viewport or color scheme | 4. Browser system |
-| Provider API drift: a field renamed, an endpoint removed, a response shape changed | 5. Live connector |
-| Installer/package bug: files not registered at the expected path, autostart missing, uninstall/purge leaves stray files, upgrade loses user state | 6. Packaged-artifact |
-| Subjective visual defect (contrast, spacing, layout "looking right") | 7. Manual exploratory/UX |
-| First-time third-party consent/OAuth screen behaving unexpectedly | 7. Manual exploratory/UX |
+| Wrong logic or malformed output from a pure function | 1 |
+| Broken wiring between daemon, web routes, gate and audit | 2 |
+| Works on Linux, breaks on Windows/macOS (paths, locking, process spawning, discovery) | 3 |
+| Script order, a CSP directive that silently blocks something, rendering at a viewport or color scheme | 4 |
+| A provider renamed a field, removed an endpoint, changed a response shape | 5 |
+| Files in the wrong place, autostart missing, uninstall leaves files, upgrade loses state | 6 |
+| Contrast/spacing "looks wrong"; a provider's consent screen behaves unexpectedly | 7 |
 
-Every layer but the last is, by the governing rule above, a candidate to *stay* automated — a
-failure type that currently lands in layer 7 only belongs there if it's one of the two named
-exceptions; otherwise it's a sign the corresponding automation genuinely hasn't landed yet, not
-that the failure type is inherently manual.
+## Layers 1–4: every PR
 
-### Checked against `release-testing.md`
+`.github/workflows/tests.yml` runs on every pull request, every push to `main` or `releases/**`,
+and on dispatch. A 100% pass rate is required to merge.
 
-Every item that used to require manual release QA maps to exactly one layer above, and every layer
-but 7 is now fully automated (see the taxonomy table above). What's left genuinely manual today is
-exactly layer 7's two named exceptions (visual/
-subjective judgment, first-time third-party consent) plus a small set of infrastructure-cost items
-(a real third-party MCP client, OS-native trust-prompt presentation) — all covered by
-[`release-testing.md`](release-testing.md), the evergreen standing reference for what stays manual
-and why. `connector-qa-testing.md` covers the narrower, non-routine case: a new connector, a
-material connector/gate change, or an unexplained regression — not a routine release.
+| Job | Runs |
+|---|---|
+| `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
+| `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest` |
+| `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
+| `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
+| `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, `scripts/mypy_strict_modules.py` (all blocking); whole-tree `mypy src/privacyfence` (`continue-on-error`, informational) |
 
-## 0. Runner-local live tier (scheduled, not per-PR)
+`pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
+also runs `playwright install --with-deps chromium`. Browser tests skip when Playwright or Chromium
+is missing, and layer-6 tests skip when no built artifact is under `dist/`.
 
-*Layer 5 (live connector) in the taxonomy above.*
+**Coverage is a ratchet.** `check_coverage_floor.py` fails if overall coverage, or any module on its
+security-critical list (`MODULE_FLOORS`), drops below its recorded floor. Raise a floor in the PR
+that raises its coverage; lowering one is a regression, not a config edit.
 
-`.github/workflows/connector-live-check.yml` runs `qa_fixture_recorder.py --check` (and, on
-drift, `--record`), then `qa_fixture_recorder.py --lifecycle` (§2.1's bounded lifecycle mode --
-create/read/update/delete a fresh QA object per write-capable connector), against the four
-dedicated test accounts (Google, Slack, Atlassian, Salesforce) on a weekly schedule (plus
-`workflow_dispatch`) — never on `pull_request`, and never on a GitHub-hosted runner. Unlike
-`--check`'s drift (data, not a failure), a `--lifecycle` failure fails the job outright: a failed
-write/read/update is a real provider-contract regression, and a cleanup call that ran but didn't
-actually remove what it created would otherwise silently accumulate objects in the QA accounts
-forever. It targets a self-hosted runner this project provisions and controls
-(label `privacyfence-test`), provisioned per
-[`connector-live-check-setup.md`](connector-live-check-setup.md)'s "Runner requirements" section. The four OAuth
-token files and `org/org_config.json` live only as local files on that runner — they are never
-added as GitHub Actions secrets, and are never transmitted to GitHub at all. See
-[`connector-live-check-setup.md`](connector-live-check-setup.md) for the full account/runner setup
-and [ADR 0019](adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md) for the
-reasoning behind isolating this tier from every GitHub-hosted job.
+**Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
+reviewed list: `test`, `platform-windows`, `platform-macos`, the three `Test (Python 3.x, core
+suite)` checks, `static-analysis`, `org-mode-smoke`, and `website-build` (`website-build.yml`'s
+job, which also runs on every PR). Update it in the PR that adds, renames or removes one of those
+jobs. It is applied to the live repository ruleset by hand (`... apply`, and
+`--branch "releases/**" apply` for the release branches) — no CI job does it; `... show` compares
+intent with what is live.
 
-On drift, the job re-records the affected fixtures and opens an ordinary PR
-(`chore/connector-live-fixture-drift`) with the redacted diff; a maintainer reviews it exactly as
-they would review a manually-run `--record` per §2.1 below. That PR then runs through §1's normal
-GitHub-hosted `tests.yml` merge gate like any other PR — the live-credential job and the
-credential-free merge gate never share a runner or a trigger.
+Key modules in the suite:
 
-## 1. Automated suite — every PR, in CI
+- `tests/integration/test_mcp_daemon_contract.py` — a real `WebServer` on a loopback socket, driven
+  by the official `mcp` client over TCP.
+- `tests/integration/test_shim_mcp_contract.py` — the built `mcpb/shim/dist/shim.js` against that
+  server, over MCP-over-stdio. Skips without Node.
+- `tests/system/test_local_mode_system.py` — `python -m privacyfence.daemon_main` as a separate
+  process: discovery, bootstrap into `/approvals` and `/settings`, a gated call allowed and denied
+  through the HTTP decide route, the audit log read back, and "Quit PrivacyFence". Runs in every
+  full-suite job, so on all three OSes.
+- `tests/integration/test_org_guide_configs.py` — the org guide's hardened systemd unit and nginx
+  block, read from the guide by heading name: `systemd-analyze verify` and `nginx -t` (each skips
+  without its binary; the `org-mode-smoke` job installs both), plus static checks of the hardening
+  lines, forwarded headers and upload size limit.
+- `tests/platform/` — atomic-write concurrency, cross-process single-instance locking, the browser
+  launch default, a spawned-daemon lifecycle, and real `icacls` behavior on Windows.
+- `tests/integration/test_browser_smoke.py` — real headless Chromium: login, decisions (including
+  "Always allow", live SSE refresh, idempotency), PDF preview, CSP, org-mode WebAuthn, PII banners,
+  three viewports, light/dark structure. `test_download_page.py` covers `website/download/` and
+  `test_releases_page.py` covers `website/releases/`, both with the Worker's API stubbed.
+- Each connector's `TestLiveFixtureParsing` replays a committed fixture from
+  `tests/fixtures/live/<connector>/` through the real parser; it skips if no fixture is recorded.
 
-*Layers 1 (unit) and 2 (integration) in the taxonomy above, plus most of what layer 4 (browser
-system) already has — see `test_browser_smoke.py` below.*
+**What a green `org-mode-smoke` does not prove.** It proves org mode deploys and authenticates:
+fail-closed startup, reverse-proxy Host handling, per-principal sessions, MCP OAuth discovery, an
+approval audited under the right principal, state surviving a restart. Its `org_config.json` has no
+connectors, so it cannot see a principal's tool list or auto-accept rules; those are proven by
+`tests/unit/web/test_routes_mcp.py::TestListTools` and
+`tests/unit/test_daemon_main.py::TestLoadPrincipalSettings`.
 
-`.github/workflows/tests.yml` runs on every push to `main` and every pull request:
+### Other workflows that gate a PR
 
-```bash
-npm test              # mcpb/shim/, Node's built-in test runner
-npm run typecheck     # mcpb/shim/, tsc --noEmit
-pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
-python scripts/check_coverage_floor.py coverage.json
-```
+- **`dependency-audit.yml`** — on a PR or a push to `main`/`releases/**` that touches
+  `pyproject.toml`, `requirements/*.lock.txt` or either `package.json`/`package-lock.json`, weekly
+  (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
+  `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`
+  and `docs.lock.txt` (the website's docs generator) and reports `dev.lock.txt` informationally; `npm-audit` blocks on high/critical in the shim's
+  runtime dependencies (`--omit=dev`); `npm-audit-worker` blocks on high/critical across the whole
+  `cloudflare/downloads/` tree, dev dependencies included, because `wrangler` deploys with a
+  production token.
+- **`deploy-download-worker.yml`'s `verify` job** — on a PR, or a push to `main`, that touches
+  `cloudflare/downloads/**`: `npm ci`, `npm run typecheck`, `npm test` (local Miniflare, no
+  Cloudflare credentials), `npm run dry-run`. Its `deploy` job needs `verify` and runs only on
+  `main` or dispatch. Neither job is in `REQUIRED_STATUS_CHECKS`.
+- **`website-build.yml`** — on every PR and every push to `main`/`releases/**`: builds
+  privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
+  would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
+  commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
+  `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
+  `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  sites and the layout screenshots. Not in `REQUIRED_STATUS_CHECKS`.
 
-on an `ubuntu-latest` runner. A 100% pass rate is required to merge, for both suites. Coverage
-itself is a ratchet, not a specific percentage a PR must hit: `scripts/check_coverage_floor.py` fails the build
-if overall branch+line coverage, or the coverage of any module on its security-critical list (the
-URL-scheme allowlist, identity-matching, audit-export, org-config/bundle-trust, session/token-
-lifetime, privacy-filter, secure-write, OIDC-discovery-trust, and MCP-error-taxonomy code paths —
-see that script's `MODULE_FLOORS` for the exact list), drops below where it was recorded. A PR that
-raises coverage on one of those modules should bump its floor in the same PR; a PR that needs to
-*lower* one is a real regression, not a config edit. `pytest`'s own `--cov-report=json`/`html`
-output is uploaded as a `coverage-report` CI artifact on every run (pass or fail) so a regression
-can be inspected without re-running locally.
+### `qa_web_smoke.py` (layer 4, by hand)
 
-`tests.yml` runs six jobs on every PR: this `test` job; `platform-windows`/`platform-macos` (the
-full core suite again on real Windows/macOS runners — see §3's system-layer row above for what
-these add); `test-python-compat` (the same core suite, Node-free, against Python 3.11, 3.12 and 3.14 —
-reported as three separate checks, one per Python version, since each matrix leg is its own GitHub
-check; 3.14 is there because it is the default `python3` on current Ubuntu releases, so it is what
-a plain `pip install privacyfence` resolves against on a fresh box); `org-mode-smoke` (`test_org_ubuntu_release_smoke.py`, see §3's row above); and
-`static-analysis`'s blocking `ruff check .`, `bandit` and `scripts/mypy_strict_modules.py` steps
-(its whole-tree `mypy` step is still `continue-on-error` and stays informational; the modules
-promoted by `[[tool.mypy.overrides]]` are blocking — see `coding-and-testing-guidelines.md`). `scripts/update_branch_protection.py`'s
-`REQUIRED_STATUS_CHECKS` is the reviewable record of exactly which of those checks are *meant* to
-be required — update it in the same PR whenever
-a job here is added, renamed, or removed.
-
-The live setting is a **repository ruleset** (Settings → Rules → Rulesets, the `main` ruleset), not
-a classic branch-protection rule — reading the classic `/branches/main/protection` endpoint instead
-returns `enforcement_level: "off"` with empty `contexts` purely because no classic rule exists,
-which is a false negative that has already been reported as a finding once. The ruleset currently
-requires all of the checks above, with "require branches to be up to date" on and an empty bypass
-list, so it applies to admins too.
-
-That is still repo configuration this repo doesn't track as a file and no CI job enforces:
-`REQUIRED_STATUS_CHECKS` is the *intended* set, and applying it remains a deliberate, unautomated
-step a repo admin takes by running `scripts/update_branch_protection.py apply` against GitHub
-directly — see that script's own docstring for why this is intentionally not wired into CI. Run its
-`show` to compare the intent here against what is live.
-
-Through P9 this ran on `macos-latest` instead, and a second, non-blocking `test-linux` job carried
-the platform-independent subset (everything under `web/`, `web_approval_ui.py`, `card_builder.py`,
-and `approval_icons.py`) on `ubuntu-latest`, `--ignore`-ing the handful of test modules that imported
-an AppKit-tainted module (`approval_popup.py`/`approval_window.py`/`dialog_window.py`/`menu_bar.py`)
-directly at module scope. P10 deleted all
-of that — the native menu bar/approval dialogs/settings window — so nothing in this repo depends on
-real AppKit/PyObjC behavior any more, the whole suite is platform-independent, and the two-job split
-collapsed back into one.
-
-This tier is fully self-contained: no network calls to Gmail/Slack/Jira/etc., no credentials, no
-manual steps. It includes:
-
-- Every module under `tests/unit/`, one test module per `src/privacyfence/` module — with one
-  deliberate exception: `connector_host.py`'s `ConnectorHost` (the live `{name: Connector}` map) has
-  no `test_connector_host.py` of its own; its behavior is exercised through its three consumers'
-  own test modules instead (`test_settings_controller.py`, `test_daemon_main.py`,
-  `tests/unit/web/test_routes_settings.py`, `tests/unit/web/test_server.py`), since it's a thin
-  enough holder that testing it in isolation would just re-mock what those already cover for real.
-- Each connector's `TestLiveFixtureParsing` class (in `tests/unit/test_<connector>_client.py`),
-  which replays a **previously recorded** fixture from `tests/fixtures/live/<connector>/` through
-  the real `_parse_*` method — still fully offline, since it's reading a committed JSON file, not
-  making a live API call. See [§2.1](#21-qa_fixture_recorderpy---check----record) below for how those
-  fixtures get recorded in the first place. A connector with no recorded fixture yet has its
-  `TestLiveFixtureParsing` tests skip (not fail) with a message pointing at the recorder.
-- `tests/unit/test_qa_fixture_recorder.py` — unit tests for the recorder script itself
-  (`scripts/qa_fixture_recorder.py`), exercised against mocked/offline API responses. This is
-  different from actually running the recorder: these tests prove the recorder's own logic
-  (redaction, capture mechanisms, the tag guardrail) is correct without touching any real account.
-- `tests/unit/test_approval_window_html.py`, `tests/unit/test_dialog_window_html.py` — construction-
-  only coverage for the pure HTML builders behind every card/confirmation dialog (content, buttons,
-  PII tint/banner, summary rows, details text). Through P9 these were rendered inside a real native
-  AppKit view tree too (`test_approval_window.py`/`test_dialog_window.py`, covering the modal-loop
-  host around the same HTML); P10 deleted that host, so this construction-only tier is now the whole
-  of it.
-- `tests/unit/test_web_approval_ui.py`, `tests/unit/test_card_builder.py`,
-  `tests/unit/test_approval_icons.py`, `tests/unit/web/` — the web approval surface's own coverage,
-  added at P1: `WebApprovalUI`'s blocking contract (the sole `ApprovalUI` implementation since P10 —
-  see `approval_ui.py`'s ABC), the pure gate-args-to-card-HTML translation, shared icon-asset loading,
-  and the approval routes themselves against an in-process ASGI test client (auth, CSRF, Host
-  allowlist, security headers, idempotent decisions — no real socket).
-- `tests/unit/web/test_mcp_dispatch.py`, `tests/unit/web/test_routes_mcp.py` — the `/mcp` endpoint's
-  own coverage, added at P2: `McpDispatcher`'s dedupe/staleness/gating dispatch and meta-tools
-  (`test_mcp_dispatch.py`) and the wire-protocol/auth layer on top of it (`test_routes_mcp.py`),
-  driven with the real official `mcp` Python client over an in-process ASGI transport — no real
-  socket, same posture as the approval routes above. `TestAudienceSeparation` in
-  `tests/unit/web/test_server.py` is the one required to fail loudly if the MCP bearer-token and
-  approval-surface session-cookie middleware are ever reordered.
-- `tests/unit/web/test_mcp_tools.py` — added at phase 1.9 (TST-02):
-  `mcp_tools.py`'s own `ToolSpec`-to-`Tool`/`CallToolResult` schema translation (untested by either
-  file above, which exercise dispatch and wire framing, not this mapping layer), plus end-to-end
-  coverage over the real `/mcp` transport for `privacyfence_begin_unattended_session` refusing when
-  disabled by configuration. TST-02's other original gap, an unattended session denying a
-  rule-change proposal before any confirmation popup can be shown, lives on as
-  `privacyfence_propose_policy_change`'s own unattended-denial coverage since PSC-3 deleted the
-  older tool that gap was first found on (see `McpDispatcher.propose_policy_change`'s own comment
-  in `mcp_dispatch.py`).
-- `mcpb/shim/test/*.test.ts` (`npm test`, run from `mcpb/shim/`) — the .mcpb shim's own suite:
-  daemon discovery/launch (`daemon.test.ts`, against
-  `mcp_url` file discovery) and the stdio<->Streamable HTTP message proxy (`proxy.test.ts`,
-  `index.test.ts` — the latter against a real fake `/mcp` server built on the official SDK's own
-  server classes, not a hand-mocked transport). The only Node suite left in this repo since P5
-  retired the original bridge and its own `bridge/test/*.test.ts`.
-- `npm run typecheck` (`tsc --noEmit`, run from `mcpb/shim/`) — catches type errors across
-  `mcpb/shim/src/*.ts` that `npm test`'s runtime coverage wouldn't necessarily hit (an unreachable
-  branch, a type mismatch in an untested code path).
-- `tests/integration/test_mcp_daemon_contract.py` — spawns a real `privacyfence.web.server.WebServer`
-  bound to a real loopback socket and drives it with the official `mcp` Python client over a real
-  TCP connection (not the in-process ASGI transport `test_routes_mcp.py` above uses), so a
-  real-network-stack bug (uvicorn startup, real TCP binding, real HTTP framing) can't slip through
-  either. Needs no Node — since P5 there is no longer a second, independently-maintained protocol
-  implementation to cross-check against (both client and server here are the official `mcp` SDK).
-  Uses the official `mcp` Python client, a runtime dependency since P2 (`pyproject.toml`'s
-  `[project.dependencies]`) rather than a
-  test-only one.
-- `tests/system/test_local_mode_system.py` (layer 3, cross-platform system) — the one module in
-  this tier that spawns the real
-  `python -m privacyfence.daemon_main` entry point as a genuinely separate OS process (every module
-  above drives daemon/server code as a plain in-process call), and runs it through the full
-  contract: `mcp_url`/lock-file discovery, `/approvals`/`/settings` reached via a real one-time
-  bootstrap exchange (minted through the #428 Phase 2 control channel, never a link scraped out of
-  the log — `safe_errors.SecretRedactingFormatter` deliberately redacts those), a gated MCP tool
-  call resolved both Allow
-  and Deny through the real HTTP decide route, the audit log read back from disk to confirm both
-  decisions, and a graceful shutdown via the real "Quit PrivacyFence" action. Collected by every job
-  that runs the full suite (`test`, `platform-windows`, `platform-macos`), so this one module proves
-  the scenario identical on Linux, Windows, and macOS with no extra CI wiring — the same
-  `pyproject.toml` `testpaths = ["tests"]` mechanism `tests/platform/` (Phase 2.3) already relies on.
-- `tests/integration/test_shim_mcp_contract.py` — spawns the real built `mcpb/shim/dist/shim.js`
-  against that same real, socket-bound `WebServer` and drives *it* with the official `mcp` Python
-  client over real MCP-over-stdio. A passthrough test, not a schema test — the shim carries no
-  tool-schema knowledge, so "one `initialize` and one `tools/call` round-trip, with the bearer
-  header attached and `mcp_url` honoured" is the whole of what there is to assert. Skips
-  automatically if Node isn't on `PATH`; CI installs it, so this runs there.
-- `tests/integration/test_browser_smoke.py` (TST-06) — drives the real web approval surface in a
-  real headless Chromium via Playwright: bootstrap login, an Allow/Deny decision round trip, PDF
-  preview actually rendering, a real no-inline-script CSP check, and the org-mode WebAuthn UI. The
-  one place in this tier that exercises what only a real browser does — the CSP header actually
-  enforced, cookie `SameSite` semantics on a real `fetch()`, the page's own JS event loop
-  (`EventSource`, `navigator.credentials`) — rather than a scripted transport (`test_routes_
-  approvals.py`) or a real socket driven by a non-browser client (`test_mcp_daemon_contract.py`
-  above). This is layer 4 (browser system) in the taxonomy at the top of this document; it already
-  runs here in tier 1 because Playwright/Chromium install cleanly on `ubuntu-latest` with no
-  external credential, unlike the connector accounts §0/§2.1 need. This file's coverage was later
-  extended (empty-list/multi-card/idempotency behavior, PII-specific
-  banner assertions, responsive layout, light/dark structural assertions) — that extension did not
-  need to create the layer, which was already here.
-
-## 2. Local-only checks — run manually before opening/updating a relevant PR, never in CI
-
-*§2.1 is a local-only slice of layer 5 (live connector), run by hand between §0's scheduled runs.
-§2.2 is a local-only slice of layer 4 (browser system), covering the subjective/visual-judgment
-sliver `test_browser_smoke.py`'s own structural checks in §1 can't reach (light/dark contrast,
-phone-width "does this look right") — neither is layer 7 (manual exploratory/UX) in the
-`qa_fixture_recorder.py`/deterministic-report sense: both are fully deterministic, just not yet safe
-or fast enough to run on a GitHub-hosted PR runner.*
-
-Two scripts exist specifically because some failure classes can't be caught by a fully-mocked,
-fully-offline suite. Both are excluded from CI on purpose — one needs real, authenticated
-third-party accounts; the other needs a real browser — and both print the same kind of small,
-deterministic Markdown report meant to be pasted into the PR description so a reviewer doesn't have
-to re-run anything or have access to the same accounts/hardware themselves.
-
-Through P9 a third script, `qa_popup_smoke.py`, covered the one thing `test_approval_window.py`/
-`test_dialog_window.py`'s construction-only tests couldn't reach: whether the real native modal loop
-actually blocked and a real click actually reached it. P10 deleted the native popup itself along with that script — there is no modal loop left to smoke-
-test. `qa_web_smoke.py` below is this tier's own (Chromium-driven, not AppKit-driven) equivalent for
-the web approval surface that replaced it, and already existed before this phase; nothing new was
-needed to fill the gap.
-
-### 2.1 `qa_fixture_recorder.py --check` / `--record`
-
-Every `tests/unit/test_<connector>_client.py` module mocks the connector's `*_client.py` (or the
-third-party SDK object one layer inside it), which is correct for testing this codebase's own
-parsing logic in isolation — but it has a structural blind spot: a hand-authored mock fixture can
-drift out of sync with what the real provider API actually returns (a field renamed, an endpoint
-removed, a response shape changed) while the mocked test suite stays green. `scripts/
-qa_fixture_recorder.py` closes that gap by calling the real, targeted read methods against a real,
-already-authenticated account.
-
-**Never run on a GitHub-hosted runner, or on any `pull_request`-triggered workflow.** It reuses the
-exact OAuth token files `privacyfence-app --<connector>-oauth` writes to the git-ignored
-`credentials/` directory, and only ever targets one specific, `[QATEST]`-tagged seed artifact per
-connector — set up once per environment via [`qa-environment-setup.md`](qa-environment-setup.md),
-resolved through the non-secret, git-ignored manifest `tests/fixtures/qa_environment.yaml` (see
-[`qa_environment.yaml.example`](../tests/fixtures/qa_environment.yaml.example) for the template). No
-credential is ever provisioned to a GitHub-hosted runner or any other shared cloud service to make
-this possible.
-
-The instructions below are for running this by hand, from your own machine, between scheduled
-runs — still valid and still the right thing to do for a PR that touches a `*_client.py` or
-`connectors/**` file. §0 above describes the one place this also now runs automatically: a
-project-owned self-hosted runner, on a schedule, per
-[`connector-live-check-setup.md`](connector-live-check-setup.md).
-
-Three modes:
-
-- `--check [connector ...]` — calls each connector's read methods against its seed artifact,
-  asserts non-empty/expected results, prints a report. Never writes a file. Safe to run any time.
-  The printed report also includes a **fixture freshness** line per connector checked: `< 60 days`
-  healthy, `60–90 days` warning, `> 90 days` refresh required — a quick signal for whether a
-  connector's recorded fixture is due for a fresh `--record`, without doing the day-count
-  arithmetic by hand.
-- `--record [connector ...]` — the same calls, plus identity-field redaction (author email, account
-  id, display name, ...) and structural de-identification (opaque resource ids, decorative URLs —
-  neither of which any test actually depends on the specific value of), then writes the result to
-  `tests/fixtures/live/<connector>/<method>.json`.
-- `--lifecycle [connector ...]` — for each write-capable connector that supports it (`calendar`, `confluence`, `jira`,
-  `tasks` — see the comment above `LIFECYCLE_CHECKS` in `qa_fixture_recorder.py` for why
-  `contacts`/`gmail`/`drive`/`slack`/`salesforce`/`telegram` aren't included), creates a fresh,
-  uniquely-tagged QA object, reads it back, updates it, reads it back again, then deletes it and
-  confirms the deletion actually took, using the same run's redaction-free internal SDK access
-  `RawCapture`/`RawCaptureExecute` already use — never a tool any MCP client can reach, since
-  nothing in `connectors/**` ever registers a delete tool at all. Never writes a fixture file. Runs
-  on the same weekly self-hosted-runner schedule as `--check`/`--record` (§0 above); safe to run by
-  hand too, same caveats as `--check`/`--record`.
-
-**When to run this**: only when a PR touches `src/privacyfence/*_client.py` or
-`src/privacyfence/connectors/**` — not every PR. Scope it to the connector(s) touched, using the
-project's own venv (a bare system `python3` won't have the third-party clients this imports):
+`scripts/qa_web_smoke.py` drives the real embedded server in real Chromium for what a pytest
+assertion cannot judge: a click that really round-trips, script-order bugs, the CSP letting
+`resources/sw.js` register, and how it looks in light and dark at phone width. It never runs in CI.
+Run it when a PR touches `web_shell.py`, `approval_list_html.py`, the JS emitted by
+`web/routes_approvals.py`/`web/routes_settings.py`, `resources/sw.js`, or the CSP in
+`web/server.py`:
 
 ```bash
-.venv/bin/python scripts/qa_fixture_recorder.py --check confluence
+.venv/bin/python scripts/qa_web_smoke.py [--chromium-path <binary>] [--report-file <path>]
 ```
 
-- **Passes, live shape unchanged**: nothing else to do. `--check` never writes a file.
-- **Fails, or the fix was specifically in response to a provider shape change**: run
-  `--record <connector>`, inspect the diff under `tests/fixtures/live/<connector>/*.json` — it
-  should be a small, meaningful shape change, with identity fields already redacted to placeholders
-  (if anything in the diff looks like a real email, name, or account-specific id, the redaction
-  logic needs a fix before committing, not after) — then commit the updated fixtures alongside the
-  code fix, in the same PR.
-- Paste the printed report (or the file from `--report-file <path>`) into the PR description under
-  a `## Local QA check` heading.
+Paste the report into the PR description under `## Web smoke check`.
 
-### 2.2 `qa_web_smoke.py`
+## Layer 5: live connector
 
-`tests/unit/web/`, `test_web_shell.py`, and `test_approval_list_html.py` cover the web surfaces'
-(`/settings`, `/approvals`) HTML/JSON construction and route behavior — CSRF, the settings action
-allowlist, argument validation — on every PR, entirely against Starlette's in-process `TestClient`.
-That deliberately leaves one thing untested: a **real browser** actually parsing and running the JS
-those routes emit. A script tag referencing a DOM element or another script's global defined *later*
-in the document silently no-ops instead of raising in a real browser — this script's own "card
-decide → return-to-list toast" scenario is a regression test for exactly that bug (approval_list_
-html.py's toast/notification-prompt code read `#pf-shell-toast`, defined by web_shell.py *after* it
-in document order, before that element existed — found by running this script during P4's own
-development, not by any unit test). It also confirms the CSP (web/server.py's `_CSP`) actually
-permits what a page needs — e.g. that `worker-src 'self'` really does let `resources/sw.js` register,
-not just that the header string contains the right token.
+Live provider credentials exist only on the project's self-hosted runner (label
+`privacyfence-test`), as local files — never as GitHub Actions secrets, never on a GitHub-hosted
+runner, never reachable from `pull_request` ([ADR
+0019](adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md)). Runner and QA-account
+setup: [`connector-qa.md`](connector-qa.md).
 
-**Never run in CI.** It needs `playwright` (`pip install playwright` — not a project dependency,
-install it locally) and a Chromium binary, and drives a real embedded HTTP server + real browser
-end to end, which is slower and flakier than the route-level suite that already runs on every PR.
+- **`connector-live-check.yml`** — weekly (Monday 06:00 UTC) and on dispatch. Runs
+  `qa_fixture_recorder.py --check` over every connector in `CONNECTOR_CHECKS`; on drift, `--record`
+  and a PR on `chore/connector-live-fixture-drift` with the redacted diff, reviewed like any other
+  PR. Then `--lifecycle` (create, read, update, delete a tagged QA object in `calendar`,
+  `confluence`, `jira`, `tasks`); a lifecycle failure fails the job.
+- **`qa-record-fixture.yml`** — dispatch only, input `connector`. Records one connector's fixture
+  and commits it to the branch it was dispatched against; refuses a protected branch. Use it for a
+  connector with no fixture yet, which the drift-only record step never records. It shares the
+  `connector-live-check` concurrency group, so it queues behind a running check.
+- **`/qa-record <connector>`** (`.claude/commands/qa-record.md`) — dispatches `qa-record-fixture.yml`
+  for the current branch, then pulls and reviews the fixture diff. A connector name missing from
+  `CONNECTOR_CHECKS` makes the recorder exit 0 having recorded nothing, so the command checks first.
 
-**When to run this**: whenever `web_shell.py`, `approval_list_html.py`, the JS-emitting functions in
-`web/routes_approvals.py`/`web/routes_settings.py`, `resources/sw.js`, or `web/server.py`'s CSP
-changes. Not for a `settings_controller.py`/`settings_window_html.py` change with no web-shell/CSP
-involvement — those are covered by `test_settings_window_html.py`'s construction-only assertions.
+A PR touching `src/privacyfence/*_client.py` or `src/privacyfence/connectors/**` owes a `--check`
+report, scoped to that connector, under a `## Local QA check` heading. Run it on a machine with QA
+credentials, or dispatch `connector-live-check.yml`:
 
 ```bash
-.venv/bin/pip install playwright
-.venv/bin/python scripts/qa_web_smoke.py
+.venv/bin/python scripts/qa_fixture_recorder.py --check confluence    # never writes
+.venv/bin/python scripts/qa_fixture_recorder.py --record confluence   # writes tests/fixtures/live/confluence/
 ```
 
-If Playwright's own bundled Chromium isn't installed, pass `--chromium-path` at a Chromium/Chrome
-binary already on disk instead of downloading one. Paste the printed report into the PR description
-under a `## Web smoke check` heading, same convention as §2.1.
+`--check` reports each fixture's age: under 60 days healthy, 60–90 warning, over 90 refresh
+required. After `--record`, read the diff: identity fields must already be placeholders; a real
+email, name or account id means the redaction needs fixing before the commit.
 
-## 3. Full manual QA pass — before a release, not per-PR
+## Layer 6: packaged artifact
 
-*Layer 7 (manual exploratory/UX) in the taxonomy above — this is the one tier the governing rule
-says should stay manual. A later cross-check found how much of what
-this tier used to be the only proof for is actually deterministic gate behavior that belongs in
-`test_gate.py` (layer 2) instead, and confirmed `test_gate.py` already covers nearly all of it —
-this tier has shrunk accordingly, to the parts that genuinely need a human watching a real popup
-render against real account data (or a live provider's own tool-to-gate-metadata mapping, which
-`test_gate.py` deliberately doesn't duplicate per connector).*
+| Test module | Workflow, job | Covers |
+|---|---|---|
+| `test_macos_packaged_smoke.py` | `build.yml`, `build` | DMG contents, the app from its `.pkg`, MCP approval round trip, `codesign`/`spctl`, upgrade keeps state |
+| `test_macos_pkg_smoke.py` | `build.yml`, `build` | `.pkg` structure, postinstall, OS/arch refusal, signature — no install |
+| `test_windows_packaged_smoke.py` | `build.yml`, `build-windows` | Silent install separates, upgrade over a running install, uninstall keeps data, purge, refusal of a user-writable install dir |
+| `test_deb_packaged_lifecycle.py` | `build.yml`, `build-deb` | Install, remove, reinstall, purge, upgrade, unattended install, a failing machine half failing the install |
+| `test_linux_graphical_session_autostart.py` | `linux-graphical-session.yml` | XDG autostart under a real `systemd --user` session; the OAuth loopback opening a browser under Xvfb |
+| `test_windows_graphical_session_autostart.py` | `windows-graphical-session.yml` | Task Scheduler's stored companion task against `tests/windows_task_contract.py`; the companion started as the signed-in user; SCM restart of a killed service |
+| `test_macos_graphical_session_autostart.py`, `test_macos_pkg_install.py` | `macos-graphical-session.yml` | `enable` and a real `installer -pkg` bringing up the LaunchDaemon as `_privacyfence` and the companion LaunchAgent |
 
-[`connector-qa-testing.md`](connector-qa-testing.md) drives every tool through a live Claude
-Cowork/Desktop session connected to the real `privacyfence` daemon, against real accounts, watching
-what actually prompts. It is no longer the primary proof for gate-state correctness — that's
-`test_gate.py`'s job now, confirmed exhaustive by Phase 5 — but it's still the only thing that
-exercises the gate, the popup UI, and the audit log against a live provider end to end, and it stays
-the route to catch a connector's tool wired to the wrong gate/metadata in the first place. Run it
-before a release, or after any change to `gate.py`/`auto_accept.py`/`policy/resource_registry.py`/
-the web approval UI broadly, not on every PR.
+`build.yml` runs on a `v*` tag push and on dispatch. Each packaged test runs right after its job
+builds the artifact and before any upload; `build-deb` also runs `test_org_ubuntu_release_smoke.py`.
+Every upload and publish step is gated on a tag ref, so a dispatched run builds and tests everything
+and publishes nothing — which is the pre-flight in [`release-testing.md`](release-testing.md).
+`publish-pypi.yml`'s `wait_for_build` job blocks every publish until `build.yml`'s run for the same
+commit succeeds.
 
-A routine release no longer runs §2.1/§2.2 across every connector on principle —
-[release-testing.md](release-testing.md)'s own "before release" check just confirms §0's scheduled
-fixture check is recent and green, and reserves this full manual pass for the same trigger as
-above: a broad gate/auto-accept/approval-UI change since the last release, not the mere fact that a
-release is happening.
+The three graphical-session workflows run on a push to `main` or `releases/**` that touches their
+packaging paths, weekly (Monday 07:00, 08:00, 09:00 UTC for Linux, Windows, macOS), and on dispatch —
+never on `pull_request`, never as part of `build.yml`. `build.yml`'s `finalize-release` runs
+`scripts/check_graphical_session_coverage.py`, which reads the latest completed run of each on the
+release branch: a run that is missing, not an ancestor of the tagged commit, or red warns on a
+pre-release tag and fails a stable one. It never waits for a new run. They run on GitHub-hosted
+runners with one secret, `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`, the shared app identity every
+release build already carries ([ADR 0040](adr/0040-telegram-app-credentials-ship-in-every-distribution.md)),
+not a per-account credential.
 
-## Quick reference
+## Layer 7: manual
 
-| Check | Layer | Runs in CI? | When |
-|---|---|---|---|
-| `pytest` (full suite, incl. the mcp/daemon, shim/mcp contract, canonical system, and browser-smoke tests) | 1, 2, 3, 4 | Yes, every PR | Always — this is the merge gate |
-| `pytest` on `platform-windows`/`platform-macos` (incl. `tests/platform/`, `-m platform`, and `tests/system/test_local_mode_system.py`) | 1, 2, 3 | Yes, every PR | Always — this is also a merge gate |
-| `test_org_ubuntu_release_smoke.py` (`org-mode-smoke` job) | 3 | Yes, every PR (Ubuntu only) — also re-run in `build.yml`'s `build-deb` job at release time | Always — this is also a merge gate |
-| `pytest` on `test-python-compat` (core suite, Node-free, Python 3.11, 3.12 and 3.14) | 1, 2 | Yes, every PR (Ubuntu only) — three checks, one per Python version | Always — all three are also a merge gate |
-| `ruff check .` / `bandit` (`static-analysis` job) | — (static check, not a layer) | Yes, every PR | Always — both are also a merge gate |
-| `mypy src/privacyfence` (whole tree, `static-analysis` job) | — (static check, not a layer) | Yes, every PR, but `continue-on-error` | No — informational only, doesn't gate the job or the merge |
-| `scripts/mypy_strict_modules.py` (modules promoted by `[[tool.mypy.overrides]]`, `static-analysis` job) | — (static check, not a layer) | Yes, every PR | Always — this is also a merge gate |
-| `check_coverage_floor.py` (coverage ratchet, TST-03) | — (a quality gate on layers 1–2, not a layer itself) | Yes, every PR | Always — this is also a merge gate |
-| `npm test` (mcpb/shim/'s own suite) | 1 | Yes, every PR | Always — this is the merge gate |
-| `npm run typecheck` (mcpb/shim/) | — (static check, not a layer) | Yes, every PR | Always — this is the merge gate |
-| `qa_fixture_recorder.py --check` / `--record` (`connector-live-check.yml`) | 5 | Yes, but only on a project-owned self-hosted runner, never GitHub-hosted, never on `pull_request` | Weekly schedule + manual dispatch |
-| `qa_fixture_recorder.py --lifecycle` (`connector-live-check.yml`) | 5 | Yes, same runner/trigger restrictions as `--check`/`--record` above; unlike drift, a failure fails the job | Weekly schedule + manual dispatch |
-| `qa_fixture_recorder.py --check` (manual) | 5 | No | PR touches a `*_client.py`/`connectors/**` file, between scheduled runs |
-| `qa_web_smoke.py` | 4 | No | PR touches `web_shell.py`, `approval_list_html.py`, web routes' JS, `resources/sw.js`, or the CSP |
-| `test_linux_graphical_session_autostart.py` (`linux-graphical-session.yml`) | 6 | Yes, but its own dedicated workflow — never `pull_request`, never `build.yml`'s release pipeline | Packaging-related `main` pushes + weekly schedule + manual dispatch |
-| `test_windows_graphical_session_autostart.py` (`windows-graphical-session.yml`) | 6 | Yes, but its own dedicated workflow — never `pull_request`, never `build.yml`'s release pipeline | Packaging-related `main` pushes + weekly schedule + manual dispatch |
-| `test_macos_graphical_session_autostart.py` (`macos-graphical-session.yml`) | 6 | Yes, but its own dedicated workflow — never `pull_request`, never `build.yml`'s release pipeline | Packaging-related `main` pushes + weekly schedule + manual dispatch |
-| `test_macos_pkg_smoke.py` (`build.yml`'s `build` job) | 6 | Yes, tag-triggered release path | Always for a macOS release build — no install, structural only |
-| `test_macos_pkg_install.py` (`macos-graphical-session.yml`) | 6 | Yes, but its own dedicated workflow — never `pull_request`, never `build.yml`'s release pipeline | Packaging-related `main` pushes + weekly schedule + manual dispatch |
-| `connector-qa-testing.md`'s live Cowork pass | 7 | No | A new connector, a material connector/gate change, an unexplained regression, or a broad gate/auto-accept/approval-UI change — not routine releases (Phase 9) |
+Manual release checks, and the rule for what may stay manual, are in
+[`release-testing.md`](release-testing.md).
 
-Layer 3 (cross-platform system) is now fully settled here (the two rows above) — `tests/platform/`
-gives it a real, named subset of its own, and the canonical daemon/MCP/approval/audit scenario on
-all three OSes (`tests/system/test_local_mode_system.py`)
-has landed too. Layer 6 (packaged-artifact) is now also fully settled — see the taxonomy table
-above: all three platforms' install/lifecycle/
-upgrade tests are wired into `build.yml`, `publish-pypi.yml`'s own publish steps are gated on
-`build.yml`'s run for the same commit succeeding (Phase 6.4), and all three platforms' own
-graphical-session/autostart verification (Phase 7 items 1–2, plus macOS's own B19 fix-up) are
-wired into their own scheduled `linux-graphical-session.yml`/`windows-graphical-session.yml`/
-`macos-graphical-session.yml` workflows rather than `build.yml`,
-since this tier's own runtime cost must not sit on the release's critical path.
+## Running the gate yourself
 
-None of the "No" rows require a credential or secret to ever be granted to a **GitHub-hosted**
-runner or any `pull_request`-triggered workflow — that part of the policy is unchanged and still
-absolute. The `qa_fixture_recorder.py` "Yes" rows above are GitHub Actions workflows too,
-technically, but only ever execute on infrastructure this project itself owns and controls (§0) —
-not a GitHub-hosted runner, and not reachable from a fork PR or any untrusted trigger.
-`linux-graphical-session.yml`'s, `windows-graphical-session.yml`'s and `macos-graphical-session.yml`'s
-rows are a different case:
-they do run on a GitHub-hosted `ubuntu-latest`/`windows-latest`/`macos-latest` runner, same as
-`build.yml`, but
-never on `pull_request` (a fork PR can't trigger any of them), and the one secret each bakes in
-(`TELEGRAM_API_ID`/`TELEGRAM_API_HASH`) is the same shared, non-per-account app identity `build.yml`
-itself already bakes into every distributed release build on a GitHub-hosted runner — not a live
-per-account third-party OAuth credential of the kind this policy exists to keep off
-GitHub-hosted/`pull_request` infrastructure.
+- **`/dod`** (`.claude/commands/dod.md`) — runs the blocking gate of
+  [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)
+  (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy_strict_modules.py`, the shim's
+  `npm test`/`typecheck`), then checks the diff for the conditional items (live `--check` report,
+  contract tests, lock files, `CHANGELOG.md`) and reports a pass/fail table. Given a path, it narrows
+  `pytest` and skips the coverage floor.
+- **`scripts/pre_release_check.py`** — the same blocking commands as one script, exiting non-zero on
+  any failure.

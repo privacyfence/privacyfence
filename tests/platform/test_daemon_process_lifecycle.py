@@ -115,7 +115,7 @@ def _prepare_sandbox(tmp_path: Path, *, port: int) -> Path:
     config = yaml.safe_load(example.read_text(encoding="utf-8"))
     config["web"]["port"] = port
     config["update_check"]["enabled"] = False
-    # #428 Phase 1: settings.yaml lives under an `authority` subdirectory of
+    # settings.yaml lives under an `authority` subdirectory of
     # data_dir(), not data_dir() itself.
     config_dir = sandbox / "authority" / "config"
     config_dir.mkdir(parents=True)

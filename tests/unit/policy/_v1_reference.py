@@ -1,20 +1,18 @@
-"""Frozen pre-P9 v1 reference implementation, kept only so the P2 equivalence tests
+"""Frozen v1 reference implementation, kept only so the v1/v2 equivalence tests
 (test_conditions.py, test_scopes.py) keep meaning what they always meant.
 
-P9 deletes `AutoAcceptEvaluator` and all its `_rule_*` predicate methods, plus the
-`ARGS_ONLY_RULES`/`DATA_DEPENDENT_RULES` classification sets, from
-`privacyfence/auto_accept.py` -- the v1 rule engine they belonged to is gone, replaced by
-`policy.scopes`/`policy.conditions`. But the whole point of `test_conditions.py`/
-`test_scopes.py` is proving the v2 `ConditionSelector`/`ScopeSelector` objects behave
-*identically* to what those old `_rule_*` methods always did, fixture by fixture -- so this
-module is a verbatim, standalone copy of exactly what `_rule_*` did, `parseaddr()`-comparison
-security fix and all, extracted from the last commit before P9's deletion
-(`git show HEAD:src/privacyfence/auto_accept.py` as of this PR). It intentionally does not
-import anything from `privacyfence.auto_accept` -- that module is expected to keep changing
-under P9 and beyond, and this file's job is to stay exactly as it was the day v1 was deleted,
-not to track whatever `auto_accept.py` does next. If a real behavioral difference between v1
-and v2 is ever suspected, diff this file against the pre-P9 commit above rather than editing it
-to "improve" it.
+`privacyfence/auto_accept.py` has no `AutoAcceptEvaluator`, no `_rule_*` predicate methods and no
+`ARGS_ONLY_RULES`/`DATA_DEPENDENT_RULES` classification sets -- the v1 rule engine they belonged
+to is retired (ADR 0004), replaced by `policy.scopes`/`policy.conditions`. But the whole point
+of `test_conditions.py`/`test_scopes.py` is proving the v2 `ConditionSelector`/`ScopeSelector`
+objects behave *identically* to what those old `_rule_*` methods always did, fixture by fixture
+-- so this module is a verbatim, standalone copy of exactly what `_rule_*` did, `parseaddr()`-comparison
+security fix and all, extracted from the last commit that still had them
+(`git show 081c1fe4^:src/privacyfence/auto_accept.py`). It intentionally does not import
+anything from `privacyfence.auto_accept` -- that module keeps changing, and this file's job is
+to stay exactly as v1 was, not to track whatever `auto_accept.py` does next. If a real
+behavioral difference between v1 and v2 is ever suspected, diff this file against that commit
+rather than editing it to "improve" it.
 
 Only the pieces `test_conditions.py`/`test_scopes.py` actually exercise are kept: the
 `_rule_*` predicate methods either file calls via `_old()`, the small set of private helpers
@@ -54,7 +52,7 @@ def condition_name_for_v1_predicate(predicate: str) -> str | None:
     return None
 
 
-# ── Classification sets (verbatim from pre-P9 auto_accept.py) ───────────────────────────────
+# ── Classification sets (verbatim from v1 auto_accept.py) ───────────────────────────────────
 
 ARGS_ONLY_RULES: frozenset[str] = frozenset({
     "dm_with_myself",
@@ -110,7 +108,7 @@ DATA_DEPENDENT_RULES: frozenset[str] = frozenset({
 })
 
 
-# ── Private helpers (verbatim from pre-P9 auto_accept.py) ───────────────────────────────────
+# ── Private helpers (verbatim from v1 auto_accept.py) ───────────────────────────────────────
 
 def _file_from(raw: Any) -> Any:
     """Unwrap a Drive file object out of whatever shape a call's raw_data carries it in."""
@@ -142,7 +140,7 @@ def _attendee_email(attendee: Any) -> str:
 
 class V1Reference:
     """Standalone stand-in for the deleted `AutoAcceptEvaluator` -- every `_rule_*` method
-    both equivalence test files call via `_old()`, unchanged from pre-P9 `auto_accept.py`.
+    both equivalence test files call via `_old()`, unchanged from v1 `auto_accept.py`.
     """
 
     # ── Gmail ──────────────────────────────────────────────────────────────
@@ -221,7 +219,16 @@ class V1Reference:
         return self._rule_approved_folder(value, ctx)
 
     def _rule_move_within_approved_folders(self, value, ctx):
-        return self._rule_approved_folder(value, ctx)
+        # Deliberately not verbatim: v1 checked only the source folder, so a folder grant
+        # approved moving a file out of the folder. Both engines now also require the destination.
+        if not self._rule_approved_folder(value, ctx):
+            return False
+        allowed = set(value if isinstance(value, list) else [value])
+        raw = ctx.raw_data
+        destination = ctx.args.get("destination_folder_id") or (
+            raw.get("destination_folder_id") if isinstance(raw, dict) else ""
+        )
+        return bool(destination) and destination in allowed
 
     def _rule_file_type_allowlist(self, value, ctx):
         if not value:
@@ -236,13 +243,14 @@ class V1Reference:
 
     def _rule_shared_drive_exclusion(self, _v, ctx):
         f = self._file_from(ctx.raw_data)
-        return not getattr(f, "shared", False)
+        return not getattr(f, "drive_id", "")
 
     # ── Slack ─────────────────────────────────────────────────────────────
 
     def _rule_dm_with_myself(self, _v, ctx):
-        cid = ctx.args.get("channel_id", "") or ""
-        return cid.startswith("D")
+        # Deliberately not verbatim: v1 matched any "D"-prefixed id, i.e. every 1:1 DM. Both
+        # engines now read the connector's self-DM verdict and fail closed without it.
+        return ctx.args.get("is_self_dm") is True
 
     def _rule_send_to_myself(self, v, ctx):
         return self._rule_dm_with_myself(v, ctx)

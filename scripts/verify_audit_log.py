@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the append-integrity hash chain on an installed audit log (SEC-23).
+"""Verify the append-integrity hash chain on an installed audit log.
 
 Checks every ``*.jsonl`` file under an audit log directory with
 ``AuditLogger.verify_chain()`` (src/privacyfence/audit_log.py) -- each
@@ -14,9 +14,19 @@ silently drifting apart on what "canonical" means.
 Needs PrivacyFence's own package installed (unlike build_org_bundle.py, this
 imports audit_log.py directly rather than reimplementing its logic).
 
+The local-mode log is ``<data>/authority/logs/audit``. On a separated
+install that directory belongs to the service account (``0700``), so reading
+it needs sudo, or an elevated shell on Windows. Where each install keeps it
+is in docs/security-and-compliance.md's "Audit log integrity" section.
+
 Usage:
-    python3 scripts/verify_audit_log.py ~/.privacyfence/logs/audit
-    python3 scripts/verify_audit_log.py ~/.privacyfence/logs/audit --week 2026-W28
+    # not separated (a source or pip install)
+    python3 scripts/verify_audit_log.py ~/.privacyfence/authority/logs/audit
+    # separated: macOS, then Linux
+    sudo python3 scripts/verify_audit_log.py "/Library/Application Support/PrivacyFence/authority/logs/audit"
+    sudo python3 scripts/verify_audit_log.py /var/lib/privacyfence/authority/logs/audit --week 2026-W28
+    # separated Windows, from an elevated shell
+    python scripts\\verify_audit_log.py C:\\ProgramData\\PrivacyFence\\authority\\logs\\audit
 
 Exit status is 0 when every checked week's chain is intact, 1 if any week
 fails verification (or the directory has no *.jsonl files to check at all),
@@ -41,13 +51,18 @@ def _weeks_in(log_dir: Path) -> list[str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="verify_audit_log.py",
-        description="Verify SEC-23's append-integrity hash chain on an installed audit log.",
+        description="Verify the append-integrity hash chain on an installed audit log.",
     )
     parser.add_argument(
-        "log_dir", help='Audit log directory, e.g. "~/.privacyfence/logs/audit" (local mode) or '
-                        'a principal\'s own "logs/audit" under an org-mode server\'s data '
-                        'directory. This is the same directory AuditLogger writes to -- see '
-                        "docs/TECHNICAL_REFERENCE.md's \"Audit log\" section.",
+        "log_dir", help='Audit log directory, e.g. "<data>/authority/logs/audit" (local mode: '
+                        '"~/.privacyfence/authority/logs/audit" when not separated; on a separated '
+                        'install the service-owned "/Library/Application Support/PrivacyFence/'
+                        'authority/logs/audit", "/var/lib/privacyfence/authority/logs/audit" or '
+                        '"C:\\ProgramData\\PrivacyFence\\authority\\logs\\audit", read with sudo or '
+                        'from an elevated shell) or a principal\'s own "logs/audit" under an '
+                        'org-mode server\'s data directory. This is the same directory AuditLogger '
+                        "writes to -- see docs/security-and-compliance.md's \"Audit log integrity\" "
+                        "section.",
     )
     parser.add_argument(
         "--week", metavar="YYYY-WNN", action="append", dest="weeks", default=None,

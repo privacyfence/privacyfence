@@ -74,6 +74,12 @@ def test_windows_installer_floor_matches_matrix():
     declared = re.findall(r"^MinVersion=(\S+)$", setup, flags=re.MULTILINE)
     assert declared == ["10.0"]
     assert _matrix_floor("Windows") == "Windows 10 / Windows Server 2016 (x64)"
+    # The matrix's "(x64)" is enforced only by ArchitecturesAllowed; the 64-bit
+    # install mode on its own refuses nothing.
+    allowed = re.findall(r"^ArchitecturesAllowed=(\S+)$", setup, flags=re.MULTILINE)
+    assert allowed == ["x64os"], allowed
+    mode = re.findall(r"^ArchitecturesInstallIn64BitMode=(\S+)$", setup, flags=re.MULTILINE)
+    assert mode == ["x64os"], mode
 
 
 def _deb_depends() -> str:
@@ -93,7 +99,7 @@ def test_deb_floor_matches_matrix():
 
 
 def test_deb_architectures_match_matrix():
-    # debian/control may only claim what the matrix (and so CI) ships -- #679.
+    # debian/control may only claim what the matrix (and so CI) ships -- ADR 0044.
     control = (REPO_ROOT / "debian" / "control").read_text(encoding="utf-8")
     package_stanza = control.strip().split("\n\n")[-1]
     declared = re.findall(r"^Architecture: (.+)$", package_stanza, flags=re.MULTILINE)

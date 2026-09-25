@@ -7,6 +7,9 @@ product cleanup that followed that day's source-code audit of the documentation)
 the policy settings format; the file-location moves and the installers' upgrade and uninstall steps
 are removed platform by platform in the cleanup's later phases, each citing this ADR.
 
+Amended by [ADR 0047](0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md):
+decision 2 no longer refuses v1 sections that an earlier release already converted.
+
 Supersedes [ADR 0004](0004-retire-the-v1-auto-accept-config-model.md) in part: decisions 4 and 5
 kept the one-time v1 → v2 settings conversion (`policy/compat.py`'s `migrate_to_policy_v2`) as the
 last caller of the v1 compiler and of `policy/resource_registry.py`'s grant expansion. That

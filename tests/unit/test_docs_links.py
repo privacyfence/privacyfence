@@ -14,7 +14,7 @@ is not this suite's business), and `mailto:` is skipped for the same reason -- b
 `raw.githubusercontent.com/privacyfence/privacyfence/main/<path>` URL names a file in the working
 tree, so it is resolved against the checkout exactly like a relative link would be. README.md is
 the reason that matters: it is also the PyPI long description, so its links and images have to be
-absolute to render there (privacyfence/privacyfence#370), and without this they would have dropped
+absolute to render there, and without this they would have dropped
 out of the check above the moment they stopped being relative.
 """
 from __future__ import annotations
@@ -153,9 +153,11 @@ def _assert_resolves(where: str, resolved: Path, anchor: str, target: str) -> No
 
 
 def test_the_self_url_scan_actually_found_links():
-    """Same guard as above, for the absolute-URL scan: README.md alone carries dozens of these, so
-    a handful would mean the prefixes or the `<img>` pattern stopped matching."""
-    assert len(_SELF_LINKS) > 20, f"only {len(_SELF_LINKS)} self-referencing absolute URLs found -- scan is probably broken"
+    """Same guard as above, for the absolute-URL scan. README.md links its docs on privacyfence.eu
+    (tests/unit/test_readme_site_links.py checks those), so what is left here is its images and its
+    links to root files (LICENSE, NOTICE, SECURITY.md, ...): none at all would mean the prefixes or
+    the `<img>` pattern stopped matching."""
+    assert len(_SELF_LINKS) >= 5, f"only {len(_SELF_LINKS)} self-referencing absolute URLs found -- scan is probably broken"
 
 
 @pytest.mark.parametrize("path, line, url", _SELF_LINKS, ids=lambda v: str(v) if isinstance(v, str) else "")

@@ -1,5 +1,5 @@
-"""Release-workflow smoke test for the Ubuntu org-mode service (TST-16),
-later extended with app-level authz-policy coverage, an approval exercised
+"""Release-workflow smoke test for the Ubuntu org-mode service, later
+extended with app-level authz-policy coverage, an approval exercised
 with audit-principal correctness, and persisted state surviving a restart
 (see the classes/tests below for what each covers and why), and promoted
 from dispatch/tag-only to a permanent per-PR CI job.
@@ -15,10 +15,10 @@ through: ``daemon_main.main()`` end to end -- CLI parsing, config
 bootstrap, ``load_org_config()``'s fail-closed signature/mode checks,
 ``build_connectors()``, the instance lock, the *real* uvicorn thread bound
 to a *real* socket in a *separate OS process* -- started, stopped, and
-restarted the way systemd (docs/org-mode-setup-guide.md's own Step 7,
-``privacyfence.service``) actually would, with a reverse proxy's Host/
-X-Forwarded-* handling (the guide's Caddy config, §6) simulated at the
-HTTP layer rather than assumed.
+restarted the way systemd (docs/org-mode-setup-guide.md's "Hardened systemd
+unit", ``privacyfence-org.service``) actually would, with a reverse proxy's
+Host/X-Forwarded-* handling (the guide's "Caddy" config under "Reverse proxy
+and TLS") simulated at the HTTP layer rather than assumed.
 
 Covers, against one synthetic, Ed25519-signed ``org_config.json`` and a
 real (loopback) mocked IdP (tests/integration/mock_idp.py) -- never a real
@@ -26,8 +26,8 @@ external IdP, real TLS certificate, or real reverse proxy binary:
 
   - **Strict startup**: a `mode: org` bundle that is malformed, unsigned, or
     missing its ``idp`` section makes the daemon refuse to start (nonzero
-    exit, no listening socket) rather than silently degrading -- SEC-04/
-    SEC-05's fail-closed posture, proven against the real process exit
+    exit, no listening socket) rather than silently degrading -- the
+    broken-config and bundle-signing fail-closed posture, proven against the real process exit
     code, not just the ``ConfigurationError`` type.
   - **Reverse-proxy / Host handling**: a request carrying the issuer's own
     Host header (what Caddy's ``reverse_proxy`` actually sends) is served;
@@ -41,11 +41,10 @@ external IdP, real TLS certificate, or real reverse proxy binary:
     trip through the mocked IdP mints an isolated, per-principal session;
     a second principal's login neither collides with nor is disturbed by
     logging the first one out.
-  - **App-level authz policy** (SEC-22, ``org_mode.AuthzPolicyConfig``,
-    Phase 8): with an ``authz.allowed_domains`` allowlist configured, a
+  - **App-level authz policy** (``org_mode.AuthzPolicyConfig``): with an ``authz.allowed_domains`` allowlist configured, a
     principal the IdP already authenticated in an allowed domain signs in
     normally; one outside every allowed domain is turned away with the
-    same generic sign-in failure any other rejection gets (SEC-10), no
+    same generic sign-in failure any other rejection gets, no
     session issued -- ``TestAppLevelAuthzPolicy``, its own daemon since the
     policy is fixed at startup.
   - **MCP OAuth discovery**: DCR (``/register``), the authorization-code +
@@ -55,8 +54,8 @@ external IdP, real TLS certificate, or real reverse proxy binary:
     (``paths.user_dir()``) it causes to be created on disk is exactly the
     signed-in principal's own, proving the token really did resolve to
     that principal end to end, not just that the dance completed.
-  - **An approval, exercised end to end, with audit-principal correctness**
-    (Phase 8): ``privacyfence_propose_policy_change`` (the one
+  - **An approval, exercised end to end, with audit-principal correctness**:
+    ``privacyfence_propose_policy_change`` (the one
     MCP-reachable approval this module's zero-connector config can drive
     without a real Google/Slack/... credential -- the shared probe in
     ``tests/packaged_policy_probe.py``) blocks on a human
@@ -67,7 +66,7 @@ external IdP, real TLS certificate, or real reverse proxy binary:
     of this same check), the principal it actually belongs to can, and the
     resulting audit entry lands under that principal's own per-principal
     audit log directory, not local's or anyone else's. This is also where
-    Phase 8's own grounding work found and fixed two real bugs no earlier
+    writing this test found and fixed two real bugs no earlier
     org-mode test (all in-process, all effectively single-principal)
     could have caught: ``gate._run_in_popup_executor`` silently dropped
     ``contextvars`` (and therefore ``current_principal()``) across its
@@ -82,12 +81,12 @@ external IdP, real TLS certificate, or real reverse proxy binary:
     first MCP interaction raised "auto_accept config path not
     initialized." Both are fixed in ``gate.py``/``web/mcp_dispatch.py``.
   - **Clean shutdown/restart, with persisted state actually surviving it**
-    (Phase 8 extends this beyond "starts cleanly again"): SIGTERM (what
+    (not just "starts cleanly again"): SIGTERM (what
     ``systemctl stop`` actually sends) brings the process down promptly,
     and a second instance started right after against the same ``$HOME``
     comes up cleanly -- the instance lock and any on-disk state left
     behind survive a stop/start cycle the way an admin running
-    ``systemctl restart privacyfence`` needs them to.
+    ``systemctl restart privacyfence-org`` needs them to.
     ``test_persisted_state_survives_a_restart`` proves the stronger claim:
     a principal's confirmed auto-accept rule is still on ``settings.yaml``
     and readable by the fresh process, and that principal's audit trail
@@ -95,7 +94,7 @@ external IdP, real TLS certificate, or real reverse proxy binary:
     unchanged) grows rather than resets when a post-restart MCP call
     audits again.
 
-Deliberately NOT covered here (out of this item's own scope): a real
+Deliberately NOT covered here: a real
 systemd unit, a real Caddy process, a real external IdP, or the packaged
 ``.deb``
 specifically -- see "Why a --target install, not the .deb" below for why the
@@ -111,8 +110,8 @@ connectors rather than ``LOCAL_PRINCIPAL``'s (empty, on an org server --
 8322c111), and whether a rule configured in a principal's own
 ``settings.yaml`` is actually live in their ``AutoAcceptEvaluator`` rather
 than silently ignored (cfe3716c). Both are genuinely server-side and, per
-``docs/testing-policy.md``'s "Gate/policy correctness" row, belong at the
-synthetic/unit tier rather than here -- and proving either one for real
+``docs/testing-policy.md``'s "What a green `org-mode-smoke` does not prove", belong at the
+synthetic/unit layers rather than here -- and proving either one for real
 would need a connector to actually exist in a signed-in principal's
 ``dispatcher.connectors``, which every connector client in this codebase
 (``GmailClient``, ``SlackClient``, ...) makes a real, hardcoded external
@@ -153,8 +152,8 @@ with any other daemon already running against this same checkout. A real
 (non-editable) install is what flips ``paths._is_installed_package()`` to
 True, which is what makes ``data_dir()`` resolve under ``$HOME/
 .privacyfence`` instead -- and *that* is genuinely what
-docs/org-mode-setup-guide.md's own Step 3 documents for a real Ubuntu
-server (``pipx install privacyfence`` / ``pip install .``), not the
+docs/org-mode-setup-guide.md's "Service account and install" documents for
+a real Ubuntu server (``pip install privacyfence`` into a venv), not the
 desktop-oriented ``.deb`` (autostart entry, app icons) scripts/
 build_deb.sh produces. Building it fresh here (module-scoped, once per test
 session) with ``pip install --no-deps --target <dir>`` (see the
@@ -171,12 +170,11 @@ default) skips this whole module instantly, so a contributor's ordinary
 ``pytest`` run never pays this module's setup cost, and neither does the
 `test`/`platform-windows`/`platform-macos` full-suite jobs in tests.yml,
 which never set it. Two CI jobs do: ``.github/workflows/build.yml``'s
-``build-deb`` job (the release workflow TST-16's own plan-table wording
-refers to) at release-tag time, and, since Phase 8 item 2,
+``build-deb`` job at release-tag time, and
 ``.github/workflows/tests.yml``'s own ``org-mode-smoke`` job on every PR --
-promoted the same way ``test-windows`` -> ``platform-windows`` was by
-Phase 2.1, once this module was itself proven green rather than left
-release-tag-gated indefinitely.
+promoted the same way ``test-windows`` -> ``platform-windows`` was, once
+this module was itself proven green rather than left release-tag-gated
+indefinitely.
 """
 from __future__ import annotations
 
@@ -281,7 +279,7 @@ def installed_privacyfence(tmp_path_factory: pytest.TempPathFactory) -> str:
     assert install.returncode == 0, (
         f"pip install of {REPO_ROOT} into an isolated site-packages failed "
         f"(this is what a real `pip install privacyfence` on a fresh Ubuntu server does -- see "
-        f"docs/org-mode-setup-guide.md Step 3):\n{install.stdout}\n{install.stderr}"
+        f"docs/org-mode-setup-guide.md's \"Service account and install\"):\n{install.stdout}\n{install.stderr}"
     )
     entry = site_dir / "privacyfence" / "daemon_main.py"
     assert entry.exists(), f"privacyfence package was not installed at {entry}"
@@ -303,17 +301,18 @@ def _signed_org_config(
             "issuer_url": ISSUER_URL,
             "bind_host": "127.0.0.1",
             "port": port,
-            # The one thing standing in for docs/org-mode-setup-guide.md
-            # §6's Caddy `reverse_proxy 127.0.0.1:8765` here -- this test's
+            # The one thing standing in for docs/org-mode-setup-guide.md's
+            # "Caddy" `reverse_proxy 127.0.0.1:8765` here -- this test's
             # own HTTP client connects from 127.0.0.1 too, so trusting it
             # is what makes the Host-header simulation below meaningful at
-            # all (§10.2: never honored without this, in either mode).
+            # all (forwarded headers are never honored without this, in
+            # either mode).
             "trusted_proxies": ["127.0.0.1"],
         },
     }
     if with_idp:
         cfg["idp"] = {"issuer": idp_issuer, "client_id": "privacyfence-smoke", "client_secret": "smoke-test-secret"}
-    # SEC-22 (org_mode.AuthzPolicyConfig): an app-level allowlist layered on
+    # org_mode.AuthzPolicyConfig: an app-level allowlist layered on
     # top of the IdP's own authentication -- absent (the default) admits
     # every IdP-authenticated principal, unchanged. TestAppLevelAuthzPolicy
     # below is the only caller that passes this.
@@ -362,7 +361,7 @@ def _daemon(installed_privacyfence: str, *, home: Path, extra_env: dict[str, str
     # rather than a fresh venv.
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = installed_privacyfence + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
-    # discover_idp() requires HTTPS for a real deployment (SEC-11) -- this
+    # discover_idp() requires HTTPS for a real deployment -- this
     # dev-only override is exactly what org_identity.py's own docstring
     # names it for: "local development against a plain-HTTP test IdP."
     env["PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP"] = "1"
@@ -405,7 +404,8 @@ def _wait_until_ready(proc: subprocess.Popen, host: str, port: int, log_path: Pa
 # HTTP helpers -- the reverse-proxy simulation: every request is sent to the
 # real loopback socket the daemon is bound to, but with the issuer's own
 # Host header attached by hand (exactly what Caddy's `reverse_proxy` does
-# for a real request, per docs/org-mode-setup-guide.md §6), and redirects
+# for a real request, per docs/org-mode-setup-guide.md's "Reverse proxy and
+# TLS"), and redirects
 # are followed manually rather than automatically, since a `Location:
 # https://pf.example.internal/...` the daemon issues has to be rewritten
 # back onto this same loopback socket -- there is no DNS entry (and no TLS
@@ -515,7 +515,7 @@ def _find_pending_approval_id(list_page_html: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------- #
-# Strict startup (SEC-04/SEC-05): a broken org-mode bundle must never start
+# Strict startup: a broken or unsigned org-mode bundle must never start
 # ---------------------------------------------------------------------------- #
 
 class TestStrictStartup:
@@ -615,12 +615,12 @@ class TestRunningOrgModeService:
         assert self.client.get("/login").status_code == 302
         assert self.client.get("/.well-known/oauth-authorization-server").status_code == 200
         assert self.client.get("/approvals").status_code == 302  # not signed in yet -> redirect to /login
-        assert self.client.get("/settings").status_code == 302  # #400 -- same, redirect to /login
+        assert self.client.get("/settings").status_code == 302  # same, redirect to /login
 
     def test_local_mode_only_routes_are_not_mounted(self):
-        # /settings itself is a real, read-only route in org mode now (#400)
-        # -- see test_org_mode_routes_are_mounted below -- and, since PSC-5,
-        # org mode mounts its own POST /api/settings/{action} too (the same
+        # /settings itself is a real, read-only route in org mode now
+        # -- see test_org_mode_routes_are_mounted below -- and org mode
+        # mounts its own POST /api/settings/{action} too (the same
         # path local mode's ~30-action dispatcher answers, restricted to
         # routes_settings._ORG_ALLOWED_ACTIONS) -- so a GET here now 405s
         # (a real route, wrong method) rather than 404ing outright.
@@ -749,7 +749,7 @@ class TestRunningOrgModeService:
         in-process coverage of this, now over the real subprocess); the
         principal it actually belongs to can; and the resulting audit
         entry lands under that same principal's own log directory, not
-        local's or anyone else's (SEC-23's per-principal audit trail,
+        local's or anyone else's (the per-principal audit trail,
         proven end to end for the first time here -- every other org-mode
         test in this repo drives audit_log.py in-process).
         """
@@ -765,7 +765,7 @@ class TestRunningOrgModeService:
                     async with ClientSession(r, w) as session:
                         await session.initialize()
                         return await session.call_tool(PROBE_TOOL, probe_arguments(
-                            value=["example.com"], reason="TST-16 Phase 8 smoke test",
+                            value=["example.com"], reason="org-mode release smoke test",
                         ))
 
         # propose_policy_change blocks (on the human confirmation dialog)
@@ -773,7 +773,7 @@ class TestRunningOrgModeService:
         # can poll for, and then decide, the approval it creates while
         # that call is still in flight, the same "two things happening at
         # once over one real running service" shape
-        # test_deferred_approval_round_trip.py (TST-09) already proves for
+        # test_deferred_approval_round_trip.py already proves for
         # gated *tool* calls, applied here to propose_policy_change instead.
         propose_task = asyncio.ensure_future(propose())
         try:
@@ -786,7 +786,7 @@ class TestRunningOrgModeService:
                     break
             assert approval_id is not None, "propose_policy_change never registered a pending approval for carol"
 
-            # Cross-principal: bob can't see it (P9's per-principal list_
+            # Cross-principal: bob can't see it (the per-principal list_
             # pending filter) or decide it (approvals.PendingApprovalRegistry.
             # answer's own principal_id check) -- the same authorization
             # test_routes_org_approvals.py already proves in-process, now
@@ -839,7 +839,7 @@ class TestRunningOrgModeService:
         entries = [json.loads(line) for line in audit_file.read_text().splitlines() if line.strip()]
         matching = [e for e in entries if e["decision"] == AUDIT_DECISION_CHANGED]
         assert matching, f"no {AUDIT_DECISION_CHANGED} entry in {[e['decision'] for e in entries]}"
-        assert matching[-1]["claude_reason"] == "TST-16 Phase 8 smoke test"
+        assert matching[-1]["claude_reason"] == "org-mode release smoke test"
 
         bob_audit_file = (
             self.home / ".privacyfence" / "users" / safe_principal_id("bob") / "logs" / "audit" / f"{current_week()}.jsonl"
@@ -848,7 +848,7 @@ class TestRunningOrgModeService:
 
 
 # ---------------------------------------------------------------------------- #
-# App-level authz policy (SEC-22, org_mode.AuthzPolicyConfig): "authenticated
+# App-level authz policy (org_mode.AuthzPolicyConfig): "authenticated
 # MCP request with identity/policy applied" -- the IdP has already vouched
 # for this human by the time org_identity.check_authz_policy runs; this is
 # PrivacyFence's own, additional say over who it admits. A separate daemon
@@ -881,7 +881,7 @@ class TestAppLevelAuthzPolicy:
     def test_a_principal_outside_every_allowed_domain_is_denied_sign_in(self):
         # org_identity.check_authz_policy raises AuthorizationDenied, which
         # login_callback's catch-all (see that exception's own docstring:
-        # deliberately not surfaced to the browser -- SEC-10) turns into
+        # deliberately not surfaced to the browser) turns into
         # the same generic 400 an IdP-side failure gets, with no session
         # cookie set -- indistinguishable from any other failed sign-in,
         # by design.
@@ -909,7 +909,7 @@ class TestCleanShutdownAndRestart:
         with _daemon(installed_privacyfence, home=home) as (proc, log_path):
             _wait_until_ready(proc, "127.0.0.1", port, log_path)
             # SIGTERM, not SIGINT: this is what `systemctl stop`/`docker
-            # stop` actually send (privacyfence.service's default
+            # stop` actually send (the systemd unit's default
             # KillSignal) -- Ctrl-C's SIGINT already has its own dedicated
             # handling in daemon_main.py (_wait_for_shutdown's docstring);
             # what an Ubuntu service deployment needs proven is this one.
@@ -934,8 +934,8 @@ class TestCleanShutdownAndRestart:
         """Starting cleanly again (the test above) isn't the same claim as
         *this* principal's own on-disk state -- an auto-accept rule they
         confirmed, and the audit trail that decision wrote -- still being
-        there afterwards, the way ``systemctl restart privacyfence`` needs
-        (docs/org-mode-setup-guide.md's own Step 7): a clean stop/start
+        there afterwards, the way ``systemctl restart privacyfence-org`` needs
+        (docs/org-mode-setup-guide.md's "Hardened systemd unit"): a clean stop/start
         must never look, from the outside, like each principal's storage
         reset to empty.
         """
@@ -947,7 +947,7 @@ class TestCleanShutdownAndRestart:
         port = _free_port()
         _write_org_config(home, _signed_org_config(idp_issuer=mock_idp.base_url, port=port))
         carol_dir = home / ".privacyfence" / "users" / safe_principal_id("carol")
-        # #428 Phase 1: settings.yaml lives under an authority/ subdirectory
+        # settings.yaml lives under an authority/ subdirectory
         # now; the audit log doesn't move for a non-local principal (it's
         # never routed through daemon_main.py's authority_root() -- see
         # audit_log.py's _fallback_log_dir(), the only path org-mode
@@ -1037,7 +1037,7 @@ class TestCleanShutdownAndRestart:
             assert "gmail.sender_domain" in result.content[0].text
 
         # The audit trail grew, in the *same* weekly file, rather than
-        # being reset or rotated by the restart -- SEC-23's append-only
+        # being reset or rotated by the restart -- the append-only
         # chain (audit_log.py's own entry_hash/prev_hash linkage) survives
         # a stop/start cycle, not just the settings a human would notice.
         entries_after_restart = [line for line in audit_file.read_text().splitlines() if line.strip()]

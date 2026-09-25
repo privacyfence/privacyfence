@@ -1,6 +1,5 @@
 """Unit tests for privacyfence.approvals.PendingApprovalRegistry -- the
-deferred-approval protocol's domain object (docs/https-connector-refactor-
-plan.md §5-§6). See that module's own docstring for the two-layer
+deferred-approval protocol's domain object. See that module's own docstring for the two-layer
 answer()/finalize() design these tests exercise directly, without gate.py's
 own orchestration in the way.
 """
@@ -417,7 +416,7 @@ class TestApprovalUrl:
 
 
 class TestBinderUrl:
-    """Approval binder, Phase 4: the list page itself, distinct from any one
+    """Approval binder: the list page itself, distinct from any one
     approval's own approval_url()."""
 
     def test_no_base_url_configured_returns_none(self):
@@ -431,7 +430,7 @@ class TestBinderUrl:
 
 
 class TestHasOtherLive:
-    """Approval binder, Phase 4: gate.py's adaptive hold window collapses to
+    """Approval binder: gate.py's adaptive hold window collapses to
     zero exactly when this returns True for a call that just registered."""
 
     def test_false_when_nothing_else_is_pending(self):
@@ -586,8 +585,7 @@ class TestListPendingAndGet:
 
 
 class TestPrincipalDimension:
-    """P9: approvals.py finally gains the principal dimension approval_ui.py's
-    own module docstring already promised (see approvals.py's own module
+    """approvals.py's principal dimension (see approvals.py's own module
     docstring). Every approval defaults to LOCAL_PRINCIPAL_ID when nothing
     entered principal_scope() -- so every test above this class, none of
     which passes a principal_id anywhere, stays correct unchanged."""
@@ -608,7 +606,7 @@ class TestPrincipalDimension:
         assert approval.principal_id == "alice"
 
     def test_two_principals_with_the_identical_dedupe_key_get_two_approvals(self):
-        # The P7-precedented cross-principal dedupe-key collision (see
+        # The cross-principal dedupe-key collision (see
         # approvals.py's own module docstring) -- without the principal
         # dimension in _by_key, the second registration below would
         # coalesce onto the first instead of creating its own.
@@ -648,7 +646,7 @@ class TestPrincipalDimension:
             )
         assert len(registry.list_pending("alice")) == 1
         assert len(registry.list_pending("bob")) == 1
-        assert len(registry.list_pending()) == 2  # no filter -- every pre-P9 caller
+        assert len(registry.list_pending()) == 2  # no filter -- every principal's approvals
 
     def test_get_with_principal_id_rejects_a_foreign_approval(self):
         registry = make_registry()

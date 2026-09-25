@@ -1,161 +1,227 @@
-:root {
-  --bg: #f6f8fb;
-  --surface: #ffffff;
-  --surface-soft: #eef3f8;
-  --ink: #14212b;
-  --muted: #60707d;
-  --line: #dbe3e9;
-  --accent: #167a70;
-  --accent-dark: #0e5f57;
-  --accent-soft: #e1f2ef;
-  --shadow: 0 22px 70px rgba(25, 48, 62, .11);
-  --radius: 22px;
-}
+/* privacyfence.eu -- page typography and sections for the hand-written pages.
+
+   No CSS framework, by decision (docs/adr/0049-website-css-is-plain-modern-css-without-a-framework.md):
+   design tokens on :root, a handful of layout primitives, and the page sections expressed on
+   top of them, in three files every hand-written page loads in this order: tokens.css (the
+   tokens, shared with the /docs/ theme), chrome.css (primitives, header, menu, footer, buttons
+   and consent banner, also shared with /docs/) and this one. What "responsive" means for this
+   site, and what tests/integration/test_website_layout.py checks on every page:
+
+   1. Viewports tested: 320, 360, 390 (phones), 768 (tablet portrait), 1024 (tablet landscape /
+      small laptop), 1440 (desktop).
+   2. No page-level horizontal scroll at any tested width. Wide content (code, tables, diagrams)
+      scrolls inside its own container.
+   3. Every header destination is reachable at every width: inline links on desktop, the
+      <details> menu below the nav breakpoint (works without JavaScript, keyboard-operable).
+   4. Tap targets >= 44 x 44 px for nav links, buttons and the menu toggle below 1024 px.
+   5. One set of layout primitives (.shell, .stack, .cluster, .grid-auto, .split), not per-page
+      media queries. Section classes (hero, proof-grid, principle-grid, privacy-card, cta-card,
+      download-grid) are expressed on them.
+   6. Tokens on :root for colour, type scale, spacing, radius. The two breakpoints are 900 px
+      (nav collapse) and 560 px (compact spacing); custom properties cannot be used inside
+      @media, so they are written out where used and named here.
+   7. Images and diagrams scale: max-width 100% with explicit width/height attributes.
+   8. Body copy measure <= ~75 characters on desktop; body text >= 16 px on a 320 px phone.
+   9. prefers-reduced-motion is honoured. Dark mode is out of scope.
+*/
+
+/* ---- Base ------------------------------------------------------------------------------ */
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body { margin: 0; color: var(--ink); background: var(--bg); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; scroll-padding-top: 96px; }
+body { margin: 0; color: var(--ink); background: var(--bg); font-family: var(--font-sans); font-size: var(--step-body); line-height: 1.6; -webkit-font-smoothing: antialiased; }
 a { color: inherit; text-decoration: none; }
-img { max-width: 100%; display: block; }
-.shell { width: min(1160px, calc(100% - 48px)); margin-inline: auto; }
+img, svg { max-width: 100%; height: auto; display: block; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { font-size: var(--step-h1); line-height: .99; letter-spacing: -.058em; margin: 26px 0 28px; font-weight: 780; }
+h1 span { color: var(--accent); }
+h2 { font-size: var(--step-h2); line-height: 1.08; letter-spacing: -.045em; margin-bottom: 20px; }
+h3 { font-size: var(--step-h3); line-height: 1.25; letter-spacing: -.02em; margin: 17px 0 11px; }
+code { font-family: var(--font-mono); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+main { container-type: inline-size; }
 
-.site-header { width: min(1220px, calc(100% - 36px)); margin: 18px auto 0; min-height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 10px 16px; background: rgba(255,255,255,.82); border: 1px solid rgba(219,227,233,.9); border-radius: 18px; backdrop-filter: blur(16px); position: sticky; top: 14px; z-index: 10; box-shadow: 0 8px 28px rgba(20,33,43,.05); }
-.brand, .footer-brand { display: flex; align-items: center; gap: 10px; font-weight: 750; letter-spacing: -.02em; }
-.brand img, .footer-brand img { border-radius: 8px; }
-.site-header nav { display: flex; align-items: center; gap: 26px; font-size: 14px; color: #43535f; }
-.site-header nav a:hover, .site-footer a:hover, .text-link:hover { color: var(--accent-dark); }
-.nav-cta { padding: 9px 14px; background: var(--ink); color: #fff !important; border-radius: 10px; }
+/* ---- Buttons and small components ------------------------------------------------------ */
 
-.hero { min-height: 720px; display: grid; grid-template-columns: 1.08fr .92fr; gap: 70px; align-items: center; padding: 90px 0 100px; }
 .eyebrow, .kicker { color: var(--accent-dark); font-size: 13px; font-weight: 750; text-transform: uppercase; letter-spacing: .11em; }
 .eyebrow { display: inline-flex; align-items: center; gap: 9px; padding: 7px 11px; border: 1px solid #cfe4e1; background: rgba(225,242,239,.6); border-radius: 999px; }
 .dot { width: 7px; height: 7px; background: var(--accent); border-radius: 50%; }
-h1, h2, h3, p { margin-top: 0; }
-h1 { font-size: clamp(52px, 6vw, 82px); line-height: .99; letter-spacing: -.058em; margin: 26px 0 28px; font-weight: 780; }
-h1 span { color: var(--accent); }
-.lede { max-width: 690px; font-size: 20px; line-height: 1.65; color: #4d5e6a; }
-.actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
-.button { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 19px; border-radius: 12px; font-weight: 700; font-size: 15px; transition: transform .15s ease, box-shadow .15s ease, background .15s ease; }
-.button:hover { transform: translateY(-1px); }
-.primary { background: var(--ink); color: #fff; box-shadow: 0 8px 24px rgba(20,33,43,.13); }
-.primary:hover { background: #253743; }
-.secondary { background: #fff; border: 1px solid var(--line); }
-.release-meta { margin-top: 20px; display: flex; gap: 18px; color: var(--muted); font-size: 13px; }
+.kicker { margin-bottom: 13px; }
+.lede { max-width: 690px; font-size: var(--step-lede); line-height: 1.65; color: #4d5e6a; }
+.tagline { font-size: clamp(20px, 1.4vw + 14px, 26px); font-weight: 650; letter-spacing: -.02em; color: var(--ink-soft); margin: 0; }
+
+.actions.vertical { flex-direction: column; align-items: stretch; margin-top: 0; min-width: 220px; }
+.link-row { --cluster-gap: 0 28px; margin-top: 26px; }
+.link-row .text-link { margin-top: 0; }
+.text-link { display: inline-block; margin-top: 26px; color: var(--accent-dark); font-weight: 700; font-size: var(--step-small); }
+
+.release-meta { --cluster-gap: 8px 18px; margin-top: 20px; color: var(--muted); font-size: 13px; }
 .release-meta span + span::before { content: "·"; margin-right: 18px; color: #a1adb6; }
 
-.hero-visual { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 28px; padding: 32px; box-shadow: var(--shadow); }
+.section-heading { max-width: 760px; margin-bottom: 55px; }
+.section-heading.compact { margin-bottom: 34px; }
+.section-heading > p:last-child, .proof-copy > p, .privacy-copy { color: var(--muted); font-size: 18px; }
+
+/* ---- Homepage sections ----------------------------------------------------------------- */
+
+.hero { --split-cols: 1.08fr .92fr; min-height: 720px; padding: 90px 0 100px; }
+.hero-visual { position: relative; max-width: 620px; background: var(--surface); border: 1px solid var(--line); border-radius: 28px; padding: clamp(20px, 3vw, 32px); box-shadow: var(--shadow); }
 .flow-label { width: fit-content; margin: 0 auto; padding: 9px 15px; border-radius: 10px; background: var(--surface-soft); font-size: 14px; font-weight: 700; }
 .flow-line { width: 1px; height: 34px; margin: 0 auto; background: var(--line); }
 .pf-card { border: 1px solid #badbd6; background: linear-gradient(145deg, #f4fbfa, #e8f5f3); border-radius: 18px; padding: 20px; }
 .pf-title { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; font-size: 18px; }
 .pf-title img { border-radius: 7px; }
-.pf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pf-grid { --min: 150px; --grid-gap: 8px; }
 .pf-grid span { background: rgba(255,255,255,.72); border: 1px solid rgba(186,219,214,.75); padding: 9px 11px; border-radius: 9px; font-size: 13px; color: #3c5d59; }
-.services { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; }
+.services { --cluster-gap: 7px; justify-content: center; }
 .services span, .connector-list span { padding: 8px 11px; border: 1px solid var(--line); background: #fff; border-radius: 9px; color: #53636f; font-size: 12px; font-weight: 650; }
 .visual-note { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.55; }
 
-.problem { padding: 100px 0 120px; }
-.section-heading { max-width: 760px; margin-bottom: 55px; }
-.section-heading.compact { margin-bottom: 34px; }
-.kicker { margin-bottom: 13px; }
-h2 { font-size: clamp(36px, 4vw, 55px); line-height: 1.08; letter-spacing: -.045em; margin-bottom: 20px; }
-.section-heading > p:last-child, .proof-copy > p, .privacy-copy, .connectors .section-heading > p:last-child { color: var(--muted); font-size: 18px; }
-.principle-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
+.about { padding: 0 0 var(--space-section); }
+.about-copy { --stack-gap: 18px; max-width: 820px; color: var(--ink-soft); font-size: 18px; }
+.about-copy p:first-child { color: var(--ink); font-size: var(--step-lede); }
+
+.problem { padding: var(--space-section) 0; }
+.principle-grid { --min: 250px; --grid-gap: 0; border-top: 1px solid var(--line); }
 .principle-grid article { padding: 34px 34px 20px 0; }
 .principle-grid article + article { padding-left: 34px; border-left: 1px solid var(--line); }
-.principle-grid article > span { color: var(--accent); font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
-h3 { font-size: 21px; line-height: 1.25; letter-spacing: -.02em; margin: 17px 0 11px; }
+.principle-grid article > span { color: var(--accent); font: 700 12px var(--font-mono); }
 .principle-grid p { color: var(--muted); font-size: 15px; }
 
 .proof-section { background: #fff; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .proof-section.alternate { background: var(--bg); border-top: 0; }
-.proof-grid { display: grid; grid-template-columns: .78fr 1.22fr; gap: 75px; align-items: center; padding-top: 105px; padding-bottom: 105px; }
-.proof-grid.reverse { grid-template-columns: .72fr 1.28fr; }
-.proof-grid.reverse .proof-copy { order: 2; }
+.proof-grid { --split-cols: .78fr 1.22fr; --split-gap: clamp(45px, 5vw, 75px); padding-block: clamp(75px, 8vw, 105px); }
+/* The screenshot always gets the wide column: in .reverse it is the first one. */
+.proof-grid.reverse { --split-cols: 1.22fr .78fr; }
 .proof-copy ul { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 10px; color: #445660; font-size: 14px; }
 .proof-copy li::before { content: "✓"; color: var(--accent); font-weight: 800; margin-right: 10px; }
 .screenshot-frame { margin: 0; padding: 12px; background: #eef2f5; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 65px rgba(29,47,60,.12); }
 .screenshot-frame img { width: 100%; border-radius: 10px; }
-.screenshot-frame figcaption { padding: 10px 5px 2px; color: #74828c; font-size: 11px; }
+.screenshot-frame figcaption { padding: 10px 5px 2px; color: #74828c; font-size: 12px; }
 
-.privacy { padding: 120px 0; }
-.privacy-card { display: grid; grid-template-columns: 1.1fr .9fr; gap: 80px; padding: 58px; color: #eaf4f3; background: #142b2b; border-radius: 28px; box-shadow: var(--shadow); }
+.privacy { padding: var(--space-section) 0; }
+.privacy-card { --split-cols: 1.1fr .9fr; --split-gap: 80px; align-items: start; padding: clamp(30px, 5vw, 58px) clamp(24px, 5vw, 58px); color: #eaf4f3; background: #142b2b; border-radius: 28px; box-shadow: var(--shadow); }
 .privacy-card .kicker { color: #8fd3ca; }
 .privacy-card h2 { margin-bottom: 0; }
 .privacy-copy { color: #c6d8d5; }
+.privacy-copy .quiet a { color: #eaf4f3; text-decoration: underline; text-underline-offset: 2px; }
 .privacy-copy .quiet { font-size: 14px; color: #8fa7a4; margin: 28px 0 0; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.12); }
 
-.connectors { padding: 30px 0 120px; }
-.connector-list { display: flex; flex-wrap: wrap; gap: 9px; max-width: 850px; }
+.connectors { padding: 30px 0 var(--space-section); }
+.connector-list { --cluster-gap: 9px; max-width: 850px; }
 .connector-list span { padding: 10px 14px; font-size: 13px; }
-.text-link { display: inline-block; margin-top: 26px; color: var(--accent-dark); font-weight: 700; font-size: 14px; }
 
 .cta-section { padding: 0 0 80px; }
-.cta-card { display: grid; grid-template-columns: 1fr auto; gap: 60px; align-items: center; padding: 50px 55px; background: var(--accent-soft); border: 1px solid #c9e4e0; border-radius: 26px; }
-.cta-card h2 { font-size: 42px; }
+.cta-card { --split-cols: 1fr auto; --split-gap: 60px; padding: clamp(30px, 4vw, 50px) clamp(24px, 4.5vw, 55px); background: var(--accent-soft); border: 1px solid #c9e4e0; border-radius: 26px; }
+.cta-card h2 { font-size: clamp(32px, 3vw + 8px, 42px); }
 .cta-card p:not(.kicker) { max-width: 670px; color: #526965; }
-.actions.vertical { flex-direction: column; margin-top: 0; min-width: 220px; }
-.stats { display: flex; gap: 28px; margin-top: 25px; font-size: 13px; color: #58716d; }
+.stats { --cluster-gap: 12px 28px; margin-top: 25px; font-size: 13px; color: #58716d; }
 .stats strong { color: var(--ink); font-size: 20px; margin-right: 5px; }
 
-.site-footer { min-height: 150px; display: grid; grid-template-columns: auto 1fr auto; gap: 35px; align-items: center; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-.site-footer p { margin: 0; }
-.site-footer > div:last-child { display: flex; gap: 20px; }
+/* "Works with": the tested AI clients, rendered by scripts/build_site.py from
+   website/_data/clients.json (an `include: clients` line). */
+.works-with { --cluster-gap: 8px; margin: 26px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.works-with-label { color: var(--muted); font-weight: 700; margin-right: 4px; }
+.works-with .client { padding: 7px 11px; border: 1px solid var(--line); background: #fff; border-radius: 9px; font-weight: 700; color: var(--ink); }
+.works-with .client small { font-size: 12px; font-weight: 600; color: var(--muted); }
+.works-with-more { color: var(--muted); }
 
-@media (max-width: 900px) {
-  .site-header nav a:not(.nav-cta) { display: none; }
-  .hero { grid-template-columns: 1fr; gap: 45px; padding: 70px 0 80px; }
-  .hero-visual { max-width: 620px; }
-  .principle-grid { grid-template-columns: 1fr; }
-  .principle-grid article, .principle-grid article + article { padding: 28px 0; border-left: 0; border-bottom: 1px solid var(--line); }
-  .proof-grid, .proof-grid.reverse { grid-template-columns: 1fr; gap: 45px; }
-  .proof-grid.reverse .proof-copy { order: initial; }
-  .privacy-card { grid-template-columns: 1fr; gap: 30px; padding: 38px; }
-  .cta-card { grid-template-columns: 1fr; }
-  .site-footer { grid-template-columns: 1fr; gap: 12px; padding: 35px 0; }
-}
+/* ---- Core pages (/how-it-works/, /security/, /enterprise/, /connectors/) ----------------- */
 
-@media (max-width: 560px) {
-  .shell { width: min(100% - 30px, 1160px); }
-  .site-header { width: calc(100% - 20px); top: 8px; margin-top: 10px; }
-  .brand span { font-size: 15px; }
-  .nav-cta { padding: 8px 11px; }
-  .hero { min-height: auto; padding-top: 58px; }
-  h1 { font-size: 47px; }
-  .lede { font-size: 17px; }
-  .actions { flex-direction: column; align-items: stretch; }
-  .release-meta { flex-wrap: wrap; gap: 8px 14px; }
-  .release-meta span + span::before { margin-right: 14px; }
-  .hero-visual { padding: 20px; border-radius: 20px; }
-  .pf-grid { grid-template-columns: 1fr; }
-  .problem, .privacy { padding: 80px 0; }
-  .proof-grid { padding-top: 75px; padding-bottom: 75px; }
-  .privacy-card, .cta-card { padding: 30px 24px; border-radius: 20px; }
-  .cta-card h2 { font-size: 36px; }
-}
+.page-intro { padding: 60px 0 clamp(36px, 5vw, 56px); }
+.page-intro h1 { font-size: clamp(38px, 5vw, 62px); margin: 14px 0 20px; }
+.page-intro .lede { margin: 0; }
+.page-intro .lede a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.page-section { padding-block: clamp(44px, 6vw, 76px); border-top: 1px solid var(--line); }
+.page-section > h2, .page-section .section-heading h2 { font-size: clamp(28px, 2.4vw + 12px, 40px); }
+.page-section .section-heading { margin-bottom: 30px; }
+.page-section:last-child { padding-bottom: clamp(60px, 8vw, 100px); }
+.card-grid + .page-copy, .table-scroll + .page-copy { margin-top: 24px; }
+.page-copy { --stack-gap: 14px; max-width: var(--measure); color: var(--ink-soft); }
+.page-copy a, .card a:not(.button), .table-scroll a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.page-copy code, .card code, .table-scroll code { font-size: .9em; overflow-wrap: anywhere; }
 
-@media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  *, *::before, *::after { transition: none !important; }
-}
+/* The request-flow diagram: a wide SVG, and a top-to-bottom one below 600 px (rule 7). */
+.diagram { margin: 0; padding: clamp(10px, 2vw, 18px); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
+.diagram img { width: 100%; }
+.diagram + .card-grid { margin-top: 34px; }
+.diagram figcaption { padding: 12px 6px 2px; color: var(--muted); font-size: 14px; }
 
-/* ---- Download page (docs/downloads-and-release-kpi.md) -------------------------------------
-   Cards are built at runtime from the release manifest, so these styles key off structure
+/* A card per topic, in as many columns as fit. */
+.card-grid { --min: 290px; }
+.card-grid.four { --min: 240px; }
+.card { --stack-gap: 10px; padding: clamp(20px, 2vw, 26px); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card h3 { margin: 0; font-size: 20px; }
+.card p, .card li { margin: 0; color: var(--ink-soft); font-size: 15px; }
+.card ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; }
+.card .text-link { margin-top: 4px; }
+.card.limitations { background: #fff7ed; border-color: #f3d9b8; }
+
+/* A numbered walk-through next to its screenshot. */
+.walkthrough { --split-cols: .9fr 1.1fr; --split-gap: clamp(32px, 4vw, 60px); align-items: start; }
+.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 16px; }
+.steps li { counter-increment: step; position: relative; padding-left: 44px; color: var(--ink-soft); }
+.steps li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dark); font: 700 14px var(--font-mono); }
+.steps strong { color: var(--ink); }
+
+/* Side-by-side comparison and per-connector tables: they scroll inside .table-scroll (rule 2). */
+.table-scroll.wide table { min-width: 640px; }
+.table-scroll td.num, .table-scroll th.num { text-align: right; white-space: nowrap; }
+
+/* /connectors/: one card per connector, its gate counts checked against docs/tools-reference.md
+   (tests/unit/test_website_connectors_page.py). */
+.connector-grid { --min: 320px; }
+.connector-counts { font-size: 13px !important; font-weight: 700; color: var(--accent-dark) !important; }
+.connector-gates { margin: 0; display: grid; gap: 2px; font-size: 15px; }
+.connector-gates dt:not(:first-child) { margin-top: 10px; }
+.connector-gates dt { font-weight: 700; color: var(--ink); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+.connector-gates dd { margin: 0; color: var(--ink-soft); }
+.connector-note { font-weight: 650; }
+.connector-links { --cluster-gap: 0 18px; font-size: 14px; }
+.connector-links a { display: inline-flex; align-items: center; min-height: var(--tap); }
+.section-heading a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.page-copy ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+
+/* /faq/: visible questions and answers, one article each, with a jump list above them. */
+.faq-index ul { --cluster-gap: 8px 10px; margin: 0 0 20px; padding: 0; list-style: none; }
+.faq-index a { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--accent-dark); font-size: 14px; font-weight: 650; }
+.faq-item { padding-block: clamp(26px, 3vw, 36px); border-top: 1px solid var(--line); scroll-margin-top: 90px; }
+.faq-item h2 { margin: 0; font-size: clamp(24px, 1.4vw + 16px, 30px); }
+.faq-item .works-with { margin: 0; }
+.faq-item .verify-commands { margin: 0; }
+
+/* ---- Legal and prose pages (/privacy/, /imprint/) -------------------------------------- */
+
+.prose-page { padding: 60px 0 100px; }
+.prose { max-width: var(--measure); }
+.prose h1 { font-size: clamp(38px, 5vw, 58px); margin: 14px 0 20px; }
+.prose h2 { font-size: clamp(24px, 2vw + 12px, 30px); letter-spacing: -.025em; margin: 48px 0 14px; }
+.prose h3 { font-size: 19px; margin: 28px 0 8px; }
+.prose p, .prose li { color: var(--ink-soft); }
+.prose a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.prose ul { padding-left: 1.2em; }
+.prose .updated { color: var(--muted); font-size: 14px; }
+.table-scroll { overflow-x: auto; margin: 18px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.table-scroll table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table-scroll th, .table-scroll td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.table-scroll tr:last-child td { border-bottom: 0; }
+.table-scroll th { background: var(--surface-soft); font-weight: 700; }
+.table-scroll code { font-size: 13px; white-space: nowrap; }
+
+/* ---- Download page (docs/downloads-and-release-kpi.md) --------------------------------- */
+/* Cards are built at runtime from the release manifest, so these styles key off structure
    rather than any particular platform or filename. */
-
-.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 .download-page { padding: 60px 0 110px; }
 .download-intro { max-width: 720px; margin-bottom: 46px; }
 .download-intro h1 { font-size: clamp(40px, 5vw, 62px); margin: 14px 0 20px; }
 .download-intro .release-meta a.text-link { margin-top: 0; }
 
-.download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
 .download-grid.compact { margin-top: 20px; }
 .download-loading { color: var(--muted); }
 
-.download-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 26px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 20px rgba(20,33,43,.04); }
+.download-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: clamp(22px, 2vw, 26px) clamp(20px, 2vw, 24px); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 20px rgba(20,33,43,.04); }
 .download-card h3 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .download-card .download-detail { margin: 0; color: var(--muted); font-size: 14px; }
 .download-card .download-button { margin-top: 10px; align-self: stretch; }
@@ -167,25 +233,65 @@ h3 { font-size: 21px; line-height: 1.25; letter-spacing: -.02em; margin: 17px 0 
 .download-badge { padding: 5px 10px; background: var(--accent-soft); color: var(--accent-dark); border-radius: 999px; font-size: 12px; font-weight: 700; }
 
 .download-checksum { width: 100%; margin-top: 2px; }
-.download-checksum summary { color: var(--accent-dark); font-size: 13px; font-weight: 700; cursor: pointer; }
-.download-checksum code { display: block; margin-top: 8px; padding: 9px 10px; background: var(--surface-soft); border-radius: 9px; font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: #3c5d59; overflow-wrap: anywhere; }
+.download-checksum summary { display: flex; align-items: center; min-height: var(--tap); color: var(--accent-dark); font-size: 13px; font-weight: 700; cursor: pointer; }
+.download-checksum code { display: block; margin-top: 8px; padding: 9px 10px; background: var(--surface-soft); border-radius: 9px; font: 600 11px var(--font-mono); color: #3c5d59; overflow-wrap: anywhere; }
 
 .download-fallback { padding: 22px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 .download-fallback p { margin: 0; color: var(--muted); }
 .download-fallback a.text-link { margin-top: 0; }
 
-.verify-block, .prerelease-block { margin-top: 64px; padding: 34px 32px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.verify-block, .prerelease-block { margin-top: clamp(46px, 5vw, 64px); padding: clamp(26px, 3vw, 34px) clamp(22px, 3vw, 32px); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 .verify-block h2, .prerelease-block h2 { font-size: 26px; letter-spacing: -.025em; margin-bottom: 12px; }
 .verify-block p, .prerelease-block p { color: var(--muted); margin: 0; max-width: 720px; }
 .verify-commands { margin: 20px 0 0; padding: 16px 18px; background: var(--surface-soft); border-radius: 12px; overflow-x: auto; }
-.verify-commands code { font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: #3c5d59; white-space: pre; }
+.verify-commands code { font: 600 13px var(--font-mono); color: #3c5d59; white-space: pre; }
 .verify-os { color: var(--muted); font-weight: 600; }
 .prerelease-note { margin-top: 18px !important; font-size: 14px; }
+.prerelease-note a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
 
 .download-stats { margin-top: 46px; color: var(--muted); font-size: 14px; text-align: center; }
 
-@media (max-width: 720px) {
-  .download-page { padding: 40px 0 80px; }
-  .verify-block, .prerelease-block { padding: 26px 22px; margin-top: 46px; }
-  .download-card { padding: 22px 20px; }
+/* ---- Release history (/releases/) ------------------------------------------------------ */
+/* One row per channel's newest release, built from /api/releases. The table scrolls inside its
+   own .table-scroll box on a phone (rule 2); the checksum stays wrapped inside its cell. */
+
+.releases-page .lede a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.releases-table table { min-width: 720px; }
+.releases-table th[scope="row"] { background: none; font: 700 15px var(--font-mono); white-space: nowrap; }
+.releases-table th[scope="row"] .download-badge { margin-left: 6px; font-family: var(--font-sans); vertical-align: 1px; }
+.releases-table td { color: var(--ink-soft); }
+.releases-table time, .releases-table td:last-child { white-space: nowrap; }
+.release-superseded { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; }
+.releases-table th[scope="row"], .releases-table td { vertical-align: middle; }
+.releases-table tr:last-child th { border-bottom: 0; }
+.release-installers { margin: 0; padding: 0; list-style: none; display: grid; min-width: 260px; }
+.release-installers li { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; }
+.release-installers a.release-download { display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 700; }
+.release-size { color: var(--muted); font-size: 13px; }
+.release-installers .download-checksum { width: auto; margin-top: 0; }
+.release-installers .download-checksum[open] { flex-basis: 100%; padding-bottom: 8px; }
+.release-installers .download-checksum code { white-space: normal; overflow-wrap: anywhere; margin-top: 0; }
+.releases-notes { margin-top: clamp(40px, 5vw, 56px); }
+.releases-notes h2 { font-size: 26px; letter-spacing: -.025em; }
+
+/* ---- Breakpoint overrides -------------------------------------------------------------- */
+/* Only what the primitives cannot express: the principle grid's divider direction, and the
+   hero's height and spacing. Column counts collapse through .split and .grid-auto. */
+
+@media (max-width: 900px) {
+  .hero { min-height: auto; padding: 70px 0 80px; }
+  .principle-grid { grid-template-columns: 1fr; }
+  .principle-grid article, .principle-grid article + article { padding: 28px 0; border-left: 0; border-bottom: 1px solid var(--line); }
+  .actions.vertical { min-width: 0; }
+}
+
+@media (max-width: 560px) {
+  .hero { padding-top: 58px; }
+  .hero-visual { border-radius: 20px; }
+  .privacy-card, .cta-card { border-radius: 20px; }
+  .download-page, .prose-page { padding: 40px 0 80px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
 }

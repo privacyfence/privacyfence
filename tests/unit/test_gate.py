@@ -2,9 +2,8 @@
 tool call passes through (auto-accept check -> popup -> audit log).
 
 These tests stub out the popup functions (``gate.show_popup``/``gate.
-show_read_popup`` -- P10 deleted the native AppKit implementation behind
-them, so they now delegate to whichever ``ApprovalUI`` is current, i.e.
-``WebApprovalUI``) and the auto-accept decision (P9: ``gate._evaluate_auto_accept``
+show_read_popup``, which delegate to whichever ``ApprovalUI`` is current,
+i.e. ``WebApprovalUI``) and the auto-accept decision (``gate._evaluate_auto_accept``
 itself, monkeypatched directly -- see ``FakeEvaluator`` below) so the state
 machine can be exercised deterministically, without spawning a real approval
 surface. The one invariant that matters more than any individual branch:
@@ -74,7 +73,7 @@ def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
 
 async def wait_until_async(predicate, timeout=2.0, interval=0.005) -> bool:
     """``wait_until``'s counterpart for use directly in an async test body
-    (the event-loop thread itself): P3's deferred protocol resolves a
+    (the event-loop thread itself): the deferred-approval protocol resolves a
     pending approval via a scheduled asyncio task (approvals._drive_
     interaction), not a background OS thread, so the poll here must
     ``await asyncio.sleep`` -- a plain ``time.sleep`` loop would block the
@@ -89,11 +88,8 @@ async def wait_until_async(predicate, timeout=2.0, interval=0.005) -> bool:
 
 
 class FakeEvaluator:
-    """Test double for ``gate._evaluate_auto_accept`` -- P9 removed the
-    ``AutoAcceptEvaluator`` object that used to get passed into it (and the
-    ``get_auto_accept_evaluator()``/``policy.engine`` shadow-mode machinery
-    that used to sit around it). This class no longer stands in for an
-    evaluator gate.py *consults*; it now largely stands in *as*
+    """Test double for ``gate._evaluate_auto_accept``. gate.py consults no
+    evaluator object, so this class stands in *as*
     ``gate._evaluate_auto_accept`` itself, monkeypatched in directly:
 
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "i_am_sender")))
@@ -155,8 +151,7 @@ def make_proposal(predicate: str, value, tool: str, *, connector: str | None = N
 
 def capture_added_rules(monkeypatch) -> list:
     """Patch ``gate.add_policy_v2_rules`` to record every call's rule list instead of writing to
-    disk -- the "Always allow" flow's real persistence path (P9), replacing the old
-    ``add_auto_accept_rule`` 3-tuple mock."""
+    disk -- the "Always allow" flow's real persistence path."""
     added: list = []
     monkeypatch.setattr(gate, "add_policy_v2_rules", lambda rules: added.append(list(rules)) or True)
     return added
@@ -172,7 +167,7 @@ def assert_single_rule(added: list, predicate: str, value, operation: str) -> No
 
 
 def capture_temp_accepts(monkeypatch) -> list:
-    """Patch ``gate.register_temp_accept`` (a bare module-level function since P9, not an
+    """Patch ``gate.register_temp_accept`` (a bare module-level function, not an
     evaluator method) to record every call instead of arming the real grace window."""
     registered: list = []
     monkeypatch.setattr(gate, "register_temp_accept", lambda op, key: registered.append((op, key)))
@@ -264,18 +259,17 @@ class TestAutoAcceptPath:
 
 
 class TestPolicyV2StoreRules:
-    """P9: gate._evaluate_auto_accept reads the on-disk v2 auto_accept: section
+    """gate._evaluate_auto_accept reads the on-disk v2 auto_accept: section
     (auto_accept.get_policy_v2_store_rules(), refreshed by settings_controller.add_policy_rule and
-    at daemon startup) unconditionally -- there is no more v1 evaluator and no policy.engine
-    switch left to gate this behind (P3-P8's shadow-mode dual-evaluation, which used to run
-    alongside a separate v1 AutoAcceptEvaluator and log a WARNING on disagreement, is gone
-    entirely -- see auto_accept.py's own module docstring)."""
+    at daemon startup) unconditionally -- there is no v1 evaluator (ADR 0004), no policy.engine
+    switch to gate this behind and no second evaluator to compare against (see auto_accept.py's
+    own module docstring)."""
 
     def _install(self, monkeypatch, rules):
         monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: rules)
 
     async def test_matching_v2_store_rule_auto_accepts(self, monkeypatch, audit_dir):
-        # gmail.anything (P6) is unconditional (like always_allow), so it needs no matching args --
+        # gmail.anything is unconditional (like always_allow), so it needs no matching args --
         # what's under test here is that the v2-store layer is consulted at all, not any one
         # predicate's own matching logic (that's scopes.py's own test suite's job).
         self._install(monkeypatch, [PolicyRule(
@@ -289,7 +283,7 @@ class TestPolicyV2StoreRules:
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
         assert entries[0]["auto_accept_rule"] == "r-gmail-configure"
-        # P8: a v2-store rule's own `.id` IS the canonical rule_id, trusted directly rather than
+        # A v2-store rule's own `.id` IS the canonical rule_id, trusted directly rather than
         # recomputed -- see gate._evaluate_auto_accept's own comment on this branch.
         assert entries[0]["rule_id"] == "r-gmail-configure"
 
@@ -328,11 +322,10 @@ class TestPolicyV2StoreRules:
 
 
 class TestRuleIdAttribution:
-    """P8/P9 (rule attribution and staleness): AuditEntry.rule_id, resolving F9 -- a decision in
-    the audit log attributes to exactly one on-disk rule row, never an ambiguous rule name. P9
-    retired the v1/v2 shadow comparison this class used to test (there is only ever one rule
-    source now, so "agreement" is no longer a meaningful question): every real v2-store match
-    always carries a rule_id. These tests exercise the two shapes that remain -- a genuine
+    """Rule attribution: AuditEntry.rule_id -- a decision in the audit log attributes to exactly
+    one on-disk rule row, never an ambiguous rule name (a rule is identified by its id, since names
+    can repeat; ADR 0074). There is only one rule source, so every real v2-store match always carries a
+    rule_id. These tests exercise its two shapes -- a genuine
     store-rule match (rule_id == auto_accept_rule == the matched rule's own canonical id) and the
     temp-accept pseudo-match (no rule row at all) -- plus the two in-branch race-recheck call
     sites that also have to thread rule_id through correctly.
@@ -515,7 +508,7 @@ class TestReviewGateDecisions:
     async def test_show_read_popup_receives_two_choices_for_a_multi_candidate_item(
         self, monkeypatch, audit_dir,
     ):
-        # The multi-button window (issue #151): each matching candidate
+        # The multi-button window: each matching candidate
         # becomes its own (index, short_label) entry, not a single
         # top-priority hint.
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
@@ -642,7 +635,7 @@ class TestAcceptAll:
 class TestAcceptAllMultipleChoices:
     """When proposals_for() returns 2+ candidates for the same item
     (e.g. a Drive file you own that's also in an approved folder), the
-    popup renders one "Always allow" button per candidate (issue #151) --
+    popup renders one "Always allow" button per candidate --
     which rule gets created is decided by *which button was clicked*
     (chosen_index, the popup's own return value), not a second chooser
     dialog shown after a single generic Always-allow click."""
@@ -737,8 +730,7 @@ class TestAcceptAllMultipleChoices:
 class TestAcceptAllWrites:
     """The write-gate counterpart to TestAcceptAll -- gate.py's popup branch drives its own
     "Always allow" button from the same policy_propose.proposals_for()/rules_for_proposal()
-    machinery the review branch already uses (P9: there's no longer a separate
-    suggest_write_rule() table)."""
+    machinery the review branch already uses, not a write-only suggestion table of its own."""
 
     async def test_accept_all_confirmed_creates_rule_and_audits(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
@@ -992,9 +984,9 @@ class TestAcceptAllWrites:
 
 
 class TestPreflightAutoAccept:
-    """gate.preflight_auto_accept() -- backs privacyfence_check_policy's matched_rule_id (P7),
-    now reading the v2 store directly (P9: no more evaluator argument, no more v1/v2 shadow left
-    to disagree -- see this module's TestPolicyV2StoreRules/TestRuleIdAttribution for the
+    """gate.preflight_auto_accept() -- backs privacyfence_check_policy's matched_rule_id,
+    reading the v2 store directly (no evaluator argument, no second rule source to disagree
+    with -- see this module's TestPolicyV2StoreRules/TestRuleIdAttribution for the
     equivalent gated_call()-level coverage)."""
 
     def setup_method(self):
@@ -1015,7 +1007,7 @@ class TestPreflightAutoAccept:
             "gmail.create_draft", {"to": "me@example.com"}, "me@example.com",
         )
         assert verdict == "auto_accept"
-        # P9: matched_rule/matched_rule_id are always the same value -- the matched rule's own
+        # matched_rule/matched_rule_id are always the same value -- the matched rule's own
         # canonical, content-derived id (policy.store.rule_id_for), never a bare predicate name.
         expected_id = policy_store.rule_id_for("to_is_myself", None, ())
         assert matched_rule == expected_id
@@ -1031,7 +1023,7 @@ class TestPreflightAutoAccept:
         assert (verdict, matched_rule, matched_rule_id) == ("unknown", "", "")
 
     def test_store_only_rule_with_no_v1_counterpart_still_predicts_auto_accept(self):
-        # apps_script.project (F5) has no v1 rule shape at all -- there was never a v1 evaluator
+        # apps_script.project has no v1 rule shape at all -- there was never a v1 evaluator
         # that could predict this operation key at all. The always-on v2-store layer is what
         # makes it predictable.
         auto_accept.set_policy_v2_store_rules([
@@ -1089,8 +1081,7 @@ class TestProposePolicyChange:
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
 
     async def test_the_dialog_it_raises_is_marked_sensitive(self, monkeypatch):
-        """The self-approval review's Phase 4. Nothing gated this dialog
-        before it appeared -- an MCP client asked, no card was shown -- so
+        """Nothing gated this dialog before it appeared -- an MCP client asked, no card was shown -- so
         confirming it is the whole of the gate on a rule that decides what
         auto-accepts in future. web/routes_approvals.py's decide route reads
         that flag off the ``PendingApproval`` and holds the confirm to the
@@ -1679,7 +1670,7 @@ class TestTempAccept:
     with no separate choice offered. show_popup itself only ever returns
     'accept' or 'deny' now (see approval_window.py); gate.py is what decides
     whether an 'accept' also registers the grace window (auto_accept.
-    register_temp_accept, a bare module-level function since P9, not an
+    register_temp_accept, a bare module-level function, not an
     evaluator method).
     """
 
@@ -2347,7 +2338,7 @@ class TestConcurrentApprovals:
 
 
 class TestCoalescing:
-    """§6's "New coalescing case": two concurrent identical gated calls (the
+    """Coalescing: two concurrent identical gated calls (the
     same connector/tool/args) become one pending approval, not two --
     exercised here with a real WebApprovalUI-backed registry, since
     coalescing is specifically the registry's job (gate.py has no more lock
@@ -2386,7 +2377,7 @@ class TestCoalescing:
 
 
 class TestPendingApprovalCarriesPreview:
-    """Phase 0 of the approval-binder plan: the ``preview`` dict gated_call()
+    """The ``preview`` dict gated_call()
     hands to show_popup()/show_read_popup() is now also stamped onto the
     PendingApproval itself, at registration time -- before any
     _popup_executor worker has ever run build_card_html for it. A future
@@ -2456,7 +2447,7 @@ class TestPendingApprovalCarriesPreview:
                 await task
 
     async def test_stamped_preview_never_carries_details_text_or_body_content(self, monkeypatch, audit_dir):
-        # §1.5: "preview dicts carry metadata only... never body/content".
+        # Preview dicts carry metadata only, never body or content.
         # gated_call() never merges details_text/raw content into preview
         # before it reaches register_or_coalesce -- assert that directly
         # against gate.py's own call sites, not just against whatever a
@@ -2483,11 +2474,10 @@ class TestPendingApprovalCarriesPreview:
 
 
 class TestManyPendingApprovalsAreAllReviewable:
-    """Phase 0 residual work: the popup executor must hold at least as many
-    workers as the registry can have approvals live at once, or an approval
-    past its worker count never gets its card HTML built at all -- 87c30cc's
-    fix only covered for that with a placeholder page, it didn't remove the
-    underlying stall (see gate.py's own _popup_executor comment)."""
+    """The popup executor must hold at least as many workers as the
+    registry can have approvals live at once, or an approval past its worker
+    count never gets its card HTML built at all -- a placeholder page alone
+    doesn't remove that stall (see gate.py's own _popup_executor comment)."""
 
     async def test_past_the_old_literal_eight_every_approval_still_gets_rendered(self, monkeypatch, audit_dir):
         from concurrent.futures import ThreadPoolExecutor
@@ -2649,11 +2639,11 @@ class TestDeferredApprovalProtocol:
         decisions = [e["decision"] for e in entries]
         assert decisions == ["approval_pending", "approved"]
         # The release entry's decided_at is the human's real click, distinct
-        # from this entry's own (later) write time -- §5.4.
+        # from this entry's own (later) write time.
         assert entries[1]["decided_at"]
 
     async def test_reissued_call_after_a_binder_decision_audits_with_the_batch_id(self, monkeypatch, audit_dir):
-        # Phase 2 of the approval binder plan: a decision released through
+        # A decision released through
         # answer_batch()'s decided_via/batch_id stamping (approvals.py)
         # survives finalize() -> consume_ledger() -> LedgerHit ->
         # gate.py's own audit() closure, all the way into the audit entry
@@ -2685,9 +2675,9 @@ class TestDeferredApprovalProtocol:
         assert entries[0]["batch_id"] == ""
 
     async def test_write_gate_ledger_entry_is_single_use(self, monkeypatch, audit_dir):
-        # D3: read decisions stay reusable within the ledger TTL; write
+        # Read decisions stay reusable within the ledger TTL; write
         # decisions don't -- a second identical write must re-gate, not
-        # silently replay the first's approval.
+        # silently replay the first's approval (ADR 0073).
         registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
         approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
@@ -2711,7 +2701,7 @@ class TestDeferredApprovalProtocol:
 
 
 class TestAdaptiveHoldWindow:
-    """Approval binder, Phase 4: without this, a sequential agent never
+    """Without an adaptive hold window, a sequential agent never
     fills the binder -- it stalls the full hold_window on call #1, relays
     that one link, and only issues call #2 once a human has already
     answered. Once this principal has one unfinalized approval outstanding,
@@ -2793,7 +2783,7 @@ class TestAdaptiveHoldWindow:
 
 
 class TestPendingResultPointsAtTheBinder:
-    """Approval binder, Phase 4: _pending_result() gains pending_count and
+    """_pending_result() carries pending_count and
     binder_url, and the message asks Claude to batch outstanding approvals
     through privacyfence_await_approval instead of relaying one link at a
     time -- but only once there's actually more than one to batch."""
@@ -3235,50 +3225,61 @@ class TestPiiAndAuditWorkOffTheEventLoop:
     used to run inline on
     gated_call's own coroutine -- synchronous, CPU-bound-ish work that
     blocked every other concurrently-dispatched request on the IPC server's
-    single event loop for however long it took. Proven here the standard
-    way: a slow stand-in for each, run concurrently with a ticker coroutine
-    that must keep making progress throughout -- if the slow call still ran
-    inline, the ticker would freeze for its whole duration instead.
+    single event loop for however long it took.
+
+    Proven without wall-clock thresholds, which a stalled CI runner can miss
+    either way: the slow stand-in waits for a ticker coroutine on the event
+    loop to run while the stand-in is in progress. Off the loop, the ticker
+    runs and releases it at once. Inline, nothing else can run on the loop
+    while it waits, so it always times out.
     """
 
     @staticmethod
-    async def _ticks_while(coro) -> list[float]:
-        ticks: list[float] = []
+    async def _loop_ran_during_call(monkeypatch, target, name, returns) -> list[bool]:
+        """Replaces `target.name` with a stand-in that returns `returns` once
+        the event loop has run concurrently with it (or after a timeout),
+        runs gated_call, and returns whether each call saw the loop run."""
+        started = threading.Event()
+        loop_ran = threading.Event()
+        results: list[bool] = []
+
+        def stand_in(*args, **kwargs):
+            started.set()
+            results.append(loop_ran.wait(timeout=2.0))
+            return returns
+
+        monkeypatch.setattr(target, name, stand_in)
 
         async def ticker():
+            # Only a tick after the stand-in started counts: gated_call may
+            # yield to the loop earlier, before it reaches the stand-in.
             while True:
-                ticks.append(time.monotonic())
+                if started.is_set():
+                    loop_ran.set()
                 await asyncio.sleep(0.01)
 
         ticker_task = asyncio.create_task(ticker())
         try:
-            await coro
+            await gate.gated_call(**base_kwargs(gate="review"))
         finally:
             ticker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await ticker_task
-        return ticks
+        return results
 
     async def test_detect_pii_categories_does_not_block_concurrent_tasks(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "rule")))
-        monkeypatch.setattr(gate, "detect_pii_categories", lambda text: time.sleep(0.15) or [])
 
-        ticks = await self._ticks_while(gate.gated_call(**base_kwargs(gate="review")))
+        results = await self._loop_ran_during_call(monkeypatch, gate, "detect_pii_categories", [])
 
-        # >5 ticks in 0.15s (a 0.01s ticker interval) means the event loop
-        # kept running throughout -- inline, blocked for the whole sleep, it
-        # would show at most one or two.
-        assert len(ticks) > 5
+        assert results and all(results)
 
     async def test_recent_matches_does_not_block_concurrent_tasks(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "rule")))
-        monkeypatch.setattr(
-            get_audit_logger(), "recent_matches", lambda *a, **k: time.sleep(0.15) or 0
-        )
 
-        ticks = await self._ticks_while(gate.gated_call(**base_kwargs(gate="review")))
+        results = await self._loop_ran_during_call(monkeypatch, get_audit_logger(), "recent_matches", 0)
 
-        assert len(ticks) > 5
+        assert results and all(results)
 
 
 class TestCancellation:
@@ -3289,12 +3290,12 @@ class TestCancellation:
     generic "error" fallback.
     """
 
-    @pytest.mark.timeout(5)  # TST-11: bounded by its own internal Event.wait(timeout=2.0)s, not the 30s suite default
+    @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0)s, not the 30s suite default
     async def test_cancellation_while_waiting_on_the_popup_records_cancelled(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((False, "")))
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
         release = threading.Event()
-        # TST-11: started is
+        # started is
         # set by slow_popup itself, the actual event this test needs to
         # synchronize on -- a fixed sleep here was only ever guessing how
         # long _run_in_popup_executor takes to actually reach slow_popup.
@@ -3317,14 +3318,13 @@ class TestCancellation:
         entries = read_audit_entries(audit_dir)
         assert entries[-1]["decision"] == "cancelled"
 
-    @pytest.mark.timeout(5)  # TST-11: bounded by its own internal Event.wait(timeout=2.0)s, not the 30s suite default
+    @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0)s, not the 30s suite default
     async def test_cancellation_while_coalesced_onto_anothers_interaction_records_cancelled(
         self, monkeypatch, audit_dir,
     ):
-        # P3 replacement for the old "cancelled while queued behind
-        # _popup_lock" case: with the lock gone, the analogous "not the one
-        # actually driving the interaction" scenario is a coalesced caller
-        # (§6's "New coalescing case") -- cancelling it must not touch the
+        # A caller that isn't the one actually driving the interaction: a
+        # coalesced caller (an identical concurrent call sharing the other
+        # call's pending approval) -- cancelling it must not touch the
         # card the *other*, still-running caller is showing, and must still
         # leave exactly one audit entry.
         registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
@@ -3339,7 +3339,7 @@ class TestCancellation:
         driver = asyncio.create_task(gate.gated_call(**base_kwargs(gate="review")))
         assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
 
-        # TST-11: a spy on
+        # A spy on
         # the real registry.wait_async -- called only after the coalesced
         # call has found the existing approval and started waiting on it --
         # replaces a fixed sleep that was only ever guessing when the event
@@ -3397,7 +3397,7 @@ class TestRunInPopupExecutor:
 
         assert seen["thread"].startswith("pf-popup")
 
-    @pytest.mark.timeout(5)  # TST-11: bounded by its own internal Event.wait(timeout=2.0)s, not the 30s suite default
+    @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0)s, not the 30s suite default
     async def test_stays_prompt_while_the_default_to_thread_pool_is_saturated(self):
         # The scenario this executor exists for: a handful of slow
         # connector calls (a Slack rate-limit retry sleeping out
@@ -3406,7 +3406,7 @@ class TestRunInPopupExecutor:
         # not queue behind them.
         default_pool_size = min(32, (__import__("os").cpu_count() or 1) + 4)
         release = threading.Event()
-        # TST-11: all_started
+        # all_started
         # fires only once every occupier has actually begun running (not
         # merely been submitted to the pool) -- a fixed sleep here was only
         # ever guessing how long the default pool takes to schedule all of
@@ -3506,7 +3506,7 @@ class TestConfigurePopupExecutor:
 
 
 class TestAgentAttribution:
-    """AGT-2: a gated call's audit row carries the agent in scope; an expiry-sweep row carries
+    """A gated call's audit row carries the agent in scope; an expiry-sweep row carries
     the agent that created the approval, not the one whose call happens to run the sweep."""
 
     async def test_gated_call_row_carries_scoped_agent(self, monkeypatch, audit_dir):

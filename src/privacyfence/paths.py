@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from .principal import Principal
 
 # Deliberately strict -- principal ids reach here from an OAuth 2.1/OIDC
-# `sub` claim once P7 lands (today it's always "local"), and this is the one
+# `sub` claim in org mode (in local mode it's always "local"), and this is the one
 # place that string becomes a filesystem path component. Anything outside
 # this set (a "/", a leading "." that could hide a directory, ...) is
 # rejected rather than sanitized, so a hostile or malformed id fails loudly
@@ -52,7 +52,7 @@ def _is_safe_principal_id(principal_id: str) -> bool:
 
 def safe_principal_id(raw: str) -> str:
     """``raw`` unchanged if it's already filesystem-safe, otherwise a
-    stable hash of it (P7: an OIDC ``sub`` claim is opaque per spec and may
+    stable hash of it (an OIDC ``sub`` claim is opaque per spec and may
     contain characters ``_is_safe_principal_id`` rejects -- hashing keeps
     org_identity.py's ``principal_from_claims`` always able to produce a
     ``Principal`` rather than letting a login fail on an oddly-formatted
@@ -126,7 +126,7 @@ def data_dir() -> Path:
     for anything that's per-user data.
 
     Created (or re-tightened) to ``0700`` via ``secure_mkdir`` -- see that
-    function's own docstring and ``docs/security-and-compliance.md``'s "Storage format and permissions"
+    function's own docstring and ``docs/security-and-compliance.md``'s "Privilege separation"
     section for what this closes. (``secure_mkdir``'s ``chmod`` is a no-op
     best-effort on Windows, which has no POSIX permission bits to set --
     see that function's own docstring.)
@@ -159,10 +159,12 @@ def data_dir() -> Path:
 
 def handoff_dir() -> Path:
     """Where the files the *user's own desktop session* has to reach live:
-    the agent's ``mcp_token`` and the ``mcp_url`` the MCPB shim discovers it
-    by, the ``web_base_url``/``*_url`` discovery files a human reads, and
-    both ends of the control channels (``control.sock``,
-    ``companion.sock``).
+    the ``mcp_url`` the MCPB shim discovers the daemon by, the
+    ``web_base_url``/``*_url`` discovery files the companion and a human
+    read, and both ends of the control channels (``control.sock``,
+    ``companion.sock``). On an unseparated install the agent's ``mcp_token``
+    is here too; a separated install keeps it under the authority directory
+    and clients mint it over the control channel instead.
 
     ``data_dir()`` itself on an unseparated install.
     On a separated install it's ``data_dir()/handoff``, group-owned by the
@@ -207,7 +209,7 @@ def org_dir() -> Path:
 
 
 def user_dir(principal: "Principal | None" = None) -> Path:
-    """Per-principal storage root (P6): ``config/settings.yaml``,
+    """Per-principal storage root: ``config/settings.yaml``,
     ``credentials/*``, ``logs/audit/*`` and the various per-connector cache
     files all live under here.
 
@@ -240,8 +242,8 @@ def authority_dir(principal: "Principal | None" = None) -> Path:
     read-only to the shared group where POSIX has to make it writable), the
     privacy policy (``config/settings.yaml``), enrolled WebAuthn credentials,
     and local mode's audit log and its HMAC key -- as distinct from
-    ``user_dir()``, which stays reachable by the agent for its own
-    ``mcp_token`` and connector caches/credentials.
+    ``user_dir()``, which stays reachable by the agent for its connector
+    caches/credentials.
 
     On a privilege-separated install this subtree is owned by the service
     account and unreadable to the agent; on an unseparated one it lives at

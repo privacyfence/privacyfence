@@ -16,8 +16,8 @@
   // show it rather than silently drop it while waiting for a website deploy.
   const PLATFORMS = {
     // One macOS download, not two: the DMG carries the .pkg installer and the Claude Desktop
-    // extension side by side (#428 D2, scripts/build_dmg.sh). The .pkg had its own
-    // 'macos-arm64-pkg' entry here while it was a separate download; it isn't one any more.
+    // extension side by side (scripts/build_dmg.sh), so there is no separate .pkg entry.
+    // scripts/build_site.py's PLATFORMS repeats these names for the pre-rendered cards.
     'macos-arm64': { name: 'macOS', detail: 'Apple silicon · installer + Claude extension', match: /mac/i },
     'windows-x64': { name: 'Windows', detail: '64-bit', match: /win/i },
     'linux-x64': { name: 'Linux', detail: 'Debian / Ubuntu, 64-bit', match: /linux/i },
@@ -140,6 +140,15 @@
     // The filename is the manifest's, not a guess -- and naming it in the accessible label means
     // a screen-reader user knows what they are about to get, not just "Download".
     link.setAttribute('aria-label', `Download ${spec.name}: ${artifact.filename}`);
+    // Which platform people pick, for GA4 (site.js). A no-op unless the visitor accepted
+    // analytics; the Worker's own cookieless counter stays the full count either way.
+    link.addEventListener('click', () => {
+      window.pfAnalytics?.event('download_click', {
+        platform: artifact.platform || artifact.id,
+        architecture: artifact.architecture || '',
+        channel,
+      });
+    });
     card.append(link);
 
     const meta = document.createElement('p');
@@ -168,12 +177,16 @@
     if (loading) loading.remove();
     if (!grid) return;
 
+    // The build pre-renders the cards and release line it saw at deploy time
+    // (scripts/build_site.py), so the page works without JavaScript. The live manifest replaces
+    // them rather than adding a second set.
     const recommendedId = detectPlatformId();
-    for (const artifact of manifest.artifacts || []) {
-      grid.append(buildCard(artifact, manifest.channel, recommendedId));
-    }
+    grid.replaceChildren(
+      ...(manifest.artifacts || []).map((artifact) => buildCard(artifact, manifest.channel, recommendedId)),
+    );
 
     const meta = document.getElementById('release-meta');
+    if (meta) meta.replaceChildren();
     if (meta && manifest.version) {
       const version = document.createElement('span');
       version.textContent = `Version ${manifest.version}`;
@@ -208,6 +221,9 @@
   function showFallback() {
     const loading = document.getElementById('download-loading');
     if (loading) loading.remove();
+    // Pre-rendered cards from the build still work: their links go to the Worker, not to this
+    // fetch. Only an empty page needs the way out to GitHub Releases.
+    if (document.querySelector('#download-grid .download-card')) return;
     const fallback = document.getElementById('download-fallback');
     if (fallback) fallback.hidden = false;
   }

@@ -6,8 +6,8 @@ best-effort read access to the result of a run the user triggered themselves.
 
 Running a script is deliberately out of scope for this client and for
 PrivacyFence entirely -- see ``connectors/apps_script.py``'s module docstring
-for why. There is no ``run`` method here, and there never should be one added
-without a fresh threat-model discussion (see issue #154's "Non-goals").
+and ADR 0075 for why. There is no ``run`` method here, and there never should be one added
+without a fresh threat-model discussion.
 
 The Apps Script API itself has no "list my script projects" endpoint, so
 ``list_projects`` goes through the Drive API instead (standalone script
@@ -15,9 +15,9 @@ projects show up there with mime type
 ``application/vnd.google-apps.script``) -- hence the extra
 ``drive.metadata.readonly`` scope below, kept as narrow as it can be (just
 enough to list/name script projects, not read Drive file content).
-``get_execution_log`` uses the Processes API's ``listScriptProcesses``
-(open question 1(b) in issue #154): status/duration/function name per
-recent run, not a full ``console.log`` transcript -- the Apps Script
+``get_execution_log`` uses the Processes API's ``listScriptProcesses``:
+status/duration/function name per recent run, not a full ``console.log``
+transcript -- the Apps Script
 editor's "Executions" panel transcript would need the script bound to a
 standard, Cloud-Logging-enabled GCP project plus a `logging.read` scope,
 extra per-script user setup this client deliberately doesn't require.
@@ -141,7 +141,7 @@ class AppsScriptClient:
             if not os.path.exists(self._token_file):
                 raise AppsScriptClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Authenticate Apps Script from PrivacyFence Settings (Connectors) to authorize."
+                    "Authenticate Apps Script from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
                 )
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
             if creds.valid:
@@ -153,13 +153,13 @@ class AppsScriptClient:
                 except Exception as exc:  # noqa: BLE001 - surface a clear message
                     raise AppsScriptClientError(
                         f"Failed to refresh OAuth token: {exc}. "
-                        "Reconnect Apps Script from PrivacyFence Settings (Connectors) to re-authorize."
+                        "Reconnect Apps Script from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
             raise AppsScriptClientError(
                 "Cached OAuth token is invalid and cannot be refreshed. "
-                "Reconnect Apps Script from PrivacyFence Settings (Connectors) to re-authorize."
+                "Reconnect Apps Script from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:

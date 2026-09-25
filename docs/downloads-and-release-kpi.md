@@ -1,90 +1,235 @@
-# Downloads and the installer-download KPI
+# Downloads, the release archive and the installer-download KPI
 
-How a PrivacyFence release reaches a user, and how installer downloads are counted. The runtime
-code is the source of truth when behavior changes: `cloudflare/downloads/` (the Worker),
-`scripts/r2_release.py` (publication), `scripts/release_stats.py` (the GitHub half of the KPI),
-and `website/download/` (the page people actually use).
+How a tagged release's files are stored, how they reach a user, and how installer downloads are
+counted. The code is the source of truth: `scripts/r2_release.py` (publication to R2),
+`cloudflare/downloads/` (the download Worker), `scripts/release_stats.py` (the GitHub half of the
+KPI) and `website/download/` plus `website/stats.js` (the pages that show it).
 
-Release mechanics themselves — what a tag triggers, which channel publishes where — live in
-[`CLAUDE.md`](../CLAUDE.md) § "Releasing"; this document covers the delivery and counting side.
+What a tag triggers, the channel scheme and the release checklist are in
+[`CLAUDE.md`](../CLAUDE.md) § "Releasing"; this document covers storage, delivery and counting.
 
 ## How a release reaches a user
 
 ```
-git tag vX.Y.Z
-      │
-      ▼
-GitHub Build & Release  ──► Build installers (macOS/Windows/Linux) ──► private Cloudflare R2
-      │                                                                releases/<channel>/<version>/
-      └──► GitHub Release (notes + stable binary mirror)                       │
-                                                                               ▼
-                                                                       release manifest
-                                                                               │
-                                                                               ▼
-                                                                   channel "latest" pointer
-                                                                               │
-                                                                               ▼
-                                                              downloads.privacyfence.eu (Worker)
-                                                                  │                    │
-                                                                  │                    └─ D1 counters
-                                                                  ▼
-                                                            private R2 object
-                                                                  ▲
-                                                                  │
-                                                          privacyfence.eu/download/
+git tag vX.Y.Z  ──►  build.yml / publish-pypi.yml
+                          │
+                          ├──► private Cloudflare R2: releases/<channel>/<version>/...
+                          │         │
+                          │         └─ finalize-release: manifest.json, then latest.json
+                          │
+                          └──► GitHub Release (stable: files attached; pre-release: no files)
+
+privacyfence.eu/download/ ──► downloads.privacyfence.eu (Worker) ──► R2 object (RELEASES binding)
+                                          │
+                                          └─► D1 counters (DB binding)
 ```
 
-**R2 stays private.** The browser never receives R2 credentials or a direct R2 endpoint — the
-Worker is the only public path to a release artifact. That is what makes the download count a full
-count rather than a sample: nothing can enumerate the bucket, hotlink an object, or fetch a release
-without passing the route that counts it.
+The browser never receives R2 credentials or a bucket URL. Every installer download on
+`privacyfence.eu/download/` streams through the Worker.
 
-It does *not* restrict who may download a pre-release. Every channel the Worker knows is served
-unauthenticated. See `CLAUDE.md` § "Who can download a pre-release" for that decision and the
-two-step path to reversing it.
+## Release archive (R2)
+
+Every tag push, stable and pre-release alike, uploads that release's files to the Cloudflare R2
+bucket **`privacyfence-releases`** (`DEFAULT_BUCKET` in `scripts/r2_release.py`; the workflows
+also set `R2_BUCKET: privacyfence-releases`). R2 is the one archive that holds every file of every
+release, whatever else is also published elsewhere.
+
+### Layout
+
+```
+releases/
+  <channel>/
+    latest.json                  pointer: {"version": ..., "manifest": "releases/<channel>/<version>/manifest.json"}
+    <version>/
+      <every uploaded file, by basename>
+      manifest.json              installers only (see below)
+```
+
+- `<version>` is the version `setuptools_scm` resolves from the tag, e.g. `4.1.0` or `4.2.0b1` —
+  never the `v`-prefixed tag name.
+- `<channel>` is derived from the version's PEP 440 suffix: none → `stable`, `a` → `alpha`,
+  `b` → `beta`, `rc` → `rc` (`channel_for_version()`; the Worker's `src/channel.ts` and
+  `website/download/download.js` carry hand-kept copies of the same regex). A between-tags dev
+  version (`….dev<n>+g<sha>`) is rejected, so nothing can be uploaded for an untagged build.
+
+### What uploads what
+
+Every upload step below runs only on a tag ref (`if: startsWith(github.ref, 'refs/tags/')`), and
+every job that resolves a version runs `r2_release.py check-tag` before publishing anything (see
+[ADR 0022](adr/0022-one-release-tag-per-commit.md)).
+
+| Workflow · job | Uploads to `releases/<channel>/<version>/` |
+| -------------- | ------------------------------------------ |
+| `build.yml` · `build` | `PrivacyFence-*.dmg`, `scripts/build_org_bundle.py`, `scripts/sync_room_directory.py` |
+| `build.yml` · `build-windows` | `PrivacyFence-*-setup.exe` |
+| `build.yml` · `build-deb` | `privacyfence_*.deb` |
+| `build.yml` · `sbom` | `sbom-python.cdx.json`, `sbom-shim-npm.cdx.json` |
+| `publish-pypi.yml` · `publish-r2` | the sdist and wheel (`dist/*`); runs after `build` and `wait_for_build` |
+| `build.yml` · `finalize-release` | `manifest.json`, then `latest.json` (`r2_release.py finalize`) |
+
+The macOS `.pkg` and `.mcpb` travel inside the DMG and are never uploaded on their own
+(`scripts/build_dmg.sh`).
+
+### Public distribution per channel
+
+| Channel | R2 | GitHub Release | PyPI / TestPyPI |
+| ------- | -- | -------------- | --------------- |
+| `stable` | every file above | created by `finalize-release` with the DMG, `-setup.exe`, `.deb`, both SBOMs and both org-config scripts attached; body from `CHANGELOG.md` | sdist + wheel |
+| `alpha` / `beta` / `rc` | every file above | created, marked prerelease, **no files attached** (`update_checker.py`'s beta channel reads that flag) | never |
+
+A pre-release's DMG, installers, SBOMs, sdist and wheel are stored only in R2 and reachable only
+through the Worker's download routes.
+
+### What the private bucket does and does not buy
+
+The bucket is left at R2's default: private, no public bucket policy, no Public Development URL,
+no Custom Domain.
+
+- **It does** make the Worker the only public path to any artifact. Nothing can enumerate the
+  bucket, hotlink an object, or fetch a release without passing through the route that counts it,
+  which is what makes the download count a full count rather than a sample.
+- **It does not** restrict who can download a pre-release. The Worker serves
+  `/download/<channel>/<artifact-id>` for every channel it knows, unauthenticated, and
+  `/api/releases` and `/api/releases/history` list them all. That is deliberate; see
+  [ADR 0024](adr/0024-pre-releases-are-publicly-downloadable.md) for the decision and for how to
+  reverse it (Worker routes and website together).
+
+### Publication is transactional
+
+`scripts/r2_release.py` subcommands (from its `argparse`):
+
+| Subcommand | Arguments | Does |
+| ---------- | --------- | ---- |
+| `channel` | `<version>` | prints the channel; exit 1 for a non-release version |
+| `check-tag` | `--tag`, `--version` | exit 1 unless the resolved version is the one the pushed tag names |
+| `upload` | `--version`, `[--bucket]`, `files…` | uploads each file to `releases/<channel>/<version>/<basename>` |
+| `finalize` | `--version`, `[--bucket]` | writes `manifest.json`, runs `verify`, then `promote` |
+| `verify` | `--version`, `[--bucket]` | checks every manifest artifact exists with the recorded size and SHA-256 |
+| `promote` | `--version`, `[--bucket]` | rewrites the channel's `latest.json` to point at that version |
+
+`--bucket` defaults to `$R2_BUCKET`, else `privacyfence-releases`. `upload` publishes nothing by
+itself; only `finalize` moves `latest.json`, and only after verification passes. A release
+missing any mandatory installer fails `finalize` with `latest.json` untouched, so an incomplete
+release can sit in the bucket without becoming the one the Worker serves. `finalize-release`
+`needs: [build, build-windows, build-deb, sbom]`, so a failure in any of those leaves the previous
+release as `latest`.
+
+Properties to know before changing any of it:
+
+- **The manifest lists installers only.** `_INSTALLERS` recognizes exactly three filename
+  patterns — `PrivacyFence-*.dmg` → `macos-arm64`, `PrivacyFence-*-setup.exe` → `windows-x64`,
+  `privacyfence_*_amd64.deb` → `linux-x64` — and all three (`REQUIRED_ARTIFACT_IDS`) are mandatory
+  for `finalize`. SBOMs, org-config scripts, the sdist/wheel and any `.pkg` stay in R2 but never
+  enter `artifacts[]` (`classify_installer()` returns `None`; the `.pkg` case is asserted in
+  `tests/unit/test_r2_release.py`). This keeps the KPI correct by construction: the Worker counts
+  every artifact it serves and the stats query sums every row without filtering `artifact_kind`.
+- **Manifest schema is `1`** (`MANIFEST_SCHEMA`): `schema`, `version`, `channel`, `published_at`,
+  and `artifacts[]` of `id`, `kind` (`installer`), `platform`, `architecture`, `filename`, `key`,
+  `size`, `sha256`, sorted by `id`. The contract is `cloudflare/downloads/src/manifest.ts`; change
+  both and the Worker's test fixtures together. `key` is for the Worker alone: the `/api/*`
+  routes publish every other field and never `key` (see "Routes" below).
+- **SHA-256 is recorded as R2 object metadata (`sha256`) at upload time**, not computed during
+  `finalize`, which runs on a runner where none of the installers exist on disk. An ETag is no
+  substitute: large uploads go multipart, and a multipart ETag is not the object's MD5.
+- **Uploads are immutable.** Identical bytes under an existing key are skipped, so re-running a
+  partly failed job is safe; different bytes hard-fail. A version that has published artifacts
+  stays published — cut the next one.
+- **`promote` refuses a version with no `manifest.json`.** `finalize` always writes it first, so
+  this only matters when `promote` is run by hand, where a mistyped version would otherwise point
+  a whole channel at a 404.
 
 ## The download Worker
 
-`cloudflare/downloads/` — deployed to `downloads.privacyfence.eu` by
-`.github/workflows/deploy-download-worker.yml` on any change to that tree on `main`.
+`cloudflare/downloads/`, served at `downloads.privacyfence.eu`. It reaches R2 and D1 only through
+its `RELEASES` and `DB` bindings (`wrangler.toml`) and holds no S3 credentials.
 
-Routes:
+`.github/workflows/deploy-download-worker.yml` runs on changes to `cloudflare/downloads/**` or
+itself:
 
-- `GET /download/<channel>/<platform-arch>` — resolves `releases/<channel>/latest.json` → that
-  version's manifest → the matching artifact, and streams it from the `RELEASES` binding.
-  Never a redirect to a public URL.
-- `GET /download/version/<version>/<platform-arch>` — the same, pinned to one version's own
-  manifest.
-- `GET /api/releases`, `GET /api/releases/<channel>` — release metadata.
-- `GET /api/stats/downloads` — the Cloudflare half of the KPI.
-- `GET /health`.
+- `verify` (push to `main`, pull requests, dispatch): `npm ci`, `npm run typecheck`, `npm test`
+  (vitest under local Miniflare, no credentials), `npm run dry-run`.
+- `deploy` (push to `main` or dispatch only, after `verify`):
+  `wrangler d1 migrations apply DB --remote`, `wrangler deploy`, then a `HEAD /health` check that
+  must return 200.
 
-A bare `/` returns 404 `{"error":"no such route"}`. That is correct rather than a defect: the
-handler serves `/health`, `/api/*` and `/download/*` and falls through for everything else.
+### Routes
 
-`Content-Type`, `Content-Length`, `ETag`, `Content-Disposition: attachment` and `Accept-Ranges`
-are set on downloads. CORS (`Access-Control-Allow-Origin`) is restricted to the website's own
-origin and applies only to `/api/*` — download routes need no browser CORS.
+| Route | Methods | Returns |
+| ----- | ------- | ------- |
+| `/download/<channel>/<artifact-id>` | `GET`, `HEAD` | resolves `releases/<channel>/latest.json` → manifest → artifact and streams it from R2 |
+| `/download/version/<version>/<artifact-id>` | `GET`, `HEAD` | same, from that version's own manifest (older versions stay downloadable) |
+| `/api/releases` | `GET` | `{"channels": {stable, alpha, beta, rc}}`, each the latest manifest (without R2 keys) or `null` |
+| `/api/releases/<channel>` | `GET` | that channel's latest manifest (without R2 keys); 404 if unknown or unpublished |
+| `/api/releases/history` | `GET` | `{"releases": [...]}`: every published version on every channel, newest first (see below) |
+| `/api/stats/downloads` | `GET` | `{total, by_channel, by_platform}` from D1; 503 on a D1 error, never a fake zero |
+| `/health` | `GET`, `HEAD` | `{"status":"ok"}`; touches neither binding |
+
+`<channel>` is one of `stable`, `alpha`, `beta`, `rc`; `<artifact-id>` is a manifest `id`
+(`macos-arm64`, `windows-x64`, `linux-x64`). Downloads are streamed, never redirected. Anything
+else returns 404 JSON (`{"error": "no such route"}` for an unknown top-level path, including `/`);
+a wrong method returns 405 with `Allow`. `/api/*` accepts `GET` and `OPTIONS` only.
+
+**No `/api/*` response names an R2 key or URL.** Each manifest goes out through
+`publicManifest()` (`src/manifest.ts`), which copies `schema`, `version`, `channel`,
+`published_at` and each artifact's `id`, `kind`, `platform`, `architecture`, `filename`, `size`
+and `sha256` field by field, so a field added to the manifest later is not published until it is
+listed there. Only the `/download/...` routes read `key`, to find the object they stream.
+
+**Release metadata is cached for five minutes.** `/api/releases`, `/api/releases/<channel>` and
+`/api/releases/history` answer a 200 with `Cache-Control: public, max-age=300` and keep it in the
+Worker's edge cache (`caches.default`, `cachedRelease()` in `src/index.ts`) for the same five
+minutes: one entry per route path, whatever the query string or `Origin` (CORS is added after the
+cache), so page views cannot drive the R2 reads behind them. A new release therefore reaches the
+API, and the website, within five minutes of `latest.json` moving; the `/download/...` routes
+are not cached and serve it at once. Only 200s are cached: a 404 for a channel with nothing
+published yet never outlives its first release, and a 503 never outlives the outage.
+`/api/stats/downloads` is not cached, because its counts are live. The website's own fetches use
+`cache: 'no-store'`, which skips the browser's cache but not the Worker's.
+
+Download responses carry `Content-Type` (by extension: `.dmg`, `.exe`, `.deb`, `.pkg`, else
+`application/octet-stream`), `Content-Length`, `ETag`, `Accept-Ranges: bytes` and
+`Content-Disposition: attachment; filename="…"`. A single `bytes=` range is honored with a 206 and
+`Content-Range`; malformed or multi-range headers get the full object. Conditional requests go to
+R2 (`onlyIf`), and a failed precondition returns 304.
+
+**Release history.** `/api/releases/history` lists `releases/<channel>/` in R2 and reads each
+version's `manifest.json` (`src/history.ts`). A version is listed when its manifest exists and it
+is not newer than the version the channel's `latest.json` points at: `finalize` writes the
+manifest before it verifies and promotes, so a newer manifest is a release that never finished
+publishing, or one rolled back by promoting an older version. A channel with no `latest.json`
+lists nothing, and a manifest that cannot be read is skipped rather than failing the list. Each
+entry is the public manifest (as above, without `key`) with its `kind: "installer"` artifacts
+only; downloads stay on `/download/version/<version>/<artifact-id>`. Ordering is major.minor.patch, then
+stable > rc > beta > alpha, then stage number (`compareVersions` in `src/channel.ts`). It is
+cached like the other release routes (above), which matters most here: an uncached response is
+an R2 list per channel plus one read per version. An R2 failure returns 503 with
+`Cache-Control: no-store`, which is never cached. The route serves metadata only and counts
+nothing.
+
+CORS applies to `/api/*` only: `Access-Control-Allow-Origin` is reflected for
+`https://privacyfence.eu` and `https://www.privacyfence.eu`, never for other origins and never on
+`/download/*`.
 
 ### Counting semantics
 
-`env.DB` is incremented only for `GET` requests that begin serving an artifact successfully
-(`isDownloadStart()` in `src/artifacts.ts`):
+A D1 counter is incremented only for a `GET` that R2 answers with a body and that is a download
+start (`isDownloadStart()` in `src/artifacts.ts`):
 
 | Request | Counted? |
 | ------- | -------- |
 | `GET /download/...` → 200 | yes |
-| `GET` with `Range: bytes=0-...` | yes |
-| `GET` with `Range: bytes=<N>-`, `N > 0` (a resume) | **no** |
+| `GET` with `Range: bytes=0-…` | yes |
+| `GET` with `Range: bytes=<N>-`, `N > 0` (a resume) | no |
+| `GET` with a suffix range `Range: bytes=-<N>` | no |
+| `GET` answered 304 (failed precondition) | no |
 | `HEAD`, `OPTIONS` | no |
-| 404s, metadata and stats requests | no |
+| 404s, `/api/*`, `/health` | no |
 
-The resume row is the one that matters most: a naive implementation counts every `206` and
-inflates the KPI every time someone's connection drops. All of the above is verified against the
-live Worker, not only under Miniflare.
+Not counting resumes is what keeps a dropped connection from inflating the KPI. These rules are
+covered by `cloudflare/downloads/test/download.test.ts` and `artifacts.test.ts`.
 
-The counter is written asynchronously and best-effort — a D1 failure must never block or slow the
-byte stream, and an R2 failure must not increment.
+The write goes through `ctx.waitUntil()` and is best-effort: a D1 failure is logged and swallowed
+and never blocks the byte stream; an R2 miss returns 404 before any count.
 
 ### What is stored
 
@@ -103,94 +248,94 @@ CREATE TABLE download_counts (
 );
 ```
 
-No IP address, user ID, cookie ID, fingerprint, email, Cloudflare Ray ID or User-Agent is stored
-anywhere, in this table or any other. The schema has no column for any of them, which is a stronger
-guarantee than a policy.
-
-Because the channel is recorded, deliberate verification traffic stays separable from real user
-downloads forever — run production checks against `alpha`, not `stable`.
+`day` is the UTC date. One row per key; a download increments it in place. No IP address, user
+ID, cookie ID, fingerprint, email, Cloudflare Ray ID or User-Agent is stored anywhere — the schema
+has no column for any of them.
 
 ## The KPI
 
-The public number is **PrivacyFence installer downloads**, summed from two halves:
+The public figure is **installer downloads**, summed from two halves:
 
-- **Cloudflare** — `GET /api/stats/downloads`, as above.
-- **GitHub** — `scripts/release_stats.py`, run by `.github/workflows/pages.yml`, which sums
-  `download_count` across release assets that are installers only (`*.dmg`, `*-setup.exe`,
-  `*.deb`) and emits it as `github_installer_downloads`. It reuses `classify_installer()` from
-  `scripts/r2_release.py` rather than maintaining a second filename filter, so one definition
-  serves both halves.
+- **Cloudflare** — `GET /api/stats/downloads`'s `total`: every counted download across **all
+  four channels**, alpha, beta and rc included. The query does not filter by channel;
+  `by_channel` is there to separate them when reading the numbers, but the headline does not.
+- **GitHub** — `scripts/release_stats.py`, run in `.github/workflows/pages.yml`'s build step,
+  sums `download_count` over the assets of the newest 100 non-draft releases (one API page,
+  `per_page=100`) that `classify_installer()` (imported from
+  `scripts/r2_release.py`) recognizes as installers, and writes it to `release-stats.json` as
+  `github_installer_downloads`, with `stars` and `latest_release`. Pre-release GitHub Releases
+  carry no files, so in practice only stable contributes.
 
-SBOMs, checksums, org-admin scripts, source archives, the sdist/wheel, metadata requests and CI
-probes never count.
+SBOMs, checksums, org-config scripts, source archives, the sdist/wheel, metadata requests and
+`HEAD` probes never count.
 
-**Release CI must use `HEAD`, never `GET`, on public download routes**, so that checking the
-system never inflates the number it is checking. `build.yml`'s `finalize-release` smoke test does
-exactly this.
+**Checks against production use `HEAD`, never `GET`.** Because the headline total includes every
+channel, a `GET` against `alpha` inflates the public number exactly as much as one against
+`stable`. `build.yml`'s `finalize-release` smoke test (`HEAD` of all three artifact ids on the
+release's channel) and `deploy-download-worker.yml`'s `/health` check both use `HEAD`.
 
-`website/stats.js` adds the two halves into one headline figure, with the Cloudflare half resolving
-to `0` on failure — an outage understates the total rather than hiding the figure or blocking the
-page. The figure stays hidden entirely below `>= 50` downloads or `>= 10` stars, so social proof
-never advertises an empty launch.
+### Who sees the numbers
 
-## Publication is transactional
-
-`scripts/r2_release.py` (`channel`, `upload`, `finalize`, `verify`, `promote`), called from
-`build.yml`. `finalize` writes `manifest.json`, verifies every artifact it references is really in
-R2 with the recorded size and SHA-256, and only then rewrites the channel's `latest.json`.
-
-A release missing any mandatory installer fails with `latest.json` untouched, so an incomplete
-release can sit in the bucket without ever becoming the one the Worker serves. This has held under
-real conditions: a tag whose Windows build failed left its DMG, `.deb` and SBOMs in R2 with no
-manifest and no pointer to them.
-
-Four properties worth knowing before changing any of it:
-
-- **The manifest lists installers only.** SBOMs, org-config scripts and the sdist/wheel upload to
-  the same prefix but never enter `artifacts[]`. This is correctness, not tidiness: the Worker
-  counts every artifact it serves and the stats query sums every row without filtering
-  `artifact_kind`, so anything a manifest lists is countable by construction — and the KPI says
-  those files never count.
-- **SHA-256 is recorded as R2 object metadata at upload time**, not computed during finalize, which
-  runs on a clean runner where none of the installers exist on disk. An ETag is no substitute:
-  uploads go multipart above a threshold, and a multipart ETag is not the object's MD5.
-- **Uploads are immutable.** Identical bytes under an existing key are skipped (so re-running a
-  partly-failed release job is safe); different bytes hard-fail rather than silently replacing
-  something people may already have downloaded.
-- **One installer per platform, all of them mandatory.** `scripts/r2_release.py`'s `_INSTALLERS`
-  recognizes exactly three filename patterns — the DMG, the `-setup.exe` and the `.deb` — and every
-  one of them (`REQUIRED_ARTIFACT_IDS`) gates `latest.json`. The macOS `.pkg` (#428 D2) used to be
-  a fourth, deliberately optional entry, back when it was a second macOS download alongside a
-  drag-install DMG; it now ships *inside* the DMG (`scripts/build_dmg.sh`) and is never uploaded on
-  its own, so it is no longer an artifact this manifest, the Worker or the KPI knows about at all.
-  A `.pkg` reaching this prefix by accident would not be served or counted — `classify_installer()`
-  returns `None` for one, which is asserted directly in `tests/unit/test_r2_release.py`.
-
-`promote()` refuses to point a channel at a version with no manifest. `finalize` always writes the
-manifest first, so this never fires on that path — but `promote` exists to be run by hand, and by
-hand is exactly when a typo would otherwise leave every downloader on the channel resolving
-`latest.json` to a 404 with the previous pointer already overwritten.
+- **`/api/stats/downloads` is public.** It has no authentication; anyone can read it with any HTTP
+  client. CORS only decides which web origins' scripts may read it in a browser
+  (`privacyfence.eu`, `www.privacyfence.eu`). It exposes aggregates only (`total`, per channel,
+  per platform/architecture). `/api/stats/downloads` is the only stats route; any other
+  `/api/stats/*` path is a 404.
+- **Homepage** (`website/stats.js`): shows GitHub half + Cloudflare half as "release downloads",
+  together with the star count, only once the sum is **≥ 50 or** stars are **≥ 10**; otherwise
+  the block stays hidden. The Cloudflare half resolves to `0` on any failure, so an outage
+  understates the total instead of hiding it; if `release-stats.json` fails, nothing is shown.
+- **Download page** (`website/download/download.js`): shows the Cloudflare `total` alone as
+  "N installers downloaded so far." whenever it is non-zero; any failure leaves the line hidden.
 
 ## The website
 
 `website/download/` builds every card at runtime from `GET /api/releases/<channel>` — filenames,
-sizes, checksums and which platforms exist all come from the manifest, so a new build needs no
-website change. Browser OS detection only *highlights* the likely installer; it never hides the
-others.
+sizes, SHA-256 and which platforms exist all come from the manifest, so a new build needs no
+website change. Download buttons point at `downloads.privacyfence.eu/download/<channel>/<id>`.
+An artifact id missing from the page's `PLATFORMS` map still renders under its raw id. Browser OS
+detection only highlights the likely installer; it never hides the others.
 
-Three failure paths degrade independently: a stable-metadata failure falls back to GitHub Releases
-so the page is never a dead end; a pre-release channel with nothing published renders nothing
-rather than an empty invitation; a stats outage hides one line and touches nothing else.
+**Pre-release section.** `newestPublishedPreRelease()` fetches `rc`, `beta` and `alpha` in
+parallel (a failed or 404 fetch counts as unpublished), and `pickPreRelease()` returns the
+manifest with the **highest version**, not the first channel that answers: compare
+major.minor.patch, then stage (`rc` > `b` > `a`), then stage number. So a newer-cycle alpha
+outranks a leftover rc from an older cycle. A manifest whose version does not parse is skipped.
+The section names the channel from the manifest and stays hidden if nothing is published or the
+winning manifest has no artifacts.
 
-The pre-release section follows whichever channel has a build, trying `rc`, then `beta`, then
-`alpha`, and names the channel from the manifest. Hardcoding one channel is how that section once
-stayed permanently hidden while a perfectly good build sat published one channel over.
+**Release history** (`website/releases/`, `privacyfence.eu/releases/`). One table row per
+published version on every channel, from `GET /api/releases/history`, newest version first (the
+same order as the pre-release pick). Each row has the version, channel, the manifest's
+`published_at` date, the installers and a link to the version's GitHub Release. **Current** marks
+the newest stable release only. Download links pin the exact version
+(`/download/version/<version>/<id>`), so a row never serves a newer file after its channel moves
+on. Only `kind: "installer"` artifacts are offered, and a release with none is left out. A
+pre-release older than the current stable one is marked superseded by it. `/download/`'s header
+and its pre-release section link here, and so does the site footer. The header nav does not.
 
-**`pages.yml` builds `_site` from a hand-written list of files, not from the `website/`
-directory.** A file not named there ships as a 404 no matter how many tests pass locally — that is
-how `/download/` first shipped, while the homepage CTAs already pointed at it.
-`tests/unit/test_website_download_cta.py::test_every_website_file_is_actually_deployed` now fails
-if any file under `website/` is missing from that step. Add new website files to both.
+The Worker (`deploy-download-worker.yml`) and the site (`pages.yml`) deploy independently, so the
+page never assumes the history route exists. If it is missing, failing or empty, `releases.js`
+falls back to `GET /api/releases`, the newest release per channel, and keeps rows the build
+pre-rendered unless that list has a version they lack (one published since the build). The build
+falls back the same way.
+
+The failure paths are independent: a failed stable fetch shows a fallback linking to GitHub
+Releases' latest release; an empty pre-release set renders nothing; a stats failure hides one
+line. `tests/integration/test_download_page.py` exercises the page in headless Chromium with the
+API stubbed.
+
+**The site is built from a named list of files, not the `website/` directory.**
+`scripts/build_site.py`'s manifest (`PAGES`, `STATIC`) is what ships; a file named in none of its
+lists ships as a 404. `tests/unit/test_website_download_cta.py::test_every_website_file_is_actually_deployed`
+fails if any file under `website/` is missing from them; add new website files to the manifest.
+The build also pre-renders `/download/` from `/api/releases/stable` at deploy time, so the page
+lists the current installers without JavaScript; `download.js` replaces those cards with the live
+manifest, and keeps them (instead of showing the GitHub fallback) if the fetch fails. `/releases/`
+is pre-rendered from `/api/releases/history` (or `/api/releases`, as above) the same way and
+behaves the same when its fetches fail: pre-rendered rows stay, and an empty table shows a link to
+GitHub Releases.
+`tests/integration/test_releases_page.py` covers it in Chromium.
 
 ## Cloudflare resources
 
@@ -209,38 +354,38 @@ repository.
 | D1 database ID | `1cb5c99c-6d34-4031-a5f6-2f3a406e4979` |
 | D1 binding | `DB` |
 
-The D1 schema comes from this repo's migration, never the dashboard. `workers_dev = false` and
-`[[routes]] custom_domain = true` are committed in `wrangler.toml` so a later `wrangler deploy`
-cannot silently re-enable a `*.workers.dev` URL.
+The D1 schema comes from this repo's migrations, never the dashboard. `workers_dev = false` and
+`[[routes]] custom_domain = true` are committed in `wrangler.toml` so a `wrangler deploy` cannot
+re-enable a `*.workers.dev` URL.
 
 ## Credentials
 
-**There are two unrelated Cloudflare credential sets. Do not conflate them** — they differ in
-resource (Workers/D1 vs. R2), in purpose (deploying the Worker vs. publishing the release
-archive), and in which workflow reads them. The names carry the distinction: `CF_` plus which
-resource they are for.
+**There are two unrelated Cloudflare credential sets.** They differ in resource (Workers/D1 vs.
+R2), purpose (deploying the Worker vs. publishing the release archive) and the workflows that read
+them. Set them under repo **Settings → Secrets and variables → Actions**.
 
-| Secret / variable | Used by | For |
-| ----------------- | ------- | --- |
-| `CF_DOWNLOADS_WORKER_API_TOKEN` | `deploy-download-worker.yml` | `wrangler` deploy + D1 migrations |
-| `CF_DOWNLOADS_WORKER_ACCOUNT_ID` | `deploy-download-worker.yml` | the account above |
-| `CF_RELEASES_R2_ACCESS_KEY_ID` | `build.yml`, `publish-pypi.yml` | S3 uploads to the release archive |
-| `CF_RELEASES_R2_SECRET_ACCESS_KEY` | `build.yml`, `publish-pypi.yml` | as above |
-| `CF_RELEASES_R2_ENDPOINT` (a **variable**, not a secret) | `build.yml`, `publish-pypi.yml` | the bucket's S3 endpoint |
+| Name | Kind | Used by | For |
+| ---- | ---- | ------- | --- |
+| `CF_DOWNLOADS_WORKER_API_TOKEN` | secret | `deploy-download-worker.yml` (as `CLOUDFLARE_API_TOKEN`) | `wrangler deploy` + D1 migrations |
+| `CF_DOWNLOADS_WORKER_ACCOUNT_ID` | secret | `deploy-download-worker.yml` (as `CLOUDFLARE_ACCOUNT_ID`) | the account above |
+| `CF_RELEASES_R2_ACCESS_KEY_ID` | secret | `build.yml`, `publish-pypi.yml` | S3 access to the release archive |
+| `CF_RELEASES_R2_SECRET_ACCESS_KEY` | secret | `build.yml`, `publish-pypi.yml` | as above |
+| `CF_RELEASES_R2_ENDPOINT` | **variable** (read as `vars.`) | `build.yml`, `publish-pypi.yml` | the bucket's S3-compatible endpoint URL |
 
-The Worker reaches R2 through its `RELEASES` binding, never through S3 credentials — so a green
-`deploy-download-worker.yml` is no evidence at all about the R2 pair, and vice versa. Nothing
-exercises the R2 credentials until a tag push, i.e. mid-release; verify them out of band after any
-rotation rather than finding out then.
+`scripts/r2_release.py` exits with an error naming any of the three `CF_RELEASES_R2_*` values that
+is missing (the `channel` and `check-tag` subcommands need none of them). The R2 pair is an R2 API
+token scoped to the `privacyfence-releases` bucket.
+
+The Worker reaches R2 through its binding, never through the R2 pair, so a green
+`deploy-download-worker.yml` says nothing about the R2 credentials, and vice versa. Nothing
+exercises the R2 credentials until a tag push; verify them out of band after any rotation.
 
 ### Use account-owned API tokens
 
-Create the Worker deploy token under **Manage Account → Account API Tokens** (Super Administrator
-role required), *not* My Profile → API Tokens. Cloudflare recommends account-owned tokens wherever
-a credential should not be associated with a particular user: they act as service principals, which
-is what a CI deploy key is. A user token carries whoever created it, so it can stop working the
-moment that person's role changes — an outcome this repo cannot detect except as a red release
-build. The account scope is implicit in ownership. The same rule applies to the R2 token.
+Mint **both** tokens — the Worker deploy token and the R2 release-archive token — under
+**Manage Account → Account API Tokens** (Super Administrator role required), not My Profile → API
+Tokens. An account-owned token acts as a service principal; a user token stops working when that
+user's access changes, which this repo would only notice as a failed deploy or a failed release.
 
 Permissions for the Worker deploy token:
 
@@ -252,20 +397,15 @@ Permissions for the Worker deploy token:
 | Zone | Workers Routes · Edit | the `downloads.privacyfence.eu` custom domain |
 | Zone | Zone · Read | resolving that zone at deploy time |
 
-Scope Zone Resources to `privacyfence.eu`, and **leave the expiry empty** — a dated token becomes a
-silent release outage.
+Scope Zone Resources to `privacyfence.eu`, and **leave the expiry empty** — a dated token becomes
+a silent release outage.
 
 ### Verify a token before storing it
 
-**A stored secret is not a working credential, and CI is where that difference shows up.** The
-Worker deploy went through five failed runs proving this: four carried a token Cloudflare rejected
-with `7403` (`The given account is not valid or is not authorized to access this service`) though
-the secret was present and non-empty, and one carried no token at all, because a rename landed in
-the workflow while the GitHub secrets kept their old names.
-
-Note the *account* verify path. An account-owned token is not entitled to call
-`/user/tokens/verify`, and `wrangler whoami` reports on the authenticated user rather than the
-token, so neither is a valid test here:
+A stored, non-empty secret is not a working credential: Cloudflare rejects an unauthorized token
+with error `7403` (`The given account is not valid or is not authorized to access this service`).
+An account-owned token cannot call `/user/tokens/verify`, and `wrangler whoami` reports on the
+user rather than the token, so use the account paths:
 
 ```
 ACCT=326657b4f70af041996d60fd6b8f83fa
@@ -275,6 +415,7 @@ curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCT/d1/database" \
   -H "Authorization: Bearer $CF_TOKEN"
 ```
 
-Expect `"status": "active"` from the first and the `privacyfence-downloads` database — not `7403` —
-from the second. The second call is the one that distinguishes a good token from an unauthorized
-one.
+Expect `"status": "active"` from the first and the `privacyfence-downloads` database — not
+`7403` — from the second. The second call is the one that distinguishes a good token from an
+unauthorized one. When renaming a secret, rename it in GitHub and in the workflow together: a
+workflow reading a name that does not exist gets an empty value.

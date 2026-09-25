@@ -1,7 +1,7 @@
 """The real default browser-launch path of run_browser_oauth().
 
 ``open_browser`` is deliberately injectable (oauth_loopback.py's own
-docstring, §16.2.7) so tests can simulate the provider round trip without a
+docstring) so tests can simulate the provider round trip without a
 real browser -- and every existing test of it
 (tests/unit/test_oauth_loopback.py) does exactly that, always passing its
 own ``open_browser`` stand-in. That leaves the actual default this

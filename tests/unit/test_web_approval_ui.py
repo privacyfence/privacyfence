@@ -191,8 +191,8 @@ class TestSingleton:
 
 
 class TestDeferredRegistry:
-    """P3: card/confirmation storage moved out of this class's own single
-    slot into approvals.PendingApprovalRegistry (see this module's own
+    """Card/confirmation storage lives in
+    approvals.PendingApprovalRegistry (see this module's own
     docstring) -- exposed here for gate.py's deferred protocol, and reused
     for this class's own multi-item current()/resolve() contract."""
 
@@ -266,7 +266,7 @@ class TestDeferredRegistry:
 
 
 class TestCardNamesTheCapturedAgent:
-    """AGT-4: the card shows the identity the approval captured at
+    """The card shows the identity the approval captured at
     registration; a direct call with none uses the calling context's."""
 
     def test_uses_the_approvals_own_agent(self):

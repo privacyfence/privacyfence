@@ -1,12 +1,11 @@
-"""Equivalence tests for privacyfence.policy.conditions (P2 of the policy v2 redesign).
+"""Equivalence tests for privacyfence.policy.conditions against the v1 rule engine it replaces.
 
 Every `ConditionSelector` is checked against the old `AutoAcceptEvaluator._rule_*` method(s) it
 replaces on a table of fixtures per old predicate name, mirroring `test_auto_accept.py`'s own
 edge cases (a match, a non-match, and -- for every FETCHED condition -- the absence case with
 `raw_data=None` or a missing attribute, since that's exactly the hazard `DATA_DEPENDENT_RULES`
-exists to flag). Agreement on every fixture is P2's exit criterion for this module: a red run here
-is the equivalence harness described in the redesign proposal's P0 catching a real behavioral
-drift, not a false alarm to silence.
+exists to flag). This module must agree on every fixture: a red run here is the equivalence
+harness catching a real behavioral drift, not a false alarm to silence.
 """
 from __future__ import annotations
 
@@ -95,8 +94,9 @@ FIXTURES: dict[str, list] = {
         (None, make_ctx(raw_data=None)),
     ],
     "shared_drive_exclusion": [
-        (None, make_ctx(raw_data=SimpleNamespace(shared=False))),
-        (None, make_ctx(raw_data=SimpleNamespace(shared=True))),
+        (None, make_ctx(raw_data=SimpleNamespace(drive_id=""))),
+        (None, make_ctx(raw_data=SimpleNamespace(drive_id="0AShared"))),
+        (None, make_ctx(raw_data=SimpleNamespace(drive_id="", shared=True))),
         (None, make_ctx(raw_data=SimpleNamespace())),
         (None, make_ctx(raw_data=None)),
     ],
@@ -148,6 +148,21 @@ class TestNoAttachmentsUnknownConnector:
         selector = CONDITION_SELECTORS["no_attachments"]
         ctx = make_ctx(connector="jira", raw_data=SimpleNamespace())
         assert selector.holds(None, ctx) is False
+
+
+class TestNotSharedDrive:
+    """Drive's `shared` flag means "shared with someone", not "lives in a shared drive"; only a
+    non-empty `drive_id` identifies a shared-drive file."""
+
+    def test_a_shared_drive_file_fails(self):
+        selector = CONDITION_SELECTORS["not_shared_drive"]
+        ctx = make_ctx(raw_data=SimpleNamespace(drive_id="0AShared", shared=False))
+        assert selector.holds(None, ctx) is False
+
+    def test_a_my_drive_file_shared_with_a_colleague_holds(self):
+        selector = CONDITION_SELECTORS["not_shared_drive"]
+        ctx = make_ctx(raw_data=SimpleNamespace(drive_id="", shared=True))
+        assert selector.holds(None, ctx) is True
 
 
 class TestVocabularyCompleteness:

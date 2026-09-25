@@ -1,28 +1,23 @@
-"""The v2 rule evaluator -- P3 of the policy v2 redesign.
+"""The rule evaluator -- the only one there is.
 
-Replaces the rule-evaluation half of ``auto_accept.AutoAcceptEvaluator`` (``should_auto_accept``,
-``preflight_from_args``, the temp-accept window) with one built on P1's registry and P2's scope/
-condition selectors, so a rule's three-way preflight verdict is *derived* from each selector's own
-declared ``resolves_from`` rather than kept in sync by hand across ``ARGS_ONLY_RULES``/
-``DATA_DEPENDENT_RULES`` (F6).
+Built on the tool registry (`policy/registry.py`) and the scope/condition selectors
+(`policy/scopes.py`, `policy/conditions.py`), so a rule's three-way preflight verdict is *derived*
+from each selector's own declared ``resolves_from`` rather than kept in sync by hand in a separate
+list of "arguments-only" and "needs the fetched item" predicates, which is how the old evaluator
+drifted.
 
 This module knows nothing about where a ``PolicyRule`` list comes from -- in production
-``policy/store.py`` compiles one from the on-disk ``auto_accept:`` section. ``evaluate()``
-and ``preflight()`` are drop-in replacements for ``should_auto_accept()``/``preflight_from_args()``:
-same ``(bool, matched_rule_id)`` / ``(verdict, matched_rule_id, reason)`` shapes, same fail-closed
-behaviour on an unrecognised predicate or an evaluation error, same temp-accept fallback -- delegated
-to whichever store the caller passes in (``is_temp_accepted``), rather than re-implemented here, so a
-v2-authoritative gate.py and its v1 shadow keep sharing one grace-window store instead of drifting the
-moment a user clicks "Allow once" (see ``auto_accept.AutoAcceptEvaluator.is_temp_accepted``).
+``policy/store.py`` compiles one from the on-disk ``auto_accept:`` section. ``evaluate()`` returns
+``(bool, matched_rule_id)`` and ``preflight()`` returns ``(verdict, matched_rule_id, reason)``; both
+fail closed on an unrecognised predicate or an evaluation error. The temp-accept grace window is
+delegated to whichever store the caller passes in (``is_temp_accepted``) rather than re-implemented
+here, so every caller shares the one store a click on "Allow once" writes to.
 
-P3 ran this alongside the old evaluator for one release (shadow mode) rather than replacing it
-outright -- both engines on every real call, the old one deciding by default, a disagreement logged
-at ``WARNING`` and never at the content level -- behind a ``policy.engine: v1 | v2`` switch. P9
-([ADR 0004](../../../docs/adr/0004-retire-the-v1-auto-accept-config-model.md)) ended that: the old
-evaluator, the switch and its config module are gone, and this engine is the only one. What is left
-of the safety net is the equivalence harness that proves each selector behaves like the predicate it
-replaced (``tests/unit/policy/_v1_reference.py``). The one-time v1 -> v2 settings conversion is gone
-too (ADR 0041).
+The old evaluator, and the ``policy.engine`` switch that once chose between it and this one, are
+gone ([ADR 0004](../../../docs/adr/0004-retire-the-v1-auto-accept-config-model.md)). What is left of
+that migration's safety net is the equivalence harness that proves each selector behaves like the
+predicate it replaced (``tests/unit/policy/_v1_reference.py``). The one-time settings conversion is
+gone too (ADR 0041).
 """
 from __future__ import annotations
 
@@ -40,16 +35,16 @@ IsTempAccepted = Callable[[str, "str | None"], bool]
 
 @dataclass(frozen=True)
 class PolicyRule:
-    """One compiled v2 rule: ``predicate`` + ``value`` select a scope (via
+    """One compiled rule: ``predicate`` + ``value`` select a scope (via
     ``scopes.SCOPE_SELECTORS``/``scopes.NEW_SCOPE_SELECTORS``), narrowed by zero or more
     ``conditions`` (via ``conditions.CONDITION_SELECTORS``) that must all hold. ``operations``
-    is the set of v1 operation keys this rule applies to -- the operation key doesn't disappear
-    in v2, it stays the engine's internal address (redesign proposal §09); it's what a future
-    schema's user-facing verb list compiles down to.
+    is the set of operation keys this rule applies to -- the operation key stays the engine's
+    internal address, and a user-facing verb list compiles down to it.
 
     ``id`` is the rule's identifier for logging. A rule read back from disk carries the
-    content-derived id ``policy.store.rule_id_for`` minted; a rule built in memory may carry
-    anything, which is why attribution recomputes it (``policy.store.rule_id_for_rule``).
+    content-derived id ``policy.store.rule_id_for`` minted, and that stored id is what decisions
+    are attributed to (ADR 0074); a rule built in memory may carry anything, which is what
+    ``policy.store.rule_id_for_rule`` recomputes the canonical id for.
     """
 
     id: str
@@ -74,12 +69,11 @@ def _conditions_hold(rule: PolicyRule, ctx: ReviewContext) -> bool:
 def find_matching_rule(
     rules: Iterable[PolicyRule], operation_key: str, ctx: ReviewContext,
 ) -> "PolicyRule | None":
-    """The rule object ``evaluate()`` below would match, or ``None`` -- factored out for P8 (rule
-    attribution): a caller that needs to know *which row* matched, not just its ``.id`` (not
+    """The rule object ``evaluate()`` below would match, or ``None`` -- factored out for rule
+    attribution: a caller that needs to know *which row* matched, not just its ``.id`` (not
     guaranteed canonical for a rule built in memory -- see ``policy.store.rule_id_for_rule``),
-    needs the object itself, and
-    re-deriving it from ``evaluate()``'s returned id would be wrong whenever two rules in the same
-    list happen to share one (exactly the F9 shape this whole redesign exists to fix). Never
+    needs the object itself, and re-deriving it from ``evaluate()``'s returned id would be wrong
+    whenever two rules in the same list happen to share one. Never
     considers the temp-accept grace window -- that is a session-scoped fallback, not a rule row,
     which is exactly why a caller resolving a decision to "one rule row" should get ``None`` here
     for it, not a pseudo-rule.
@@ -109,14 +103,12 @@ def evaluate(
     *,
     is_temp_accepted: IsTempAccepted | None = None,
 ) -> tuple[bool, str]:
-    """v2 counterpart of ``AutoAcceptEvaluator.should_auto_accept``. Same ``(bool,
-    matched_rule_id)`` shape: the first rule (in ``rules``' own order) whose ``operations``
-    contains ``operation_key``, whose scope matches, and whose conditions all hold wins: an
-    ordinary union, no precedence beyond "first configured, first checked" (``effect`` is
-    reserved to ``"allow"`` only in v2 -- see the redesign proposal's D3). An unrecognised
+    """Whether a real call auto-accepts, as ``(bool, matched_rule_id)``: the first rule (in
+    ``rules``' own order) whose ``operations`` contains ``operation_key``, whose scope matches, and
+    whose conditions all hold wins: an ordinary union, no precedence beyond "first configured,
+    first checked" (every rule allows; there is no deny rule to order against). An unrecognised
     predicate, or a selector/condition that raises, is treated as a non-match rather than
-    propagated -- fail closed, exactly as ``should_auto_accept``'s own ``except Exception``
-    around ``self._evaluate`` does.
+    propagated -- fail closed.
     """
     rule = find_matching_rule(rules, operation_key, ctx)
     if rule is not None:
@@ -134,13 +126,12 @@ def preflight(
     my_email: str = "",
     is_temp_accepted: IsTempAccepted | None = None,
 ) -> tuple[str, str, str]:
-    """v2 counterpart of ``AutoAcceptEvaluator.preflight_from_args``. Never touches
-    ``ctx.raw_data`` (always ``None`` here, same as the original), and only ever evaluates a
-    rule whose scope selector *and* every attached condition selector declare
-    ``resolves_from == ResolvesFrom.ARGS`` -- derived per rule from the selectors it actually
-    uses, rather than kept in a hand-maintained set (F6). Returns ``(verdict, matched_rule_id,
-    reason)`` with ``verdict`` one of ``"auto_accept"``, ``"requires_review"``, ``"unknown"``,
-    same semantics as the original.
+    """What a call would get before it is made, from its arguments alone. Never touches
+    ``ctx.raw_data`` (always ``None`` here), and only ever evaluates a rule whose scope selector
+    *and* every attached condition selector declare ``resolves_from == ResolvesFrom.ARGS`` --
+    derived per rule from the selectors it actually uses, rather than kept in a hand-maintained
+    set. Returns ``(verdict, matched_rule_id, reason)`` with ``verdict`` one of
+    ``"auto_accept"``, ``"requires_review"``, ``"unknown"``.
     """
     ctx = ReviewContext(connector="", tool="", args=args or {}, raw_data=None, my_email=my_email)
 

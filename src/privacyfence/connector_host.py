@@ -1,19 +1,13 @@
 """The live connector registry the daemon builds once and shares with every
 consumer that needs the current connector set.
 
-This is the one piece of ``ipc_server.IPCServer`` that outlives it (P5:
-"``bridge/``, ``ipc.py``, ``ipc_server.py`` deleted"): everything else that class used to own --
-socket framing, the per-launch auth token, connector-call dispatch, retry
-dedupe, the meta-tools (``check_policy``/``list_rules``/
-``propose_rule_change``), unattended-session bookkeeping -- lived there only
-because the bridge protocol needed it, and none of that had a reason to
-survive the bridge. ``web/mcp_dispatch.py``'s ``McpDispatcher`` is the one
-dispatcher left (it always was, for ``/mcp`` -- see that module's own
-docstring), and it now owns unattended-session state too, since a
-connection over ``/mcp`` is the only kind that can ever mark itself
-unattended once there is no bridge socket to do it from.
+Connector-call dispatch, retry dedupe, the meta-tools (``check_policy``/
+``list_rules``/``propose_rule_change``) and unattended-session bookkeeping
+all live in ``web/mcp_dispatch.py``'s ``McpDispatcher``, the one dispatcher
+(see that module's own docstring) -- a connection over ``/mcp`` is the only
+kind that can mark itself unattended.
 
-What's left, and what this class is, is just the live ``{name: Connector}``
+This class is just the live ``{name: Connector}``
 map -- built once by ``daemon_main.build_connectors()`` and swapped
 wholesale by ``SettingsController.refresh_connectors()`` whenever a service
 is authenticated, re-authenticated, or toggled on/off. Three consumers

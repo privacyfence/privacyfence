@@ -10,18 +10,26 @@
  *   GET/HEAD /download/version/<version>/<artifact-id>    -- pin to an exact, possibly older, version
  *   GET      /api/releases                                -- latest manifest per channel
  *   GET      /api/releases/<channel>                       -- latest manifest for one channel
+ *   GET      /api/releases/history                         -- every published version, newest first
  *   GET      /api/stats/downloads                          -- aggregated D1 counters
  *   GET      /health                                       -- liveness probe, touches no binding
  *
  * `<artifact-id>` matches a manifest artifact's own `id` field (e.g. "macos-arm64",
  * "windows-x64", "linux-x64") -- see manifest.ts's Manifest/ManifestArtifact types, which match
- * Phase 2's manifest schema exactly.
+ * the manifest.json scripts/r2_release.py writes exactly.
  */
 import { CHANNELS, isChannel, type Channel } from "./channel.js";
-import { findArtifact, resolveLatestManifest, resolveVersionManifest, type Manifest } from "./manifest.js";
+import {
+  findArtifact,
+  publicManifest,
+  resolveLatestManifest,
+  resolveVersionManifest,
+  type Manifest,
+} from "./manifest.js";
 import { recordDownload, queryStats } from "./counters.js";
 import { artifactHeaders, isDownloadStart, parseRangeHeader } from "./artifacts.js";
 import { corsPreflight, jsonResponse, methodNotAllowed, notFound, withCors } from "./http.js";
+import { listReleaseHistory } from "./history.js";
 
 // `Env` (RELEASES/DB bindings) is declared globally in ../worker-configuration.d.ts, matching
 // wrangler.toml -- no import needed, same as any other Workers project's generated types.
@@ -114,26 +122,77 @@ async function handleStats(env: Env): Promise<Response> {
   } catch (err) {
     console.error("privacyfence-downloads: stats query failed", err);
     // A stats failure must never look like "zero downloads" -- surface it so the website
-    // (Phase 5) can hide the stats section instead of showing a wrong number.
+    // download page can hide the stats section instead of showing a wrong number.
     return jsonResponse({ error: "stats temporarily unavailable" }, 503);
   }
 }
 
-async function routeApi(path: string, env: Env): Promise<Response> {
-  if (path === "/api/releases") {
-    const entries = await Promise.all(
-      CHANNELS.map(async (channel) => [channel, await resolveLatestManifest(env.RELEASES, channel)] as const),
-    );
-    return jsonResponse({ channels: Object.fromEntries(entries) });
+// How long release metadata may be reused, by browsers and other HTTP caches and by this
+// Worker's edge cache. Short, so a new release shows up within minutes; long enough that page
+// views cannot drive the R2 reads (and, for the history, list operations) behind every response.
+const RELEASES_MAX_AGE_SECONDS = 300;
+const RELEASES_CACHE_CONTROL = { "Cache-Control": `public, max-age=${RELEASES_MAX_AGE_SECONDS}` };
+
+/**
+ * Serves a release-metadata route from the edge cache, or builds it with `produce` and caches it.
+ * One entry per route path: the key has no query string and no Origin (CORS is added by the
+ * caller, after the cache), so neither can be used to bypass it. Only a 200 is cached -- a 404
+ * for a channel with nothing published yet must not outlive its first release, and a 503 must
+ * not outlive the outage.
+ */
+async function cachedRelease(
+  path: string,
+  request: Request,
+  ctx: ExecutionContext,
+  produce: () => Promise<Response>,
+): Promise<Response> {
+  const cacheKey = new Request(new URL(path, request.url).toString());
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+  const response = await produce();
+  if (response.status === 200) ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+  return response;
+}
+
+async function handleHistory(env: Env): Promise<Response> {
+  let releases;
+  try {
+    releases = await listReleaseHistory(env.RELEASES);
+  } catch (err) {
+    console.error("privacyfence-downloads: release history failed", err);
+    // Not cached: the website falls back to /api/releases, and the next request retries.
+    return jsonResponse({ error: "release history temporarily unavailable" }, 503, { "Cache-Control": "no-store" });
   }
+  return jsonResponse({ releases }, 200, RELEASES_CACHE_CONTROL);
+}
+
+async function handleLatest(env: Env): Promise<Response> {
+  const entries = await Promise.all(
+    CHANNELS.map(async (channel) => {
+      const manifest = await resolveLatestManifest(env.RELEASES, channel);
+      return [channel, manifest && publicManifest(manifest)] as const;
+    }),
+  );
+  return jsonResponse({ channels: Object.fromEntries(entries) }, 200, RELEASES_CACHE_CONTROL);
+}
+
+async function handleChannel(env: Env, channel: Channel): Promise<Response> {
+  const manifest = await resolveLatestManifest(env.RELEASES, channel);
+  if (!manifest) return notFound(`no published release for channel: ${channel}`);
+  return jsonResponse(publicManifest(manifest), 200, RELEASES_CACHE_CONTROL);
+}
+
+async function routeApi(path: string, request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (path === "/api/releases") return cachedRelease(path, request, ctx, () => handleLatest(env));
+
+  // Before the channel route, which would otherwise read "history" as an unknown channel.
+  if (path === "/api/releases/history") return cachedRelease(path, request, ctx, () => handleHistory(env));
 
   const channelMatch = /^\/api\/releases\/([^/]+)$/.exec(path);
   if (channelMatch) {
     const channel = channelMatch[1]!;
     if (!isChannel(channel)) return notFound(`unknown channel: ${channel}`);
-    const manifest = await resolveLatestManifest(env.RELEASES, channel);
-    if (!manifest) return notFound(`no published release for channel: ${channel}`);
-    return jsonResponse(manifest);
+    return cachedRelease(path, request, ctx, () => handleChannel(env, channel));
   }
 
   if (path === "/api/stats/downloads") return handleStats(env);
@@ -155,7 +214,7 @@ export default {
     if (pathname.startsWith("/api/")) {
       if (request.method === "OPTIONS") return corsPreflight(request);
       if (request.method !== "GET") return withCors(request, methodNotAllowed(["GET", "OPTIONS"]));
-      return withCors(request, await routeApi(pathname, env));
+      return withCors(request, await routeApi(pathname, request, env, ctx));
     }
 
     if (pathname.startsWith("/download/")) {

@@ -1,4 +1,4 @@
-"""Tests for web/server.py's org-mode wiring (P7): build_app(org=...) and
+"""Tests for web/server.py's org-mode wiring: build_app(org=...) and
 WebServer(org=...) -- see test_org_mcp_e2e.py for the full DCR/authorize/
 token/tool-call flow driven over real HTTP; this file covers what server.py
 itself is responsible for: which routes exist (and, just as importantly,
@@ -48,10 +48,9 @@ class TestBuildAppOrgMode:
         assert r.status_code == 401
 
     def test_capability_routes_are_mounted_with_no_auth_required(self, tmp_path, monkeypatch):
-        # Phase 4 ("Clients without the bridge"): org mode mounts
-        # mount_capability_routes() alone (never mount_file_bridge's
-        # bearer-authenticated pair -- see that function's own docstring),
-        # so both a malformed slot and a malformed token come back 404
+        # Org mode mounts mount_capability_routes() alone (ADR 0028; never
+        # mount_file_bridge's bearer-authenticated pair -- see that
+        # function's own docstring), so both a malformed slot and a malformed token come back 404
         # (route exists, token isn't live), never 401.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(
@@ -95,17 +94,17 @@ class TestBuildAppOrgMode:
     def test_settings_dispatcher_surface_is_not_mounted(self, tmp_path, monkeypatch):
         # /settings' ~30-action local-mode dispatcher surface stays out of
         # org mode (see server.py's module docstring) -- unlike /approvals,
-        # which P9 (below) mounts as its own principal-aware route set.
-        # PSC-5: org mode now mounts its own POST /api/settings/{action}
+        # which org mode mounts as its own principal-aware route set (below).
+        # Org mode mounts its own POST /api/settings/{action}
         # (routes_settings.py's own build_org_routes, restricted to
-        # _ORG_ALLOWED_ACTIONS -- see that module's own docstring), the
-        # same path local mode's ~30-action dispatcher answers, so this
-        # path existing at all no longer proves local's surface isn't
-        # mounted. quit_app is one of the ~24 local-only actions
-        # _ORG_ALLOWED_ACTIONS never includes -- POSTing it still 404s
+        # _ORG_ALLOWED_ACTIONS -- see that module's own docstring and
+        # ADR 0032), the same path local mode's ~30-action dispatcher
+        # answers, so this path existing at all doesn't prove local's
+        # surface isn't mounted. quit_app is one of the ~24 local-only
+        # actions _ORG_ALLOWED_ACTIONS never includes -- POSTing it 404s
         # (an unauthenticated request 401s before the action name is even
-        # checked, so this signs in first); /settings itself is real now
-        # (#400, see the read-only-surface test below), so this only
+        # checked, so this signs in first); /settings itself is a real
+        # route (see the read-only-surface test below), so this only
         # checks the local-mode dispatcher's own unrestricted action
         # surface stays unreachable.
         org = _org_auth(tmp_path, monkeypatch)
@@ -118,7 +117,7 @@ class TestBuildAppOrgMode:
         assert client.get("/api/state/stream").status_code == 404
 
     def test_readonly_settings_surface_is_mounted(self, tmp_path, monkeypatch):
-        # #400: /settings and /settings/privacy are real routes now -- a
+        # /settings and /settings/privacy are real routes -- a
         # small, purpose-built surface (web/routes_settings.py's build_org_routes),
         # not the local-mode dispatcher above. An unauthenticated request is
         # redirected to /login, same as /approvals.
@@ -130,7 +129,7 @@ class TestBuildAppOrgMode:
         assert r.headers["location"] == "/login?next=/settings"
 
     def test_local_mode_approval_surface_is_not_what_gets_mounted(self, tmp_path, monkeypatch):
-        # /approvals exists (P9), but it's web/routes_approvals.py's
+        # /approvals exists, but it's web/routes_approvals.py's
         # build_routes() principal-aware route set, not that module's
         # create_app() shared-secret one -- an unauthenticated request is redirected to
         # /login, never served the (local-mode-only) card content directly.
@@ -143,11 +142,10 @@ class TestBuildAppOrgMode:
 
 
 class TestConnectSurfaceOrgMode:
-    """P8: /connect and the /oauth/start|callback/{service} routes are
+    """/connect and the /oauth/start|callback/{service} routes are
     mounted only once a real ConnectorRegistry is supplied on OrgAuth --
     see that class's own docstring. A hand-built OrgAuth without one
-    (every test above this class) keeps getting exactly P7's own route
-    set."""
+    (every test above this class) gets the route set without them."""
 
     def test_connect_is_not_mounted_without_a_connector_registry(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)
@@ -185,13 +183,13 @@ class TestConnectSurfaceOrgMode:
         # test_routes_org_identity.py's own fixtures -- that file's
         # TestLogin already proves default_next_path reaches the callback's
         # redirect; this just proves server.py actually wires "/connect" in
-        # as that default once P8's registry is present (see test_routes_
-        # org_identity.py::TestLogin for the equivalent no-registry case,
-        # which keeps the original "/approvals" default).
+        # as that default once a connector registry is present (see
+        # test_routes_org_identity.py::TestLogin for the equivalent
+        # no-registry case, which keeps the "/approvals" default).
 
 
 class TestApprovalsAndSecuritySurfaceOrgMode:
-    """P9: /approvals and /security are mounted unconditionally (unlike
+    """/approvals and /security are mounted unconditionally (unlike
     /connect, they need nothing from OrgAuth.connector_registry) -- see
     web/server.py's own module docstring."""
 
@@ -236,7 +234,7 @@ class TestApprovalsAndSecuritySurfaceOrgMode:
 
 
 class TestSecurityHeadersOrgMode:
-    """SEC-18: Strict-Transport-Security is org mode's own addition to the
+    """Strict-Transport-Security is org mode's own addition to the
     header set web/test_server.py's TestSecurityHeaders already covers for local
     mode -- CSP/X-Frame-Options/Permissions-Policy/Cross-Origin-Opener-
     Policy come from the same shared _SecurityHeadersMiddleware either way,
@@ -259,7 +257,7 @@ class TestSecurityHeadersOrgMode:
 
 
 class TestCacheControlOnSensitivePagesOrgMode:
-    """SEC-18: the org-mode counterpart of web/test_server.py's own
+    """The org-mode counterpart of web/test_server.py's own
     TestCacheControlOnSensitivePages -- every principal-aware page org mode
     mounts, authenticated and not."""
 
@@ -413,3 +411,38 @@ class TestWebServerOrgMode:
         org = _org_auth(tmp_path, monkeypatch)
         server = WebServer(WebApprovalUI(), org=org)
         assert not isinstance(server._server.config.app, ProxyHeadersMiddleware)
+
+    def test_uvicorn_does_not_add_its_own_proxy_headers_middleware(self, tmp_path, monkeypatch):
+        # uvicorn.Config defaults to proxy_headers=True with 127.0.0.1/::1
+        # (or $FORWARDED_ALLOW_IPS) trusted, which would honour forwarded
+        # headers without any trusted_proxies configured.
+        monkeypatch.setenv("FORWARDED_ALLOW_IPS", "*")
+        org = _org_auth(tmp_path, monkeypatch)
+        server = WebServer(WebApprovalUI(), org=org)
+        assert server._server.config.proxy_headers is False
+
+    async def test_forwarded_proto_from_loopback_is_ignored_without_trusted_proxies(self, tmp_path, monkeypatch):
+        org = _org_auth(tmp_path, monkeypatch)
+        config = WebServer(WebApprovalUI(), org=org)._server.config
+        seen: dict[str, object] = {}
+
+        async def probe(scope, receive, send):
+            seen["scheme"] = scope["scheme"]
+            seen["client"] = scope["client"]
+
+        async def noop(*_args):  # pragma: no cover - the probe never calls it
+            return None
+
+        # Swap in a probe as the app, so config.load() wraps it in exactly
+        # the middleware uvicorn itself would add at serve time.
+        config.app = probe
+        config.load()
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "GET", "scheme": "http", "path": "/", "raw_path": b"/",
+            "query_string": b"", "root_path": "",
+            "headers": [(b"x-forwarded-proto", b"https"), (b"x-forwarded-for", b"203.0.113.9")],
+            "client": ("127.0.0.1", 50000), "server": ("127.0.0.1", 8765),
+        }
+        await config.loaded_app(scope, noop, noop)
+        assert seen == {"scheme": "http", "client": ("127.0.0.1", 50000)}

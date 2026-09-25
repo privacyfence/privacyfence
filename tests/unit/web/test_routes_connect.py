@@ -1,6 +1,5 @@
 """Tests for web/routes_connect.py: /connect and the GET /oauth/start/
-{service}+/oauth/callback/{service} server-redirect flow (P8, `git show 96cd5af4^:docs/https-
-connector-refactor-plan.md` §9.3).
+{service}+/oauth/callback/{service} server-redirect flow.
 
 httpx's TestClient does not enforce SameSite cookie semantics the way a
 real browser does, so it would happily pass a naive implementation that
@@ -20,7 +19,7 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import apps_script_client, paths
+from privacyfence import apps_script_client, paths, slack_client
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_connect as rc
@@ -174,6 +173,21 @@ class TestOAuthStart:
         qs = dict(up.parse_qsl(up.urlparse(location).query))
         assert qs["redirect_uri"] == f"{ISSUER}/oauth/callback/slack"
         assert "state" in qs
+
+    def test_slack_requests_the_bundles_user_scopes(self):
+        slack_org = {**_ORG_CONFIG["slack"], "user_scopes": ["channels:read", "users:read"]}
+        app, sessions, _registry = _app(org_config={"slack": slack_org})
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/oauth/start/slack", cookies={org_session.SESSION_COOKIE: session_id})
+        qs = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))
+        assert qs["user_scope"] == "channels:read,users:read"
+
+    def test_slack_without_bundle_scopes_requests_the_defaults(self):
+        app, sessions, _registry = _app()
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/oauth/start/slack", cookies={org_session.SESSION_COOKIE: session_id})
+        qs = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))
+        assert qs["user_scope"] == ",".join(slack_client.DEFAULT_USER_SCOPES)
 
     def test_google_service_redirects_with_pkce_challenge(self):
         app, sessions, _registry = _app()

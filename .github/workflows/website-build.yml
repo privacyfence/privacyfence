@@ -1,0 +1,138 @@
+name: Website build
+
+# Builds privacyfence.eu with scripts/build_site.py on every pull request and on pushes to main and
+# releases/**, without deploying anything (pages.yml deploys, from main only). It proves both ways
+# /docs/ can come out of the build, whatever the newest stable tag is at the time:
+#
+# - "as deployed now": the newest stable tag, exactly what pages.yml would publish today;
+# - "stale-tag guard": v4.5.0, which predates the published doc set, must build with /docs/ and
+#   llms-full.txt skipped;
+# - "next release": a throwaway local tag on this commit (never pushed: the job only has
+#   contents: read) makes it the newest stable tag, so the docs as they stand in this pull request
+#   are rendered through the same tag-resolution path a real release takes. The website guardrails
+#   (5, 6, 7, 12, 13 and the page checks) then run against that build, /docs/ included.
+
+on:
+  pull_request:
+  push:
+    branches: [main, "releases/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # The check's name, and so what scripts/update_branch_protection.py requires. Unique on purpose:
+    # build.yml and publish-pypi.yml also have a job called `build`, and a required check matches by
+    # name alone.
+    name: website-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # every tag: the docs come from the newest stable one
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install the docs generator and the test dependencies
+        run: |
+          pip install --require-hashes -r requirements/docs.lock.txt
+          pip install -e ".[test]"
+
+      - name: Install Playwright's Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Build as deployed now (newest stable tag)
+        run: python scripts/build_site.py --out _site --report site-report.json
+
+      - name: The pre-rendered /download/ names a version without JavaScript
+        run: |
+          version="$(python -c 'import json; print(json.load(open("site-report.json"))["download_version"] or "")')"
+          if [ -z "$version" ]; then
+            echo "::warning::the download Worker could not be read, so /download/ was built without pre-rendered cards"
+          else
+            grep -q "<span>Version ${version}</span>" _site/download/index.html
+            echo "/download/ shows Version ${version} in its HTML"
+          fi
+
+      - name: The pre-rendered /releases/ lists its versions without JavaScript
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          versions = json.load(open("site-report.json"))["releases"]
+          if not versions:
+              print("::warning::the release list could not be read, so /releases/ was built without pre-rendered rows")
+          else:
+              page = pathlib.Path("_site/releases/index.html").read_text(encoding="utf-8")
+              missing = [v for v in versions if f'<th scope="row">{v}' not in page]
+              assert not missing, f"/releases/ lacks rows for {missing}"
+              print(f"/releases/ lists {', '.join(versions)} in its HTML")
+          PY
+
+      - name: Build with the stale-tag guard (v4.5.0 predates the published doc set)
+        run: |
+          python scripts/build_site.py --out _site-stale --docs-ref v4.5.0 --offline --report stale-report.json
+          python - <<'PY'
+          import json, pathlib
+          report = json.load(open("stale-report.json"))
+          assert report["docs"] == "skipped: stale tag", report
+          assert not pathlib.Path("_site-stale/docs").exists()
+          assert not pathlib.Path("_site-stale/llms-full.txt").exists()
+          print("stale-tag guard: /docs/ and llms-full.txt skipped")
+          PY
+
+      - name: Build as the next stable release (a local tag on this commit)
+        run: |
+          git tag v999.0.0
+          python scripts/build_site.py --out _site-next --offline --report next-report.json
+          git tag -d v999.0.0
+          python - <<'PY'
+          import json
+          report = json.load(open("next-report.json"))
+          assert report["docs"] == "published" and report["docs_ref"] == "v999.0.0", report
+          print(f"/docs/ published: {len(report['docs_pages'])} pages")
+          PY
+
+      # Guardrails 5, 6, 7, 12 and 13 and the page checks, on the "next release" build: the
+      # layout and consent tests load the docs sample pages too.
+      - name: Website guardrails on the built site
+        env:
+          PRIVACYFENCE_SITE_DIR: _site-next
+        run: |
+          pytest -v -p no:cacheprovider \
+            tests/unit/test_build_site.py \
+            tests/unit/test_website_*.py \
+            tests/integration/test_website_layout.py \
+            tests/integration/test_website_consent.py \
+            tests/integration/test_download_page.py \
+            tests/integration/test_releases_page.py
+
+      - name: Upload the built sites
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: website-build
+          path: |
+            _site/
+            _site-next/
+            site-report.json
+            next-report.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload the layout screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: website-build-layout-screenshots
+          path: test-results/website-layout/
+          retention-days: 14
+          if-no-files-found: ignore

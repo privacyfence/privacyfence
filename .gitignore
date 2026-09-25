@@ -17,7 +17,7 @@ scripts/dev_env.sh
 config/settings.yaml
 config/settings.local.yaml
 
-# #428 Phase 1: the same user configuration/authority state as above, moved under its own
+# The same user configuration/authority state as above, kept under its own
 # subdirectory -- dev-mode data_dir() is the repo root, same reasoning as everything else here
 # (paths.py's authority_dir()/authority_root()).
 authority/
@@ -26,20 +26,30 @@ authority/
 # staging directories -- same "dev-mode data_dir() is the repo root"
 # reasoning as authority/ above. Only ever holds encrypted, short-lived
 # ciphertext (see either module's own docstring), but there's no reason
-# for it to sit in the working tree either.
-downloads/
-uploads/
+# for it to sit in the working tree either. Anchored to the two places
+# paths.py puts them (the local principal's data_dir() root, and
+# users/<id>/ for every other principal), so the pattern does not also
+# swallow cloudflare/downloads/, the download Worker's source.
+/downloads/
+/uploads/
+/users/*/downloads/
+/users/*/uploads/
 
 # Local runtime caches (dev-mode data_dir() is the repo root -- see paths.py)
 resource_name_cache.json
 update_check_cache.json
-# SEC-23: this install's own random id (daemon_main.get_or_create_deployment_id) --
+# This install's own random id (daemon_main.get_or_create_deployment_id) --
 # dev-mode data_dir() is the repo root, same as the caches above.
 deployment_id
-# SEC-06 bootstrap-link discovery files (web/server.py's mint_bootstrap_url) --
+# Bootstrap-link discovery files (web/server.py's mint_bootstrap_url) --
 # same dev-mode-data_dir()-is-the-repo-root reasoning as deployment_id above.
 approvals_url
 settings_url
+# The handoff files a source daemon writes (paths.handoff_dir() is data_dir(), the repo root,
+# here): mcp_url and web_base_url for discovery, and mcp_token, the agent's live bearer token.
+/mcp_url
+/mcp_token
+/web_base_url
 
 # QA fixture manifest (keep only the .example) -- reveals which real
 # project/space/folder/calendar/list/channel/chat a QA environment uses,

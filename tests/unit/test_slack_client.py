@@ -514,6 +514,81 @@ class TestResolveIsGroupDm:
         assert web_client.conversations_info.call_count == 2
 
 
+class TestResolveIsSelfDm:
+    def _web_client(self, *, own="U_ME", counterpart="U_ME", is_im=True):
+        web_client = MagicMock()
+        web_client.auth_test.return_value = {"user_id": own}
+        web_client.conversations_info.return_value = {"channel": {"is_im": is_im, "user": counterpart}}
+        return web_client
+
+    def test_im_with_myself_is_a_self_dm_and_both_lookups_are_cached(self):
+        web_client = self._web_client()
+        client = make_client(web_client)
+
+        assert client.resolve_is_self_dm("D1") is True
+        assert client.resolve_is_self_dm("D1") is True
+        web_client.auth_test.assert_called_once()
+        web_client.conversations_info.assert_called_once_with(channel="D1")
+
+    def test_im_with_another_user_is_not_a_self_dm(self):
+        client = make_client(self._web_client(counterpart="U_BOB"))
+        assert client.resolve_is_self_dm("D2") is False
+
+    def test_own_user_id_as_the_channel_is_a_self_dm_without_a_lookup(self):
+        web_client = self._web_client()
+        client = make_client(web_client)
+        assert client.resolve_is_self_dm("U_ME") is True
+        web_client.conversations_info.assert_not_called()
+
+    def test_non_im_id_is_not_looked_up(self):
+        web_client = self._web_client()
+        client = make_client(web_client)
+        assert client.resolve_is_self_dm("C1") is False
+        web_client.conversations_info.assert_not_called()
+
+    def test_a_d_id_that_is_not_an_im_is_not_a_self_dm(self):
+        client = make_client(self._web_client(is_im=False))
+        assert client.resolve_is_self_dm("D3") is False
+
+    def test_empty_channel_id_is_not_a_self_dm(self):
+        web_client = self._web_client()
+        client = make_client(web_client)
+        assert client.resolve_is_self_dm("") is False
+        web_client.auth_test.assert_not_called()
+
+    def test_unknown_own_id_fails_closed_and_is_retried(self):
+        web_client = self._web_client()
+        web_client.auth_test.side_effect = [slack_error("invalid_auth"), {"user_id": "U_ME"}]
+        client = make_client(web_client)
+
+        assert client.resolve_is_self_dm("D1") is False
+        web_client.conversations_info.assert_not_called()
+        assert client.resolve_is_self_dm("D1") is True
+
+    def test_auth_test_without_a_user_id_fails_closed(self):
+        client = make_client(self._web_client(own=""))
+        assert client.resolve_is_self_dm("D1") is False
+
+    def test_counterpart_lookup_error_fails_closed_and_is_not_cached(self):
+        web_client = self._web_client()
+        web_client.conversations_info.side_effect = [
+            slack_error(), {"channel": {"is_im": True, "user": "U_ME"}},
+        ]
+        client = make_client(web_client)
+
+        assert client.resolve_is_self_dm("D1") is False
+        assert client.resolve_is_self_dm("D1") is True
+
+    def test_check_connection_primes_the_own_user_id(self):
+        web_client = self._web_client()
+        web_client.auth_test.return_value = {"team": "Acme", "user": "me", "user_id": "U_ME"}
+        client = make_client(web_client)
+
+        client.check_connection()
+        assert client.own_user_id() == "U_ME"
+        web_client.auth_test.assert_called_once()
+
+
 class TestResolveUserName:
     def test_empty_user_id_returns_empty(self):
         client = make_client(MagicMock())
@@ -976,7 +1051,7 @@ class TestListGroupChats:
 
 # ---------------------------------------------------------------------------- #
 # Participant resolution helpers (the users.conversations fast path) and the
-# other small P0-performance pieces underneath list_channels/list_group_chats/
+# other small performance pieces underneath list_channels/list_group_chats/
 # _search_by_participant.
 # ---------------------------------------------------------------------------- #
 

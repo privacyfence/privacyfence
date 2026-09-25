@@ -1,16 +1,16 @@
-"""WebAuthn step-up (P9, D7; #426): platform-authenticator proof (Face ID / Touch ID / Android fingerprint
-/ Windows Hello) that a human -- not merely a possessed, stolen session
-cookie -- is the one approving a gated *write*, in org mode, and (#426
-Phase 1) enrollable in local mode too, though nothing there consults it
-yet -- see step_up_config.py's own module docstring for why local mode
-gets this at all and what still has to land (#428 Phase 4) before it means
-anything there. §10.6's own framing: "a borrowed or stolen unlocked phone
-with a live session becomes a remote approval instrument for live write
-actions ... the control that actually closes it is a step-up check on the
-approval itself."
+"""WebAuthn step-up: user-verified passkey proof (Face ID / Touch ID /
+Windows Hello, a security key with a PIN or biometric, or a phone over the
+hybrid flow) that a human -- not merely a possessed, stolen session cookie
+-- is the one approving a gated *write*, in org mode and local mode alike
+-- see step_up_config.py's own module docstring for why local mode gets
+this at all, and why it means something there only on a privilege-
+separated install (ADR 0003). The threat it closes: a borrowed or stolen
+unlocked phone with a live session becomes a remote approval instrument for
+live write actions, and the control that actually closes that is a
+step-up check on the approval itself.
 
 Built on the ``webauthn`` package (py_webauthn), not hand-rolled -- the same
-D2 reasoning §8.2 already gives for the MCP SDK and PyJWT applies here:
+reasoning ADR 0009 gives for the MCP SDK applies here (and to PyJWT):
 parsing CBOR attestation objects and verifying COSE signatures is
 security-critical, spec-governed work with a maintained implementation
 already available; owning that by hand buys nothing.
@@ -26,8 +26,7 @@ resolves *who* (``Principal``) and *what RP*
   possession of an already-enrolled one, from web/routes_approvals.py's
   decide endpoint.
 
-Five things from §10.6 this module exists to get right, not just the happy
-path:
+Five things this module exists to get right, not just the happy path:
 
 - **User verification is checked, not just the signature -- against a
   cooperating authenticator.** ``require_user_verification=True`` on both
@@ -35,61 +34,63 @@ path:
   (no biometric/PIN) is rejected outright rather than silently accepted as
   "good enough". What that check reads is the ``UV`` bit in the
   authenticator's own ``authData``, which is a claim the authenticator
-  makes about itself: a real platform authenticator sets it only after a
+  makes about itself: a real authenticator sets it only after a
   biometric or PIN, and a process that is not one sets it to 1 because
   nothing signs the *absence* of a human. Registration here uses ``none``
   attestation (below), so there is also no attestation statement tying the
   key to a genuine authenticator model to fall back on. Treat this flag as
   "this authenticator says a human was verified", not as proof that one
-  was -- exactly the same client-side-enforced posture as platform
-  attachment below, and for the same structural reason. The control that
-  makes it *mean* something against a local adversary is not this flag but
-  the enrollment gate (web/routes_security.py's ``register_options``): a
+  was -- the same structural reason attachment is not constrained
+  (below). The control that makes it *mean* something against a local
+  adversary is not this flag but the enrollment gate (web/routes_security.py's ``register_options``): a
   key nothing attests to is only as good as the proof demanded before it
   got into the store in the first place.
-- **Platform attachment is requested, not (and cannot be) cryptographically
-  enforced.** ``authenticatorSelection.authenticator_attachment=platform``
-  at registration time is what stops a compliant browser from offering a
-  roaming security key in the first place; WebAuthn's signed payload
-  carries no attachment claim to re-verify server-side after the fact (the
+- **Any authenticator attachment is accepted, because none could be
+  enforced.** Registration sets no ``authenticator_attachment``, so a
+  browser offers a built-in authenticator, a roaming security key, or a
+  phone over the hybrid (QR code) flow alike. Asking for ``platform`` would
+  only have been a request to a cooperating browser: WebAuthn's signed
+  payload carries no attachment claim to re-verify server-side (the
   browser-reported ``authenticatorAttachment`` field on the credential is
-  informational only), so this is real but client-side-enforced, the same
-  posture every RP using this mechanism has. ``exclude_credentials`` (below,
-  from ``list_credentials``) is client-side-enforced in the same way and
-  worth naming as such: it stops a *browser* offering to re-enroll an
+  informational only), so it bought no assurance -- while making enrollment
+  impossible on a machine with no built-in authenticator, which is most
+  Linux desktops. User verification, above, is the property that matters
+  and stays required. See ADR 0055. ``exclude_credentials`` (below, from
+  ``list_credentials``) is client-side-enforced in the same way and worth
+  naming as such: it stops a *browser* offering to re-enroll an
   authenticator this principal already has, and stops nothing else.
-- **The RP ID must be a real registrable domain.** D1 (§15) already pins
-  local mode's own dev server to ``localhost`` for exactly this reason;
+- **The RP ID must be a real registrable domain.** Local mode's own server
+  is bound to ``localhost`` for exactly this reason (ADR 0010);
   ``StepUpConfig.rp_id`` here is org mode's own version of that constraint
   -- an IP address or a non-HTTPS origin fails the ceremony at the browser
   level, not here.
 - **The challenge is bound to a specific decision, not just "a human
-  tapped something."** §10.6: "make it a server nonce bound to the
-  approval_id and a hash of the decision payload, and verify that
-  server-side." ``decision_fingerprint``/``StepUpChallengeStore`` below are
+  tapped something."** The challenge is a server nonce bound to the
+  approval_id and a hash of the decision payload, verified server-side.
+  ``decision_fingerprint``/``StepUpChallengeStore`` below are
   that binding -- see their own docstrings.
 - **Sign-count regression is logged, not silently ignored** -- see
   ``verify_assertion``'s own note on why it's a warning, not a hard
   failure, for this authenticator class.
 
-#426 Phase 4 adds two more concerns, both still scoped to *this*
+Two more concerns, both still scoped to *this*
 principal's own credential-store directory and, like everything else
 here, free of any dependency on audit_log.py -- callers (web/
 routes_security.py, daemon_main.py) record the actual audit entries,
 this module only tracks the state an entry needs to be written from:
 
 - **A one-time recovery code** (``generate_recovery_code``/
-  ``consume_recovery_code``) -- issue #426's own Phase 4 text: "with no
-  IdP there is no remote reset" in local mode, so once #428 Phase 4 takes
-  ``config/settings.yaml`` off the agent's uid, losing the only enrolled
+  ``consume_recovery_code``) -- with no IdP there is no remote reset in
+  local mode, and privilege separation takes ``config/settings.yaml`` off
+  the agent's uid, so losing the only enrolled
   authenticator (a new machine, a wiped TPM) needs a sanctioned way back
   in that isn't "edit the config file from a shell" -- the very door the
   agent this feature defends against would also use. Generated once,
   shown once, never recoverable again, stored only as a salted hash.
 
-  *Where* it is shown once is mode-dependent as of plan item 1.3. Org mode
-  hands it to the browser in the same response that generates it
-  (``generate_recovery_code``), which is what this always did. Local mode
+  *Where* it is shown once is mode-dependent. Org mode hands it to the
+  browser in the same response that generates it
+  (``generate_recovery_code``). Local mode
   does not: a packaged local-mode install mints the code
   (``mint_recovery_code``), has the companion put it in front of the human
   on their own desktop (web/control_channel.py's ``SHOW RECOVERY``), and
@@ -100,21 +101,19 @@ this module only tracks the state an entry needs to be written from:
   issue a replacement later, which is the only way this is ever shown
   twice: a new one, with the old invalidated.
 - **Requirement enable/disable tracking**
-  (``observe_step_up_requirement``/``step_up_disabled_notice``) -- through
-  #426 Phase 4 there was no UI to flip ``step_up.require_passkey`` at all
-  (a config file edit plus a restart), so the only place a *change* could
-  be observed was daemon startup, comparing the freshly loaded value
-  against what was last seen. B9 of the 4.1.0 action plan added a one-
-  directional UI path (settings_controller.py's ``enable_step_up``, see
-  step_up_config.py's own ``LiveStepUpConfig`` docstring) that turns this
-  *on*, and that path calls this same function itself right away rather
-  than waiting for the next startup, so an enable is observed -- and
-  audited -- the moment it happens. Turning it back *off* is still a
+  (``observe_step_up_requirement``/``step_up_disabled_notice``) -- daemon
+  startup compares the freshly loaded ``step_up.require_passkey`` against
+  what was last seen, which catches a change made by a config file edit
+  plus a restart. The one UI path (settings_controller.py's
+  ``enable_step_up``, see step_up_config.py's own ``LiveStepUpConfig``
+  docstring) only turns this *on*, and it calls this same function itself
+  right away rather than waiting for the next startup, so an enable is
+  observed -- and audited -- the moment it happens. Turning it back *off* is a
   config-file-plus-restart operation with no UI of its own, deliberately:
   that asymmetry is what keeps ``step_up_disabled_notice``'s "treat this
   install as compromised" banner trustworthy -- a disable this module ever
   observes did not come from a human clicking a button in their own
-  browser.
+  browser. See ADR 0068.
 """
 from __future__ import annotations
 
@@ -132,7 +131,6 @@ from typing import Any
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.structs import (
-    AuthenticatorAttachment,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     ResidentKeyRequirement,
@@ -147,8 +145,8 @@ logger = logging.getLogger(__name__)
 
 CREDENTIALS_FILE_NAME = "webauthn_credentials.json"
 
-# §10.6's own binding window -- generous enough to cover a real biometric
-# prompt (including the 1Password hand-off delay §12's manual check found)
+# The binding window -- generous enough to cover a real biometric prompt
+# (including the delay a password-manager hand-off such as 1Password adds)
 # but short enough that a leaked/logged challenge is useless well before
 # the pending approval itself would expire.
 STEP_UP_CHALLENGE_TTL_SECONDS = 2 * 60
@@ -206,10 +204,9 @@ class WebAuthnCredential:
 # Credential storage -- one 0600 JSON file per principal, same posture as
 # every OAuth token file in this codebase (see slack_client.
 # save_token_record's own comment). Lives under paths.authority_dir(), not
-# paths.user_dir() directly (#428 Phase 1): #428's whole point is that the
-# agent must not be able to write the credential store a passkey (#426)
-# would be checked against, and authority_dir() is the root that becomes
-# service-owned in Phase 4.
+# paths.user_dir() directly: the agent must not be able to write the
+# credential store a passkey is checked against, and authority_dir() is
+# the root privilege separation makes service-owned (ADR 0003).
 # --------------------------------------------------------------------- #
 
 def _credentials_path(principal: Principal) -> Path:
@@ -318,7 +315,6 @@ def begin_registration(principal: Principal, *, rp_id: str, rp_name: str) -> tup
         user_id=principal.id.encode("utf-8"),
         user_display_name=principal.display_name or principal.email or principal.id,
         authenticator_selection=AuthenticatorSelectionCriteria(
-            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
             resident_key=ResidentKeyRequirement.PREFERRED,
             user_verification=UserVerificationRequirement.REQUIRED,
         ),
@@ -368,8 +364,8 @@ def finish_registration(
 def begin_assertion(principal: Principal, *, rp_id: str) -> tuple[str, bytes] | None:
     """``None`` when this principal has no enrolled credential -- the
     caller (web/routes_approvals.py) falls back to offering the IdP
-    step-up/re-auth path instead (§10.6: "OIDC re-auth as the fallback for
-    a user with no passkey enrolled")."""
+    step-up/re-auth path instead (OIDC re-auth is the fallback for a user
+    with no passkey enrolled)."""
     creds = list_credentials(principal)
     if not creds:
         return None
@@ -420,9 +416,8 @@ def verify_assertion(
 
 
 # --------------------------------------------------------------------- #
-# Decision binding -- §10.6: "make it a server nonce bound to the
-# approval_id and a hash of the decision payload, and verify that
-# server-side." web/routes_approvals.py's decide endpoint is the one
+# Decision binding -- a server nonce bound to the approval_id and a hash of
+# the decision payload, verified server-side. web/routes_approvals.py's decide endpoint is the one
 # caller of both halves below.
 # --------------------------------------------------------------------- #
 
@@ -438,7 +433,7 @@ def decision_fingerprint(*, approval_id: str, principal_id: str, result: str, ch
 
 
 def batch_decision_fingerprint(*, principal_id: str, items: list[tuple[str, str]]) -> str:
-    """The approval binder's own binding (Phase 3 of the binder plan): the
+    """The approval binder's own binding: the
     role ``decision_fingerprint`` plays for one decision, over a whole
     submitted *set*. ``items`` is ``(approval_id, result)`` pairs -- sorted
     here before hashing, so resubmitting the identical set in a different
@@ -489,7 +484,7 @@ class StepUpChallengeStore:
         """Evict entries past ``self._ttl`` -- called with ``self._lock``
         already held. ``pop()`` only ever discards the one key it was asked
         for, on read; the second half of the store's own key space
-        (``batch:<batch_id>``, B26) is chosen by the request body rather
+        (``batch:<batch_id>``) is chosen by the request body rather
         than bounded by ``max_pending`` the way ``approval_id`` is, so
         without a sweep here nothing ever evicts an entry nobody comes back
         to pop."""
@@ -500,9 +495,9 @@ class StepUpChallengeStore:
 
 
 def is_step_up_required(*, gate_kind: str, pii_detected: bool, scope: str) -> bool:
-    """§10.6: "scope it to writes, or to writes plus PII-flagged reads,"
-    plus ``"writes_and_reads"`` for an install that wants every gated read
-    covered too rather than trusting pii_detector.py to have flagged the
+    """Step-up covers writes, or writes plus PII-flagged reads, or
+    (``"writes_and_reads"``) every gated read too, for an install that
+    wants them covered rather than trusting pii_detector.py to have flagged the
     ones worth confirming. ``scope`` is
     ``step_up_config.StepUpConfig.scope`` -- kept as a bare string parameter
     here (rather than importing ``step_up_config.StepUpScope``) so this
@@ -523,7 +518,7 @@ def is_step_up_required(*, gate_kind: str, pii_detected: bool, scope: str) -> bo
 
 
 # --------------------------------------------------------------------- #
-# Recovery code (#426 Phase 4) -- one per principal, salted-hash storage
+# Recovery code -- one per principal, salted-hash storage
 # alongside the credential file itself under authority_dir(), same 0600
 # posture. Exactly one *unused* code exists for a principal at a time:
 # generating a new one (web/routes_security.py's register_verify, whenever
@@ -633,7 +628,7 @@ def consume_recovery_code(principal: Principal, code: str) -> bool:
 
 
 # --------------------------------------------------------------------- #
-# Requirement enable/disable tracking (#426 Phase 4) -- see module
+# Requirement enable/disable tracking -- see module
 # docstring. One small state file per principal, alongside the credential
 # and recovery-code files.
 # --------------------------------------------------------------------- #

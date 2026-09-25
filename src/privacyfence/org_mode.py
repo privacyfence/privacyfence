@@ -1,7 +1,7 @@
-"""``mode: local`` vs. ``mode: org`` (P7, docs/https-connector-refactor-
-plan.md §4's operating-modes table) -- the one setting the rest of the
-table's rows follow from. Lives in ``org_config.json`` (§4: "org_config.json
-| as today | as today, plus server/TLS/IdP config"), not settings.yaml: it's
+"""``mode: local`` vs. ``mode: org`` -- the one setting every other
+difference between the two operating modes follows from. Lives in
+``org_config.json`` (alongside the org server, TLS and IdP settings), not
+settings.yaml: it's
 an install-wide decision, not a per-user preference, and org_config.json is
 already the file daemon_main.py reads before it knows anything about a
 principal at all.
@@ -29,7 +29,7 @@ class ConfigurationError(ValueError):
     """Raised for organization configuration that is present but broken --
     unreadable, malformed JSON, a non-object top level, an invalid
     ``mode``, or (in org mode) missing/incomplete required sections --
-    rather than genuinely absent (SEC-04). daemon_main.py's ``main()``
+    rather than genuinely absent. daemon_main.py's ``main()``
     never catches this specifically: it's a ``ValueError`` subclass, so it
     falls into the same "print and refuse to start" path every other
     startup configuration error already takes, deliberately -- there is no
@@ -47,7 +47,8 @@ def resolve_mode(org_config: dict[str, Any]) -> Mode:
 
 @dataclass(frozen=True)
 class ServerConfig:
-    """§10.2's transport decision, made concrete per install. Only org mode
+    """Org mode's listener and transport settings, made concrete per install
+    (see docs/org-mode-setup-guide.md's "Reverse proxy and TLS"). Only org mode
     reads this class -- ``daemon_main.py`` calls ``from_org_config`` only
     when ``resolve_mode`` says org, and local mode binds its own hardcoded
     ``localhost``. The defaults (``bind_host="127.0.0.1"``, no TLS, no
@@ -68,8 +69,10 @@ class ServerConfig:
     issuer_url: str = ""
     cert_file: str = ""
     key_file: str = ""
-    # §10.2: "X-Forwarded-For / X-Forwarded-Proto are honored only when an
-    # explicit trusted_proxies list is configured, never by default."
+    # X-Forwarded-For / X-Forwarded-Proto are honored only when an explicit
+    # trusted_proxies list is configured, never by default: otherwise any
+    # client that can reach the listener could claim to be HTTPS or spoof its
+    # own address.
     trusted_proxies: tuple[str, ...] = ()
 
     @property
@@ -156,8 +159,8 @@ class DownloadDeliveryConfig:
     # is the primary mitigation, and staging still happens for oversized
     # files by default.
     allow_disk_staging: bool = True
-    # Phase 4 (`git show 453ae02e:local-mode-fixes-plan.md`, ADR 0007's "Clients
-    # without the bridge" section): every staged-link download in org mode is reached
+    # ADR 0028 (and ADR 0007's "Clients without the bridge" section): every
+    # staged-link download in org mode is reached
     # by an MCP client -- an agent, not a human with a browser -- so the
     # default is the capability link (/mcp-files/fetch/<token>, no bearer
     # header or session cookie needed: the token in the URL is the
@@ -169,7 +172,7 @@ class DownloadDeliveryConfig:
 
     def staged_link_path(self, token: bytes) -> str:
         """The URL path a staged download's ``download_url`` should use,
-        given this config's own ``agent_links`` choice: the Phase 4
+        given this config's own ``agent_links`` choice: the agent-facing
         capability route (no bearer header or session cookie needed -- the
         token in the URL is the credential) by default, or the older
         cookie-authenticated browser route when an org has opted back into
@@ -229,8 +232,7 @@ DEFAULT_SYSLOG_PORT = 6514
 
 @dataclass(frozen=True)
 class AuditForwardingConfig:
-    """SEC-23: org
-    mode's centralized audit-log forwarding destination. Lives in
+    """Org mode's centralized audit-log forwarding destination. Lives in
     ``org_config.json``'s ``audit_forwarding`` section, org-mode-only like
     ``ServerConfig``/``DownloadDeliveryConfig`` above -- local mode never
     looks at this at all (there is no "centralize" to speak of for a single
@@ -239,8 +241,8 @@ class AuditForwardingConfig:
 
     Forwarding is *additional* visibility, never a replacement for the
     local audit log ``audit_log.py``'s ``AuditLogger`` always writes --
-    that JSONL file (with its own append-integrity hash chain, SEC-23's
-    other half, always on regardless of this config) stays the
+    that JSONL file (with its own append-integrity hash chain, always on
+    regardless of this config) stays the
     authoritative record even when forwarding is enabled and even when a
     specific entry fails to forward. See ``audit_forwarding.py`` for what
     each ``kind`` actually sends on the wire.
@@ -303,19 +305,19 @@ class AuditForwardingConfig:
 
 @dataclass(frozen=True)
 class AuthzPolicyConfig:
-    """SEC-22: an
-    optional PrivacyFence-level allowlist layered *on top of* the IdP's own
+    """An optional PrivacyFence-level allowlist layered *on top of* the IdP's own
     authentication, not a replacement for it -- the IdP has already decided
     who this human is by the time anything here runs (org_identity.py's
     ``check_authz_policy`` is only ever called after ``principal_from_
     claims`` has a real ``Principal`` in hand); this decides whether
     PrivacyFence itself is willing to admit them.
 
-    Exists because docs/org-mode-setup-guide.md §4.1 flags this as a real
-    gap: for a plain (non-Workspace) Google IdP, the OAuth consent screen's
-    own test-user list or verification status is the *only* access control
-    most org-mode deployments have -- an IdP-side setting this repo can't
-    see or audit, let alone enforce consistently across a different IdP.
+    Exists because, without it, for a plain (non-Workspace) Google IdP the
+    OAuth consent screen's own test-user list or verification status is the
+    *only* access control most org-mode deployments have -- an IdP-side
+    setting this repo can't see or audit, let alone enforce consistently
+    across a different IdP. docs/org-mode-setup-guide.md's "Who may sign in"
+    documents the flags that populate it.
 
     Lives in ``org_config.json``'s ``authz`` section, org-mode-only like
     every other org_mode.py config class. Absent entirely (or an ``authz``

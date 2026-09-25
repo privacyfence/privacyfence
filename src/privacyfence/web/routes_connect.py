@@ -1,6 +1,5 @@
-"""Per-user service authorization on the web (P8, `git show 96cd5af4^:docs/https-
-connector-refactor-plan.md` §9.3) -- the org-mode surface that finally makes P6/P7's
-per-principal machinery reach somewhere: ``GET /connect`` lets a signed-in
+"""Per-user service authorization on the web -- the org-mode surface that
+connects each principal's own services: ``GET /connect`` lets a signed-in
 principal see which of Google/Slack/Salesforce/Atlassian/Telegram they've
 authorized and connect the rest, and ``GET /oauth/start/{service}``/
 ``GET /oauth/callback/{service}`` are the server-side redirect endpoints
@@ -10,8 +9,7 @@ only ever worked when the browser and the daemon were the same machine.
 
 **Not** a port of settings_window_html.py/routes_settings.py's ~30-action
 surface into org mode -- that's real, separate follow-up work (see web/
-server.py's own module docstring, and the "Deliberately out of scope for
-P7" paragraph at the top of the plan document): this page does exactly one
+server.py's own module docstring): this page does exactly one
 thing, authorizing a principal's own connectors, using org mode's session
 cookie (``pf_org_session``) for its own small CSRF model (``org_session.
 check_csrf``/``check_origin``) rather than reusing local mode's shared-
@@ -257,7 +255,10 @@ def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri:
         slack_org = org_config.get("slack") or {}
         if not slack_org.get("client_id"):
             raise _NotConfigured(service)
-        return slack_client.build_authorize_url(slack_org["client_id"], redirect_uri, state), ""
+        url = slack_client.build_authorize_url(
+            slack_org["client_id"], redirect_uri, state, user_scopes=slack_org.get("user_scopes"),
+        )
+        return url, ""
 
     if service == "salesforce":
         sf_org = org_config.get("salesforce") or {}

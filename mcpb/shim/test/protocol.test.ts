@@ -7,6 +7,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   CONTROL_SOCKET_FILE_NAME,
   dataDir,
+  DEV_DATA_DIR_ENV,
   handoffDir,
   MAX_SUN_PATH_BYTES,
   pipeNameFor,
@@ -90,7 +91,56 @@ describe("readMcpUrl", () => {
   });
 });
 
-describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
+describe("dataDir with DEV_DATA_DIR_ENV (a source checkout's daemon)", () => {
+  const checkout = path.join(os.tmpdir(), "pf-checkout");
+  /** No marker anywhere: a temp root with nothing in it stands in for the
+   * platform's system root, so a real install on the test machine can't
+   * change the answer. */
+  function withUnseparatedEnv(fn: (env: NodeJS.ProcessEnv) => void): void {
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pf-nosep-"));
+    try {
+      fn({ PRIVACYFENCE_SYSTEM_ROOT: emptyRoot, [DEV_DATA_DIR_ENV]: checkout });
+    } finally {
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
+  }
+
+  it("resolves mcp_url's directory, the control socket and the pipe name under the checkout", () => {
+    withUnseparatedEnv((env) => {
+      assert.equal(dataDir(env), checkout);
+      assert.equal(handoffDir(env), checkout);
+      withPlatform("linux", () => {
+        assert.equal(posixControlSocketPath(env), path.join(checkout, "authority", CONTROL_SOCKET_FILE_NAME));
+      });
+      assert.equal(windowsControlPipeName(env), pipeNameFor(checkout));
+    });
+  });
+
+  it("ignores a relative path", () => {
+    withUnseparatedEnv((env) => {
+      withPlatform("linux", () => {
+        assert.equal(dataDir({ ...env, [DEV_DATA_DIR_ENV]: "relative/dir" }), path.join(os.homedir(), ".privacyfence"));
+      });
+    });
+  });
+
+  it("is ignored on a privilege-separated install", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pf-sep-"));
+    try {
+      fs.writeFileSync(
+        path.join(root, "privilege-separation.json"),
+        JSON.stringify({ version: 1, platform: process.platform }),
+      );
+      const env = { PRIVACYFENCE_SYSTEM_ROOT: root, [DEV_DATA_DIR_ENV]: checkout };
+      assert.notEqual(dataDir(env), checkout);
+      assert.equal(handoffDir(env), path.join(root, "handoff"));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("privilegeSeparationRoot / handoffDir", () => {
   /** A temp directory standing in for the macOS system root
    * scripts/macos_privilege_separation.sh provisions, with whatever marker
    * the test wants inside it. */
@@ -154,17 +204,17 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
   });
 
   it("ignores a relative PRIVACYFENCE_SYSTEM_ROOT on a platform with no default", () => {
-    // freebsd, not win32: B5c gave Windows a default root of its own, so the
-    // only platforms left with none are the ones #428 P4 has no installer
-    // for at all.
+    // freebsd, not win32: Windows has a default root of its own, so the
+    // only platforms left with none are the ones privilege separation has no
+    // installer for at all.
     withPlatform("freebsd", () => {
       assert.equal(privilegeSeparationRoot({ PRIVACYFENCE_SYSTEM_ROOT: "relative/path" }), null);
     });
   });
 
-  it("looks for no marker at all on a platform #428 P4 has not shipped for", () => {
-    // All three desktop platforms have an installer as of B5c, so this is
-    // now about the ones that never will: there is nothing that could have
+  it("looks for no marker at all on a platform privilege separation has not shipped for", () => {
+    // All three desktop platforms have an installer, so this is about the
+    // ones that never will: there is nothing that could have
     // written a marker on freebsd, and going looking for one would mean
     // reading a path this shim invented.
     withPlatform("freebsd", () => {
@@ -184,7 +234,7 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
     });
   });
 
-  it("knows each shipped platform's own default root (#428 P4 B5a/B5b/B5c)", () => {
+  it("knows each shipped platform's own default root", () => {
     // The roots themselves, not just the marker logic: this is the shim's
     // half of the contract with privilege_separation.PLATFORM_LAYOUTS, whose
     // own test reads this same table back from source and asserts the two
@@ -209,7 +259,7 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
     }
   });
 
-  describe("PRIVACYFENCE_SYSTEM_ROOT guard (B11)", () => {
+  describe("PRIVACYFENCE_SYSTEM_ROOT guard", () => {
     // This shim's environment is whatever the logged-in user's session set,
     // unlike the daemon's own (launchd/systemd-controlled) one. So once a
     // real install is provisioned at the platform's actual default root, the

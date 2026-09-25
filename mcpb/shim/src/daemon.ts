@@ -1,9 +1,6 @@
 /**
- * Daemon auto-start + /mcp reachability check. Ported from bridge/src/
- * daemon.ts -- see that file's own module comment for the original
- * bridge_main.py provenance. The one thing that changes here is *what*
- * "connectable" means: the bridge discovered a bare TCP socket via
- * ipc_port; this discovers /mcp's host:port via the mcp_url file
+ * Daemon auto-start + /mcp reachability check. This discovers /mcp's
+ * host:port via the mcp_url file
  * (protocol.ts) written by web/server.py's WebServer.start(). The probe
  * itself stays a plain TCP connect, not an HTTP request -- the shim has no
  * HTTP/MCP protocol knowledge of its own before it hands off to
@@ -84,12 +81,15 @@ export interface FindDaemonCmdOptions {
 }
 
 /**
- * Return the command to launch privacyfence-app. Identical reasoning to
- * bridge/src/daemon.ts's findDaemonCmd: the shim ships inside the .mcpb,
- * never as a sibling of privacyfence-app on disk, so this normally only
- * matters as a fallback -- the daemon should already be running via its
- * LaunchAgent (macOS), Task Scheduler task (Windows), or systemd --user unit / XDG autostart
- * entry (Linux) by the time Claude Desktop spawns the shim.
+ * Return the command to launch privacyfence-app. The shim ships inside the
+ * .mcpb, never as a sibling of privacyfence-app on disk, so this normally
+ * only matters as a fallback for an unseparated development install -- a
+ * shipped install runs the daemon as a system service (the LaunchDaemon
+ * system/com.privacyfence.daemon on macOS, the system unit
+ * privacyfence-daemon.service on Linux, the PrivacyFence service on
+ * Windows), and ensureDaemonRunning below waits for that service rather
+ * than calling this at all. The LaunchAgent and the Task Scheduler task
+ * start only the companion, never the daemon.
  */
 export function findDaemonCmd(opts: FindDaemonCmdOptions = {}): string[] {
   const scriptPath = opts.scriptPath ?? process.argv[1] ?? process.execPath;
@@ -134,9 +134,8 @@ export function findDaemonCmd(opts: FindDaemonCmdOptions = {}): string[] {
 
   // Development fallback: run the daemon as a Python module. Relies on a
   // Python interpreter already on PATH with privacyfence installed (e.g.
-  // an activated venv) -- see bridge/src/daemon.ts's identical fallback
-  // for why this can't reuse an interpreter path the way the old Python
-  // bridge did. Windows Python installs commonly expose only `python`, not
+  // an activated venv): unlike the old Python bridge, this Node process has
+  // no interpreter path of its own to reuse. Windows Python installs commonly expose only `python`, not
   // a `python3` alias (the reverse of most POSIX distros), so try that
   // name first there.
   const pythonCmd = platform === "win32" ? "python" : "python3";
@@ -236,7 +235,7 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
     return;
   }
 
-  // #428 Phase 4: on a privilege-separated install the daemon belongs to the
+  // On a privilege-separated install the daemon belongs to the
   // service manager and to its own account, and this process is neither.
   // Spawning it here would start it as the logged-in user, where
   // privilege_separation.check_runtime_identity() refuses to run it rather
@@ -245,9 +244,9 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
   // reason (the service manager hasn't started it, or it crashed) under a
   // second failure. Wait for it instead, and say what to look at.
   if (separationRoot() !== null) {
-    // One entry per platform #428 Phase 4 has shipped for, since the thing a
-    // reader has to go look at is different in each: the daemon is a
-    // LaunchDaemon, a system systemd unit, or (B5c) a Windows service running
+    // One entry per platform, since the thing a reader has to go look at is
+    // different in each: the daemon is a LaunchDaemon, a system systemd
+    // unit, or a Windows service running
     // as NT SERVICE\PrivacyFence. Keyed with a default rather than exhaustively,
     // because this message is diagnostics -- naming the wrong inspection
     // command would be unhelpful, but throwing here would turn a running
@@ -262,9 +261,9 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
     ];
     console.error(
       `Daemon not running (${describeTarget(mcpUrlFile)}) — this install runs it as ` +
-        `${manager} under its own account (#428 Phase 4), so waiting for the service ` +
-        // The local-mode-fixes plan's Phase 2: the companion's own menu (macOS/Windows) or
-        // Applications-menu entry (Linux) is now what most people should
+        `${manager} under its own account, so waiting for the service ` +
+        // The companion's own menu (macOS/Windows) or Applications-menu
+        // entry (Linux) is what most people should
         // reach for first -- it can start/restart/stop the service itself,
         // with a real elevation prompt, where the inspect command below can
         // only say why it isn't running. Kept as the second sentence rather
@@ -291,8 +290,8 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
   child.unref();
   // Without this, a spawn failure (ENOENT for a missing/relocated binary,
   // EACCES/ENOEXEC for a partially-copied .app left behind by a Finder
-  // upgrade that was interrupted mid-drag -- see privacyfence/privacyfence#431
-  // -- or a corrupted/quarantined bundle) emits an unhandled 'error' on the
+  // upgrade that was interrupted mid-drag, or a corrupted/quarantined
+  // bundle) emits an unhandled 'error' on the
   // ChildProcess EventEmitter, which Node rethrows as an uncaught exception
   // and kills this whole shim process before waitForConnectable below (or
   // waitForDaemonPatiently's retry loop, which exists precisely for a slow
@@ -307,8 +306,8 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
 }
 
 /** Poll until the daemon's /mcp endpoint answers, or the window elapses.
- * Shared by the ordinary spawn-then-wait path and the #428 Phase 4
- * wait-for-launchd one above, so both raise the same ShimExitError and
+ * Shared by the ordinary spawn-then-wait path and the privilege-separated
+ * wait-for-the-service-manager one above, so both raise the same ShimExitError and
  * therefore get waitForDaemonPatiently()'s same never-give-up retry. */
 async function waitForConnectable(
   mcpUrlFile: string,
@@ -338,8 +337,7 @@ export interface WaitForDaemonPatientlyOptions extends EnsureDaemonRunningOption
 }
 
 /**
- * Like ensureDaemonRunning, but never gives up -- same reasoning as bridge/
- * src/daemon.ts's waitForDaemonPatiently: a privacyfence-app cold start
+ * Like ensureDaemonRunning, but never gives up: a privacyfence-app cold start
  * (GUI launch, licensing checks, etc.) can outlast the initial window, and
  * since this process is an ephemeral MCP server Claude Desktop spawns once
  * per session, giving up early would force the user to restart their Claude

@@ -1,6 +1,5 @@
-"""End-to-end proof of P7's own exit criterion (`git show 96cd5af4^:docs/https-connector-
-refactor-plan.md` §12: "Claude adds the connector by DCR; audience
-separation test passes") -- drives the real ``/mcp`` Streamable HTTP
+"""End-to-end proof that Claude adds the org-mode connector by DCR and
+that audience separation holds (ADR 0011) -- drives the real ``/mcp`` Streamable HTTP
 endpoint and the real OAuth 2.1 authorization-server routes
 (``mount_org_oauth``) together, over an in-process ASGI transport, exactly
 the way a real Claude client would: register via DCR, complete
@@ -10,7 +9,7 @@ code at ``/token``, then actually call a tool over ``/mcp`` with the
 resulting bearer token and confirm it resolves to the signed-in human's own
 Principal -- not the OAuth client's id, not the local principal.
 
-Also covers §10.3's audience separation for org mode specifically: an
+Also covers audience separation for org mode specifically: an
 access token minted by this same authorization server must never be
 accepted as an org-mode browser session (web/org_session.py), and a
 browser session cookie must never be accepted as a bearer token on
@@ -188,7 +187,7 @@ async def test_two_different_humans_authorizing_the_same_claude_client_get_isola
 
 
 async def test_mcp_access_token_is_rejected_as_an_org_session_cookie(tmp_path, monkeypatch):
-    """§10.3 audience separation, org-mode side: an MCP bearer token must
+    """Audience separation, org-mode side: an MCP bearer token must
     never double as a browser session."""
     app, _provider, _session_manager = _build_app(tmp_path, monkeypatch)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
@@ -213,7 +212,7 @@ async def test_mcp_access_token_is_rejected_as_an_org_session_cookie(tmp_path, m
 
 
 async def test_org_session_cookie_is_rejected_as_an_mcp_bearer_token(tmp_path, monkeypatch):
-    """§10.3 audience separation, the other direction: a browser session id
+    """Audience separation, the other direction: a browser session id
     must never verify as an MCP access token."""
     _app, provider, _session_manager = _build_app(tmp_path, monkeypatch)
     from privacyfence.principal import Principal

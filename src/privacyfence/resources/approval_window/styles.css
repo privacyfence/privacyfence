@@ -171,7 +171,7 @@ img { display: block; max-width: 100%; }
   color: color-mix(in srgb, var(--color-text) 50%, transparent);
 }
 
-/* — tags — (category pills on the §4 PII/content-flag card; color set per-instance) */
+/* — tags — (category pills on the PII/content-flag card; color set per-instance) */
 .tag {
   display: inline-flex; align-items: center; font-size: 11px;
   letter-spacing: 0.02em; padding: 3px 10px;
@@ -349,7 +349,7 @@ img { display: block; max-width: 100%; }
 }
 
 /* Applied to both of build_card_stack_html's two scrollable containers
-   (§3's cap and the WIDE right pane) whenever they're actually capped --
+   (the disclosure section's cap and the WIDE right pane) whenever they're actually capped --
    see approval_window_html.py. Styling ::-webkit-scrollbar at all opts a
    WKWebView out of macOS's default overlay scrollbar (invisible until
    actively scrolling/hovering) in favor of a classic, always-visible
@@ -422,7 +422,7 @@ img { display: block; max-width: 100%; }
    module docstring) -- same brand-blue primary/danger-red deny/quiet-link
    always-allow visual language the native buttons used, plus a matching
    --color-danger token this file otherwise has no need for (every other
-   "this is risky" cue -- the §4 PII/content-flag card -- uses the
+   "this is risky" cue -- the PII/content-flag card -- uses the
    accent-2/pii-w-* families above instead). Buttons render disabled
    (aria-disabled="true", no data-pf-action) until the page's own
    DOMContentLoaded handling enables them -- see build_card_stack_html's
@@ -512,7 +512,7 @@ img { display: block; max-width: 100%; }
   /* Nothing in the header may be nowrap once the viewport is real:
      "Create Gmail Reply-All Draft" at 25px overflows a 360px screen
      horizontally, and a horizontally scrolled decision surface is the one
-     thing approval-list-ui-ux.md's "Responsive behavior" rules out. */
+     thing 5deef1d8:docs/approval-list-ui-ux.md's "Responsive behavior" rules out. */
   .pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }
   .pf-head-title { flex-wrap: wrap; gap: 8px; }
   .pf-head { gap: 12px; margin-bottom: 16px; }

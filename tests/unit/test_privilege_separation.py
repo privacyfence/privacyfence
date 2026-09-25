@@ -1,4 +1,4 @@
-"""#428 Phase 4 (B5a/B5b/B5c): all three privilege-separation layouts.
+"""All three privilege-separation layouts.
 
 The thing under test is a *contract between four artifacts*: the Python
 module that resolves paths from a marker file, the shell script that writes
@@ -13,12 +13,12 @@ the templates and the shim still agree with the module about what that
 marker means.
 
 Everything that isn't a name is shared between the platforms, which is why
-almost every test here runs against all of them: what B5b added to B5a is
-three strings (a root, an account, a group) and a second installer, and a
+almost every test here runs against all of them: what Linux adds to macOS
+is three strings (a root, an account, a group) and a second installer, and a
 test that only ever exercised one platform's strings would not have noticed
 the other's going wrong.
 
-B5c is the exception that proves how far that goes. Windows shares the
+Windows is the exception that proves how far that goes. It shares the
 marker, the directory layout, the migration list and every path decision --
 so it joins ``PLATFORMS`` and runs all of that unchanged -- but it expresses
 the *permissions* as NTFS ACLs rather than as mode bits, and it provisions
@@ -26,11 +26,11 @@ them from PowerShell rather than from bash. So the installer contract and
 the layout audit split in two: ``POSIX_PLATFORMS`` keeps the shell-script
 and mode-bit assertions, and ``TestWindows*`` below covers the half that has
 no POSIX counterpart at all -- the ACL audit, the ``.ps1``, the companion
-Scheduled Task, and the service. The one check every platform needs turns
-out not to be Windows-only after all: B1 found that a packaged macOS
-install's own image can be just as writable by the account it's separated
-from as an unelevated Windows one, so ``TestPosixImageAudit`` below covers
-the ``stat``-walk counterpart to ``TestWindowsLayoutAudit``'s ACL read.
+Scheduled Task, and the service. The image check is not Windows-only,
+though: a packaged macOS install's own image can be just as writable by the
+account it's separated from as an unelevated Windows one, so
+``TestPosixImageAudit`` below covers the ``stat``-walk counterpart to
+``TestWindowsLayoutAudit``'s ACL read.
 
 ``current_platform`` is monkeypatched rather than ``sys.platform`` itself,
 and ``PRIVACYFENCE_SYSTEM_ROOT`` relocates the whole layout under
@@ -66,7 +66,7 @@ from privacyfence.web import control_channel, mcp_auth
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Every platform #428 P4 has shipped for, and the installer that provisions
+# Every platform privilege separation supports, and the installer that provisions
 # it. Kept as its own table rather than derived from PLATFORM_LAYOUTS so a
 # platform added to the module without an installer fails here loudly --
 # which is exactly the mistake PLATFORM_LAYOUTS' own comment warns about.
@@ -358,12 +358,13 @@ class TestSystemRootOverride:
         assert privilege_separation.system_root() == privilege_separation.MACOS_SYSTEM_ROOT
 
     def test_refuses_the_override_when_the_real_root_has_a_marker(self, platform_name, monkeypatch, tmp_path):
-        # B11: on a separated install, the companion and the MCPB shim honour
+        # On a separated install, the companion and the MCPB shim honour
         # this var too, and their environment comes from the user's login
         # session -- exactly the boundary privilege separation exists to
         # hold. Once a real install is provisioned at the platform's actual
         # root, a user-session process redirecting itself elsewhere is the
-        # attack this guards against, not the test hatch the variable is for.
+        # attack this guards against, not the test hatch the variable is for
+        # (ADR 0060).
         real_root = tmp_path / "real"
         _write_marker(real_root, platform_name)
         monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: real_root)
@@ -461,7 +462,7 @@ class TestSeparatedPathResolution:
         # falls back to a short name in the system temp directory when the
         # preferred path would overflow AF_UNIX's sun_path, which a macOS
         # runner's own tmp_path reliably does (/private/var/folders/...) and a
-        # Linux one reliably doesn't. What Phase 4 changes is *which directory*
+        # Linux one reliably doesn't. What separation changes is *which directory*
         # is consulted, and that holds in either regime.
         assert control_channel.posix_socket_path() == control_channel.socket_path_under(separated / "handoff")
         assert control_channel.posix_socket_path() != control_channel.socket_path_under(separated / "authority")
@@ -470,9 +471,8 @@ class TestSeparatedPathResolution:
         assert control_channel.companion_socket_path() == control_channel.companion_socket_path_under(
             separated / "handoff"
         )
-        # Pre-Phase-4 this was rooted at data_dir() itself. It had to move: the
-        # companion runs as the human, who cannot create anything under the
-        # service-account-owned root.
+        # Not rooted at data_dir() itself: the companion runs as the human,
+        # who cannot create anything under the service-account-owned root.
         assert control_channel.companion_socket_path() != control_channel.companion_socket_path_under(separated)
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
@@ -491,10 +491,10 @@ class TestSeparatedPathResolution:
         assert control_channel.companion_socket_path_under(handoff) == handoff / "companion.sock"
 
     def test_mcp_token_moved_out_of_the_shared_handoff_dir(self, separated):
-        # ADR 0008 retires #428's "mcp_token stays reachable by the agent"
-        # invariant on purpose: a token any service-group member could read
-        # off disk is exactly the shared-identity leak Phase 3 closes. It
-        # now lives under authority_dir() -- service-account-owned, 0700,
+        # ADR 0008: mcp_token is deliberately not left reachable on disk --
+        # a token any service-group member could read off disk is exactly
+        # the shared-identity leak one principal per OS user closes. It
+        # lives under authority_dir() -- service-account-owned, 0700,
         # reachable only by minting it fresh over the control channel
         # (MINT MCP) -- not under the shared, agent-readable handoff dir.
         token = mcp_auth.load_or_create_mcp_token()
@@ -566,7 +566,7 @@ class TestRuntimeIdentity:
 
 
 class TestStopCommand:
-    """#428 B4: the control channel's ``QUIT`` names this instead of acting,
+    """The control channel's ``QUIT`` names this instead of acting,
     once separated -- one per platform, same as ``start_command``."""
 
     def test_every_platform_has_one(self, platform_name):
@@ -607,9 +607,9 @@ class TestAuditLayout:
         assert "authority" in problems[0]
 
     def test_reports_an_authority_dir_the_human_still_owns(self, separated):
-        # 0700 under the logged-in user's own uid is exactly the pre-#428
-        # state this phase exists to leave behind, and is invisible to a
-        # mode-only check.
+        # 0700 under the logged-in user's own uid is exactly the
+        # shared-account state privilege separation exists to leave behind,
+        # and is invisible to a mode-only check.
         problems = privilege_separation.audit_layout()
 
         assert any("not actually in effect" in problem for problem in problems)
@@ -640,7 +640,7 @@ class TestProcessIdentityHelpers:
 
 
 class TestServiceAccountUid:
-    """#428 B10: ``web/control_channel.py``'s companion channel checks a
+    """``web/control_channel.py``'s companion channel checks a
     connecting peer's real uid against this."""
 
     # Two of the tests below call the real `pwd.getpwnam` (POSIX-only, like
@@ -730,11 +730,11 @@ class TestAuditLayoutBestEffort:
 
 
 class TestPosixImageAudit:
-    """B1: nothing previously verified the daemon/companion image was not
-    user-writable before privilege separation elevated to it. ADR 0002 §5a
-    used to claim ``/Applications`` was root-owned the same way ``/opt`` is
-    -- it's actually ``root:admin drwxrwxr-x``, and a drag-installed ``.app``
-    is normally owned by the installing user. This is the POSIX counterpart
+    """The daemon/companion image must not be user-writable before
+    privilege separation elevates to it. ``/Applications`` is not root-owned
+    the way ``/opt`` is -- it's ``root:admin drwxrwxr-x``, and a
+    drag-installed ``.app`` is normally owned by the installing user -- so
+    this is checked rather than assumed. This is the POSIX counterpart
     of ``TestWindowsLayoutAudit``'s image tests and of
     ``windows_acl.image_problems()`` itself: a ``stat`` walk rather than an
     ACL read, since a mode bit has no inheritance to lean on the way an ACL
@@ -849,7 +849,7 @@ class TestPosixImageAudit:
         assert privilege_separation._posix_image_problems((image,)) == []
 
     def test_checks_every_directory_on_the_way_to_the_image(self, fake_stats):
-        # The other half of B1's "or any directory on the path to it": a
+        # The other half of the check, "or any directory on the path to it": a
         # root-owned, unwritable executable still isn't safe if the bundle
         # holding it can be deleted and replaced wholesale.
         image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
@@ -896,6 +896,89 @@ class TestHandoffWrites:
         assert target.read_text(encoding="utf-8") == "http://127.0.0.1:8765/mcp"
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
         assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
+
+
+class TestSharedDirectoriesKeepTheirMode:
+    """``shared_dir_mode()`` via ``secure_files.secure_mkdir()``: nothing
+    written into a separated install's root or ``handoff/`` may re-tighten
+    either one to the ``0700`` default. It did, as the service account that
+    owns them -- every ``atomic_write_*()`` of a file directly under the
+    root chmod-ed the root to ``0700``, the logged-in user could no longer
+    traverse it to read the marker, and the companion took the install for
+    an unseparated one."""
+
+    pytestmark = posix_permissions_only
+
+    def test_a_write_into_the_root_leaves_the_root_traversable(self, separated):
+        secure_files.atomic_write_text(separated / "deployment_id", "abc")
+
+        assert stat.S_IMODE(separated.stat().st_mode) == privilege_separation.SYSTEM_ROOT_MODE
+
+    def test_a_write_into_handoff_keeps_its_group_mode(self, separated):
+        handoff = separated / privilege_separation.HANDOFF_DIR_NAME
+        secure_files.atomic_write_text(handoff / "mcp_url", "http://127.0.0.1:8765/mcp")
+
+        assert stat.S_IMODE(handoff.stat().st_mode) == privilege_separation.HANDOFF_DIR_MODE
+
+    def test_a_drifted_root_is_put_back_by_the_next_write(self, separated):
+        separated.chmod(0o700)
+
+        secure_files.atomic_write_text(separated / "deployment_id", "abc")
+
+        assert stat.S_IMODE(separated.stat().st_mode) == privilege_separation.SYSTEM_ROOT_MODE
+
+    def test_every_other_directory_still_gets_the_callers_mode(self, separated):
+        authority = separated / "authority"
+        secure_files.atomic_write_text(authority / "settings.yaml", "x: 1")
+
+        assert stat.S_IMODE(authority.stat().st_mode) == 0o700
+
+    def test_nothing_is_shared_on_an_unseparated_install(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing-here"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.shared_dir_mode(tmp_path) is None
+
+
+class TestUnreadableMarker:
+    """A marker the logged-in user cannot reach is a separated install with
+    a drifted root, never an unseparated one. (Driven by stubbing ``stat``
+    rather than by a real ``0700`` root: CI and dev containers often run as
+    root, which ``EACCES`` never applies to.)"""
+
+    def _deny(self, monkeypatch, marker: Path) -> None:
+        real_stat = Path.stat
+
+        def _stat(self, *args, **kwargs):
+            if self == marker:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", _stat)
+
+    def test_reports_a_marker_it_may_not_stat(self, separated, monkeypatch):
+        self._deny(monkeypatch, separated / privilege_separation.MARKER_FILE_NAME)
+
+        assert privilege_separation.marker_unreadable() is True
+
+    def test_a_missing_marker_is_not_unreadable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing-here"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.marker_unreadable() is False
+
+    def test_a_readable_marker_is_not_unreadable(self, separated):
+        assert privilege_separation.marker_unreadable() is False
+
+    def test_an_unreadable_answer_is_not_cached(self, separated, monkeypatch):
+        # The companion is long-lived: caching "unseparated" off one EACCES
+        # would keep it on the wrong layout after the daemon fixed the mode.
+        with monkeypatch.context() as denied:
+            denied.setattr(privilege_separation, "_parse_marker", lambda path: None)
+            denied.setattr(privilege_separation, "marker_unreadable", lambda: True)
+            assert privilege_separation.is_enabled() is False
+
+        assert privilege_separation.is_enabled() is True
 
 
 class TestInstallerContract:
@@ -961,6 +1044,21 @@ class TestInstallerContract:
         assert '/usr/sbin/privacyfence-privilege-separation"' in build_deb
         # And that what it installs there really is this platform's installer.
         assert "install -m 0755 scripts/linux_privilege_separation.sh" in build_deb
+
+    def test_the_darwin_commands_name_the_script_the_pkg_installs(self):
+        # Every separated Mac is a .pkg install, so the commands quote the
+        # bundle's absolute path, never one relative to a checkout.
+        layout = privilege_separation.PLATFORM_LAYOUTS["darwin"]
+        packaged = "/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh"
+
+        assert layout.status_command == f"sudo {packaged} status"
+        assert layout.enable_command == f"sudo {packaged} enable"
+        for command in (layout.status_command, layout.enable_command):
+            assert command.startswith("sudo /Applications/")
+        build_dmg = (REPO_ROOT / "scripts" / "build_dmg.sh").read_text(encoding="utf-8")
+        assert 'cp -p scripts/macos_privilege_separation.sh "${RESOURCES}/scripts/macos_privilege_separation.sh"' in (
+            build_dmg
+        )
 
     def test_the_deb_ships_the_templates_that_script_renders(self):
         # The script resolves a checkout layout first and /usr/share second;
@@ -1048,7 +1146,7 @@ class TestInstallerContract:
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_refuses_to_run_without_the_companion(self, platform):
-        # ADR 0002 decision 2: after Phase 4 nobody in the user's desktop
+        # ADR 0002 decision 2: once separated, nobody in the user's desktop
         # session can mint a sign-in link except the companion, so installing
         # the daemon half alone is a locked door.
         assert "a separated install needs the companion app" in self.SCRIPTS[platform]
@@ -1062,12 +1160,12 @@ class TestInstallerContract:
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_has_a_non_interactive_auto_mode(self, platform):
-        # #428 D1 (4.1): both POSIX platforms' unattended auto-enable
+        # ADR 0003: both POSIX platforms' unattended auto-enable
         # trigger -- the .deb's postinst on Linux, the daemon's own
         # admin-prompt on macOS -- passes --auto, and it has to make enable
         # safe to run unattended (never die() a caller that can't recover
         # interactively) without silently skipping require_root. Windows
-        # stays opt-in only -- D1 does not extend to it.
+        # is not in POSIX_PLATFORMS: its installer runs enable itself.
         assert "--auto" in self.SCRIPTS[platform]
         assert "AUTO=1" in self.SCRIPTS[platform]
 
@@ -1418,7 +1516,7 @@ class TestMacosScriptHelpers:
 
 
 class TestAutoEnableMacos:
-    """#428 D1 (4.1) / ADR 0003 decision 6: the daemon's own trigger for
+    """ADR 0003 decision 6: the daemon's own trigger for
     auto-enabling privilege separation on macOS, since there's no
     package-manager postinst there to lean on the way Linux's .deb has.
     Nothing here can exercise the real ``osascript`` admin prompt (no macOS,
@@ -1426,10 +1524,10 @@ class TestAutoEnableMacos:
     the trigger fires (or correctly doesn't) under every precondition, and
     that the elevated command it builds is what it should be.
 
-    Synchronous since decision 6: unlike the old #428 D1-only version, this
-    is no longer backgrounded on a thread and no longer writes a one-shot
-    marker -- ``enforce_separation()`` needs to read the outcome, and a
-    decline is asked again on the next start rather than respected forever.
+    Synchronous, per decision 6: not backgrounded on a thread, and no
+    one-shot marker -- ``enforce_separation()`` needs to read the outcome,
+    and a decline is asked again on the next start rather than respected
+    forever.
     """
 
     pytestmark = posix_permissions_only
@@ -1474,7 +1572,7 @@ class TestAutoEnableMacos:
         script = tmp_path / "macos_privilege_separation.sh"
         script.write_text("#!/bin/sh\n", encoding="utf-8")
         monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
-        # B2's script-safety check is covered by its own TestMacosAutoEnableScriptProblem
+        # The script-safety check is covered by its own TestMacosAutoEnableScriptProblem
         # below; a script this test writes itself is never root-owned, so it is bypassed
         # here to keep this test about the dispatch behavior alone.
         monkeypatch.setattr(privilege_separation, "_macos_auto_enable_script_problem", lambda _script: None)
@@ -1582,7 +1680,7 @@ class TestAutoEnableMacos:
         assert privilege_separation._macos_installer_script_path() is None
 
     def test_noop_when_the_resolved_script_fails_its_safety_check(self, monkeypatch, tmp_path):
-        # #428 B2: whatever _macos_auto_enable_script_problem() decides (its
+        # Whatever _macos_auto_enable_script_problem() decides (its
         # own logic is covered by TestMacosAutoEnableScriptProblem below) --
         # a script that fails it must produce no elevation prompt, just a
         # log line naming why.
@@ -1606,11 +1704,11 @@ class TestAutoEnableMacos:
 
 
 class TestMacosAutoEnableScriptProblem:
-    """#428 B2: the check ``maybe_auto_enable_macos()`` runs immediately
+    """The check ``maybe_auto_enable_macos()`` runs immediately
     before handing a script to ``osascript … with administrator
-    privileges`` -- the fix for a new local privilege-escalation path D1
-    introduced, where the elevated script was whatever the logged-in user
-    (and therefore the agent) most recently put at the resolved path.
+    privileges`` -- without it, the elevated script would be whatever the
+    logged-in user (and therefore the agent) most recently put at the
+    resolved path, a local privilege-escalation path.
 
     CI cannot make a file root-owned, so ownership/mode are exercised
     through a faked ``os.stat()`` result rather than a real one -- the
@@ -2063,8 +2161,7 @@ class TestWindowsInstallerContract:
         # section tag and one starting with '#' as an ISPP directive -- even
         # inside a Pascal (* *) comment in [Code]. Both are compile errors
         # ("Invalid section tag", "unknown preprocessor directive") that only
-        # the Windows build job would otherwise find: the first sank a
-        # dispatched build of this very cleanup, the second #411's CI.
+        # the Windows build job would otherwise find.
         inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
         code = inno.split("\n[Code]\n", 1)[1]
 
@@ -2208,7 +2305,7 @@ class TestWindowsInstallerContract:
         assert "WindowsBuiltInRole]::Administrator" in self.SCRIPT
 
     def test_refuses_a_user_writable_install(self):
-        # #407, settled: a service runs whatever binPath names, so a
+        # A service runs whatever binPath names, so a
         # PrivacyFence the logged-in user can rewrite would hand the agent a
         # way to run its own code as the service account.
         assert "function Assert-ImageProtected" in self.SCRIPT
@@ -2245,11 +2342,12 @@ class TestWindowsInstallerContract:
         assert "could not take ownership" in set_layout
 
     def test_a_failed_enable_leaves_nothing_claiming_separation(self):
-        # privacyfence/privacyfence#599: the observed failure left the daemon's
-        # data under %ProgramData% with no marker, no service and no companion
-        # task pointing at it -- a layout paths.py resolves for nobody. `sc
-        # create` (the step that failed) now comes first, and everything from
-        # there on is inside a catch that takes the half-made install down.
+        # A half-finished enable could leave the daemon's data under
+        # %ProgramData% with no marker, no service and no companion task
+        # pointing at it -- a layout paths.py resolves for nobody. `sc
+        # create` (the step most likely to fail) comes first, and everything
+        # from there on is inside a catch that takes the half-made install
+        # down.
         enable = self.SCRIPT.split("function Invoke-Enable", 1)[1].split("\nfunction ", 1)[0]
         # Call sites only. A comment that names a later step to explain an
         # earlier one is ordinary and correct in this script.
@@ -2476,7 +2574,7 @@ class TestWindowsLayoutAudit:
 
     def test_reports_a_handoff_dir_the_group_cannot_read(self, separated_windows, monkeypatch):
         # The failure that presents as "the daemon is not running": the shim
-        # cannot read mcp_token, so it reports no daemon against one that is
+        # cannot read mcp_url, so it reports no daemon against one that is
         # running perfectly well.
         self._install_dacls(monkeypatch, separated_windows, {
             separated_windows / privilege_separation.HANDOFF_DIR_NAME: [
@@ -2486,7 +2584,7 @@ class TestWindowsLayoutAudit:
 
         problems = privilege_separation.audit_layout()
 
-        assert any("cannot reach mcp_token" in problem for problem in problems)
+        assert any("cannot read mcp_url, web_base_url" in problem for problem in problems)
 
     def test_reports_a_handoff_dir_the_group_can_write(self, separated_windows, monkeypatch):
         # Nothing in the user's session creates anything there on Windows --
@@ -2710,12 +2808,32 @@ class TestWindowsServiceHost:
         assert "$process.StandardError.ReadToEndAsync()" in script
         assert script.index("ReadToEndAsync") < script.index("$process.WaitForExit()")
 
+    def test_a_refused_start_puts_the_reason_in_the_event_log_message(self):
+        # A service has no stderr, and the refusals that matter happen before
+        # the daemon has a log file: the Event Log entry is the one place left.
+        message = windows_service.startup_failure_message(1, "Configuration error: bad settings.yaml")
+        assert message == "PrivacyFence exited with status 1: Configuration error: bad settings.yaml"
+        assert "see the daemon's own log" in windows_service.startup_failure_message(1, None)
+
+    def test_the_installer_registers_and_removes_the_event_log_source(self):
+        # `sc create` registers no Event Log source, so every entry the service
+        # wrote read as empty and Get-WinEvent refused to filter on it.
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        assert r"Services\EventLog\Application\$ServiceName" in script
+        assert "'servicemanager*.pyd'" in script
+        assert "-Name 'EventMessageFile'" in script
+        enable = script[script.index("function Invoke-Enable"):]
+        assert "\n    Register-EventSource\n    Start-DaemonService\n" in enable
+        uninstall = script[script.index("function Invoke-Uninstall"):]
+        assert "Unregister-EventSource" in uninstall[: uninstall.index("if (-not $Purge)")]
+
     def test_the_module_imports_without_pywin32(self):
         # Deliberate: the ServiceFramework subclass is built inside a
         # function, so importing this module (from a test, or from
         # daemon_main's own argument routing) never requires Windows.
         assert windows_service.SERVICE_DISPLAY_NAME
-        assert "#428" in windows_service.SERVICE_DESCRIPTION
+        assert "under its own account" in windows_service.SERVICE_DESCRIPTION
 
     @staticmethod
     def _run_isolated(code: str) -> str:
@@ -2968,8 +3086,8 @@ class TestForUserKeepsTheRecordedOwner:
     """ADR 0043: the marker's ``owner_user`` is written once and then kept.
     ``owner_uid()``/``owner_sid()`` map the account it names to
     ``LOCAL_PRINCIPAL`` -- the install's original data -- so ``enable
-    --for-user`` for a second account (ADR 0008) must leave it alone. Each
-    script used to write the account it had just resolved, which moved the
+    --for-user`` for a second account (ADR 0008) must leave it alone. A
+    script that wrote the account it had just resolved would move the
     owner's principal to whoever was added last.
 
     Runs each script's real ``cmd_enable_for_user``/``Invoke-EnableForUser``,
@@ -3121,12 +3239,16 @@ class TestForUserKeepsTheRecordedOwner:
         assert result.returncode == 0, result.stdout + result.stderr
         return root
 
+    # The PowerShell run above has 120 s of its own; the suite-wide 30 s timeout would cut a cold
+    # Windows PowerShell start short of that on a busy runner.
+    @pytest.mark.timeout(150)
     @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
     def test_a_second_for_user_leaves_the_windows_owner_alone(self, tmp_path, monkeypatch):
         root = self._run_windows(tmp_path, owner_user="bob", recorded="alice")
 
         assert self._recorded_owner("win32", root, monkeypatch) == "alice"
 
+    @pytest.mark.timeout(150)
     @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
     def test_the_first_windows_for_user_on_a_machine_only_install_records_the_owner(self, tmp_path, monkeypatch):
         root = self._run_windows(tmp_path, owner_user="alice", recorded="")
@@ -3494,9 +3616,8 @@ class TestOwnerMembershipPending:
         assert privilege_separation.owner_membership_pending() is True
 
     def test_a_different_account_outside_the_group_is_pending(self, separated, monkeypatch):
-        # ADR 0008 retired the local-mode-fixes plan's Phase 2 §2.6 interim
-        # guard: the marker names "alice" as owner, but "bob" is a second
-        # account this install's separated daemon can now give an isolated
+        # ADR 0008: the marker names "alice" as owner, but "bob" is a second
+        # account this install's separated daemon can give an isolated
         # principal of their own -- so "bob" outside the group is pending
         # exactly like the owner always was, not refused.
         monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
@@ -3681,8 +3802,8 @@ class TestInstallerScriptResolution:
 
 
 class TestElevationScriptProblem:
-    """#428 B2, now guarding a second elevation. The rule it encodes is the
-    same one: the only thing this module ever runs as root is a script an
+    """The elevation check, guarding both elevations. The rule it encodes:
+    the only thing this module ever runs as root is a script an
     installer shipped, never one the account being separated from can
     rewrite."""
 
@@ -3912,8 +4033,8 @@ class TestPerUserElevationCommand:
         assert "-Verb RunAs" in command
         # -Wait *and* -PassThru, or the return code below would be the
         # launcher's rather than the script's and every failure would read as
-        # a success -- privacyfence/privacyfence#599, where it did, on every
-        # run, with the daemon logging a separation that had not happened.
+        # a success, with the daemon logging a separation that had not
+        # happened.
         assert "-Wait" in command
         assert "-PassThru" in command
         assert "exit $p.ExitCode" in command
@@ -3961,8 +4082,8 @@ class TestPerUserElevationCommand:
             privilege_separation._windows_full_enable_argv(script, transcript),
         ):
             assert argv is not None
-            # `& '<path>'` is -File spelled as an expression; the redirection
-            # #599 needs has to be established inside the elevated process,
+            # `& '<path>'` is -File spelled as an expression; the output
+            # redirection has to be established inside the elevated process,
             # which -File has no room for. The guarantee is unchanged: the
             # path reaches the elevated PowerShell as one argument, whatever
             # it contains.
@@ -4017,10 +4138,9 @@ class TestCompletePerUserSeparation:
         in the service group afterwards.
 
         Default rather than per-test because every test below that expects
-        True now depends on it -- privacyfence/privacyfence#599 made an exit
-        code alone insufficient to return True, and this is the machine state
-        that makes it sufficient. The tests that care about the *absence* of
-        this override it back."""
+        True depends on it -- an exit code alone is not enough to return
+        True, and this is the machine state that makes it sufficient. The
+        tests that care about the *absence* of this override it back."""
         monkeypatch.setattr(
             privilege_separation, "service_group_members", lambda group: frozenset({"alice", "bob"})
         )
@@ -4124,12 +4244,11 @@ class TestCompletePerUserSeparation:
     def test_an_exit_zero_that_changed_nothing_is_not_success(
         self, separated, script, monkeypatch, caplog
     ):
-        # privacyfence/privacyfence#599, in the half that reaches a person:
-        # returning True here makes companion.py tell somebody to sign out
+        # Returning True here makes companion.py tell somebody to sign out
         # and back in, and a sign-out that fixes nothing is worse advice than
-        # none. On Windows the exit code being trusted here was not even the
-        # script's -- `Start-Process -Verb RunAs -Wait` without -PassThru
-        # exits 0 whatever the elevated run did.
+        # none. On Windows an exit code need not even be the script's --
+        # `Start-Process -Verb RunAs -Wait` without -PassThru exits 0
+        # whatever the elevated run did.
         monkeypatch.setattr(
             privilege_separation, "service_group_members", lambda group: frozenset({"bob"})
         )
@@ -4334,10 +4453,10 @@ class TestEnforceSeparation:
 
 
 class TestDataDirLogFilesReleased:
-    """privacyfence/privacyfence#599's third defect: the elevated ``enable``
-    used to move the data directory out from under the process that asked
-    for it. It no longer moves anything (ADR 0041); the release-and-repoint
-    around it stays, and so do these tests of it.
+    """The elevated ``enable`` must not pull the data directory out from
+    under the process that asked for it. It moves nothing (ADR 0041); the
+    release-and-repoint around it stays as a safeguard, and so do these
+    tests of it.
 
     ``enforce_separation()`` runs from inside a packaged daemon that has
     already called ``daemon_main.setup_logging()``, so
@@ -4475,11 +4594,10 @@ class TestRunFullAutoEnableNonMacos:
         """The ordinary outcome: the install is separated afterwards.
 
         Default rather than per-test for the same reason as
-        TestCompletePerUserSeparation's own: since
-        privacyfence/privacyfence#599 the success *log line* is written off
-        the machine rather than off an exit code, so every test below that
-        expects one depends on this. The test that cares about its absence
-        overrides it."""
+        TestCompletePerUserSeparation's own: the success *log line* is
+        written off the machine rather than off an exit code, so every test
+        below that expects one depends on this. The test that cares about its
+        absence overrides it."""
         monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
 
     def test_warns_when_no_script_is_found(self, monkeypatch, caplog):
@@ -4575,11 +4693,9 @@ class TestRunFullAutoEnableNonMacos:
     def test_an_exit_zero_that_separated_nothing_is_not_logged_as_success(
         self, monkeypatch, script, caplog
     ):
-        # privacyfence/privacyfence#599's first defect, and the one that made
-        # the rest of it undiagnosable: "privilege separation enabled
-        # automatically" was written at the exact moment separation had not
-        # happened, and it is the only account a user or an operator gets of a
-        # start that then refuses to serve.
+        # "privilege separation enabled automatically" must never be written
+        # at a moment separation has not happened: it is the only account a
+        # user or an operator gets of a start that then refuses to serve.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
         monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: "/usr/bin/pkexec")
         monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)

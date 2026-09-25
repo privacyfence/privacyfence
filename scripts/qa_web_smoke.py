@@ -16,10 +16,10 @@ script during development), the CSP actually permitting what the page needs
 registration, say), and whether a click really reaches the code a unit test
 only proved exists.
 
-This is NOT a pytest test and NEVER runs in CI: it needs `playwright`
-(`pip install playwright` -- not a project dependency, install it locally)
-and a Chromium binary. If Playwright's own browser isn't installed
-(`playwright install chromium`), point `--chromium-path` at one already on
+This is NOT a pytest test and NEVER runs in CI: it needs `playwright`, which
+comes with the `[test]` extra (`pip install -e '.[test]'`), plus a Chromium
+binary for it (`playwright install chromium`). If you'd rather not download
+Playwright's own browser, point `--chromium-path` at one already on
 disk (this repo's own CI sandbox, when it has one, sets
 `PLAYWRIGHT_BROWSERS_PATH`; on such a machine the binary is usually under
 `$PLAYWRIGHT_BROWSERS_PATH/chromium-*/chrome-linux/chrome` or the macOS
@@ -30,14 +30,13 @@ web/routes_approvals.py's or web/routes_settings.py's own JS-emitting
 functions, resources/sw.js, or web/server.py's CSP change. Not on every
 settings_controller.py/settings_window_html.py change -- those are covered
 by tests/unit/test_settings_window_html.py's construction-only assertions.
-(Through P9 the equivalent script for the native approval popup was
-qa_popup_smoke.py, retired at P10 along with the popup itself, decision D6.)
 
-    .venv/bin/pip install playwright   # once, locally -- not committed
+    .venv/bin/pip install -e '.[test]'           # once; brings playwright
+    .venv/bin/playwright install chromium        # once; the browser it drives
     .venv/bin/python scripts/qa_web_smoke.py
 
 Paste the printed report into the PR description under a
-`## Web smoke check` heading, same convention as testing-policy.md §2.1.
+`## Web smoke check` heading, same convention as testing-policy.md "Layer 5: live connector".
 """
 from __future__ import annotations
 
@@ -76,9 +75,8 @@ def _render_report(results: list[ScenarioResult]) -> str:
 def _sign_in_url(server, path: str) -> str:
     """A one-time sign-in link for this in-process server.
 
-    ``WebServer.mint_bootstrap_url()`` used to hand one back; the
-    self-approval plan's Phase 2 removed it along with the discovery files it
-    wrote (web/server.py). Minting now belongs to the control channel, and an
+    ``WebServer`` does not mint sign-in links itself (web/server.py): minting
+    belongs to the control channel, and an
     *attested* mint needs a companion process to call back to -- which this
     script has no reason to start, so it mints from the store directly, the
     same way the daemon's own bootstrap middleware consumes from it.
@@ -237,7 +235,7 @@ def main() -> None:
     try:
         results = _run(args.chromium_path)
     except ImportError as exc:
-        print(f"qa_web_smoke.py: {exc} -- `pip install playwright` first (see this script's own docstring).",
+        print(f"qa_web_smoke.py: {exc} -- `pip install -e '.[test]'` first (see this script's own docstring).",
               file=sys.stderr)
         sys.exit(2)
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Headless lookup of QA fixture IDs — Google Tasks list IDs and Telegram
-chat IDs — for docs/qa-environment-setup.md, without needing a live Claude
-session just to call telegram_list_chats / tasks_list_task_lists yourself.
+chat IDs — for docs/connector-qa.md's "Seed: Tasks" and "Seed: Telegram"
+checklists, without needing a live Claude session just to call
+telegram_list_chats / tasks_list_task_lists yourself.
 
 Reuses the same connector construction and stored credentials the daemon
 uses (privacyfence.daemon_main.build_connectors), so connectors must already

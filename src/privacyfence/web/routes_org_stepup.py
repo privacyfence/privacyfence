@@ -1,9 +1,10 @@
-"""Org mode's IdP re-authentication fallback for decide-time step-up (§10.6,
-D7) -- the one piece of web/routes_org_approvals.py's former surface with no
+"""Org mode's IdP re-authentication fallback for decide-time step-up -- the
+one piece of web/routes_org_approvals.py's former surface with no
 local-mode analogue at all (local mode has no IdP to re-authenticate
-against), so PSC-2b's merge of the rest of that module into
-web/routes_approvals.py left this behind as its own small module rather than
-forcing it behind a mode adapter with nothing on the other side.
+against), so merging the rest of that module into
+web/routes_approvals.py (ADR 0033) left this behind as its own small module rather than
+forcing it behind a mode adapter with nothing on the other side. Why org
+mode falls back to the IdP at all, and local mode does not, is ADR 0066.
 
 ``GET /api/approvals/{id}/stepup/idp`` -> ``GET /oauth/stepup/callback``
 mirrors web/routes_org_identity.py's own ``/login`` flow almost exactly
@@ -14,7 +15,7 @@ otherwise a second IdP account signing in through a leaked step-up link
 could authorize someone else's pending decision. See
 ``_StepUpAuthAttemptStore``/``stepup_callback`` below.
 
-``step_up.require_passkey`` (#406) closes this fallback entirely for orgs
+``step_up.require_passkey`` closes this fallback entirely for orgs
 that want hardware-bound WebAuthn as a hard requirement: with it set,
 web/routes_approvals.py's own ``_org_step_up_response`` never advertises
 ``idp_stepup_url``, and ``stepup_idp_start`` below refuses outright (not
@@ -101,7 +102,7 @@ def build_routes(
             # Not merely unadvertised (_org_step_up_response omits
             # idp_stepup_url) -- the endpoint itself refuses, so a client
             # hitting it directly can't use it as a bypass. See module
-            # docstring's #406 note.
+            # docstring's note on ``step_up.require_passkey``.
             return PlainTextResponse(
                 "This organization requires a passkey for step-up verification; "
                 "IdP re-authentication cannot be used instead.", status_code=403,
@@ -164,7 +165,7 @@ def build_routes(
             )
         # The human who just re-authenticated must be the *same* one this
         # step-up was started for -- otherwise a leaked step-up link (the
-        # approval URL itself is not a secret, per §10.4) could be completed
+        # approval URL itself is not a secret) could be completed
         # by signing in as someone else entirely. See module docstring's own
         # note on why this check exists.
         if reauthed.id != attempt.principal_id:

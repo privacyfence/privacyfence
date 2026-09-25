@@ -3,20 +3,10 @@ logic, the meta-tools (check_policy/list_policy/propose_policy_change/
 begin-end-unattended-session), and manifest building, all scoped to one
 Streamable HTTP session.
 
-Originally written (P2) as a self-contained Python port of what was then
-``bridge/src/tools.ts``'s schema mapping and ``ipc_server.IPCServer``'s own
-``_call_connector``/``_check_policy``/``_build_manifest``/
-begin-end-unattended-session --
-deliberately not a shared refactor of ``IPCServer`` at the time, so as not
-to put that module's own already-green test suite at risk mid-migration.
-P5 deleted the bridge and ``ipc_server.py`` entirely once both had a stable
-release behind them, so
-this module (alongside its P3 collaborator, ``approvals.py``) is now simply
-the one connector-call dispatcher there is, not "the /mcp counterpart" of
-anything else. The session key this dispatch is scoped to is a fresh UUID
-per Streamable HTTP session (routes_mcp.py, via the low-level Server's own
-per-session lifespan) -- the same role ``id(writer)`` played for a bridge
-connection.
+This module, together with its collaborator ``approvals.py``, is the one
+connector-call dispatcher in the daemon. The session key this dispatch is
+scoped to is a fresh UUID per Streamable HTTP session (routes_mcp.py, via the
+low-level Server's own per-session lifespan).
 """
 from __future__ import annotations
 
@@ -42,13 +32,18 @@ from ..principal import current_principal
 
 logger = logging.getLogger(__name__)
 
+# Args the Slack connector computes itself (from Slack's own answer) before gated_call. An agent
+# asking check_policy could otherwise supply them and be told a call would auto-accept when the
+# real call, which recomputes them, would not.
+_CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm"})
+
 
 def _policy_rule_row(rule) -> dict:
     """One ``privacyfence_list_policy`` rule row -- the same fields
     ``settings_controller.SettingsController._auto_accept_state`` renders for the Auto-accept
-    Settings page (P6), minus that method's own name-resolution machinery (a friendly display name
-    for an opaque id like a Drive folder), which is a web-page-only affordance the bridge has no use
-    for: a model reading ``covered_tools``/``sentence`` already gets the width of the rule, and raw
+    Settings page, minus that method's own name-resolution machinery (a friendly display name
+    for an opaque id like a Drive folder), which is a web-page-only affordance an MCP client has no
+    use for: a model reading ``covered_tools``/``sentence`` already gets the width of the rule, and raw
     ids are exactly what it would pass back into ``privacyfence_propose_policy_change`` anyway."""
     connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
     return {
@@ -112,15 +107,15 @@ class McpDispatcher:
         self._unattended_sessions: set[Hashable] = set()
         self._unattended_changed_listener: Callable[[], None] | None = None
         # The deferred-approval registry privacyfence_await_approval polls
-        # (P3) -- None when nothing in this install can ever produce a
+        # -- None when nothing in this install can ever produce a
         # pending approval (native-only local mode with /mcp still enabled),
         # in which case every id this tool is asked about is simply
         # "unknown".
         self._registry = registry
         # privacyfence_status's own per-connector view -- {name, enabled,
         # authenticated, blocked_by} rows, reusing SettingsController's
-        # already-tracked connector/config/failure state (issue #396 Phase
-        # 1) rather than this dispatcher trying to derive enabled/blocked_by
+        # already-tracked connector/config/failure state rather than this
+        # dispatcher trying to derive enabled/blocked_by
         # itself from nothing but the built Connector objects it's handed.
         # None in org mode (no per-principal settings surface exists yet to
         # source this from -- see daemon_main._connectors_for_principal's
@@ -128,7 +123,7 @@ class McpDispatcher:
         # back to reporting only the connectors it can actually see as
         # already-authenticated, which is the best it can do without this.
         self._connectors_state_provider: Callable[[], list[dict[str, Any]]] | None = None
-        # issue #396 Part C: fans a real MCP ``tools/list_changed``
+        # Fans a real MCP ``tools/list_changed``
         # notification out to every live Streamable HTTP session --
         # wired to web/routes_mcp.py's own broadcaster (which is the one
         # module that actually holds each session's live ``ServerSession``,
@@ -169,8 +164,8 @@ class McpDispatcher:
         ``set_connectors_changed_listener``, wired in daemon_main.py)
         whenever the live connector set actually changes -- fans a real
         ``tools/list_changed`` notification out to every open MCP session,
-        closing issue #396's own "I set it all up and Claude still can't
-        see it" gap. A no-op wherever no broadcaster is wired (org mode
+        so a connector set up while a client is connected shows up in that
+        client without a reconnect. A no-op wherever no broadcaster is wired (org mode
         today, or any test that never calls
         set_tools_changed_broadcaster) -- there is nothing live to notify
         in that case."""
@@ -182,7 +177,7 @@ class McpDispatcher:
     # ------------------------------------------------------------------ #
 
     def build_manifest(self) -> dict:
-        """Same shape as ``IPCServer._build_manifest`` -- kept for parity/
+        """The connector/tool manifest as a plain dict -- kept for
         debugging even though routes_mcp.py's ``list_tools`` handler builds
         MCP ``Tool`` objects (mcp_tools.to_mcp_tool) rather than consuming
         this dict directly."""
@@ -194,22 +189,23 @@ class McpDispatcher:
         }
 
     # ------------------------------------------------------------------ #
-    # Connector calls -- dedupe/staleness logic ported from
-    # IPCServer._call_connector; see that method's own docstring (module
-    # docstring of ipc_server.py) for the full rationale.
+    # Connector calls -- dedupe/staleness logic: an MCP client that retries
+    # an identical call (a timeout, a re-sent request) gets the in-flight or
+    # just-finished result instead of a second gated call and a second
+    # approval prompt for the same action.
     # ------------------------------------------------------------------ #
 
     async def call(self, session_key: Hashable, connector_name: str, tool: str, args: dict) -> Any:
-        # "reason" must never reach the dedupe key or connector.call() --
-        # see ipc_server.py's _call_connector docstring for why (a freshly
-        # regenerated reason string on every retry would defeat dedupe).
+        # "reason" must never reach the dedupe key or connector.call(): a
+        # freshly regenerated reason string on every retry would defeat
+        # dedupe.
         args = dict(args)
         reason = args.pop("reason", "")
         connector = self.connectors.get(connector_name)
         if connector is None:
             raise ValueError(f"Unknown connector: {connector_name!r}")
 
-        # P7: principal_id folds into both the dedupe key and the
+        # principal_id folds into both the dedupe key and the
         # last-write timestamp below.
         # Without it, two different org-mode principals calling the same
         # tool with the same arguments within _DEDUPE_TTL_SECONDS would
@@ -250,8 +246,10 @@ class McpDispatcher:
             raise
         except Exception as exc:
             fut.set_exception(exc)
-            fut.exception()  # mark retrieved -- see ipc_server.py's identical comment
-            # B3: a failed call must not be replayed for the rest of the
+            # Mark retrieved, so asyncio doesn't log "exception never retrieved"
+            # when no second caller ever awaits this future.
+            fut.exception()
+            # A failed call must not be replayed for the rest of the
             # dedupe window -- a caller already awaiting this exact `fut`
             # (the `return await fut` branch above) still gets the
             # exception fine, since that's the future object itself, not
@@ -262,16 +260,16 @@ class McpDispatcher:
             raise
         fut.set_result(result)
         if is_pending_result(result):
-            # P3: never cache a {"status": "approval_pending", ...} result
+            # Never cache a {"status": "approval_pending", ...} result
             # -- see approvals.is_pending_result's own docstring. Popped
             # immediately, same as the CancelledError branch above, so the
             # re-issued call Claude is expected to make once a human
-            # decides (§5.2 point 6) reaches gate.gated_call() again
+            # decides reaches gate.gated_call() again
             # instead of being handed this same stale pending blob back.
             self._inflight.pop(key, None)
             return result
         if local_files.call_produced_deliveries():
-            # B3: a result that staged a file-bridge download carries a
+            # A result that staged a file-bridge download carries a
             # single-use download_staging token in its _meta -- reusing it
             # from the dedupe cache would hand a second caller a token the
             # first claim (or the shim writing the first response to disk)
@@ -323,8 +321,9 @@ class McpDispatcher:
         else:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
             my_email = getattr(connector, "my_email", "")
+            agent_args = {k: v for k, v in args.items() if k not in _CONNECTOR_COMPUTED_ARGS}
             verdict, matched_rule, matched_rule_id, reason = preflight_auto_accept(
-                operation_key, args, my_email,
+                operation_key, agent_args, my_email,
             )
             if gate == "review":
                 reason += (
@@ -363,7 +362,7 @@ class McpDispatcher:
             logger.warning("Audit log write failed for policy check: %s", exc)
 
     def list_policy(self, claude_reason: str = "") -> dict:
-        """privacyfence_list_policy's handler (P7 of the policy v2 redesign): the on-disk v2
+        """privacyfence_list_policy's handler: the on-disk v2
         ``auto_accept:`` section, sentence-rendered the same way ``settings_controller.
         SettingsController._auto_accept_state`` renders it for the Auto-accept Settings page, plus
         the scope catalogue ``privacyfence_propose_policy_change``'s ``group``/``verbs`` validate
@@ -394,18 +393,16 @@ class McpDispatcher:
         return result
 
     async def propose_policy_change(self, session_key: Hashable, params: dict) -> dict:
-        # TST-02 regression: this used to be a @staticmethod that called
-        # gate.propose_policy_change() with no unattended_scope() around it
-        # at all -- unlike call() above, which always wraps a connector
-        # dispatch in unattended_scope(session_key in self._unattended_
-        # sessions). That meant privacyfence_propose_policy_change never saw
-        # itself as unattended even after this exact session had called
-        # privacyfence_begin_unattended_session, and it fell through to a
-        # real (never-to-be-answered) show_rule_confirmation_popup() instead
-        # of the immediate denial its own tool description promises ("If
-        # ... this connection is in an unattended session, the call
-        # throws"). Needs session_key threaded through from
-        # routes_mcp._dispatch_meta_tool for is_unattended() to see it.
+        # Wrapped in unattended_scope() the same way call() above wraps a
+        # connector dispatch. Without it, privacyfence_propose_policy_change
+        # would not see itself as unattended even after this exact session
+        # had called privacyfence_begin_unattended_session, and would fall
+        # through to a real (never-to-be-answered)
+        # show_rule_confirmation_popup() instead of the immediate denial its
+        # own tool description promises ("If ... this connection is in an
+        # unattended session, the call throws"). Needs session_key threaded
+        # through from routes_mcp._dispatch_meta_tool for is_unattended() to
+        # see it.
         #
         # Forces this principal's ConnectorRegistry entry to exist (a
         # no-op if a connector tool call already built it this session) --
@@ -418,9 +415,9 @@ class McpDispatcher:
         # (routes_mcp._dispatch_connector_tool already touches
         # self.connectors before dispatching), this meta tool has no
         # connector of its own to force that same lazy bootstrap, so it has
-        # to ask for it directly -- discovered by docs/testing-policy.md's
-        # Phase 8 release-workflow smoke test: a principal whose very first
-        # MCP call was this one had never had this side effect run at all.
+        # to ask for it directly: a principal whose very first MCP call is
+        # this one would otherwise never have had that side effect run at
+        # all (tests/integration/test_org_ubuntu_release_smoke.py covers it).
         _ = self.connectors
         with unattended_scope(session_key in self._unattended_sessions):
             return await propose_policy_change(
@@ -433,7 +430,7 @@ class McpDispatcher:
             )
 
     def status(self, claude_reason: str = "") -> dict:
-        """privacyfence_status's handler (issue #396 Phase 2): the one
+        """privacyfence_status's handler: the one
         meta-tool guaranteed to answer even when ``connectors == []`` makes
         every other tool -- meta-tools included, for a client that only
         lists them alongside real connector tools -- look identical to
@@ -473,12 +470,11 @@ class McpDispatcher:
             self._audit_status_check("status_checked", claude_reason)
             return result
 
-        # The self-approval plan's Phase 2 repointed this at the companion.
-        # It used to read "ask_for_sign_in_link", which told the model to
-        # offer to mint a live session credential and hand it over -- the
-        # tool that did so is retired (web/mcp_tools.py's own module
-        # docstring), and what is left for an un-onboarded install is the
-        # one affordance that does not route through this process at all.
+        # Points at the companion rather than at anything reachable over
+        # /mcp: no MCP tool mints a sign-in credential (ADR 0013,
+        # docs/adr/0013-no-mcp-tool-mints-a-sign-in-credential.md), so what
+        # is left for an un-onboarded install is the one affordance that
+        # does not route through this process at all.
         result["next_step"] = "open_privacyfence_companion"
         result["sign_in_url"] = None
         result["message"] = (
@@ -511,11 +507,8 @@ class McpDispatcher:
     @staticmethod
     def _audit_status_check(decision: str, claude_reason: str = "") -> None:
         # ``decision`` is always "status_checked" -- privacyfence_status
-        # never mints a sign-in link itself, and since the self-approval
-        # plan's Phase 2 retired privacyfence_get_sign_in_link, nothing
-        # reachable over /mcp does (issue #396's own threat-model follow-up
-        # asked for the narrower version of this: that the credential only
-        # be issued because a human asked). Kept as a parameter rather than
+        # never mints a sign-in link itself, and nothing reachable over /mcp
+        # does (ADR 0013). Kept as a parameter rather than
         # hardcoded so a future distinct status-only decision doesn't need
         # this call site touched again.
         try:
@@ -541,11 +534,11 @@ class McpDispatcher:
         """privacyfence_await_approval's handler: long-poll ``approval_ids``
         against the registry and return their current status once anything
         changes, or once the (clamped) timeout elapses -- whichever comes
-        first. Status only, never content (§5.2 point 7 -- see
+        first. Status only, never content (see
         approvals.PendingApprovalRegistry.await_status's own docstring for
-        the exact vocabulary). Scoped to current_principal() (P9): an id
+        the exact vocabulary). Scoped to current_principal(): an id
         belonging to another principal reads as "unknown", the same
-        cross-principal check §10.5 requires of every other approval read."""
+        cross-principal check every other approval read makes."""
         ids = [str(i) for i in (approval_ids or [])]
         if not ids:
             return {}
@@ -567,12 +560,10 @@ class McpDispatcher:
             await asyncio.sleep(self._AWAIT_APPROVAL_POLL_SECONDS)
 
     # ------------------------------------------------------------------ #
-    # Unattended sessions -- ported from IPCServer.begin/end_unattended_
-    # session/unattended_session_count/_audit_unattended_session_event.
-    # Cleared explicitly by end_unattended_session, or by end_session()
-    # (routes_mcp.py calls this from the per-MCP-session lifespan's own
-    # finally block -- the direct counterpart of ipc_server.py's
-    # _handle_connection finally block clearing id(writer)).
+    # Unattended sessions -- cleared explicitly by end_unattended_session,
+    # or by end_session() (routes_mcp.py calls this from the per-MCP-session
+    # lifespan's own finally block, so a dropped connection never leaves its
+    # session marked unattended).
     # ------------------------------------------------------------------ #
 
     def begin_unattended_session(self, session_key: Hashable, claude_reason: str = "") -> dict:
@@ -604,7 +595,7 @@ class McpDispatcher:
     def end_session(self, session_key: Hashable) -> None:
         """Called once, when the MCP session this key identifies ends (see
         module docstring) -- whatever unattended-session state it carried
-        dies with it, the same way a dropped bridge connection used to."""
+        dies with it."""
         had_unattended = session_key in self._unattended_sessions
         self._unattended_sessions.discard(session_key)
         if had_unattended:

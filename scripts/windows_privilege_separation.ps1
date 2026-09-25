@@ -1,21 +1,21 @@
 <#
 .SYNOPSIS
-  #428 Phase 4 (B5c): provision -- or back out of -- running the PrivacyFence
+  Provision -- or back out of -- running the PrivacyFence
   daemon under its own Windows account.
 
 .DESCRIPTION
   Until this runs, the daemon and the AI agent it exists to govern are the same
-  OS user, which is the root cause of all four weaknesses issue #428 describes:
+  OS user, which is the root cause of four weaknesses:
   the agent can read the session-minting channel, rewrite the always-allow rules
   and PII policy that decide what it is allowed to do, forge a WebAuthn
   credential into the store a local passkey would be checked against, and read
   the audit log's HMAC key. One change closes all four -- a dedicated account
   owning those files -- and this script is that change, made reversible.
 
-  macOS and Linux got the same change in their own idioms
+  macOS and Linux make the same change in their own idioms
   (scripts/macos_privilege_separation.sh, scripts/linux_privilege_separation.sh)
   and this deliberately mirrors them step for step. Three things have no POSIX
-  counterpart at all, and they are why Windows was sequenced last:
+  counterpart at all:
 
   1. NTFS ACLs instead of permission bits. secure_files.secure_mkdir's chmod is
      a documented no-op here, so every "mode" in the POSIX layout becomes an
@@ -28,11 +28,11 @@
   3. The install location is part of the boundary. A service runs whatever its
      binPath names, so a PrivacyFence the logged-in user can rewrite would let
      the agent run its own code *as the service account*. This script refuses to
-     enable against such an install -- see Assert-ImageProtected below. #407's
-     non-elevated per-user install tier was the case that made that refusal
-     reachable by an ordinary user; ADR 0003 decision 4 withdraws the tier
-     rather than the refusal, which stays as the check on every install
-     directory this is ever pointed at.
+     enable against such an install -- see Assert-ImageProtected below. A
+     non-elevated per-user install tier would make that refusal reachable by
+     an ordinary user; ADR 0003 decision 4 withdraws the tier rather than the
+     refusal, which stays as the check on every install directory this is
+     ever pointed at.
 
 .EXAMPLE
   # From an elevated PowerShell, against a real install:
@@ -53,20 +53,19 @@
 
   Adding the owner to $ServiceGroup is the only step here that needs to know
   *which human* this install is for, and ADR 0003 decision 3 splits it out
-  for that reason: an MDM push or
-  a SYSTEM-context install resolves no owner account, and that used to leave
-  the whole install unseparated. It no longer does. `enable` with no
-  resolvable owner does everything an administrator can do alone and records
+  for that reason: an MDM push or a SYSTEM-context install resolves no owner
+  account, and that must not leave the whole install unseparated. `enable`
+  with no resolvable owner does everything an administrator can do alone and records
   the group membership as pending; `enable -ForUser <name>` closes that half
   later, idempotently, and is what the companion app runs by itself at the
   first real sign-in.
 
-  No longer opt-in. ADR 0003 decision 4 has installer/privacyfence.iss run
+  Not opt-in. ADR 0003 decision 4 has installer/privacyfence.iss run
   `enable` itself, elevated, as a step of every install -- so on Windows this
   script is normally something a human runs only to look at an install
-  (`status`) or to purge one (`uninstall -Purge`), the same way the .deb's postinst
-  has run the Linux script since #428 D1. Running `enable` by hand still
-  works, and is the documented way to re-provision an install whose service,
+  (`status`) or to purge one (`uninstall -Purge`), the same way the .deb's
+  postinst runs the Linux script. Running `enable` by hand still works, and
+  is the documented way to re-provision an install whose service,
   ACLs or companion task have drifted.
 #>
 [CmdletBinding()]
@@ -98,7 +97,7 @@ param(
     # and the $ServiceGroup local group. The POSIX scripts' `uninstall --purge`.
     [switch] $Purge,
 
-    # #428 Phase 2: `daemon`'s own sub-verb -- {status|start|stop|restart|
+    # `daemon`'s own sub-verb -- {status|start|stop|restart|
     # ensure-running}. Position = 1 (the only other positional parameter
     # this script has) is what lets `service_control.py`'s elevated
     # `_windows_runas_argv(script, "daemon $action", transcript)` work
@@ -372,9 +371,9 @@ function Test-TrustedIdentity {
 
     # SYSTEM and Administrators are ignored everywhere in this script, for the
     # reason windows_acl.py's own docstring gives: they are the service manager
-    # and the account that provisioned the install, and issue #428's "Honest
-    # limits" already concedes that a local Administrator defeats the design by
-    # taking ownership. Matched by SID so this holds on a non-English Windows.
+    # and the account that provisioned the install, and a local Administrator
+    # defeats the design by taking ownership anyway. Matched by SID so this
+    # holds on a non-English Windows.
     #
     # NT SERVICE\TrustedInstaller (S-1-5-80-956008885-3418522649-1831038044-
     # 1853292631-2271478464 -- an "NT SERVICE" SID, computed the same
@@ -407,16 +406,14 @@ function Test-TrustedIdentity {
 
 function Assert-ImageProtected {
     <#
-      #407, settled: a service runs whatever binPath names, so an install the
-      logged-in user can rewrite turns privilege separation inside out -- the
-      agent gains a way to run its own code *as the service account*, which is
-      strictly worse than the unseparated install it replaced.
+      A service runs whatever binPath names, so an install the logged-in
+      user can rewrite turns privilege separation inside out -- the agent
+      gains a way to run its own code *as the service account*, which is
+      strictly worse than an unseparated install.
 
-      This used to be a check on which install *tier* had been chosen:
-      privacyfence.iss offered a non-elevated per-user install under
-      %LOCALAPPDATA%\Programs, and that tier is what this refused. ADR 0003
-      decision 4 removed the tier -- Setup is PrivilegesRequired=admin and runs
-      this script itself, so a stock install lands under %ProgramFiles% and
+      ADR 0003 decision 4 rules out a non-elevated per-user install tier
+      under %LOCALAPPDATA%\Programs -- Setup is PrivilegesRequired=admin and
+      runs this script itself, so a stock install lands under %ProgramFiles% and
       never reaches the refusal below. What is left for it to catch is
       everything else that can put a writable image under a service's binPath:
       a -DaemonExec pointed at a copy somewhere in a profile, an install
@@ -632,8 +629,7 @@ function Set-Layout {
     # and it denies the daemon WRITE_DAC on its own boundary -- a service
     # that can rewrite the ACL protecting it from the agent is one
     # compromise away from not having one. Administrators can already defeat
-    # all of this by taking ownership, which issue #428's "Honest limits"
-    # says in as many words, so nothing is given away.
+    # all of this by taking ownership, so nothing is given away.
     #
     # It also settles OWNER RIGHTS (S-1-3-4), an ACE Windows materializes on
     # directories under a user profile that grants *whoever owns the object*
@@ -671,9 +667,9 @@ owned by that account would make every permission below advisory. Re-run
     Invoke-Icacls @($SystemRoot, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
     Invoke-Icacls @($SystemRoot, '/grant', "${SidUsers}:(X)", '/q')
 
-    # authority\: policy the agent may not edit, #426's WebAuthn store, the
+    # authority\: policy the agent may not edit, the WebAuthn store, the
     # audit log and its HMAC key. The service account and nothing else -- this
-    # is the whole of what Phase 4 claims, on every platform.
+    # is the whole of what privilege separation claims, on every platform.
     Invoke-Icacls @($authority, '/inheritance:r', '/q')
     Invoke-Icacls @($authority, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
 
@@ -682,13 +678,14 @@ owned by that account would make every permission below advisory. Re-run
     # group rwx because the companion creates its own socket there and
     # connect(2) needs write on the node; here both control channels are named
     # pipes, so nothing in the user's session ever creates anything in this
-    # directory -- it only reads mcp_token and the discovery files.
+    # directory -- it only reads the discovery files (mcp_url, web_base_url).
     Invoke-Icacls @($handoff, '/inheritance:r', '/q')
     Invoke-Icacls @($handoff, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", "${ServiceGroup}:(OI)(CI)(RX)", '/q')
     # Files already in handoff\ -- a reinstall's, left by `uninstall` -- are
     # reset to inherit the grants above rather than trusted to still carry
-    # them. mcp_token in particular is reused across restarts and would
-    # otherwise stay unreadable to the agent if its ACL had drifted. This is
+    # them. The daemon rewrites them on every start, but until then a drifted
+    # ACL would keep the companion and the .mcpb shim from finding a daemon
+    # that is running. This is
     # the Windows counterpart of the POSIX scripts' find -exec chmod 640.
     Get-ChildItem -Path $handoff -Force -ErrorAction SilentlyContinue | ForEach-Object {
         Invoke-Icacls @($_.FullName, '/reset', '/q')
@@ -765,7 +762,7 @@ function Install-DaemonService {
     # the SCM materializes it with the service, gives it its own SID, and
     # grants it the "log on as a service" right itself -- none of which is
     # true for an ordinary account, which would need a password stored
-    # somewhere and a separate LsaAddAccountRights call.
+    # somewhere and a separate LsaAddAccountRights call. See ADR 0059.
     #
     # The spaces after each `=` are sc.exe's own (genuinely strange) syntax,
     # not a typo: the separator is "name= value", and "name=value" is parsed
@@ -794,11 +791,50 @@ function Install-DaemonService {
         'start=', 'auto',
         'DisplayName=', (ConvertTo-CommandLineToken 'PrivacyFence')
     ) -join ' ') | Out-Null
-    Invoke-Sc @('description', $ServiceName, 'Runs the PrivacyFence approval daemon under its own account (issue #428 Phase 4).') | Out-Null
-    # Crash restart, the thing the Scheduled Task's repeating TimeTrigger was
-    # standing in for before there was a service manager involved: three
-    # restarts with a widening delay, and the counter resets after a day.
+    Invoke-Sc @('description', $ServiceName, 'Runs the PrivacyFence approval daemon under its own account.') | Out-Null
+    # Crash restart: three restarts with a widening delay, and the counter
+    # resets after a day.
     Invoke-Sc @('failure', $ServiceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/10000/restart/30000') | Out-Null
+}
+
+# Where Windows looks up the message text for an Event Log source. pywin32's
+# servicemanager, which writes the service's events, carries the message table
+# they use; with no source registered here, Event Viewer and Get-WinEvent show
+# every PrivacyFence entry with an empty message, and Get-WinEvent refuses a
+# -FilterHashtable naming the provider at all ("The parameter is incorrect").
+$EventSourceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\$ServiceName"
+
+function Register-EventSource {
+    <#
+      Point the service's Event Log source at servicemanager's .pyd in the
+      install, the registration pywin32's own InstallService makes and `sc
+      create` does not. Best-effort: without it the service still runs and
+      still logs, its entries just read as empty -- not a reason to fail or
+      roll back an `enable` that otherwise worked.
+    #>
+    $installDir = Split-Path -Parent $script:DaemonExec
+    $messageFile = Get-ChildItem -LiteralPath $installDir -Recurse -File -Filter 'servicemanager*.pyd' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $messageFile) {
+        Write-Warn "no servicemanager*.pyd under $installDir -- the $ServiceName service's Event Log entries will show no message text"
+        return
+    }
+    try {
+        New-Item -Path $EventSourceKey -Force | Out-Null
+        New-ItemProperty -Path $EventSourceKey -Name 'EventMessageFile' -PropertyType ExpandString -Value $messageFile.FullName -Force | Out-Null
+        New-ItemProperty -Path $EventSourceKey -Name 'TypesSupported' -PropertyType DWord -Value 7 -Force | Out-Null
+        Write-Note "registered the $ServiceName Event Log source ($($messageFile.FullName))"
+    } catch {
+        Write-Warn "could not register the $ServiceName Event Log source: $($_.Exception.Message)"
+    }
+}
+
+function Unregister-EventSource {
+    # On `uninstall` and on a rolled-back `enable`, because the message file it
+    # names is in the program files the uninstaller is about to delete.
+    if (Test-Path -LiteralPath $EventSourceKey) {
+        Remove-Item -LiteralPath $EventSourceKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Start-DaemonService {
@@ -950,11 +986,10 @@ function Undo-PartialEnable {
       0042: nothing restores data into a user profile). A re-run `enable`
       picks it up exactly as a reinstall does.
 
-      This is privacyfence/privacyfence#599's counterpart to the `disable`
-      defect fixed in 1d6b13f: an operation that is not atomic and does not
-      clean up after itself when it fails midway leaves an install that is
-      neither separated nor whole -- here, a marker claiming a layout whose
-      service is gone, which paths.py would resolve for nobody.
+      An operation that is not atomic and does not clean up after itself
+      when it fails midway leaves an install that is neither separated nor
+      whole -- here, a marker claiming a layout whose service is gone,
+      which paths.py would resolve for nobody.
 
       Every step is a no-op on the state it was not reached from
       (Uninstall-* return early on what is not there), which is what lets one
@@ -974,6 +1009,7 @@ function Undo-PartialEnable {
         }
         Uninstall-CompanionTask
         Uninstall-DaemonService
+        Unregister-EventSource
         Write-Note "rolled back -- this install is not separated; anything under $SystemRoot is left where it is"
     } catch {
         Write-Warn @"
@@ -1023,13 +1059,12 @@ function Invoke-Enable {
         Write-Note "no owner account resolved -- leaving the $ServiceGroup membership pending"
     }
     # Everything that can leave this install in neither layout, in one block
-    # that undoes itself -- privacyfence/privacyfence#599's third half. The two
-    # states worth having are "separated" and "not"; an `enable` that stops
-    # between them produces neither, and that is not a theoretical shape. The
-    # observed one was the daemon's data under %ProgramData% -- a real
-    # install's authority directory, audit log and MCP token -- with no marker,
-    # no service and no companion task pointing at it, which `paths.py`
-    # resolves for nobody.
+    # that undoes itself. The two states worth having are "separated" and
+    # "not"; an `enable` that stops between them produces neither, and that
+    # is not a theoretical shape: one seen on a real runner is the daemon's
+    # data under %ProgramData% -- a real install's authority directory, audit
+    # log and MCP token -- with no marker, no service and no companion task
+    # pointing at it, which `paths.py` resolves for nobody.
     #
     # Install-DaemonService goes first because it is what brings
     # NT SERVICE\PrivacyFence into existence, and Set-Layout's grants cannot
@@ -1052,6 +1087,7 @@ function Invoke-Enable {
     # is a separated install with a broken daemon, which `sc query` and the
     # event log can both explain, and rolling the marker and the ACLs back
     # around it would trade a diagnosable problem for a silent one.
+    Register-EventSource
     Start-DaemonService
     Write-Note 'enable: done'
 
@@ -1173,6 +1209,7 @@ function Invoke-Uninstall {
 
     Uninstall-CompanionTask
     Uninstall-DaemonService
+    Unregister-EventSource
 
     if (-not $Purge) {
         Write-Host @"
@@ -1282,7 +1319,7 @@ function Invoke-Status {
         $groupRules = @(Get-PathAccessRules -LiteralPath $handoff |
             Where-Object { $_.IdentityReference.Value -like "*\$ServiceGroup" -or $_.IdentityReference.Value -ieq $ServiceGroup })
         if ($groupRules.Count -eq 0) {
-            Write-Host "  NO HANDOFF       $handoff grants $ServiceGroup nothing -- your MCP client cannot read mcp_token"
+            Write-Host "  NO HANDOFF       $handoff grants $ServiceGroup nothing -- the companion app and MCP extension cannot read mcp_url/web_base_url (the daemon will look like it is not running)"
             $problems = 1
         } elseif (@($groupRules | Where-Object { Test-RuleGrantsWrite -Rule $_ }).Count -gt 0) {
             Write-Host "  TOO OPEN         $handoff grants $ServiceGroup write access -- it only needs to read"
@@ -1334,7 +1371,7 @@ function Invoke-Status {
     return $problems
 }
 
-# ── Daemon manager (#428 Phase 2) ──────────────────────────────────────────
+# ── Daemon manager ─────────────────────────────────────────────────────────
 #
 # `daemon {status|start|stop|restart|ensure-running}` is what the companion
 # app's tray menu runs -- `status` unprivileged, on every poll, and

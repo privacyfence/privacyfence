@@ -288,14 +288,13 @@ class TestGetPage:
         assert kwargs["raw_data"] is kwargs["filtered_data"]
 
     async def test_storage_format_markup_is_converted_to_markdown(self, gated_call_spy):
-        # Regression test for issue #112: confluence_get_page's details_text/
-        # pii_scan_text were fed raw Confluence storage-format XHTML (with
-        # unstripped <ac:*> macro tags) straight into the approval popup and
-        # the PII scanner. body must be run through html_to_markdown() first
-        # so the reviewer sees readable, rendered content (not raw tag soup)
-        # and the scanner sees the actual text rather than XML markup. Also
-        # covers the "markdown" preview_blocks entry that renders that
-        # content richly (see approval_window_html.py).
+        # confluence_get_page's details_text/pii_scan_text must not be raw
+        # Confluence storage-format XHTML (with unstripped <ac:*> macro tags) in
+        # the approval popup and the PII scanner. body must be run through
+        # html_to_markdown() first so the reviewer sees readable, rendered
+        # content (not raw tag soup) and the scanner sees the actual text rather
+        # than XML markup. Also covers the "markdown" preview_blocks entry that
+        # renders that content richly (see approval_window_html.py).
         connector, client = make_connector()
         client.get_page.return_value = make_page(
             body='<p>Confidential steps here</p>'
@@ -356,7 +355,7 @@ class TestGetPageByTitle:
         assert gated_call_spy[0]["sender"] == "ENG"
 
     async def test_storage_format_markup_is_converted_to_markdown(self, gated_call_spy):
-        # Same regression as TestGetPage's test of the same name (issue #112).
+        # Same check as TestGetPage's test of the same name.
         connector, client = make_connector()
         client.get_page_by_title.return_value = make_page(
             body='<ul><li>Confidential item</li></ul>'
@@ -669,8 +668,8 @@ class TestOrgModeDownloadDelivery:
         )
 
         assert result["delivery"] == "link"
-        # Phase 4: agent_links defaults to True -- the capability route,
-        # not the older cookie-authenticated browser one.
+        # agent_links defaults to True -- the capability route,
+        # not the cookie-authenticated browser one.
         assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
         assert get_download_staging_store().pending_count == 1
         assert gated_call_spy[0]["delivery"] == "staged_link"

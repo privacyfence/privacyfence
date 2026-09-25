@@ -7,15 +7,14 @@ postures, chosen per call by whether the active ApprovalUI exposes a
 ``deferred_registry`` (approval_ui.py's own docstring):
 
 - **No registry** (any ApprovalUI that has nowhere to send a human a
-  reviewable link -- WebApprovalUI, the only implementation since P10
-  retired NativeApprovalUI/approval_popup.py, always has one, so this path
-  is dormant today but the seam still generalizes to it -- see
-  approval_ui.py's own docstring): unchanged from before P3. gated_call()
+  reviewable link -- WebApprovalUI, the only implementation, always has
+  one, so this path is dormant today but the seam still generalizes to
+  it -- see approval_ui.py's own docstring). gated_call()
   blocks until the popup returns; there is no pending-approval handshake,
   so Claude never holds a tool that can release gated data on its own.
 - **A registry** (WebApprovalUI): gated_call() still resolves inline,
   identically, *if a human decides within ``registry.hold_window`` seconds*
-  (default 30s -- D3). If not, it returns a structured
+  (default 30s). If not, it returns a structured
   ``{"status": "approval_pending", "approval_id", "url", ...}`` result
   instead of continuing to block. The human interaction keeps
   running in the background; when it concludes, the outcome lands in
@@ -29,15 +28,10 @@ postures, chosen per call by whether the active ApprovalUI exposes a
   -- see approvals.py's own module docstring for the full protocol and why
   the security invariant survives it unchanged.
 
-``_popup_lock`` (this module's own, pre-P3: one dialog serialized at a
-time, and the "was this already covered by a rule created while queued?"
-re-check that ran under it) is gone. Job 1 -- one screen, one dialog -- is
-simply obsolete for the web surface, whose whole point is several
-approvals pending at once; the
-native approval surface that used to keep its own, separate serialization
-lock was retired at P10 (§12, D6), so there is no longer a second dialog
-host to reconcile this module's own concurrency model against. Job 2
-survives as an explicit re-check at the top of each
+Approvals are not serialized: the web surface's whole point is several
+approvals pending at once, so there is no one-dialog-at-a-time lock. What
+such a lock would also have bought -- "was this already covered by a rule
+created while it was queued?" -- is an explicit re-check at the top of each
 gate's interaction (see each branch's own ``_interact`` closure), for
 whichever request happens to still be mid-interaction when a rule changes,
 plus the rules-changed re-evaluation broadcast
@@ -196,7 +190,7 @@ class GateDeniedError(RuntimeError):
     each raise site below): unlike the bare ``RuntimeError(str(exc))`` every
     connector's own ``_fetch``-style helper raises to wrap a ``*ClientError``
     (gmail_client.py and friends -- see that pattern in connectors/*.py),
-    this type never carries a third party's own exception text. SEC-10:
+    this type never carries a third party's own exception text.
     safe_errors.py's public_message() relies on exactly this distinction -- a bare
     ``RuntimeError`` is *not* trusted to reach an MCP client verbatim, but a
     named subclass (this one, plus approvals.TooManyPendingApprovalsError
@@ -210,13 +204,13 @@ class GateDeniedError(RuntimeError):
 # Thin delegations to the pluggable ApprovalUI seam (approval_ui.py), kept as
 # plain module-level functions -- rather than called as get_approval_ui().
 # show_read_popup(...) inline at each call site below -- so this module
-# still calls a bare name for each dialog, same as before this seam existed.
+# still calls a bare name for each dialog.
 # That's what lets every gate.py test
 # monkeypatch e.g. gate.show_read_popup directly without knowing anything
 # about ApprovalUI. get_approval_ui() is re-resolved on every call rather
 # than bound once at import time, so a later init_approval_ui() swap (a
-# different ApprovalUI implementation, e.g. for #55's mobile remote
-# approval) takes effect immediately, not just for gate.py calls that happen
+# different ApprovalUI implementation, e.g. one that sends the decision to
+# a phone -- ADR 0005) takes effect immediately, not just for gate.py calls that happen
 # after this module was first imported.
 
 
@@ -236,14 +230,10 @@ def show_rule_confirmation_popup(*args, **kwargs):
     return get_approval_ui().show_rule_confirmation_popup(*args, **kwargs)
 
 
-# Per-tool NARROW/WIDE card-stack shape, ported verbatim from
-# scripts/qa_popup_smoke.py's own _TOOL_LAYOUT (that script's own comment
-# explains the handful of tools that render WIDE despite otherwise looking
-# like a NARROW case, e.g. slack_send_message/telegram_send_message/
-# jira_add_comment, since NARROW has no mechanism at all to show a real
-# message/comment body) -- keep the two in sync if either ever changes;
-# this is the one gate.py consults for real production calls,
-# qa_popup_smoke.py's own copy is for local screenshot iteration only.
+# Per-tool NARROW/WIDE card-stack shape. A handful of tools render WIDE
+# despite otherwise looking like a NARROW case (e.g. slack_send_message/
+# telegram_send_message/jira_add_comment), since NARROW has no mechanism at
+# all to show a real message/comment body.
 _TOOL_LAYOUT: dict[str, str] = {
     "gmail_get_message": WIDE, "gmail_get_thread": WIDE,
     "gmail_download_attachment": WIDE, "drive_download_file": WIDE,
@@ -262,7 +252,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "slack_create_group_chat": NARROW,
     "gmail_reply_all_draft": WIDE,
     # Parallel to gmail_create_draft/gmail_reply_draft/gmail_reply_all_draft above --
-    # same WIDE right-pane body-text preview, just with an extra Attachments row in §1.
+    # same WIDE right-pane body-text preview, just with an extra Attachments row in the "Action to perform" card.
     "gmail_create_draft_with_attachments": WIDE, "gmail_reply_draft_with_attachments": WIDE,
     "gmail_reply_all_draft_with_attachments": WIDE,
     "gmail_add_label": NARROW, "gmail_remove_label": NARROW, "gmail_archive_message": NARROW,
@@ -299,11 +289,9 @@ _TOOL_LAYOUT: dict[str, str] = {
 # so giving popups their own dedicated lane connector I/O can never fill
 # still matters regardless of worker count.
 #
-# max_workers used to be 1, because gate.py's own _popup_lock (removed at
-# P3 -- see module docstring) already serialized every dialog to one at a
-# time, so a second worker would have sat idle. It's several now because
-# that's no longer true for the web surface: several approvals showing at
-# once is P3's whole point ("New coalescing case" / "Job 1... obsolete").
+# Several workers, not one: approvals are not serialized (see module
+# docstring), and several approvals showing at once is the web surface's
+# whole point.
 #
 # Sized against approvals.DEFAULT_MAX_PENDING, not a literal worker count:
 # every approval the registry considers "live" needs a worker parked on it
@@ -441,8 +429,7 @@ async def _resolve_decision(
     registry (either a ledger hit, or a live wait that resolved) -- the
     "no registry" / legacy path never had a separate decide-then-release
     split to time, so there is nothing new to report for it.
-    ``decided_via``/``batch_id`` (Phase 2 of the approval binder plan) are
-    "" unless the human decided this through the binder's batch decide
+    ``decided_via``/``batch_id`` are "" unless the human decided this through the binder's batch decide
     endpoint -- see approvals.PendingApproval's own fields.
     """
     if registry is None:
@@ -462,7 +449,7 @@ async def _resolve_decision(
     if created:
         asyncio.ensure_future(_drive_interaction(registry, approval, interact))
 
-    # Approval binder, Phase 4: collapse the hold window to zero once this
+    # Collapse the hold window to zero once this
     # principal already has something else waiting, rather than blocking
     # this call for the full window too -- see approvals.PendingApproval
     # Registry.has_other_live()'s own docstring.
@@ -497,7 +484,7 @@ def _pending_result(registry: PendingApprovalRegistry, approval: PendingApproval
     """The structured result gated_call() returns to Claude instead of
     blocking further.
 
-    Approval binder, Phase 4: ``pending_count`` (this principal's own
+    ``pending_count`` (this principal's own
     outstanding approvals, this one included) and ``binder_url`` (the
     ``/approvals`` list, not this one card's own link) let Claude tell a
     single stalled call apart from the case adaptive_hold above exists for --
@@ -542,8 +529,8 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
     that has a registry, mirroring mcp_dispatch.McpDispatcher's own
     _prune_stale pattern rather than running on a background timer. Every
     approval this finds is audited as "expired": one still un-answered past
-    its pending TTL (§10.5: "No decision = pending, then expired =
-    denied"), or one whose human decision was never reclaimed by a
+    its pending TTL (no decision means pending, then expired, which
+    counts as denied), or one whose human decision was never reclaimed by a
     re-issued call before the ledger TTL ran out (approvals.py's own
     docstring on why "expired" covers that case too)."""
     if registry is None:
@@ -573,7 +560,8 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
 
 def _on_rules_changed() -> None:
     """Subscribed to auto_accept.add_rules_changed_listener() at import
-    time (below) -- the live half of §6's "Job 2": any already-pending (not
+    time (below) -- the live half of the "was this covered by a rule created
+    while it waited?" re-check (module docstring): any already-pending (not
     yet answered) approval that a rule/grant change now covers is resolved
     as auto_accepted immediately, without waiting for a human to open it,
     exactly like the description in approvals.PendingApprovalRegistry.
@@ -600,12 +588,12 @@ def _should_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, s
 
 def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, str, str]:
     """Decide whether ``operation_key`` auto-accepts. Returns ``(auto_ok, matched_rule,
-    matched_rule_id)`` -- ``matched_rule``/``matched_rule_id`` are always the same value here
-    (P9): every rule, wherever it originated -- authored through Settings, the MCP bridge, the
+    matched_rule_id)`` -- ``matched_rule``/``matched_rule_id`` are always the same value here:
+    every rule, wherever it originated -- authored through Settings, the MCP bridge, the
     popup's own "Always allow" flow, or migrated from a hand-edited v1 config at startup -- lives
     in the on-disk v2 ``auto_accept:`` section, so there is exactly one rule list to check and its
-    own ``.id`` (content-derived, ``policy.store.rule_id_for_rule``) is already the canonical id
-    F9 asked for. An empty ``matched_rule_id`` on an ``"auto_accepted"`` audit entry still means
+    own ``.id`` (content-derived, ``policy.store.rule_id_for``) is already the canonical id
+    an audit entry records (ADR 0074). An empty ``matched_rule_id`` on an ``"auto_accepted"`` audit entry still means
     exactly what it always has: the temp-accept grace window matched, not a rule row.
     """
     rules = get_policy_v2_store_rules()
@@ -643,7 +631,7 @@ def preflight_auto_accept(operation_key: str, args: dict, my_email: str = "") ->
 # request came in on a Streamable HTTP session that called
 # privacyfence_begin_unattended_session() and hasn't since called
 # privacyfence_end_unattended_session() -- see unattended_scope() below and
-# docs/TECHNICAL_REFERENCE.md's "Scheduled / unattended Cowork tasks"
+# 5deef1d8:docs/TECHNICAL_REFERENCE.md's "Scheduled / unattended Cowork tasks"
 # section. Deliberately NOT a module-level bool: a plain bool would be
 # shared across every concurrent request on
 # every session, but unattended mode is a per-session state (tracked in
@@ -731,8 +719,8 @@ async def gated_call(
     filtered_data: Any,
     gate: str = "review",         # "review" | "popup"
     preview: dict | None = None,  # fields shown in the review-gate dialog
-    new_info: dict[str, str] | None = None,  # §3 ("What will be provided to
-        # Claude") -- real (label, value) pairs a connector builds directly, e.g.
+    new_info: dict[str, str] | None = None,  # The "What will be provided to
+        # Claude" card -- real (label, value) pairs a connector builds directly, e.g.
         # calendar_get_event_details's Attendees/Location/Description. Read-only
         # (gate="review") calls only, same reasoning as visibility below. Only consulted by
         # approval_window_html.py's layout="narrow"/"wide" rendering (falls back to a
@@ -812,11 +800,10 @@ async def gated_call(
     my_email: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
-    delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- `git show
-        # 04d08f4a^:docs/org-mode-download-delivery-plan.md`'s Phase 3: which transport actually moved (or would move)
-        # this call's file bytes, recorded on the audit entry alongside the ordinary accept/
-        # deny decision. "" (every call site before this phase, and every non-download tool)
-        # means "not applicable" -- this is deliberately not inferred from anything else gated_
+    delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- which
+        # transport actually moved (or would move) this call's file bytes (ADR 0017), recorded
+        # on the audit entry alongside the ordinary accept/deny decision. "" (every
+        # non-download tool) means "not applicable" -- this is deliberately not inferred from anything else gated_
         # call already has, since only the three download/attachment tools know their own
         # delivery mode. See audit_log.AuditEntry.delivery's own docstring.
 ) -> Any:
@@ -928,9 +915,8 @@ async def gated_call(
     seen_count = await asyncio.to_thread(audit_logger.recent_matches, connector, tool, summary)
 
     # The deferred-protocol registry, if the active ApprovalUI has one (see
-    # this module's own docstring) -- None for a registry-less ApprovalUI,
-    # exactly like every gated_call() before P3. dedupe_key mirrors ipc_
-    # server.py's/mcp_dispatch.py's own retry-dedupe key shape (already
+    # this module's own docstring) -- None for a registry-less ApprovalUI.
+    # dedupe_key mirrors mcp_dispatch.py's own retry-dedupe key shape (already
     # retry-stable -- see approvals.canonical_key's docstring); computed
     # unconditionally, cheaply, since both branches below need it whether or
     # not a registry is active.
@@ -989,8 +975,8 @@ async def gated_call(
 
             # Re-check up front: by the time we actually get here, a rule may
             # already cover this item -- created by another concurrently-
-            # running approval's own "Always allow" (no more _popup_lock to
-            # serialize this against; see module docstring's "Job 2" note).
+            # running approval's own "Always allow" (approvals are not
+            # serialized; see the module docstring's re-check note).
             # An unreviewed PII match still overrides it either way --
             # pii_forces_confirmation, not pii_categories itself, since
             # pii_already_reviewed's own carve-out (see module docstring) is
@@ -1282,9 +1268,9 @@ async def propose_policy_change(
 
     Raises ``ValueError`` -- before any popup is shown -- for an unknown ``rule_id``, or for a
     ``group``/``verbs`` combination that derives no operation key at all: a verb the scope type
-    named by ``group`` cannot govern, or a value-needing group given none. This is P7's write-time
-    validation (the redesign proposal's own exit criterion): a rule the UI cannot render or remove
-    is refused here rather than silently persisted.
+    named by ``group`` cannot govern, or a value-needing group given none. This is write-time
+    validation: a rule the UI cannot render or remove is refused here rather than silently
+    persisted.
     """
     if operation not in ("add", "update", "remove"):
         raise ValueError(f"Unknown operation: {operation!r}")
@@ -1378,7 +1364,7 @@ async def propose_policy_change(
 def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[str]) -> None:
     """Fail-fast path for unattended sessions: same outcome as a human
     clicking Deny, minus the popup nobody's there to answer -- see
-    unattended_scope() above and docs/TECHNICAL_REFERENCE.md's
+    unattended_scope() above and 5deef1d8:docs/TECHNICAL_REFERENCE.md's
     "Scheduled / unattended Cowork tasks" section.
 
     Always raises; the "-> None" return type documents that this never
@@ -1478,15 +1464,14 @@ def _audit(
             decided_at=(
                 datetime.fromtimestamp(decided_at, tz=timezone.utc).isoformat() if decided_at else ""
             ),
-            # decided_via/batch_id (Phase 2 of the approval binder plan):
-            # "" unless this decision was released through the binder's
+            # decided_via/batch_id: "" unless this decision was released through the binder's
             # batch decide endpoint -- see approvals.PendingApproval's own
             # fields and LedgerHit's own docstring for how they get here.
             decided_via=decided_via,
             batch_id=batch_id,
-            # P8 (policy v2 redesign) -- see AuditEntry.rule_id's own docstring. Set only by the
+            # See AuditEntry.rule_id's own docstring. Set only by the
             # "auto_accepted" audit() calls above that resolved a canonical id; every other
-            # decision (and every audit() call that predates this parameter) keeps the default.
+            # decision keeps the default.
             rule_id=rule_id,
         ))
     except Exception as exc:

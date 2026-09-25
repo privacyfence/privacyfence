@@ -69,13 +69,12 @@ dependencies = [
     # rather than xml.etree.ElementTree, which has no protection against
     # billion-laughs/entity-expansion-style XML attacks on its own.
     "defusedxml>=0.7.1",
-    # Embedded HTTP(S) server for the web approval surface (D10): this stack is brought in
-    # starting at P1, ahead of the MCP-over-HTTP endpoint itself, so
-    # web/server.py isn't written twice against two different stacks.
+    # Embedded HTTP(S) server for the web approval surface and the MCP-over-HTTP endpoint:
+    # one stack for both, so web/server.py isn't written twice against two different stacks.
     # Platform-independent -- installed everywhere, unlike the AppKit
     # dependencies above.
     #
-    # Floor raised from 0.37 to 1.3.1 (SEC-19): every starlette release below
+    # Floor at 1.3.1: every starlette release below
     # 1.3.1 has at least one of five CVEs pip-audit's dependency-audit.yml
     # gate found live in this repo's original <1.0-capped range.
     # PYSEC-2026-161/CVE-2026-48710 and PYSEC-2026-248/CVE-2026-54282 are
@@ -95,12 +94,10 @@ dependencies = [
     # same bump regardless.
     "starlette>=1.3.1,<2.0",
     "uvicorn>=0.30,<1.0",
-    # Official MCP Python SDK, promoted from a test-only dependency to a
-    # runtime one at P2 (D2):
+    # Official MCP Python SDK, a runtime dependency (ADR 0009):
     # web/routes_mcp.py hosts the real Streamable HTTP MCP endpoint on it,
-    # not just tests/integration/test_mcp_daemon_contract.py's client
-    # side anymore. Migrated off the 1.x surface at issue #250: this is now
-    # a v2-only floor, not a widened range, because the 2.0 server API is
+    # and tests/integration/test_mcp_daemon_contract.py uses its client
+    # side. This is a v2-only floor, not a widened range, because the 2.0 server API is
     # not additive over 1.x's -- the low-level `Server` registers handlers
     # as constructor arguments (`on_list_tools=`/`on_call_tool=`) instead of
     # `@server.list_tools()` decorators, a handler is `(ctx, params) ->
@@ -119,25 +116,24 @@ dependencies = [
     # `input_schema`) -- constructing by alias still validates, reading one
     # back by alias does not.
     "mcp>=2.2,<3.0.0",
-    # Verifying the org IdP's ID token (P7: PrivacyFence is its own minimal OAuth 2.1 authorization
+    # Verifying the org IdP's ID token (ADR 0011: PrivacyFence is its own minimal OAuth 2.1 authorization
     # server, authenticating the human against the org's
     # IdP by OIDC behind the scenes) means checking a JWT signature against
     # a JWKS endpoint -- the same "security-critical, spec-governed, don't
-    # hand-roll it" reasoning D2 already gave for the MCP SDK itself
+    # hand-roll it" reasoning ADR 0009 gives for the MCP SDK itself
     # applies here. Already an undeclared transitive dependency of `mcp`
     # itself (and of simple-salesforce) as of this writing, so this adds no
     # new package to what's actually installed -- it just stops relying on
     # that being true by accident.
     "PyJWT>=2.8,<3.0",
-    # WebAuthn step-up authentication for org-mode write approvals (P9, D7):
+    # WebAuthn step-up authentication for org-mode write approvals:
     # parsing CBOR attestation objects and verifying COSE signatures is exactly the same
-    # "security-critical, spec-governed, don't hand-roll it" case D2
-    # already made for the MCP SDK -- see webauthn_stepup.py's own module
+    # "security-critical, spec-governed, don't hand-roll it" case ADR 0009
+    # makes for the MCP SDK -- see webauthn_stepup.py's own module
     # docstring.
     "webauthn>=3.0,<4.0",
     # Cross-platform single-instance file locking for daemon_main.py's
-    # _acquire_instance_lock()/_release_instance_lock() (the now-removed docs/windows-
-    # support-plan.md Phase 1, B1 in the now-removed docs/windows-linux-support-plan.md):
+    # _acquire_instance_lock()/_release_instance_lock():
     # picks the right OS primitive itself (fcntl.flock on POSIX,
     # msvcrt/LockFileEx on Windows), the same "don't hand-roll a
     # platform-locking primitive" reasoning already given above for
@@ -146,7 +142,7 @@ dependencies = [
     # platform, so every install gets it rather than branching the
     # dependency list by sys_platform.
     "portalocker>=2.8",
-    # #428 Phase 3 (ADR 0002 decision 4): the companion app's tray/menu-bar icon on macOS/
+    # ADR 0002 decision 4: the companion app's tray/menu-bar icon on macOS/
     # Windows -- a base dependency, not an optional extra, so a plain `pip install privacyfence`
     # can run the companion entry point (companion.py) out of the box on the platforms it
     # applies to. Platform-marked rather than unconditional: Linux has no tray at all (see
@@ -159,14 +155,14 @@ dependencies = [
 
 # The PyPI sidebar. Without these the project page carries no link back to anything --
 # no homepage, no source, no issue tracker -- and that page is all a visitor arriving
-# from `pip install privacyfence` gets to see (privacyfence/privacyfence#370).
+# from `pip install privacyfence` gets to see.
 # Download points at the website's download page rather than GitHub Releases because
 # that is the canonical download surface and the one that counts the download KPI
 # (docs/downloads-and-release-kpi.md).
 [project.urls]
 Homepage = "https://privacyfence.eu"
 Download = "https://privacyfence.eu/download/"
-Documentation = "https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md"
+Documentation = "https://github.com/privacyfence/privacyfence/blob/main/docs/README.md"
 Source = "https://github.com/privacyfence/privacyfence"
 Changelog = "https://github.com/privacyfence/privacyfence/blob/main/CHANGELOG.md"
 Issues = "https://github.com/privacyfence/privacyfence/issues"
@@ -174,7 +170,7 @@ Security = "https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md"
 
 [project.scripts]
 privacyfence-app = "privacyfence.daemon_main:main"
-# #428 Phase 3 (ADR 0002): the companion app -- see companion.py's own module docstring.
+# The companion app (ADR 0002) -- see companion.py's own module docstring.
 privacyfence-companion = "privacyfence.companion:main"
 
 [tool.setuptools.packages.find]
@@ -194,17 +190,10 @@ privacyfence = [
 ]
 
 [project.optional-dependencies]
-# The macos-native extra (rumps + three pyobjc-framework-* packages, gated
-# to sys_platform == 'darwin') that used to live here backed the native
-# menu bar / AppKit approval and settings windows P10 (decision D6) deleted -- nothing in
-# src/privacyfence/ had imported any of them since. Removed at Phase 3
-# PR3.9: an unused extra is
-# still a dependency-scanning and audit-surface cost, and D6's own "the
-# ApprovalUI seam lets it come back if that proves wrong" reasoning for
-# keeping it declared didn't materialize into any actual native-UI work
-# in the time since. The exact package set is preserved in
-# docs/adr/0001-remove-macos-native-extra.md for whoever picks that back
-# up.
+# There is no macos-native extra (rumps + pyobjc-framework-* packages): nothing in
+# src/privacyfence/ imports AppKit, and an unused extra is still a dependency-scanning and
+# audit-surface cost (ADR 0001). The exact package set is preserved in
+# docs/adr/0001-remove-macos-native-extra.md for whoever picks native UI work back up.
 dev = [
     "pyinstaller>=6.0",
     # sdist/wheel build + local upload, for rehearsing a release by hand --
@@ -216,7 +205,7 @@ dev = [
     "build>=1.2",
     "twine>=5.0",
     # Build-time-only PNG -> multi-resolution .ico conversion for the
-    # Windows build (the now-removed docs/windows-support-plan.md Phase 2.3): unlike
+    # Windows build: unlike
     # macOS's sips/iconutil (used by build_dmg.sh), there's no Windows-
     # native icon-conversion tool available cross-platform in CI, so
     # scripts/build_installer.ps1 does it with Pillow instead. Not a
@@ -235,7 +224,7 @@ test = [
     # tests/unit/web/test_routes_mcp.py (the same /mcp endpoint over an
     # in-process ASGI transport, no real socket) is `mcp` itself -- now a
     # runtime dependency (see pyproject.toml's [project.dependencies],
-    # P2/D2), not listed again here.
+    # ADR 0009), not listed again here.
     "freezegun>=1.5",
     # starlette.testclient.TestClient's transport -- test-only, exercising
     # web/ routes (tests/unit/web/) without a real socket.
@@ -250,8 +239,7 @@ test = [
     # dependency of `mcp`; declared here because these tests import it
     # directly rather than relying on that staying true.
     "httpx2>=2.5",
-    # tests/integration/test_browser_smoke.py (TST-06, docs/security-
-    # remediation-plan.md Phase 2 item 2.5) -- drives the real web approval
+    # tests/integration/test_browser_smoke.py -- drives the real web approval
     # surface in a real headless browser, for the CSP/SameSite-cookie/SSE
     # behavior only a real browser actually enforces (see that module's own
     # docstring). Also needs a downloaded Chromium build (`playwright
@@ -259,7 +247,7 @@ test = [
     # skips itself if either is missing, so this alone doesn't force a
     # browser download on every `pip install -e ".[test]"`.
     "playwright>=1.48,<2.0",
-    # TST-12: round-trip
+    # Round-trip
     # property tests on html_to_text.py/markdown_to_html.py/email_markdown.py/
     # text_extraction.py (tests/unit/test_parser_properties.py) -- generated
     # random inputs catch parser edge cases (unbalanced tags, adversarial
@@ -269,7 +257,15 @@ test = [
     # preview pane.
     "hypothesis>=6.100",
 ]
-# Static analysis gate (TST-07). ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
+# The privacyfence.eu docs generator (scripts/build_site.py renders /docs/ with it). Pinned exactly,
+# not to a range: it is pre-1.0, and a new release can change the rendered site. Installed in CI
+# only from requirements/docs.lock.txt, which holds this extra and nothing else -- the website
+# build never installs the package or its runtime dependencies. See
+# docs/adr/0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md.
+docs = [
+    "zensical==0.0.65",
+]
+# Static analysis gate. ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
 # [tool.bandit] below); mypy runs in CI twice -- non-blocking over the whole tree, and blocking
 # over the modules promoted by the [[tool.mypy.overrides]] ratchet below -- see the comments on
 # those tool sections for why.
@@ -301,14 +297,11 @@ testpaths = ["tests"]
 # A hung asyncio socket test (e.g. a fixture never closing a connection)
 # would otherwise block the whole suite indefinitely instead of failing.
 timeout = 30
-# The seven-layer taxonomy testing-policy.md describes (introduced by the
-# now-removed automated-test-strategy-plan.md's Phase 0, and now documented
-# there rather than here). Registered here so `pytest -m <marker>`
-# and `pytest -m "not live"` work and so an unregistered-marker typo fails
-# loudly (pytest's default `--strict-markers`-independent warning) rather
-# than silently matching nothing. Applied to new test modules as later
-# phases add them -- see testing-policy.md's "Pytest markers" note for which
-# existing modules already carry one.
+# The seven-layer taxonomy docs/testing-policy.md describes. Registered here
+# so `pytest -m <marker>` and `pytest -m "not live"` work and so an
+# unregistered-marker typo fails loudly (pytest's default
+# `--strict-markers`-independent warning) rather than silently matching
+# nothing. See testing-policy.md for which modules carry which marker.
 markers = [
     "unit: fast, fully offline",
     "integration: real internal stack, no external network",
@@ -316,19 +309,15 @@ markers = [
     "browser: real Chromium via Playwright",
     "packaged: runs against a built installer/artifact",
     "live: touches a real third-party provider (self-hosted runner only)",
-    # The now-removed automated-test-strategy-plan.md Phase 2.3: OS-level path/process/
-    # locking/daemon-discovery behavior, homed under tests/platform/ rather
-    # than scattered across existing files. Deliberately a separate marker
-    # from `system` -- Phase 0's own status note flagged this as an open
-    # naming decision (Phase 2.3's text said "the platform marker from
-    # Phase 0" before Phase 0's own marker list turned out to have no such
-    # entry); `system` stays reserved for Phase 3's canonical daemon/MCP/
-    # approval/audit scenario, a different concept from this one.
+    # OS-level path/process/locking/daemon-discovery behavior, homed under
+    # tests/platform/ rather than scattered across existing files.
+    # Deliberately a separate marker from `system`, which is the full
+    # daemon/MCP/approval/audit scenario -- a different concept.
     "platform: OS-level path/process/locking/daemon behavior (tests/platform/)",
 ]
 
 [tool.coverage.run]
-# TST-03: branch coverage, not
+# Branch coverage, not
 # just line coverage, is what scripts/check_coverage_floor.py's floors are
 # computed against -- a line that's always reached but whose "else" arm
 # never runs (e.g. a fail-open branch nothing exercises) reads as fully
@@ -338,7 +327,7 @@ markers = [
 branch = true
 source = ["src/privacyfence"]
 
-# --- Static analysis (TST-07) --- #
+# --- Static analysis --- #
 
 [tool.ruff]
 target-version = "py311"
@@ -348,12 +337,11 @@ line-length = 120
 
 [tool.ruff.lint]
 # Pinned explicitly rather than left at ruff's shifting default so a ruff
-# upgrade can't silently turn on/off rules underneath CI. This is the
-# "ruff blocking immediately" half of TST-07 -- E4/E7/E9 (syntax errors,
+# upgrade can't silently turn on/off rules underneath CI. ruff is blocking;
+# E4/E7/E9 (syntax errors,
 # obvious logic errors) and F (pyflakes: unused imports/names, undefined
 # names) are the baseline the existing codebase already passes cleanly.
-# Broadening this (import sorting, pyupgrade, ...) is the
-# "ongoing" half of TST-07's effort estimate -- each addition should land
+# Broadening this (import sorting, pyupgrade, ...) is incremental -- each addition should land
 # as its own change once the resulting diff has been reviewed, not folded
 # in silently here. B (flake8-bugbear) is the first such addition: unlike
 # E4/E7/E9/F it flags real logic risks rather than syntax errors, so its
@@ -364,8 +352,8 @@ select = ["E4", "E7", "E9", "F", "B"]
 
 [tool.mypy]
 python_version = "3.11"
-# TST-07: "mypy/pyright incrementally (non-blocking -> blocking per
-# module)". The existing code predates type-checking in CI and mypy's
+# mypy is adopted incrementally: non-blocking over the whole tree, blocking per
+# promoted module. The existing code predates type-checking in CI and mypy's
 # default strictness currently finds ~87 pre-existing errors across ~20
 # files (mostly connector wiring in daemon_main.py and a few Starlette/ASGI
 # signature mismatches) -- none of them are new to this change, and fixing
@@ -408,11 +396,9 @@ warn_return_any = true
 no_implicit_reexport = true
 strict_equality = true
 
-# Next four promotions (privacyfence/privacyfence#377): each was already clean under the
-# flags above with no code changes needed, matching url_safety.py's own bar -- small,
-# security-critical, and picked from the issue's own candidate list (org-config trust,
-# 100%-covered fail-closed/session-boundary modules). privacyfence.privacy_filter, also on
-# that list, is deliberately *not* here yet: it has one real `no-any-return` finding
+# These four modules are clean under the flags above and meet url_safety.py's own bar --
+# small and security-critical (org-config trust, 100%-covered fail-closed/session-boundary
+# modules). privacyfence.privacy_filter, which meets the same bar, is deliberately *not* here yet: it has one real `no-any-return` finding
 # (category_policy() returning an internal `dict[str, Any]` lookup) that needs an actual
 # typed-shape fix, not just a flag flip, so it's left for a PR that touches that file.
 [[tool.mypy.overrides]]
@@ -456,11 +442,10 @@ no_implicit_reexport = true
 strict_equality = true
 
 [tool.bandit]
-# TST-07: "bandit or semgrep for security-focused rules". Scans src/ only
+# Security-focused static analysis. Scans src/ only
 # for now (tests/ trips B101 `assert_used` constantly, which is how pytest
-# assertions work, not a finding). The two real B314 findings this used to flag (SEC-14, Phase 3
-# item 3.2 -- xml.etree.ElementTree on attachment content) were fixed by switching
-# text_extraction.py's DOCX/PPTX parsing to defusedxml. What was left was a handful of
+# assertions work, not a finding). B314 (xml.etree.ElementTree on attachment content) does not
+# fire because text_extraction.py parses DOCX/PPTX with defusedxml. What remains is a handful of
 # low-severity false positives -- constant/filename strings read as B105 "hardcoded password
 # strings" (`web_token`, `mcp_token`, `TOKEN_URL`, ...), the OAuth `token_type="Bearer"` literal
 # read as B106, `assert`s used for internal invariant-narrowing rather than input validation
