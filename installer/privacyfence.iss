@@ -82,6 +82,16 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Server 2016. Setup refuses to run on anything older rather than installing
 ; an app nothing has built or tested for.
 MinVersion=10.0
+; ADR 0045. RestartManager is the backstop behind [Code]'s PrepareToInstall,
+; which stops the service and ends every PrivacyFence process itself, and a
+; backstop has to be able to close what it finds. The default, `yes`, only
+; asks: none of PrivacyFence's processes has a window that answers (the daemon
+; is headless, the companion a tray icon), so RmShutdown fails with "Some
+; applications could not be shut down", and under /SUPPRESSMSGBOXES Inno's
+; Abort/Retry/Ignore answers Abort -- exit 5, three times before
+; PrepareToInstall existed. `force` terminates what does not answer, which is
+; no more than PrepareToInstall's own taskkill /F already does.
+CloseApplications=force
 
 [Files]
 ; The whole onedir PyInstaller output -- PrivacyFenceApp.exe,
@@ -381,6 +391,59 @@ begin
   end;
 end;
 
+(* The companion, the daemon's image and its non-service alias -- all three
+   best effort, each a no-op against a process that is not running (taskkill
+   exits non-zero, which this ignores). *)
+procedure KillPrivacyFenceProcesses();
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#CompanionExeName}"', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AppExeName}"', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AliasExeName}"', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+(* Which of those three images is still in the process table, as a
+   space-separated list in Running ('' when none). Matched as a whole quoted
+   CSV field, case-insensitively, over every session's processes -- Setup is
+   elevated, so tasklist sees them all. Returns False when tasklist itself
+   could not be run, so the caller can tell "none running" from "could not
+   look". *)
+function ListPrivacyFenceProcesses(var Running: String): Boolean;
+var
+  OutFile, CmdLine, Listing: String;
+  ResultCode: Integer;
+begin
+  Result := False;
+  Running := '';
+  OutFile := ExpandConstant('{tmp}\prepare-tasklist.out');
+  CmdLine := '/C ""' + ExpandConstant('{sys}\tasklist.exe') +
+    '" /NH /FO CSV > "' + OutFile + '" 2>&1"';
+  if not Exec(ExpandConstant('{cmd}'), CmdLine, '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) then
+  begin
+    Log('PrepareToInstall: Exec itself failed to launch cmd.exe for tasklist');
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    LogCommandOutput('PrepareToInstall: tasklist', OutFile);
+    Log('PrepareToInstall: tasklist exit code = ' + IntToStr(ResultCode));
+    Exit;
+  end;
+  Listing := Lowercase(ReadCapturedOutput(OutFile));
+  if Pos('"' + Lowercase('{#CompanionExeName}') + '"', Listing) > 0 then
+    Running := Running + ' {#CompanionExeName}';
+  if Pos('"' + Lowercase('{#AppExeName}') + '"', Listing) > 0 then
+    Running := Running + ' {#AppExeName}';
+  if Pos('"' + Lowercase('{#AliasExeName}') + '"', Listing) > 0 then
+    Running := Running + ' {#AliasExeName}';
+  Result := True;
+end;
+
 (* #428 Phase 2 (local-mode-fixes-plan.md §2.1): stop whatever a previous
    install left running BEFORE Setup copies a single file over it.
 
@@ -388,31 +451,34 @@ end;
    runs ahead of ssInstall, where [Files] actually copies, unlike
    CurStepChanged(ssPostInstall) above which runs *after*. df1a403d fixed
    this gap only in tests/integration/test_windows_packaged_smoke.py's own
-   test harness (_stop_daemon_service/_kill_stray_app_processes, called by
-   the test around its own upgrade-install step); this is the same fix
+   test harness, around its own upgrade-install step; this is the same fix
    ported into the installer itself, which is what a real upgrade -- not
-   just the test's own -- needed all along. See that module's own
-   docstrings for the two failures this closes: v4.1.0a9's real release
-   build hit "Some applications could not be shut down" (exit 5) because
-   RestartManager did not win the race against a still-running
-   privacyfence-app/PrivacyFenceCompanion; a separated install's daemon is
-   the harder case, because it runs as a Windows service with crash-restart
-   failure actions configured (Install-DaemonService's own `sc failure ...`
-   call), so killing it by image name only buys about five seconds before
-   the SCM relaunches it -- a clean `sc.exe stop` is required, not a
-   taskkill, for the same reason _stop_daemon_service() spells out.
+   just the test's own -- needed all along. It closes two failures:
+   v4.1.0a9's real release build hit "Some applications could not be shut
+   down" (exit 5) because RestartManager did not win the race against a
+   still-running privacyfence-app, and 3079c985 met the same with
+   PrivacyFenceCompanion; a separated install's daemon is the harder case,
+   because it runs as a Windows service with crash-restart failure actions
+   configured (Install-DaemonService's own `sc failure ...` call), so
+   killing it by image name only buys about five seconds before the SCM
+   relaunches it and Setup's four one-second DeleteFile retries run out
+   against the replacement (df1a403d) -- a clean `sc.exe stop` is required,
+   not a taskkill. Since ADR 0045 the harness does none of this any more:
+   its upgrade test runs Setup once, with no sweep and no retry, so it
+   proves this hook rather than repeating it.
 
    Best-effort throughout, and always returns '' (success): a fresh install
    has no prior service or processes to stop at all, which is the ordinary
    case, not a failure one, and this hook's only job is making sure nothing
    already has a file open before Setup starts overwriting it -- Setup's own
-   file-in-use retry/RestartManager machinery is still the last line of
-   defense, this just gives it far less to do. *)
+   file-in-use retry and RestartManager (CloseApplications=force, [Setup]
+   above) are still the last line of defense, this just gives them nothing
+   to do. *)
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  OutFile, CmdLine: String;
+  OutFile, CmdLine, Running: String;
   ResultCode, Attempt: Integer;
-  StillRunning: Boolean;
+  StillRunning, Listed: Boolean;
 begin
   Result := '';
   try
@@ -463,20 +529,34 @@ begin
     else
       Log('PrepareToInstall: the {#ServiceName} service is stopped (or was never installed)');
 
-    (* The companion, and the daemon's own non-service alias -- both best
-       effort, both a no-op against a process that is not running (taskkill
-       exits non-zero, which this ignores, same as
-       _kill_stray_app_processes() does in the test module cited above).
-       All three image names, ported from that same helper's own sweep, so
-       a real upgrade gets the protection the test was previously only
-       asserting for itself. *)
+    (* Then every remaining PrivacyFence process, and -- ADR 0045 -- wait
+       until they are actually gone rather than only told to go. taskkill /F
+       returns once TerminateProcess is issued, not once the process has
+       exited and released its image; Setup queries RestartManager the
+       moment this hook returns, and a process still tearing down then is
+       one it will try to close. Re-killing on every poll also covers one
+       that is started again in the window. Up to 30s, 500ms apart, like
+       the service wait above; the log line below is what
+       tests/integration/test_windows_packaged_smoke.py's upgrade test
+       checks. *)
     Log('PrepareToInstall: sweeping stray PrivacyFence processes');
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#CompanionExeName}"', '',
-      SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AppExeName}"', '',
-      SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AliasExeName}"', '',
-      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    KillPrivacyFenceProcesses();
+    Attempt := 0;
+    while True do
+    begin
+      Listed := ListPrivacyFenceProcesses(Running);
+      if (not Listed) or (Running = '') or (Attempt >= 60) then
+        Break;
+      Attempt := Attempt + 1;
+      Sleep(500);
+      KillPrivacyFenceProcesses();
+    end;
+    if not Listed then
+      Log('PrepareToInstall: could not list processes to confirm the sweep -- continuing anyway')
+    else if Running <> '' then
+      Log('PrepareToInstall: still running after 30s:' + Running + ' -- continuing anyway')
+    else
+      Log('PrepareToInstall: no PrivacyFence process is still running');
   except
     (* Never let a hiccup here fail the install before it has even started
        copying files -- the whole point of this hook is a convenience on top

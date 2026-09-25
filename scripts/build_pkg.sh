@@ -243,7 +243,15 @@ if [ -n "$SIGN_IDENTITY" ]; then
   echo "→ Signing installer with: ${SIGN_IDENTITY}"
   UNSIGNED_PKG="${BUILD_DIR}/${PKG_NAME}-unsigned"
   mv "$PKG_PATH" "$UNSIGNED_PKG"
-  productsign --sign "$SIGN_IDENTITY" "$UNSIGNED_PKG" "$PKG_PATH"
+  # shellcheck source=scripts/macos_sign_retry.sh
+  source "${REPO_ROOT}/scripts/macos_sign_retry.sh"
+  # A failed attempt may leave a partial output behind; each retry starts from
+  # the untouched unsigned input with no output file in the way.
+  productsign_fresh() {
+    rm -f "$PKG_PATH"
+    productsign --sign "$SIGN_IDENTITY" "$UNSIGNED_PKG" "$PKG_PATH"
+  }
+  sign_with_timestamp_retry "$PKG_PATH" productsign_fresh
 fi
 
 # ── 5. Optional notarization ──────────────────────────────────────────────
