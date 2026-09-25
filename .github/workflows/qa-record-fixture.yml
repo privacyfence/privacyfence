@@ -16,8 +16,8 @@ name: Record QA fixture
 # workflow_dispatch only. Never `pull_request`, never `push` -- the rule
 # connector-live-check.yml states, for the reason it gives: this is the
 # only runner where the QA connectors' live OAuth credentials exist (see
-# docs/connector-live-check-setup.md's "Runner requirements" section,
-# docs/testing-policy.md's "Runner-local live tier", and ADR 0019
+# docs/connector-qa.md's "Runner requirements" section,
+# docs/testing-policy.md's "Layer 5: live connector", and ADR 0019
 # (docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md)
 # for why), and a fork's PR ref is exactly the kind of ref
 # a non-maintainer controls. Dispatching requires write access by
@@ -111,7 +111,7 @@ jobs:
           for required in credentials org/org_config.json tests/fixtures/qa_environment.yaml; do
             if [ ! -e "${secrets_dir}/${required}" ]; then
               echo "##[error] ${secrets_dir}/${required} not found." \
-                   "See docs/connector-live-check-setup.md's 'Persistent QA state' section" \
+                   "See docs/connector-qa.md's 'Persistent QA state' section" \
                    "for how this runner's QA credentials are provisioned."
               exit 1
             fi

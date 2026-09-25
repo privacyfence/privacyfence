@@ -1,5 +1,5 @@
 """Tests for scripts/qa_fixture_recorder.py -- the local-only fixture
-recorder (see docs/testing-policy.md §2.1). Everything here runs
+recorder (see docs/testing-policy.md, "Layer 5: live connector"). Everything here runs
 offline, with no live credentials and no network:
 
 - redact()/redact_gmail_message() are pure functions, tested directly.

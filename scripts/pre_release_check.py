@@ -3,7 +3,7 @@
 
 This does not replace that plan -- it only covers the parts a release should
 never be blocked on discovering *manually*: the same automated suite CI runs
-(`docs/testing-policy.md` §1). Everything in `release-testing.md`
+(`docs/testing-policy.md`, "Layers 1–4: every PR"). Everything in `release-testing.md`
 -- live fixtures, popup smoke, real Cowork/Desktop prompts, DMG install --
 still needs a human, a screen, and real accounts, none of which this script
 has.

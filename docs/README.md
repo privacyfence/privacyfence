@@ -60,23 +60,33 @@ Release history is in [`../CHANGELOG.md`](../CHANGELOG.md).
 
 ## Contributor docs
 
-- [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — coding and
-  test-writing expectations, and the definition of done for a pull request.
-- [`testing-policy.md`](testing-policy.md) — test layers, what runs automatically and where.
-- [`release-testing.md`](release-testing.md) — release checks that still need a human.
-- [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — running from source next to a packaged
-  install.
-- [`connector-live-check-setup.md`](connector-live-check-setup.md) — self-hosted live-provider
-  runner setup.
-- [`qa-environment-setup.md`](qa-environment-setup.md) — dedicated QA accounts and seed data.
-- [`connector-qa-testing.md`](connector-qa-testing.md) — exploratory connector and gate QA.
-- [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — how a release reaches users
-  and how downloads are counted.
-- [`images/screenshots/README.md`](images/screenshots/README.md) — how the screenshots are made.
+How PrivacyFence is built, tested and released. For people changing the code; not published on
+privacyfence.eu.
+
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — how to propose a change: issues, forks, pull
+  requests, license.
+- [`../CLAUDE.md`](../CLAUDE.md) — release mechanics and branch hygiene: cutting a tag, release
+  notes, branch naming, `releases/*`, worktrees.
+- [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — code and test
+  conventions, adding a connector, and the definition of done for a pull request (§2.7).
+- [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — running PrivacyFence from source without
+  clashing with a packaged install.
+- [`testing-policy.md`](testing-policy.md) — the test layers, which workflow runs which layer, and
+  where.
+- [`release-testing.md`](release-testing.md) — the release gates and the manual checks every
+  release still needs.
+- [`packaging.md`](packaging.md) — how the DMG, `.pkg`, `.mcpb`, Windows installer and `.deb` are
+  built, signed and installed.
+- [`connector-qa.md`](connector-qa.md) — QA accounts and seed data, the self-hosted live-check
+  runner, recorded fixtures, and exploratory connector QA.
+- [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
+  `downloads.privacyfence.eu` Worker, and how downloads are counted.
+- [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
+  screenshots are produced.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
   are, and what was rejected.
 
-Process for contributing is in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tests/` and `scripts/`.
 
 ## Documentation principles
 
@@ -86,7 +96,8 @@ Every doc in this directory except the ADRs follows these rules.
    homes: [`../CHANGELOG.md`](../CHANGELOG.md) (what changed, per release) and [`adr/`](adr/README.md)
    (why, and what was rejected). No phase names, no issue or finding IDs, no version qualifiers
    ("as of 4.2"), and no "used to", "no longer", "formerly" or "now" framing.
-   `tests/unit/test_docs_no_history.py` checks the published docs for the common shapes.
+   `tests/unit/test_docs_no_history.py` checks the published and contributor docs for the common
+   shapes.
 2. **One topic, one home.** Each fact lives in one doc; other docs link to it.
 3. **Written for the reader, not the implementer.** User and operator docs name what people see
    and type: menu items, commands, settings keys, paths. Function and class names belong in

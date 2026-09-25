@@ -12,8 +12,8 @@ not every sentence that could be read as history, so a false positive is rare an
 `_ALLOWED` with the reason rather than a looser pattern.
 
 Scope is the published set (`PUBLISHED_DOCS`: what `privacyfence.eu/docs/` renders, plus the two
-root files readers land on first). Contributor docs are held to the same rule; add them to the
-scanned set as each one is rewritten.
+root files readers land on first) and the contributor docs (`CONTRIBUTOR_DOCS`: the GitHub-only
+half of `docs/README.md`'s index), which are held to the same rule.
 """
 
 from __future__ import annotations
@@ -51,6 +51,20 @@ PUBLISHED_DOCS = (
     "docs/telegram-setup.md",
 )
 
+CONTRIBUTOR_DOCS = (
+    "CONTRIBUTING.md",
+    "CLAUDE.md",
+    "docs/README.md",
+    "docs/coding-and-testing-guidelines.md",
+    "docs/dev-vs-live-setup.md",
+    "docs/testing-policy.md",
+    "docs/release-testing.md",
+    "docs/packaging.md",
+    "docs/connector-qa.md",
+    "docs/downloads-and-release-kpi.md",
+    "docs/images/screenshots/README.md",
+)
+
 _PATTERNS = {
     "phase name": re.compile(r"\bPhase \d"),
     "phase ID": re.compile(r"\bP\d{1,2}\b"),
@@ -61,7 +75,9 @@ _PATTERNS = {
 }
 
 # (doc, exact matched text) pairs that are not history, each with its reason. Keep it short.
-_ALLOWED: dict[tuple[str, str], str] = {}
+_ALLOWED: dict[tuple[str, str], str] = {
+    ("docs/README.md", "as of 4.2"): "the documentation principles quote the phrase as the example of what not to write",
+}
 
 
 def _hits(rel: str) -> list[str]:
@@ -74,18 +90,18 @@ def _hits(rel: str) -> list[str]:
     return hits
 
 
-@pytest.mark.parametrize("rel", PUBLISHED_DOCS)
-def test_published_doc_carries_no_history(rel):
+@pytest.mark.parametrize("rel", PUBLISHED_DOCS + CONTRIBUTOR_DOCS)
+def test_doc_carries_no_history(rel):
     hits = _hits(rel)
     assert not hits, (
-        "Published docs describe the current version only; history belongs in CHANGELOG.md or an "
+        "Docs describe the current version only; history belongs in CHANGELOG.md or an "
         "ADR (see docs/README.md's documentation principles):\n" + "\n".join(hits)
     )
 
 
-def test_every_published_doc_exists():
-    missing = [rel for rel in PUBLISHED_DOCS if not (REPO_ROOT / rel).is_file()]
-    assert not missing, f"PUBLISHED_DOCS names files that do not exist: {missing}"
+def test_every_listed_doc_exists():
+    missing = [rel for rel in PUBLISHED_DOCS + CONTRIBUTOR_DOCS if not (REPO_ROOT / rel).is_file()]
+    assert not missing, f"PUBLISHED_DOCS/CONTRIBUTOR_DOCS name files that do not exist: {missing}"
 
 
 def test_the_patterns_catch_the_shapes_they_exist_for():
