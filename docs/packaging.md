@@ -337,4 +337,4 @@ templates, `installer/privacyfence.iss`'s cleanup names, `privilege_separation.p
 marker parser to one contract, and `tests/platform/test_windows_acls.py` runs real `icacls` on the
 `platform-windows` job. What CI cannot reach (two real OS accounts, the interactive `LogonTrigger`,
 Installer.app's GUI password dialog) is in [`release-testing.md`](release-testing.md). Layer
-definitions are in [`testing-policy.md`](testing-policy.md#test-taxonomy-the-seven-layers).
+definitions are in [`testing-policy.md`](testing-policy.md#the-seven-layers).
