@@ -267,6 +267,14 @@ test = [
     # preview pane.
     "hypothesis>=6.100",
 ]
+# The privacyfence.eu docs generator (scripts/build_site.py renders /docs/ with it). Pinned exactly,
+# not to a range: it is pre-1.0, and a new release can change the rendered site. Installed in CI
+# only from requirements/docs.lock.txt, which holds this extra and nothing else -- the website
+# build never installs the package or its runtime dependencies. See
+# docs/adr/0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md.
+docs = [
+    "zensical==0.0.65",
+]
 # Static analysis gate (TST-07). ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
 # [tool.bandit] below); mypy runs in CI twice -- non-blocking over the whole tree, and blocking
 # over the modules promoted by the [[tool.mypy.overrides]] ratchet below -- see the comments on

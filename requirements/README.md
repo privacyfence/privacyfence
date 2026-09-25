@@ -1,7 +1,7 @@
 # Hash-locked dependency sets
 
-Both files here are derived, `uv pip compile --universal`-generated output (SEC-19) — do not
-hand-edit either one; regenerate with
+The files here are derived, `uv pip compile --universal`-generated output (SEC-19) — do not
+hand-edit any of them; regenerate with
 [`scripts/update_dependency_locks.sh`](../scripts/update_dependency_locks.sh)
 (needs `uv` on PATH — see the script's own comments for why `--universal` and the explicit
 `--python-version` floor it also passes both matter here) after any `pyproject.toml` dependency
@@ -27,6 +27,12 @@ fails the build if a committed file has drifted from what `pyproject.toml` actua
 - **`dev.lock.txt`** — the above plus the `dev`, `test`, and `lint` extras: build/release/test/static-
   analysis tooling CI and contributors install, that never reaches an end user's machine. Audited
   too, but informationally, by the same workflow.
+
+- **`docs.lock.txt`** — the `docs` extra only (the docs generator and its own dependencies), without
+  the package's runtime dependencies. `.github/workflows/pages.yml` and `website-build.yml` install
+  it with `pip install --require-hashes -r requirements/docs.lock.txt` before
+  `scripts/build_site.py` renders privacyfence.eu's `/docs/`; the website build installs nothing
+  else. Audited, blocking, by the same workflow, because what it builds is the public website.
 
 Every package is pinned to an exact version with every hash PyPI has published for it —
 `pip install --require-hashes -r requirements/runtime.lock.txt` verifies each download against this
