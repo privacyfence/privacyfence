@@ -49,7 +49,7 @@ question is answered. The PR says which placeholders are waiting.
 | # | Question | Blocks | Default if unanswered |
 |---|---|---|---|
 | Q1 | ~~Approve the canonical product description, homepage `<title>` and H1.~~ **Answered 2026-09-25:** new wording, H1 and tagline, see [Canonical product description](#canonical-product-description). | — | — |
-| Q2 | **Imprint:** your name as it should appear, and a postal or service address. | Wave 0 merge | None. `/imprint/` cannot ship without it. |
+| Q2 | **Imprint.** Partly answered 2026-09-25: name **Andras Takacs**, contact **info@privacyfence.eu**. Still open: is a postal or service address shown, or is the imprint email-only? | Wave 0 merge | Name and email only. The Wave 0 PR flags the missing address for review. |
 | Q3 | **GA4 measurement ID** (`G-…`, from M4). | GA going live, not the Wave 0 merge | The consent banner and GA wiring ship with the ID empty and GA disabled; the banner is not shown until an ID is set. Setting the ID later is a one-line PR. |
 | Q4 | **Repository description** for GitHub's About box (M6). Proposed: *"Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more."* | Nothing in the repo | The proposal. |
 | Q5 | **Cut 4.5.0 stable once Wave 1 has merged?** `/docs/` publishes from the latest stable tag (C4), so the new docs go live only with a stable release that contains them. | `/docs/` going live (Wave 3 can merge without it, see its brief) | Yes: 4.5.0 is the first stable after Wave 1. |
@@ -186,7 +186,7 @@ only so a later reader can tell a deliberate choice from a default.
 | D7 | Target search intents: **MCP security / gateway**, **secure Claude access to Gmail/Drive/Slack/Salesforce/Jira**, **human-in-the-loop approval for AI agents**, **PII protection before data reaches an LLM**. No compliance-framework targeting. |
 | D8 | Claude designs the **OpenGraph image**. |
 | E1 | Pages in scope: `/how-it-works/`, `/security/`, `/enterprise/`, `/connectors/` **plus per-connector pages**, and a visible **`/faq/`**. |
-| E2 | Publisher is a **named private person** (the maintainer). |
+| E2 | Publisher is a **named private person**: Andras Takacs, `info@privacyfence.eu` (Q2). The JSON-LD `Person` publisher, `/imprint/` and `/privacy/`'s controller section use this name. |
 | E3 | Add a **website privacy policy** and an **imprint**. |
 | E4 | Reuse existing screenshots where current; add a **new SVG architecture/request-flow diagram**. (The audit found the two approval screenshots are stale — see [Wave 1](#wave-1--user-documentation).) |
 | E5 | Contact: GitHub issues **and `info@privacyfence.eu`**. |
