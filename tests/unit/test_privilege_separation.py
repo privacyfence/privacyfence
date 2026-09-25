@@ -898,6 +898,89 @@ class TestHandoffWrites:
         assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
 
 
+class TestSharedDirectoriesKeepTheirMode:
+    """``shared_dir_mode()`` via ``secure_files.secure_mkdir()``: nothing
+    written into a separated install's root or ``handoff/`` may re-tighten
+    either one to the ``0700`` default. It did, as the service account that
+    owns them -- every ``atomic_write_*()`` of a file directly under the
+    root chmod-ed the root to ``0700``, the logged-in user could no longer
+    traverse it to read the marker, and the companion took the install for
+    an unseparated one."""
+
+    pytestmark = posix_permissions_only
+
+    def test_a_write_into_the_root_leaves_the_root_traversable(self, separated):
+        secure_files.atomic_write_text(separated / "deployment_id", "abc")
+
+        assert stat.S_IMODE(separated.stat().st_mode) == privilege_separation.SYSTEM_ROOT_MODE
+
+    def test_a_write_into_handoff_keeps_its_group_mode(self, separated):
+        handoff = separated / privilege_separation.HANDOFF_DIR_NAME
+        secure_files.atomic_write_text(handoff / "mcp_url", "http://127.0.0.1:8765/mcp")
+
+        assert stat.S_IMODE(handoff.stat().st_mode) == privilege_separation.HANDOFF_DIR_MODE
+
+    def test_a_drifted_root_is_put_back_by_the_next_write(self, separated):
+        separated.chmod(0o700)
+
+        secure_files.atomic_write_text(separated / "deployment_id", "abc")
+
+        assert stat.S_IMODE(separated.stat().st_mode) == privilege_separation.SYSTEM_ROOT_MODE
+
+    def test_every_other_directory_still_gets_the_callers_mode(self, separated):
+        authority = separated / "authority"
+        secure_files.atomic_write_text(authority / "settings.yaml", "x: 1")
+
+        assert stat.S_IMODE(authority.stat().st_mode) == 0o700
+
+    def test_nothing_is_shared_on_an_unseparated_install(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing-here"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.shared_dir_mode(tmp_path) is None
+
+
+class TestUnreadableMarker:
+    """A marker the logged-in user cannot reach is a separated install with
+    a drifted root, never an unseparated one. (Driven by stubbing ``stat``
+    rather than by a real ``0700`` root: CI and dev containers often run as
+    root, which ``EACCES`` never applies to.)"""
+
+    def _deny(self, monkeypatch, marker: Path) -> None:
+        real_stat = Path.stat
+
+        def _stat(self, *args, **kwargs):
+            if self == marker:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", _stat)
+
+    def test_reports_a_marker_it_may_not_stat(self, separated, monkeypatch):
+        self._deny(monkeypatch, separated / privilege_separation.MARKER_FILE_NAME)
+
+        assert privilege_separation.marker_unreadable() is True
+
+    def test_a_missing_marker_is_not_unreadable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing-here"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.marker_unreadable() is False
+
+    def test_a_readable_marker_is_not_unreadable(self, separated):
+        assert privilege_separation.marker_unreadable() is False
+
+    def test_an_unreadable_answer_is_not_cached(self, separated, monkeypatch):
+        # The companion is long-lived: caching "unseparated" off one EACCES
+        # would keep it on the wrong layout after the daemon fixed the mode.
+        with monkeypatch.context() as denied:
+            denied.setattr(privilege_separation, "_parse_marker", lambda path: None)
+            denied.setattr(privilege_separation, "marker_unreadable", lambda: True)
+            assert privilege_separation.is_enabled() is False
+
+        assert privilege_separation.is_enabled() is True
+
+
 class TestInstallerContract:
     """Each POSIX platform's shell script and this module are two halves of
     one contract: the script provisions a layout, the module resolves paths

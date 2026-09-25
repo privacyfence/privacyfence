@@ -587,6 +587,13 @@ def separation() -> Separation | None:
         return _cached_separation  # type: ignore[return-value]
     path = marker_path()
     result = None if path is None else _parse_marker(path)
+    if result is None and marker_unreadable():
+        # Not cached: a root this process cannot traverse is a separated
+        # install whose root mode has drifted (``shared_dir_mode()`` below),
+        # not an unseparated one, and the daemon's next ``paths.data_dir()``
+        # puts it back. Caching None here would pin a long-lived companion to
+        # the unseparated layout until it was restarted.
+        return None
     if result is not None and result.platform != current_platform():
         # A marker copied (or a volume moved) between platforms. Its account
         # names mean nothing here.
@@ -601,6 +608,58 @@ def separation() -> Separation | None:
 
 def is_enabled() -> bool:
     return separation() is not None
+
+
+def marker_unreadable() -> bool:
+    """Whether this platform's marker exists but this process may not look
+    at it -- the one way to see a separated install without being able to
+    read that it is one.
+
+    On a genuinely unseparated machine the system root does not exist and
+    the lookup fails with ``ENOENT``; only a root-owned or service-owned
+    directory refuses it with ``EACCES``, and nothing but the installer
+    creates one there. ``service_control.run_elevated()`` uses this to keep
+    offering Start/Restart/Stop instead of calling such an install
+    unseparated.
+    """
+    path = marker_path()
+    if path is None:
+        return False
+    try:
+        path.stat()
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return not os.access(path, os.R_OK)
+
+
+def shared_dir_mode(path: Path) -> int | None:
+    """The mode ``path`` has to keep if it is one of the two directories a
+    separated install deliberately shares with the logged-in user's session
+    -- ``SYSTEM_ROOT_MODE`` for the root, ``HANDOFF_DIR_MODE`` for
+    ``handoff/`` -- or None for every other directory, and for everything on
+    an unseparated install.
+
+    ``secure_files.secure_mkdir()`` consults this so that no caller can
+    re-tighten either of them to its own ``0700`` default. Before it did,
+    every ``atomic_write_*()`` of a file directly under the root (the
+    daemon's ``deployment_id``, a connector token) chmod-ed the root to
+    ``0700`` as the service account that owns it, and the companion -- which
+    only gets through the root by its ``--x`` bit -- could no longer read
+    this module's marker, concluded the install was unseparated, and
+    refused Start/Restart/Stop until something called ``paths.data_dir()``
+    in the daemon again.
+    """
+    state = separation()
+    if state is None:
+        return None
+    candidate = Path(os.path.abspath(path))
+    if candidate == Path(os.path.abspath(state.data_dir)):
+        return SYSTEM_ROOT_MODE
+    if candidate == Path(os.path.abspath(state.handoff_dir)):
+        return HANDOFF_DIR_MODE
+    return None
 
 
 def data_dir_override() -> Path | None:

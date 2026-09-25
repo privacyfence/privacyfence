@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.6.1] — 2026-09-25
+
 ### Added
 
 - **The documentation is on the website,** at `privacyfence.eu/docs/`, with navigation, search
@@ -50,6 +52,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that is; contributor docs and design records stay on GitHub. The download page lists the
   current release's installers even without JavaScript, and the site offers `llms.txt` and
   `llms-full.txt` for AI assistants.
+
+### Fixed
+
+- **The companion no longer says a separated install "is not privilege-separated".** Whenever
+  the daemon wrote a file directly into its data directory (`/Library/Application
+  Support/PrivacyFence` on macOS, `/var/lib/privacyfence` on Linux), it also tightened that
+  directory from `0711` to `0700`. Your own account could then no longer look inside, so the
+  menu-bar companion took the install for an unseparated one and refused **Start**, **Restart**
+  and **Stop**. The directory now keeps the mode the installer gave it. If it is already wrong,
+  the next write puts it back. On an install that really has no background service yet, those
+  items now show the command that finishes setting it up instead of a dead end.
 
 ## [4.6.0] — 2026-09-25
 
@@ -2709,7 +2722,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...HEAD
+[4.6.1]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...v4.6.1
 [4.6.0]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...v4.6.0
 [4.5.0]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...v4.4.0

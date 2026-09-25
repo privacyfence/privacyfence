@@ -94,6 +94,15 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
     path.mkdir(parents=True, exist_ok=True)
     if foreign_owner_ok and not _is_owned_by_this_process(path):
         return path
+    # A separated install's root and handoff/ are shared with the user's
+    # session on purpose, so their installer-set mode wins over whatever this
+    # caller asked for -- see privilege_separation.shared_dir_mode(). Imported
+    # here, not at the top: privilege_separation imports this module.
+    from . import privilege_separation
+
+    shared_mode = privilege_separation.shared_dir_mode(path)
+    if shared_mode is not None:
+        mode = shared_mode
     try:
         path.chmod(mode)
     except OSError as exc:  # pragma: no cover -- best effort on non-POSIX

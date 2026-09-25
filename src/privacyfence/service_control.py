@@ -86,6 +86,26 @@ def _cancelled(action: str, result: "subprocess.CompletedProcess[str]") -> bool:
     return False
 
 
+def _unseparated_detail() -> str:
+    """What Start/Restart/Stop says on an install with no system service.
+    Every installer PrivacyFence ships sets one up, so this is an install
+    that did not finish -- and the one thing worth saying is the command that
+    finishes it, spelled with the script this install actually has."""
+    script = privilege_separation.installer_script_path()
+    if script is None:
+        layout = privilege_separation.platform_layout()
+        command = layout.enable_command if layout is not None else None
+    elif privilege_separation.current_platform() == "win32":
+        command = f'powershell -ExecutionPolicy Bypass -File "{script}" enable   (from an elevated PowerShell)'
+    else:
+        command = f"sudo {shlex.quote(str(script))} enable"
+    detail = (
+        "PrivacyFence's background service isn't set up on this machine yet, so there is nothing "
+        "to start or stop -- the installer normally does this."
+    )
+    return f"{detail} To finish it, run: {command}" if command else detail
+
+
 def run_elevated(action: DaemonAction) -> tuple[bool, str]:
     """Run this platform's ``daemon <action>`` elevated, and report whether
     it worked.
@@ -98,11 +118,12 @@ def run_elevated(action: DaemonAction) -> tuple[bool, str]:
     complete_per_user_separation()`` already takes for the elevation this
     shares its argv builders with.
     """
-    if not privilege_separation.is_enabled():
-        return False, (
-            "PrivacyFence is not privilege-separated on this machine, so there is no system "
-            "service to control -- it runs as an ordinary background process instead."
-        )
+    # A marker this process cannot read is a separated install whose root
+    # mode has drifted (privilege_separation.shared_dir_mode()), not an
+    # unseparated one: the service is there, and the daemon a restart starts
+    # puts the mode back.
+    if not privilege_separation.is_enabled() and not privilege_separation.marker_unreadable():
+        return False, _unseparated_detail()
     script = privilege_separation.installer_script_path()
     if script is None:
         return False, "This install has no provisioning script to run -- see docs/platform-support.md."
