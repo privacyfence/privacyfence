@@ -201,10 +201,9 @@ class TestBuildSender:
 
 
 class TestAuditForwarder:
-    @pytest.mark.timeout(5)  # TST-11: bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
+    @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
     def test_submit_delivers_payload_to_sender(self):
-        # TST-11: an Event
-        # the worker thread itself sets, waited on with a generous timeout,
+        # An Event the worker thread itself sets, waited on with a generous timeout,
         # rather than polling calls in a fixed-interval loop for up to 1s --
         # this resolves the instant the sender actually runs instead of on
         # whichever of the 50 polls happens to land after it.
@@ -221,7 +220,7 @@ class TestAuditForwarder:
         forwarder.stop()
         assert calls == [{"event_id": "a"}]
 
-    @pytest.mark.timeout(5)  # TST-11: bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
+    @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
     def test_full_queue_drops_without_raising(self, caplog):
         # The "picked up immediately by the worker thread" assumption below
         # used to be a blind time.sleep(0.05) -- on a slow enough CI runner,
@@ -245,7 +244,7 @@ class TestAuditForwarder:
         forwarder.stop(timeout=0.1)
         assert "queue full" in caplog.text
 
-    @pytest.mark.timeout(5)  # TST-11: bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
+    @pytest.mark.timeout(5)  # bounded by its own internal Event.wait(timeout=2.0), not the 30s suite default
     def test_sender_exception_is_caught_and_logged(self, monkeypatch, caplog):
         # Signals off logger.warning itself (via a spy), not off the sender
         # raising -- the sender's exception and the warning that logs it

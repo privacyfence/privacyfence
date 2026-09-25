@@ -1,5 +1,5 @@
 """Tests for web/session_auth.py: the local-mode session store and the
-SEC-06 bootstrap-code store. Mirrors test_org_session.py's own pattern for
+one-time bootstrap-code store. Mirrors test_org_session.py's own pattern for
 OrgSessionStore -- LocalSessionStore is deliberately its local-mode counterpart, minus the
 per-principal identity org mode needs and local mode doesn't.
 """
@@ -60,7 +60,7 @@ class TestLocalSessionStore:
 
     def test_absolute_expired_session_is_dropped_even_with_recent_activity(self, monkeypatch):
         # The idle timeout alone can't save a session past its absolute
-        # cap -- SEC-06's own "cookie with idle + absolute expiry": a
+        # cap -- the session cookie has an idle *and* an absolute expiry: a
         # session touched every minute for a week must still die once the
         # absolute timeout from *creation* lapses.
         store = sa.LocalSessionStore(idle_timeout_seconds=10_000, absolute_timeout_seconds=100)
@@ -157,16 +157,15 @@ class TestBootstrapStore:
 class TestAuthenticated:
     # authenticated() reads the session cookie only -- there is no ``?token=``
     # (or ``?bootstrap=``) query-string path here to unit-test any more.
-    # Pre-SEC-06, this module's authenticated() *was* the ``?token=`` check;
-    # SEC-06 (module docstring above) replaced that with the cookie-based
-    # LocalSessionStore this class exercises, and moved the query string to
-    # a one-time, pre-authentication *exchange* (BOOTSTRAP_QUERY_PARAM,
-    # consumed by web/server.py before authenticated() is ever called, not
-    # by authenticated() itself). The regression coverage that an old-style
-    # ``?token=<secret>`` URL is no longer honored by any route lives at the
-    # route level in test_server.py's TestBootstrapFlow (it needs a live app
-    # and dispatcher to demonstrate a *route*, not this function, rejects
-    # it) -- see that class's own comment for the assertion.
+    # It checks the cookie-based LocalSessionStore this class exercises; the
+    # query string carries only a one-time, pre-authentication *exchange*
+    # (BOOTSTRAP_QUERY_PARAM, consumed by web/server.py before
+    # authenticated() is ever called, not by authenticated() itself). The
+    # regression coverage that a ``?token=<secret>`` URL is not honored by
+    # any route lives at the route level in test_server.py's
+    # TestBootstrapFlow (it needs a live app and dispatcher to demonstrate a
+    # *route*, not this function, rejects it) -- see that class's own
+    # comment for the assertion.
 
     def test_no_cookie_is_not_authenticated(self):
         store = sa.LocalSessionStore()
@@ -267,7 +266,7 @@ class TestSessionCookieHelpers:
         # The flag that actually differs between the two modes (module
         # docstring; contrast web/org_session.py's set_session_cookie,
         # which passes secure=True). Local mode's own transport is
-        # deliberate plain-HTTP loopback (D1, security-and-compliance.md),
+        # deliberate plain-HTTP loopback (ADR 0010),
         # and a Secure cookie is silently *dropped* by the browser over
         # plain HTTP -- so asserting its absence here isn't pedantry, it's
         # the difference between the session cookie working at all and a
@@ -292,18 +291,16 @@ class TestUnauthorizedHtml:
         }
 
     def test_is_no_store(self):
-        # SEC-18: this page names a live control-channel path/pipe name
-        # (the exact recovery command a reader is meant to copy-paste) -- it
-        # must never be cached, and previously carried no Cache-Control
-        # header at all.
+        # This page names a live control-channel path/pipe name (the exact
+        # recovery command a reader is meant to copy-paste) -- it must never
+        # be cached.
         response = sa.unauthorized_html(Request(self._scope()))
         assert response.status_code == 401
         assert response.headers["cache-control"] == "no-store"
 
     def test_does_not_send_the_reader_to_the_redacted_log_or_a_file(self):
         """Two dead ends this page has pointed at over time. The log line
-        always reads bootstrap=[REDACTED] (SecretRedactingFormatter,
-        SEC-10), so "open the newest sign-in link PrivacyFence logged" never
+        always reads bootstrap=[REDACTED] (SecretRedactingFormatter), so "open the newest sign-in link PrivacyFence logged" never
         worked, and no discovery file carries a link either: one would work
         for anything running as this user."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
@@ -316,23 +313,20 @@ class TestUnauthorizedHtml:
         assert "no longer writes the link to a file" in body
 
     def test_still_offers_the_on_demand_bootstrap_command(self):
-        # #428 Phase 2: the on-demand mint goes through the control channel
-        # now, not a bearer-authenticated HTTP route.
+        # The on-demand mint goes through the control channel, not a
+        # bearer-authenticated HTTP route.
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
         assert "MINT" in body
         assert "/api/bootstrap" not in body
 
     def test_does_not_send_the_reader_back_to_their_ai_client(self):
-        """Issue #423 part 3 made "ask Claude" the lead here, because P10
-        had removed the menu bar and the tool it named was the only way back
-        in from inside a conversation. The self-approval plan's Phase 2
-        retired that tool -- a live session is not something to hand the
-        party it governs -- so the page must not still be recommending it."""
+        """No MCP tool mints a sign-in credential (ADR 0013) -- a live
+        session is not something to hand the party it governs -- so the page
+        must not recommend asking the AI client for one."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
         assert "privacyfence_get_sign_in_link" not in body
         assert "companion" in body
-        # The lead is the companion, ahead of the "why you're here" line, in
-        # the slot "ask Claude" used to hold.
+        # The lead is the companion, ahead of the "why you're here" line.
         assert body.index("companion") < body.index("expired, was already used")
 
     def test_offers_the_break_glass_command_for_a_reader_with_no_companion(self):
@@ -371,8 +365,7 @@ class TestUnauthorizedHtml:
         assert "nc -U" not in body
 
     def test_companion_sentence_follows_the_platform_not_just_the_marker(self, monkeypatch):
-        # #428 Phase 4 changed this sentence, and B5b made it platform-
-        # dependent. On a separated macOS/Windows install a tray item really
+        # This sentence is platform-dependent. On a separated macOS/Windows install a tray item really
         # is started for the reader at login. On Linux what a separated
         # install autostarts is the invisible `--serve` channel -- so
         # "it should already be there" would send a locked-out reader
@@ -392,9 +385,9 @@ class TestUnauthorizedHtml:
 
 
 class TestProvenance:
-    """The self-approval plan's Phase 2: a session records *how* it was
-    established, because three paths reach one (ADR 0002 decision 6) and
-    only one of them can be attributed to a person."""
+    """A session records *how* it was established, because three paths
+    reach one (ADR 0002 decision 6) and only one of them can be attributed
+    to a person."""
 
     def _request(self, cookie: str | None):
         headers = [(b"cookie", f"{sa.SESSION_COOKIE}={cookie}".encode())] if cookie else []

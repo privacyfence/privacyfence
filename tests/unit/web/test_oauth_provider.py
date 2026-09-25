@@ -1,5 +1,5 @@
 """Tests for web/oauth_provider.py's OrgOAuthProvider -- PrivacyFence's own
-minimal OAuth 2.1 authorization server (P7).
+minimal OAuth 2.1 authorization server (ADR 0011).
 
 The IdP leg itself (org_identity.exchange_code_for_tokens/verify_id_token)
 is monkeypatched throughout -- it has its own thorough tests
@@ -195,7 +195,8 @@ class TestAuthorizeAndIdpCallback:
             await provider.handle_idp_callback(state=state, code="idp-code")
 
     async def test_idp_callback_denied_by_authz_policy_raises(self, tmp_path, monkeypatch):
-        # SEC-22: layered on top of the IdP leg -- a principal the IdP
+        # The app-level sign-in policy (allowed email domains, required
+        # groups) is layered on top of the IdP leg -- a principal the IdP
         # itself authenticated can still be turned away here.
         import urllib.parse as up
         policy = AuthzPolicyConfig(allowed_domains=("acme.com",))
@@ -364,7 +365,7 @@ class TestRefreshToken:
 
 
 class TestRefreshTokenAbsoluteLifetime:
-    """SEC-12: an absolute cap on the refresh-token *chain*, independent of
+    """An absolute cap on the refresh-token *chain*, independent of
     rotation -- a client that keeps refreshing forever must still hit a
     ceiling eventually."""
 
@@ -397,7 +398,7 @@ class TestRefreshTokenAbsoluteLifetime:
         loaded = await provider.load_refresh_token(client, tokens.refresh_token)
         new_tokens = await provider.exchange_refresh_token(client, loaded, [])
         # Backdate the original chain's issuance the rotated token carried
-        # forward -- not the rotated token's own mint time -- since SEC-12
+        # forward -- not the rotated token's own mint time -- since the cap
         # bounds the whole chain, not each individual rotation's own clock.
         provider._refresh_tokens[new_tokens.refresh_token].issued_at = 1
 
@@ -448,7 +449,7 @@ class TestRevokeToken:
 
 
 class TestDcrResourceControls:
-    """SEC-16: unauthenticated ``/register`` gets a total-client cap, a
+    """Unauthenticated ``/register`` gets a total-client cap, a
     per-registration size cap, and stale-client pruning; unauthenticated
     ``/authorize`` gets a count bound on ``_pending`` on top of its
     existing TTL prune."""
@@ -565,7 +566,7 @@ class TestDcrResourceControls:
 
 
 class TestRefreshTokenSurvivesARestart:
-    """#402: the refresh chain is the one piece of org-mode auth state that
+    """The refresh chain is the one piece of org-mode auth state that
     outlives the process, because it is the one whose loss needs a human who
     may not be there -- a scheduled tool call has nobody to complete an IdP
     redirect. Everything else here still dies with the daemon, deliberately.
@@ -630,12 +631,12 @@ class TestRefreshTokenSurvivesARestart:
     async def test_the_chain_absolute_lifetime_still_applies_to_a_rehydrated_token(
         self, tmp_path, monkeypatch,
     ):
-        """SEC-12's cap is checked against the chain's original issuance, which
-        travels inside the sealed record -- so a record that outlived its
-        ceiling cannot launder itself back in by surviving a restart. The
-        provider's own check is the authority here, not the store's coarser
-        chain_expires_at, so this hands it a record the store is still
-        perfectly happy to return.
+        """The refresh chain's absolute cap is checked against the chain's
+        original issuance, which travels inside the sealed record -- so a
+        record that outlived its ceiling cannot launder itself back in by
+        surviving a restart. The provider's own check is the authority here,
+        not the store's coarser chain_expires_at, so this hands it a record
+        the store is still perfectly happy to return.
         """
         provider = _provider(tmp_path, monkeypatch)
         client = _client_info()

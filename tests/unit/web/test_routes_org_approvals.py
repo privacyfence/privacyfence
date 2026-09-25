@@ -1,10 +1,9 @@
-"""Tests for org mode's own wiring of the principal-aware /approvals surface
-(P9): web/routes_approvals.py's build_routes() (the list/show/decide/
-preview/stream/batch-decide routes, shared with local mode) plus
-web/routes_org_stepup.py's own IdP step-up routes (the WebAuthn/IdP gate on
-write decisions, §10.6, D7, with no local-mode analogue at all). PSC-2b:
-this file used to test a dedicated routes_org_approvals.py module that no
-longer exists -- re-pointed onto the merged builder here, same tests.
+"""Tests for org mode's own wiring of the principal-aware /approvals surface:
+web/routes_approvals.py's build_routes() (the list/show/decide/
+preview/stream/batch-decide routes, shared with local mode -- ADR 0033) plus
+web/routes_org_stepup.py's own IdP step-up routes (the gate on write
+decisions: a WebAuthn passkey, with IdP re-authentication as org mode's
+fallback, which has no local-mode analogue at all).
 """
 from __future__ import annotations
 
@@ -115,8 +114,8 @@ class TestAuthRequired:
 
 class TestApprovalPreview:
     """GET /api/approvals/{id}/preview -- the org-mode counterpart of
-    web/routes_approvals.py's own preview fragment (Phase 1), scoped to
-    current_principal() the same way every other read here is (§10.5)."""
+    web/routes_approvals.py's own preview fragment, scoped to
+    current_principal() the same way every other read here is."""
 
     def test_returns_the_owning_principals_preview(self):
         app, sessions, web_ui = _app()
@@ -168,9 +167,9 @@ class TestPrincipalScopedList:
         assert "a message" in r.text or "Get message" in r.text  # her own row rendered
 
     def test_the_list_is_served_in_the_shared_shell(self):
-        # F9: this page used to be a bare document -- no header, no brand,
-        # no nav, no favicon -- while local mode's identical list got the
-        # full shell. It is also the surface a paying org actually uses.
+        # The org-mode list gets the same full shell -- header, brand, nav,
+        # favicon -- as local mode's identical list. It is also the surface a
+        # paying org actually uses.
         app, sessions, web_ui = _app()
         _register(web_ui, ALICE, dedupe_key="a1")
         client = _client(app)
@@ -266,12 +265,11 @@ class TestPrincipalScopedList:
         assert "function pfB64uToBuf" not in r.text.split("<script", 1)[0]
 
     def test_a_foreign_principal_can_neither_read_nor_decide_the_approval(self):
-        """PSC-2b: one check spanning every surface this class and
+        """One check spanning every surface this class and
         TestDecideWithoutStepUp/TestBatchDecide otherwise cover individually
         (list, get, decide, batch-decide) -- a signed-in principal who isn't
         this approval's owner gets exactly the same answer a truly unknown
-        id would, everywhere, never "exists but you can't touch it"
-        (module docstring, §10.5)."""
+        id would, everywhere, never "exists but you can't touch it"."""
         app, sessions, web_ui = _app()
         alices = _register(web_ui, ALICE, dedupe_key="a1")
         client = _client(app)
@@ -377,10 +375,9 @@ class TestDecideWithoutStepUp:
 
 
 class TestBatchDecide:
-    """Phase 2 of the approval binder plan: the org-mode counterpart of
-    test_routes_approvals.py's own TestBatchDecide -- same mechanics, with
-    every read/write additionally scoped to current_principal() (module
-    docstring, §10.5). No step-up yet -- that's Phase 3."""
+    """The org-mode counterpart of test_routes_approvals.py's own
+    TestBatchDecide -- same mechanics, with every read/write additionally
+    scoped to current_principal(). Step-up is TestBatchStepUp's."""
 
     def test_a_mixed_batch_applies_each_item_and_reports_its_own_outcome(self):
         app, sessions, web_ui = _app()
@@ -407,7 +404,7 @@ class TestBatchDecide:
         assert accept_me.batch_id == deny_me.batch_id == body["batch_id"]
 
     def test_a_client_supplied_batch_id_is_never_recorded_verbatim(self):
-        # B27: batch_id is documented (audit_log.py) as server-minted. With
+        # batch_id is documented (audit_log.py) as server-minted. With
         # no step-up in play there is never a live challenge to prove a
         # submitted batch_id against, so a forged one must be replaced
         # rather than trusted straight into the audit trail.
@@ -427,7 +424,7 @@ class TestBatchDecide:
         assert approval.batch_id != "attacker-forged-batch-id"
 
     def test_another_principals_id_reads_as_unknown_not_forbidden(self):
-        # §10.5: indistinguishable from a nonexistent id -- never "exists
+        # Indistinguishable from a nonexistent id -- never "exists
         # but you can't touch it".
         app, sessions, web_ui = _app()
         alices = _register(web_ui, ALICE, gate_kind="review")
@@ -508,9 +505,10 @@ class TestBatchDecide:
 
 
 class TestStepUpScoping:
-    """§10.6/D7: step-up is off by default, and even when enabled, applies
-    only to approving decisions on writes (or PII reads, in the wider
-    scope) -- never to denies."""
+    """Step-up (a WebAuthn passkey, with IdP re-authentication as org mode's
+    fallback) is off by default, and even when enabled, applies only to
+    approving decisions on writes (or PII reads, in the wider scope) --
+    never to denies."""
 
     def test_disabled_step_up_never_blocks_a_write_accept(self):
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=False))
@@ -622,7 +620,7 @@ class TestStepUpWebAuthnFlow:
         assert second.json() == {"status": "ok"}
 
     def test_an_assertion_for_a_different_decision_is_rejected(self):
-        # Fingerprint binding (§10.6): a challenge minted for "accept"
+        # Fingerprint binding: a challenge minted for "accept"
         # cannot be reused to authorize "accept_all" on the same approval.
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
         wa.add_credential(ALICE, wa.WebAuthnCredential(
@@ -657,7 +655,8 @@ class TestStepUpWebAuthnFlow:
 
 
 class TestStepUpRequirePasskey:
-    """#406: an org can close the IdP-reauth fallback entirely."""
+    """An org can close the IdP-reauth fallback entirely
+    (``step_up.require_passkey``)."""
 
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):
@@ -867,11 +866,11 @@ class TestIdpStepUp:
 
 
 class TestBatchStepUp:
-    """Phase 3 of the approval binder plan: the org-mode counterpart of
-    test_routes_approvals.py's own TestBatchStepUp -- same mechanics,
-    scoped to current_principal() the same way every other read/write
-    here is, and deliberately with no IdP-reauth fallback even here (see
-    ``_batch_step_up_response``'s own docstring)."""
+    """The org-mode counterpart of test_routes_approvals.py's own
+    TestBatchStepUp -- same mechanics, scoped to current_principal() the
+    same way every other read/write here is, and deliberately with no
+    IdP-reauth fallback even here (see ``_batch_step_up_response``'s own
+    docstring)."""
 
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):
@@ -891,7 +890,7 @@ class TestBatchStepUp:
             "batch_id": "attacker-forged-batch-id",
         })
         assert r.status_code == 200
-        # B27: _batch_needs_step_up() never runs verify_step_up() here, so a
+        # _batch_needs_step_up() never runs verify_step_up() here, so a
         # client-supplied batch_id must not survive into the audit trail.
         assert r.json()["batch_id"] != "attacker-forged-batch-id"
         assert approval.batch_id == r.json()["batch_id"]
@@ -980,7 +979,7 @@ class TestBatchStepUp:
         assert not extra.event.is_set()
 
     def test_another_principals_id_never_contributes_to_the_step_up_check(self):
-        # §10.5: BOB's own accept doesn't need step-up (ALICE registered
+        # BOB's own accept doesn't need step-up (ALICE registered
         # it) and can't be applied by ALICE's batch either -- it must read
         # as plain "unknown", not somehow trigger or ride along with
         # ALICE's own ceremony.
@@ -1029,7 +1028,7 @@ class TestBatchStepUp:
         })
         assert r.status_code == 200
         assert r.json()["results"] == [{"id": approval.id, "outcome": "applied"}]
-        # B27: this fallthrough (no enrolled credential, require_passkey off)
+        # This fallthrough (no enrolled credential, require_passkey off)
         # never verified the assertion, so the client-supplied batch_id must
         # not reach the audit trail either.
         assert r.json()["batch_id"] != "attacker-forged-batch-id"
@@ -1056,13 +1055,13 @@ class TestBatchStepUp:
 
 
 class TestSensitiveConfirmDialog:
-    """The self-approval review's Phase 4, org mode's half. Local mode's
-    counterpart (tests/unit/web/test_routes_approvals.py's class of the same
-    name) carries the reasoning; what differs here is that org mode has no
-    session provenance to check -- every session reaching this surface is an
-    IdP authentication -- so the passkey is the whole of it, and it is asked
-    for on the same ``require_passkey`` condition rather than on
-    ``step_up.scope``."""
+    """The passkey gate on a sensitive confirm dialog, org mode's half.
+    Local mode's counterpart (tests/unit/web/test_routes_approvals.py's
+    class of the same name) carries the reasoning; what differs here is
+    that org mode has no session provenance to check -- every session
+    reaching this surface is an IdP authentication -- so the passkey is the
+    whole of it, and it is asked for on the same ``require_passkey``
+    condition rather than on ``step_up.scope``."""
 
     def _confirm(self, web_ui, principal, *, sensitive: bool):
         with principal_scope(principal):
