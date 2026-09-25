@@ -79,6 +79,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   else. A move now auto-accepts only when both the current folder and the destination are in the
   rule, and an "Always allow" offered for a move names both folders.
 
+- **One approved write could be performed twice.** When you approved a write while the AI client
+  was still waiting for it, the same write sent again within five minutes went through without a
+  new card, and two identical writes sent at the same moment both went through on one approval.
+  Every approved write is now performed once: sending it again asks again, and a second identical
+  write sent while the first is still waiting is refused with nothing written. The audit log also
+  no longer records a released read, or a write approved while the client waited, as `expired`.
+  See [ADR 0073](docs/adr/0073-an-approved-write-is-single-use-and-an-approved-read-replays.md).
+
 - **Organization mode: approving several requests at once skipped step-up when no passkey was
   enrolled.** With step-up on, `require_passkey` off and no passkey, a batch approval went through
   without any check, although a single approval would have asked for an identity-provider sign-in.

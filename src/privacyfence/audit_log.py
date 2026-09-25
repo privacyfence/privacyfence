@@ -187,9 +187,12 @@ class AuditEntry:
                             #  if it took a while for anything to come back and collect the decision.)
                             # ("expired": a pending approval nobody decided within its TTL (still
                             #  "pending" the whole time -- fail-closed, never silently auto-approved),
-                            #  or one a human DID decide but that decision was never reclaimed by a
-                            #  re-issued call before the shorter decision-ledger TTL ran out. Either
-                            #  way: no data was ever released on this request_id's strength.)
+                            #  or one a human DID decide but whose outcome no call ever collected --
+                            #  neither the original call within its hold window nor a re-issued call
+                            #  through the ledger -- before the shorter decision-ledger TTL ran out. A
+                            #  collected outcome, a replayed read included, lapses without a row.
+                            #  Either way: no data was ever released on this request_id's strength.
+                            #  ADR 0073.)
                             # ("error": gate.py's gated_call exited without reaching a normal decision
                             #  branch -- a fallback so an unanticipated failure still leaves a trail)
                             # ("cancelled": the MCP client that issued the corresponding tool call

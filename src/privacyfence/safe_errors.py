@@ -29,6 +29,7 @@ carry two very different trust levels, indistinguishable by ``isinstance``
 alone. This module resolves that by giving every self-authored "denied, not failed" raise site
 its own named ``RuntimeError`` subclass instead (``gate.GateDeniedError``;
 ``approvals.TooManyPendingApprovalsError``,
+``approvals.IdenticalWriteAwaitingApprovalError``,
 ``connector_registry.TooManyPrincipalsError``) and having
 ``public_message()`` below trust a *named* subclass but not the bare
 ``RuntimeError`` class itself -- so a connector's wrapped failure still
@@ -110,6 +111,7 @@ def public_message(exc: BaseException) -> str:
     is exactly as likely to carry wrapped third-party text as one of the
     *ClientError types themselves. A named ``RuntimeError`` subclass
     (``gate.GateDeniedError``, ``approvals.TooManyPendingApprovalsError``,
+    ``approvals.IdenticalWriteAwaitingApprovalError``,
     ``connector_registry.TooManyPrincipalsError``) is still trusted --
     whoever defined it reviewed what goes into it, the same review this
     module's own docstring describes for the other three builtins."""
