@@ -1,5 +1,4 @@
-"""approval_list_html.py -- the /approvals list page (docs/approval-list-
-ui-ux.md §2, the P1-compatible slice)."""
+"""approval_list_html.py -- the /approvals list page."""
 from __future__ import annotations
 
 import json
@@ -57,7 +56,7 @@ class TestBuildListHtml:
         assert "Read Gmail message" in html
 
     def test_never_renders_an_allow_button(self):
-        # §2.2's central asymmetry: Deny is on the row, Allow never is.
+        # The list's central asymmetry: Deny is on the row, Allow never is.
         rows = [approval_list_html.row_from_approval(_card())]
         html = approval_list_html.build_list_html(rows, csrf="tok")
         assert "data-deny=" in html
@@ -227,18 +226,17 @@ class TestBinderMarkup:
         assert 'id="pf-approvals-toolbar" hidden' not in html
 
     def test_approve_selected_starts_disabled(self):
-        # Phase 3 of the binder plan: like Deny selected, nothing is
+        # Like Deny selected, nothing is
         # selected on first paint, so there is nothing to approve yet.
         rows = [approval_list_html.row_from_approval(_real_card())]
         html = approval_list_html.build_list_html(rows, csrf="t")
         assert 'id="pf-approve-selected" disabled' in html
 
     def test_toolbar_present_but_hidden_on_the_empty_state(self):
-        # Issue #576, bug 1: the toolbar used to be omitted entirely when
-        # nothing was pending at first paint, which meant it could never be
-        # created later by window.__pfRenderApprovals's own SSE-driven
-        # re-render (that function only ever updates existing elements). It
-        # must stay in the DOM, just hidden, so the live re-render can
+        # Omitted when nothing is pending at first paint, the toolbar
+        # could never be created later by window.__pfRenderApprovals's own
+        # SSE-driven re-render (that function only ever updates existing
+        # elements). It must stay in the DOM, just hidden, so the live re-render can
         # reveal it (see updateToolbar in _JS) the moment something
         # batchable actually arrives.
         html = approval_list_html.build_list_html([], csrf="t")
@@ -291,7 +289,7 @@ class TestRowActionOrder:
 
 
 class TestPhoneWidthRules:
-    """F2/F3: the row's own ``flex-wrap`` never engages, because
+    """Without these rules, at phone widths the row's own ``flex-wrap`` never engages, because
     ``.pf-approval-main`` is ``flex:1;min-width:0`` against a
     ``flex-shrink:0`` action cluster -- so the text column shrinks to about
     25px at 393px instead of the row wrapping. These assert the rules that
@@ -473,7 +471,7 @@ class TestConnectorIconsSurviveLiveUpdates:
         assert 'class="pf-approval-icon pf-approval-icon-fallback">N<' in row_html
 
     def test_the_connector_name_list_is_handed_to_the_page(self):
-        # Issue #576, bug 1: this is every bundled connector, not just the
+        # This is every bundled connector, not just the
         # ones with a row on the page right now -- otherwise a connector
         # with nothing pending at first paint would draw a letter badge for
         # any row that arrives for it later, until the next full reload.
@@ -492,10 +490,9 @@ class TestConnectorIconsSurviveLiveUpdates:
         assert approval_list_html._icon_slug("") == ""
 
     def test_icon_css_present_even_when_nothing_is_pending(self):
-        # The crux of issue #576's bug 1: a connector with nothing pending
-        # at first paint used to get no icon rule at all, so a row that
-        # arrived for it later drew a letter badge until the next full page
-        # load. The bundled icon set is small and fixed, so it's all baked
+        # A connector with nothing pending at first paint still needs an
+        # icon rule, or a row that arrives for it later draws a letter
+        # badge until the next full page load. The bundled icon set is small and fixed, so it's all baked
         # in unconditionally instead.
         from privacyfence import approval_icons
 
