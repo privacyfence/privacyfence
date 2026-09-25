@@ -3,8 +3,7 @@ routes, exercised against an in-process ASGI test client (no real socket).
 Auth middleware, CSRF, and Host/Origin policy each get explicit negative
 tests here.
 
-SEC-06: this module's own create_app() no longer takes a shared ``token``
--- it authenticates
+This module's own create_app() takes no shared ``token`` -- it authenticates
 against a web/session_auth.py ``LocalSessionStore`` instead (the one-time
 ``?bootstrap=`` exchange that actually mints a session lives one layer up,
 in web/server.py's ``_BootstrapMiddleware`` -- see test_server.py for that).
@@ -163,8 +162,8 @@ class TestAuthentication:
 
     def test_unauthorized_page_offers_an_on_demand_recovery_command(self, client):
         # A dead/expired link shouldn't just tell a human to restart
-        # PrivacyFence -- the control channel (web/control_channel.py,
-        # #428 Phase 2) exists precisely so they don't have to, and this
+        # PrivacyFence -- the control channel (web/control_channel.py)
+        # exists precisely so they don't have to, and this
         # page is where that needs to actually be spelled out (see
         # session_auth.unauthorized_html's own docstring). "MINT" is the
         # one substring present on either platform's command (nc -U on
@@ -245,9 +244,9 @@ class TestListApprovals:
         t.join(timeout=2)
 
     def test_two_pending_cards_both_link(self, client, sessions, web_ui):
-        # P3: several approvals can be pending at once (§6's retirement of
-        # _popup_lock's "one dialog at a time") -- the list must show all of
-        # them, not just the most recent.
+        # Several approvals can be pending at once (gate.py has no
+        # one-dialog-at-a-time lock) -- the list must show all of them, not
+        # just the most recent.
         _signed_in(client, sessions)
         t1, card1, box1 = _pending_card(web_ui)
         t2, card2, box2 = _pending_card(web_ui)
@@ -267,7 +266,7 @@ class TestListApprovals:
 
 
 class TestServiceWorker:
-    """W8 (tier 0/1 notifications, 5deef1d8:docs/approval-list-ui-ux.md §4): served
+    """The tier 0/1 notifications service worker: served
     at the origin root with no auth required, so registration never fails
     on a session that hasn't authenticated yet."""
 
@@ -281,23 +280,23 @@ class TestServiceWorker:
         assert r.headers.get("service-worker-allowed") == "/"
 
     def test_no_push_handler(self, client):
-        # This phase is tier 0/1 only -- no `push` event handler (that's
-        # tier 2, VAPID, org mode/P7+).
+        # Notifications are tier 0/1 only -- no `push` event handler (tier
+        # 2, web push with VAPID, is not implemented).
         r = client.get("/sw.js")
         assert "addEventListener(\"push\"" not in r.text
         assert "addEventListener('push'" not in r.text
 
 
 class TestApprovalsStream:
-    """GET /api/approvals/stream -- §7.1's SSE counterpart to the list page,
+    """GET /api/approvals/stream -- the SSE counterpart to the list page,
     so it updates live without polling. Only the auth boundary is exercised
     here: the handler's own generator loops until the client disconnects,
     which starlette.testclient.TestClient's synchronous, fully-buffering
     ``stream()`` (it drains an ASGI response before yielding control back,
     even under ``with client.stream(...)``) can't drive without hanging --
     a real streaming HTTP client is what this endpoint actually needs to be
-    exercised end-to-end, which is what P0/P1's own manual Chromium checks
-    already cover the pattern for, not this test client."""
+    exercised end-to-end (tests/integration/test_browser_smoke.py drives
+    the live list page in Chromium), not this test client."""
 
     def test_requires_auth(self, client):
         r = client.get("/api/approvals/stream")
@@ -306,7 +305,7 @@ class TestApprovalsStream:
 
 class TestApprovalPreview:
     """GET /api/approvals/{id}/preview -- the approval binder's read-only
-    inline-disclosure fragment (Phase 1): serves the ``preview`` dict
+    inline-disclosure fragment: serves the ``preview`` dict
     stamped onto a ``PendingApproval`` at registration, metadata only."""
 
     def test_requires_auth(self, client, web_ui):
@@ -380,7 +379,7 @@ class TestShowApproval:
         assert 'href="/approvals"' in r.text
 
     def test_shim_navigates_back_to_the_list_on_success_not_innerhtml(self, client, sessions, web_ui):
-        # §3 of 5deef1d8:docs/approval-list-ui-ux.md: a decision navigates back to
+        # A decision navigates back to
         # /approvals via location.replace (so the back button can't walk
         # into a dead card) with a toast stashed in sessionStorage, instead
         # of rewriting the document body in place.
@@ -453,7 +452,7 @@ class TestDecide:
         t.join(timeout=2)
 
     def test_second_decide_for_the_same_id_is_rejected_not_silently_applied(self, client, sessions, web_ui):
-        # Idempotent: the first accepted decision wins (§7.1). Also what
+        # Idempotent: the first accepted decision wins. Also what
         # protects against a stale tab and a genuine double-submit.
         t, card, box = _pending_card(web_ui)
         session_id = _signed_in(client, sessions)
@@ -531,7 +530,7 @@ def _client(app) -> TestClient:
 
 
 class TestStepUpScoping:
-    """#426 Phase 2: step-up is off by default, and even when enabled,
+    """Step-up is off by default, and even when enabled,
     applies only to approving decisions on writes (or PII reads, in the
     wider scope) -- never to denies. Mirrors
     test_routes_org_approvals.py's own TestStepUpScoping, minus the IdP
@@ -623,11 +622,11 @@ class TestStepUpScoping:
 
 
 class TestStepUpEvadableWithNoPasskeyEnrolled:
-    """#426 Phase 2's own deliberate gap: with no passkey enrolled and no
-    IdP to fall back to (unlike org mode), the decide endpoint has no
-    ceremony left to demand -- the decision goes through unguarded rather
-    than deadlocking behind one nobody can complete. Closing this is #426
-    Phase 3's ``require_passkey`` enforcement, not this one."""
+    """The deliberate gap with ``require_passkey`` off: with no passkey
+    enrolled and no IdP to fall back to (unlike org mode), the decide
+    endpoint has no ceremony left to demand -- the decision goes through
+    unguarded rather than deadlocking behind one nobody can complete.
+    ``require_passkey`` closes it (TestRequirePasskeyHardFail below)."""
 
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):
@@ -645,7 +644,7 @@ class TestStepUpEvadableWithNoPasskeyEnrolled:
 
 
 class TestRequirePasskeyBanner:
-    """#426 Phase 3: the list page carries step_up_config.py's own "loud
+    """The list page carries step_up_config.py's own "loud
     persistent banner" exactly when ``local_enrollment_banner()`` says to --
     see that function's own tests (test_step_up_config.py) for the
     condition itself, and web_shell.py's TestBanner for the markup."""
@@ -683,9 +682,9 @@ class TestRequirePasskeyBanner:
         assert '<div class="pf-shell-banner"' not in r.text
 
     def test_disabled_requirement_notice_is_shown(self):
-        """#426 Phase 4: webauthn_stepup.observe_step_up_requirement's own
-        persistent notice, surfaced the same way the Phase 3 enrollment
-        one is -- see test_routes_settings.py's own copy of this test."""
+        """webauthn_stepup.observe_step_up_requirement's own
+        persistent notice, surfaced the same way the enrollment
+        banner is -- see test_routes_settings.py's own copy of this test."""
         from privacyfence.principal import LOCAL_PRINCIPAL
 
         wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True)
@@ -699,7 +698,7 @@ class TestRequirePasskeyBanner:
 
 
 class TestStepUpOffNotice:
-    """B23 of the 4.1.0 action plan: the list page carries step_up_
+    """The list page carries step_up_
     config.py's own ``off_notice()`` as a dismissible strip (web_shell.
     wrap's ``dismissible_notice_html``) exactly when step-up isn't
     genuinely required -- see that function's own tests
@@ -745,7 +744,7 @@ class TestStepUpOffNotice:
 
 
 class TestRequirePasskeyHardFail:
-    """#426 Phase 3: with ``require_passkey`` on, the one deliberate gap
+    """With ``require_passkey`` on, the one deliberate gap
     TestStepUpEvadableWithNoPasskeyEnrolled documents above is closed --
     nothing enrolled means a hard ``403``, never a silent pass-through.
     Mirrors test_routes_org_approvals.py's own
@@ -845,7 +844,7 @@ class TestStepUpWebAuthnFlow:
         assert second.json() == {"status": "ok"}
 
     def test_an_assertion_for_a_different_decision_is_rejected(self):
-        # Fingerprint binding (§10.6): a challenge minted for "accept"
+        # Fingerprint binding: a challenge minted for "accept"
         # cannot be reused to authorize "accept_all" on the same approval.
         self._enroll()
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
@@ -903,7 +902,7 @@ class TestStepUpBridgeShim:
 
 
 class TestBatchDecide:
-    """Phase 2 of the approval binder plan: ``POST /api/approvals/batch/
+    """The approval binder's ``POST /api/approvals/batch/
     decide`` -- approve or deny a selected set in one request. This
     covers only the plain batch mechanics and their own auth posture,
     against an app with step-up off (the ``client``/``sessions``/``web_ui``
@@ -937,7 +936,7 @@ class TestBatchDecide:
         ]
         assert accept_me.result == "accept"
         assert deny_me.result == "deny"
-        # Audit provenance (Phase 2): every item this batch actually
+        # Audit provenance: every item this batch actually
         # applied is stamped with the same server-minted batch id --
         # already_decided/unknown items were never touched by it.
         assert accept_me.decided_via == "binder"
@@ -945,7 +944,7 @@ class TestBatchDecide:
         assert accept_me.batch_id == deny_me.batch_id == body["batch_id"]
 
     def test_a_client_supplied_batch_id_is_never_recorded_verbatim(self, client, sessions, web_ui):
-        # B27: batch_id is documented (audit_log.py) as server-minted. With
+        # batch_id is documented (audit_log.py) as server-minted. With
         # no step-up in play there is never a live challenge to prove a
         # submitted batch_id against, so a forged one must be replaced
         # rather than trusted straight into the audit trail.
@@ -1038,7 +1037,7 @@ class TestBatchDecide:
 
 
 class TestBatchStepUp:
-    """Phase 3 of the approval binder plan: the batch decide endpoint's own
+    """The batch decide endpoint's own
     passkey gate -- one WebAuthn assertion bound to the whole submitted
     set (webauthn_stepup.batch_decision_fingerprint), not one per item."""
 
@@ -1067,7 +1066,7 @@ class TestBatchStepUp:
             "batch_id": "attacker-forged-batch-id",
         })
         assert r.status_code == 200
-        # B27: _batch_needs_step_up() never runs verify_step_up() here, so a
+        # _batch_needs_step_up() never runs verify_step_up() here, so a
         # client-supplied batch_id must not survive into the audit trail.
         assert r.json()["batch_id"] != "attacker-forged-batch-id"
         assert approval.batch_id == r.json()["batch_id"]
@@ -1242,7 +1241,7 @@ class TestBatchStepUp:
         })
         assert r.status_code == 200
         assert r.json()["results"] == [{"id": approval.id, "outcome": "applied"}]
-        # B27: this fallthrough (no enrolled credential, require_passkey off)
+        # This fallthrough (no enrolled credential, require_passkey off)
         # never verified the assertion, so the client-supplied batch_id must
         # not reach the audit trail either.
         assert r.json()["batch_id"] != "attacker-forged-batch-id"
@@ -1279,7 +1278,7 @@ class TestBatchStepUp:
 
 
 class TestHumanSessionRequiredToApprove:
-    """The self-approval plan's Phase 2. ADR 0002 decision 6 names three
+    """ADR 0002 decision 6 names three
     ways a local process reaches a ``pf_session``, all by design; until now
     all three produced the same object with the same authority, so an agent
     holding one could release the write it had itself requested.
@@ -1417,8 +1416,8 @@ def _pending_confirm(web_ui, *, sensitive: bool):
 
 
 class TestSensitiveConfirmDialog:
-    """The self-approval review's Phase 4, on the two meta-tools the policy
-    v2 redesign added (``privacyfence_list_policy`` is a read;
+    """The confirm dialog that is itself the gate, on the policy meta-tools
+    (``privacyfence_list_policy`` is a read;
     ``privacyfence_propose_policy_change`` is this).
 
     Confirm dialogs were exempt from both decide-time gates by construction
@@ -1692,8 +1691,8 @@ class TestPerPrincipalIsolation:
 
         # sensitive_confirm/pending resolution both go through the same
         # principal-filtered .get() -- a foreign id resolves as unknown, so
-        # the decision is refused with "already_decided" (§7.1's own
-        # idempotent-refusal shape for an id resolve() cannot act on),
+        # the decision is refused with "already_decided" (the decide
+        # endpoint's own idempotent-refusal shape for an id resolve() cannot act on),
         # never actually applied to the owner's own card.
         assert r.status_code == 409
         assert not owners_card.event.is_set()

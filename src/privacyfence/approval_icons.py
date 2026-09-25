@@ -80,7 +80,7 @@ def all_connector_icons() -> dict[str, str]:
     and fixed (resources/connector_icons/*.png, currently ~10 files, none
     over ~135KB), so callers that want an icon reference to survive for a
     connector they haven't seen yet (approval_list_html.py's live
-    re-render -- see issue #576) can bake in all of it once rather than
+    re-render, which carries no icon data) can bake in all of it once rather than
     only the subset that happened to be relevant at the moment they asked."""
     icons_dir = _RESOURCES / "connector_icons"
     if not icons_dir.is_dir():
