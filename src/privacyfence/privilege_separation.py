@@ -306,6 +306,14 @@ class PlatformLayout:
     daemon_ctl_argv: tuple[str, ...]
 
 
+#: Where the macOS ``.pkg`` installs the provisioning script, and what the
+#: darwin layout's commands quote: every separated Mac is a ``.pkg`` install,
+#: and a reader of a daemon log does not have a checkout to resolve
+#: ``installer``'s repo-relative path against. A string rather than a ``Path``
+#: so it reads the same when the table is built on any OS.
+MACOS_PACKAGED_INSTALLER = "/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh"
+
+
 # #428 P4 ships per platform (B5a/B5b/B5c) rather than as one "x3 platforms"
 # phase, so macOS and Linux could land and soak even if Windows' net-new ACL
 # work runs long. A platform is supported exactly when it has an entry here,
@@ -317,10 +325,10 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         service_account=MACOS_SERVICE_ACCOUNT_NAME,
         service_group=MACOS_SERVICE_ACCOUNT_NAME,
         installer="scripts/macos_privilege_separation.sh",
-        status_command="sudo scripts/macos_privilege_separation.sh status",
+        status_command=f"sudo {MACOS_PACKAGED_INSTALLER} status",
         start_command="sudo launchctl kickstart -k system/com.privacyfence.daemon",
         stop_command="sudo launchctl bootout system/com.privacyfence.daemon",
-        enable_command="sudo scripts/macos_privilege_separation.sh enable",
+        enable_command=f"sudo {MACOS_PACKAGED_INSTALLER} enable",
         daemon_ctl_argv=("launchctl", "print", "system/com.privacyfence.daemon"),
     ),
     "linux": PlatformLayout(
