@@ -1,7 +1,7 @@
-"""Small-dialog HTML template for the confirmation/list-picker windows
-dialog_window.py hosts -- ports approval_popup.py's old AppleScript
-`display dialog`/`choose from list` prompts onto issue #141's
-AppKit+WKWebView bridge pattern (issue #145). Reuses approval_window_html.py's
+"""Small-dialog HTML template for the confirmation/list-picker dialogs
+web_approval_ui.py and settings_controller.py serve (through
+web_prompt.py), using the same in-page button row and bridge script as the
+approval window. Reuses approval_window_html.py's
 vendored ``styles.css`` (design tokens, embedded fonts, the
 ``.pf-btn``/``.pf-btn-primary``/``.pf-btn-deny`` button styles, ``.pf-scroll``'s
 scrollbar styling) rather than a second copy of the same visual language --
@@ -170,8 +170,8 @@ def _document(*, width: int, body_html: str) -> str:
     just without that function's per-layout width/rail-color logic, since
     both shapes here are one fixed narrow width apiece.
 
-    Generates its own fresh CSP nonce (SEC-08, see approval_window_html.py's
-    module-level note on why this document -- rendered once, served
+    Generates its own fresh CSP nonce (see approval_window_html.py's
+    module-level Content-Security-Policy note on why this document -- rendered once, served
     unchanged thereafter -- needs one baked in at build time rather than
     per response) and reuses ``approval_window_html.extract_csp_nonce``'s
     own ``<script nonce="...">`` tag shape so the same extraction code

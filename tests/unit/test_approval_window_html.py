@@ -111,8 +111,8 @@ class TestHoverTooltips:
 
 
 class TestDisclosureRowsFromVisibility:
-    """§3's plain "what's disclosed" sentence per field -- the structural
-    change from the old checklist (✓/✗/◐ icons) to prose, per an allow/
+    """The disclosure card's plain "what's disclosed" sentence per field --
+    prose rather than a checklist of ✓/✗/◐ icons, per an allow/
     redact/block policy dict (privacy_filter.category_policy()'s ground
     truth, unchanged)."""
 
@@ -148,7 +148,8 @@ class TestSectionPresenceAndOrder:
     to be on *this* card -- "03" was the PII gate on one and the disclosure
     list on the next, which is the one thing a reviewer seeing dozens of
     these cannot learn. Order is still load-bearing and still asserted: the
-    risk card renders right after §2 and *before* §3, pinned, never one
+    risk card renders right after the reason card and *before* the
+    disclosure card, pinned, never one
     scroll away from being missed."""
 
     def test_sections_carry_labels_and_no_numbers(self):
@@ -174,7 +175,7 @@ class TestSectionPresenceAndOrder:
         assert html.index("Possible PII detected") < html.index("What will be provided to the AI system")
 
     def test_a_read_call_with_no_disclosure_still_gets_its_risk_card(self):
-        # A tool with nothing to disclose in §3 (empty disclosure_rows)
+        # A tool with nothing to disclose (empty disclosure_rows)
         # whose content still matched the PII detector.
         html = build_card_stack_html(**_minimal_kwargs(pii_categories=["Phone number"]))
         assert "Possible PII detected" in html
@@ -183,7 +184,7 @@ class TestSectionPresenceAndOrder:
     def test_write_call_never_gets_section_3_even_with_a_visibility_like_dict(self):
         # disclosure_rows is only ever consulted when is_read=True -- a
         # write-gate call passing it anyway (which real callers never do)
-        # must still not render §3, mirroring show_popup() never setting
+        # must still not render a disclosure card, mirroring show_popup() never setting
         # self.visibility in the real controller.
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=False, title="Create Calendar Event",
@@ -302,8 +303,8 @@ class TestLayoutShapes:
 
     def test_wide_left_column_is_one_shared_scroll_region(self):
         # No Python-computed pixel cap anymore, and no split between an
-        # always-visible pinned block and a separately-scrolling §3 --
-        # header/§1/§2/risk-card/§3 all share one overflow-y:auto region
+        # always-visible pinned block and a separately-scrolling disclosure
+        # card -- the header and every card share one overflow-y:auto region
         # spanning the whole column (see build_card_stack_html's own
         # docstring for the trade-off this accepts). No max-height
         # anywhere: the region is bounded by real flex layout, not a
@@ -318,7 +319,7 @@ class TestLayoutShapes:
         assert "max-height" not in html
 
     def test_left_column_is_still_one_shared_scroll_region_with_no_section_3(self):
-        # Unconditional -- the wrapper doesn't depend on §3 having content
+        # Unconditional -- the wrapper doesn't depend on the disclosure card having content
         # (unlike the old columns_max_height-only-when-needed cap).
         html = build_card_stack_html(**_minimal_kwargs(layout=WIDE, disclosure_rows=[]))
         assert 'class="pf-scroll pf-wide-left"' in html
@@ -334,7 +335,7 @@ class TestLayoutShapes:
 
     def test_wide_has_exactly_two_independent_scroll_regions(self):
         # Left column and right pane -- always both, regardless of whether
-        # §3 has content, since neither wrapper is conditional anymore.
+        # the disclosure card has content, since neither wrapper is conditional anymore.
         html = build_card_stack_html(**_minimal_kwargs(
             layout=WIDE, disclosure_rows=[("Cell values", "x")],
         ))
@@ -476,9 +477,8 @@ class TestTempAcceptDisclosure:
 
 
 class TestButtonRow:
-    """Deny/Allow once/Always allow render as part of this document now
-    (issue #141), not native NSButtons -- see approval_window.py's module
-    docstring for why."""
+    """Deny/Allow once/Always allow render as part of this document, with
+    their own click/keyboard dispatch in its _JS."""
 
     def test_deny_and_allow_once_always_render(self):
         html = build_card_stack_html(**_minimal_kwargs())
@@ -539,7 +539,7 @@ class TestButtonRow:
         assert 'data-pf-choice="0"' in html
 
     def test_two_or_more_candidates_render_their_own_row(self):
-        # Issue #151's multi-button window: 2+ matching auto-accept rule
+        # The multi-button window: 2+ matching auto-accept rule
         # candidates each get their own button, in their own row above
         # Deny/Allow once (see approval_window_html.py's _button_row_html).
         html = build_card_stack_html(**_minimal_kwargs(
@@ -768,8 +768,8 @@ class TestEscapingAndNoNetwork:
     """Defense in depth: every dynamic string reaching the document must be
     escaped, and the document must never be able to reach out to the
     network -- fonts are embedded as base64 data URIs (see
-    resources/approval_window/styles.css), never linked. Since issue #141
-    this document does carry one <script> tag (the button row's own
+    resources/approval_window/styles.css), never linked. This document
+    does carry one <script> tag (the button row's own
     click/keyboard-dispatch bridge, _JS) -- entirely inline, app-authored
     code, never an external <script src="...">, so the "no network" half of
     this class's contract still holds; see TestButtonRow for that script's
@@ -793,9 +793,9 @@ class TestEscapingAndNoNetwork:
         assert "<script>x</script>" not in html
 
     def test_exactly_one_inline_script_tag_and_no_external_script_src(self):
-        # Issue #141 added the button row's own click/keyboard-dispatch
-        # bridge (_JS) -- this document is no longer script-free, but it
-        # must still never load a script from anywhere else.
+        # The button row's own click/keyboard-dispatch bridge (_JS) is
+        # inline, so this document is not script-free, but it must still
+        # never load a script from anywhere else.
         html = build_card_stack_html(**_minimal_kwargs())
         assert html.count("<script") == 1
         assert "<script src" not in html

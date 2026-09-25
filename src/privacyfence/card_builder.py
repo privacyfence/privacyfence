@@ -4,7 +4,7 @@ build_card_stack_html()'s own argument shape.
 
 This mirrors what approval_window.py's ApprovalWindowController does for
 the native host (reading-time estimate, the "Seen N times this week"
-caption, §3's disclosure rows, each accept_all candidate's "Always allow —
+caption, the disclosure card's rows, each accept_all candidate's "Always allow —
 {hint}" label, the pdf/image data-URI precedence for the WIDE preview pane)
 -- ported here framework-free, with the native-only window-sizing math left
 out, so web_approval_ui.py can render an identical card without importing
@@ -97,7 +97,7 @@ def _disclosure_rows(
     is_read: bool, new_info: dict[str, str] | None, visibility: dict[str, str] | None,
     agent_display_name: str = agent_label.NEUTRAL_SUBJECT,
 ) -> list[tuple[str, str]]:
-    """§3's rows -- see ApprovalWindowController._disclosure_rows's own
+    """The disclosure card's rows -- see ApprovalWindowController._disclosure_rows's own
     docstring for the same (new_info first, then visibility-derived policy
     sentences) merge this mirrors.
 
@@ -190,7 +190,7 @@ def build_card_html(
 
     # A read card ends with "What will be provided to Claude"; a write card
     # had nothing that named its own consequence, only the payload and
-    # Claude's reason. This is that row -- last in §1 ("Action to perform"),
+    # Claude's reason. This is that row -- last in the action card ("Action to perform"),
     # so the payload is read first and the outcome last, which is the order
     # the decision is actually made in. Read gates never get one: their
     # consequence card already exists.
