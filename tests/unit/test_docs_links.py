@@ -153,9 +153,11 @@ def _assert_resolves(where: str, resolved: Path, anchor: str, target: str) -> No
 
 
 def test_the_self_url_scan_actually_found_links():
-    """Same guard as above, for the absolute-URL scan: README.md alone carries dozens of these, so
-    a handful would mean the prefixes or the `<img>` pattern stopped matching."""
-    assert len(_SELF_LINKS) > 20, f"only {len(_SELF_LINKS)} self-referencing absolute URLs found -- scan is probably broken"
+    """Same guard as above, for the absolute-URL scan. README.md links its docs on privacyfence.eu
+    (tests/unit/test_readme_site_links.py checks those), so what is left here is its images and its
+    links to root files (LICENSE, NOTICE, SECURITY.md, ...): none at all would mean the prefixes or
+    the `<img>` pattern stopped matching."""
+    assert len(_SELF_LINKS) >= 5, f"only {len(_SELF_LINKS)} self-referencing absolute URLs found -- scan is probably broken"
 
 
 @pytest.mark.parametrize("path, line, url", _SELF_LINKS, ids=lambda v: str(v) if isinstance(v, str) else "")
