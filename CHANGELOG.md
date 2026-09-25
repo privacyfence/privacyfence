@@ -53,6 +53,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   certification, local or organization mode, cost, and verifying a download. The site's menu
   links the FAQ, and `/connectors/` links each connector's page.
 
+- **A release history page, `privacyfence.eu/releases/`,** lists the newest release on every
+  channel (stable, release candidate, beta and alpha), each with its release date, its installers
+  and their SHA-256 checksums, and a link to its release notes. It works without JavaScript. The
+  download page's "All releases" link and the site footer point to it.
+
 ## [4.6.1] — 2026-09-25
 
 ### Added

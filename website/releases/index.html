@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrivacyFence releases: stable and pre-release versions</title>
+  <meta name="description" content="The newest PrivacyFence release on every channel, stable and pre-release: version, release date, installers for macOS, Windows and Linux with SHA-256 checksums, and release notes.">
+  <meta name="pf-content-group" content="download">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/releases/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/releases/">
+  <meta property="og:title" content="PrivacyFence releases">
+  <meta property="og:description" content="The newest PrivacyFence release on every channel, with installers, checksums and release notes.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PrivacyFence: AI access without giving AI the keys. Approve the sensitive. Automate the routine.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="PrivacyFence releases">
+  <meta name="twitter:description" content="The newest PrivacyFence release on every channel, with installers, checksums and release notes.">
+  <meta name="twitter:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top" class="shell download-page releases-page">
+    <section class="download-intro">
+      <span class="kicker">Releases</span>
+      <h1>Release history</h1>
+      <p class="lede">
+        The newest PrivacyFence release on every channel, with its installers and release notes.
+        Most people want the current stable release, which is also on the
+        <a href="/download/">download page</a>.
+      </p>
+    </section>
+
+    <!-- Rows come from the download Worker's GET /api/releases, never from hardcoded versions or
+         filenames. scripts/build_site.py replaces the loading row with the releases published at
+         deploy time, so the table works without JavaScript; releases.js then renders the live
+         list over it. Each download link pins its row's exact version, so a channel moving on
+         never hands out a different file than the row names. -->
+    <section aria-labelledby="releases-heading">
+      <h2 id="releases-heading" class="visually-hidden">Releases by channel</h2>
+      <div class="table-scroll wide releases-table" id="releases-table">
+        <table>
+          <thead>
+            <tr><th scope="col">Version</th><th scope="col">Channel</th><th scope="col">Released</th><th scope="col">Installers</th><th scope="col">Notes</th></tr>
+          </thead>
+          <tbody id="releases-body">
+            <tr id="releases-loading"><td colspan="5">Loading the release list…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Shown only if the list cannot be loaded and the build had nothing to pre-render: the
+           page must never become a dead end. -->
+      <div class="download-fallback" id="releases-fallback" hidden>
+        <p>
+          We couldn't load the release list just now. Every release and its notes are also on
+          <a class="text-link" href="https://github.com/privacyfence/privacyfence/releases">GitHub Releases</a>.
+        </p>
+      </div>
+    </section>
+
+    <section class="page-copy releases-notes" aria-labelledby="channels-heading">
+      <h2 id="channels-heading">Channels</h2>
+      <p>
+        <strong>Stable</strong> is the release to install. <strong>Release candidates</strong>,
+        <strong>betas</strong> and <strong>alphas</strong> are pre-releases for testing the next
+        version: they get the same checks as stable, but they are newer and less proven. Install
+        them alongside nothing you rely on. A pre-release marked <em>superseded</em> is older than
+        the current stable release.
+      </p>
+      <p>
+        Check each installer's SHA-256 before you run it; the
+        <a href="/download/#verify-heading">download page</a> shows the command for your system.
+        The release notes of every version, including the ones listed here, are in the
+        <a href="https://github.com/privacyfence/privacyfence/blob/main/CHANGELOG.md">changelog</a>.
+      </p>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+  <script src="/releases/releases.js" defer></script>
+</body>
+</html>

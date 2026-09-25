@@ -247,8 +247,32 @@ main { container-type: inline-size; }
 .verify-commands code { font: 600 13px var(--font-mono); color: #3c5d59; white-space: pre; }
 .verify-os { color: var(--muted); font-weight: 600; }
 .prerelease-note { margin-top: 18px !important; font-size: 14px; }
+.prerelease-note a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
 
 .download-stats { margin-top: 46px; color: var(--muted); font-size: 14px; text-align: center; }
+
+/* ---- Release history (/releases/) ------------------------------------------------------ */
+/* One row per channel's newest release, built from /api/releases. The table scrolls inside its
+   own .table-scroll box on a phone (rule 2); the checksum stays wrapped inside its cell. */
+
+.releases-page .lede a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.releases-table table { min-width: 720px; }
+.releases-table th[scope="row"] { background: none; font: 700 15px var(--font-mono); white-space: nowrap; }
+.releases-table th[scope="row"] .download-badge { margin-left: 6px; font-family: var(--font-sans); vertical-align: 1px; }
+.releases-table td { color: var(--ink-soft); }
+.releases-table time, .releases-table td:last-child { white-space: nowrap; }
+.release-superseded { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; }
+.releases-table th[scope="row"], .releases-table td { vertical-align: middle; }
+.releases-table tr:last-child th { border-bottom: 0; }
+.release-installers { margin: 0; padding: 0; list-style: none; display: grid; min-width: 260px; }
+.release-installers li { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; }
+.release-installers a.release-download { display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 700; }
+.release-size { color: var(--muted); font-size: 13px; }
+.release-installers .download-checksum { width: auto; margin-top: 0; }
+.release-installers .download-checksum[open] { flex-basis: 100%; padding-bottom: 8px; }
+.release-installers .download-checksum code { white-space: normal; overflow-wrap: anywhere; margin-top: 0; }
+.releases-notes { margin-top: clamp(40px, 5vw, 56px); }
+.releases-notes h2 { font-size: 26px; letter-spacing: -.025em; }
 
 /* ---- Breakpoint overrides -------------------------------------------------------------- */
 /* Only what the primitives cannot express: the principle grid's divider direction, and the

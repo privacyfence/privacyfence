@@ -151,19 +151,15 @@ def test_every_page_gets_the_same_header_and_footer():
         page = read_page(path)
         header = page[page.index('<a class="skip-link"') : page.index("</header>")]
         footer = page[page.index('<footer class="site-footer') : page.index("</footer>")]
-        return header.replace(
-            'href="https://github.com/privacyfence/privacyfence/releases">All releases', 'href="/download/">Download'
-        ), footer
+        return header.replace('href="/releases/">All releases', 'href="/download/">Download'), footer
 
     assert len({chrome(path) for path in build_site.PAGES}) == 1
     header, footer = chrome("/")
     assert '<details class="nav-menu">' in header and "nav-menu-panel" in header
     assert '<li><a href="/privacy/" data-privacy-link>Privacy</a></li>' in footer
     assert '<li><a href="/privacy/#your-choice" data-cookie-settings>Cookie settings</a></li>' in footer
-    assert (
-        '<a class="nav-cta" href="https://github.com/privacyfence/privacyfence/releases">All releases</a>'
-        in read_page("/download/")
-    )
+    assert '<li><a href="/releases/">Releases</a></li>' in footer
+    assert '<a class="nav-cta" href="/releases/">All releases</a>' in read_page("/download/")
 
 
 def test_no_include_line_survives_the_build():
@@ -242,6 +238,132 @@ def test_the_build_prerenders_when_given_a_manifest(tmp_path):
     page = (tmp_path / "_site" / "download" / "index.html").read_text(encoding="utf-8")
     assert "<span>Version 4.5.0</span>" in page
     assert '"softwareVersion": "4.5.0"' in (tmp_path / "_site" / "index.html").read_text(encoding="utf-8")
+
+
+# ---- /releases/ pre-render -----------------------------------------------------------------------
+
+
+def _installer(artifact_id, filename, **extra):
+    return {"id": artifact_id, "kind": "installer", "filename": filename, **extra}
+
+
+RELEASES = {
+    "channels": {
+        "stable": {
+            "version": "4.6.1",
+            "channel": "stable",
+            "published_at": "2026-09-25T10:00:00Z",
+            "artifacts": [
+                _installer("macos-arm64", "PrivacyFence-4.6.1.dmg", size=104857600, sha256="a" * 64),
+                _installer("linux-arm64", "privacyfence_4.6.1_arm64.deb"),
+            ],
+        },
+        "alpha": {
+            "version": "4.7.0a2",
+            "channel": "alpha",
+            "published_at": "2026-09-26T08:00:00Z",
+            "artifacts": [_installer("windows-x64", "PrivacyFence-4.7.0a2-setup.exe", size=900)],
+        },
+        # A leftover from an older cycle: listed, and marked as older than stable.
+        "rc": {
+            "version": "4.0.0rc3",
+            "channel": "rc",
+            "published_at": "2026-08-30T08:00:00Z",
+            "artifacts": [
+                _installer("linux-x64", "privacyfence_4.0.0rc3_amd64.deb"),
+                {"id": "sbom", "kind": "sbom", "filename": "privacyfence-4.0.0rc3.cdx.json"},
+            ],
+        },
+        "beta": None,
+    }
+}
+
+
+def test_release_version_order():
+    order = ["4.10.0", "4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.1b2", "4.6.1b1", "4.6.1a9", "4.0.0rc3"]
+    assert sorted(order, key=build_site.release_version_key, reverse=True) == order
+    assert build_site.release_version_key("4.6.1.dev3+gabc") is None
+    assert build_site.release_version_key("latest") is None
+
+
+def test_published_releases_are_newest_first_installers_only():
+    releases = build_site.published_releases(RELEASES)
+    assert [m["version"] for m in releases] == ["4.7.0a2", "4.6.1", "4.0.0rc3"]
+    rc = releases[-1]
+    assert [a["id"] for a in rc["artifacts"]] == ["linux-x64"]
+
+
+def test_a_channel_without_installers_or_a_parseable_version_is_left_out():
+    data = {
+        "channels": {
+            "stable": {"version": "4.6.1", "artifacts": [{"id": "sbom", "kind": "sbom", "filename": "x.json"}]},
+            "beta": {"version": "4.7.0.dev1", "artifacts": [_installer("linux-x64", "x.deb")]},
+            "alpha": {"version": "4.7.0a1", "artifacts": [_installer("linux-x64", "x.deb")]},
+        }
+    }
+    assert [m["version"] for m in build_site.published_releases(data)] == ["4.7.0a1"]
+    assert build_site.published_releases({"channels": {}}) == []
+
+
+def test_release_rows_link_the_worker_by_exact_version():
+    rows = build_site.render_release_rows(build_site.published_releases(RELEASES))
+    assert rows.count("<tr ") == 3
+    assert 'href="https://downloads.privacyfence.eu/download/version/4.6.1/macos-arm64"' in rows
+    assert 'href="https://downloads.privacyfence.eu/download/version/4.7.0a2/windows-x64"' in rows
+    assert 'href="https://github.com/privacyfence/privacyfence/releases/tag/v4.6.1">Release notes</a>' in rows
+    assert '<th scope="row">4.6.1 <span class="download-badge">Current</span></th>' in rows
+    assert '<time datetime="2026-09-25">2026-09-25</time>' in rows
+    assert '<td>Release candidate<span class="release-superseded">Superseded by 4.6.1</span></td>' in rows
+    assert "<td>Alpha</td>" in rows  # newer than stable: not superseded
+    assert ">linux-arm64</a>" in rows  # an id the display map lacks still gets a link
+    assert '<span class="release-size">100.0 MB</span>' in rows
+    assert f"<code>{'a' * 64}</code>" in rows
+    assert "sbom" not in rows and "cdx.json" not in rows
+    for href in re.findall(r'href="([^"]+)"', rows):
+        assert href.startswith(
+            (
+                "https://downloads.privacyfence.eu/download/version/",
+                "https://github.com/privacyfence/privacyfence/releases/tag/v",
+            )
+        )
+
+
+def test_releases_prerender_replaces_the_loading_row():
+    source = build_site.assemble_page((WEBSITE / "releases" / "index.html").read_text(encoding="utf-8"))
+    page = build_site.prerender_releases(source, RELEASES)
+    assert build_site.RELEASES_LOADING_ROW not in page
+    assert page.count('<tr data-channel="') == 3
+    # Nothing published: the loading row stays, and releases.js shows the fallback.
+    assert build_site.prerender_releases(source, {"channels": {"stable": None}}) == source
+    with pytest.raises(build_site.BuildError):
+        build_site.prerender_releases("<html></html>", RELEASES)
+
+
+def test_the_build_prerenders_releases_when_given_the_list(tmp_path):
+    report = build_site.build(tmp_path / "_site", docs_ref=None, manifest=MANIFEST, releases=RELEASES)
+    assert report.releases == ["4.7.0a2", "4.6.1", "4.0.0rc3"]
+    page = (tmp_path / "_site" / "releases" / "index.html").read_text(encoding="utf-8")
+    assert "download/version/4.7.0a2/windows-x64" in page
+
+
+def test_an_unreachable_worker_leaves_releases_to_the_browser(monkeypatch, capsys):
+    def fail(*args, **kwargs):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(build_site.urllib.request, "urlopen", fail)
+    assert build_site.fetch_all_releases() is None
+    assert "could not read the release list" in capsys.readouterr().err
+
+
+def test_releases_js_mirrors_the_build():
+    script = (WEBSITE / "releases" / "releases.js").read_text(encoding="utf-8")
+    platforms = dict(
+        (match[1], (match[2], match[3]))
+        for match in re.finditer(r"'([\w-]+)': \{ name: '([^']*)', detail: '([^']*)'", script)
+    )
+    assert platforms == build_site.PLATFORMS
+    channels = re.search(r"const CHANNEL_NAMES = \{([^}]*)\}", script)[1]
+    assert dict(re.findall(r"(\w+): '([^']*)'", channels)) == build_site.CHANNEL_NAMES
 
 
 # ---- Docs export ---------------------------------------------------------------------------------
