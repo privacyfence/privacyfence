@@ -271,6 +271,16 @@ outranks a leftover rc from an older cycle. A manifest whose version does not pa
 The section names the channel from the manifest and stays hidden if nothing is published or the
 winning manifest has no artifacts.
 
+**Release history** (`website/releases/`, `privacyfence.eu/releases/`). One table row per channel
+with a published release, from `GET /api/releases`, newest version first (the same order as the
+pre-release pick). Each row has the version, channel, the manifest's `published_at` date, the
+installers and a link to the version's GitHub Release. Download links pin the exact version
+(`/download/version/<version>/<id>`), so a row never serves a newer file after its channel moves
+on. Only `kind: "installer"` artifacts are offered, and a channel with none is left out. A
+pre-release older than the current stable one is marked superseded. The route returns only the
+newest manifest per channel, so older versions are not listed. `/download/`'s header and its
+pre-release section link here, and so does the site footer. The header nav does not.
+
 The failure paths are independent: a failed stable fetch shows a fallback linking to GitHub
 Releases' latest release; an empty pre-release set renders nothing; a stats failure hides one
 line. `tests/integration/test_download_page.py` exercises the page in headless Chromium with the
@@ -282,7 +292,10 @@ lists ships as a 404. `tests/unit/test_website_download_cta.py::test_every_websi
 fails if any file under `website/` is missing from them; add new website files to the manifest.
 The build also pre-renders `/download/` from `/api/releases/stable` at deploy time, so the page
 lists the current installers without JavaScript; `download.js` replaces those cards with the live
-manifest, and keeps them (instead of showing the GitHub fallback) if the fetch fails.
+manifest, and keeps them (instead of showing the GitHub fallback) if the fetch fails. `/releases/`
+is pre-rendered from `/api/releases` the same way and behaves the same when its fetch fails:
+pre-rendered rows stay, and an empty table shows a link to GitHub Releases.
+`tests/integration/test_releases_page.py` covers it in Chromium.
 
 ## Cloudflare resources
 

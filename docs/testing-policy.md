@@ -29,7 +29,7 @@ below; a new test module carries the marker for its layer.
 Markers are applied to new modules, not backfilled across old ones. Today `system` is on
 `tests/system/test_local_mode_system.py` and `test_org_ubuntu_release_smoke.py`; `platform` on every
 module under `tests/platform/`; `packaged` on every module in layer 6; `browser` on
-`test_download_page.py` (not yet on `test_browser_smoke.py`); `live` on nothing, since layer 5 is a
+`test_download_page.py` and `test_releases_page.py` (not yet on `test_browser_smoke.py`); `live` on nothing, since layer 5 is a
 script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
 `tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit
 logs) under `test-results/`, which CI uploads as an artifact of the failed job.
@@ -67,8 +67,9 @@ that raises its coverage; lowering one is a regression, not a config edit.
 
 **Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
 reviewed list: `test`, `platform-windows`, `platform-macos`, the three `Test (Python 3.x, core
-suite)` checks, `static-analysis`, `org-mode-smoke`. Update it in the PR that adds, renames or
-removes a `tests.yml` job. It is applied to the live repository ruleset by hand (`... apply`, and
+suite)` checks, `static-analysis`, `org-mode-smoke`, and `website-build` (`website-build.yml`'s
+job, which also runs on every PR). Update it in the PR that adds, renames or removes one of those
+jobs. It is applied to the live repository ruleset by hand (`... apply`, and
 `--branch "releases/**" apply` for the release branches) — no CI job does it; `... show` compares
 intent with what is live.
 
@@ -90,8 +91,8 @@ Key modules in the suite:
   launch default, a spawned-daemon lifecycle, and real `icacls` behavior on Windows.
 - `tests/integration/test_browser_smoke.py` — real headless Chromium: login, decisions (including
   "Always allow", live SSE refresh, idempotency), PDF preview, CSP, org-mode WebAuthn, PII banners,
-  three viewports, light/dark structure. `test_download_page.py` covers `website/download/` with
-  the Worker's API stubbed.
+  three viewports, light/dark structure. `test_download_page.py` covers `website/download/` and
+  `test_releases_page.py` covers `website/releases/`, both with the Worker's API stubbed.
 - Each connector's `TestLiveFixtureParsing` replays a committed fixture from
   `tests/fixtures/live/<connector>/` through the real parser; it skips if no fixture is recorded.
 
@@ -120,8 +121,8 @@ connectors, so it cannot see a principal's tool list or auto-accept rules; those
   privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
-  `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`
-  and `test_download_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
+  `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
   sites and the layout screenshots. Not in `REQUIRED_STATUS_CHECKS`.
 
 ### `qa_web_smoke.py` (layer 4, by hand)

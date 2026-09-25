@@ -27,6 +27,10 @@ concurrency:
 
 jobs:
   build:
+    # The check's name, and so what scripts/update_branch_protection.py requires. Unique on purpose:
+    # build.yml and publish-pypi.yml also have a job called `build`, and a required check matches by
+    # name alone.
+    name: website-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,6 +61,20 @@ jobs:
             grep -q "<span>Version ${version}</span>" _site/download/index.html
             echo "/download/ shows Version ${version} in its HTML"
           fi
+
+      - name: The pre-rendered /releases/ lists its versions without JavaScript
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          versions = json.load(open("site-report.json"))["releases"]
+          if not versions:
+              print("::warning::the release list could not be read, so /releases/ was built without pre-rendered rows")
+          else:
+              page = pathlib.Path("_site/releases/index.html").read_text(encoding="utf-8")
+              missing = [v for v in versions if f'<th scope="row">{v}' not in page]
+              assert not missing, f"/releases/ lacks rows for {missing}"
+              print(f"/releases/ lists {', '.join(versions)} in its HTML")
+          PY
 
       - name: Build with the stale-tag guard (v4.5.0 predates the published doc set)
         run: |
@@ -93,7 +111,8 @@ jobs:
             tests/unit/test_website_*.py \
             tests/integration/test_website_layout.py \
             tests/integration/test_website_consent.py \
-            tests/integration/test_download_page.py
+            tests/integration/test_download_page.py \
+            tests/integration/test_releases_page.py
 
       - name: Upload the built sites
         if: always()

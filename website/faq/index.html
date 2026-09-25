@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrivacyFence FAQ — data flow, AI clients, approvals, cost</title>
+  <meta name="description" content="Short answers about PrivacyFence: where your data goes, which AI clients work, what the AI sees before you approve, automating routine requests, certification, cost and verifying a download.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/faq/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/faq/">
+  <meta property="og:title" content="PrivacyFence FAQ">
+  <meta property="og:description" content="Where your data goes, which AI clients work, what the AI sees before you approve, and what PrivacyFence costs.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">FAQ</p>
+      <h1>Questions people ask before they install.</h1>
+      <p class="lede">Short answers, each linking to the page or document that has the full detail.</p>
+    </section>
+
+    <section class="page-section shell" aria-label="Questions">
+      <nav class="faq-index" aria-label="Questions on this page">
+        <ul class="cluster">
+          <li><a href="#data-path">Does my data go through PrivacyFence's servers?</a></li>
+          <li><a href="#clients">Which AI clients work?</a></li>
+          <li><a href="#before-approval">What does the AI see before I approve?</a></li>
+          <li><a href="#routine">Can routine requests run without approval?</a></li>
+          <li><a href="#certification">Is PrivacyFence certified?</a></li>
+          <li><a href="#modes">Local or organization mode?</a></li>
+          <li><a href="#cost">Is it free?</a></li>
+          <li><a href="#verify">How do I verify a download?</a></li>
+        </ul>
+      </nav>
+
+      <div class="faq-list">
+        <article class="faq-item page-copy stack" id="data-path">
+          <h2>Does my data go through PrivacyFence's servers?</h2>
+          <p><strong>No. There are none.</strong> PrivacyFence runs on your own computer, or on a server your organization controls. Every tool call goes from there straight to the provider: Google, Slack, Salesforce, Atlassian or Telegram. No hosted service sits in the data path, and your connector sign-ins stay with PrivacyFence, never with the AI client.</p>
+          <p>The AI client itself is a different matter: whatever you approve is sent to the AI, under that AI provider's terms. PrivacyFence decides what reaches it.</p>
+          <p>This website is separate from the product. It uses Google Analytics, only if you accept it in the cookie banner; the <a href="/privacy/">privacy policy</a> says what it collects.</p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="clients">
+          <h2>Which AI clients work?</h2>
+          <p>PrivacyFence is tested with these clients, and any MCP-compatible client can connect:</p>
+          <!-- include: clients -->
+          <p>Web clients reach PrivacyFence only through an organization deployment, because on a single computer PrivacyFence listens only on that computer. <a href="/docs/how-it-works/#how-an-ai-system-connects">How an AI client connects</a> has the steps for each.</p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="before-approval">
+          <h2>What does the AI see before I approve?</h2>
+          <p><strong>Only what it already had:</strong> the tool it called, the arguments it sent, and a status telling it to wait. PrivacyFence may fetch the content first, to build your card and check it for personal data, but that content stays inside PrivacyFence until you allow it. If you deny, the AI gets nothing from it.</p>
+          <p>Lookups that disclose little, such as searching email subjects or listing files, run without a card and are audited. Which tools those are is fixed in code and listed per connector on <a href="/connectors/">Connectors</a>.</p>
+          <p><a href="/security/#before-approval">What the AI sees before approval</a></p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="routine">
+          <h2>Can routine requests run without approval?</h2>
+          <p><strong>Yes, within limits you set.</strong> An always-allow rule lets matching requests run without a card: mail from your company's domain, one Drive folder, one Slack channel, one Jira project. You can add one from a card's <strong>Always allow</strong> button, from Settings, or by letting the assistant propose it for you to confirm. Every request a rule lets through is still audited.</p>
+          <p>Rules only ever add permissions, and they cannot overrule the PII check: a read with likely personal data in it still comes to you. For scheduled work with nobody watching, a run can declare itself unattended, so anything no rule covers is refused at once instead of waiting.</p>
+          <p><a href="/docs/approvals-and-policy/#always-allow-and-policy-rules">Always-allow and policy rules</a></p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="certification">
+          <h2>Is PrivacyFence certified?</h2>
+          <p><strong>No.</strong> PrivacyFence has no security certification, no business-continuity plan and no service-level agreement. It is open-source software that you run yourself, so there is no PrivacyFence-operated infrastructure to certify, and installed copies keep running without the maintainer.</p>
+          <p>Using it does not by itself satisfy a regulation or a contract either: that depends on your configuration, identity provider, retention and your own assessment. Where policy asks for a certification, organizations typically approve PrivacyFence through an exception process, pin a reviewed release, and assign an internal owner to track releases.</p>
+          <p><a href="/security/#what-privacyfence-does-not-claim">What PrivacyFence does not claim</a></p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="modes">
+          <h2>Local or organization mode?</h2>
+          <p><strong>Local mode</strong> is the default: the installer for macOS, Windows or Linux runs PrivacyFence on one person's computer, under its own service account, for Claude Desktop and Claude Code on that computer. No server and no sign-in are needed.</p>
+          <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, behind your HTTPS reverse proxy. People sign in through your identity provider, administrators set the privacy filter and PII check for everyone, and web clients can connect too.</p>
+          <p><a href="/enterprise/">Local and organization mode side by side</a></p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="cost">
+          <h2>Is it free?</h2>
+          <p><strong>Yes.</strong> PrivacyFence is open source under the Apache License 2.0, with no paid tier, no account and no commercial offering. The services you connect are your own accounts with Google, Slack, Salesforce, Atlassian or Telegram, on whatever plan you already have.</p>
+          <p><a href="https://github.com/privacyfence/privacyfence">Source code on GitHub</a></p>
+        </article>
+
+        <article class="faq-item page-copy stack" id="verify">
+          <h2>How do I verify a download?</h2>
+          <p>The <a href="/download/">download page</a> lists the SHA-256 checksum of every installer. Compute the checksum of the file you downloaded and compare the two before running it; if they differ, do not run the file.</p>
+          <pre class="verify-commands"><code>shasum -a 256 &lt;file&gt;                    # macOS
+sha256sum &lt;file&gt;                        # Linux
+Get-FileHash &lt;file&gt; -Algorithm SHA256   # Windows</code></pre>
+          <p>Stable releases are also signed: the macOS installer is signed and notarized by Apple, and the Windows installer is Authenticode-signed. Pre-release builds may not be. Each install guide has the exact command: <a href="/docs/install-macos/#download-and-verify">macOS</a>, <a href="/docs/install-windows/#download-and-verify">Windows</a>, <a href="/docs/install-linux/#download-and-verify">Linux</a>.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Still deciding?</h2>
+          <p>See one read and one write approved, or read the security model in full.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/how-it-works/">How it works</a>
+          <a class="button secondary" href="/security/">Security</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
