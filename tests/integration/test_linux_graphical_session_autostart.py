@@ -1,6 +1,6 @@
 """Real graphical-session autostart verification for the Linux ``.deb``.
 
-``test_deb_packaged_lifecycle.py`` (Phase 6.3) already proves the install/
+``test_deb_packaged_lifecycle.py`` already proves the install/
 validate/remove/reinstall/purge/upgrade lifecycle, including that ``desktop-
 file-validate`` accepts the companion's rendered
 ``/etc/xdg/autostart/privacyfence-companion.desktop``. What it deliberately
@@ -61,7 +61,7 @@ Both are exercised below as separate tests.
 A third, independent test in this module covers the OAuth loopback
 browser-opening flow, where practical, in the one way a real graphical
 session uniquely enables:
-``tests/platform/test_browser_launch_default.py`` (Phase 2.3) already
+``tests/platform/test_browser_launch_default.py`` already
 proves ``oauth_loopback.run_browser_oauth()``'s default path reaches the
 real ``webbrowser.open`` function object, but it does so by *monkeypatching
 that function itself*, headless, with no ``$DISPLAY`` -- by its own
@@ -133,7 +133,7 @@ from tests.integration.test_deb_packaged_lifecycle import (  # noqa: E402
     _purge_if_present,
 )
 
-# #428 D1 -- the separated layout's own root and marker, on this platform.
+# The separated layout's own root and marker, on this platform.
 # Imported rather than re-declared so this test can never drift from
 # scripts/linux_privilege_separation.sh's own constants (the same reasoning
 # COMPANION_AUTOSTART_UNIT_NAME below applies to the autostart entry).
@@ -488,7 +488,7 @@ def _trigger_graphical_session_target(user_env: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Test 1 -- #428 D1's new default: a separated install's daemon comes up
+# Test 1 -- the default install: a separated install's daemon comes up
 # under its own *system* unit (no login involved at all), and what the
 # login session's XDG autostart activates instead is the companion's own
 # control channel (ADR 0002 decision 5b) -- not the daemon.
@@ -504,7 +504,7 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     port = _free_port()
     _prepare_home(home, port=port)
 
-    # ── Install. #428 D1 and ADR 0003 decision 5: the postinst separates
+    # ── Install. ADR 0003 decision 5: the postinst separates
     # the install synchronously, inside `dpkg -i` itself. The machine half
     # runs unconditionally; the per-user half additionally runs because
     # $SUDO_USER resolves to a real, non-root account here -- true of this
@@ -575,7 +575,7 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
         f"would never start it at login:\n{wants.stdout}"
     )
 
-    # B24: systemd-xdg-autostart-generator does not filter the autostart
+    # systemd-xdg-autostart-generator does not filter the autostart
     # directories by filename -- any file there, renamed or not, becomes a
     # unit. So the check that matters is not the file but whether the
     # generator pulls a daemon unit into the login target.

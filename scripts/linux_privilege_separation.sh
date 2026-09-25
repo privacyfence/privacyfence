@@ -3,7 +3,7 @@
 # back down again on uninstall.
 #
 # Without this, the daemon and the AI agent it exists to govern are the same
-# OS user, which is the root cause of all four weaknesses issue #428 describes:
+# OS user, which is the root cause of four weaknesses:
 # the agent can read the session-minting credential, rewrite the always-allow
 # rules and PII policy that decide what it is allowed to do, forge a WebAuthn
 # credential into the store a local passkey would be checked against, and read
@@ -89,8 +89,8 @@ MARKER_NAME="privilege-separation.json"
 MARKER_VERSION=1
 HANDOFF_DIR_NAME="handoff"
 SYSTEM_ROOT_MODE=711
-# #428 Phase 2's interim multi-user guard (§2.6, "companion socket
-# takeover"): the leading 3 is the sticky bit (01000) on top of the setgid
+# The multi-user guard against companion socket takeover (ADR 0027): the
+# leading 3 is the sticky bit (01000) on top of the setgid
 # bit (02000) this already carried. Setgid alone means every member of
 # SERVICE_GROUP can create and delete files here, which is exactly right for
 # the daemon and the companion producing group-owned files for each other --
@@ -423,7 +423,7 @@ purge_data_and_account() {
   fi
 }
 
-# ── Daemon manager (#428 Phase 2) ─────────────────────────────────────────────
+# ── Daemon manager ────────────────────────────────────────────────────────────
 #
 # `daemon {status|start|stop|restart|ensure-running}` is what the companion
 # app's tray menu runs -- `status` unprivileged, on every poll, and
@@ -893,7 +893,7 @@ case "$COMMAND" in
       ENABLE_COMMAND=cmd_enable
     fi
     if [ "$AUTO" = "1" ]; then
-      note "auto-enabling privilege separation (#428 D1, 4.1) -- see debian/postinst"
+      note "auto-enabling privilege separation (ADR 0003) -- see debian/postinst"
       # Run in a subshell: die() calls exit, and under set -euo pipefail an
       # exit from a *direct* call would take this whole process down with it
       # -- including the postinst that's calling us. A subshell's exit only

@@ -252,7 +252,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "slack_create_group_chat": NARROW,
     "gmail_reply_all_draft": WIDE,
     # Parallel to gmail_create_draft/gmail_reply_draft/gmail_reply_all_draft above --
-    # same WIDE right-pane body-text preview, just with an extra Attachments row in §1.
+    # same WIDE right-pane body-text preview, just with an extra Attachments row in the "Action to perform" card.
     "gmail_create_draft_with_attachments": WIDE, "gmail_reply_draft_with_attachments": WIDE,
     "gmail_reply_all_draft_with_attachments": WIDE,
     "gmail_add_label": NARROW, "gmail_remove_label": NARROW, "gmail_archive_message": NARROW,
@@ -592,8 +592,8 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
     every rule, wherever it originated -- authored through Settings, the MCP bridge, the
     popup's own "Always allow" flow, or migrated from a hand-edited v1 config at startup -- lives
     in the on-disk v2 ``auto_accept:`` section, so there is exactly one rule list to check and its
-    own ``.id`` (content-derived, ``policy.store.rule_id_for_rule``) is already the canonical id
-    an audit entry records. An empty ``matched_rule_id`` on an ``"auto_accepted"`` audit entry still means
+    own ``.id`` (content-derived, ``policy.store.rule_id_for``) is already the canonical id
+    an audit entry records (ADR 0074). An empty ``matched_rule_id`` on an ``"auto_accepted"`` audit entry still means
     exactly what it always has: the temp-accept grace window matched, not a rule row.
     """
     rules = get_policy_v2_store_rules()
@@ -719,8 +719,8 @@ async def gated_call(
     filtered_data: Any,
     gate: str = "review",         # "review" | "popup"
     preview: dict | None = None,  # fields shown in the review-gate dialog
-    new_info: dict[str, str] | None = None,  # §3 ("What will be provided to
-        # Claude") -- real (label, value) pairs a connector builds directly, e.g.
+    new_info: dict[str, str] | None = None,  # The "What will be provided to
+        # Claude" card -- real (label, value) pairs a connector builds directly, e.g.
         # calendar_get_event_details's Attendees/Location/Description. Read-only
         # (gate="review") calls only, same reasoning as visibility below. Only consulted by
         # approval_window_html.py's layout="narrow"/"wide" rendering (falls back to a

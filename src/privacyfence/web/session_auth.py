@@ -6,17 +6,13 @@ which owned this logic alone before web/routes_settings.py needed the exact
 same posture on a second set of routes sharing the same session and the
 same ``pf_session`` cookie.
 
-**SEC-06.** Through
-v4.0.0a12 this module's whole model was "the cookie's own value is the one
-shared secret everyone in the install has" -- the persistent, never-
-rotated ``web_token`` itself, carried in the ``?token=`` query string the
-daemon logged on every startup and reused, unchanged, across restarts
-forever. That meant a token that leaked once (a log file, shell history, a
-shared screen) stayed valid until someone manually deleted the token file
-and restarted the daemon: no expiry, no single-use exchange, no way to
-revoke just that one exposure.
+**Why the cookie is not a shared secret.** A persistent, never-rotated
+secret carried in a URL -- one the daemon logs on every startup and reuses
+across restarts -- stays valid after a single leak (a log file, shell
+history, a shared screen) until someone deletes it by hand: no expiry, no
+single-use exchange, no way to revoke just that one exposure.
 
-This module now splits that one secret into two purpose-built pieces,
+So this module uses two purpose-built pieces instead,
 mirroring web/org_session.py's own real-session model (minus the
 per-principal identity org mode needs and local mode doesn't):
 
@@ -29,24 +25,20 @@ per-principal identity org mode needs and local mode doesn't):
 - ``LocalSessionStore`` holds the real, server-side sessions a bootstrap
   exchange mints: an independent random id, a sliding idle timeout, and a
   hard absolute timeout from creation regardless of activity -- the
-  "cookie with idle + absolute expiry" SEC-06 asks for. Nothing about a
+  "cookie with idle + absolute expiry" the local session needs. Nothing about a
   session id is ever derived from, or comparable to, any other secret in
   this install.
 
-**#428 Phase 2.** Minting a fresh code on demand -- once a previous session
-or link has already expired, without restarting the daemon -- used to mean
-presenting a persistent local secret (``web_token``) as an ``Authorization``
-header to ``POST /api/bootstrap``, over the same loopback HTTP port a
-browser uses. That secret's only remaining job, once SEC-06 got everything
-else off it, was authorizing that one endpoint -- and a chain doesn't get
+**Minting a code on demand.** A code minted by presenting a persistent
+local secret to an HTTP endpoint on the loopback port would be only as
+strong as that secret's file permissions -- and a chain doesn't get
 stronger by hardening its middle (ADR 0002's own framing): anything on the
-machine that could read the token file could reach the endpoint too, agent
-included. Phase 2 retires that design rather than reinforcing it:
-``web/control_channel.py``'s ``ControlChannelServer`` -- a Unix domain
-socket on macOS/Linux, an ACL'd named pipe on Windows -- is now the only way
+machine that could read the file could reach the endpoint too, agent
+included. So ``web/control_channel.py``'s ``ControlChannelServer`` -- a Unix domain
+socket on macOS/Linux, an ACL'd named pipe on Windows -- is the only way
 to mint a code on demand, and it isn't reachable over the loopback port a
-browser (or a page's own ``fetch()``) can speak at all. See that module's
-own docstring for the full reasoning.
+browser (or a page's own ``fetch()``) can speak at all (ADR 0002 decision
+2). See that module's own docstring for the full reasoning.
 """
 from __future__ import annotations
 
@@ -73,23 +65,21 @@ BOOTSTRAP_QUERY_PARAM = "bootstrap"
 BOOTSTRAP_TTL_SECONDS = 10 * 60
 
 # Sliding idle timeout -- same posture and same figure as
-# org_session.py's own DEFAULT_IDLE_TIMEOUT_SECONDS (§9.4: "short idle
-# timeout"), renewed on every authenticated request so an active user is
+# org_session.py's own DEFAULT_IDLE_TIMEOUT_SECONDS (a short idle
+# timeout), renewed on every authenticated request so an active user is
 # never logged out mid-task; an abandoned tab is.
 DEFAULT_IDLE_TIMEOUT_SECONDS = 30 * 60
 
-# Absolute cap from creation, regardless of activity -- SEC-06's own
+# Absolute cap from creation, regardless of activity -- the other half of
 # "cookie with idle + absolute expiry". Long enough that a background
 # daemon someone actively uses through a workday doesn't force a
-# re-bootstrap mid-task; short enough that a session -- unlike the
-# previous design's literally-forever token -- has a real ceiling. Once it
-# lapses, the answer to "how do I get back in" is a fresh bootstrap code:
-# minted automatically on the next daemon restart, or on demand via
-# ``POST /api/bootstrap`` (see this module's own docstring).
+# re-bootstrap mid-task; short enough that a session has a real ceiling.
+# Once it lapses, the answer to "how do I get back in" is a fresh bootstrap
+# code: minted automatically on the next daemon restart, or on demand over
+# the control channel (see this module's own docstring).
 DEFAULT_ABSOLUTE_TIMEOUT_SECONDS = 24 * 60 * 60
 
-# #428 Phase 2 of the self-approval remediation plan: how the session in
-# front of us was established, which is the one thing about a ``pf_session``
+# Provenance: how the session in front of us was established, which is the one thing about a ``pf_session``
 # nothing downstream used to record.
 #
 # ADR 0002 decision 6 names three ways a local process reaches a session,
@@ -107,7 +97,7 @@ DEFAULT_ABSOLUTE_TIMEOUT_SECONDS = 24 * 60 * 60
 # is everything else: a bare ``MINT``, or a code that reached a browser by
 # some route this daemon cannot attribute to a person. Viewing is unchanged
 # either way; approving a decision, and every _SENSITIVE_ACTIONS settings
-# change, requires ``human``.
+# change, requires ``human`` (ADR 0062).
 #
 # What this is not: authentication of the companion. Companion and agent
 # share an OS user, so an agent that binds the companion's own address before
@@ -137,7 +127,7 @@ class _Session:
 
 class LocalSessionStore:
     """Server-side session store backing the local-mode ``pf_session``
-    cookie (SEC-06) -- the direct local-mode counterpart of
+    cookie -- the direct local-mode counterpart of
     web/org_session.py's ``OrgSessionStore``. Through ADR 0008 this
     docstring said it carried no ``Principal`` at all, because local mode
     had exactly one identity; now that a separated install can have one
@@ -224,11 +214,11 @@ class LocalSessionStore:
 
 
 class BootstrapStore:
-    """One-time codes (SEC-06) that exchange for exactly one
+    """One-time codes that exchange for exactly one
     ``LocalSessionStore`` session -- minted server-side, either by
-    daemon_main.py at every startup (the direct replacement for logging
-    the long-lived token itself) or on demand via ``POST /api/bootstrap``
-    (web/server.py) once a previous code/session has already expired."""
+    daemon_main.py at every startup or on demand over the control channel
+    (web/control_channel.py) once a previous code/session has already
+    expired."""
 
     def __init__(self, *, ttl_seconds: float = BOOTSTRAP_TTL_SECONDS) -> None:
         self._ttl_seconds = ttl_seconds
@@ -273,8 +263,8 @@ def authenticated(request: Request, sessions: LocalSessionStore) -> bool:
 
 
 def resolve_principal(request: Request, sessions: LocalSessionStore) -> Principal | None:
-    """The small resolve-or-reject helper alongside ``authenticated()`` above
-    (PSC-2b): ``current_principal()`` when the session cookie is live, else
+    """The small resolve-or-reject helper alongside ``authenticated()`` above:
+    ``current_principal()`` when the session cookie is live, else
     ``None`` -- the same ``Principal | None`` shape web/org_session.py's own
     ``authenticated()`` already returns, so web/routes_approvals.py's merged
     route builder can treat both modes' auth gate identically (``resolve_principal(request)``,
@@ -345,7 +335,7 @@ def clear_session_cookie(response: Response) -> None:
 
 def _companion_availability_sentence() -> str:
     """Whether the reader can expect the companion to already be running,
-    which #428 Phase 4 changed -- differently per platform.
+    which privilege separation decides -- differently per platform.
 
     It reads as a whole sentence of its own between "open the companion" and
     what that buys, so each branch ends in one. On a separated macOS/Windows
@@ -368,7 +358,7 @@ def _companion_availability_sentence() -> str:
             "This install has no tray icon (ADR 0002 decision 4) -- the Applications-menu "
             "entry is the way in. "
         )
-    return "This install runs it at login for you (#428 Phase 4), so it should already be there. "
+    return "This install runs it at login for you, so it should already be there. "
 
 
 def unauthorized_html(request: Request) -> Response:
@@ -382,7 +372,7 @@ def unauthorized_html(request: Request) -> Response:
     This used to point readers at ``privacyfence.log`` for "the newest
     sign-in link PrivacyFence logged" -- advice that never worked and never
     will: daemon_main.py's startup log line embeds the link, but every
-    logger in the process is wrapped in SecretRedactingFormatter (SEC-10),
+    logger in the process is wrapped in SecretRedactingFormatter,
     whose key=value pattern matches the literal word ``bootstrap`` and
     scrubs the code to ``bootstrap=[REDACTED]`` before the line ever
     reaches a file or a terminal -- restarting PrivacyFence changed nothing
@@ -391,23 +381,22 @@ def unauthorized_html(request: Request) -> Response:
 
     This page also used to lead with "ask Claude", which called
     ``privacyfence_get_sign_in_link`` and handed the reader a link inside
-    the conversation. That tool is retired (the self-approval plan's Phase
-    2): it handed a live session credential to the party the credential
+    the conversation. That tool is retired: it handed a live session credential to the party the credential
     governs, and its own justification -- a headless daemon with an optional
     companion -- expired when ADR 0003 made the companion mandatory and
     autostarted on all three platforms.
 
-    So the page leads with the companion (#428 Phase 3, ADR 0002), which is
+    So the page leads with the companion (ADR 0002), which is
     also the only route to a session that may approve rather than merely
     view (``PROVENANCE_HUMAN`` above), and offers ``privacyfence-app
     --print-sign-in-link`` for a reader whose companion menu is out of
     reach. The discovery file this page used to point at -- the one
     ``web/server.py`` wrote a live link into on every startup -- is gone
-    with the same Phase 2 change, for the same reason the tool is: it sat
+    for the same reason the tool is: it sat
     in a group-shared directory, which made it a session for the taking.
     What is still spelled out last, for a reader who has neither of the
-    first two, is the control channel's own raw command (#428 Phase 2,
-    ``web/control_channel.py``) -- that one mints an unattested code, which
+    first two, is the control channel's own raw command
+    (``web/control_channel.py``) -- that one mints an unattested code, which
     is enough to see what is waiting. ``request`` is otherwise
     unused here: unlike the old bearer-header ``curl`` command, the control
     channel is a local socket/pipe, not another HTTP endpoint on this
@@ -418,8 +407,7 @@ def unauthorized_html(request: Request) -> Response:
     is resolved from the real, live directory this install uses
     (``~/.privacyfence`` on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on
     Windows -- see ``paths.data_dir()``'s own docstring). It needs no Python -- a packaged
-    install doesn't guarantee one on ``PATH`` any more than the pre-Phase-2
-    page's ``curl`` was guaranteed, so this leans on the same kind of
+    install doesn't guarantee one on ``PATH``, so this leans on the same kind of
     already-present OS tool instead: POSIX gets ``nc -U`` (the BSD ``nc``
     macOS ships, and the ``netcat-openbsd`` build Debian/Ubuntu's default
     ``nc`` symlinks to, both support connecting to a Unix domain socket via
@@ -428,7 +416,7 @@ def unauthorized_html(request: Request) -> Response:
     .NET runtime, so no extra install either)."""
     data_dir = paths.data_dir()
     # handoff_dir() for the address a *reader of this page* has to reach:
-    # #428 Phase 4 moved the control socket to a user-reachable
+    # privilege separation puts the control socket in a user-reachable
     # subdirectory on a privilege-separated install, and this page's whole
     # job is telling a locked-out human where to find it. Identical to
     # data_dir() everywhere else.
@@ -451,8 +439,8 @@ def unauthorized_html(request: Request) -> Response:
         # directory), which this
         # unauthenticated error page has no business triggering on every
         # hit. socket_path_under() is the pure half of that same logic.
-        # On a #428 Phase 4 install the socket isn't under ``authority`` at
-        # all (paths.control_socket_dir()) -- it moved to the handoff
+        # On a privilege-separated install the socket isn't under ``authority`` at
+        # all (paths.control_socket_dir()) -- it lives in the handoff
         # directory so a companion running as the human can still reach it.
         sock_root = handoff if privilege_separation.is_enabled() else data_dir / "authority"
         sock_path = socket_path_under(sock_root)
@@ -480,7 +468,7 @@ def unauthorized_html(request: Request) -> Response:
         f"border-radius:4px\">{command}</pre>"
         "</body></html>",
         status_code=401,
-        # SEC-18: this
+        # This
         # page carries a live control-channel path/pipe name (the exact
         # command a reader is meant to copy-paste) -- no-store even on the
         # 401 branch, not just the authenticated pages it stands in for.
@@ -495,9 +483,7 @@ def check_csrf(request: Request, csrf: str | None) -> bool:
     shim baked in at render time -- the session id itself doubles as the
     CSRF token, the same reasoning web/org_session.py's own check_csrf
     gives for why no separate per-session value needs to be minted and
-    tracked. Constant-time compare -- same posture ipc_server.py's own
-    token check took for ~/.privacyfence/ipc_token, before P5 deleted
-    both."""
+    tracked. Constant-time compare, so the check leaks no timing."""
     cookie = request.cookies.get(SESSION_COOKIE, "")
     if not cookie or not csrf:
         return False

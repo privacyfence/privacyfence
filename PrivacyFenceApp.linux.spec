@@ -8,7 +8,7 @@
 #   dist/PrivacyFenceApp/
 #     PrivacyFenceApp        ← daemon (main entry point; headless background process,
 #                                reachable only over its own embedded web approval/settings UI --
-#                                P10 retired the native menu bar/dialogs)
+#                                there is no native menu bar or dialog UI)
 #     privacyfence-app       ← symlink → PrivacyFenceApp (for daemon auto-start; the mcpb shim's
 #                                findDaemonCmd() and the .deb's autostart entry both look for
 #                                this name specifically)
@@ -97,7 +97,7 @@ daemon_exe = EXE(
     target_arch=None,
 )
 
-# ── companion (#428 Phase 3, ADR 0002) ────────────────────────────────────────
+# ── companion (ADR 0002) ────────────────────────────────────────────────
 # A second entry point of this same bundle, not a new build/signing path (ADR 0002 decision 4)
 # -- built from the same DATAS/HIDDEN_IMPORTS as the daemon above (pystray/Pillow aren't in
 # either list: Linux never imports them -- see companion.py's own module docstring -- so nothing

@@ -148,7 +148,7 @@ class TestResolvePath:
 
 
 # ---------------------------------------------------------------------------- #
-# _resolve_authority_path (#428 Phase 1)
+# _resolve_authority_path
 # ---------------------------------------------------------------------------- #
 
 class TestResolveAuthorityPath:
@@ -310,7 +310,7 @@ class TestLoadConfig:
 
 
 class TestLoadOrgConfig:
-    """SEC-04: three states, not two -- absent is the only case that's
+    """Three states, not two -- absent is the only case that's
     still allowed to silently resolve to {} (local mode); anything present
     but broken must raise org_mode.ConfigurationError instead of quietly
     collapsing into the same {} local-mode result absence gets."""
@@ -325,9 +325,9 @@ class TestLoadOrgConfig:
         assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
 
     def test_explicit_org_mode_unsigned_raises_configuration_error(self, tmp_path, monkeypatch):
-        """SEC-05 (full signing): org mode requires a signed bundle -- see
+        """Org mode requires a signed bundle (ADR 0016) -- see
         TestLoadOrgConfigSigning below for the signed-bundle path this
-        now gates behind."""
+        gates behind."""
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         (tmp_path / "org_config.json").write_text(json.dumps({"mode": "org"}))
         with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle"):
@@ -362,11 +362,10 @@ class TestLoadOrgConfig:
             daemon_main.load_org_config()
 
     def test_a_broken_org_config_does_not_silently_fall_back_to_local_mode(self, tmp_path, monkeypatch):
-        """The bug this whole finding is about: before SEC-04, a corrupted
-        org_config.json (e.g. tampering, a botched deploy, disk
-        corruption) was indistinguishable from no org config at all, so an
-        org-mode install would silently start with no IdP-backed auth
-        wired up rather than refusing to start."""
+        """A corrupted org_config.json (e.g. tampering, a botched deploy,
+        disk corruption) must not be indistinguishable from no org config
+        at all, or an org-mode install would silently start with no
+        IdP-backed auth wired up rather than refusing to start."""
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         (tmp_path / "org_config.json").write_text('{"mode": "org", corrupted')
         with pytest.raises(org_mode.ConfigurationError):
@@ -389,7 +388,7 @@ def _write_signed_bundle(tmp_path, bundle, private_key=None):
 
 
 class TestLoadOrgConfigSigning:
-    """SEC-05 (full signing): org_bundle_signing.verify_and_maybe_pin() is
+    """ADR 0016's signing layer: org_bundle_signing.verify_and_maybe_pin() is
     wired into every load_org_config() call -- trust-on-first-use of the
     first signed bundle an install ever sees, then mandatory verification
     against that pinned key for everything after."""
@@ -469,7 +468,7 @@ class TestLoadOrgConfigSigning:
 
 
 class TestLogOrgConfigBundleHash:
-    """SEC-05 (interim): a sha256 of the installed bundle logged (and
+    """ADR 0016's hash-log layer: a sha256 of the installed bundle logged (and
     audited) once per daemon startup, independent of whether it's signed
     -- see log_org_config_bundle_hash's own docstring for why this isn't
     folded into load_org_config() itself."""
@@ -524,7 +523,7 @@ class TestLogOrgConfigBundleHash:
 
 
 class TestAuditStepUpRequirementChange:
-    """#426 Phase 4: the audit half of webauthn_stepup.observe_step_up_
+    """The audit half of webauthn_stepup.observe_step_up_
     requirement -- see that function's own tests in
     tests/unit/test_webauthn_stepup.py for the state-transition logic
     itself; this only proves daemon_main.py turns a reported change into
@@ -558,7 +557,7 @@ class TestAuditStepUpRequirementChange:
 
 
 class TestGetOrCreateDeploymentId:
-    """SEC-23: a stable, opaque per-install id persisted once at
+    """A stable, opaque per-install id persisted once at
     data_dir()/deployment_id and reused across restarts."""
 
     def test_no_existing_file_creates_and_returns_a_new_id(self, tmp_path, monkeypatch):
@@ -613,10 +612,10 @@ class TestGetOrCreateDeploymentId:
 
 
 class TestCheckStoragePermissions:
-    """SEC-09's startup check: local mode warns and keeps starting, org
-    mode refuses to start -- same "detectable vs. preventable" split
-    SEC-05's interim hash-logging draws for a similarly upgrade-sensitive
-    finding."""
+    """The storage-permissions startup check: local mode warns and keeps
+    starting, org mode refuses to start -- same "detectable vs.
+    preventable" split the org bundle's startup hash log draws (ADR 0016)
+    for a similarly upgrade-sensitive problem."""
 
     def _patch_dirs(self, monkeypatch, tmp_path):
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
@@ -633,7 +632,7 @@ class TestCheckStoragePermissions:
         with caplog.at_level(logging.WARNING):
             daemon_main.check_storage_permissions(org_mode_active=False)
 
-        assert "SEC-09" not in caplog.text
+        assert "Insecure storage permissions" not in caplog.text
 
     def test_local_mode_logs_warning_but_does_not_raise(self, tmp_path, monkeypatch, caplog):
         self._patch_dirs(monkeypatch, tmp_path)
@@ -642,7 +641,7 @@ class TestCheckStoragePermissions:
         with caplog.at_level(logging.WARNING):
             daemon_main.check_storage_permissions(org_mode_active=False)  # must not raise
 
-        assert "SEC-09" in caplog.text
+        assert "Insecure storage permissions" in caplog.text
         assert str(tmp_path) in caplog.text
 
     def test_org_mode_raises_insecure_permissions_error(self, tmp_path, monkeypatch):
@@ -673,13 +672,13 @@ class TestCheckStoragePermissions:
         with caplog.at_level(logging.WARNING):
             daemon_main.check_storage_permissions(org_mode_active=False)
 
-        assert caplog.text.count("SEC-09") == 1
+        assert caplog.text.count("Insecure storage permissions") == 1
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="POSIX permission bits only -- Windows' half of #428 Phase 4 is NTFS ACLs, audited by windows_acl.py instead",
+        sys.platform == "win32", reason="POSIX permission bits only -- Windows' separated layout is NTFS ACLs, audited by windows_acl.py instead",
     )
     def test_separated_layout_is_not_audited_against_the_flat_0700_rule(self, tmp_path, monkeypatch, caplog):
-        # #428 Phase 4 makes two of these directories deliberately looser than
+        # Privilege separation makes two of these directories deliberately looser than
         # 0700 -- the system root 0711 so the logged-in user can traverse to
         # the handoff directory, and the handoff directory 3770 so two
         # accounts can hand each other a socket. Reporting the design as a
@@ -697,9 +696,9 @@ class TestCheckStoragePermissions:
         with caplog.at_level(logging.WARNING):
             daemon_main.check_storage_permissions(org_mode_active=True)  # must not raise
 
-        assert "SEC-09" not in caplog.text
+        assert "Insecure storage permissions" not in caplog.text
 
-    def test_separated_layout_problems_are_reported_under_sec_09(self, tmp_path, monkeypatch, caplog):
+    def test_separated_layout_problems_are_reported_by_the_startup_check(self, tmp_path, monkeypatch, caplog):
         # The separated layout gets its own audit instead -- including the one
         # a mode check can't see: authority/ still owned by the human.
         self._patch_dirs(monkeypatch, tmp_path)
@@ -713,7 +712,7 @@ class TestCheckStoragePermissions:
         with caplog.at_level(logging.WARNING):
             daemon_main.check_storage_permissions(org_mode_active=False)
 
-        assert "SEC-09" in caplog.text
+        assert "Insecure storage permissions" in caplog.text
         assert "owned by 'alice'" in caplog.text
 
 
@@ -876,10 +875,10 @@ class TestBuildConnectorsSlack:
             "user_cache_file": str(data_dir() / "slack_user_cache.json"),
             "channel_cache_file": str(data_dir() / "slack_channel_cache.json"),
         }
-        # Directory-cache warming no longer happens inline in
+        # Directory-cache warming does not happen inline in
         # build_connectors() -- it's kicked off separately, in the
         # background, by _warm_connector_caches() (see run_app()), so a
-        # large workspace's re-sync can't delay the menu bar icon.
+        # large workspace's re-sync can't delay startup.
         assert fake.directories_refreshed is False
 
     def test_skipped_when_org_config_absent(self, monkeypatch):
@@ -1107,7 +1106,7 @@ class TestBuildConnectorsTelegram:
             "chat_cache_file": str(data_dir() / "telegram_chat_cache.json"),
         }
         # Same as Slack (see TestBuildConnectorsSlack): directory-cache
-        # warming is no longer inline in build_connectors() for either
+        # warming is not inline in build_connectors() for either
         # connector -- it's kicked off separately, in the background, by
         # _warm_connector_caches() (see run_app()).
         assert fake.directories_refreshed is False
@@ -1204,8 +1203,8 @@ class TestBuildConnectorsCrossCutting:
 
 
 # ---------------------------------------------------------------------------- #
-# build_connectors: per-connector failure reasons (issue #396 Phase 1) --
-# the data model a later status meta-tool needs to tell "never set up" /
+# build_connectors: per-connector failure reasons -- the data model the
+# privacyfence_status meta-tool needs to tell "never set up" /
 # "auth expired" / an actual runtime error apart, instead of every un-built
 # connector looking identical.
 # ---------------------------------------------------------------------------- #
@@ -1230,7 +1229,7 @@ class TestClassifyConnectorFailure:
 
     def test_anything_else_falls_back_to_the_redacted_public_message(self):
         # GmailClientError isn't on safe_errors.PUBLIC_SAFE_EXCEPTION_TYPES
-        # (SEC-10 -- it routinely wraps a third-party HTTP body), so a real
+        # (it routinely wraps a third-party HTTP body), so a real
         # check_connection()-style failure redacts down to the generic
         # message rather than leaking whatever text it wrapped.
         exc = daemon_main.GmailClientError("token expired: Bearer ya29.abcdefgh12345678")
@@ -1545,9 +1544,10 @@ class TestMaybeStartWebServer:
     def test_require_passkey_with_nothing_enrolled_logs_a_warning_but_still_starts(
         self, monkeypatch, tmp_path, caplog,
     ):
-        # #426 Phase 3: "start, release nothing, and show a loud persistent
-        # banner -- rather than refusing to boot." This is the "loud" half
-        # aimed at the daemon's own log; web_shell.py's TestBanner/
+        # With a passkey required and none enrolled, the daemon starts,
+        # releases nothing, and shows a loud persistent banner rather than
+        # refusing to boot. This is the "loud" half aimed at the daemon's own
+        # log; web_shell.py's TestBanner/
         # test_routes_approvals.py's TestRequirePasskeyBanner cover the
         # human-facing half.
         #
@@ -1632,12 +1632,11 @@ class TestMaybeStartWebServer:
         assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
 
     def test_the_dispatcher_has_no_way_to_mint_a_sign_in_link(self, monkeypatch, tmp_path):
-        """The self-approval plan's Phase 2 retired
-        ``privacyfence_get_sign_in_link``, and with it the
-        ``set_bootstrap_link_provider`` wiring this call site used to do --
-        the seam that handed the /mcp dispatcher a way to mint a live
-        session. Asserted here, where the wiring lived, so reintroducing it
-        by accident fails rather than passes quietly."""
+        """No MCP tool may mint a sign-in credential (ADR 0013), so this
+        call site hands the /mcp dispatcher no ``set_bootstrap_link_provider``
+        seam, no way to mint a live session. Asserted here, at the call site
+        that would wire it, so reintroducing it by accident fails rather than
+        passes quietly."""
         self._no_bind(monkeypatch, tmp_path)
 
         result = daemon_main._maybe_start_web_server(
@@ -1648,9 +1647,8 @@ class TestMaybeStartWebServer:
         assert not hasattr(result.mcp_dispatcher, "set_bootstrap_link_provider")
 
     def test_mcp_dispatcher_defaults_to_local_mode(self, monkeypatch, tmp_path):
-        # privacyfence_status's own mode field (issue #396 Phase 2) --
-        # every call site in this class passes no org_config, so this must
-        # be "local", the byte-identical-to-before-P7 default.
+        # privacyfence_status's own mode field -- every call site in this
+        # class passes no org_config, so this must be "local", the default.
         self._no_bind(monkeypatch, tmp_path)
 
         result = daemon_main._maybe_start_web_server(
@@ -1669,8 +1667,8 @@ class TestMaybeStartWebServer:
         assert result.mcp_dispatcher is None
 
     # ------------------------------------------------------------------ #
-    # web.settings.enabled -- P4's own rollback lever (§16.6), independent
-    # of the approval surface (which, since P10, is always on).
+    # web.settings.enabled -- the settings UI's own off switch, independent
+    # of the approval surface (which is always on).
     # ------------------------------------------------------------------ #
 
     def _controller(self, tmp_path, monkeypatch):
@@ -1724,7 +1722,7 @@ class TestMaybeStartWebServer:
         assert result.controller is controller
 
     def test_wires_a_live_step_up_config_into_the_controller(self, monkeypatch, tmp_path):
-        # B9: SettingsController.enable_step_up is a no-op without this --
+        # SettingsController.enable_step_up is a no-op without this --
         # _maybe_start_web_server must hand the controller the same
         # LiveStepUpConfig it hands the server itself (see that method's
         # own docstring on why it needs to be the *same* object).
@@ -1760,7 +1758,7 @@ class TestMaybeStartWebServer:
         assert isinstance(controller._step_up, LiveStepUpConfig)
 
     def test_mcp_dispatcher_gets_the_controllers_connector_status_provider(self, monkeypatch, tmp_path):
-        # privacyfence_status's own connector view (issue #396 Phase 2) --
+        # privacyfence_status's own connector view --
         # wired to SettingsController.status_connectors alongside the
         # unattended-session listener above, so the tool reports the same
         # enabled/authenticated/blocked_by state the settings page does
@@ -1782,7 +1780,7 @@ class TestMaybeStartWebServer:
         assert rows["slack"]["blocked_by"] == "not_authenticated"
 
     def test_mcp_dispatcher_gets_wired_to_notify_the_controller_of_connector_changes(self, monkeypatch, tmp_path):
-        # issue #396 Part C: SettingsController.refresh_connectors() needs a
+        # SettingsController.refresh_connectors() needs a
         # way to reach McpDispatcher.notify_tools_changed once both objects
         # exist -- wired here alongside status_connectors above.
         self._no_bind(monkeypatch, tmp_path)
@@ -1951,7 +1949,7 @@ class TestMaybeStartWebServerOrgMode:
         assert registry.adaptive_hold is False
 
     def test_org_mode_without_idp_section_raises(self, monkeypatch, tmp_path):
-        # SEC-04's "org-mode-incomplete-IdP-or-server" case.
+        # An org config with an incomplete IdP or server section.
         self._no_bind(monkeypatch, tmp_path)
         with pytest.raises(org_mode.ConfigurationError):
             daemon_main._maybe_start_web_server(
@@ -1961,7 +1959,7 @@ class TestMaybeStartWebServerOrgMode:
             )
 
     def test_org_mode_without_server_section_raises(self, monkeypatch, tmp_path):
-        # SEC-04's "org-mode-incomplete-IdP-or-server" case.
+        # An org config with an incomplete IdP or server section.
         self._no_bind(monkeypatch, tmp_path)
         with pytest.raises(org_mode.ConfigurationError):
             daemon_main._maybe_start_web_server(
@@ -1971,8 +1969,8 @@ class TestMaybeStartWebServerOrgMode:
             )
 
     def test_org_mode_reports_org_in_the_status_tool(self, monkeypatch, tmp_path):
-        # privacyfence_status's own mode field (issue #396 Phase 2) --
-        # this is the one branch that must not default to "local".
+        # privacyfence_status's own mode field -- this is the one branch that
+        # must not default to "local".
         self._no_bind(monkeypatch, tmp_path)
         result = daemon_main._maybe_start_web_server(
             {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
@@ -1981,10 +1979,9 @@ class TestMaybeStartWebServerOrgMode:
         assert result.mcp_dispatcher.status("checking")["mode"] == "org"
 
     def test_no_org_config_defaults_to_local_mode(self, monkeypatch, tmp_path):
-        # The critical byte-identical-to-before-this-phase guarantee:
-        # omitting org_config entirely (every pre-P7 call site, and every
-        # existing install's real invocation until it opts into "mode":
-        # "org") must behave exactly like local mode always did.
+        # Omitting org_config entirely (every local-mode call site, and
+        # every install's real invocation until it opts into "mode": "org")
+        # must behave exactly like local mode.
         started = self._no_bind(monkeypatch, tmp_path)
         result = daemon_main._maybe_start_web_server(
             {"web": {"approval_ui": "web"}}, self._connector_host(), unattended_sessions_enabled=False,
@@ -1996,9 +1993,8 @@ class TestMaybeStartWebServerOrgMode:
 
 # ---------------------------------------------------------------------------- #
 # _start_org_web_server -- per-principal ConnectorRegistry wiring.
-# connector_registry.py's own ConnectorRegistry existed already but was never
-# plugged into org mode's
-# actual /mcp dispatch until now -- see that module's own docstring.
+# connector_registry.py's own ConnectorRegistry, as plugged into org mode's
+# actual /mcp dispatch -- see that module's own docstring.
 # ---------------------------------------------------------------------------- #
 
 class TestOrgModeConnectorRegistry:
@@ -2054,7 +2050,7 @@ class TestOrgModeConnectorRegistry:
         host = result.org.connector_registry.get(alice)
 
         assert "slack" in host.connectors
-        # bootstrapped on first use, per-principal -- under authority/ (#428 Phase 1)
+        # bootstrapped on first use, per-principal -- under authority/
         assert (alice_dir / "authority" / "config" / "settings.yaml").exists()
 
     def test_two_principals_get_independent_connector_sets(self, monkeypatch, tmp_path):
@@ -2470,12 +2466,10 @@ class _FakeWebServer:
 
 
 class TestRunApp:
-    """Through P9 run_app() ended by blocking inside menu_bar.run_menu_bar()
-    -- rumps/AppKit, macOS-only, and every test here had to be skipped
-    elsewhere. P10 deleted that host (§12, D6): run_app() now ends by
-    blocking on _wait_for_shutdown() (a plain threading.Event), so this
-    whole class is platform-independent and runs on the web/'s Linux CI leg
-    like every other class in this file."""
+    """run_app() ends by blocking on _wait_for_shutdown() (a plain
+    threading.Event), not inside a native UI run loop, so this whole class
+    is platform-independent and runs on the Linux CI leg like every other
+    class in this file."""
 
     def _patch_common(self, monkeypatch, connectors=None, *, web_server="__default__"):
         """``web_server`` controls what the (mocked) _maybe_start_web_server
@@ -2484,18 +2478,17 @@ class TestRunApp:
         about cache-warming specifically); ``None`` simulates the org-mode
         "no server built" case (see TestMaybeStartWebServerOrgMode for the
         real short-circuit this stands in for -- local mode always builds
-        one since P10); any other value is used as the loop a real, given
+        one); any other value is used as the loop a real, given
         _FakeWebServer.wait_until_ready() should return (itself ``None`` to
         simulate a loop that never became ready in time).
 
-        Also stubs _wait_for_shutdown() to return immediately (the direct
-        successor of stubbing menu_bar.run_menu_bar() to a no-op pre-P10)
-        and _run_update_check_timer() to a no-op (real SettingsController
+        Also stubs _wait_for_shutdown() to return immediately and
+        _run_update_check_timer() to a no-op (real SettingsController
         instances aren't otherwise configured with a mocked check_for_update
         in this class -- see test_settings_controller.py's own controller
         fixture for that -- so the real timer thread must not run here).
 
-        Every call this phase's own run_app() makes into
+        Every call run_app() makes into
         _maybe_start_web_server is recorded on
         ``self._web_server_calls`` -- what
         TestUnattendedSessionsConfig below reads instead of the old
@@ -2524,11 +2517,10 @@ class TestRunApp:
         return fake_audit_logger
 
     def test_lock_already_held_returns_0_without_building_connectors(self, monkeypatch, capsys, caplog):
-        # Exit 0, not 1: Windows' autostart task (Phase 13) re-launches this
-        # daemon on a repeating trigger as its real crash-restart mechanism,
-        # so finding an instance already running is the expected outcome on
-        # every tick but the one that actually needed a relaunch -- not a
-        # failure Task Scheduler should log as one. Logged at INFO rather
+        # Exit 0, not 1: whatever re-launches this daemon (a service
+        # manager, an autostart entry, a human running it again) finds an
+        # instance already running as an expected outcome, not a failure
+        # the service manager should log as one. Logged at INFO rather
         # than ERROR for the same reason; the stderr message stays for a
         # human running the CLI a second time.
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: False)
@@ -2594,10 +2586,11 @@ class TestRunApp:
         assert warm_calls[0][1] is loop
 
     def test_org_mode_refuses_to_start_over_insecure_storage_permissions(self, tmp_path, monkeypatch):
-        """SEC-09: wired into run_app() right after org_config is loaded --
-        raises before build_connectors()/the web server ever get a chance
-        to run, same "fail fast, before anything else stands up" posture
-        SEC-04's ConfigurationError already has for a broken org config."""
+        """The storage-permissions check is wired into run_app() right after
+        org_config is loaded -- raises before build_connectors()/the web
+        server ever get a chance to run, same "fail fast, before anything
+        else stands up" posture the ConfigurationError for a broken org
+        config already has."""
         from privacyfence.secure_files import InsecurePermissionsError
 
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -2621,7 +2614,7 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         # Simulates org mode's own "mcp.enabled off" short circuit (see
         # TestMaybeStartWebServerOrgMode) -- local mode always builds a
-        # server since P10, but run_app() itself doesn't care which mode
+        # server, but run_app() itself doesn't care which mode
         # produced None here.
         self._patch_common(monkeypatch, web_server=None)
         warm_calls = []
@@ -2693,11 +2686,11 @@ class TestRunApp:
         assert "file_metadata" not in caplog.text
 
     def test_malformed_privacy_filter_config_refuses_to_start(self, monkeypatch):
-        # SEC-07: a typo'd default_policy must fail closed, not silently
+        # A typo'd default_policy must fail closed, not silently
         # downgrade to "allow" -- run_app() propagates
         # PrivacyFilterConfigError (a ValueError) all the way out, same
-        # "print and refuse to start" path SEC-04's org_mode.
-        # ConfigurationError already takes via main()'s top-level catch.
+        # "print and refuse to start" path org_mode.ConfigurationError
+        # already takes via main()'s top-level catch.
         from privacyfence.privacy_filter import PrivacyFilterConfigError
 
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -2712,7 +2705,7 @@ class TestRunApp:
         sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py, just surfacing through the org-mode startup check instead of a direct stat() assertion",
     )
     def test_org_mode_passes_org_managed_through_to_privacy_filter(self, monkeypatch):
-        # SEC-07: an org-managed install's genuinely-absent privacy groups
+        # An org-managed install's genuinely-absent privacy groups
         # should fail closed to "block", not inherit local mode's "allow".
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
@@ -2798,15 +2791,12 @@ class TestRunApp:
         assert auto_accept.get_policy_v2_store_rules() == policy_store.compile_rules_from_config(config)
 
     def test_stale_rule_suggestion_priority_key_is_silently_ignored(self, monkeypatch, tmp_path, caplog):
-        # Issue #151 retired the settings.yaml-configurable
-        # rule_suggestion_priority (every matching auto-accept rule now gets
-        # its own "Always allow" button, so there's nothing left to
-        # prioritize or exclude). The dedicated "ignoring this key" log
-        # notice that once called this out by name was itself removed -- a
-        # pre-existing rule_suggestion_priority block in a user's
-        # settings.yaml must still load without error, now via the same
-        # silent "unknown key is inert" handling as any other retired key,
-        # not a dedicated call-out.
+        # rule_suggestion_priority is not a setting (every matching
+        # auto-accept rule gets its own "Always allow" button, so there's
+        # nothing to prioritize or exclude). A rule_suggestion_priority
+        # block in a user's settings.yaml must still load without error,
+        # through the same silent "unknown key is inert" handling as any
+        # other unrecognized key, not a dedicated call-out.
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)
@@ -2868,7 +2858,7 @@ class TestRunApp:
 
 
 class TestAuditForwardingWiring:
-    """SEC-23: run_app() only builds an AuditForwarder when org mode's
+    """run_app() only builds an AuditForwarder when org mode's
     audit_forwarding config is both enabled and actually running in org
     mode -- local mode (or an org_config with mode: local) never forwards,
     whatever the section says."""
@@ -3158,7 +3148,7 @@ class TestMain:
         assert "Fatal error" in capsys.readouterr().err
 
     def test_refuses_to_start_as_the_wrong_account_on_a_separated_install(self, monkeypatch, capsys):
-        # #428 Phase 4. This runs before load_config(), and has to: on a
+        # This runs before load_config(), and has to: on a
         # separated install started as the logged-in user, settings.yaml is
         # unreadable under the service-owned authority directory and
         # load_config()'s own first-run path would seed a fresh default over
@@ -3302,9 +3292,9 @@ class TestLoadPrincipalSettings:
         assert "migrated_to_policy_v2" not in on_disk
 
     def test_populates_the_privacy_filter_registry_for_the_principal(self, tmp_path, monkeypatch):
-        """#400 Phase 0: before this fix, privacy_filter._REGISTRY kept its
-        default empty-dict entry for every principal but whichever one a
-        local-mode run_app() happened to call init_privacy_filter() for --
+        """Without this, privacy_filter._REGISTRY would keep its default
+        empty-dict entry for every principal but whichever one a local-mode
+        run_app() happened to call init_privacy_filter() for --
         category_policy()'s own "group absent from the registry" fallback is
         a hardcoded "allow", the opposite of org mode's intended fail-closed
         "block" default. Every org principal must get a real registry entry,
@@ -3357,13 +3347,13 @@ class TestLoadPrincipalSettings:
         assert bob_policy == "block"
 
     def test_seeds_the_pii_gate_from_the_install_wide_config(self, tmp_path, monkeypatch):
-        """#400 C3e: the same omission as the privacy-filter one above, in
-        pii_detector. Its _REGISTRY is a PrincipalRegistry too and run_app()
-        is the only caller of init_pii_detection() there has ever been, so
-        an org principal got a default-constructed _PiiState -- detection
-        on, both optional categories on -- regardless of what the install's
+        """The same hazard as the privacy-filter one above, in pii_detector.
+        Its _REGISTRY is a PrincipalRegistry too and run_app() is the only
+        caller of init_pii_detection(), so without seeding an org principal
+        would get a default-constructed _PiiState -- detection on, both
+        optional categories on -- regardless of what the install's
         settings.yaml said. Harmless on its own (that default detects more,
-        not less), but not something a page that now *edits* this value can
+        not less), but not something a page that *edits* this value can
         ship on top of."""
         from privacyfence import pii_detector
         from privacyfence.principal import Principal, principal_scope
@@ -3388,10 +3378,9 @@ class TestLoadPrincipalSettings:
 
 
 class TestPrintSignInLink:
-    """The self-approval plan's Phase 2 break-glass path: a sign-in link
-    printed in the human's own terminal, never handed to the agent. It
-    replaces ``privacyfence_get_sign_in_link``, which handed exactly this
-    credential to the party the credential governs.
+    """The break-glass path: a sign-in link printed in the human's own
+    terminal, never handed to the agent -- no MCP tool may mint this
+    credential for the party it governs (ADR 0013).
 
     The confirmation dialog itself belongs to the companion process and is
     tested there (tests/unit/web/test_control_channel.py); what is exercised

@@ -14,21 +14,27 @@ URIs; see that directory's fonts/OFL.txt for licensing) are vendored into
 vendored local ``@font-face`` -- this document must never trigger a network
 fetch just to render a popup.
 
+The left column stacks up to four cards, top to bottom: the action card
+("Action to perform" on a write, "What Claude already knows" on a read),
+the reason card ("Why Claude is doing this" / "Why Claude needs more
+data"), the PII or content-flag risk card, and the disclosure card ("What
+will be provided to Claude").
+
 Sections carry a label and no number. Which sections render varies by tool
-and by direction -- §3 ("What will be provided to Claude") only ever renders
+and by direction -- the disclosure card only ever renders
 for a review-gate call carrying a ``visibility`` dict (see
 ``disclosure_rows`` below), and the risk card never renders at all without a
-match -- so a number could only ever have been a running count of what
-happened to be on *this* card. It was: the PII card read "03" on a write
-gate and on a read gate whose §3 was absent, and "04" otherwise.
+match -- so a number could only ever be a running count of what
+happened to be on *this* card: the PII card would read "03" on a write
+gate and on a read gate with no disclosure card, and "04" otherwise.
 
 That is the wrong thing to number. A reviewer who sees dozens of these
 cannot learn a position when "03" is the PII gate on one and the disclosure
-list on the next, and the ordering the numbers appeared to give is already
-given by the vertical stack. The labels carry the meaning; the numbers only
-carried a false promise that the meaning was stable.
+list on the next, and the ordering the numbers would give is already
+given by the vertical stack. The labels carry the meaning; numbers would
+only carry a false promise that the meaning was stable.
 
-§3's rows are real values (the same rendering as §1's ``.pf-kv`` rows, just
+The disclosure card's rows are real values (the same rendering as the action card's ``.pf-kv`` rows, just
 meaning "new to Claude" instead of "already known"), not an abstract policy
 summary -- "What will be provided to Claude" should show what will actually
 be provided. ``disclosure_rows`` accepts either: literal (label, real value)
@@ -42,7 +48,7 @@ controller decides which source to use per call (its ``new_info`` vs
 
 NARROW layout has no preview pane at all -- not a smaller version of WIDE's,
 genuinely absent. A tool gets WIDE only when it has real free-text body
-content §1-§4's fixed-row-per-field format can't represent (email/message
+content the left-column cards' fixed-row-per-field format can't represent (email/message
 bodies, ticket descriptions, page content, sheet cell values, uploaded file
 content); everything else is NARROW. Every row in every section is a fixed
 size regardless of actual value length (see styles.css's .pf-kv/.pf-quote
@@ -136,14 +142,14 @@ BODY_PADDING_BOTTOM = 24
 BODY_VERTICAL_PADDING = BODY_PADDING_TOP + BODY_PADDING_BOTTOM
 
 # WIDE's left column width -- deliberately narrower than a full 550px
-# single-column tool's content width, giving §1-§4's rows enough room without
+# single-column tool's content width, giving the left-column cards' rows enough room without
 # pushing the window's overall width past what comfortably fits on a
 # scaled-resolution laptop display (a symmetric 550/550 split would need an
 # ~1200px window, too wide for common 1280/1440-logical-point MacBook
 # screens).
 _WIDE_LEFT_COLUMN_WIDTH = 420
 
-# §3's generic allow/redact/block -> disclosure-sentence mapping. A
+# The disclosure card's generic allow/redact/block -> disclosure-sentence mapping. A
 # deliberate, generic rule rather than hand-authored per-tool prose -- see
 # this module's docstring for why the exact wording isn't tool-specific.
 _DISCLOSURE_ALLOW = "Full {label_lower}"
@@ -182,7 +188,7 @@ def disclosure_rows_from_visibility(
     visibility: dict[str, str], *, agent_display_name: str = NEUTRAL_SUBJECT,
 ) -> list[tuple[str, str]]:
     """Translate the existing ``{label: allow/redact/block}`` policy dict
-    (privacy_filter.category_policy()'s ground truth, unchanged) into §3's
+    (privacy_filter.category_policy()'s ground truth, unchanged) into the disclosure card's
     plain "what's disclosed" sentence per field (prose, not per-row icons),
     even though the exact wording here is generic rather than hand-tuned
     per tool (see module docstring). Pure function, order-preserving."""
@@ -360,9 +366,10 @@ def build_preview_body_html(
     prose or a simple table-only list don't need this -- ``details_text``/
     ``tables`` alone still cover those without the extra structure.
 
-    No content_kind="email" structured header here: under the §1/§3
-    knowledge-boundary split, From/Subject/Date already render as §1 rows
-    and To as a §3 row, so
+    No content_kind="email" structured header here: under the
+    knowledge-boundary split between the action card and the disclosure
+    card, From/Subject/Date already render as action-card rows and To as a
+    disclosure-card row, so
     repeating them a second time atop the body would just be duplication --
     the right pane is plain body text for every WIDE tool, email included.
 
@@ -487,7 +494,7 @@ def _card(kicker: str, inner_html: str, *, style: str = "", kicker_color: str = 
     )
 
 
-# §1/§2's kicker color for a write dialog -- read stays the plain
+# The action and reason cards' kicker color for a write dialog -- read stays the plain
 # .card-kicker default (var(--color-accent), teal); write gets the same
 # accent-2 (magenta) family the pill/rail already use, so the two kinds
 # of dialog read as visually distinct at the section-header level too,
@@ -508,9 +515,9 @@ def _section_1_html(is_read: bool, preview: dict[str, str], agent_display_name: 
 def _section_2_html(is_read: bool, claude_reason: str, agent_display_name: str) -> str:
     if not claude_reason:
         return ""
-    # §2 always shows Claude's stated *reason* (the quote below), on both
+    # The reason card always shows Claude's stated *reason* (the quote below), on both
     # read and write. "Why Claude is doing this" matches what's actually
-    # on screen -- the real write payload lives in §1/the right pane, not
+    # on screen -- the real write payload lives in the action card/the right pane, not
     # here -- same as read's "Why Claude needs more data".
     kicker = (
         f"Why {agent_display_name} needs more data" if is_read
@@ -767,9 +774,9 @@ def build_card_stack_html(
     Pure function -- no AppKit, no filesystem access beyond the module-level
     styles.css already read at import time -- directly unit-testable.
 
-    ``layout`` is ``NARROW`` (§1-§4 only, no preview pane at all --
+    ``layout`` is ``NARROW`` (the left-column cards only, no preview pane at all --
     ``preview_kicker``/``preview_body_html`` are ignored entirely) or
-    ``WIDE`` (§1-§4 in a fixed-width left column, plus a genuine
+    ``WIDE`` (the same cards in a fixed-width left column, plus a genuine
     independently-scrolling right-hand preview pane). Callers decide which
     per tool -- see module docstring for the criterion (real free-text body
     content vs. everything else) and approval_window.py's ``layout``
@@ -780,10 +787,10 @@ def build_card_stack_html(
     Containment is pure CSS flexbox, not a Python-computed pixel cap --
     ``<body>`` is ``height:100vh`` (the WKWebView's own real native frame,
     not an estimate of it) and ``display:flex;flex-direction:column``. The
-    left column (header/§1/§2/risk-card/§3, all of it) is one
+    left column (header, action, reason, risk and disclosure cards, all of it) is one
     ``flex:1;min-height:0;overflow-y:auto`` region -- a single shared
     scrollbar spans the whole column when its content is taller than the
-    real available height, rather than only §3 growing its own internal
+    real available height, rather than only the disclosure card growing its own internal
     one below an always-visible pinned block. For WIDE, the right-hand
     preview pane gets the identical treatment (its own independent
     ``flex:1;min-height:0;overflow-y:auto``) as a sibling of the left
@@ -807,16 +814,17 @@ def build_card_stack_html(
     be exactly right for containment to hold.
 
     Trade-off worth knowing: because the left column is one shared scroll
-    region, §1/§2/the PII-or-content-flag risk card are *not* guaranteed to
-    stay on screen if the column's total content is taller than the
-    window -- scrolling to read the rest of §3 also scrolls them out of
-    view. The alternative (pinning those cards and only letting §3 scroll
+    region, the action card, the reason card and the PII-or-content-flag
+    risk card are *not* guaranteed to stay on screen if the column's total
+    content is taller than the window -- scrolling to read the rest of the
+    disclosure card also scrolls them out of view. The alternative
+    (pinning those cards and only letting the disclosure card scroll
     internally) trades this for a different problem: a short,
-    visually-inconsistent internal scrollbar confined to §3's own card
+    visually-inconsistent internal scrollbar confined to the disclosure card
     whenever the pinned block above it takes up most of the available
     height. This module takes the one-shared-scrollbar trade-off instead,
     matching the right pane's own full-height scrollbar treatment. The
-    risk card still renders *before* §3 (not after) for the same reason as
+    risk card still renders *before* the disclosure card (not after) for the same reason as
     always: it's the highest-consequence card, so it's the first thing
     scrolled past on the way down, not the last.
 
@@ -839,7 +847,7 @@ def build_card_stack_html(
     The whole button row is appended last, after ``temp_accept_text``'s own
     caption when present.
 
-    ``nonce`` (SEC-08, see module-level note above): the CSP nonce baked
+    ``nonce`` (see the Content-Security-Policy note above): the CSP nonce baked
     into this document's own ``<style>``/``<script>`` tags. Callers building
     a genuinely new document leave this ``None`` and get a fresh
     cryptographically random one; a caller re-rendering (never happens
@@ -849,7 +857,8 @@ def build_card_stack_html(
     ``agent_label`` (agent_label.label_for()) is who is asking and how
     strongly that is known. The header shows it in its tier's own treatment
     (``_agent_html``), and its ``subject`` is the name the card's own copy
-    uses for the caller -- §1/§2/§3's kickers and §2's attribution line (see
+    uses for the caller -- the action, reason and disclosure cards' kickers and
+    the reason card's attribution line (see
     AGENT_PLACEHOLDER). ``None`` renders as unknown, never as "Claude".
     ``agent_icon_data_uri`` is drawn only for the attested tier, whatever a
     caller passes. Everything from the label is rendered escaped.
@@ -860,8 +869,8 @@ def build_card_stack_html(
         agent_label = UNKNOWN_AGENT_LABEL
     agent_display_name = agent_label.subject
     width = CONTENT_WIDTH[layout]
-    pinned_html = []  # header, §1, §2, risk card -- always fully visible
-    scrollable_html = []  # §3 alone -- the only card that ever scrolls
+    pinned_html = []  # header, action card, reason card, risk card -- always fully visible
+    scrollable_html = []  # the disclosure card alone -- the only card that ever scrolls
 
     sec1 = _section_1_html(is_read, preview, agent_display_name)
     if sec1:
@@ -871,7 +880,7 @@ def build_card_stack_html(
     if sec2:
         pinned_html.append(sec2)
 
-    # Pinned, and placed *before* §3 -- the highest-consequence card must
+    # Pinned, and placed *before* the disclosure card -- the highest-consequence card must
     # never end up scrolled out of view, and reads that way too: right
     # after "why Claude needs this," before the disclosure detail.
     if pii_categories:
@@ -885,7 +894,7 @@ def build_card_stack_html(
         pinned_html.append(risk_html)
 
     if is_read:
-        # Write-gate calls never get §3 at all.
+        # Write-gate calls never get a disclosure card at all.
         sec3 = _section_3_html(disclosure_rows, agent_display_name)
         if sec3:
             scrollable_html.append(sec3)
@@ -896,13 +905,15 @@ def build_card_stack_html(
     )
     pinned_joined = "".join(pinned_html)
     scrollable_joined = "".join(scrollable_html)
-    # The whole left column -- header/§1/§2/risk-card *and* §3 together --
-    # is one shared scroll region, not split into an always-visible pinned
-    # part plus a separately-scrolling §3. See this function's own
-    # docstring for the trade-off this accepts (PII/§1/§2 can scroll out of
-    # view alongside §3 in an extreme case) in exchange for one scrollbar
-    # that visually spans the whole column, matching the right pane's own
-    # full-height one, instead of a short one confined to just §3's card.
+    # The whole left column -- header, action, reason and risk cards *and*
+    # the disclosure card together -- is one shared scroll region, not
+    # split into an always-visible pinned part plus a separately-scrolling
+    # disclosure card. See this function's own docstring for the trade-off
+    # this accepts (the risk, action and reason cards can scroll out of
+    # view alongside the disclosure card in an extreme case) in exchange
+    # for one scrollbar that visually spans the whole column, matching the
+    # right pane's own full-height one, instead of a short one confined to
+    # just the disclosure card.
     left_column_content = header_html + pinned_joined + scrollable_joined
 
     if layout == WIDE:

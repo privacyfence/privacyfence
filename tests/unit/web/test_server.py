@@ -1,5 +1,5 @@
 """Tests for web/server.py -- the Host allowlist and security-header
-middleware, and the SEC-06 bootstrap flow that authenticates a browser.
+middleware, and the bootstrap-code flow that authenticates a browser.
 Covers the Host allowlist against DNS rebinding, CSP/X-Frame-Options,
 Cache-Control -- the last one is per-route, tested in test_routes_approvals.py
 instead.
@@ -70,8 +70,8 @@ class TestHostAllowlist:
         assert r.status_code == 200
 
     def test_ipv6_literal_host_matches_after_stripping_brackets(self):
-        # SEC-17: the old split(":", 1)[0] returned "[" for this, which
-        # could never be in any real allowlist.
+        # A naive split(":", 1)[0] returns "[" for this, which could never
+        # be in any real allowlist.
         client = self._client(allowed_hosts=frozenset({"::1"}))
         r = client.get("/approvals", headers={"Host": "[::1]"})
         assert r.status_code == 200
@@ -133,7 +133,7 @@ class TestParseHostHeader:
 
 
 class TestPrincipalScopeMiddleware:
-    """P6: entered once per HTTP request, in exactly one place, for the
+    """Entered once per HTTP request, in exactly one place, for the
     browser surface -- proves
     the ASGI wiring actually scopes a real request (and only that request),
     not just that principal_scope() itself works (that's test_principal.py's
@@ -316,7 +316,6 @@ class TestSecurityHeaders:
         assert r.headers.get("x-frame-options") == "DENY"
 
     def test_permissions_policy_denies_unused_powerful_features(self):
-        # SEC-18.
         r = self._client().get("/approvals")
         policy = r.headers.get("permissions-policy", "")
         assert "camera=()" in policy
@@ -344,7 +343,7 @@ class TestSecurityHeaders:
 
 
 class TestCacheControlOnSensitivePages:
-    """SEC-18: a sweep across every local-mode page that carries session-
+    """A sweep across every local-mode page that carries session-
     or approval-specific content, rather than trusting that each route author remembered
     Cache-Control: no-store on their own -- a future new page that forgets
     it fails here instead of shipping silently cacheable."""
@@ -370,8 +369,7 @@ class TestCacheControlOnSensitivePages:
 
     def test_the_unauthorized_landing_page_is_no_store(self):
         # Regression test: this page names a live bearer-secret command
-        # (session_auth.unauthorized_html) and, before SEC-18, shipped with
-        # no Cache-Control header at all.
+        # (session_auth.unauthorized_html), so it must never be cached.
         app = build_app(WebApprovalUI())
         r = TestClient(app, base_url="http://localhost").get("/approvals")
         assert r.status_code == 401
@@ -379,7 +377,8 @@ class TestCacheControlOnSensitivePages:
 
 
 class TestCspNonce:
-    """SEC-08."""
+    """A fresh CSP nonce per response, matching the one in the document
+    (ADR 0063)."""
 
     def _client(self):
         sessions = LocalSessionStore()
@@ -424,10 +423,9 @@ class TestCspNonce:
 
 
 class TestSecurityHeadersMiddlewareReplacesNotExtends:
-    """SEC-08: the middleware used to blindly append its fixed header set,
-    which would have emitted
-    *two* headers of the same name if the wrapped app already set one of
-    them -- this proves it overrides instead."""
+    """Blindly appending the middleware's fixed header set would emit *two*
+    headers of the same name if the wrapped app already set one of them --
+    this proves it overrides instead."""
 
     async def _app(self, scope, receive, send):
         response = JSONResponse({"ok": True}, headers={
@@ -499,7 +497,7 @@ class TestWebServerConstruction:
 
 
 # --------------------------------------------------------------------------- #
-# #428 Phase 2: WebServer owns a ControlChannelServer alongside the ASGI app
+# WebServer owns a ControlChannelServer alongside the ASGI app
 # in local mode -- test_control_channel.py covers the channel's own protocol
 # and socket handling; this is just the wiring (built in __init__, started/
 # stopped alongside the rest of WebServer's own lifecycle).
@@ -512,7 +510,7 @@ class TestWebServerControlChannel:
         assert server.control_channel.address is None  # not started yet
 
     def test_local_mode_wires_a_status_callback(self, monkeypatch):
-        # The local-mode-fixes plan's Phase 2: daemon_status.py's "the
+        # daemon_status.py's "the
         # control channel answered" source is this callback, wired to
         # local_status_payload() -- checked here rather than only through a
         # real round trip, since TestWebServerControlChannel's other tests
@@ -674,13 +672,14 @@ class TestWebServerControlChannel:
 
 
 class TestHumanSessionWiring:
-    """The self-approval plan's Phase 2, at the one place that decides
+    """The human-session gate, at the one place that decides
     whether the gate is on: privilege separation. It is what ADR 0003 makes
     mandatory for every packaged install (decision 6), and what guarantees
     the companion an attested session is minted through exists at all
     (decisions 3-5) -- on an unseparated build-from-source install neither
     holds, and an agent that can rewrite the credential store directly (ADR
-    0002 decision 6) gains nothing from a session check anyway.
+    0002 decision 6) gains nothing from a session check anyway. ADR 0062
+    records the gate itself.
 
     The decide route's own behavior is web/routes_approvals.py's to test
     (TestHumanSessionRequiredToApprove there); what is checked here is that
@@ -730,7 +729,7 @@ class TestBootstrapFlow:
         assert "pf_session" in r.headers.get("set-cookie", "")
 
     def test_the_session_inherits_the_code_s_own_provenance(self):
-        """The self-approval plan's Phase 2: the mint is the only moment
+        """The mint is the only moment
         anything knew how this credential came to exist (web/session_auth.py's
         ``PROVENANCE_*``), so the exchange carries it across rather than
         deciding it here."""
@@ -786,8 +785,8 @@ class TestBootstrapFlow:
         assert "Nothing is waiting" in r.text
 
     def test_the_old_token_query_param_no_longer_authenticates(self):
-        # SEC-06's whole point: ?token=<the old persistent secret> was never
-        # honored by any route, only ?bootstrap=<one-time code>.
+        # No route honors a ?token=<persistent secret>, only
+        # ?bootstrap=<one-time code>.
         app, _sessions, _bootstrap = self._app()
         client = TestClient(app, base_url="http://localhost")
 
@@ -796,9 +795,9 @@ class TestBootstrapFlow:
         assert r.status_code == 401
 
     def test_api_bootstrap_no_longer_exists_as_an_http_route(self):
-        # #428 Phase 2: minting a fresh code on demand moved off this
-        # loopback-HTTP surface entirely, onto web/control_channel.py's
-        # ControlChannelServer -- there is no HTTP route left to authenticate
+        # Minting a fresh code on demand is not on this loopback-HTTP
+        # surface at all but on web/control_channel.py's
+        # ControlChannelServer -- there is no HTTP route to authenticate
         # at all, correct or incorrect Bearer header alike.
         app, _sessions, _bootstrap = self._app()
         client = TestClient(app, base_url="http://localhost")
@@ -865,9 +864,8 @@ class TestNoBootstrapUrlFiles:
 
 
 # --------------------------------------------------------------------------- #
-# D11: the mcp_url discovery file mcpb/shim reads to find /mcp without any
-# config the user has to edit -- the direct successor of ipc.py's
-# PORT_FILE. Only written/cleared
+# The mcp_url discovery file mcpb/shim reads to find /mcp without any
+# config the user has to edit. Only written/cleared
 # when this WebServer actually has an mcp_dispatcher (i.e. web.mcp.enabled);
 # a server started for the approval UI alone must not claim /mcp exists.
 # --------------------------------------------------------------------------- #
@@ -914,11 +912,11 @@ class TestMcpUrlFile:
 
 
 # --------------------------------------------------------------------------- #
-# §10.3's audience separation: the MCP bearer token and the approval
+# Audience separation (ADR 0061): the MCP bearer token and the approval
 # surface's session cookie/CSRF token are different secrets, checked in
 # different middleware, and neither is ever accepted on the other's routes.
-# The one test in this class required to "fail loudly if the middleware is
-# ever reordered" (§10.3/§13).
+# One test in this class is there to fail loudly if the middleware is ever
+# reordered.
 # --------------------------------------------------------------------------- #
 
 class TestAudienceSeparation:
@@ -952,7 +950,7 @@ class TestAudienceSeparation:
         assert resp.status_code != 401
 
     def test_capability_routes_need_no_bearer_token_at_all(self):
-        # Phase 4: /mcp-files/slots/<token> and /mcp-files/fetch/<token>
+        # ADR 0028: /mcp-files/slots/<token> and /mcp-files/fetch/<token>
         # are mounted alongside /mcp and /mcp-files/uploads|downloads, but
         # deliberately outside the bearer-auth stack -- a malformed/unknown
         # token is a 404 (the route exists, the token just isn't live),
@@ -984,7 +982,7 @@ class TestAudienceSeparation:
 
 
 # --------------------------------------------------------------------------- #
-# P4: /settings and /api/state/stream folded into the same combined app,
+# /settings and /api/state/stream folded into the same combined app,
 # sharing the approval surface's own session -- see build_app()'s own docstring for why
 # this is the deliberate contrast with MCP's separate audience.
 # --------------------------------------------------------------------------- #
@@ -1039,7 +1037,7 @@ class TestSettingsFoldedIntoTheCombinedApp:
     # fully-buffering client.get() can't drive an endless SSE response
     # without hanging). Only the auth boundary -- which short-circuits
     # before the generator is ever entered -- is exercised here; the real
-    # streaming behavior is what P0/P1's manual Chromium checks cover.
+    # streaming behavior needs a real browser to observe.
 
     def test_state_stream_requires_auth(self):
         from privacyfence.web.state_stream import StateStream
@@ -1061,9 +1059,9 @@ class TestSettingsFoldedIntoTheCombinedApp:
 
 
 class TestStateStreamTouchesItsOwnSession:
-    """Issue #423: ``_state_stream_route`` used to authenticate once, at
-    connect time, and never touch the session again for the life of the
-    connection -- a tab watching it past the idle timeout got evicted
+    """``_state_stream_route`` must not authenticate only once, at connect
+    time, and never touch the session again for the life of the
+    connection -- a tab watching it past the idle timeout would be evicted
     anyway. Driving the route's generator directly (same reasoning
     TestSettingsFoldedIntoTheCombinedApp gives above for not going through
     a real GET) proves the ``touch`` callback threaded into
@@ -1320,7 +1318,7 @@ class TestLocalModeWiresTheFirstEnrollmentGate:
 
 
 class TestLocalEnrollmentState:
-    """Plan item 1.2's daemon-side answer: the one question the companion
+    """The first-enrollment offer's daemon-side answer: the one question the companion
     cannot answer for itself, because on a separated install the credential
     store is unreadable to the logged-in user."""
 
@@ -1368,7 +1366,7 @@ class TestLocalEnrollmentState:
 
 
 class TestLocalStatusPayload:
-    """The local-mode-fixes plan's Phase 2: the daemon's own answer to the
+    """The daemon's own answer to the
     companion's ``STATUS`` command."""
 
     def _server_module(self):
@@ -1423,8 +1421,8 @@ class TestLocalStatusPayload:
 
 
 class TestRecoveryCodeDelivery:
-    """Plan item 1.3: a credential-store reset token stops being a value a
-    process holding a ``pf_session`` can read out of an HTTP response."""
+    """A credential-store reset token is never a value a process holding a
+    ``pf_session`` can read out of an HTTP response."""
 
     def _server_module(self):
         from privacyfence.web import server as srv

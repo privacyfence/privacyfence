@@ -549,7 +549,7 @@ class SlackConnector(Connector):
         messages = await self._fetch(self._slack.search_messages, query, count, participant, days)
         n = len(messages)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
-        # Query/participant are Claude's own input (kept in §1 as
+        # Query/participant are Claude's own input (kept in the preview as
         # identifying context, same reasoning as drive_sheets_get_values's
         # Range); Results (count) is only learned once this call is approved.
         preview: dict[str, str] = {}
@@ -565,7 +565,7 @@ class SlackConnector(Connector):
         ]
         details = "\n".join(lines)
         # Search results span channels, unlike channel_history/thread_replies
-        # (already fixed to one channel in §1), so the table needs an
+        # (already fixed to one channel in the preview), so the table needs an
         # explicit Channel column too.
         table = {
             "headers": ["Channel", "Sender", "Date", "Message"],

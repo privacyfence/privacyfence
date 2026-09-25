@@ -93,6 +93,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emulation, and elsewhere it installed in 32-bit mode, where the service could not start. See
   [ADR 0054](docs/adr/0054-the-windows-installer-refuses-anything-but-native-x64.md).
 
+- **Messages no longer cite internal tracker and plan references.** Log lines, refusal and error
+  messages, the Windows service description, the macOS installer's welcome screen, the Linux
+  service's documentation link, the `.mcpb` shim's "daemon not running" message, and the `--help`
+  text of `build_org_bundle.py`, `verify_audit_log.py` and the other scripts now say what they
+  mean in words, or name the ADR that explains it. The daemon's insecure-storage warning now reads
+  "Insecure storage permissions: …". See
+  [ADR 0056](docs/adr/0056-code-carries-no-project-history.md).
+
 ### Fixed
 
 - The `not_shared_drive` condition read Drive's "shared with someone" flag, so it rejected My

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the append-integrity hash chain on an installed audit log (SEC-23).
+"""Verify the append-integrity hash chain on an installed audit log.
 
 Checks every ``*.jsonl`` file under an audit log directory with
 ``AuditLogger.verify_chain()`` (src/privacyfence/audit_log.py) -- each
@@ -51,7 +51,7 @@ def _weeks_in(log_dir: Path) -> list[str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="verify_audit_log.py",
-        description="Verify SEC-23's append-integrity hash chain on an installed audit log.",
+        description="Verify the append-integrity hash chain on an installed audit log.",
     )
     parser.add_argument(
         "log_dir", help='Audit log directory, e.g. "<data>/authority/logs/audit" (local mode: '

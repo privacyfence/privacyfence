@@ -1,15 +1,15 @@
-"""Equivalence tests for privacyfence.policy.scopes (P2 of the policy v2 redesign).
+"""Equivalence tests for privacyfence.policy.scopes against the v1 rule engine it replaces.
 
 Every `SCOPE_SELECTORS` entry is checked against the old `AutoAcceptEvaluator._rule_*` method it
 replaces on a table of fixtures per predicate, mirroring `test_auto_accept.py`'s own edge cases
 (a match, a non-match, an empty/falsy value, and -- for a FETCHED predicate -- the shapes its old
 counterpart is known to accept: dict vs. object raw_data, a `.file`-wrapped Drive object, a
-non-list raw_data standing in for a single result). Agreement on every fixture is P2's exit
-criterion for this module: a red run here is the equivalence harness described in the redesign
-proposal's P0 catching a real behavioral drift, not a false alarm to silence.
+non-list raw_data standing in for a single result). This module must agree on every fixture: a
+red run here is the equivalence harness catching a real behavioral drift, not a false alarm to
+silence.
 
-`TestIdentitySpoofResistance` below carries the same SEC-02 payloads `test_auto_accept.py` uses to
-prove the old rules compare a parsed address rather than a substring -- reusing `_address_of`
+`TestIdentitySpoofResistance` below carries the same identity-spoof payloads `test_auto_accept.py`
+uses to prove the old rules compare a parsed address rather than a substring -- reusing `_address_of`
 (imported, not reimplemented, in `policy/scopes.py`) means every new identity selector inherits
 that fix for free, but the fixture is repeated here so a future refactor that stops reusing
 `_address_of` fails loudly in this module too.
@@ -256,44 +256,44 @@ class TestEverySelectorAgreesWithItsCounterpart:
             assert new_result == old_result, (predicate, value, ctx, old_result, new_result)
 
 
-# The same SEC-02 payloads test_auto_accept.py uses -- every parsed-address identity selector must
-# keep rejecting them (see this module's docstring).
-_SEC02_MY_EMAIL = "me@example.com"
+# The same identity-spoof payloads test_auto_accept.py uses -- every parsed-address identity
+# selector must keep rejecting them (see this module's docstring).
+_SPOOF_MY_EMAIL = "me@example.com"
 
-_SEC02_SPOOF_PAYLOADS = [
-    pytest.param(f"{_SEC02_MY_EMAIL} <attacker@evil.com>", id="spoofed-display-name"),
-    pytest.param(f"Notify <{_SEC02_MY_EMAIL}.attacker.net>", id="lookalike-domain-suffix"),
-    pytest.param(f"not{_SEC02_MY_EMAIL}", id="lookalike-localpart-prefix"),
-    pytest.param(f"{_SEC02_MY_EMAIL.upper()} <attacker@evil.com>", id="spoofed-display-name-mixed-case"),
+_SPOOF_PAYLOADS = [
+    pytest.param(f"{_SPOOF_MY_EMAIL} <attacker@evil.com>", id="spoofed-display-name"),
+    pytest.param(f"Notify <{_SPOOF_MY_EMAIL}.attacker.net>", id="lookalike-domain-suffix"),
+    pytest.param(f"not{_SPOOF_MY_EMAIL}", id="lookalike-localpart-prefix"),
+    pytest.param(f"{_SPOOF_MY_EMAIL.upper()} <attacker@evil.com>", id="spoofed-display-name-mixed-case"),
 ]
 
-_SEC02_IDENTITY_SELECTORS = [
+_SPOOF_IDENTITY_SELECTORS = [
     pytest.param(
         "i_am_sender",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(sender=payload)),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(sender=payload)),
         id="i_am_sender",
     ),
     pytest.param(
         "i_am_sole_recipient",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(recipients=[payload])),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(recipients=[payload])),
         id="i_am_sole_recipient",
     ),
     pytest.param(
         "i_am_owner",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
         id="i_am_owner",
     ),
     pytest.param(
         "created_by_me",
-        lambda payload: make_ctx(my_email=_SEC02_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
+        lambda payload: make_ctx(my_email=_SPOOF_MY_EMAIL, raw_data=SimpleNamespace(owners=[payload])),
         id="created_by_me",
     ),
 ]
 
 
 class TestIdentitySpoofResistance:
-    @pytest.mark.parametrize("predicate,build_ctx", _SEC02_IDENTITY_SELECTORS)
-    @pytest.mark.parametrize("payload", _SEC02_SPOOF_PAYLOADS)
+    @pytest.mark.parametrize("predicate,build_ctx", _SPOOF_IDENTITY_SELECTORS)
+    @pytest.mark.parametrize("payload", _SPOOF_PAYLOADS)
     def test_rejects_spoofed_identity(self, predicate, build_ctx, payload):
         selector = SCOPE_SELECTORS[predicate]
         ctx = build_ctx(payload)
@@ -392,7 +392,7 @@ class TestMoveWithinApprovedFolders:
 
 
 class TestNewScopeSelectors:
-    """drive.file and apps_script.project have no v1 predicate (redesign proposal §04) -- checked
+    """drive.file and apps_script.project have no v1 predicate -- checked
     against their own logic directly rather than an old counterpart."""
 
     def test_drive_file_matches_the_fetched_files_own_id(self):

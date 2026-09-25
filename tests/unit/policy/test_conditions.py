@@ -1,12 +1,11 @@
-"""Equivalence tests for privacyfence.policy.conditions (P2 of the policy v2 redesign).
+"""Equivalence tests for privacyfence.policy.conditions against the v1 rule engine it replaces.
 
 Every `ConditionSelector` is checked against the old `AutoAcceptEvaluator._rule_*` method(s) it
 replaces on a table of fixtures per old predicate name, mirroring `test_auto_accept.py`'s own
 edge cases (a match, a non-match, and -- for every FETCHED condition -- the absence case with
 `raw_data=None` or a missing attribute, since that's exactly the hazard `DATA_DEPENDENT_RULES`
-exists to flag). Agreement on every fixture is P2's exit criterion for this module: a red run here
-is the equivalence harness described in the redesign proposal's P0 catching a real behavioral
-drift, not a false alarm to silence.
+exists to flag). This module must agree on every fixture: a red run here is the equivalence
+harness catching a real behavioral drift, not a false alarm to silence.
 """
 from __future__ import annotations
 

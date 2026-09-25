@@ -48,7 +48,7 @@ class TestIconDataUri:
 class TestAllConnectorIcons:
     """approval_list_html.py's live re-render needs every bundled icon
     available at first paint, not just the ones with something pending
-    right then (issue #576) -- this is the whole bundled set it draws on."""
+    right then -- this is the whole bundled set it draws on."""
 
     def test_includes_every_bundled_connector(self):
         icons = approval_icons.all_connector_icons()

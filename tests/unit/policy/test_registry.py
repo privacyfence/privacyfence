@@ -1,10 +1,10 @@
-"""Unit tests for privacyfence.policy.registry (P1 of the policy v2 redesign).
+"""Unit tests for privacyfence.policy.registry.
 
 The registry's whole job is to be a *superset* of the existing tables it joins -- these tests
-assert exact agreement with `TOOL_TO_GATE`/`TOOL_TO_OPERATION` (so P1 is provably a no-op for
+assert exact agreement with `TOOL_TO_GATE`/`TOOL_TO_OPERATION` (so the registry provably changes nothing for
 every consumer that still reads those tables directly) and then assert the registry adds a verb
-and scope subject everywhere those tables don't reach, including the six operation keys F5 in the
-redesign proposal identifies as configurable nowhere today.
+and scope subject everywhere those tables don't reach, including the six operation keys that are
+configurable nowhere today.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from privacyfence.policy.registry import (
     operation_verbs,
 )
 
-# The six operation keys the redesign proposal's F5/P0.3 findings identify as ungovernable today:
+# The six operation keys that are ungovernable today:
 # TOOL_TO_OPERATION knows about them, but no rule, label or grant capability can ever reach them.
 _UNGOVERNABLE_OPERATIONS = frozenset({
     "apps_script.read_content",
@@ -35,9 +35,9 @@ _UNGOVERNABLE_OPERATIONS = frozenset({
     "slack.create_group_chat",
 })
 
-# Operation keys shared by tools that perform two different verbs -- P0.2 in the redesign
-# proposal. Migrating a v1 rule keyed on one of these must expand to every verb listed, not just
-# the first, or the migration silently narrows what the rule allows.
+# Operation keys shared by tools that perform two different verbs. Migrating a v1 rule keyed on
+# one of these must expand to every verb listed, not just the first, or the migration silently
+# narrows what the rule allows.
 _DUAL_VERB_OPERATIONS: dict[str, frozenset[Verb]] = {
     "calendar.create_modify_event": frozenset({Verb.CREATE, Verb.UPDATE}),
     "slack.read_messages": frozenset({Verb.READ, Verb.SEARCH}),
@@ -125,8 +125,8 @@ class TestVerbVocabulary:
             assert VERB_FAMILY[verb] == VerbFamily.WRITE
 
     def test_quantified_scope_subjects_match_the_verbs_that_need_more_than_one_object(self):
-        # These three are exactly the verbs the redesign proposal calls out as measuring more
-        # than a single item -- getting one of these wrong is how F3 and F7 happened.
+        # These three are exactly the verbs that measure more than a single item -- getting one
+        # of these wrong describes a rule as allowing more (or other) objects than it can match.
         assert VERB_SCOPE_SUBJECT[Verb.SEARCH] == ScopeSubject.EVERY_RESULT
         assert VERB_SCOPE_SUBJECT[Verb.MOVE] == ScopeSubject.SOURCE_AND_DESTINATION
         assert VERB_SCOPE_SUBJECT[Verb.DRAFT] == ScopeSubject.EVERY_RECIPIENT
@@ -134,7 +134,7 @@ class TestVerbVocabulary:
 
 class TestUngovernableOperationsAreNowCovered:
     def test_ungovernable_operations_are_absent_from_every_existing_surface(self):
-        # This is F5/P0.3 itself: confirm the gap still exists in the resource-type manifest the
+        # Confirm the gap still exists in the resource-type manifest the
         # registry is meant to eventually replace, so this test would fail (loudly, as a welcome
         # sign of progress) once a later phase closes it there instead of just here.
         capability_keys = _capability_operation_keys()

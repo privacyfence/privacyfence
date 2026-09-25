@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build PrivacyFence.pkg -- the signed macOS installer package that *is* the
-# macOS install. It provisions privilege separation (#428 D2) automatically at
+# macOS install. It provisions privilege separation (ADR 0003) automatically at
 # install time, instead of leaving that to the daemon's own admin-password
-# runtime prompt (privilege_separation.maybe_auto_enable_macos(), #428 D1),
-# which now only fires when this package's postinstall did not finish
+# runtime prompt (privilege_separation.maybe_auto_enable_macos()),
+# which only fires when this package's postinstall did not finish
 # separating the install (it never fails the install over that). A .pkg
 # install already runs as root and already asks for an administrator password
 # as part of the normal "Install PrivacyFence" step non-technical users already
@@ -15,22 +15,19 @@
 #
 # **This package is not released on its own.** scripts/build_dmg.sh calls this
 # script and puts the resulting .pkg inside the DMG, next to PrivacyFence.mcpb;
-# that DMG is the only macOS artifact that ships. The .pkg used to be a second,
-# separately-downloadable artifact alongside a drag-install DMG, which is what
-# made its conclusion screen's "open <mcpb>, next to this installer" line a lie
-# for anyone who downloaded the .pkg by itself -- there was no .mcpb next to it.
-# Carrying both in one DMG makes that sentence true and leaves exactly one macOS
-# download to explain.
+# that DMG is the only macOS artifact that ships. The .pkg's conclusion screen
+# says "open <mcpb>, next to this installer", which is only true when the .pkg
+# and the .mcpb sit in the same disk image. Carrying both in one DMG keeps that
+# sentence true and leaves exactly one macOS download to explain.
 #
 # A pkg-installed .app lands root:wheel-owned by pkgbuild's own default
 # ownership -- but /Applications itself is always root:admin, so that alone
-# doesn't satisfy macos_privilege_separation.sh's B1 trusted-image check
+# doesn't satisfy macos_privilege_separation.sh's trusted-image check
 # (require_trusted_image() walks every ancestor directory, /Applications
 # included). `enable` -- run by this package's own postinstall script --
 # closes that itself: it copies the image into a root:wheel-owned location
 # of its own (TRUSTED_IMAGE_DIR) before trusting anything, regardless of
-# where --app pointed. See that function's own comment for the full story
-# (#428 D2's own B1 follow-up).
+# where --app pointed. See that function's own comment for the full story.
 #
 # Packages the *already-built* dist/PrivacyFenceApp.app -- this script never
 # runs PyInstaller itself, so it only ever runs after scripts/build_dmg.sh's
@@ -157,11 +154,11 @@ sed -e "s|__MCPB_NAME__|${MCPB_NAME}|g" \
 # folder, a still-mounted DMG, a build tree -- that silently redirects the
 # whole install away from /Applications.
 #
-# This is not hypothetical here. It is what
+# This is not hypothetical here. Without it,
 # test_macos_pkg_install.py::test_pkg_install_enables_privilege_separation_
-# with_no_manual_step had been failing on for weeks (#562, mis-diagnosed as a
-# payload-visibility flake, which is why it looked intermittent -- it tracks
-# whether Launch Services happens to have registered another copy yet):
+# with_no_manual_step fails intermittently, in a way that looks like a
+# payload-visibility flake -- it tracks whether Launch Services happens to
+# have registered another copy yet:
 #
 #   installd: PackageKit: Applications/PrivacyFenceApp.app relocated to
 #             Users/runner/work/.../dist/PrivacyFenceApp.app

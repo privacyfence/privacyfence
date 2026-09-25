@@ -1,37 +1,23 @@
 """privacyfence.settings_controller -- the domain/business logic behind the
-webview settings window (issue #120).
+web settings page.
 
-This module's coverage was moved here from test_menu_bar.py's pre-#120 rule/
-grant/PII/privacy/connector/audit/org-config tests (see git history) --
-same behavior, now exercised through SettingsController's methods instead of
-PrivacyFenceMenuBar's. Native-picker-specific tests (_osascript_pick-driven
-rule/policy selection, the old int-value/list-value rumps.Window prompts)
-were dropped rather than ported -- there is no native picker left to test.
-The webview-dropdown rule editor #120 replaced them with is itself gone
-as of the policy v2 redesign's P6 (see TestAddPolicyRule/TestRemovePolicyRule
-below for its replacement, and settings_controller.py's own "Auto-accept"
-section comment).
+Rule/PII/privacy/connector/audit/org-config behavior is exercised through
+SettingsController's methods. The Auto-accept page's rule editor is covered
+by TestAddPolicyRule/TestRemovePolicyRule below (see settings_controller.py's
+own "Auto-accept" section comment).
 
-Also covers the cross-thread AppHelper.callAfter marshaling contract
-(_run_async/on_change) that used to live in test_menu_bar.py's "P6" module
-docstring -- see TestRunAsyncMarshaling and TestOnChangeMarshaling below for
-why that still matters here.
+Also covers the cross-thread marshaling contract (_run_async/on_change) --
+see TestRunAsyncMarshaling and TestOnChangeMarshaling below for why that
+matters here.
 
-One follow-up feature rebuilt after the initial #120 pass per user
-direction (see PR history): Telegram's in-webview multi-step sign-in
-(TestTelegramStartAuth/TestTelegramSubmitCode/TestTelegramSubmit2FA/
-TestTelegramCancelAuth, replacing the native rumps.Window-based flow --
-telethon is mocked via MagicMock/AsyncMock, the same house style
-test_telegram_client.py's own tests already use, rather than the
-hand-rolled fake class the deleted native-prompt tests used).
+Telegram's in-webview multi-step sign-in is covered by
+TestTelegramStartAuth/TestTelegramSubmitCode/TestTelegramSubmit2FA/
+TestTelegramCancelAuth -- telethon is mocked via MagicMock/AsyncMock, the
+same house style test_telegram_client.py's own tests already use.
 
-Suggestion-priority reordering (the Rules page's old "Always-allow
-Suggestion Order" section: move up/down, exclude/re-include) was one such
-restored feature but is gone again as of issue #151 -- every auto-accept
-rule that plausibly matches an item now gets its own "Always allow" button
-in the popup, so there's nothing left to prioritize or exclude. See
-git history for the removed TestSuggestionPriorityState/
-TestSuggestionPriorityMutators coverage.
+There is no suggestion-priority ordering to test: every auto-accept rule
+that plausibly matches an item gets its own "Always allow" button in the
+popup, so there's nothing to prioritize or exclude.
 """
 from __future__ import annotations
 
@@ -189,11 +175,7 @@ class TestCallOnMain:
     dispatcher yet (a standalone import, or a test with no web server
     running), instead of dying with AttributeError inside the worker thread
     where nothing surfaces it (the exact bug this seam fixes -- see this
-    module's git history).
-    Through P9 a third path existed (AppKit's own run loop, via
-    PyObjCTools.AppHelper.callAfter, when the native settings window was
-    hosting); P10 deleted that host along with the rest of the AppKit UI
-    layer."""
+    module's git history)."""
 
     def test_dispatcher_registered_is_used(self, monkeypatch):
         recorded = []
@@ -232,9 +214,9 @@ class TestCallOnMain:
 
 
 class TestChangeListeners:
-    """§16.8's risk #2: two on_change consumers (the native window's single
-    on_change slot, plus web/state_stream.py's subscription) after this
-    phase -- both must fire from one _push_snapshot."""
+    """Two change consumers (the single on_change slot, plus
+    web/state_stream.py's subscription) -- both must fire from one
+    _push_snapshot."""
 
     def test_on_change_and_extra_listeners_both_fire(self, controller):
         on_change_calls = []
@@ -294,7 +276,7 @@ class TestConfigHelpers:
         controller._save_config({"a": 1})  # must not raise
 
     def test_save_config_updates_audit_logger_security_config_hash(self, controller):
-        # SEC-23: every settings.yaml write is a privacy-policy change, so
+        # Every settings.yaml write is a privacy-policy change, so
         # the audit log's per-decision fingerprint (AuditEntry.
         # security_config_hash) must move with it.
         from privacyfence.audit_log import compute_security_config_hash, get_audit_logger
@@ -422,7 +404,7 @@ class TestPiiDetection:
 
 
 class TestEnableStepUp:
-    """B9: the browser-reachable counterpart to hand-editing config/
+    """The browser-reachable counterpart to hand-editing config/
     settings.yaml's own step_up: section. See SettingsController.
     enable_step_up's own docstring for what it refuses and why."""
 
@@ -640,9 +622,7 @@ class TestUpdateCheck:
         assert len(pushed) == 1
 
     def test_update_available_pushes_state_for_the_web_banner(self, controller):
-        # Through P9 an update found here also popped a native rumps.alert()
-        # -- deleted at P10 (see _on_update_check_done's own comment). The
-        # web General page's own banner is driven entirely by _general_state
+        # The web General page's own banner is driven entirely by _general_state
         # (below), which reads straight off _latest_update -- there's
         # nothing else for _on_update_check_done itself to do beyond
         # recording the result and pushing a fresh snapshot.
@@ -670,9 +650,7 @@ def stub_connector_build(monkeypatch):
 @pytest.mark.usefixtures("stub_connector_build")
 class TestOrgConfigInstall:
     """install_org_config_bytes is the validate-then-write step behind
-    web/routes_settings.py's multipart upload -- through P9 also reachable
-    from a native "choose file" picker (install_org_config()), deleted at
-    P10 along with the rest of the AppKit UI layer."""
+    web/routes_settings.py's multipart upload."""
 
     def test_non_json_file_sets_error(self, controller):
         controller.install_org_config_bytes(b"not valid json")
@@ -749,7 +727,7 @@ class TestOrgConfigInstall:
 
 @pytest.mark.usefixtures("stub_connector_build")
 class TestOrgConfigInstallSigning:
-    """SEC-05 (full signing): install_org_config_bytes runs every bundle
+    """Signing (ADR 0016): install_org_config_bytes runs every bundle
     through org_bundle_signing.verify_and_maybe_pin() before writing it to
     disk -- see that module's own docstring for the trust-on-first-use
     model this mirrors daemon_main.load_org_config's own enforcement of."""
@@ -803,7 +781,7 @@ class TestOrgConfigInstallSigning:
 
 @pytest.mark.usefixtures("stub_connector_build")
 class TestWouldPinNewOrgSigningKey:
-    """F5 of the self-approval review: the read-only precheck web/
+    """The read-only precheck web/
     routes_settings.py's org_config_upload route uses to demand an
     explicit confirmation before install_org_config_bytes above pins a
     new key as a side effect."""
@@ -839,9 +817,8 @@ class TestWouldPinNewOrgSigningKey:
 
 
 class TestConnectorEnableDisable:
-    """F6 of the self-approval review: enable_connector/disable_connector
-    replace a single toggle_connector so web/routes_settings.py can gate
-    the two directions differently -- see enable_connector's own
+    """enable_connector/disable_connector are separate actions so
+    web/routes_settings.py can gate the two directions differently -- see enable_connector's own
     docstring for why."""
 
     def test_disable_connector_sets_it_false_and_refreshes(self, controller, monkeypatch):
@@ -898,7 +875,7 @@ class TestRefreshConnectors:
         assert controller._host_calls == [[SimpleNamespace(name="drive")]]
 
     def test_connectors_changed_listener_fires_after_a_successful_refresh(self, controller, monkeypatch):
-        # issue #396 Part C: wired to McpDispatcher.notify_tools_changed in
+        # Wired to McpDispatcher.notify_tools_changed in
         # production (daemon_main.py) -- fires after the connector set is
         # actually swapped, so a listener reading fresh state sees it.
         recorded = []
@@ -974,7 +951,7 @@ class TestRefreshConnectors:
 
 
 class TestOrgConfigOrEmpty:
-    """SEC-04 made load_org_config() raise org_mode.ConfigurationError for
+    """load_org_config() raises org_mode.ConfigurationError for
     a present-but-broken org_config.json instead of silently treating it
     as absent. This settings surface is local-mode-only (org mode mounts
     no local settings page at all), so a broken org bundle here isn't the
@@ -1017,8 +994,8 @@ class TestOrgConfigOrEmpty:
 
 
 class TestWireUnattendedListener:
-    """P5: unattended-session changes are wired from outside the
-    constructor now (by daemon_main.py, once it knows a McpDispatcher
+    """Unattended-session changes are wired from outside the
+    constructor (by daemon_main.py, once it knows a McpDispatcher
     actually exists), not unconditionally inside it -- see
     SettingsController.__init__'s own docstring."""
 
@@ -1260,11 +1237,9 @@ class TestAuthenticateAtlassian:
         # deferred_registry docstring) -- the default, unconfigured
         # ApprovalUI (no init_approval_ui() call in this test) returns None,
         # which pick_resource's own caller (atlassian_oauth.py) already
-        # treats as "fall back to the first resource". Through P9 this same
-        # outcome was also reachable via a cancelled native picker; P10
-        # deleted that picker along with the rest of the AppKit UI layer,
-        # so TestPickResourceIndexWebMode below covers the web-registry
-        # equivalent (an explicit "cancel" answer) instead.
+        # treats as "fall back to the first resource".
+        # TestPickResourceIndexWebMode below covers the web-registry
+        # equivalent (an explicit "cancel" answer).
         recorded = []
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
@@ -1290,8 +1265,8 @@ class TestAuthenticateAtlassian:
 
 
 class TestPickResourceIndexWebMode:
-    """§16.2.2: the Atlassian picker routed through web_prompt.py when a
-    WebApprovalUI (the only ApprovalUI implementation since P10) is the
+    """The Atlassian picker routed through web_prompt.py when a
+    WebApprovalUI (the only ApprovalUI implementation) is the
     live ApprovalUI -- same picker, same cancelled-falls-back-to-first-
     resource/options-are-URLs contract, routed through the registry every
     approval card already uses."""
@@ -1374,8 +1349,7 @@ class TestPickResourceIndexWebMode:
 class TestTelegramStartAuth:
     """telethon is mocked the same way test_telegram_client.py's own tests
     do -- MagicMock() with AsyncMock() for the awaited methods, rather than
-    a hand-rolled fake class (the pattern the pre-#120 native-prompt flow's
-    tests used) -- see that file's TestCheckConnection etc. for the house
+    a hand-rolled fake class -- see that file's TestCheckConnection etc. for the house
     style this follows."""
 
     def test_missing_credentials_sets_error_without_running_flow(self, controller, monkeypatch):
@@ -1626,7 +1600,7 @@ class TestTelegramAuthSnapshotState:
         assert state["telegram_auth"] == {"step": "code", "error": "oops"}
 
     def test_never_echoes_a_login_code_or_2fa_password(self, controller):
-        """§16.2.8: telegram_submit_code/telegram_submit_2fa carry a login
+        """telegram_submit_code/telegram_submit_2fa carry a login
         code and an account password over loopback HTTP -- the snapshot
         this state feeds into every open settings page/window must never
         carry either back out, pinned by a test rather than left as a
@@ -1645,7 +1619,7 @@ class TestTelegramAuthSnapshotState:
 
 
 class TestPolicyScopeCatalogue:
-    """P6 of the policy v2 redesign: the Auto-accept page's "add a rule" scope picker -- one entry
+    """The Auto-accept page's "add a rule" scope picker -- one entry
     per policy.propose.SCOPES_BY_GROUP widening group, plus sc._POLICY_EXTRA_SCOPES."""
 
     def test_covers_every_propose_group_and_every_extra(self):
@@ -1676,7 +1650,7 @@ class TestPolicyScopeCatalogue:
 
 
 class TestAddPolicyRule:
-    """P6: add_policy_rule is the Auto-accept page's one writer, straight to the on-disk v2
+    """add_policy_rule is the Auto-accept page's one writer, straight to the on-disk v2
     ``auto_accept:`` section -- never through v1's auto_accept_rules/auto_accept_grants."""
 
     def test_adds_a_scope_rule_to_the_v2_section(self, controller):
@@ -1766,7 +1740,7 @@ class TestRemovePolicyRule:
 
 
 class TestAutoAcceptRuleUsage:
-    """P8 (rule attribution and staleness): each Auto-accept row's own match_count/last_matched/
+    """Rule attribution and staleness: each Auto-accept row's own match_count/last_matched/
     never_matched, from the audit log's rule_id field (see AuditEntry.rule_id's own docstring)."""
 
     def _record(self, controller, **overrides):
@@ -1821,8 +1795,8 @@ class TestAutoAcceptRuleUsage:
 
 
 class TestResolvedRuleValue:
-    """P6: rule values resolve through the same cached-name machinery the old grant rows used,
-    reusing RULE_NAME_TO_RESOURCE_TYPE for a predicate whose value is an opaque resource id."""
+    """Rule values resolve through the shared cached-name machinery, reusing
+    RULE_NAME_TO_RESOURCE_TYPE for a predicate whose value is an opaque resource id."""
 
     def test_resolves_a_cached_name(self, controller):
         rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
@@ -1840,9 +1814,8 @@ class TestResolvedRuleValue:
         assert state["auto_accept"]["rules"][0]["value"] == "acme.com"
 
     def test_sentence_uses_the_resolved_value_not_the_raw_id(self, controller):
-        """Issue #588: the sentence rendered for the Auto-accept page must agree with the
-        resolved ``value`` field -- previously ``rule_sentence`` always spelled out the raw id
-        even though a resolved display name was computed right next to it and discarded."""
+        """The sentence rendered for the Auto-accept page must agree with the resolved ``value``
+        field -- ``rule_sentence`` spells out the resolved display name, not the raw id."""
         rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
         controller._resolver._disk[resource_names._cache_key(rt, "F1")] = "Groceries"
         state = controller.add_policy_rule("drive.folder", "F1", ["update"])
@@ -2018,7 +1991,7 @@ class TestSnapshotStructure:
 
 
 class TestConnectorsStateBlockedBy:
-    """_connectors_state()'s blocked_by field (issue #396 Phase 1) -- what
+    """_connectors_state()'s blocked_by field -- what
     tells a connected connector, a deliberately disabled one, and one that
     failed to build apart, instead of every un-built connector reading the
     same "not connected" way to a client. Sourced from build_connectors()'s
@@ -2100,7 +2073,7 @@ class TestConnectorsStateBlockedBy:
 
 
 class TestStatusConnectors:
-    """status_connectors() (issue #396 Phase 2) -- the same per-connector
+    """status_connectors() -- the same per-connector
     state _connectors_state() derives for the settings page, reshaped into
     the {name, enabled, authenticated, blocked_by} rows privacyfence_status
     documents. web/mcp_dispatch.py's McpDispatcher wires this in as its

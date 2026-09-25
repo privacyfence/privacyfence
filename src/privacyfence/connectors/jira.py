@@ -197,7 +197,7 @@ class JiraConnector(Connector):
         # jira_search_issues; Description and Comments are only learned
         # once this call is approved -- jira_search_issues never returns
         # either. Neither has a fixed size (Description's length is
-        # unbounded, Comments has no fixed count), so §3 gets one fixed
+        # unbounded, Comments has no fixed count), so new_info gets one fixed
         # summary row for each rather than the literal text -- the real
         # content lives in the right-pane preview/details_text instead.
         preview = {

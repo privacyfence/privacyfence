@@ -1,64 +1,58 @@
-"""#428 Phase 2: the control channel that replaces ``web_token`` -> ``POST
-/api/bootstrap`` as the way a bootstrap code gets minted on demand.
+"""The daemon's control channel: how a bootstrap code gets minted on demand,
+over a channel a browser cannot reach at all.
 
-Through Phase 1, minting a fresh code without restarting the daemon meant
-presenting the persistent local secret (``web/server.py``'s old
-``load_or_create_token()``, read from a file under ``paths.authority_dir()``)
-as a Bearer header over the same loopback HTTP port the browser uses. That
-secret's only remaining job, once SEC-06 got everything else off it, was
-authorizing that one endpoint -- and the endpoint itself was reachable by
-anything on the machine that could read the token file, agent included.
-Phase 2 doesn't try to make that check stronger (ADR 0002's "a chain doesn't
-get stronger when you strengthen its middle" -- see ``session_auth.py``'s own
-module docstring); it retires the file-and-bearer-header design entirely and
-replaces it with a channel a browser cannot reach at all:
+Minting a fresh code without restarting the daemon could be done by
+presenting a persistent local secret as a Bearer header over the same
+loopback HTTP port the browser uses -- but that endpoint would be reachable
+by anything on the machine that could read the secret, agent included.
+Making that check stronger would not help (ADR 0002's "a chain doesn't get
+stronger when you strengthen its middle" -- see ``session_auth.py``'s own
+module docstring), so there is no file-and-bearer-header design at all.
+Instead:
 
-- **macOS/Linux**: a Unix domain socket, created 0600 under the same
-  ``authority`` root the old token file lived in (falling back to a short
-  path in the system temp directory when that one doesn't fit ``AF_UNIX``'s
-  fixed-size ``sun_path`` buffer -- see ``posix_socket_path()``).
+- **macOS/Linux**: a Unix domain socket, created 0600 under the
+  ``authority`` root (falling back to a short path in the system temp
+  directory when that one doesn't fit ``AF_UNIX``'s fixed-size ``sun_path``
+  buffer -- see ``posix_socket_path()``).
 - **Windows**: a named pipe in the machine-global ``\\\\.\\pipe\\`` namespace,
   created with a security descriptor whose DACL grants access to the current
-  user's SID alone -- plus, once #428 Phase 4 has split the daemon and the
-  companion into two accounts, to each of those. See
+  user's SID alone -- plus, on a privilege-separated install where the
+  daemon and the companion run as two accounts, to each of those. See
   ``_current_user_security_attributes()``.
 
-Both are still reachable by anything running as the same OS user, agent
-included -- Phase 2 is explicitly "still same uid, so still no security gain
-alone" (issue #428). What it buys is the interface: a channel the browser's
-own loopback TCP connection categorically cannot speak (no ``fetch()`` to a
-Unix socket or a named pipe from a web page), which is what Phase 3's
-companion app needs to exist as the thing that *can* speak it, and what
-Phase 4's privilege separation needs already file-permissioned/ACL'd the way
-a service-owned resource has to be.
+Both are reachable by anything running as the same OS user, agent
+included, so the channel by itself is no security gain. What it buys is the
+interface: a channel the browser's own loopback TCP connection
+categorically cannot speak (no ``fetch()`` to a Unix socket or a named pipe
+from a web page), which is what the companion app needs to exist as the
+thing that *can* speak it, and what privilege separation needs already
+file-permissioned/ACL'd the way a service-owned resource has to be.
 
-The protocol is deliberately minimal -- originally one command (``MINT``),
-because minting a bootstrap code was the one thing this channel replaced.
-Phase 3 (ADR 0002, ``docs/adr/0002-local-mode-trust-boundary-and-companion-
-app.md``) adds a second: ``QUIT``, so the companion's tray/menu-bar "Quit"
-item and Linux's XDG launcher "Quit" action can stop the daemon without a
-browser -- gated by the same ``allow_quit`` setting the web settings page's
-own Quit action already respects. Phase 4 (#428 B4) narrows that further: on
-a privilege-separated install this socket is ``0660`` group-shared so the
-companion can still reach it, which puts the agent in the same group, so
-``QUIT`` refuses unconditionally there regardless of ``allow_quit`` -- a
-system service is not this channel's to stop, only its service manager's
-(``privilege_separation.PlatformLayout.stop_command``). A client sends a
-single line, ``MINT\\n`` or ``QUIT\\n``, and gets back either
-``OK[ <value>]\\n`` or
+The protocol is deliberately minimal. ``MINT`` mints a bootstrap code.
+``QUIT`` (ADR 0002, ``docs/adr/0002-local-mode-trust-boundary-and-companion-
+app.md``) lets the companion's tray/menu-bar "Quit" item and Linux's XDG
+launcher "Quit" action stop the daemon without a browser -- gated by the
+same ``allow_quit`` setting the web settings page's own Quit action already
+respects. On a privilege-separated install this socket is ``0660``
+group-shared so the companion can still reach it, which puts the agent in
+the same group, so ``QUIT`` refuses unconditionally there regardless of
+``allow_quit`` -- a system service is not this channel's to stop, only its
+service manager's (ADR 0026, ``privilege_separation.PlatformLayout.
+stop_command``). A client sends a single line, ``MINT\\n`` or ``QUIT\\n``,
+and gets back either ``OK[ <value>]\\n`` or
 ``ERROR <reason>\\n``. The MINT code itself is exactly what
-``session_auth.BootstrapStore.mint()`` always produced -- this channel is a
-new way to *reach* that call, not a new kind of credential. Redeeming the
-code is unchanged: a client still does that over the browser's own loopback
-HTTP, via ``?bootstrap=<code>`` (``web/server.py``'s ``_BootstrapMiddleware``).
+``session_auth.BootstrapStore.mint()`` produces -- this channel is a way to
+*reach* that call, not a new kind of credential. Redeeming the code happens
+over the browser's own loopback HTTP, via ``?bootstrap=<code>``
+(``web/server.py``'s ``_BootstrapMiddleware``).
 
-Phase 3 also adds a second, independent channel running in the *opposite*
+There is also a second, independent channel running in the *opposite*
 direction: ``CompanionChannelServer`` is owned by the companion app, not the
 daemon, and speaks ``OPEN <url>``, which the daemon's own
 ``oauth_loopback.py`` sends when it needs a browser opened for a connector
-OAuth flow (ADR 0002 decision 5) -- the thing #428 Phase 4 makes mandatory on
-Windows, where a service-hosted daemon runs in session 0 and cannot open a
-browser in the user's desktop session itself. It reuses this module's own
+OAuth flow (ADR 0002 decision 5) -- mandatory on Windows, where a
+service-hosted daemon runs in session 0 and cannot open a browser in the
+user's desktop session itself. It reuses this module's own
 ``_LineProtocolServer`` (the POSIX-socket/Windows-named-pipe plumbing
 ``ControlChannelServer`` itself is built on) rather than the daemon's own
 socket/pipe -- companion and daemon each own the address they *listen* on,
@@ -91,14 +85,14 @@ side effect of holding a session. docs/security-and-compliance.md states that
 limit in the same terms; keep the two in agreement. See
 ``request_enrollment_confirmation()`` for the daemon's own side.
 
-Phase 1 of the self-approval hardening plan adds two more commands in each
-direction, and both exist for the same reason ``CONFIRM ENROLL`` does -- the
+Two more commands run in each direction, and both exist for the same
+reason ``CONFIRM ENROLL`` does -- the
 companion is the only PrivacyFence process that runs where a human is:
 
 - ``ENROLLMENT`` (companion -> daemon) answers ``OK pending`` when this
   install requires a passkey and has none enrolled, ``OK ok`` otherwise. It
   is what lets the companion walk somebody through their first enrollment at
-  its own next start (plan item 1.2) instead of leaving a freshly installed,
+  its own next start instead of leaving a freshly installed,
   passkey-required install sitting behind a banner nobody is looking at. The
   credential store lives under ``authority_dir()`` and is unreadable to the
   logged-in user on a separated install, so the companion cannot answer this
@@ -106,7 +100,8 @@ companion is the only PrivacyFence process that runs where a human is:
 - ``RECOVERY`` (companion -> daemon), and ``CONFIRM RECOVERY`` / ``SHOW
   RECOVERY <code>`` (daemon -> companion), move the one-time recovery code
   off the ``/security`` HTTP response body and onto the companion's own
-  dialog (plan item 1.3). ``RECOVERY``'s reply never carries the code -- it
+  dialog (ADR 0003's 2026-09-19 Out-of-scope amendment). ``RECOVERY``'s
+  reply never carries the code -- it
   is ``OK`` or ``ERROR <reason>`` and nothing else, so a local process that
   speaks this socket learns only that a human was asked, never what they
   were shown.
@@ -158,12 +153,12 @@ _MAX_SUN_PATH_BYTES = 100
 
 SOCKET_FILE_NAME = "control.sock"
 
-# Phase 3: the companion's own listening address lives under a different
+# The companion's own listening address lives under a different
 # name (same directory), so the two channels' sockets/pipes can never
 # collide -- see CompanionChannelServer's own docstring.
 COMPANION_SOCKET_FILE_NAME = "companion.sock"
 
-# Phase 3: WebServer.start() writes this file (mirroring MCP_URL_FILE_NAME,
+# WebServer.start() writes this file (mirroring MCP_URL_FILE_NAME,
 # web/server.py) so the companion -- a separate process that never imports
 # web/server.py itself, see companion.py's own module docstring for why --
 # can learn this install's local-mode base URL (``http://127.0.0.1:<port>``)
@@ -176,8 +171,8 @@ def read_base_url() -> str | None:
     """The companion's own way to learn this install's local-mode base URL
     -- None if the daemon isn't currently running (the file is cleared on
     WebServer.stop()) or is running in org mode, which has no local
-    base_url() concept for a companion to reach at all (org mode is out of
-    #428's scope -- ADR 0002's own "Out of scope")."""
+    base_url() concept for a companion to reach at all (ADR 0002's own
+    "Out of scope")."""
     path = paths.handoff_dir() / WEB_BASE_URL_FILE_NAME
     if not path.exists():
         return None
@@ -212,13 +207,13 @@ def posix_socket_path() -> Path:
     discovery file of its own.
 
     ``paths.control_socket_dir()`` rather than ``paths.authority_dir()``
-    directly since #428 Phase 4: the two are the same directory on an
+    directly: the two are the same directory on an
     ordinary install, but a privilege-separated one makes ``authority_dir()``
     ``0700`` under the daemon's own service account, and the companion --
     which runs as the logged-in human and is this channel's whole reason for
     existing -- has to still be able to connect. See that function, and
     ``paths.handoff_dir()``, for why relocating the socket gives up nothing
-    Phase 4 claims."""
+    privilege separation claims."""
     return socket_path_under(paths.control_socket_dir())
 
 
@@ -265,8 +260,8 @@ def companion_socket_path_under(data_dir: Path, principal_id: str = LOCAL_PRINCI
     directly at ``data_dir``, not an ``authority`` subdirectory: unlike
     ``control.sock`` (which authorizes minting a *human* session, so it
     belongs among the human-authority files ``paths.authority_dir()``
-    collects for #428 Phase 4), this is just the address a *daemon* reaches
-    to ask a *companion* to open a browser tab -- nothing #428 Phase 4 needs
+    collects), this is just the address a *daemon* reaches to ask a
+    *companion* to open a browser tab -- nothing privilege separation needs
     to re-own. Rooted at ``paths.handoff_dir()`` in practice (see
     ``companion_socket_path()``), which *is* ``data_dir()`` on an ordinary
     install and the user-reachable subdirectory of it on a separated one --
@@ -275,7 +270,7 @@ def companion_socket_path_under(data_dir: Path, principal_id: str = LOCAL_PRINCI
 
     ``principal_id`` (ADR 0008) picks which principal's own address this
     resolves to -- see ``_companion_address_suffix()``. ``handoff/``'s own
-    sticky bit (the local-mode-fixes plan's Phase 2 §2.6) keeps doing its
+    sticky bit (ADR 0027) keeps doing its
     job unmodified here: it stops any other group member from unlinking a
     socket they do not own, exactly as much with several legitimate
     companions as with one."""
@@ -357,9 +352,8 @@ def _handle_daemon_request(
     mint_mcp_token: Callable[[bool], str] | None = None,
 ) -> str:
     """``enrollment_state``/``reissue_recovery_code``/``status`` are the
-    daemon's own answers to commands this channel did not originally have
-    (module docstring's Phase 1 items, and the local-mode-fixes plan's
-    Phase 2 ``STATUS``). All
+    daemon's own answers to ``ENROLLMENT``, ``RECOVERY`` and ``STATUS``
+    (see the module docstring). All
     default to ``None`` -- "this install does not offer that" -- because
     every caller that constructs a ``ControlChannelServer`` without a
     ``StepUpConfig``/status callback behind it (the tests that exercise
@@ -396,7 +390,8 @@ def _handle_daemon_request(
         # what anything on this machine can send, so it mints the session
         # that may view but not approve. The two attested shapes cost a
         # round trip into the companion process, which is the only
-        # PrivacyFence process running where a human can be asked at all.
+        # PrivacyFence process running where a human can be asked at all
+        # (ADR 0062).
         #
         # ADR 0008: every shape below now also binds the resulting session
         # to whichever principal this *connection* belongs to (peer
@@ -482,7 +477,7 @@ def _handle_daemon_request(
         issued, reason = reissue_recovery_code()
         return "OK\n" if issued else f"ERROR {reason}\n"
     if command == "STATUS":
-        # The local-mode-fixes plan's Phase 2: read-only and safe for any
+        # Read-only and safe for any
         # group member -- no tokens or paths, just
         # version/pid/mode/connector-configured-ness -- so
         # unlike every command above it, this one answers unconditionally
@@ -496,7 +491,7 @@ def _handle_daemon_request(
         return f"OK {status()}\n"
     if command == "QUIT":
         if privilege_separation.is_enabled():
-            # #428 B4: this socket is 0660 group-shared with the companion
+            # ADR 0026: this socket is 0660 group-shared with the companion
             # on a separated install, which puts the agent in the same
             # group -- so unlike ``allow_quit`` below, this is not a setting
             # an install can leave on. A system service is not this
@@ -727,7 +722,7 @@ def current_os_principal_id() -> str:
 
 
 def _verify_companion_peer(conn: socket.socket, line: str) -> str | None:
-    """The companion channel's own gate (#428 B10) -- called on every
+    """The companion channel's own gate (ADR 0002 decision 5) -- called on every
     connection, after its one request line has been read and before the
     handler sees it, POSIX only (Windows named pipes are ACL'd instead, see
     ``_current_user_security_attributes()``). Before separation this channel
@@ -1217,16 +1212,16 @@ def _handle_companion_request(line: str) -> str:
     ``CONFIRM ENROLL``, both sent by the daemon (``request_open_url()``/
     ``request_enrollment_confirmation()`` below) and acted on here, in the
     companion process, which is the one thing in this architecture that
-    still runs in the user's desktop session once #428 Phase 4 moves the
-    daemon to a service account.
+    still runs in the user's desktop session when privilege separation
+    moves the daemon to a service account.
 
     ``OPEN`` is scheme-restricted to http(s) and ``CONFIRM``'s prompt is a
-    constant of this module for the same single reason: pre-Phase-4, or on a
-    Phase-4 install this dispatch is even reached from at all (see
-    ``_verify_companion_peer()`` -- #428 B10 -- for who that is once
+    constant of this module for the same single reason: on an unseparated
+    install, or from wherever a separated one lets this dispatch be reached
+    at all (see ``_verify_companion_peer()`` for who that is once
     separated), the caller is at minimum "anything running as the same OS
-    user" (companion and daemon are still the same uid pre-Phase-4, agent
-    included -- ADR 0002 decision 1), so neither command hands that caller
+    user" (companion and daemon are the same uid on an unseparated install,
+    agent included -- ADR 0002 decision 1), so neither command hands that caller
     an arbitrary ``file://``/custom-scheme URL to open, nor arbitrary words
     to put in a PrivacyFence-branded dialog.
     """
@@ -1297,17 +1292,17 @@ def _existing_socket_owner_problem(sock_path: Path) -> str | None:
     process's own account created it; otherwise a human-readable reason for
     ``_LineProtocolServer._start_posix()`` to refuse taking it over.
 
-    The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6, one
-    quarter of the "companion socket takeover" fix -- ``HANDOFF_DIR_MODE``'s
-    sticky bit is the filesystem-level half). Before this check, ``_start_posix()``
-    unlinked and rebound whatever was already at this path unconditionally,
-    on the theory that "the caller is the only process that will ever bind
-    here" -- true while daemon, companion and agent are one uid, false the
-    moment a *second* OS user's companion starts on a separated install
-    that already has a first user's ``companion.sock`` sitting there. The
-    daemon's own ``OPEN``/``CONFIRM MINT``/``SHOW RECOVERY`` calls go to
-    whichever companion bound last, so an unauthenticated unlink-and-rebind
-    here is exactly the takeover #428's diagnosis describes: ask for a
+    The multi-user guard against a "companion socket takeover" (ADR 0027;
+    ``HANDOFF_DIR_MODE``'s sticky bit is the filesystem-level half). Without
+    this check, ``_start_posix()`` would unlink and rebind whatever was
+    already at this path unconditionally, on the theory that "the caller is
+    the only process that will ever bind here" -- true while daemon,
+    companion and agent are one uid, false the moment a *second* OS user's
+    companion starts on a separated install that already has a first user's
+    ``companion.sock`` sitting there. The daemon's own ``OPEN``/``CONFIRM
+    MINT``/``SHOW RECOVERY`` calls go to whichever companion bound last, so
+    an unauthenticated unlink-and-rebind here is exactly the takeover ADR
+    0027 describes: ask for a
     recovery code, confirm it on your own desktop, and you hold the first
     user's approval authority. Refusing to steal a socket another account
     created closes it with nothing more than an ``lstat``.
@@ -1357,7 +1352,8 @@ class _LineProtocolServer:
         self._pipe_name_fn = pipe_name
         self._thread_name = thread_name
         # POSIX only (see _serve_one_posix) -- CompanionChannelServer's own
-        # #428 B10 gate; None everywhere else (ADR 0002 decision 6).
+        # peer gate (ADR 0002 decision 5); None everywhere else (ADR 0002
+        # decision 6).
         self._verify_peer = verify_peer
         # ADR 0008: ``ControlChannelServer`` only -- every command it
         # dispatches (``MINT``, ``MINT MCP``, ``STATUS``, ``RECOVERY``, ...)
@@ -1414,7 +1410,7 @@ class _LineProtocolServer:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(str(sock_path))
         # 0600 while daemon, companion and agent are all one uid -- nothing
-        # else on the machine could connect anyway. 0660 on a #428 Phase 4
+        # else on the machine could connect anyway. 0660 on a separated
         # install, where the two ends are two accounts and the shared
         # ``_privacyfence`` group is what still lets them reach each other;
         # connect(2) on a unix socket needs *write* permission on the node,
@@ -1500,8 +1496,8 @@ class _LineProtocolServer:
         # start() returns could race the background thread's first
         # CreateNamedPipe call and find no instance there yet.
         #
-        # The local-mode-fixes plan's interim multi-user guard (Phase 2
-        # §2.6, "companion socket takeover") is why this first instance is
+        # The multi-user guard against a "companion socket takeover" (ADR
+        # 0027) is why this first instance is
         # created with FILE_FLAG_FIRST_PIPE_INSTANCE: it is the Windows
         # counterpart of _existing_socket_owner_problem() on POSIX -- a
         # process that already holds an instance of this exact pipe name
@@ -1712,12 +1708,12 @@ class CompanionChannelServer:
     via ``request_open_url()`` below -- see this module's own docstring for
     why the two channels run in opposite directions.
 
-    On a #428 Phase 4 separated install (POSIX only -- see
+    On a separated install (POSIX only -- see
     ``_verify_companion_peer()``), a connection is refused unless it comes
     from the daemon's own service-account uid: this socket is ``0660``
     group-shared with the agent, same as ``ControlChannelServer``'s, but
     unlike that one, separation *does* put a different uid on the other end
-    of the connection this channel exists to accept (#428 B10).
+    of the connection this channel exists to accept (ADR 0002 decision 5).
     """
 
     def __init__(self) -> None:
@@ -1749,18 +1745,16 @@ class CompanionChannelServer:
 
 def _current_user_security_attributes():  # noqa: ANN201 -- a pywin32 SECURITY_ATTRIBUTES, no type stub
     """A ``SECURITY_ATTRIBUTES`` whose DACL grants full access to the
-    current process token's own user SID -- plus, on a #428 Phase 4
-    separated install, to the two accounts that now sit on the other end of
-    these channels. The "real security descriptor" half of #428 Phase 2's
-    named-pipe requirement. Windows has no filesystem permission bits
+    current process token's own user SID -- plus, on a separated install,
+    to the two accounts that sit on the other end of these channels. Windows has no filesystem permission bits
     (``paths.py``'s own ``secure_mkdir`` docstring), so a named pipe's ACL
     is the actual access-control primitive here, not a chmod equivalent
     applied afterwards.
 
     Shared by both ``ControlChannelServer`` and ``CompanionChannelServer``'s
-    pipes, and deliberately the same descriptor for both. Before Phase 4
-    that was one SID, because daemon, companion and agent were one account.
-    After it they are two -- the daemon is ``NT SERVICE\\PrivacyFence``, the
+    pipes, and deliberately the same descriptor for both. On an unseparated
+    install that is one SID, because daemon, companion and agent are one
+    account. On a separated one they are two -- the daemon is ``NT SERVICE\\PrivacyFence``, the
     companion is the logged-in human -- and each end has to be reachable by
     the other, which is exactly what ``privilege_separation.socket_mode()``'s
     ``0660`` expresses on POSIX. This is that, in the primitive Windows has.
@@ -1805,7 +1799,7 @@ def _current_user_security_attributes():  # noqa: ANN201 -- a pywin32 SECURITY_A
 
 
 # --------------------------------------------------------------------------- #
-# Clients -- Phase 3: the companion app is the daemon's control channel's own
+# Clients -- the companion app is the daemon's control channel's own
 # client (mint_bootstrap_code/request_quit), and the daemon is the
 # companion channel's client (request_open_url). Both directions share the
 # same low-level send-one-line-get-one-line-back mechanics
@@ -1822,9 +1816,9 @@ class ControlChannelError(Exception):
 def send_line_posix(socket_path: Path | str, message: str, *, timeout: float) -> str:
     """Connect to a Unix domain socket, send ``message``, and return
     whatever comes back -- the shared low-level half of every POSIX client
-    in this module (and, before Phase 3, of ``tests/control_channel_client.
-    py``'s own near-identical helper, kept there for its sandboxed-data-dir
-    resolution, not because the socket I/O itself needs to differ)."""
+    in this module. ``tests/control_channel_client.py`` keeps its own
+    near-identical helper for its sandboxed-data-dir resolution, not because
+    the socket I/O itself needs to differ."""
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(timeout)
     try:
@@ -2133,8 +2127,8 @@ def request_open_url(url: str, *, timeout: float = 2.0) -> bool:
     """Best-effort: asks a running companion to open ``url`` in the user's
     browser (ADR 0002 decision 5) -- returns False (never raises) for
     anything that means "no companion is running right now", which is the
-    normal case until a human starts one (Phase 3 doesn't autostart it --
-    that's Phase 4's job): no socket/pipe present, connection refused, or a
+    normal case on an install that does not autostart one: no socket/pipe
+    present, connection refused, or a
     timeout. ``oauth_loopback.py``'s default browser opener falls back to
     calling ``webbrowser.open()`` directly when this returns False, so a
     missing companion never blocks a connector's OAuth flow."""
@@ -2164,7 +2158,7 @@ def enrollment_state(*, timeout: float = 5.0) -> str:
 
 
 def request_status(*, timeout: float = 3.0) -> dict[str, Any]:
-    """The companion's own side of ``STATUS`` (the local-mode-fixes plan's Phase 2):
+    """The companion's own side of ``STATUS``:
     ``{"version", "pid", "started_at", "mode", "separated", "connectors"}``,
     parsed from the daemon's JSON reply. Raises ``ControlChannelError`` on a
     reply that is not a well-formed ``OK <json>`` (including one this build
@@ -2246,12 +2240,14 @@ _COMPANION_UNREACHABLE = (
 
 def send_recovery_code(code: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) -> tuple[bool, str]:
     """Hand a freshly minted recovery code to a running companion to put in
-    front of the human (plan item 1.3). Returns ``(shown, reason)``; a
+    front of the human. Returns ``(shown, reason)``; a
     ``False`` here means the code reached nobody, and web/routes_security.py
     treats that as "no code was issued" rather than storing one that cannot
     be produced. Never call this with anything but a code straight from
     ``webauthn_stepup``: the companion refuses a line that does not match
-    the format, which is the backstop, not the contract."""
+    the format, which is the backstop, not the contract. Why the code goes
+    through the companion rather than an HTTP response: ADR 0003's
+    2026-09-19 Out-of-scope amendment."""
     return _ask_companion(
         f"SHOW RECOVERY {code}\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
     )

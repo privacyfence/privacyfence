@@ -52,8 +52,7 @@ not the session logon a ``LogonTrigger`` subscribes to; an earlier version of
 this module tried, and Task Scheduler reported ``Last Result: 267011``,
 ``SCHED_S_TASK_HAS_NOT_RUN``, on every run). So the trigger's own firing is
 covered by ``release-testing.md``'s Windows human checks, on a real machine
-with a real sign-in, tracked on
-`privacyfence/privacyfence#121 <https://github.com/privacyfence/privacyfence/issues/121>`_.
+with a real sign-in.
 
 A task whose principal is a *group* runs with the interactive token of a
 member who is **signed in**. On a hosted runner exactly one account has a real
@@ -652,8 +651,8 @@ async def test_crash_restart_relaunches_the_separated_daemon(_installed):
         f"---- daemon log (tail) ----\n{_daemon_log_tail()}"
     )
     # Still the service account, not something that happened to take the
-    # name: a restart that came back as anyone else would be the #428
-    # weakness reopening quietly.
+    # name: a restart that came back as anyone else would reopen the
+    # shared-account weakness privilege separation closes, quietly.
     config = _service_config()
     assert config is not None and WINDOWS_SERVICE_ACCOUNT_NAME.lower() in config.lower(), (
         f"the relaunched {WINDOWS_SERVICE_NAME} service does not run as "

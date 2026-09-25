@@ -14,7 +14,7 @@ the way. A per-response nonce closes
 that: only ``<style>``/``<script>`` elements carrying the exact nonce this
 response's own ``Content-Security-Policy`` header names are honored, and an
 attacker injecting markup into the response body has no way to know that
-value in advance.
+value in advance. See ADR 0063.
 
 **Why ``style-src-attr`` keeps ``'unsafe-inline'``.** CSP nonces only ever
 cover ``<style>``/``<script>`` *elements* -- there is no nonce mechanism for
@@ -89,13 +89,13 @@ def build_csp(nonce: str) -> str:
     with narrow, explicit exceptions for exactly what these pages actually
     use.
 
-    ``object-src data:`` *and* ``frame-src data:`` (SEC-08/Phase 3.1):
-    without an explicit exception, each falls back to ``default-src
-    'none'`` and blocks approval_window_html.build_preview_body_html's own
+    ``object-src data:`` *and* ``frame-src data:``: without an explicit
+    exception, each falls back to ``default-src 'none'`` and blocks
+    approval_window_html.build_preview_body_html's own
     ``<embed type="application/pdf" src="data:...">`` -- the PDF-preview
-    pane never rendered under the pre-3.1 policy in a real browser, only
-    ever exercised via ``TestClient``'s in-process transport, which doesn't
-    enforce CSP at all. Both directives, not just ``object-src``, turned
+    pane does not render in a real browser without them, and
+    ``TestClient``'s in-process transport can't show that because it
+    doesn't enforce CSP at all. Both directives, not just ``object-src``, turned
     out to matter: Chromium's built-in PDF viewer renders an ``<embed>``
     by navigating an internal frame, which ``frame-src`` (not just
     ``object-src``) governs -- caught only by actually driving this in a
@@ -104,7 +104,7 @@ def build_csp(nonce: str) -> str:
     ``securitypolicyviolation`` listener, not by reasoning about the CSP
     spec from the ``<embed>`` tag alone.
 
-    ``worker-src 'self'`` (P4/W8) registers resources/sw.js for tier-0/1
+    ``worker-src 'self'`` registers resources/sw.js for tier-0/1
     notifications (web_shell.py's own script) against that same
     default-src 'none'.
 

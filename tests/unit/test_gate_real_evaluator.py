@@ -74,7 +74,7 @@ def make_kwargs(**overrides):
 
 def rule_id(predicate: str, value=None, conditions: tuple = ()) -> str:
     """The canonical, content-derived rule id a matched v2-store rule reports as its
-    ``auto_accept_rule`` (P8/P9: ``gate._evaluate_auto_accept`` trusts ``matched.id`` directly
+    ``auto_accept_rule`` (``gate._evaluate_auto_accept`` trusts ``matched.id`` directly
     rather than the raw predicate name -- see that function's own docstring). Every
     ``install_rules()``-installed rule below goes through ``policy.store.merge_rules``, which
     always mints this id, so a plain regular-match ("auto_accepted") audit entry never reports
@@ -270,7 +270,7 @@ class TestDriveTempAccept:
     temp-accept-eligible call must silently auto-accept a second call for
     the same file, against the real, in-memory temp-accept store
     (auto_accept.register_temp_accept/is_temp_accepted -- module-level
-    functions gate.py calls directly, P9) -- not test_gate.py::TestTempAccept's
+    functions gate.py calls directly) -- not test_gate.py::TestTempAccept's
     FakeEvaluator, which only proves gate.py's own decision routing around
     whatever that store reports."""
 
@@ -846,16 +846,9 @@ class TestAcceptAllPersistsARealRuleForWrites:
         assert entries[1]["decision"] == "auto_accepted"
         assert entries[1]["auto_accept_rule"] == rule_id("label_name_allowlist", ["Newsletters"])
 
-    # test_a_request_queued_behind_an_in_progress_accept_all_sees_the_new_rule
-    # lived here through P2: two concurrent gated_call()s for *different*
-    # args (so not a coalescing case) racing to create the same rule via
-    # Always allow, serialized deterministically by _popup_lock so the
-    # second was guaranteed to see the first's freshly-created rule via the
-    # in-lock re-check rather than showing its own dialog. P3 removes
-    # _popup_lock entirely and
-    # with it the guaranteed ordering this test depended on -- two
-    # concurrent calls for genuinely different args now race independently,
-    # with no serialization point left to assert a fixed outcome against.
-    # test_gate.py's TestCoalescing covers the case P3 actually guarantees
-    # instead: two concurrent calls for the *same* args share one card and
-    # one decision.
+    # No test here for two concurrent gated_call()s for *different* args
+    # (so not a coalescing case) racing to create the same rule via Always
+    # allow: nothing serializes them, so they race independently, with no
+    # serialization point to assert a fixed outcome against.
+    # test_gate.py's TestCoalescing covers the case that is guaranteed: two
+    # concurrent calls for the *same* args share one card and one decision.

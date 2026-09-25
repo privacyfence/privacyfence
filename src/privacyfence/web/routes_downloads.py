@@ -105,7 +105,7 @@ def build_routes(*, sessions: OrgSessionStore, store: DownloadStagingStore | Non
             # Missing, expired, wrong-principal, or already-claimed --
             # deliberately indistinguishable (download_staging.claim's own
             # docstring), so this endpoint never discloses which case
-            # applies to an attacker guessing tokens. SEC-18: no-store even
+            # applies to an attacker guessing tokens. No-store even
             # on this 404 -- a shared cache is free to key on the full path,
             # and this path (the token itself) is a one-time credential a
             # cache has no business retaining a response for either way.

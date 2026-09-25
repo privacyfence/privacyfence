@@ -26,14 +26,15 @@ already resolves for the tag): on every channel it prints a `::warning::` per ga
 more; on `stable` specifically, a gap additionally fails this script, which
 `finalize-release` runs as an ordinary step ahead of anything that attaches or publishes
 anything -- so a stable tag with broken or stale autostart coverage never ships.
-Pre-release tags stay ungated on purpose: that's where a flake is cheapest to absorb, and this is still not a live wait -- a stable tag with a real coverage gap
-fails immediately rather than blocking on a fresh run, so the "off the release's critical path"
+Pre-release tags stay ungated on purpose: that's where a flake is cheapest to absorb. And this is
+still not a live wait -- a stable tag with a real coverage gap fails immediately rather than
+blocking on a fresh run, so the "off the release's critical path"
 property this tier was built around never breaks. One re-run allowance: a run this finds red is
 not necessarily this release's fault -- if a maintainer judges it a flake, re-running that
 workflow's own failed jobs (not this script) updates the same run in place, and the next
 `finalize-release` attempt picks up the improved conclusion automatically, since this always reads
 the *latest* completed run reachable from the commit being released. A second red run on the same
-commit is real and must not be re-run away.
+commit is real and must not be re-run away. See ADR 0057.
 
 Usage (matches scripts/release_stats.py's own conventions -- reads GH_TOKEN/GITHUB_TOKEN, and
 keeps the pure decision (`evaluate`) separate from the network fetch and the `git` ancestor check
@@ -130,19 +131,19 @@ def evaluate(workflow: str, run: dict[str, Any] | None, run_is_ancestor: bool) -
     if run is None:
         return (
             f"{workflow} has no completed run at all -- no autostart coverage exists for this "
-            "release (privacyfence/privacyfence#374)."
+            "release (see docs/testing-policy.md's layer 6)."
         )
     if not run_is_ancestor:
         return (
             f"{workflow}'s most recent completed run ({run.get('html_url')}) is not an ancestor "
             "of this release's commit -- no autostart coverage exists for this exact release yet "
-            "(privacyfence/privacyfence#374)."
+            "(see docs/testing-policy.md's layer 6)."
         )
     conclusion = run.get("conclusion")
     if conclusion != "success":
         return (
             f"{workflow}'s most recent run reachable from this release did not succeed "
-            f"(conclusion={conclusion}): {run.get('html_url')} (privacyfence/privacyfence#374)."
+            f"(conclusion={conclusion}): {run.get('html_url')} (see docs/testing-policy.md's layer 6)."
         )
     return None
 
@@ -198,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
             "graphical-session workflow -- see the warnings above. If a failure looks like a "
             "flake, re-run that workflow's own failed jobs once and re-run this release; a "
             "second red run on the same commit is real and must not be re-run away "
-            "(privacyfence/privacyfence#374)."
+            "(see docs/testing-policy.md's layer 6)."
         )
         return 1
 

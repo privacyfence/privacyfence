@@ -1,8 +1,8 @@
 """Packaged-artifact lifecycle test for the Windows installer.
 
-The same role ``tests/integration/test_macos_packaged_smoke.py`` (TST-15)
-plays for the DMG and ``tests/integration/test_deb_packaged_lifecycle.py``
-(Phase 6.3) plays for the ``.deb``: install the actual built artifact -- not
+The same role ``tests/integration/test_macos_packaged_smoke.py`` plays for
+the DMG and ``tests/integration/test_deb_packaged_lifecycle.py`` plays for
+the ``.deb``: install the actual built artifact -- not
 a source checkout, not an editable dev install -- and exercise it as closely
 as possible to how a real user would.
 
@@ -1082,7 +1082,7 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Test 2 -- upgrade in place preserves user state (Phase 6 item 20)
+# Test 2 -- upgrade in place preserves user state
 # --------------------------------------------------------------------------- #
 
 def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tuple[Path, str]:
@@ -1275,7 +1275,7 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
         )
 
         # ── The service, against the image the installer just placed. A
-        # binPath pointing anywhere else is the whole #407 failure mode. ─────
+        # binPath pointing anywhere else could name a user-writable image. ──
         config = _service_config()
         assert config is not None, f"the {WINDOWS_SERVICE_NAME} service does not exist after install"
         assert str(install_dir / ALIAS_EXE_NAME).lower() in config.lower(), (

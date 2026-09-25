@@ -46,11 +46,11 @@ class TestWrap:
         assert '<div id="mine">x</div>' in html
 
     def test_onerror_tells_a_permanent_close_from_a_retrying_one(self):
-        # Issue #423 part 2: readyState CLOSED (a non-2xx response, e.g.
-        # this route's own 401 once the session has expired) never gets an
-        # automatic retry per the EventSource spec, unlike a transient
-        # network error -- the old handler set the same "reconnecting…"
-        # text for both, which lied forever on an expired tab.
+        # readyState CLOSED (a non-2xx response, e.g. this route's own 401
+        # once the session has expired) never gets an automatic retry per
+        # the EventSource spec, unlike a transient network error -- a
+        # handler that set the same "reconnecting…" text for both would lie
+        # forever on an expired tab.
         html = web_shell.wrap("", title="t", active="approvals")
         start = html.index("es.onerror = function ()")
         end = html.index("es.addEventListener('settings'")
@@ -68,7 +68,7 @@ class TestWrap:
 
 
 class TestBanner:
-    """#426 Phase 3: the "loud persistent banner" step_up_config.py's
+    """The "loud persistent banner" step_up_config.py's
     StepUpConfig.local_enrollment_banner() drives -- see that function's
     own docstring for when it fires."""
 
@@ -90,7 +90,7 @@ class TestBanner:
 
 
 class TestDismissibleNotice:
-    """B23 of the 4.1.0 action plan: a second, dismissible strip below
+    """A second, dismissible strip below
     banner_html -- see step_up_config.py's own off_notice() for the one
     real caller today."""
 
@@ -135,7 +135,7 @@ class TestDismissibleNotice:
 
 
 class TestNotifications:
-    """W8, 5deef1d8:docs/approval-list-ui-ux.md §4: tiers 0-1 only."""
+    """Tiers 0-1 only: the title badge and a local service-worker notification (ADR 0064)."""
 
     def test_registers_the_service_worker(self):
         html = web_shell.wrap("", title="t", active="approvals")
@@ -148,7 +148,7 @@ class TestNotifications:
         assert 'aria-live="polite"' in html
 
     def test_never_asks_for_permission_on_page_load(self):
-        # §4.4: only window.__pfNotifPrompt, called by approval_list_html.py
+        # Only window.__pfNotifPrompt, called by approval_list_html.py
         # after a decision -- never invoked unconditionally by this script.
         html = web_shell.wrap("", title="t", active="approvals")
         assert "Notification.requestPermission()" in html
@@ -157,7 +157,7 @@ class TestNotifications:
         assert "__pfNotifPrompt();" not in html
 
     def test_maybe_notify_never_reads_row_fields_directly(self):
-        # §4.3's hard invariant: the *only* thing allowed to decide what a
+        # The hard invariant: the *only* thing allowed to decide what a
         # notification says is notificationBody()'s own per-level
         # allowlist (see the test class below) -- maybeNotify just calls
         # it and hands the result to showNotification, never reaching into
@@ -172,9 +172,9 @@ class TestNotifications:
             assert forbidden not in notify_fn_body, forbidden
 
     def test_notification_body_allowlist_by_detail_level(self):
-        # P5's per-field content allowlist (5deef1d8:docs/approval-list-ui-ux.md
-        # §4.3): minimal (or a multi-approval grouped notification, which
-        # has no richer copy defined -- §4.2) never touches a row at all;
+        # The per-field content allowlist: minimal (or a multi-approval
+        # grouped notification, which has no richer copy defined) never
+        # touches a row at all;
         # `summary` -- the one field that can carry real gated content
         # (approvals.PendingApproval.summary -- see gate.py's call sites)
         # -- is read exactly once, and only inside the `detailed` branch.

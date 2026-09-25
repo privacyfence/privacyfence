@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def _populated_field_names(fields: dict[str, Any]) -> list[str]:
     """Alphabetized names of the fields that actually have a value -- same
-    "skip unset ones" filter _format_flat_fields uses, factored out so §3's
+    "skip unset ones" filter _format_flat_fields uses, factored out so new_info's
     field-name list and the preview table can never disagree about which
     fields count as "on this record"."""
     return sorted(key for key, value in fields.items() if value not in (None, ""))
@@ -262,10 +262,10 @@ class SalesforceConnector(Connector):
         # Salesforce has no auto/no-gate search or list of record contents at
         # all (unlike every other connector's list_* tool) -- Object
         # type/Record ID are Claude's own input to this very call (kept in
-        # §1 as identifying context, not "known"), but nothing about the
+        # the preview as identifying context, not "known"), but nothing about the
         # record's actual fields, including its Name, is known beforehand.
         # The record can have an arbitrary, per-object-type field set (not a
-        # fixed row count), so §3 names which fields are on this record
+        # fixed row count), so new_info names which fields are on this record
         # (not a fixed row per field), and the actual values render as a
         # Field/Value table in the right-pane preview instead of a text dump.
         field_names = _populated_field_names(record_fields)
@@ -360,7 +360,7 @@ class SalesforceConnector(Connector):
         records = await self._fetch(self._sf.search, search_term, object_types, account_id, max_results)
         result = [asdict(r) for r in records]
         # Search term/Object types/Account ID are Claude's own input to this
-        # call (kept in §1 as identifying context); Results (count) and the
+        # call (kept in the preview as identifying context); Results (count) and the
         # actual match list are only learned once approved -- no auto/
         # no-gate search exists for Salesforce at all.
         preview = {

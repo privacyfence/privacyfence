@@ -1,22 +1,14 @@
-"""Real-socket contract test for the ``/mcp`` endpoint -- the P5 successor
-of test_bridge_daemon_contract.py, which drove the real Node bridge over
-real MCP-over-stdio against a real ``ipc_server.IPCServer``.
+"""Real-socket contract test for the ``/mcp`` endpoint.
 
-That test existed because the bridge (TypeScript) and the daemon (Python)
-were two independently hand-maintained implementations of one wire
-protocol, and nothing else in the suite proved they agreed with each
-other -- tests/unit/web/test_routes_mcp.py drives the real ASGI app, but
-over an in-process ``httpx2.ASGITransport`` with no real socket, so a
+tests/unit/web/test_routes_mcp.py drives the real ASGI app, but over an
+in-process ``httpx2.ASGITransport`` with no real socket, so a
 real-network-stack bug (uvicorn startup, real TCP binding, real HTTP
-framing) could still slip through.
-
-P5 deleted the bridge and ``ipc_server.py`` once both had a stable release
-behind them. What is left to contract-test here
-is narrower, and needs no Node at all: does a real ``web/server.py``
-``WebServer``, bound to a real loopback socket, actually speak Streamable
-HTTP correctly to the official ``mcp`` Python client -- the same client
-Claude Code/Desktop itself uses, and mcpb/shim/'s own stdio proxy sits in
-front of for Desktop (covered separately, with the shim included, by
+framing) could still slip through. This module closes that gap: does a
+real ``web/server.py`` ``WebServer``, bound to a real loopback socket,
+actually speak Streamable HTTP correctly to the official ``mcp`` Python
+client -- the same client Claude Code/Desktop itself uses, and
+mcpb/shim/'s own stdio proxy sits in front of for Desktop (covered
+separately, with the shim included, by
 tests/integration/test_shim_mcp_contract.py). Needs only the `mcp`
 package (test-only, see pyproject.toml's [project.optional-dependencies]
 .test) -- no Node, no npm, no subprocess.
@@ -144,10 +136,10 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
             async with ClientSession(read, write) as session:
                 init_result = await session.initialize()
 
-                # Issue #396 Part A: the instructions string is what tells a
-                # client that an empty/partial tool list means "not set up
-                # yet", not "nothing to do here" -- a real client (not just
-                # the in-process ASGI transport test) actually receives it.
+                # The instructions string is what tells a client that an
+                # empty/partial tool list means "not set up yet", not
+                # "nothing to do here" -- a real client (not just the
+                # in-process ASGI transport test) actually receives it.
                 assert init_result.instructions
                 assert "privacyfence_status" in init_result.instructions
 
@@ -166,9 +158,9 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
 
 
 async def test_connector_set_swap_pushes_a_real_tools_list_changed_notification(running_mcp_server):
-    """Issue #396 Part C, end to end: a real client sees
+    """End to end: a real client sees
     tools.list_changed=True at initialize (the NotificationOptions override
-    Phase 0's spike found necessary), and a connector-set swap -- the same
+    without which the SDK advertises False), and a connector-set swap -- the same
     call SettingsController.refresh_connectors() makes in production --
     actually reaches it as a real notifications/tools/list_changed message,
     not just a call that doesn't raise.

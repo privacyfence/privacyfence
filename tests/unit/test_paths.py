@@ -96,7 +96,7 @@ class TestDataDir:
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_created_at_0700_not_the_process_umask(self, monkeypatch, tmp_path):
-        """SEC-09: this directory holds every credential/token file this
+        """This directory holds every credential/token file this
         install has, so its own permissions matter regardless of what an
         individual file's chmod does."""
         monkeypatch.setattr(paths, "is_bundled", lambda: True)
@@ -110,7 +110,7 @@ class TestDataDir:
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_re_tightens_a_pre_existing_directory_with_looser_permissions(self, monkeypatch, tmp_path):
-        """A pre-SEC-09 install's data_dir() may already exist at whatever
+        """An older install's data_dir() may already exist at whatever
         the umask left it with (e.g. a shared 0755) -- every subsequent
         resolution must tighten it, not just the first one that creates
         it."""
@@ -189,7 +189,7 @@ class TestOrgDir:
 
 
 class TestSafePrincipalId:
-    """P7, org_identity.py's principal_from_claims: an OIDC `sub` claim is
+    """org_identity.py's principal_from_claims: an OIDC `sub` claim is
     opaque per spec and may not be filesystem-safe."""
 
     @pytest.mark.parametrize("safe_id", ["alice", "alice@example.com", "a1b2-c3_d4.e5"])

@@ -146,8 +146,8 @@ def test_clients_requirement_sentence():
 
 
 def test_every_page_gets_the_same_header_and_footer():
-    # The partials carried over Wave 0's header, menu and footer unchanged: the four pages must
-    # still be identical there, the download page's CTA aside.
+    # The partials render one header, menu and footer: the four pages must
+    # be identical there, the download page's CTA aside.
     def chrome(path):
         page = read_page(path)
         header = page[page.index('<a class="skip-link"') : page.index("</header>")]

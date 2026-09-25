@@ -39,8 +39,8 @@
 #define AliasExeName "privacyfence-app.exe"
 ; Matches daemon.ts's Windows DEFAULT_APP_PATH -- keep these in sync if this changes.
 #define InstallDirName "PrivacyFence"
-; #428 Phase 4 (B5c). Both of these are created by
-; scripts/windows_privilege_separation.ps1's `enable` -- which, since ADR 0003
+; Both of these are created by
+; scripts/windows_privilege_separation.ps1's `enable` -- which, per ADR 0003
 ; decision 4, [Code]'s CurStepChanged(ssPostInstall) below runs as part of
 ; every install. They are still named here rather than derived, because
 ; *uninstall* keeps a floor under that script's own `uninstall` (see
@@ -69,10 +69,7 @@ SolidCompression=yes
 ; creates a Windows service, a local group and an ACL'd %ProgramData%
 ; directory -- none of which a non-elevated token can do. It also has to be a
 ; machine-wide install: Assert-ImageProtected refuses to run a service out of
-; a directory the signed-in user can rewrite. This used to be `lowest`; why
-; that stopped working (#410: a LogonTrigger task needs
-; SeCreateGlobalPrivilege) is in git history, with the daemon sign-in task it
-; was about.
+; a directory the signed-in user can rewrite.
 PrivilegesRequired=admin
 ; ADR 0054. Only a native x64 Windows: `x64os` (Inno Setup 6.3+) refuses
 ; 32-bit Windows and every arm64 Windows, including Windows 11, whose x64
@@ -108,20 +105,19 @@ Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 ; comment). Kept at its versioned filename so a user who's kept an older
 ; installer's copy doesn't collide with it.
 Source: "{#McpbPath}"; DestDir: "{app}"; Flags: ignoreversion
-; #428 Phase 4 (B5c): the privilege-separation tool and the companion
+; The privilege-separation tool and the companion
 ; autostart task it registers. Both are *installed* rather than extracted to
 ; {tmp}, because both outlive the install: the script is how a human inspects
 ; (`status`) the separation afterwards and what the uninstaller runs
 ; (`uninstall`), and the template is what a later re-run of `enable` renders
 ; the companion task from.
 ;
-; This used to be the whole of it -- the script shipped, nothing ran it, and a
-; Windows install stayed unseparated until somebody typed `enable` into an
-; elevated PowerShell. ADR 0003 decision 4 withdraws that: [Code]'s
+; Shipping the script is not enough on its own: nothing would run it, and a
+; Windows install would stay unseparated until somebody typed `enable` into
+; an elevated PowerShell. Per ADR 0003 decision 4, [Code]'s
 ; CurStepChanged(ssPostInstall) below runs `enable` itself, with Setup's own
 ; elevated token, and a failure of that step fails the install. The .deb's
-; postinst is the same shape; the difference was never a design, only which
-; platform had an installer hook wired up.
+; postinst has the same shape.
 ;
 ; Renamed to privilege-separation.ps1 on the way in, and the template lands
 ; beside it: the script resolves its template directory as "the checkout's
@@ -137,20 +133,19 @@ Source: "windows\privacyfence-companion-task.xml.tmpl"; DestDir: "{app}"; Flags:
 ; ADR 0031: opens Approvals through the companion (--launch), which starts
 ; the tray icon first if it isn't running -- the same thing a double-click on
 ; the macOS app does. Not the daemon executable (a headless service; nothing
-; to show), and no longer the bare settings URL it used to be, which only
-; worked for a browser that already had a session cookie.
+; to show), and not a bare settings URL, which only works for a browser
+; that already has a session cookie.
 Name: "{group}\{#AppName}"; Filename: "{app}\{#CompanionExeName}"; Parameters: "--launch"; \
     IconFilename: "{app}\{#AppExeName}"
-; #428 Phase 4 (B5c): the companion app (ADR 0002), as a thing a human can
+; The companion app (ADR 0002), as a thing a human can
 ; start by hand. On a privilege-separated install it is started at sign-in by
 ; its own Scheduled Task and this shortcut is the recovery path when that tray
 ; icon has been quit or has crashed -- the daemon is a service by then, so
 ; there is nothing else in the user's session that can mint a sign-in link or
 ; open a browser for a connector's OAuth flow. On an ordinary install it is
-; simply the opt-in way to run it, which is what ADR 0002 Phase 3 always
-; intended. The entry above covers the same recovery (--launch starts the
-; tray when none is running) and opens Approvals as well; this one only
-; starts the tray.
+; simply the opt-in way to run it (ADR 0002). The entry above covers the
+; same recovery (--launch starts the tray when none is running) and opens
+; Approvals as well; this one only starts the tray.
 Name: "{group}\{#AppName} Companion"; Filename: "{app}\{#CompanionExeName}"; \
     IconFilename: "{app}\{#CompanionExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
@@ -314,7 +309,7 @@ end;
 
 (* The same captured output, as one string, for a message a human will
    actually read -- Log() goes to Setup's log file, which nobody opens
-   unprompted (the whole lesson of privacyfence/privacyfence#410). When the
+   unprompted. When the
    separation step below fails, what `enable` printed about *why* is the only
    useful thing Setup can say, so it is carried into the error itself. *)
 function ReadCapturedOutput(OutFile: String): String;
@@ -602,10 +597,9 @@ begin
        Every continuation line below starts with a quoted string, never a
        bare #13#10 -- Inno's preprocessor (ISPP) treats a line whose first
        non-blank character is '#' as a directive line, and "unknown
-       preprocessor directive" is a compile-time error, not a Pascal one, so
-       this bit it once already (privacyfence/privacyfence#411's own CI).
-       Each #13#10 pair stays glued to the end of the previous line
-       instead. *)
+       preprocessor directive" is a compile-time error, not a Pascal one, and
+       only the Windows build job would find it. Each #13#10 pair stays
+       glued to the end of the previous line instead. *)
     if not SeparateInstall(SeparationOutput) then
     begin
       Log('SeparateInstall: FAILED; aborting the installation.');

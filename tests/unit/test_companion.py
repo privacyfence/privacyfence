@@ -1,4 +1,4 @@
-"""Tests for privacyfence.companion -- #428 Phase 3 (ADR 0002). Real
+"""Tests for privacyfence.companion (ADR 0002). Real
 coverage of the pure dispatch logic (_open_path/_quit_daemon/_run_action/
 main's argparse wiring) plus a couple of true end-to-end runs against real
 ControlChannelServer/CompanionChannelServer instances.
@@ -8,10 +8,9 @@ neither of which this CI OS has (or, on Linux, ever will -- see
 companion.py's own module docstring for why pystray isn't even a dependency
 here). What _run_tray *wires up* does not: TestTrayLoop below stubs both at
 the deferred import _run_tray does itself, and exercises the menu, the
-channel's setup/teardown and the Quit ordering. That stopped being optional
-when the self-approval plan added two behaviours to that function -- Phase
-1's recovery-code item and Phase 2's attested _open_path -- neither of which
-anything else reaches.
+channel's setup/teardown and the Quit ordering. That is not optional: the
+tray carries two behaviours -- the recovery-code item and the attested
+_open_path -- that nothing else reaches.
 """
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ from privacyfence.web.session_auth import BootstrapStore
 
 
 class TestOpenPath:
-    """Three shapes, since the self-approval plan's Phase 2 -- see
+    """Three shapes -- see
     ``_open_path``'s own docstring. Which one runs depends on who owns the
     companion channel, because that is the process the daemon calls back to
     before it will mint a session that can approve."""
@@ -249,7 +248,7 @@ class TestMainArgvDispatch:
         assert companion.main([]) == 0
 
     def test_serve_flag_runs_the_channel_on_a_non_tray_platform(self, monkeypatch):
-        # #428 Phase 4 (B5b): what the XDG autostart entry a separated Linux
+        # What the XDG autostart entry a separated Linux
         # install writes actually runs. Without it there is no persistent
         # process in the user's session for a service-hosted daemon to hand a
         # connector OAuth URL to.
@@ -384,10 +383,9 @@ class TestPendingSeparation:
         assert "log out and back in" not in caplog.text
 
     def test_a_different_accounts_pending_join_is_completed_too(self, monkeypatch, caplog):
-        # ADR 0008 retired the local-mode-fixes plan's Phase 2 §2.6 interim
-        # guard: a non-owner account pending join is completed exactly like
-        # the owner's own always was -- each gets their own isolated
-        # principal, so there is no longer anything to refuse.
+        # ADR 0008 D2: a non-owner account's pending join is completed
+        # exactly like the owner's -- each gets their own isolated
+        # principal, so there is nothing to refuse.
         monkeypatch.setattr(
             companion.privilege_separation, "separation",
             lambda: SimpleNamespace(service_group="privacyfence"),
@@ -488,7 +486,7 @@ class TestCompanionEndToEnd:
             server.stop()
 
     def test_serve_is_that_same_channel_and_nothing_else(self, tmp_path, monkeypatch):
-        """#428 Phase 4 (B5b): `privacyfence-companion --serve` run against a
+        """`privacyfence-companion --serve` run against a
         real daemon-side caller. This is the whole of what a separated Linux
         install autostarts -- no tray, no menu -- and the thing it has to
         deliver is precisely the relay the previous test exercises, so assert
@@ -534,7 +532,7 @@ class TestCompanionEndToEnd:
 
 
 class TestRecoveryCodeAction:
-    """Plan item 1.3's "re-presented by the companion" half. The code itself
+    """The recovery code's "re-presented by the companion" half. The code itself
     never travels back over this call -- the daemon calls back into this
     process's own channel to put it on screen -- so all this action can do
     is succeed or explain why it didn't."""
@@ -575,7 +573,7 @@ class TestRecoveryCodeAction:
 
 
 class TestFirstEnrollmentOffer:
-    """Plan item 1.2: the other half of defaulting step-up on for packaged
+    """The other half of defaulting step-up on for packaged
     installs. A fresh install requires a passkey it does not have, which is
     a safe state (nothing is approved) but not a usable one, and nobody is
     looking at a page they have no reason to open."""
@@ -683,8 +681,7 @@ class TestFirstEnrollmentOffer:
 
 class TestMenuModel:
     """``_menu_model()``/``_status_line_text()`` -- pystray-free on purpose
-    (the plan's own testing note: test the pure function, don't drive
-    pystray). ``TestTrayLoop`` below still exercises the real
+    (test the pure function, don't drive pystray). ``TestTrayLoop`` below still exercises the real
     ``pystray.MenuItem`` wiring end to end, but every state/visibility rule
     itself is checked here directly."""
 
@@ -917,9 +914,8 @@ class TestTrayLoop:
     called untestable. Running the real loop still is: it needs a display,
     and pystray/Pillow are not dependencies on this OS. What is testable,
     with those two stubbed at the import ``_run_tray`` does itself, is
-    everything the tray is *wiring up* -- and both halves of the self-approval
-    plan added to it (Phase 1 the recovery-code item, Phase 2 the attested
-    ``_open_path``), so the menu had grown two behaviours nothing checked.
+    everything the tray is *wiring up* -- including the recovery-code item
+    and the attested ``_open_path``, two behaviours nothing else checks.
     """
 
     @pytest.fixture
@@ -928,7 +924,7 @@ class TestTrayLoop:
         so ``_run_tray``'s own deferred import picks them up, plus a captured
         icon so the test can invoke the menu callbacks the way a click would.
 
-        The local-mode-fixes plan's Phase 2: ``daemon_status.probe()`` is stubbed to a fixed
+        ``daemon_status.probe()`` is stubbed to a fixed
         ``running`` status by default -- ``_run_tray()`` calls it before the
         menu is even built, and a real probe would reach for a control
         socket/service manager this test has no business touching. The
