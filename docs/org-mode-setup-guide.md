@@ -629,6 +629,8 @@ With step-up on:
 - With `--step-up-require-passkey`, only a passkey is accepted. Someone with no passkey is sent to
   `/security` to enroll one.
 - Approving several cards at once takes a single passkey confirmation that covers the selected set.
+  Someone with no passkey cannot approve several at once, with or without
+  `--step-up-require-passkey`: they approve each card on its own, or enroll a passkey first.
   Denying never needs step-up.
 
 **Sensitive settings writes.** Adding or removing an always-allow rule, changing the privacy policy

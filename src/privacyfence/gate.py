@@ -193,9 +193,10 @@ class GateDeniedError(RuntimeError):
     this type never carries a third party's own exception text.
     safe_errors.py's public_message() relies on exactly this distinction -- a bare
     ``RuntimeError`` is *not* trusted to reach an MCP client verbatim, but a
-    named subclass (this one, plus approvals.TooManyPendingApprovalsError
-    and connector_registry.TooManyPrincipalsError, both reviewed the same
-    way) is. Don't raise plain ``RuntimeError(...)`` in this module for that
+    named subclass (this one, plus approvals.TooManyPendingApprovalsError,
+    approvals.IdenticalWriteAwaitingApprovalError and
+    connector_registry.TooManyPrincipalsError, all reviewed the same way)
+    is. Don't raise plain ``RuntimeError(...)`` in this module for that
     reason -- use this instead so a future call site here gets the same
     trust by construction rather than by accident.
     """
@@ -431,6 +432,11 @@ async def _resolve_decision(
     split to time, so there is nothing new to report for it.
     ``decided_via``/``batch_id`` are "" unless the human decided this through the binder's batch decide
     endpoint -- see approvals.PendingApproval's own fields.
+
+    Raises approvals.IdenticalWriteAwaitingApprovalError, releasing nothing,
+    for a write whose identical twin is still waiting on its own approval
+    (ADR 0073) -- surfaced and audited exactly like
+    TooManyPendingApprovalsError from the same call.
     """
     if registry is None:
         decision, rule_name = await interact(None)
@@ -445,21 +451,33 @@ async def _resolve_decision(
         request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
         operation_key=operation_key, review_ctx=ctx, pii_forces_confirmation=bool(pii_forces_confirmation),
         pii_detected=pii_detected, pii_categories=pii_categories, claude_reason=claude_reason,
+        waiting=True,
     )
-    if created:
-        asyncio.ensure_future(_drive_interaction(registry, approval, interact))
+    # This call is now counted as a waiter on ``approval`` (waiting=True
+    # above); release_waiter() below undoes that however the wait ends.
+    try:
+        if created:
+            asyncio.ensure_future(_drive_interaction(registry, approval, interact))
 
-    # Collapse the hold window to zero once this
-    # principal already has something else waiting, rather than blocking
-    # this call for the full window too -- see approvals.PendingApproval
-    # Registry.has_other_live()'s own docstring.
-    hold_window = registry.hold_window
-    if registry.adaptive_hold and registry.has_other_live(approval.principal_id, approval.id):
-        hold_window = 0.0
+        # Collapse the hold window to zero once this
+        # principal already has something else waiting, rather than blocking
+        # this call for the full window too -- see approvals.PendingApproval
+        # Registry.has_other_live()'s own docstring.
+        hold_window = registry.hold_window
+        if registry.adaptive_hold and registry.has_other_live(approval.principal_id, approval.id):
+            hold_window = 0.0
 
-    decided = await registry.wait_async(approval, hold_window)
-    if not decided:
-        return _PENDING, approval, None, "", ""
+        decided = await registry.wait_async(approval, hold_window)
+        if not decided:
+            return _PENDING, approval, None, "", ""
+        # Decided within the hold window: this call collects the outcome
+        # directly, so a write is consumed exactly as a ledger hit would be,
+        # and an identical write afterwards goes back through the gate
+        # (ADR 0073). Done while still counted as a waiter, so no other call
+        # can take the same write from the ledger in between.
+        registry.mark_collected(approval)
+    finally:
+        registry.release_waiter(approval)
     return approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via, approval.batch_id
 
 
@@ -530,9 +548,12 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
     _prune_stale pattern rather than running on a background timer. Every
     approval this finds is audited as "expired": one still un-answered past
     its pending TTL (no decision means pending, then expired, which
-    counts as denied), or one whose human decision was never reclaimed by a
-    re-issued call before the ledger TTL ran out (approvals.py's own
-    docstring on why "expired" covers that case too)."""
+    counts as denied), or one whose human decision no call ever collected
+    (not a re-issued call through the ledger, not the original call within
+    its hold window) before the ledger TTL ran out. A decided outcome that
+    did reach a caller -- a replayed read included -- lapses silently, since
+    its release is already audited (approvals.PendingApprovalRegistry.
+    pop_expired_ledger_events(), ADR 0073)."""
     if registry is None:
         return
     # Each audit below runs inside agent_scope() of the identity the approval

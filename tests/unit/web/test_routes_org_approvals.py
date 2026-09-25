@@ -869,8 +869,12 @@ class TestBatchStepUp:
     """The org-mode counterpart of test_routes_approvals.py's own
     TestBatchStepUp -- same mechanics, scoped to current_principal() the
     same way every other read/write here is, and deliberately with no
-    IdP-reauth fallback even here (see ``_batch_step_up_response``'s own
-    docstring)."""
+    IdP-reauth fallback even here (see web/approval_step_up.py's
+    ``batch_step_up_response``). Where the modes differ: with nothing
+    enrolled and ``require_passkey`` off, an approving batch that needs
+    step-up is refused here with a ``400`` and nothing applied, where local
+    mode applies it -- a single org-mode decision always has the IdP link to
+    fall back to, and a batch has none (ADR 0065, ADR 0066)."""
 
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):
@@ -1013,26 +1017,45 @@ class TestBatchStepUp:
         assert not accept_me.event.is_set()
         assert not deny_me.event.is_set()
 
-    def test_require_passkey_off_with_nothing_enrolled_lets_it_through_with_no_idp_link(self):
-        # Deliberately different from this module's own single-decision
-        # behavior (which would offer idp_stepup_url here instead) -- see
-        # module docstring's own note on why the batch endpoint has no IdP
-        # fallback at all.
+    def test_require_passkey_off_with_nothing_enrolled_refuses_the_batch_with_nothing_applied(self):
+        # A single decision here would offer idp_stepup_url instead; a batch
+        # has no IdP fallback, so it is refused rather than applied unguarded.
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
-        approval = _register(web_ui, ALICE, gate_kind="popup")
+        accept_me = _register(web_ui, ALICE, gate_kind="popup", dedupe_key="k1")
+        deny_me = _register(web_ui, ALICE, dedupe_key="k2")
         client = _client(app)
         session_id = _signed_in(client, sessions, ALICE)
         r = client.post("/api/approvals/batch/decide", json={
-            "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
-            "batch_id": "attacker-forged-batch-id",
+            "csrf": session_id,
+            "items": [{"id": accept_me.id, "result": "accept"}, {"id": deny_me.id, "result": "deny"}],
+        })
+        assert r.status_code == 400
+        body = r.json()
+        assert body["error"] == "batch_step_up_unavailable"
+        assert "/security" in body["message"]
+        assert "from its card" in body["message"]
+        assert "idp_stepup_url" not in body
+        assert not accept_me.event.is_set()
+        assert not deny_me.event.is_set()
+        still_pending = {a.id for a in web_ui.deferred_registry.list_pending(ALICE.id)}
+        assert {accept_me.id, deny_me.id} <= still_pending
+
+    def test_require_passkey_off_with_nothing_enrolled_still_applies_a_deny_only_batch(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        first = _register(web_ui, ALICE, gate_kind="popup", dedupe_key="k1")
+        second = _register(web_ui, ALICE, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [{"id": first.id, "result": "deny"}, {"id": second.id, "result": "deny"}],
         })
         assert r.status_code == 200
-        assert r.json()["results"] == [{"id": approval.id, "outcome": "applied"}]
-        # This fallthrough (no enrolled credential, require_passkey off)
-        # never verified the assertion, so the client-supplied batch_id must
-        # not reach the audit trail either.
-        assert r.json()["batch_id"] != "attacker-forged-batch-id"
-        assert approval.batch_id == r.json()["batch_id"]
+        assert r.json()["results"] == [
+            {"id": first.id, "outcome": "applied"}, {"id": second.id, "outcome": "applied"},
+        ]
+        assert first.event.is_set()
+        assert second.event.is_set()
 
     def test_per_item_mode_refuses_the_batch_with_nothing_applied(self):
         app, sessions, web_ui = _app(

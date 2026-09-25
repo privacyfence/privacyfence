@@ -42,7 +42,7 @@ import pytest
 import yaml
 
 from privacyfence import approval_ui, auto_accept, gate
-from privacyfence.approvals import PendingApprovalRegistry
+from privacyfence.approvals import IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.pii_detector import init_pii_detection
 from privacyfence.policy import describe as policy_describe
@@ -2698,6 +2698,164 @@ class TestDeferredApprovalProtocol:
         # Clean up the third call's own still-running background interaction.
         registry.answer(registry.get(third["approval_id"]).id, "deny")
         await asyncio.sleep(0.02)
+
+    async def _decide_first_pending(self, registry, decision, *, exclude=()):
+        """Answer the first pending card whose id is not in ``exclude``, once
+        one appears, and return its id."""
+        assert await wait_until_async(
+            lambda: any(a.id not in exclude for a in registry.list_pending()), timeout=2.0,
+        )
+        [card] = [a for a in registry.list_pending() if a.id not in exclude]
+        registry.answer(card.id, decision)
+        return card.id
+
+    async def test_write_decided_within_the_hold_window_is_single_use(self, monkeypatch, audit_dir):
+        # The decision reaches the original call directly, not through the
+        # ledger; an identical write afterwards must still go back through
+        # the gate instead of replaying it (ADR 0073).
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        kwargs = base_kwargs(gate="popup", tool="gmail_create_draft")
+
+        first, first_id = await asyncio.gather(
+            gate.gated_call(**kwargs), self._decide_first_pending(registry, "accept"),
+        )
+        assert first is FILTERED
+
+        # A new card, not a replay: deny it, and the call is denied.
+        with pytest.raises(gate.GateDeniedError):
+            await asyncio.gather(
+                gate.gated_call(**kwargs),
+                self._decide_first_pending(registry, "deny", exclude={first_id}),
+            )
+
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions == ["approved", "rejected"]
+
+    async def test_write_decided_within_the_hold_window_leaves_no_expired_row(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=0.05)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+
+        first, _ = await asyncio.gather(
+            gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft")),
+            self._decide_first_pending(registry, "accept"),
+        )
+        assert first is FILTERED
+
+        await asyncio.sleep(0.1)  # past the ledger TTL
+        gate._pop_registry_expirations(registry)
+
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions == ["approved"]
+
+    async def test_read_decided_within_the_hold_window_leaves_no_expired_row(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=0.05)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+
+        first, _ = await asyncio.gather(
+            gate.gated_call(**base_kwargs(gate="review")), self._decide_first_pending(registry, "accept"),
+        )
+        assert first is FILTERED
+
+        await asyncio.sleep(0.1)  # past the ledger TTL
+        gate._pop_registry_expirations(registry)
+
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions == ["approved"]
+
+    async def test_replayed_read_leaves_no_expired_row_after_the_ledger_ttl(self, monkeypatch, audit_dir):
+        # A read released from the ledger was released: its lapse is not
+        # "expired", which means nothing was released (ADR 0073).
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+
+        first = await gate.gated_call(**base_kwargs(gate="review"))
+        assert first["status"] == "approval_pending"
+        approval = registry.get(first["approval_id"])
+        registry.answer(approval.id, "accept")
+        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+
+        assert await gate.gated_call(**base_kwargs(gate="review")) is FILTERED
+        assert await gate.gated_call(**base_kwargs(gate="review")) is FILTERED  # replays
+
+        approval.ledger_expires_at = 0.0  # the ledger TTL lapses
+        gate._pop_registry_expirations(registry)
+
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions == ["approval_pending", "approved", "approved"]
+        assert registry.get(approval.id) is None  # still cleaned up
+
+    async def test_uncollected_decision_is_still_audited_as_expired(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+
+        first = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        assert first["status"] == "approval_pending"
+        approval = registry.get(first["approval_id"])
+        registry.answer(approval.id, "accept")
+        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+
+        approval.ledger_expires_at = 0.0  # nobody came back for it
+        gate._pop_registry_expirations(registry)
+
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions == ["approval_pending", "expired"]
+
+    async def test_concurrent_identical_write_is_refused_while_the_first_waits(self, monkeypatch, audit_dir):
+        # One decision never releases two writes: the second identical call,
+        # issued while the first is still waiting on its card, is refused
+        # and releases nothing; the first gets the decision (ADR 0073).
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        kwargs = base_kwargs(gate="popup", tool="gmail_create_draft")
+
+        first = asyncio.create_task(gate.gated_call(**kwargs))
+        assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+
+        with pytest.raises(IdenticalWriteAwaitingApprovalError, match="already awaiting approval"):
+            await gate.gated_call(**kwargs)
+        assert len(registry.list_pending()) == 1  # no second card either
+
+        registry.answer(registry.list_pending()[0].id, "accept")
+        assert await first is FILTERED
+
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert sorted(decisions) == ["approved", "error"]  # the refusal, then the one release
+        assert decisions.count("approved") == 1
+
+    async def test_reissued_write_after_pending_still_collects_its_decision(self, monkeypatch, audit_dir):
+        # Coalescing a write onto an approval nobody waits on is how a
+        # deferred write collects its decision, so it must keep working.
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        kwargs = base_kwargs(gate="popup", tool="gmail_create_draft")
+
+        first = await gate.gated_call(**kwargs)
+        assert first["status"] == "approval_pending"
+        registry.hold_window = 5.0
+
+        second, _ = await asyncio.gather(
+            gate.gated_call(**kwargs), self._decide_first_pending(registry, "accept"),
+        )
+        assert second is FILTERED
+
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
+        assert decisions == ["approval_pending", "approved"]
+        assert registry.get(first["approval_id"]) is None  # consumed on collection
 
 
 class TestAdaptiveHoldWindow:

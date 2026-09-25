@@ -1232,6 +1232,9 @@ class TestBatchStepUp:
         assert not deny_me.event.is_set()  # nothing applied -- not even the deny
 
     def test_require_passkey_off_with_nothing_enrolled_lets_it_through(self):
+        # Local mode's batch follows its single-decision rule here (ADR
+        # 0066): applied without step-up. Org mode refuses the same batch --
+        # test_routes_org_approvals.py's TestBatchStepUp pins that half.
         app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
         approval = _register(web_ui, gate_kind="popup")
         client = _client(app)

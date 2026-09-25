@@ -4,7 +4,8 @@
 
 Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-17 in `2fc760aa`, merged as
 [#471](https://github.com/privacyfence/privacyfence/pull/471) under
-[#426](https://github.com/privacyfence/privacyfence/issues/426)).
+[#426](https://github.com/privacyfence/privacyfence/issues/426)). The banner wording below
+followed as part of fixing https://github.com/privacyfence/privacyfence/issues/741.
 
 ## Context
 
@@ -47,8 +48,8 @@ The daemon starts and serves in this state. It does not raise a `ConfigurationEr
 - The daemon is closed for releases and open for repair: `/security` and denies keep working, and
   nothing step-up covers is released.
 - A decision outside `step_up.scope` is still released by a session. Under the default scope
-  (ADR 0067) that is an unflagged read. The banner's wording ("approving decisions and sensitive
-  settings changes are blocked") does not make that distinction.
+  (ADR 0067) that is an unflagged read. The banner says so by naming what is blocked as
+  "approvals that need step-up and sensitive settings changes", not every approving decision.
 - `enable_step_up` refuses to create this state from the UI (ADR 0068). It arises from a default
   or a hand edit, not from a click.
 

@@ -3239,12 +3239,16 @@ class TestForUserKeepsTheRecordedOwner:
         assert result.returncode == 0, result.stdout + result.stderr
         return root
 
+    # The PowerShell run above has 120 s of its own; the suite-wide 30 s timeout would cut a cold
+    # Windows PowerShell start short of that on a busy runner.
+    @pytest.mark.timeout(150)
     @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
     def test_a_second_for_user_leaves_the_windows_owner_alone(self, tmp_path, monkeypatch):
         root = self._run_windows(tmp_path, owner_user="bob", recorded="alice")
 
         assert self._recorded_owner("win32", root, monkeypatch) == "alice"
 
+    @pytest.mark.timeout(150)
     @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
     def test_the_first_windows_for_user_on_a_machine_only_install_records_the_owner(self, tmp_path, monkeypatch):
         root = self._run_windows(tmp_path, owner_user="alice", recorded="")
