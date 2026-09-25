@@ -56,7 +56,7 @@ _PATTERNS = {
 }
 
 # What may precede a section reference or plan item ID when it cites something that still exists. A
-# Markdown path that follows a commit (`<sha>:docs/x.md`) names a document that no longer does.
+# Markdown path that follows a commit and a colon names a document that no longer does.
 _CITATION = re.compile(
     r"(?:ADR \d{4}(?:'s)?(?: decision)?|RFC ?\d+|WebAuthn(?: L\d)?|Debian policy|(?<![\w./:-])[\w./-]+\.md`?(?:'s)?)"
     r"[,:]?\s*$"
@@ -160,7 +160,7 @@ def test_the_patterns_catch_the_shapes_they_exist_for():
     assert line_hits("src/x.py", '"""F5 of the review') == [("plan item ID", "F5")]
     assert line_hits("src/x.py", "F9's rule id") == [("plan item ID", "F9")]
     assert line_hits("src/x.py", "the PSC-4a merge") == [("finding ID", "PSC-4")]
-    assert line_hits("src/x.py", "5deef1d8:docs/ux.md §3") == [("section reference", "§3")]
+    assert line_hits("src/x.py", "5deef1d8:docs/approval-list-ui-ux.md §3") == [("section reference", "§3")]
 
 
 def test_citations_and_data_are_not_history():
