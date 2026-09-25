@@ -52,6 +52,7 @@ def test_the_script_downloads_only_through_the_worker():
     # GitHub is linked only for release notes, and R2 is never named.
     assert "const API = 'https://downloads.privacyfence.eu';" in SCRIPT
     assert "`${API}/download/version/" in SCRIPT
+    assert "rel: 'nofollow'" in SCRIPT  # a crawler following a link would be counted
     assert "r2.dev" not in SCRIPT and "r2.cloudflarestorage" not in SCRIPT
     assert re.findall(r"`\$\{REPO\}([^`$]*)", SCRIPT) == ["/releases/tag/v"]
 

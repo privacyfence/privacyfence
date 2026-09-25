@@ -136,6 +136,8 @@
     const link = document.createElement('a');
     link.className = 'button primary download-button';
     link.href = `${API}/download/${channel}/${artifact.id}`;
+    // A crawler following this would be counted as a download (docs/downloads-and-release-kpi.md).
+    link.rel = 'nofollow';
     link.textContent = 'Download';
     // The filename is the manifest's, not a guess -- and naming it in the accessible label means
     // a screen-reader user knows what they are about to get, not just "Download".

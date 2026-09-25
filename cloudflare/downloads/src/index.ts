@@ -13,6 +13,7 @@
  *   GET      /api/releases/history                         -- every published version, newest first
  *   GET      /api/stats/downloads                          -- aggregated D1 counters
  *   GET      /health                                       -- liveness probe, touches no binding
+ *   GET/HEAD /robots.txt                                   -- keeps crawlers off /download/, touches no binding
  *
  * `<artifact-id>` matches a manifest artifact's own `id` field (e.g. "macos-arm64",
  * "windows-x64", "linux-x64") -- see manifest.ts's Manifest/ManifestArtifact types, which match
@@ -127,6 +128,21 @@ async function handleStats(env: Env): Promise<Response> {
   }
 }
 
+// Crawlers that honor robots.txt stay off the counted download routes, so they never inflate the
+// download KPI (docs/downloads-and-release-kpi.md). /api/* and /health stay allowed: metadata
+// only, never counted. A host with no robots.txt (a 404) reads to a crawler as "allow everything".
+const ROBOTS_TXT = "User-agent: *\nDisallow: /download/\n";
+const ROBOTS_MAX_AGE_SECONDS = 86400;
+
+function robotsTxt(request: Request): Response {
+  return new Response(request.method === "HEAD" ? null : ROBOTS_TXT, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": `public, max-age=${ROBOTS_MAX_AGE_SECONDS}`,
+    },
+  });
+}
+
 // How long release metadata may be reused, by browsers and other HTTP caches and by this
 // Worker's edge cache. Short, so a new release shows up within minutes; long enough that page
 // views cannot drive the R2 reads (and, for the history, list operations) behind every response.
@@ -209,6 +225,12 @@ export default {
       // Deliberately touches neither binding: a real outage in R2/D1 shouldn't also take down
       // the liveness probe used to check the Worker itself deployed correctly.
       return jsonResponse({ status: "ok" });
+    }
+
+    if (pathname === "/robots.txt") {
+      if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed(["GET", "HEAD"]);
+      // Touches neither binding and records nothing, same as /health.
+      return robotsTxt(request);
     }
 
     if (pathname.startsWith("/api/")) {

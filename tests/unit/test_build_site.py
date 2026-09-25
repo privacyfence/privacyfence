@@ -180,6 +180,9 @@ def test_prerender_writes_cards_version_and_release_notes():
     assert 'href="https://github.com/privacyfence/privacyfence/releases/tag/v4.5.0">Release notes</a>' in page
     assert page.count('class="download-card"') == 3
     assert 'href="https://downloads.privacyfence.eu/download/stable/macos-arm64"' in page
+    # A crawler following a card's button would be counted as a download.
+    downloads = re.findall(r"<a [^>]*download-button[^>]*>", page)
+    assert len(downloads) == 3 and all('rel="nofollow"' in a for a in downloads)
     assert "PrivacyFence-4.5.0.dmg · 100.0 MB" in page
     assert "privacyfence_4.5.0_amd64.deb · 1 KB" in page
     assert "<h3>linux-arm64</h3>" in page  # an id the display map lacks still gets a card
@@ -368,6 +371,9 @@ def test_release_rows_link_the_worker_by_exact_version():
     assert '<span class="release-size">100.0 MB</span>' in rows
     assert f"<code>{'a' * 64}</code>" in rows
     assert "sbom" not in rows and "cdx.json" not in rows
+    # A crawler following an installer link would be counted as a download.
+    downloads = re.findall(r'<a [^>]*href="https://downloads\.privacyfence\.eu/[^>]*>', rows)
+    assert downloads and all('rel="nofollow"' in a for a in downloads)
     for href in re.findall(r'href="([^"]+)"', rows):
         assert href.startswith(
             (

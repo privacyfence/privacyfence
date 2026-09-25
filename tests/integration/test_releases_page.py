@@ -224,6 +224,9 @@ def test_history_downloads_go_through_the_worker_at_the_exact_version(browser, o
     try:
         hrefs = page.eval_on_selector_all(".release-download", "links => links.map(a => a.href)")
         assert len(hrefs) == 9
+        # A crawler following a link would be counted as a download.
+        rels = page.eval_on_selector_all(".release-download", "links => links.map(a => a.rel)")
+        assert rels == ["nofollow"] * 9
         assert all(href.startswith(f"{API_ORIGIN}/download/version/") for href in hrefs)
         assert f"{API_ORIGIN}/download/version/4.5.0/macos-arm64" in hrefs
         assert f"{API_ORIGIN}/download/version/4.6.0b1/windows-x64" in hrefs
@@ -267,6 +270,8 @@ def test_fallback_downloads_go_through_the_worker_at_the_exact_version(browser, 
             f"{API_ORIGIN}/download/version/4.6.1/windows-x64",
             f"{API_ORIGIN}/download/version/4.7.0a2/macos-arm64",
         ]
+        rels = page.eval_on_selector_all(".release-download", "links => links.map(a => a.rel)")
+        assert rels == ["nofollow"] * 5
         notes = page.eval_on_selector_all("#releases-body td:last-child a", "links => links.map(a => a.href)")
         assert "https://github.com/privacyfence/privacyfence/releases/tag/v4.7.0a2" in notes
         assert "cdx.json" not in page.content() and "sbom" not in page.inner_text("#releases-body").lower()
