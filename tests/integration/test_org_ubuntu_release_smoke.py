@@ -111,8 +111,8 @@ connectors rather than ``LOCAL_PRINCIPAL``'s (empty, on an org server --
 8322c111), and whether a rule configured in a principal's own
 ``settings.yaml`` is actually live in their ``AutoAcceptEvaluator`` rather
 than silently ignored (cfe3716c). Both are genuinely server-side and, per
-``docs/testing-policy.md``'s "Gate/policy correctness" row, belong at the
-synthetic/unit tier rather than here -- and proving either one for real
+``docs/testing-policy.md``'s "What a green `org-mode-smoke` does not prove", belong at the
+synthetic/unit layers rather than here -- and proving either one for real
 would need a connector to actually exist in a signed-in principal's
 ``dispatcher.connectors``, which every connector client in this codebase
 (``GmailClient``, ``SlackClient``, ...) makes a real, hardcoded external

@@ -33,8 +33,8 @@ This module drives that for real:
 
 Real GUI installer double-clicks and the admin-password dialog a human would
 actually see are out of scope here, same as everywhere else in this repo's
-packaged-artifact coverage (``docs/testing-policy.md``'s "what deliberately
-remains manual"): ``sudo installer -pkg ... -target /`` is the same
+packaged-artifact coverage (``docs/release-testing.md``'s "What stays
+manual"): ``sudo installer -pkg ... -target /`` is the same
 command-line substitution ``test_deb_packaged_lifecycle.py``'s own
 ``_can_install_packages()`` and ``test_macos_graphical_session_autostart.py``'s
 own passwordless-sudo probe already make for the same reason -- nothing in CI

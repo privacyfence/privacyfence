@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Coverage ratchet (TST-03).
 
-`pytest`'s own `--cov-report=term-missing` (docs/testing-policy.md §1) is
+`pytest`'s own `--cov-report=term-missing` (docs/testing-policy.md, "Layers 1–4: every PR") is
 informational only -- nothing before this script gated a merge on coverage
 actually staying where it was, so a PR could silently drop coverage on a
 security-critical module (an untested new branch in gate.py, an

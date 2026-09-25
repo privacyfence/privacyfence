@@ -1528,8 +1528,8 @@ class TestResponsiveLayout:
 # structural assertions only (element presence, and that the dark-mode
 # design tokens actually took effect on a real computed style) -- not pixel
 # comparison, per that item's own text; subjective visual quality
-# (contrast, "does this look right") stays manual (docs/testing-policy.md's
-# governing rule on what stays manual).
+# (contrast, "does this look right") stays manual (docs/release-testing.md's
+# "What stays manual").
 # --------------------------------------------------------------------- #
 
 

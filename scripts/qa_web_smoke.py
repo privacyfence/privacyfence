@@ -37,7 +37,7 @@ qa_popup_smoke.py, retired at P10 along with the popup itself, decision D6.)
     .venv/bin/python scripts/qa_web_smoke.py
 
 Paste the printed report into the PR description under a
-`## Web smoke check` heading, same convention as testing-policy.md §2.1.
+`## Web smoke check` heading, same convention as testing-policy.md "Layer 5: live connector".
 """
 from __future__ import annotations
 
