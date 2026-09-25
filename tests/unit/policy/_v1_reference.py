@@ -221,7 +221,16 @@ class V1Reference:
         return self._rule_approved_folder(value, ctx)
 
     def _rule_move_within_approved_folders(self, value, ctx):
-        return self._rule_approved_folder(value, ctx)
+        # Deliberately not verbatim: v1 checked only the source folder, so a folder grant
+        # approved moving a file out of the folder. Both engines now also require the destination.
+        if not self._rule_approved_folder(value, ctx):
+            return False
+        allowed = set(value if isinstance(value, list) else [value])
+        raw = ctx.raw_data
+        destination = ctx.args.get("destination_folder_id") or (
+            raw.get("destination_folder_id") if isinstance(raw, dict) else ""
+        )
+        return bool(destination) and destination in allowed
 
     def _rule_file_type_allowlist(self, value, ctx):
         if not value:
@@ -236,13 +245,14 @@ class V1Reference:
 
     def _rule_shared_drive_exclusion(self, _v, ctx):
         f = self._file_from(ctx.raw_data)
-        return not getattr(f, "shared", False)
+        return not getattr(f, "drive_id", "")
 
     # ── Slack ─────────────────────────────────────────────────────────────
 
     def _rule_dm_with_myself(self, _v, ctx):
-        cid = ctx.args.get("channel_id", "") or ""
-        return cid.startswith("D")
+        # Deliberately not verbatim: v1 matched any "D"-prefixed id, i.e. every 1:1 DM. Both
+        # engines now read the connector's self-DM verdict and fail closed without it.
+        return ctx.args.get("is_self_dm") is True
 
     def _rule_send_to_myself(self, v, ctx):
         return self._rule_dm_with_myself(v, ctx)

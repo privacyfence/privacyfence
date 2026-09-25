@@ -234,20 +234,35 @@ class TestDriveSandboxFolderCoveragePastComment:
         assert entries[0]["decision"] == "auto_accepted"
         assert entries[0]["auto_accept_rule"] == rule_id("parent_folder_allowlist", ["qa-folder-id"])
 
-    async def test_move_of_a_file_from_the_allowlisted_folder_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"drive.move_file": [{"predicate": "move_within_approved_folders", "value": ["qa-folder-id"]}]})
+    async def test_move_between_allowlisted_folders_auto_accepts(self, monkeypatch, audit_dir):
+        folders = ["qa-folder-id", "qa-subfolder-id"]
+        install_rules({"drive.move_file": [{"predicate": "move_within_approved_folders", "value": folders}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
             connector="drive", tool="drive_move_file", gate="popup",
-            raw_data={"file": SimpleNamespace(parent_ids=["qa-folder-id"], owners=[]), "destination_folder_id": "other"},
-            args={"file_id": "file-abc", "destination_folder_id": "other"},
+            raw_data={"file": SimpleNamespace(parent_ids=["qa-folder-id"], owners=[]),
+                      "destination_folder_id": "qa-subfolder-id"},
+            args={"file_id": "file-abc", "destination_folder_id": "qa-subfolder-id"},
         ))
 
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == rule_id("move_within_approved_folders", ["qa-folder-id"])
+        assert entries[0]["auto_accept_rule"] == rule_id("move_within_approved_folders", folders)
+
+    async def test_move_out_of_the_allowlisted_folder_still_prompts(self, monkeypatch, audit_dir):
+        install_rules({"drive.move_file": [{"predicate": "move_within_approved_folders", "value": ["qa-folder-id"]}]})
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**make_kwargs(
+            connector="drive", tool="drive_move_file", gate="popup",
+            raw_data={"file": SimpleNamespace(parent_ids=["qa-folder-id"], owners=[]), "destination_folder_id": "other"},
+            args={"file_id": "file-abc", "destination_folder_id": "other"},
+        ))
+
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "approved"
 
 
 class TestDriveTempAccept:

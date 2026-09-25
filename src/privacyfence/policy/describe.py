@@ -1,25 +1,19 @@
-"""Rendering a v2 rule into words -- P5 of the policy v2 redesign.
+"""Rendering a rule into words.
 
-The redesign proposal's §09 gives ``policy/describe.py`` one job: rule -> sentence, rule -> covered
-tool list, change -> confirmation text. It replaces ``auto_accept.describe_rule``,
-``describe_rule_short`` and ``describe_rule_change``, which are three hand-written English tables
-keyed by v1 rule name -- and are why the popup and Settings can describe the same intent
-differently (F2). ``_RULE_DESCRIPTIONS``' templates are read-direction-only prose ("Jira issue reads
-in project(s): ..."), so ``gate.py`` already has to avoid them on the write gate and fall back to
-``describe_rule_change``'s bare ``operation_key`` spelling; neither can say how *wide* the rule it
-is describing actually is.
+This module has one job: rule -> sentence, rule -> covered tool list, change -> confirmation text.
+It replaced three hand-written English tables keyed by old rule name, which are why the popup and
+Settings used to describe the same intent differently, and which could not say how *wide* the rule
+they were describing actually was.
 
-Everything here is derived instead: the connector and scope type come from P2's selector registry,
-the verbs from P1's registry (via ``policy.propose``'s catalogue, so a rule is only credited with
-the verbs its own predicate governs), and the tool list from the registry's own rows. A rule is
-rendered the same way wherever it is shown, and "what this actually unblocks" is a real list rather
-than something the reader has to infer from an operation key.
+Everything here is derived instead: the connector and scope type come from the selector registry
+(`policy/scopes.py`), the verbs from the tool registry (via ``policy.propose``'s catalogue, so a rule
+is only credited with the verbs its own predicate governs), and the tool list from the registry's
+own rows. A rule is rendered the same way wherever it is shown, and "what this actually unblocks" is
+a real list rather than something the reader has to infer from an operation key.
 
-``covered_tools`` is the answer to F2 in particular: it is what lets a surface show, before the
-user agrees to anything, that one intent reaches one tool and another reaches thirteen.
-
-Nothing outside ``tests/`` consumes this module yet -- P6's single Auto-accept page and the popup's
-own confirmation dialog are the surfaces that will.
+``covered_tools`` in particular is what lets a surface show, before the user agrees to anything,
+that one intent reaches one tool and another reaches thirteen. The Auto-accept Settings page, the
+popup's confirmation dialog and the MCP bridge's policy tools all render rules through this module.
 """
 from __future__ import annotations
 
@@ -39,14 +33,14 @@ def connector_label(connector: str) -> str:
 
 def scope_type_label(scope_type: str) -> str:
     """``drive.folder`` -> ``folder``, ``gmail.sender_domain`` -> ``sender domain``. The scope type
-    names were chosen to read this way (redesign proposal §04), so the noun a sentence needs is the
+    names were chosen to read this way, so the noun a sentence needs is the
     name itself with its connector prefix dropped."""
     _connector, _, rest = scope_type.partition(".")
     return rest.replace("_", " ")
 
 
 def scope_type_of(rule: PolicyRule) -> str:
-    """The v2 scope type a compiled rule's predicate lands under.
+    """The scope type a compiled rule's predicate lands under.
 
     ``label_name_allowlist`` genuinely serves two scope types (``gmail.label`` and
     ``contacts.label``) depending on which connector the rule's operations belong to, which is why
@@ -54,8 +48,8 @@ def scope_type_of(rule: PolicyRule) -> str:
     operations rather than picking one arbitrarily. An unrecognised predicate has no scope type at
     all; callers render it as the predicate name, never as something that looks configured.
 
-    Public (P6): the Auto-accept Settings page's own connector/scope-type filter facets are built
-    off this, the same resolution ``rule_sentence`` below already needed internally.
+    Public: the Auto-accept Settings page's own connector/scope-type filter facets are built off
+    this, the same resolution ``rule_sentence`` below already needed internally.
     """
     selector = scopes.SCOPE_SELECTORS.get(rule.predicate) or scopes.NEW_SCOPE_SELECTORS.get(rule.predicate)
     if selector is None:
@@ -71,9 +65,9 @@ def scope_type_of(rule: PolicyRule) -> str:
 
 def _catalogue_verbs(predicate: str) -> frozenset[Verb]:
     """Every verb ``predicate`` can govern, per ``propose.PROPOSABLE_SCOPES``. Empty for a predicate
-    no surface proposes (a hand-written v1 rule, or one of P2's scopes that no phase has made
-    proposable yet) -- callers then fall back to crediting the rule with whatever verbs its
-    operation keys carry, which is the best that can be said about it."""
+    no surface proposes (a hand-written rule, or a scope that is not proposable) -- callers then
+    fall back to crediting the rule with whatever verbs its operation keys carry, which is the best
+    that can be said about it."""
     return frozenset(
         verb
         for entry in propose.PROPOSABLE_SCOPES
@@ -87,7 +81,7 @@ def rule_verbs(rule: PolicyRule) -> tuple[Verb, ...]:
 
     Intersecting the predicate's own verbs with each operation key's verbs is what keeps a rule on a
     double-verb key honest: ``approved_channel`` under ``slack.read_messages`` allows ``read``, not
-    ``read`` *and* ``search``, even though the key carries both (F7) -- the all-results predicate is
+    ``read`` *and* ``search``, even though the key carries both -- the all-results predicate is
     the one that allows the search.
     """
     governed = _catalogue_verbs(rule.predicate)
@@ -101,9 +95,8 @@ def rule_verbs(rule: PolicyRule) -> tuple[Verb, ...]:
 
 
 def covered_tools(rule: PolicyRule) -> tuple[str, ...]:
-    """Every tool this rule can auto-accept -- the redesign proposal's "what this actually
-    unblocks", and the concrete answer to "does this cover one operation or thirteen?" that neither
-    surface can give today."""
+    """Every tool this rule can auto-accept -- "what this actually unblocks", and the concrete
+    answer to "does this cover one operation or thirteen?"."""
     verbs = frozenset(rule_verbs(rule))
     return tuple(sorted(
         entry.tool
@@ -121,7 +114,7 @@ def _value_phrase(value: object) -> str:
 def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
     """One rule as the sentence it is: ``Drive - folder 1CdeF: allow read, update, format``.
 
-    An unconditional scope says so rather than hiding behind a rule name (D4), and a rule's
+    An unconditional scope says so rather than hiding behind a rule name, and a rule's
     conditions are appended as the narrowing they are.
 
     ``value_display``, when given, replaces the raw ``rule.value`` phrase -- a caller that already
@@ -172,7 +165,7 @@ def confirmation_text(proposal: RuleProposal, widenings: Iterable[Widening] = ()
 
     Built from the rules that will actually be written (``propose.rules_for_proposal``), not from a
     template keyed on the proposal -- so the text can never describe a narrower rule than the one
-    being created, which is the failure mode F2 describes from the other direction.
+    being created.
     """
     rules = propose.rules_for_proposal(proposal, widenings)
     tools = sorted({tool for rule in rules for tool in covered_tools(rule)})

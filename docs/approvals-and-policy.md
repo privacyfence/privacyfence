@@ -316,7 +316,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 | Scope | Kind | Value | Predicate(s) | Matches when |
 |---|---|---|---|---|
-| Drive folder | identity | folder ids | `approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, `move_within_approved_folders` | the file's direct parent is one of the folders (not recursive). For an upload or new file, the destination folder. For a move, the file's current folder — the destination is not checked |
+| Drive folder | identity | folder ids | `approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, `move_within_approved_folders` | the file's direct parent is one of the folders (not recursive). For an upload or new file, the destination folder. For a move, both the file's current folder and the destination must be among them |
 | Drive file | identity | file ids | `drive.file` | the file is one of these |
 | Drive file type | attribute | MIME types | `file_type_allowlist` | the file has one of these MIME types |
 | Drive files I own | attribute | — | `i_am_owner`, `created_by_me` | you are an owner of the file |
@@ -328,8 +328,8 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Gmail label | identity | label names | `label_match`, `label_name_allowlist` | the message carries one of the labels; the label being applied or removed is one of these |
 | Gmail / Calendar — anything | attribute | — | `always_allow` | always (unconditional) |
 | Gmail — anything | attribute | — | `gmail.anything` | always (used for Gmail filters) |
-| Slack channel | identity | channel or user ids | `approved_channel`, `approved_channel_all_results`, `approved_recipient`, `send_to_myself` | the channel is one of these; for a search, every result is in one of them |
-| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is a direct message (any 1:1 DM, not only your self-DM); a group DM; every result is from a public channel |
+| Slack channel | identity | channel or user ids | `approved_channel`, `approved_channel_all_results`, `approved_recipient`, `send_to_myself` | the channel is one of these; for a search, every result is in one of them; `send_to_myself` takes no ids and holds only for your DM with yourself |
+| Slack channel kind | attribute | — | `dm_with_myself`, `group_dm`, `public_channels_only` | the channel is your DM with yourself (a DM with anyone else, or one PrivacyFence could not confirm as yours, never matches); a group DM; every result is from a public channel |
 | Slack — anything | attribute | — | `slack.anything` | always (used for creating group chats) |
 | Telegram chat | identity | chat ids | `approved_chats`, `approved_chats_all_results` | the chat is one of these; for a search, every result is in one of them |
 | Calendar | identity | calendar ids | `personal_calendar` | the call's calendar is one of these |
@@ -361,7 +361,7 @@ and "non-private events"; add any other condition by editing `settings.yaml`.
 | `no_external_attendees` | — | every attendee's address contains your own domain |
 | `no_conferencing_link` | — | the event has no meeting link |
 | `not_private` | — | the event's visibility is not private |
-| `not_shared_drive` | — | Google Drive reports the file as not shared. Despite the name, this reads Drive's "shared" flag, which Drive does not set for files in a shared drive — so it does not exclude shared-drive files |
+| `not_shared_drive` | — | the file is not in a shared drive (it lives in someone's My Drive, whether or not it is shared with others) |
 | `no_contact_info_change` | — | a contact edit changes no email address or phone number |
 | `in_existing_thread` | — | the Slack message is a reply in an existing thread |
 
