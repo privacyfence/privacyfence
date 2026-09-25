@@ -77,7 +77,7 @@ blocks waiting for one silently. If a step is missing, it says which one in its 
 | M8 | After Wave 0 deploys | **Baseline:** record 3 months of Search Console impressions and clicks, the download total and the star count ([Measurement](#measurement)). |
 | M9 | After Wave 0 deploys | **Live checks:** Wave 0's post-deploy "Done when" list: bot user agents, Rich Results Test, OG card, GA Realtime only after "Accept", and one real phone. |
 | M10 | Every wave | **Review and merge** each wave's PR. |
-| M11 | After Wave 1 merges | **Fresh install per platform** using only `getting-started.md`. Record it in `release-testing.md`'s manual checks. |
+| M11 | After Wave 1 merges | **Fresh install per platform** using only `getting-started.md` and that platform's `install-*.md`. Record it in `release-testing.md`'s manual checks. |
 | M12 | Before the next stable release | **Windows uninstaller:** click through the "Delete PrivacyFence data" checkbox, which has only been compiled in CI ([#674](https://github.com/privacyfence/privacyfence/pull/674)). |
 | M13 | After Wave 1 merges (Q5) | **Cut 4.6.0**, the first stable release containing Wave 1, through `/cut-release` or the Actions tab (`release.yml`). A Claude Code on the web container cannot push tags. |
 | M14 | After Wave 3 deploys and M13 | Check that `/docs/getting-started/` shows the released text, and that Search Console accepts the regenerated sitemap. |
@@ -202,6 +202,8 @@ only so a later reader can tell a deliberate choice from a default.
 | H1 | **Every page is responsive and well aligned on desktop and mobile** (added 2026-09-25): the marketing pages, `/download/` and the rendered `/docs/` alike, from a 320 px phone to a wide desktop. |
 | H2 | **No CSS framework** for the marketing pages: the existing self-hosted `styles.css` is rebuilt into a small token + layout-primitive system on plain modern CSS; `/docs/` gets responsiveness from its generator's theme (C1). Reasoning and rejected alternatives in [Responsive layout](#responsive-layout). |
 | H3 | Responsiveness is **enforced by a browser test** (guardrail 12) from **Wave 0**, so every page added later is born under it. |
+| I1 | **Measure connector and platform interest per page** (added 2026-09-25): every connector and every platform has its own page, so GA4 page views rank them. The Worker's per-platform download count stays the full, consent-free platform signal. See [Connector and platform interest](#connector-and-platform-interest). |
+| I2 | **The install guide is split per platform** (2026-09-25): `getting-started.md` becomes a short overview, and `install-macos.md`, `install-windows.md` and `install-linux.md` each hold one platform's install, client setup, troubleshooting and uninstall. |
 
 ## Documentation principles
 
@@ -280,7 +282,7 @@ Re-checked again on 2026-09-25 at `7b61b6c1`: two more PRs merged, neither remov
 
 | Change on `main` | Where the target set absorbs it |
 |---|---|
-| **The `.deb` is amd64 only** (#681, ADR 0044, amending ADR 0018): `debian/control` declares `amd64`, `build_deb.sh` refuses other hosts, `platform-support.md`'s matrix already says so. | `platform-support.md` (the architectures column is now correct at the source; keep it when cutting the page to ~120 lines), `getting-started.md`'s Linux section (no arm64 `.deb`; say what an arm64 Linux user can install instead, after checking whether the PyPI install is supported there), `/download/` and the JSON-LD's platform list. |
+| **The `.deb` is amd64 only** (#681, ADR 0044, amending ADR 0018): `debian/control` declares `amd64`, `build_deb.sh` refuses other hosts, `platform-support.md`'s matrix already says so. | `platform-support.md` (the architectures column is now correct at the source; keep it when cutting the page to ~120 lines), `install-linux.md` (no arm64 `.deb`; say what an arm64 Linux user can install instead, after checking whether the PyPI install is supported there), `/download/` and the JSON-LD's platform list. |
 | **Org mode skips old-format registered OAuth clients** with a per-entry warning instead of converting them (#680). | Nothing to document (G1: no upgrade paths). The org guide's troubleshooting must not mention the old format. |
 
 Re-checked a third time on 2026-09-25 after #682 (Windows/macOS packaged-test stability, eSigner
@@ -316,7 +318,8 @@ is updated in the same PR; guardrail 9 fails the build on any link to a missing 
 
 | Doc | Built from | What changes |
 |---|---|---|
-| `getting-started.md` | itself + README quick start + migration-guide's troubleshooting facts | The single install doc. Per platform: install, connect **Claude Desktop** (`.mcpb`), **Claude Code** (with the real per-OS path to `privacyfence-app --print-mcp-token`), and a pointer that **claude.ai** needs an organization deployment; first approval including the **passkey step-up** (on by default, scope `writes_and_pii_reads`); a troubleshooting table (`PENDING USER`, `PENDING SIGNOUT`, `enable --for-user`, "daemon stopped → Start PrivacyFence…"); **uninstall** per platform. Fixes: the shim never starts the daemon on packaged installs; `.deb` runs a system service, not XDG autostart; data lives under the system root, not `~/.privacyfence`; Windows needs a sign-out; macOS postinstall never fails the install. |
+| `getting-started.md` | itself + README quick start + migration-guide's troubleshooting facts | **The overview (I2), ~60 lines:** what you need, pick your platform (links to the three install pages), local vs organization deployment (claude.ai needs organization mode), the first approval including the **passkey step-up** (on by default, scope `writes_and_pii_reads`), and troubleshooting shared by all platforms (`PENDING USER`, `PENDING SIGNOUT`, `enable --for-user`, "daemon stopped → Start PrivacyFence…"). Keeps its file name, because many links point at it. |
+| `install-macos.md`, `install-windows.md`, `install-linux.md` (new) | `getting-started.md`'s per-platform parts | **One page per platform (I2),** same template: requirements (minimum OS and architecture from `platform-support.md`'s matrix), download and verify, install, first start, connect **Claude Desktop** (`.mcpb`) and **Claude Code** (that OS's real path to `privacyfence-app --print-mcp-token`), that platform's troubleshooting, **uninstall** (keeps data) and **purge** (deletes data). Data locations and logs are linked from `platform-support.md`, not repeated. Fixes carried over: the shim never starts the daemon on packaged installs; macOS postinstall never fails the install; Windows needs a sign-out; the `.deb` runs a system service, not XDG autostart, is amd64 only, and keeps its data under the system root, not `~/.privacyfence`. |
 | `platform-support.md` | its own lines 1–63 + per-platform essentials | ~120 lines: support matrix with **minimum OS** (macOS 13) and **architectures** (Apple Silicon DMG, x64 Windows, amd64 `.deb`), one data-location table, logs, start/stop/status commands (`launchctl`/`systemctl`/`sc`), Linux dialog dependency, adding a second account. Build internals move to `packaging.md`; "Known open items" (bug history) deleted, the two real open items move to `release-testing.md`. |
 | `how-it-works.md` (new) | TECHNICAL_REFERENCE architecture, MCP and meta-tools sections | Daemon, companion, shim vs direct HTTP, how clients get a token (control channel `MINT MCP`, `--print-mcp-token`), the eight meta-tools with their real annotations, how the calling AI system is identified (`agent_source`), what opening PrivacyFence does, unattended sessions. |
 | `approvals-and-policy.md` (new) | approval-list-ui-ux (user parts), approval-window-content-reference, always-allow prose, TECHNICAL_REFERENCE auto-accept, file-type-support (user parts), privacy filter | Outline: how requests are gated (auto / review / confirm; the 30 s wait and `approval_pending`) · the approvals list · anatomy of a card (the caller's name and whether it is verified; Enter never approves, Esc denies) · the PII check (overrides rules, second confirmation, re-read of own content skips it) · always-allow and policy rules (every matching candidate gets a button; `conditions:` key; `not_shared_drive`; the scope catalogue; the 5-minute same-file window) · privacy filter allow/redact/block (org default `block`, local default `allow`) · file previews with real limits · notifications (`web.notifications.*`, code default `minimal` vs seeded `standard`). |
@@ -522,6 +525,7 @@ the guardrails that protect its own work.
 | 11 | **No claims ADR 0025 rules out**: no website page contains "certified", "compliant with", "SLA" or "guarantee" outside the `/security/` limitations section. | 4 |
 | 12 | **Responsive layout** — the one guardrail that needs a browser: `tests/integration/test_website_layout.py` (`integration` + `browser` markers, same setup and skip posture as `test_download_page.py`, network stubbed) loads every page at the six [tested viewports](#what-responsive-means-here). It asserts no page-level horizontal scroll, every header destination reachable (visible, or visible after opening the menu), tap targets ≥ 44 px below 1024 px, and no element's box extending past the viewport outside a scroll container. It saves a full-page screenshot per page × width as a CI artifact, for the maintainer's review. | 0 (source pages), 3 (built `_site/`) |
 | 13 | **Nothing third-party before consent**: in a browser test, loading every page with no stored choice makes no request to any origin other than the site itself (and `downloads.privacyfence.eu` on `/download/` and `/releases/`) and sets no cookie; accepting loads `googletagmanager.com`; declining loads nothing, and the choice persists across pages. | 0 |
+| 14 | **Platform pages match platforms**: every row of `platform-support.md`'s support matrix has exactly one `install-<platform>.md`, `getting-started.md` links each, and the download page offers a card for each installer platform. | 1 |
 
 Also: no third-party resources on the site apart from Google Analytics, which loads only after
 consent (see [Analytics](#analytics-google-analytics-4-behind-consent)). Fonts, images, scripts and
@@ -616,6 +620,11 @@ Deliverables:
   [Analytics](#analytics-google-analytics-4-behind-consent)): the GA snippet is in the repo, and
   the page injects it only after "Accept". A "Cookie settings" footer link reopens the choice.
   Guardrail 13.
+- **Interest measurement (I1)**, wired into the same consent code: every page declares its
+  content group (`<meta name="pf-content-group">`, one of `marketing`, `download`, `connector`,
+  `platform`, `docs`), sent as GA4's `content_group`; `download.js` sends a `download_click`
+  event with `platform`, `architecture` and `channel` when a download button is clicked. Both are
+  no-ops without consent. See [Connector and platform interest](#connector-and-platform-interest).
 - Footer on both pages: Privacy · Imprint · Cookie settings · GitHub · Apache 2.0 · `info@privacyfence.eu`.
 - `pages.yml` copy step and its guard test updated.
 - **Responsive foundation** ([When it is built](#when-it-is-built), Wave 0 row): `styles.css`
@@ -659,7 +668,7 @@ Claude, reviewed by the maintainer doc by doc. Deliverables:
 3. Delete the merged-away docs; update every link to them across the repo (code comments, tests,
    workflows, CLAUDE.md) — guardrail 9 proves none are left.
 4. Add the tools-reference generator (guardrail 3), configuration-reference test (4), history
-   lint (2) and dangling-reference test (9).
+   lint (2), dangling-reference test (9) and platform-pages test (14).
 5. `docs/README.md` becomes the two-part index plus the documentation principles.
 6. **Approval screenshots regenerated from the web UI** by a script (extend
    `qa_readme_screenshots.py`), replacing `gmail-read-thread.png` and `sheets-write.png` — native
@@ -669,11 +678,12 @@ Claude, reviewed by the maintainer doc by doc. Deliverables:
    "ask that client to open PrivacyFence for you", "one persistent macOS daemon", Windows sign-out,
    packaged script paths); README shrink (C5) happens in Wave 4 once `/docs/` URLs exist.
 
-Done when (in the PR): guardrails 2, 3, 4 and 9 pass; every item in the [cleanup
+Done when (in the PR): guardrails 2, 3, 4, 9 and 14 pass; every item in the [cleanup
 table](#what-the-product-cleanup-changed) and every audit finding for each doc is applied or listed
 as not applied, with the reason; the maintainer has read every published doc end to end.
 
-Done when (after merge): M11, a fresh install on each platform using only `getting-started.md`.
+Done when (after merge): M11, a fresh install on each platform using only `getting-started.md` and
+that platform's install page.
 Then Q5/M13: the stable release that takes these docs live.
 
 ### Wave 2 — contributor documentation
@@ -713,6 +723,10 @@ Deliverables:
 - **Generator choice first (half a day):** Zensical, falling back to pinned MkDocs + Material;
   all transforms happen in our own export step so the generator stays swappable. The trial
   includes checking mobile nav, the TOC and wide tables at 360 px (H1).
+- **Analytics on `/docs/`:** the docs theme loads the same consent banner and GA code as the
+  marketing pages. Guardrail 13 covers docs pages too. The content group is set from the file:
+  `install-*.md` → `platform`, the five connector setup guides → `connector`, everything else →
+  `docs`.
 - **Responsive, shared:** the Wave 0 header/menu and footer become the partials; the docs theme
   loads the site's tokens via `extra_css`; guardrail 12 moves to the built `_site/` with its page
   list from the build manifest (see [When it is built](#when-it-is-built)).
@@ -781,7 +795,7 @@ Deliverables:
 
 Deliverables:
 
-- **Five connector pages**, each answering one D7 search intent in its own words, with what the
+- **Five connector pages** (content group `connector`), each answering one D7 search intent in its own words, with what the
   assistant can do, what is reviewed vs automatic, PII behavior for that connector's content, a
   screenshot where one exists, and "Set it up" → its setup guide. Guardrail 8.
 - **`/faq/`** (visible Q&A, no FAQ schema): Does my data go through PrivacyFence's servers? Which
@@ -847,6 +861,31 @@ stars. GA4 sees only visitors who accepted, so read its numbers as trends, not t
 count (Worker-side, cookieless) stays the headline KPI. After each wave, ask ChatGPT,
 Claude and Perplexity "What is PrivacyFence?" and "How do I install PrivacyFence on Windows?" and
 note whether the answers match the canonical description and the current install flow.
+
+### Connector and platform interest
+
+Decision I1. Which connectors and platforms people care about, ranked from strongest to weakest:
+
+| Question | Signal | Where to read it |
+|---|---|---|
+| Which **platform** do people install? | Installer downloads per platform: the full count, cookieless, consent-free | The Worker's download stats (existing KPI) |
+| Which platform do people read about? | Views of `/docs/install-macos/`, `/install-windows/`, `/install-linux/` | GA4 → Reports → Engagement → Pages and screens, content group `platform` |
+| Which platform button gets clicked? | `download_click` events by `platform` | GA4 → Events → `download_click` |
+| Which **connector** do people evaluate? | Views of `/connectors/<name>/` | GA4 → Pages and screens, content group `connector`, path starting `/connectors/` |
+| Which connector do people set up? | Views of that connector's setup guide under `/docs/` (stronger intent than the connector page) | GA4 → Pages and screens, content group `connector`, path starting `/docs/` |
+| Which connector do people search for? | Search queries naming a connector | Search Console → Performance → Queries |
+
+Record the ranking monthly with the other numbers. When you read it:
+
+- **Compare pages with each other, not totals:** GA4 counts only visitors who accepted.
+- **Page views also measure search ranking,** not only demand. A connector page that ranks well
+  gets more views for that reason alone, so check it against Search Console's impressions for
+  that connector.
+- **Give every connector and platform the same entry points:** each is linked from `/connectors/`
+  or `getting-started.md` with equal prominence. Otherwise the layout, not interest, decides the
+  ranking.
+- Setup-guide views and download clicks are the signals that lead to real use. Weight them above
+  overview-page views.
 
 ## ADRs this plan creates
 
