@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrivacyFence for organizations — local mode or a central deployment</title>
+  <meta name="description" content="Run PrivacyFence on each employee's computer or as one central deployment with sign-in through your identity provider: the two side by side, the prerequisites, and the limits.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/enterprise/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/enterprise/">
+  <meta property="og:title" content="PrivacyFence for organizations">
+  <meta property="og:description" content="On each employee's computer, or one central deployment with sign-in through your identity provider. Both side by side, with prerequisites.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Enterprise</p>
+      <h1>One gateway on every laptop, or one for the whole organization.</h1>
+      <p class="lede">PrivacyFence runs on an employee's own computer, or once on a Linux server your organization controls, where everyone signs in through your identity provider. Both are the same open-source software, fully featured, and neither sends data through a PrivacyFence-operated server.</p>
+      <!-- include: clients -->
+    </section>
+
+    <section class="page-section shell" aria-labelledby="compare-heading">
+      <div class="section-heading">
+        <p class="kicker">Side by side</p>
+        <h2 id="compare-heading">Local mode and organization mode.</h2>
+      </div>
+      <div class="table-scroll wide">
+        <table>
+          <thead>
+            <tr><th scope="col"></th><th scope="col">Local mode</th><th scope="col">Organization mode</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Where it runs</th><td>Each person's own computer: macOS, Windows or Debian/Ubuntu</td><td>One Linux server the organization runs, behind its HTTPS reverse proxy</td></tr>
+            <tr><th scope="row">Who uses it</th><td>The people signed in to that computer, each with their own connectors, rules and approvals</td><td>Everyone your identity provider lets in, each kept apart: connectors, approvals, passkeys and audit log per person</td></tr>
+            <tr><th scope="row">Sign-in</th><td>None: the companion app opens the pages already signed in</td><td>Your OpenID Connect identity provider</td></tr>
+            <tr><th scope="row">AI clients</th><td>Claude Desktop and Claude Code on the same computer</td><td>Claude Desktop, Claude Code and web clients such as claude.ai, through OAuth 2.1</td></tr>
+            <tr><th scope="row">Install</th><td>The installer (<code>.dmg</code>, <code>.exe</code> or <code>.deb</code>)</td><td><code>pip install privacyfence</code> into a virtual environment, run by systemd</td></tr>
+            <tr><th scope="row">Protection from the AI client</th><td>Privilege separation: PrivacyFence runs under its own service account</td><td>The AI client reaches the server only through <code>/mcp</code></td></tr>
+            <tr><th scope="row">Policy</th><td>Set by the person, in Settings</td><td>Privacy filter and PII detection set install-wide by admins; each person keeps their own always-allow rules</td></tr>
+            <tr><th scope="row">Passkey step-up</th><td>On by default with the installers</td><td>Set in the organization config bundle</td></tr>
+            <tr><th scope="row">Verified AI-system identity</th><td>No: the name a client sends is shown as not verified</td><td>Admins pin OAuth clients to known AI systems</td></tr>
+            <tr><th scope="row">Audit log</th><td>On the computer</td><td>On the server, and optionally forwarded to syslog or an HTTP endpoint</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="page-copy">In both modes, connector credentials stay with PrivacyFence and never reach the AI client. Local mode is described in <a href="/docs/getting-started/">Getting started</a>, the difference in trust in <a href="/docs/security-and-compliance/#deployment-modes">Security and compliance</a>.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="prereq-heading">
+      <div class="section-heading">
+        <p class="kicker">Before you start</p>
+        <h2 id="prereq-heading">Prerequisites for an organization deployment.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>A Linux server</h3>
+          <p>Ubuntu 24.04 is the reference, with <code>python3-venv</code> added. Any Linux with Python 3.11 or newer, the <code>venv</code> module and systemd works the same way. Do not install the desktop <code>.deb</code> on this host.</p>
+        </article>
+        <article class="card stack">
+          <h3>A hostname and TLS</h3>
+          <p>A public hostname with DNS pointing at the server, and a certificate for it. If people will use claude.ai, the hostname must be reachable from the internet, because claude.ai connects from Anthropic's servers.</p>
+        </article>
+        <article class="card stack">
+          <h3>A reverse proxy on the same host</h3>
+          <p>Caddy or nginx terminates HTTPS and forwards to PrivacyFence on <code>127.0.0.1</code>. PrivacyFence trusts forwarded headers only from proxies listed with <code>--server-trusted-proxy</code>, so a proxy on the same host is listed as <code>127.0.0.1</code>.</p>
+        </article>
+        <article class="card stack">
+          <h3>Your identity provider</h3>
+          <p>Admin access to register one OpenID Connect client. You name which claim makes someone an admin, and can limit sign-in to your domains or a group.</p>
+        </article>
+        <article class="card stack">
+          <h3>Connector apps</h3>
+          <p>Admin access to each service's developer console, to register one OAuth app per service you offer: Google, Slack, Salesforce, Atlassian. Each person then connects their own account. Outbound HTTPS from the server to those APIs and to the identity provider.</p>
+        </article>
+        <article class="card stack">
+          <h3>The bundle builder</h3>
+          <p><code>build_org_bundle.py</code>, attached to every stable GitHub Release, builds and signs <code>org_config.json</code>, the organization's settings. It needs only Python's standard library, plus <code>cryptography</code> for signing.</p>
+        </article>
+      </div>
+      <p class="page-copy"><a href="/docs/org-mode-setup-guide/#2-prerequisites">The prerequisites in full</a>, and the <a href="/docs/org-mode-setup-guide/#7-reverse-proxy-and-tls">reverse proxy settings</a>, are in the organization deployment guide.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="limits-heading">
+      <div class="section-heading">
+        <p class="kicker">Sizing</p>
+        <h2 id="limits-heading">Limits of one deployment.</h2>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <tbody>
+            <tr><th scope="row">People with connectors loaded at once</th><td class="num">200</td></tr>
+            <tr><th scope="row">Registered AI clients</th><td class="num">2,000</td></tr>
+            <tr><th scope="row">Pending approvals</th><td class="num">50 in all, 20 per person</td></tr>
+            <tr><th scope="row">Upload slot</th><td class="num">50 MB</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="page-copy">An organization deployment is one daemon, not a cluster. Every limit, and which can be changed, is in the guide's <a href="/docs/org-mode-setup-guide/#limits">Limits</a> table.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="evaluate-heading">
+      <div class="section-heading">
+        <p class="kicker">Evaluating it</p>
+        <h2 id="evaluate-heading">Open source, with no commercial offering.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence is published under Apache 2.0 by a private person. There is no paid tier or support contract: questions and bugs go to <a href="https://github.com/privacyfence/privacyfence/issues">GitHub issues</a> or <a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a>, and vulnerabilities to the <a href="https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md">security policy</a>.</p>
+        <p>Before a rollout, read <a href="/security/#what-privacyfence-does-not-claim">what PrivacyFence does not claim</a>, and plan for it: pin a reviewed release and give someone the job of tracking new ones.</p>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Deploy</p>
+          <h2>Set up a central deployment.</h2>
+          <p>The organization deployment guide takes an administrator from an empty server to the first sign-in, with Caddy or nginx, a hardened systemd unit and a validation checklist.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/docs/org-mode-setup-guide/">Organization deployment guide</a>
+          <a class="button secondary" href="/download/">Download for one computer</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

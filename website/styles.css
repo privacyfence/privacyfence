@@ -52,6 +52,8 @@ main { container-type: inline-size; }
 .tagline { font-size: clamp(20px, 1.4vw + 14px, 26px); font-weight: 650; letter-spacing: -.02em; color: var(--ink-soft); margin: 0; }
 
 .actions.vertical { flex-direction: column; align-items: stretch; margin-top: 0; min-width: 220px; }
+.link-row { --cluster-gap: 0 28px; margin-top: 26px; }
+.link-row .text-link { margin-top: 0; }
 .text-link { display: inline-block; margin-top: 26px; color: var(--accent-dark); font-weight: 700; font-size: var(--step-small); }
 
 .release-meta { --cluster-gap: 8px 18px; margin-top: 20px; color: var(--muted); font-size: 13px; }
@@ -103,6 +105,7 @@ main { container-type: inline-size; }
 .privacy-card .kicker { color: #8fd3ca; }
 .privacy-card h2 { margin-bottom: 0; }
 .privacy-copy { color: #c6d8d5; }
+.privacy-copy .quiet a { color: #eaf4f3; text-decoration: underline; text-underline-offset: 2px; }
 .privacy-copy .quiet { font-size: 14px; color: #8fa7a4; margin: 28px 0 0; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.12); }
 
 .connectors { padding: 30px 0 var(--space-section); }
@@ -115,6 +118,69 @@ main { container-type: inline-size; }
 .cta-card p:not(.kicker) { max-width: 670px; color: #526965; }
 .stats { --cluster-gap: 12px 28px; margin-top: 25px; font-size: 13px; color: #58716d; }
 .stats strong { color: var(--ink); font-size: 20px; margin-right: 5px; }
+
+/* "Works with": the tested AI clients, rendered by scripts/build_site.py from
+   website/_data/clients.json (an `include: clients` line). */
+.works-with { --cluster-gap: 8px; margin: 26px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.works-with-label { color: var(--muted); font-weight: 700; margin-right: 4px; }
+.works-with .client { padding: 7px 11px; border: 1px solid var(--line); background: #fff; border-radius: 9px; font-weight: 700; color: var(--ink); }
+.works-with .client small { font-size: 12px; font-weight: 600; color: var(--muted); }
+.works-with-more { color: var(--muted); }
+
+/* ---- Core pages (/how-it-works/, /security/, /enterprise/, /connectors/) ----------------- */
+
+.page-intro { padding: 60px 0 clamp(36px, 5vw, 56px); }
+.page-intro h1 { font-size: clamp(38px, 5vw, 62px); margin: 14px 0 20px; }
+.page-intro .lede { margin: 0; }
+.page-intro .lede a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.page-section { padding-block: clamp(44px, 6vw, 76px); border-top: 1px solid var(--line); }
+.page-section > h2, .page-section .section-heading h2 { font-size: clamp(28px, 2.4vw + 12px, 40px); }
+.page-section .section-heading { margin-bottom: 30px; }
+.page-section:last-child { padding-bottom: clamp(60px, 8vw, 100px); }
+.card-grid + .page-copy, .table-scroll + .page-copy { margin-top: 24px; }
+.page-copy { --stack-gap: 14px; max-width: var(--measure); color: var(--ink-soft); }
+.page-copy a, .card a:not(.button), .table-scroll a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.page-copy code, .card code, .table-scroll code { font-size: .9em; overflow-wrap: anywhere; }
+
+/* The request-flow diagram: a wide SVG, and a top-to-bottom one below 600 px (rule 7). */
+.diagram { margin: 0; padding: clamp(10px, 2vw, 18px); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
+.diagram img { width: 100%; }
+.diagram + .card-grid { margin-top: 34px; }
+.diagram figcaption { padding: 12px 6px 2px; color: var(--muted); font-size: 14px; }
+
+/* A card per topic, in as many columns as fit. */
+.card-grid { --min: 290px; }
+.card-grid.four { --min: 240px; }
+.card { --stack-gap: 10px; padding: clamp(20px, 2vw, 26px); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card h3 { margin: 0; font-size: 20px; }
+.card p, .card li { margin: 0; color: var(--ink-soft); font-size: 15px; }
+.card ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; }
+.card .text-link { margin-top: 4px; }
+.card.limitations { background: #fff7ed; border-color: #f3d9b8; }
+
+/* A numbered walk-through next to its screenshot. */
+.walkthrough { --split-cols: .9fr 1.1fr; --split-gap: clamp(32px, 4vw, 60px); align-items: start; }
+.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 16px; }
+.steps li { counter-increment: step; position: relative; padding-left: 44px; color: var(--ink-soft); }
+.steps li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dark); font: 700 14px var(--font-mono); }
+.steps strong { color: var(--ink); }
+
+/* Side-by-side comparison and per-connector tables: they scroll inside .table-scroll (rule 2). */
+.table-scroll.wide table { min-width: 640px; }
+.table-scroll td.num, .table-scroll th.num { text-align: right; white-space: nowrap; }
+
+/* /connectors/: one card per connector, its gate counts checked against docs/tools-reference.md
+   (tests/unit/test_website_connectors_page.py). */
+.connector-grid { --min: 320px; }
+.connector-counts { font-size: 13px !important; font-weight: 700; color: var(--accent-dark) !important; }
+.connector-gates { margin: 0; display: grid; gap: 2px; font-size: 15px; }
+.connector-gates dt:not(:first-child) { margin-top: 10px; }
+.connector-gates dt { font-weight: 700; color: var(--ink); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+.connector-gates dd { margin: 0; color: var(--ink-soft); }
+.connector-note { font-weight: 650; }
+.connector-links { --cluster-gap: 0 18px; font-size: 14px; }
+.connector-links a { display: inline-flex; align-items: center; min-height: var(--tap); }
+.section-heading a { color: var(--accent-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---- Legal and prose pages (/privacy/, /imprint/) -------------------------------------- */
 

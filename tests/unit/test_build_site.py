@@ -70,6 +70,9 @@ def test_the_stale_tag_guard_skips_docs_for_a_tag_without_the_published_set(tmp_
     llms = (site / "llms.txt").read_text(encoding="utf-8")
     assert "https://github.com/privacyfence/privacyfence/tree/main/docs" in llms
     assert "/docs/" not in (site / "sitemap.xml").read_text(encoding="utf-8")
+    # The header's Docs link and the pages' links into /docs/ lead to GitHub instead.
+    for source in build_site.PAGES.values():
+        assert 'href="/docs/' not in (site / source).read_text(encoding="utf-8"), source
 
 
 def test_docs_source_at_a_ref_reads_that_ref():
@@ -114,6 +117,42 @@ def test_partial_errors():
         build_site.render_partial("header", colour="red")
     with pytest.raises(build_site.BuildError):
         build_site.assemble_page("<body>\n  <p><!-- include: header --></p>\n</body>\n")
+
+
+def test_header_nav_lists_the_target_site_in_both_places():
+    header = build_site.render_partial("header")
+    inline = re.findall(r'<a href="([^"]+)">', header.split('<div class="nav-links">', 1)[1].split("</div>", 1)[0])
+    menu = re.findall(r'<a href="([^"]+)">', header.split('<div class="nav-menu-panel">', 1)[1].split("</div>", 1)[0])
+    assert inline == menu == ["/how-it-works/", "/security/", "/enterprise/", "/connectors/", "/docs/"]
+
+
+def test_clients_include_is_rendered_from_the_data_file():
+    page = build_site.assemble_page("<main>\n    <!-- include: clients -->\n</main>\n")
+    assert '    <ul class="works-with cluster" aria-label="Tested AI clients">' in page
+    for client in build_site.load_clients()["clients"]:
+        assert f">{client['name']}" in page
+    with pytest.raises(build_site.BuildError):
+        build_site.assemble_page('<main>\n<!-- include: clients colour="red" -->\n</main>\n')
+
+
+def test_clients_requirement_sentence():
+    assert build_site.clients_requirement() == (
+        "An MCP-compatible AI client, such as Claude Desktop, Claude Code or claude.ai (organization deployment)"
+    )
+
+
+def test_docs_links_fall_back_to_github_without_docs():
+    page = (
+        '<a href="/docs/">Docs</a> <a href="/docs/tools-reference/#gmail">Gmail</a>'
+        ' <a href="/docs/getting-started/">Start</a> <a href="/download/">Download</a>'
+    )
+    out = build_site.docs_links_to_github(page)
+    blob = "https://github.com/privacyfence/privacyfence/blob/main/docs"
+    assert f'href="{blob}/README.md"' in out
+    assert f'href="{blob}/tools-reference.md#gmail"' in out
+    assert f'href="{blob}/getting-started.md"' in out
+    assert 'href="/download/"' in out
+    assert 'href="/docs/' not in out
 
 
 def test_every_page_gets_the_same_header_and_footer():

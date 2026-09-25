@@ -78,8 +78,9 @@
         <p class="tagline">Approve the sensitive. Automate the routine.</p>
         <div class="actions cluster">
           <a class="button primary" href="/download/">Download PrivacyFence</a>
-          <a class="button secondary" href="https://github.com/privacyfence/privacyfence">View on GitHub</a>
+          <a class="button secondary" href="/how-it-works/">How it works</a>
         </div>
+        <!-- include: clients -->
         <div class="release-meta cluster" id="release-meta" aria-live="polite">
           <span>Apache 2.0</span><span>macOS · Windows · Linux</span><span>No account required</span>
         </div>
@@ -139,6 +140,7 @@
             <li>Understand why the assistant requested access</li>
             <li>Record accepted, denied and automated decisions locally</li>
           </ul>
+          <a class="text-link" href="/how-it-works/#read-heading">Follow a read, step by step →</a>
         </div>
         <figure class="screenshot-frame">
           <a href="/assets/gmail-read-thread.png"><img src="/assets/gmail-read-thread.png" width="2000" height="2020" alt="PrivacyFence Gmail review dialog showing AI visibility details and a detected PII warning" loading="lazy"></a>
@@ -153,6 +155,7 @@
           <p class="kicker">Actions need context too</p>
           <h2>Review what will change before it changes.</h2>
           <p>For supported write operations, PrivacyFence presents the target and values before execution, so approval is tied to the actual business action rather than a broad permission granted earlier.</p>
+          <a class="text-link" href="/how-it-works/#write-heading">Follow a write, step by step →</a>
         </div>
         <figure class="screenshot-frame">
           <a href="/assets/sheets-write.png"><img src="/assets/sheets-write.png" width="2000" height="1560" alt="PrivacyFence review dialog for a spreadsheet write action" loading="lazy"></a>
@@ -169,7 +172,7 @@
         </div>
         <div class="privacy-copy">
           <p>PrivacyFence is designed so credential ownership, policy enforcement, PII checks and audit can remain in the environment you control. Credentials stay in the PrivacyFence daemon rather than the AI-facing bridge.</p>
-          <p class="quiet">PrivacyFence runs on macOS, Windows and Debian/Ubuntu Linux, integrating with Claude through MCP. IT can instead opt into org mode — one shared instance on a Linux server, with each person signing in through your organization's own identity provider — for centralized, multi-user deployment. Neither mode runs on PrivacyFence-operated infrastructure. The project governs a defined set of enterprise connectors and operations.</p>
+          <p class="quiet">PrivacyFence runs on macOS, Windows and Debian/Ubuntu Linux, and works with MCP-compatible AI clients. An organization can instead run one central deployment on a Linux server, with each person signing in through its own identity provider. Neither runs on PrivacyFence-operated infrastructure. <a href="/enterprise/">Compare the two</a> or read <a href="/security/">the security model</a>.</p>
         </div>
       </div>
     </section>
@@ -183,7 +186,10 @@
       <div class="connector-list cluster" aria-label="Supported connector examples">
         <span>Gmail</span><span>Google Drive</span><span>Google Docs</span><span>Google Sheets</span><span>Calendar</span><span>Contacts</span><span>Tasks</span><span>Slack</span><span>Telegram</span><span>Salesforce</span><span>Jira</span><span>Confluence</span>
       </div>
-      <a class="text-link" href="https://github.com/privacyfence/privacyfence#what-privacyfence-governs">See governed operations on GitHub →</a>
+      <div class="cluster link-row">
+        <a class="text-link" href="/connectors/">What each connector can do →</a>
+        <a class="text-link" href="/docs/tools-reference/">Every tool and its gate →</a>
+      </div>
     </section>
 
     <section class="cta-section">
@@ -191,7 +197,7 @@
         <div>
           <p class="kicker">Open source</p>
           <h2>Run it yourself. Inspect everything.</h2>
-          <p>PrivacyFence is released under Apache 2.0. Try it locally, inspect the implementation, and tell me what does not work.</p>
+          <p>PrivacyFence is released under Apache 2.0. Try it locally, read how it decides, inspect the implementation, and tell me what does not work.</p>
           <div class="stats cluster" id="stats" hidden>
             <span><strong id="download-count">0</strong> release downloads</span>
             <span><strong id="star-count">0</strong> GitHub stars</span>
@@ -199,7 +205,10 @@
         </div>
         <div class="actions vertical cluster">
           <a class="button primary" href="/download/">Download latest release</a>
-          <a class="button secondary" href="https://github.com/privacyfence/privacyfence">Source &amp; documentation</a>
+          <a class="button secondary" href="/how-it-works/">How it works</a>
+          <a class="button secondary" href="/security/">Security</a>
+          <a class="button secondary" href="/enterprise/">Organization deployment</a>
+          <a class="button secondary" href="https://github.com/privacyfence/privacyfence">Source on GitHub</a>
         </div>
       </div>
     </section>
