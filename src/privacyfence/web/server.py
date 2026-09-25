@@ -21,7 +21,8 @@ daemon -- does not go through this loopback port at all:
 ``web/control_channel.py``'s ``ControlChannelServer`` is a Unix domain
 socket (macOS/Linux) or ACL'd named pipe (Windows) a browser's own loopback
 connection cannot speak, rather than a persistent secret presented over
-HTTP. See that module's own docstring for the full reasoning.
+HTTP (ADR 0002 decision 2). See that module's own docstring for the full
+reasoning.
 
 **Org mode**: a
 configurable bind host/port, optional TLS termination, optional
@@ -219,7 +220,8 @@ def confirm_first_passkey_enrollment() -> tuple[bool, str]:
 def present_recovery_code(code: str) -> tuple[bool, str]:
     """Local mode's ``deliver_recovery_code`` (web/routes_security.py):
     hand a freshly minted one-time recovery code to the companion, which
-    puts it in front of whoever is at this machine's own login session.
+    puts it in front of whoever is at this machine's own login session
+    (ADR 0003's 2026-09-19 Out-of-scope amendment).
 
     Wired only on a *packaged* build -- ``build_app`` below decides that --
     for the same reason ``confirm_first_passkey_enrollment`` above honors a
@@ -253,7 +255,8 @@ def reissue_local_recovery_code() -> tuple[bool, str]:
     agent shares (web/control_channel.py's own ``0660`` paragraph): the
     reply carries no code, so triggering this learns an attacker nothing,
     and the dialog means it cannot even invalidate the human's saved code
-    without somebody at the keyboard agreeing to it.
+    without somebody at the keyboard agreeing to it. See ADR 0003's
+    2026-09-19 Out-of-scope amendment.
     """
     confirmed, reason = request_recovery_confirmation()
     if not confirmed:
@@ -400,7 +403,7 @@ class _SecurityHeadersMiddleware:
     read from ``scope["state"]`` at send time, *after* the app has already
     run and had a chance to override it -- not the value minted up front --
     so the header always matches whichever nonce actually ended up in the
-    response body.
+    response body. Why a nonce and not ``'unsafe-inline'``: ADR 0063.
 
     **Replace, not extend.** Appending the fixed header set onto whatever
     the wrapped app already sent would silently emit *two* headers of the same name -- ambiguous at
@@ -821,7 +824,7 @@ def build_app(
     store), which is what makes the audience separation ("the
     MCP access token must never be accepted on approval-decision endpoints,
     and the browser session cookie must never be accepted on /mcp") hold
-    structurally rather than by convention. In org mode the same
+    structurally rather than by convention (ADR 0061). In org mode the same
     separation holds because ``org.provider``'s tokens and
     ``org.sessions``' cookies are two entirely different stores with
     nothing that compares one against the other (see
@@ -902,7 +905,7 @@ def build_app(
     # ``require_human_session`` paragraph for why privilege separation is
     # the line: it is what ADR 0003 makes mandatory on every packaged
     # install, and what guarantees the companion that mints such a session
-    # exists at all.
+    # exists at all. See ADR 0062.
     require_human_session = privilege_separation.is_enabled()
 
     if controller is not None:

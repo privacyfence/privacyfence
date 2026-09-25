@@ -135,7 +135,7 @@ class TestDismissibleNotice:
 
 
 class TestNotifications:
-    """Tiers 0-1 only: the title badge and a local service-worker notification."""
+    """Tiers 0-1 only: the title badge and a local service-worker notification (ADR 0064)."""
 
     def test_registers_the_service_worker(self):
         html = web_shell.wrap("", title="t", active="approvals")

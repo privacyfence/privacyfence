@@ -1,4 +1,4 @@
-"""Tests for web/csp.py -- the shared nonce/CSP helpers.
+"""Tests for web/csp.py -- the shared nonce/CSP helpers (ADR 0063).
 web/test_server.py covers the middleware/header-emission side end-to-end;
 this module covers the small pure helpers in isolation.
 """

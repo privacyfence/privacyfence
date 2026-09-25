@@ -29,7 +29,7 @@ preview actually renders (the card's ``<embed>`` is blocked by the
 implicit ``default-src 'none'`` fallback unless the policy names
 ``object-src``/``frame-src`` exceptions). Both assert real pass/fail
 outcomes -- see ``TestSecurityHeadersCsp``/``TestPdfPreview`` below, and
-web/csp.py's ``build_csp()`` for the policy they check.
+web/csp.py's ``build_csp()`` for the policy they check (ADR 0063).
 """
 from __future__ import annotations
 

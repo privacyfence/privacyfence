@@ -10,7 +10,7 @@ stack (``RequireAuthMiddleware`` / ``AuthContextMiddleware`` /
 small nested Starlette app, exactly the same shape ``mount_mcp`` already
 uses to keep ``/mcp`` off the main approval-surface app's own middleware
 stack (audience separation: a browser session cookie must never be
-accepted here any more than it is on ``/mcp``). The principal for both
+accepted here any more than it is on ``/mcp``; see ADR 0061). The principal for both
 routes always comes from that bearer token via ``principal_from_access_
 token``, never from a cookie or a path parameter.
 
