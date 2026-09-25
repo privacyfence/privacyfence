@@ -216,7 +216,7 @@ class TestDecisionFingerprint:
 
 
 class TestBatchDecisionFingerprint:
-    """The approval binder's own binding (Phase 3): the role
+    """The approval binder's own binding: the role
     decision_fingerprint plays for one decision, over a whole submitted
     set."""
 
@@ -257,7 +257,7 @@ class TestBatchDecisionFingerprint:
         )
 
     def test_binds_deny_items_too_not_just_the_accepting_ones(self):
-        # §10.6's own binding covers the whole set a human saw, not merely
+        # The binding covers the whole set a human saw, not merely
         # the subset that happened to need step-up -- an assertion for
         # {accept A, deny B} must not cover {accept A, deny C} either.
         with_b = [("a1", "accept"), ("b", "deny")]

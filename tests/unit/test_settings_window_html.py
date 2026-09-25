@@ -167,8 +167,7 @@ class TestToggleTemplate:
         for action in (
             "toggle_pii_detection", "toggle_pii_category",
             "toggle_update_check", "toggle_update_check_beta",
-            # F6 of the self-approval review: no single toggle_connector
-            # any more -- both branches of the directional ternary are
+            # No single toggle_connector -- both branches of the directional ternary are
             # present as source text regardless of any connector's actual
             # state (see settings_window_html.py's renderConnectors).
             "enable_connector", "disable_connector",
@@ -189,7 +188,7 @@ class TestConnectorRowTemplate:
 
 
 class TestInitialSection:
-    """``initial_section`` (issue #396 Part C) -- web/routes_settings.py's
+    """``initial_section`` -- web/routes_settings.py's
     ``GET /settings/connectors`` passes this so an un-onboarded sign-in link
     lands on Connectors instead of the client-side JS's own 'general'
     default."""
@@ -213,8 +212,8 @@ class TestInitialSection:
 
 
 class TestWelcomeBanner:
-    """The un-onboarded welcome banner on the Connectors page (issue #396
-    Part C) -- client-rendered, so this only asserts on the shipped
+    """The un-onboarded welcome banner on the Connectors page --
+    client-rendered, so this only asserts on the shipped
     template/logic, same as every other section's own tests in this file
     (see the module docstring)."""
 
@@ -235,9 +234,7 @@ class TestWelcomeBanner:
 
 
 class TestAutoAcceptTemplate:
-    """P6 of the policy v2 redesign: the single filterable Auto-accept page, replacing the old
-    per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-page surface (see git history for
-    this class's own pre-P6 shape, TestRulesAndGrantsTemplate)."""
+    """The single filterable Auto-accept page (policy v2)."""
 
     def test_rule_row_fields_wired(self):
         html = build_html(_make_state())
@@ -265,7 +262,7 @@ class TestAutoAcceptTemplate:
         assert "covered_tools" in html
 
     def test_usage_fields_wired(self):
-        # P8 (rule attribution and staleness): every row's match count/last-matched/never-matched
+        # Rule attribution and staleness: every row's match count/last-matched/never-matched
         # trio is read and rendered, with a distinct class for a rule that has never fired.
         html = build_html(_make_state())
         assert "match_count" in html
@@ -337,8 +334,7 @@ class TestAboutTemplate:
 
 class TestTelegramModalTemplate:
     """Telegram's in-webview multi-step sign-in modal (phone -> code ->
-    optional 2FA password), replacing the pre-#120 native rumps.Window
-    flow. See TestTelegramStartAuth/TestTelegramSubmitCode/
+    optional 2FA password). See TestTelegramStartAuth/TestTelegramSubmitCode/
     TestTelegramSubmit2FA in test_settings_controller.py for the Python
     side; string-level checks only here, same reasoning as this module's
     own docstring -- actual step-transition/auto-close behavior was

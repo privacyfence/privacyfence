@@ -9,7 +9,7 @@ once, with no route move and no file deletion: both callers still resolve
 their own ``Principal`` (ambient in local mode, from
 ``org_session.authenticated()`` in org mode -- ADR 0008) and still build
 their own "step-up required" response (local: passkey-only ``428``/``403``;
-org: a ``428`` that can also carry an IdP-reauth link, closed by #406's
+org: a ``428`` that can also carry an IdP-reauth link, closed by
 ``require_passkey``) -- both passed in rather than duplicated here.
 
 ``batch_step_up_response`` has no such per-mode difference at all: comparing
@@ -93,9 +93,8 @@ def guard_decision(
     Covers a single decision's two independent step-up triggers, in the
     same order both former implementations checked them:
 
-    - a **sensitive confirm** (the self-approval review's Phase 4):
-      ``approval.sensitive`` and ``result`` is a rule-creating confirm
-      (``CONFIRM_RESULTS[0]``) -- gated on ``step_up.require_passkey``
+    - a **sensitive confirm**: ``approval.sensitive`` and ``result`` is a
+      rule-creating confirm (``CONFIRM_RESULTS[0]``) -- gated on ``step_up.require_passkey``
       directly, never on ``scope``, since a rule change is not a read or a
       write, it is what decides which of those get asked about at all (both
       modules' own module docstrings);
@@ -175,8 +174,7 @@ def batch_step_up_response(
     response -- same "no enrolled credential and ``require_passkey`` off"
     evadable fall-through (``None``), same ``403`` naming ``/security`` when
     ``require_passkey`` is on instead. Deliberately no IdP-reauth fallback
-    in either mode: the approval binder plan's own Phase 3 text treats this
-    as a page-level ceremony (like web/routes_settings.py's own sensitive
+    in either mode: a batch decision is a page-level ceremony (like web/routes_settings.py's own sensitive
     actions), not a per-card one, and a page-level step-up never offered an
     IdP link either -- unlike a mode's own single-decision response, this
     has no ``require_passkey``-off branch to fall back to an IdP link

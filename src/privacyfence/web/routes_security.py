@@ -1,16 +1,15 @@
-"""Passkey enrollment, for org mode and (#426 Phase 1) local mode alike:
+"""Passkey enrollment, for org mode and local mode alike:
 ``GET /security`` lets a signed-in principal see and manage their own
 enrolled WebAuthn credentials, and the ``/api/security/webauthn/*`` routes
 drive the two ceremonies webauthn_stepup.py implements. web/routes_
-org_approvals.py's decide endpoint (org mode) is the other, later consumer
-of an enrolled credential (the actual step-up check on a write approval);
-local mode's own decide-time check is #426 Phase 2 -- this module only ever
-registers or removes a credential, in either mode.
+approvals.py's decide endpoint is the other, later consumer of an enrolled
+credential (the actual step-up check on a write approval), in both modes --
+this module only ever registers or removes a credential.
 
 Same posture as web/routes_connect.py (not a port of routes_settings.py's
 whole surface, a session-cookie CSRF model) -- see that module's own
-docstring for the reasoning, which applies here unchanged. Mode-agnostic
-since #426 Phase 1: ``build_routes`` takes a principal/session resolver
+docstring for the reasoning, which applies here unchanged. Mode-agnostic:
+``build_routes`` takes a principal/session resolver
 rather than an ``OrgSessionStore`` directly, so org mode passes ``org_
 session``'s functions and local mode passes web/session_auth.py's -- the
 two modules already have matching shapes (``authenticated``/``check_csrf``/
@@ -36,11 +35,10 @@ this module owns it only because enrollment is where the ceremony's shape
 first has to exist; there is nothing enrollment-specific about the helpers
 themselves.
 
-**Deleting your last credential (#426 Phase 3)** is gated behind a fresh
-assertion, regardless of ``step_up.require_passkey`` -- "belt-and-braces
-once #428 lands, since the flag is no longer agent-writable, but also the
-right behavior for a human at the keyboard" (issue #426's own Phase 3
-text): removing the *only* enrolled passkey is what would silently turn a
+**Deleting your last credential** is gated behind a fresh
+assertion, regardless of ``step_up.require_passkey`` -- belt-and-braces on
+a privilege-separated install, where the flag is not agent-writable, but
+also the right behavior for a human at the keyboard: removing the *only* enrolled passkey is what would silently turn a
 "mandatory" install back into an unenforced one, so ``delete_credential``
 below demands proof of possession of that very credential first, the same
 428-then-retry protocol web/routes_approvals.py's decide() uses. Removing
@@ -91,7 +89,7 @@ docstring. A refusal by either gate is audited
 enrollment nobody asked for distinguishable from one a human made -- the
 ``webauthn_credential_enrolled`` entry alone cannot tell them apart.
 
-**Tamper-evidence and recovery (#426 Phase 4)**: every enroll and remove
+**Tamper-evidence and recovery**: every enroll and remove
 here writes an audit entry (see ``_audit`` below), and ``register_verify``
 issues a one-time recovery code whenever this principal doesn't currently
 have an unused one on file. Who shows it is ``deliver_recovery_code``'s
@@ -221,7 +219,7 @@ class RecoveryAttemptLimiter:
 # see webauthn_stepup.py's module docstring on why hand-rolling the
 # verification side, but not this encode/decode plumbing, would be a
 # mistake). Written by hand, not loaded from a CDN: web/server.py's CSP
-# (script-src is a per-response nonce, no external host -- SEC-08) allows
+# (script-src is a per-response nonce, no external host) allows
 # no external script on any page this daemon serves -- see web/csp.py's own
 # module docstring.
 PF_WEBAUTHN_JS = """
@@ -335,7 +333,7 @@ def build_routes(
     recovery_limiter: RecoveryAttemptLimiter | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
-    mode-specific half of this module (#426 Phase 1) -- org mode's caller
+    mode-specific half of this module -- org mode's caller
     (web/server.py's ``_build_org_app``) passes ``org_session``'s three
     functions bound to its own ``OrgSessionStore``; local mode's caller
     passes web/session_auth.py's, bound to its own ``LocalSessionStore``.
@@ -351,7 +349,7 @@ def build_routes(
     string either way. ``back_link`` is an ``(href, label)`` pair for the
     page's own footer link, rendered only when ``nav_items`` is ``None``
     (see module docstring) -- it defaults to org mode's ``/connect`` (routes_
-    connect.py) since that was this module's only caller until #426 Phase 1;
+    connect.py);
     local mode's caller overrides it to ``/settings/connectors``, since it
     has no ``/connect`` route to link to (settings_window_html.py's
     Connectors tab is that mode's own equivalent). ``nav_items`` is ``None``
@@ -381,7 +379,7 @@ def build_routes(
     server.py's ``present_recovery_code``, which hands the code to the
     companion to put on the human's own desktop instead, so a credential-
     store reset token never travels in a response body a process holding a
-    ``pf_session`` can read (F7 of the review this plan comes from). It
+    ``pf_session`` can read (ADR 0003's amendment on the recovery trade). It
     returns ``(delivered, reason)``, and a ``False`` is load-bearing: the
     code is only *stored* once somebody has been shown it, so a failed
     delivery leaves the principal with no code rather than one nobody has.
@@ -449,12 +447,13 @@ def build_routes(
         return None
 
     def _audit(principal: Principal, decision: str, summary: str) -> None:
-        """#426 Phase 4: one audit entry per credential-store lifecycle
+        """One audit entry per credential-store lifecycle
         event -- enroll, remove, and (recover_credential, below) a spent
         recovery code. Never allowed to block or fail the request it's
         attached to -- same posture as every other non-critical audit call
-        in this codebase (see docs/coding-and-testing-guidelines.md
-        §1.4's "non-critical side effects" rule)."""
+        in this codebase (see
+        docs/coding-and-testing-guidelines.md §1.4's "non-critical side
+        effects" rule)."""
         try:
             get_audit_logger().record(AuditEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -595,7 +594,7 @@ def build_routes(
             # authorized challenge -- kept as the invariant's own tripwire so
             # a future path that issues a registration challenge without
             # passing the enrollment gate fails closed here rather than silently
-            # restoring F1. See the module docstring.
+            # enrolling an unvetted credential. See the module docstring.
             logger.warning("Refused to complete an enrollment whose challenge was never authorized.")
             _audit(
                 principal, "webauthn_enrollment_refused",
@@ -625,10 +624,10 @@ def build_routes(
             f"{'First passkey' if was_first else 'Passkey'} enrolled: {saved.label!r}",
         )
         response: dict[str, Any] = {"status": "ok", "credential_id": saved.credential_id, "label": saved.label}
-        # #426 Phase 4: issue a recovery code the moment there stops being
-        # an unused one on file -- covers both the first-ever enrollment
-        # and an upgrade from before this feature existed. It is shown
-        # exactly once either way; what differs (plan item 1.3, see
+        # Issue a recovery code the moment there stops being an unused one
+        # on file -- covers both the first-ever enrollment and a store that
+        # has credentials but no code. It is shown exactly once either way;
+        # what differs (see
         # build_routes' docstring on deliver_recovery_code) is who shows it.
         if not webauthn_stepup.has_recovery_code(principal):
             code = webauthn_stepup.mint_recovery_code()
@@ -699,7 +698,7 @@ def build_routes(
         return JSONResponse({"status": "ok"})
 
     async def recover_credential(request: Request) -> Response:
-        """#426 Phase 4: the sanctioned way back in when the only enrolled
+        """The sanctioned way back in when the only enrolled
         authenticator is lost (new machine, wiped TPM) -- see module
         docstring and webauthn_stepup.py's own on generate_recovery_code/
         consume_recovery_code. A still-signed-in principal (this route
@@ -870,7 +869,7 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     }).then(function (r) { return r.json(); }).then(function (data) {
       if (data.error) { throw new Error(data.error); }
-      // #426 Phase 4: a recovery code is issued the moment none is
+      // A recovery code is issued the moment none is
       // currently unused -- shown exactly once, here, since the server
       // never returns it again after this response.
       if (data.recovery_code) {
@@ -898,7 +897,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
-  // #426 Phase 4: the recovery-code path for a lost/unusable authenticator
+  // The recovery-code path for a lost/unusable authenticator
   // -- no WebAuthn ceremony, just the one-time code from enrollment.
   var recoverBtn = document.getElementById('pf-use-recovery-code');
   var recoverStatus = document.getElementById('pf-recovery-status');
@@ -923,7 +922,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // #426 Phase 3: removing your *only* enrolled passkey demands a fresh
+  // Removing your *only* enrolled passkey demands a fresh
   // assertion first (module docstring) -- the server's own 428 carries
   // options only in that case, so this same handler is a plain one-shot
   // delete whenever it isn't (a 200 with no 428 round trip at all).
@@ -1008,10 +1007,10 @@ _RECENT_MINTS_SCANNED = 200
 
 def _recent_mints() -> list[tuple[str, str]]:
     """``(when, what)`` for the most recent sign-in code mints and refusals,
-    newest first -- the self-approval plan's Phase 2 half that makes an
-    unexpected mint *visible* rather than merely inferable.
+    newest first -- this is what makes an unexpected mint *visible* rather
+    than merely inferable.
 
-    Every path to a session is audited now (web/control_channel.py's
+    Every path to a session is audited (web/control_channel.py's
     ``_audit_mint``), but an audit entry nobody reads is evidence after the
     fact and not much else; this puts them on the one page a human already
     visits to reason about what can approve on this install.
