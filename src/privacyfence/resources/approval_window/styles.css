@@ -274,10 +274,20 @@ img { display: block; max-width: 100%; }
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
   padding: 6px 10px 6px 0; border-bottom: 1px solid var(--color-divider);
 }
+/* Any cell may break mid-word as a last resort -- that is what lets a long
+   URL, email or ID shrink to fit instead of pushing the table past the
+   pane. The exception is the label column of a two-column label/value
+   table (Salesforce's Field/Value, a markdown key/value table): auto
+   layout gives nearly all the width to a long value next to it, and
+   letting the label break anywhere is what squeezed "Description" into
+   "Descripti" / "on". overflow-wrap: normal makes its min-content width
+   its longest word, so it wraps at spaces only and the value column still
+   takes the rest. */
 .pf-table td {
   padding: 6px 10px 6px 0; border-bottom: 1px solid var(--color-divider);
-  vertical-align: top; word-break: break-word;
+  vertical-align: top; overflow-wrap: anywhere;
 }
+.pf-table td:first-child:nth-last-child(2) { overflow-wrap: normal; }
 .pf-table tr:last-child td { border-bottom: none; }
 .pf-table-footer {
   font-size: 12px; font-style: italic; color: var(--color-neutral-700); margin: 6px 0 0;

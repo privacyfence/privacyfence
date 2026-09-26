@@ -1616,6 +1616,48 @@ class TestPdfPreview:
             thread.join(timeout=5)
 
 
+class TestPreviewTableLayout:
+    def test_a_label_column_never_breaks_mid_word_next_to_a_long_value(self, page, local_server):
+        """Auto table layout gives a long value nearly all the width; a label
+        beside it that may break anywhere then renders as "Descripti" /
+        "on". The label must stay on one line (it has no space to wrap at)
+        while the value takes the rest and nothing overflows the pane."""
+        server, web_ui = local_server
+        page.set_viewport_size({"width": 1000, "height": 800})
+        _sign_in_local(page, server)
+        thread, card = _register_card(
+            web_ui, read=True, layout="wide", table_only=True,
+            preview_tables=[{
+                "headers": ["Field", "Value"],
+                "rows": [["Description", "Billing contact for the annual contract. " * 12]],
+            }],
+        )
+        try:
+            page.goto(f"{server.base_url}/approvals/{card.id}")
+            page.wait_for_selector(".pf-table")
+            label, value, table_width, pane_width = page.evaluate(
+                """() => {
+                    const t = document.querySelector('.pf-table');
+                    const [l, v] = t.querySelectorAll('tbody td');
+                    // The label's own line boxes, not the cell's height --
+                    // the row is as tall as the (long) value beside it.
+                    const range = document.createRange();
+                    range.selectNodeContents(l);
+                    return [
+                        {lines: range.getClientRects().length},
+                        {width: v.getBoundingClientRect().width},
+                        t.scrollWidth, t.parentElement.clientWidth,
+                    ];
+                }"""
+            )
+            assert label["lines"] == 1, "the label wrapped mid-word"
+            assert value["width"] > table_width / 2, "the value column should take the remaining width"
+            assert table_width <= pane_width
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
 # --------------------------------------------------------------------- #
 # CSP: no-inline-script
 # --------------------------------------------------------------------- #
