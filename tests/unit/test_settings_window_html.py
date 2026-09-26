@@ -95,7 +95,7 @@ class TestDocumentShell:
 
     def test_embeds_an_app_mount_point(self):
         html = build_html(_make_state())
-        assert '<div id="app"></div>' in html
+        assert '<div id="app" class="shell pf-settings"></div>' in html
 
     def test_defines_pf_render_entry_point(self):
         html = build_html(_make_state())
@@ -156,11 +156,13 @@ class TestStateEmbedding:
 
 
 class TestToggleTemplate:
-    def test_toggle_track_and_knob_classes_defined(self):
+    def test_switches_are_the_toggle_component(self):
+        # app.css's toggle: a real checkbox with role=switch inside a <label> tap target, the
+        # data-action on the input itself (one tap, one post).
         html = build_html(_make_state())
-        assert ".pf-toggle" in html
-        assert ".pf-toggle.on" in html
-        assert ".pf-knob" in html
+        assert "<label class=\"toggle pf-toggle\"><input type=\"checkbox\" role=\"switch\"" in html
+        assert "<span class=\"toggle-track\"></span></label>" in html
+        assert ".toggle-track" in html  # the component's own CSS, from app.css
 
     def test_toggle_bridge_actions_referenced(self):
         html = build_html(_make_state())
@@ -295,13 +297,13 @@ class TestAutoAcceptTemplate:
 
 
 class TestPrivacySegmentedControl:
-    def test_policy_colors_match_the_design(self):
+    def test_policy_colors_are_the_status_tokens(self):
+        # allow / redact / block take the success / warning / danger status colours (app.css),
+        # which have a dark-mode value, never a literal of their own.
         html = build_html(_make_state())
-        # #0071e3 allow / #b76e00 redact / #d92d20 block -- see
-        # settings_window_html.py's module docstring.
-        assert ".policy-allow { background: #0071e3" in html
-        assert ".policy-redact { background: #b76e00" in html
-        assert ".policy-block { background: #d92d20" in html
+        assert ".pf-seg-btn.policy-allow { color: var(--success); background: var(--success-soft)" in html
+        assert ".pf-seg-btn.policy-redact { color: var(--warning); background: var(--warning-soft)" in html
+        assert ".pf-seg-btn.policy-block { color: var(--danger); background: var(--danger-soft)" in html
 
     def test_policy_actions_wired(self):
         html = build_html(_make_state())

@@ -87,7 +87,6 @@ _COLOUR_FUNCTION = re.compile(r"\b(?:rgba?|hsla?)\(")
 
 # file -> (number of colour literals it may still have, phase that removes them)
 COLOUR_ALLOWED: dict[str, tuple[int, str]] = {
-    "src/privacyfence/settings_window_html.py": (23, "p3-settings"),
     "src/privacyfence/web/routes_connect.py": (14, "p6-remaining-pages"),
     "src/privacyfence/web/routes_security.py": (15, "p6-remaining-pages"),
     "src/privacyfence/web/session_auth.py": (1, "p6-remaining-pages"),
@@ -171,9 +170,7 @@ def _primitive_knobs() -> set[str]:
 FOREIGN_PROPERTIES = re.compile(r"md-[\w-]+")  # the /docs/ generator's theme (website/_docs/)
 
 # (file, property-name pattern) -> phase that removes the definitions.
-TOKEN_DEFINITIONS_ALLOWED: dict[tuple[str, str], str] = {
-    ("src/privacyfence/settings_window_html.py", r"pf-[\w-]+"): "p3-settings",
-}
+TOKEN_DEFINITIONS_ALLOWED: dict[tuple[str, str], str] = {}
 
 
 def _styled_files() -> list[Path]:

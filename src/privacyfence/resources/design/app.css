@@ -51,6 +51,9 @@
 
   /* The floating header's shadow (website/chrome.css's .site-header uses the same value). */
   --shadow-header: 0 8px 28px rgba(20, 33, 43, .05);
+
+  /* The backdrop behind a modal dialog: dims the page, never carries text. */
+  --scrim: rgba(20, 33, 43, .45);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -72,6 +75,7 @@
     --ink-hover: #ffffff;
     --shadow-button: 0 8px 24px rgba(0, 0, 0, .3);
     --shadow-header: 0 8px 28px rgba(0, 0, 0, .3);
+    --scrim: rgba(0, 0, 0, .6);
 
     --danger: #ff9a8b;
     --danger-soft: #3d201c;

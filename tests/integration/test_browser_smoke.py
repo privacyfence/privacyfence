@@ -2307,11 +2307,6 @@ _PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {
     "approvals": ("p6-remaining-pages", _PHONES),
     "connect": ("p6-remaining-pages", _PHONES),
     "security": ("p6-remaining-pages", _PHONES),
-    # The fixed 190px nav leaves each section about half the width, and Privacy Filter's editor
-    # about a fifth.
-    **{f"settings-admin-{s}": ("p3-settings", _PHONES) for s in _ADMIN_SECTIONS},
-    **{f"settings-member-{s}": ("p3-settings", _PHONES) for s in _MEMBER_SECTIONS},
-    "settings-privacy-route": ("p3-settings", _PHONES),
     # No viewport meta at all: a phone lays them out at 980px and zooms out.
     "no-longer-pending": ("p6-remaining-pages", _EVERY_WIDTH),
     "preparing": ("p6-remaining-pages", _EVERY_WIDTH),
@@ -2442,8 +2437,8 @@ class TestPhoneLayout:
         phone_page.goto(f"{server.base_url}/settings{'/privacy' if case == 'settings-privacy-route' else ''}")
         phone_page.wait_for_selector(".pf-navitem")
         if case != "settings-privacy-route":
-            # A script click: the point is the section's own layout, not whether the nav (which
-            # p3 turns into a tab strip) happens to be tappable at this width.
+            # A script click: the point is the section's own layout; the tab strip's own tap
+            # targets are checked with the rest of the page by (c).
             phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
         # A section renders into .pf-page (About into .pf-about-page); Privacy Filter's editor,
         # beside its group list, into .pf-detail-page.
