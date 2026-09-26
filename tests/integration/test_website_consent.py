@@ -99,6 +99,22 @@ class Visit:
     def goto(self, path):
         self.page.goto(f"{self.site_url}{path}", wait_until="networkidle")
 
+    def accept(self):
+        """Clicks "Accept" and returns once the gtag.js request it causes has been recorded.
+
+        The click returns when Chromium acks the mouse-up; the request it starts reaches
+        Playwright later, by way of the network service. `wait_for_load_state("networkidle")`
+        cannot bridge that: the page reached networkidle before the click, so it returns at
+        once. Times out, and fails the test, if no request comes."""
+        with self.page.expect_request(lambda request: request.url.startswith(GA_ORIGIN)):
+            self.page.click(f"{BANNER} [data-consent=granted]")
+
+    def settle(self):
+        """The settle point for "nothing was requested": reloads and waits for the new
+        document's networkidle, by which time any request the page made before has been
+        reported. Waiting for networkidle without a navigation does not wait (see accept)."""
+        self.page.reload(wait_until="networkidle")
+
     def third_party(self) -> list[str]:
         site_host = urlsplit(self.site_url).netloc
         return [url for url in self.requests if urlsplit(url).netloc not in {site_host, *FIRST_PARTY_HOSTS}]
@@ -137,8 +153,7 @@ def test_no_third_party_request_and_no_cookie_before_a_choice(visit, path):
 def test_accept_loads_google_analytics_with_the_pages_content_group(visit, path):
     v = visit()
     v.goto(path)
-    v.page.click(f"{BANNER} [data-consent=granted]")
-    v.page.wait_for_load_state("networkidle")
+    v.accept()
     assert v.ga_requests(), f"{path}: accepting did not load Google Analytics"
     assert not v.page.locator(BANNER).is_visible()
 
@@ -154,7 +169,7 @@ def test_accept_loads_google_analytics_with_the_pages_content_group(visit, path)
 def test_accepting_carries_over_to_the_next_page(visit):
     v = visit()
     v.goto("/")
-    v.page.click(f"{BANNER} [data-consent=granted]")
+    v.accept()  # so this page's gtag.js request cannot land after the clear() below
     v.requests.clear()
     v.goto("/download/")
     assert not v.page.locator(BANNER).is_visible(), "the banner came back after accepting"
@@ -165,8 +180,9 @@ def test_declining_loads_nothing_and_persists_across_pages(visit):
     v = visit()
     v.goto("/")
     v.page.click(f"{BANNER} [data-consent=denied]")
-    v.page.wait_for_load_state("networkidle")
     assert not v.page.locator(BANNER).is_visible()
+    # Each goto waits for a fresh document's networkidle: the settle point for the
+    # third_party() check below, including for anything the click itself requested.
     for path in PAGES:
         v.goto(path)
         assert not v.page.locator(BANNER).is_visible(), f"{path} asked again after declining"
@@ -177,7 +193,7 @@ def test_declining_loads_nothing_and_persists_across_pages(visit):
 def test_cookie_settings_reopens_the_choice_and_can_withdraw_consent(visit):
     v = visit()
     v.goto("/privacy/")
-    v.page.click(f"{BANNER} [data-consent=granted]")
+    v.accept()  # so this page's gtag.js request cannot land after the clear() below
     v.page.click("[data-cookie-settings]")
     assert v.page.locator(BANNER).is_visible()
     v.page.click(f"{BANNER} [data-consent=denied]")
@@ -220,11 +236,12 @@ def test_download_click_is_sent_only_after_consent(visit):
     declined.page.click(f"{BANNER} [data-consent=denied]")
     _click_first_download(declined.page)
     assert _download_click_events(declined.page) == []
+    declined.settle()
     assert not declined.ga_requests()
 
     accepted = visit()
     accepted.goto("/download/")
-    accepted.page.click(f"{BANNER} [data-consent=granted]")
+    accepted.accept()
     _click_first_download(accepted.page)
     events = _download_click_events(accepted.page)
     assert len(events) == 1
