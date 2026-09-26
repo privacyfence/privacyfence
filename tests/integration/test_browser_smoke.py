@@ -33,6 +33,7 @@ web/csp.py's ``build_csp()`` for the policy they check (ADR 0063).
 """
 from __future__ import annotations
 
+import base64
 import http.server
 import logging
 import re
@@ -52,6 +53,7 @@ from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 from pypdf import PdfWriter  # noqa: E402
 
+from privacyfence import approval_window_html  # noqa: E402
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.connector_registry import ConnectorRegistry  # noqa: E402
@@ -1764,6 +1766,33 @@ class TestPdfPreview:
             thread.join(timeout=5)
 
 
+    @pytest.mark.parametrize(("pane", "embeds", "pages"), [(700, 1, 0), (599, 0, 1)])
+    def test_the_preview_width_picks_the_embed_or_the_page_images(self, page, pane, embeds, pages):
+        """ADR 0080: the <embed> where the preview is at least 600px wide, the server-rendered
+        page images below that. A container query, so it is the preview's own width that
+        decides, wherever the card sits. Measured on the fragment in a box of a set width: the
+        WIDE card is 980px wide, so its pane never reaches 600px today."""
+        fragment = approval_window_html.build_preview_body_html(
+            pdf_data_uri="data:application/pdf;base64," + base64.b64encode(_pdf_bytes()).decode("ascii"),
+            pdf_page_uris=["data:image/png;base64," + base64.b64encode(
+                (Path(paths_module.__file__).parent / "resources" / "icon_512.png").read_bytes(),
+            ).decode("ascii")],
+            pdf_page_count=3,
+        )
+        page.set_content(
+            f"<style>{approval_window_html.DOCUMENT_CSS}{approval_window_html._STYLES_CSS}</style>"
+            f'<div style="width:{pane}px;height:600px">{fragment}</div>'
+        )
+        shown = page.evaluate("""() => {
+            const shown = (sel) => [...document.querySelectorAll(sel)]
+                .filter((el) => el.getBoundingClientRect().width > 0).length;
+            return {embeds: shown('embed.pf-pdf-embed'), pages: shown('img.pf-pdf-page')};
+        }""")
+        assert shown == {"embeds": embeds, "pages": pages}
+        if pages:
+            assert page.inner_text(".pf-pdf-note") == "Showing page 1 of 3"
+
+
 class TestPreviewTableLayout:
     def test_a_label_column_never_breaks_mid_word_next_to_a_long_value(self, page, local_server):
         """Auto table layout gives a long value nearly all the width; a label
@@ -2289,9 +2318,6 @@ _PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {
     "not-authorized": ("p6-remaining-pages", _EVERY_WIDTH),
     # The full-page card's preview pane is 81-85% of a phone's width (the card's own padding).
     **{f"card-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
-    # The PDF is an <embed>, and the 10-column table breaks its words mid-word, at every width.
-    "card-pdf-preview": ("p4-review-content", _EVERY_WIDTH),
-    "card-table-preview": ("p4-review-content", _EVERY_WIDTH),
     # Inline in a list row there is no card yet, only the Details metadata disclosure: narrower
     # than 90% on a phone, and with no PDF page or table in it at all.
     **{f"inline-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},

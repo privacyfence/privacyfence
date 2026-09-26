@@ -63,6 +63,12 @@ dependencies = [
     "certifi>=2024.2.2",
     "openpyxl>=3.1",
     "pypdf>=5.0",
+    # pdf_render.py rasterises a PDF preview's first pages to PNG, so a review card can show the
+    # document on a phone, where no browser renders an inline <embed> of a PDF (ADR 0080). An exact
+    # pin, unlike its neighbours: it bundles PDFium, a C parser that is handed attacker-supplied
+    # files before a human has decided anything, so a new version is a deliberate bump, never
+    # something a fresh resolve picks up on its own.
+    "pypdfium2==5.13.0",
     # text_extraction.py's DOCX/PPTX parsing: that content is an
     # attacker-controlled attachment fetched and parsed pre-approval, so its
     # embedded XML parts get defusedxml's stdlib-compatible ElementTree

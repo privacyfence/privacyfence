@@ -67,7 +67,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from html import escape as _html_escape
 from pathlib import Path
 
@@ -247,23 +247,44 @@ def _table_html(
     cell on its own, through the same ``_escape_with_highlights`` a text
     block uses, so a match is scanned against -- and marked within -- the
     exact string being escaped. Headers, caption and footer are the
-    connector's own labels, not fetched content, and are never marked."""
+    connector's own labels, not fetched content, and are never marked.
+
+    A table with more than two headed columns -- a record list, the shape
+    that stops fitting first -- is wrapped in ``.pf-table-scope`` and gets
+    ``.pf-table-stack``: below the preview pane's narrow width (a container
+    query in styles.css) each row becomes a block of label/value lines,
+    the label taken from the cell's ``data-label``. Five columns squeezed
+    into a phone-width pane otherwise break every word ("Anders/on"). A
+    two-column table (Field/Value) already reads as label/value pairs and
+    stays a table."""
     caption = table.get("caption", "")
-    headers = table.get("headers") or []
+    headers = [str(h) for h in table.get("headers") or []]
     rows = table.get("rows") or []
     footer = table.get("footer", "")
+    stack = len(headers) > 2
     parts = []
     if caption:
         parts.append(f'<div class="pf-table-caption">{_html_escape(caption)}</div>')
     thead_html = ""
     if headers:
-        header_html = "".join(f"<th>{_html_escape(str(h))}</th>" for h in headers)
+        header_html = "".join(f"<th>{_html_escape(h)}</th>" for h in headers)
         thead_html = f"<thead><tr>{header_html}</tr></thead>"
+
+    def cell_html(index: int, cell: object) -> str:
+        label = headers[index] if stack and index < len(headers) else ""
+        label_attr = f' data-label="{_html_escape(label)}"' if label else ""
+        value = _table_cell_html(str(cell), highlight)
+        # A stacked cell is a two-column grid (styles.css): its label, then this one value.
+        # Unwrapped, each <mark> in the value would become a grid cell of its own.
+        return f"<td{label_attr}><span>{value}</span></td>" if stack else f"<td>{value}</td>"
+
     rows_html = "".join(
-        "<tr>" + "".join(f"<td>{_table_cell_html(str(cell), highlight)}</td>" for cell in row) + "</tr>"
+        "<tr>" + "".join(cell_html(i, cell) for i, cell in enumerate(row)) + "</tr>"
         for row in rows
     )
-    parts.append(f'<table class="pf-table">{thead_html}<tbody>{rows_html}</tbody></table>')
+    table_class = "pf-table pf-table-stack" if stack else "pf-table"
+    table_html = f'<table class="{table_class}">{thead_html}<tbody>{rows_html}</tbody></table>'
+    parts.append(f'<div class="pf-table-scope">{table_html}</div>' if stack else table_html)
     if footer:
         parts.append(f'<div class="pf-table-footer">{_html_escape(footer)}</div>')
     return "".join(parts)
@@ -336,6 +357,9 @@ def build_preview_body_html(
     details_text: str = "", *,
     image_data_uri: str = "",
     pdf_data_uri: str = "",
+    pdf_page_uris: Sequence[str] = (),
+    pdf_page_count: int = 0,
+    pdf_fallback_text: str = "",
     tables: list[dict] | None = None,
     blocks: list[dict] | None = None,
     highlight: Callable[[str], list[tuple[int, int]]] | None = None,
@@ -352,6 +376,16 @@ def build_preview_body_html(
     already one WKWebView, so WebKit's own built-in PDF renderer and image
     decoding handle both directly, no native PDFView/NSImageView overlay
     needed.
+
+    A PDF renders twice, and a container query on ``.pf-pdf`` (styles.css)
+    shows one: the ``<embed>`` when the pane is at least 600px wide, and
+    otherwise ``pdf_page_uris`` -- the first pages as PNG ``data:`` URIs
+    (pdf_render.py, via card_builder.py) -- under a "Showing pages 1–N of
+    M" note, because no phone browser shows an inline PDF (ADR 0080).
+    With no page images (the render failed or was not attempted),
+    the narrow view says so and shows ``pdf_fallback_text``, the
+    document's extracted text, instead; with no text either, it says
+    that too. It is never empty.
 
     ``tables`` (see ``_table_html``) render after ``details_text`` --
     together, not either/or, since some tools need both. Neither is
@@ -410,9 +444,8 @@ def build_preview_body_html(
     rendered, and offsets into its source do not survive that.
     """
     if pdf_data_uri:
-        return (
-            f'<embed src="{pdf_data_uri}" type="application/pdf" '
-            'style="width:100%;height:100%;min-height:400px;border:none">'
+        return _pdf_preview_html(
+            pdf_data_uri, pdf_page_uris, pdf_page_count, pdf_fallback_text, highlight,
         )
     if image_data_uri:
         return f'<img src="{image_data_uri}" style="max-width:100%;display:block">'
@@ -426,6 +459,36 @@ def build_preview_body_html(
         if details_text else ""
     )
     return text_html + tables_html
+
+
+def _pdf_preview_html(
+    pdf_data_uri: str, page_uris: Sequence[str], page_count: int, fallback_text: str,
+    highlight: Callable[[str], list[tuple[int, int]]] | None,
+) -> str:
+    embed = f'<embed class="pf-pdf-embed" src="{pdf_data_uri}" type="application/pdf">'
+    if page_uris:
+        shown = len(page_uris)
+        total = max(page_count, shown)
+        pages = f"page 1 of {total}" if shown == 1 else f"pages 1–{shown} of {total}"
+        narrow = (
+            f'<p class="pf-pdf-note"><span class="badge">Showing {pages}</span></p>'
+            + "".join(
+                f'<img class="pf-pdf-page" src="{uri}" alt="Page {i} of {total}">'
+                for i, uri in enumerate(page_uris, start=1)
+            )
+        )
+    elif fallback_text:
+        narrow = (
+            '<p class="pf-pdf-notice">This PDF could not be shown as pages at this width, '
+            "so its text is shown instead.</p>"
+            + _escaped_text_fragment(fallback_text, highlight(fallback_text) if highlight else None)
+        )
+    else:
+        narrow = (
+            '<p class="pf-pdf-notice">This PDF could not be shown at this width, and no text '
+            "could be read from it.</p>"
+        )
+    return f'<div class="pf-pdf">{embed}<div class="pf-pdf-pages">{narrow}</div></div>'
 
 
 def _merge_spans(spans: list[tuple[int, int]], length: int) -> list[tuple[int, int]]:
