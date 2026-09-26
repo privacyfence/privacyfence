@@ -1,10 +1,10 @@
 """Small-dialog HTML template for the confirmation/list-picker dialogs
 web_approval_ui.py and settings_controller.py serve (through
 web_prompt.py), using the same in-page button row and bridge script as the
-approval window. Reuses approval_window_html.py's
-vendored ``styles.css`` (design tokens, embedded fonts, the
-``.pf-btn``/``.pf-btn-primary``/``.pf-btn-deny`` button styles, ``.pf-scroll``'s
-scrollbar styling) rather than a second copy of the same visual language --
+approval window. Reuses the card's stylesheets (the shared design files and
+approval_window_html.py's ``styles.css``: tokens, the ``.button`` styles, the
+decision row and its compact layout, the ``pf-card`` size container) rather
+than a second copy of the same visual language --
 these are just much smaller, fixed-shape documents than
 ``build_card_stack_html``'s full card stack, with no header icon/pill, no
 preview pane, no PII/disclosure cards.
@@ -136,11 +136,11 @@ def _confirm_button_row_html(cancel_label: str, confirm_label: str) -> str:
     grouping as approval_window_html.py's own _button_row_html (Deny left,
     Allow once right)."""
     cancel_html = (
-        '<div class="pf-btn pf-btn-deny" role="button" aria-disabled="true" '
+        '<div class="button danger pf-btn-deny" role="button" aria-disabled="true" '
         f'aria-label="{_html_escape(cancel_label)}" data-pf-action="cancel">{_html_escape(cancel_label)}</div>'
     )
     confirm_html = (
-        '<div class="pf-btn pf-btn-primary" role="button" aria-disabled="true" '
+        '<div class="button primary pf-btn-primary" role="button" aria-disabled="true" '
         f'data-pf-primary="1" aria-label="{_html_escape(confirm_label)}" data-pf-action="confirm">'
         f'{_html_escape(confirm_label)}</div>'
     )
@@ -149,7 +149,7 @@ def _confirm_button_row_html(cancel_label: str, confirm_label: str) -> str:
 
 def _cancel_only_button_row_html(cancel_label: str) -> str:
     cancel_html = (
-        '<div class="pf-btn pf-btn-deny" role="button" aria-disabled="true" '
+        '<div class="button danger pf-btn-deny" role="button" aria-disabled="true" '
         f'aria-label="{_html_escape(cancel_label)}" data-pf-action="cancel">{_html_escape(cancel_label)}</div>'
     )
     return f'<div class="pf-btn-row"><div class="pf-btn-row-left">{cancel_html}</div></div>'
@@ -183,8 +183,7 @@ def _document(*, width: int, body_html: str) -> str:
 <head>
 <meta charset="utf-8">
 <!-- See approval_window_html.build_card_stack_html's own head: without
-     this a phone renders the document in a ~980px viewport at ~40% scale
-     and every phone-width @media rule below silently never matches. -->
+     this a phone renders the document in a ~980px viewport at ~40% scale. -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
@@ -192,46 +191,32 @@ def _document(*, width: int, body_html: str) -> str:
 {_STYLES_CSS}
 html {{ height: 100%; }}
 html, body {{ overflow-y: auto; }}
-body {{
-  /* min(...,100%) + margin:0 auto -- same fix approval_window_html.py's
-     own build_card_stack_html applies to its <body>, for the same reason
-     (see that function's docstring): this document also renders inside an
-     ordinary browser tab, at a phone viewport, not only inside a native
-     host's window frame sized to exactly {width}px. A bare `width:
-     {width}px` (this document's own shape before that reasoning was
-     applied here too) overflows any viewport narrower than {width}px --
-     found by an actual headless-browser layout check
-     (tests/integration/test_browser_smoke.py's TestResponsiveLayout), the
-     same way TestPdfPreview/TestSecurityHeadersCsp's own real-browser
-     checks caught their bugs. */
-  box-sizing: border-box; width: min({width}px, 100%); height: 100vh;
-  margin: 0 auto;
-  padding: 24px 28px;
-  display: flex; flex-direction: column;
-}}
-/* Same breakpoint/reasoning as approval_window_html.py's own: below this
-   width the document is assumed to be embedded somewhere that isn't a
-   fixed-height native window frame, so it scrolls like an ordinary page
-   instead of clipping to a viewport-height frame. */
-@media (max-width: 700px) {{
-  body {{ height: auto; min-height: 100vh; }}
-}}
-h2 {{ font-size: 19px; margin-bottom: 12px; }}
-.pf-choice-list {{
-  display: flex; flex-direction: column; gap: 6px;
-  flex: 1; min-height: 0; overflow-y: auto;
-  margin: 4px 0 15px;
-}}
+/* The card root (styles.css's .pf-card-root, the pf-card size container):
+   at most {width}px, centred in a wider tab, all of a narrower one. Every
+   dialog is under styles.css's 600px, so it is always a compact card: a page
+   that grows with its content, with Cancel and the accepting button as two
+   equal full-height touch targets. */
+.pf-card-root {{ width: min({width}px, 100%); }}
+.pf-dialog {{ padding: 24px 20px; }}
+h2 {{ font-size: 19px; margin-bottom: 12px; overflow-wrap: anywhere; }}
+.pf-choice-list {{ display: flex; flex-direction: column; gap: 6px; margin: 4px 0 15px; }}
+/* An option is visibly a control at rest -- a bordered row the height of a
+   tap target -- and the highlight a mouse gets on hover, a keyboard gets on
+   focus and a finger on press, so no state is reachable by hover alone. */
 .pf-choice-row {{
-  padding: 10px 12px; border-radius: var(--radius-s);
-  background: var(--surface); font-size: 13px;
+  display: flex; align-items: center; min-height: var(--tap);
+  padding: 10px 14px; border-radius: var(--radius-s);
+  background: var(--surface); color: var(--ink); font-size: 14px;
+  border: 1px solid var(--control-line); overflow-wrap: anywhere;
   cursor: pointer; user-select: none;
 }}
-.pf-choice-row:hover {{ background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }}
-.pf-choice-row[aria-disabled="true"] {{ opacity: .45; pointer-events: none; cursor: default; }}
+.pf-choice-row:hover, .pf-choice-row:focus-visible, .pf-choice-row:active {{
+  background: var(--accent-soft); border-color: var(--accent);
+}}
+.pf-choice-row[aria-disabled="true"] {{ opacity: .45; }}
 </style>
 </head>
-<body>{body_html}<script nonce="{nonce}">{_JS}</script></body>
+<body><div class="pf-card-root"><div class="pf-card pf-dialog">{body_html}</div></div><script nonce="{nonce}">{_JS}</script></body>
 </html>
 """
 
@@ -245,7 +230,7 @@ def build_confirmation_html(
     body_html = (
         '<div class="pf-kicker"><span>PrivacyFence</span></div>'
         f'<h2>{_html_escape(title)}</h2>'
-        f'<div style="flex:1;min-height:0;overflow-y:auto">{_message_html(message_lines)}</div>'
+        f'<div class="pf-dialog-message">{_message_html(message_lines)}</div>'
         f'{_confirm_button_row_html(cancel_label, confirm_label)}'
     )
     return _document(width=CONFIRM_WIDTH, body_html=body_html)

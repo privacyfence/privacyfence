@@ -86,6 +86,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prepared for.
 - The **Review** button on the approvals list showed its text in almost the same colour as the
   button, and several highlighted controls in settings were hard to read in dark mode.
+- **The approval card and its confirmation dialogs fit the space they are shown in**, not only
+  the width of the screen: in a narrow browser window or a tablet the card's two columns stack
+  instead of squeezing the preview, and the card, the "Possible PII detected" confirmation and
+  the rule picker each look like the rest of the app, with every button and option large
+  enough to tap. In a wide desktop window the card uses more of the width, so a PDF preview
+  there has room for the browser's own viewer and can be read past its first five pages.
+- **Nothing on the approval card needs a mouse to read any more.** A value cut short (a long
+  list of attendees, a long stated reason) opens in full when you tap or click it, and what
+  "Not verified" means next to a requester is written under it rather than hidden in a
+  tooltip.
 
 ## [4.7.0] — 2026-09-26
 

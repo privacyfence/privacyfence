@@ -73,9 +73,6 @@ _WIDTH_MEDIA = re.compile(
 
 # file -> (number of width/height @media queries it may still have, phase that removes them)
 MEDIA_ALLOWED: dict[str, tuple[int, str]] = {
-    "src/privacyfence/approval_window_html.py": (1, "p5-card-containers"),
-    "src/privacyfence/dialog_window_html.py": (1, "p5-card-containers"),
-    "src/privacyfence/resources/approval_window/styles.css": (2, "p5-card-containers"),
 }
 
 

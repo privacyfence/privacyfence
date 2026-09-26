@@ -72,42 +72,39 @@ class TestLineClamp:
 
     def test_attendees_row_carries_its_own_inline_clamp_override(self):
         html = build_card_stack_html(**_minimal_kwargs(disclosure_rows=[("Attendees", "Alice, Bob")]))
-        assert '<span style="-webkit-line-clamp:3" title="Alice, Bob">Alice, Bob</span>' in html
+        assert '<span class="pf-clamp" style="-webkit-line-clamp:3">Alice, Bob</span>' in html
 
     def test_description_row_carries_its_own_inline_clamp_override(self):
         html = build_card_stack_html(**_minimal_kwargs(disclosure_rows=[("Description", "A long paragraph.")]))
-        assert '<span style="-webkit-line-clamp:4" title="A long paragraph.">A long paragraph.</span>' in html
+        assert '<span class="pf-clamp" style="-webkit-line-clamp:4">A long paragraph.</span>' in html
 
 
-class TestHoverTooltips:
-    """Truncated values need a way to read the full text -- since this
-    document runs with JavaScript disabled (approval_window.py's
-    setJavaScriptEnabled_(False)), a native title="..." attribute is the
-    only hover-tooltip mechanism available; WebKit shows it with no script
-    needed. Set unconditionally (not just when a value happens to actually
-    clamp) since predicting that in advance would need real text
-    measurement, which this layout deliberately avoids -- see
-    _kv_rows_html's own comment."""
+class TestCutOffValuesOpenOnTap:
+    """A value cut off by its line cap opens in place on a tap, a click or
+    Enter -- no title= tooltip, which only a mouse can open. Whether a value
+    is really cut off depends on the rendered width and font, so the page's
+    own script measures each .pf-clamp after layout and turns only those
+    into buttons (the browser test TestCardContainers checks it live)."""
 
-    def test_kv_row_value_has_a_title_attribute_with_the_full_text(self):
+    def test_kv_row_value_is_a_clamp_and_has_no_tooltip(self):
         html = build_card_stack_html(**_minimal_kwargs(preview={"Title": "A fairly long event title"}))
-        assert 'title="A fairly long event title"' in html
+        assert '<span class="pf-clamp">A fairly long event title</span>' in html
+        assert ' title="' not in html
 
-    def test_kv_row_title_is_escaped(self):
+    def test_kv_row_value_is_escaped(self):
         html = build_card_stack_html(**_minimal_kwargs(preview={"Title": '<script>alert(1)</script> & "x"'}))
-        assert 'title="&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;x&quot;"' in html
+        assert '<span class="pf-clamp">&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;x&quot;</span>' in html
 
-    def test_disclosure_row_value_has_a_title_attribute(self):
-        html = build_card_stack_html(**_minimal_kwargs(disclosure_rows=[("Attendees", "Alice, Bob, Carol")]))
-        assert 'title="Alice, Bob, Carol"' in html
-
-    def test_claude_reason_quote_has_a_title_attribute_with_the_full_text(self):
+    def test_claude_reason_quote_is_a_clamp_and_has_no_tooltip(self):
         html = build_card_stack_html(**_minimal_kwargs(claude_reason="A fairly long stated reason."))
-        assert 'title="A fairly long stated reason."' in html
+        assert '<p class="pf-quote pf-clamp">“A fairly long stated reason.”</p>' in html
+        assert ' title="' not in html
 
-    def test_claude_reason_title_is_escaped(self):
-        html = build_card_stack_html(**_minimal_kwargs(claude_reason='<script>alert(1)</script> & "x"'))
-        assert 'title="&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;x&quot;"' in html
+    def test_the_script_turns_cut_off_values_into_buttons(self):
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert "function markClamped()" in html
+        assert "el.setAttribute('role', 'button')" in html
+        assert "window.addEventListener('resize', markClamped)" in html
 
 
 class TestDisclosureRowsFromVisibility:
@@ -225,7 +222,8 @@ class TestRiskCardVariants:
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=False, write_content_flags=["Phone number"],
         ))
-        assert "background:var(--warning-soft);border:1px solid var(--warning)" in html
+        assert '<div class="card card-warning pf-section">' in html
+        assert '<span class="badge badge-warning">' in html
         assert "This message appears to contain" in html
 
     def test_upload_forced_placeholder_reuses_read_styling_not_write(self):
@@ -235,8 +233,8 @@ class TestRiskCardVariants:
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=False, write_content_flags=["Phone number"], upload_forced=True,
         ))
-        assert "background:var(--danger-soft);border:1px solid var(--danger)" in html
-        assert "background:var(--warning-soft);border:1px solid var(--warning)" not in html
+        assert '<div class="card card-danger pf-section">' in html
+        assert "card-warning pf-section" not in html
 
     def test_upload_forced_is_ignored_when_there_is_no_write_content_flag(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=False, upload_forced=True))
@@ -252,33 +250,34 @@ class TestReadWriteDifferentiation:
 
     def test_read_gets_the_read_pill_and_accent_rail(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=True))
-        assert '<span class="pf-pill" style="background:var(--accent-soft);color:var(--accent-dark)">Read</span>' in html
+        assert '<span class="badge badge-accent pf-pill">Read</span>' in html
         assert "border-left: 6px solid var(--accent)" in html
         assert ">Write</span>" not in html
         assert "6px solid var(--warning)" not in html
 
     def test_write_gets_the_write_pill_and_accent_2_rail(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=False))
-        assert '<span class="pf-pill" style="background:var(--warning-soft);color:var(--warning)">Write</span>' in html
+        assert '<span class="badge badge-warning pf-pill">Write</span>' in html
         assert "border-left: 6px solid var(--warning)" in html
         assert ">Read</span>" not in html
         assert "6px solid var(--accent)" not in html
 
     def test_pill_sits_next_to_the_title(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=True, title="Read Calendar Event"))
-        assert html.index("Read Calendar Event") < html.index('class="pf-pill"')
+        assert html.index("Read Calendar Event") < html.index('pf-pill"')
 
     def test_read_section_kickers_use_the_plain_default_color(self):
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=True, claude_reason="Checking as requested.",
         ))
-        assert 'class="card-kicker" style="color:' not in html
+        assert '<div class="kicker">What the AI system already knows</div>' in html
+        assert 'class="kicker kicker-write"' not in html
 
     def test_write_section_kickers_use_the_accent_2_color(self):
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=False, claude_reason="Doing this as requested.",
         ))
-        assert html.count('class="card-kicker" style="color:var(--warning)"') == 2
+        assert html.count('class="kicker kicker-write"') == 2
 
 
 class TestLayoutShapes:
@@ -294,6 +293,10 @@ class TestLayoutShapes:
         html = build_card_stack_html(**_minimal_kwargs(layout=WIDE))
         assert 'class="pf-wide-row"' in html
         assert f"width: min({CONTENT_WIDTH[WIDE]}px, 100%)" in html
+
+    def test_wide_preview_is_a_panel(self):
+        html = build_card_stack_html(**_minimal_kwargs(layout=WIDE))
+        assert 'class="pf-scroll pf-wide-right panel pf-preview"' in html
 
     def test_narrow_layout_has_no_preview_pane_at_all(self):
         # Not a smaller version of WIDE's preview -- genuinely absent, even
@@ -332,7 +335,7 @@ class TestLayoutShapes:
         # row's own real height, independent of the left column's own
         # scroll region.
         html = build_card_stack_html(**_minimal_kwargs(layout=WIDE))
-        assert 'class="pf-scroll pf-wide-right"' in html
+        assert 'class="pf-scroll pf-wide-right' in html
 
     def test_wide_has_exactly_two_independent_scroll_regions(self):
         # Left column and right pane -- always both, regardless of whether
@@ -366,48 +369,60 @@ class TestLayoutShapes:
             assert re.search(r'class="pf-scroll[^"]*"[^>]*class="', html) is None
 
 
-class TestResponsiveBreakpoint:
-    """The phone-viewport pass: below a fixed breakpoint the document
-    stops assuming it's inside a fixed-height native window frame, avoiding
-    two layout traps (flex:0 0 420px becoming a height once the row goes
-    vertical; two independently-scrolling flex:1 panes fighting over a
-    height neither needs once body itself isn't 100vh)."""
+class TestCardContainers:
+    """The card sizes itself by the room it has, never by the viewport: the
+    same document is a phone screen, a desktop tab or a row of the approvals
+    list. Its root is a size container, and every responsive rule is a
+    container query on it (the browser tests measure the result)."""
 
-    def test_body_width_never_exceeds_the_viewport(self):
+    def test_the_body_is_the_card_root_and_the_frame_carries_the_layout(self):
+        for layout in (NARROW, WIDE):
+            html = build_card_stack_html(**_minimal_kwargs(layout=layout))
+            assert f'<body><div class="pf-card-root"><div class="pf-card pf-card-{layout}">' in html
+            assert ".pf-card-root { container: pf-card / inline-size;" in html
+
+    def test_the_card_never_exceeds_its_container(self):
         for layout in (NARROW, WIDE):
             html = build_card_stack_html(**_minimal_kwargs(layout=layout))
             assert f"width: min({CONTENT_WIDTH[layout]}px, 100%)" in html
 
-    def test_body_height_drops_to_auto_below_the_breakpoint(self):
+    def test_a_wide_card_leaves_its_preview_room_for_the_pdf_viewer_on_a_desktop(self):
+        # ADR 0080's 600px, inside the panel's padding: 60px of rail and
+        # padding, the 420px left column and the 28px gap come off first.
+        assert CONTENT_WIDTH[WIDE] - 60 - 420 - 28 - 2 * 34 >= 600
+
+    def test_no_viewport_media_query_anywhere(self):
+        for layout in (NARROW, WIDE):
+            html = build_card_stack_html(**_minimal_kwargs(layout=layout))
+            css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+            assert re.search(r"@media[^{]*width", css) is None
+
+    def test_wide_columns_stack_below_the_split_threshold(self):
         html = build_card_stack_html(**_minimal_kwargs(layout=WIDE))
-        assert "@media (max-width: 700px)" in html
-        assert "body { height: auto; min-height: 100vh; }" in html
+        assert "@container pf-card (width < 860px)" in html
+        assert ".pf-wide-row { flex-direction: column; gap: 16px; }" in html
+        assert ".pf-card-wide { height: auto; min-height: 100vh; }" in html
+
+    def test_the_compact_card_is_a_page_not_a_frame(self):
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert "@container pf-card (width < 600px)" in html
+        assert ".pf-card { height: auto; min-height: 100vh;" in html
 
     def test_wide_row_and_panes_use_classes_not_inline_style(self):
-        # An inline style="..." can't carry a @media query at all -- see
-        # styles.css's .pf-wide-row/.pf-wide-left/.pf-wide-right comment.
-        # These are the exact inline styles the responsive pass removed --
-        # not a blanket "no style=" check, since the document legitimately
-        # keeps other inline styles elsewhere (e.g. the header's read/write
-        # pill row).
+        # An inline style="..." cannot carry a container query.
         html = build_card_stack_html(**_minimal_kwargs(layout=WIDE))
         assert 'style="display:flex;gap:28px' not in html
         assert 'style="flex:0 0 420px' not in html
         assert 'style="flex:1;min-width:0;border-left' not in html
 
     def test_declares_a_device_width_viewport(self):
-        # Without this, every rule in the block above is dead code on a real
-        # phone: the viewport reports ~980px and the document is scaled to
-        # fit instead, so `@media (max-width: 700px)` never matches and
-        # 13px body text lands near 5px.
+        # Without this a phone lays the document out at ~980px and scales it
+        # down, and the card is told it has 980px of room.
         for layout in (NARROW, WIDE):
             html = build_card_stack_html(**_minimal_kwargs(layout=layout))
             assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
 
     def test_header_title_and_shield_use_classes_not_inline_style(self):
-        # Same reason as the wide-row panes above: the heading has to wrap
-        # and drop its font size, and the shield has to shrink, below the
-        # breakpoint -- none of which an inline style can express.
         html = build_card_stack_html(
             **_minimal_kwargs(shield_icon_data_uri="data:image/png;base64,AAA"),
         )
@@ -415,43 +430,34 @@ class TestResponsiveBreakpoint:
         assert 'class="pf-head-shield"' in html
         assert 'style="width:51px;height:51px' not in html
 
-    def test_heading_stops_being_nowrap_below_the_breakpoint(self):
-        # .pf-head h2 is nowrap at 25px unconditionally, which overflows a
-        # 360px screen horizontally the moment a real viewport arrives --
-        # the regression the viewport meta above would otherwise expose.
+    def test_heading_stops_being_nowrap_when_compact(self):
         html = build_card_stack_html(**_minimal_kwargs())
         assert ".pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }" in html
 
-    def test_decision_controls_get_a_real_touch_target_below_the_breakpoint(self):
-        # 90px-wide pills one var(--space-xs) apart, on the one surface
-        # where a mis-tap is irreversible.
+    def test_always_allow_is_a_real_touch_target_when_compact(self):
         html = build_card_stack_html(**_minimal_kwargs())
-        assert ".pf-btn-row .pf-btn { min-height: 48px; font-size: 14px; }" in html
+        assert "min-height: var(--tap); text-align: center; font-size: 12px;" in html
 
-    def test_key_value_rows_stop_sharing_a_line_below_the_breakpoint(self):
-        # "Participants" plus three addresses cannot share a 360px row
-        # without one of them winning -- and the 2-line clamp that buys
-        # deterministic height for a native frame has nothing to buy here.
+    def test_key_value_rows_stop_sharing_a_line_when_compact(self):
         html = build_card_stack_html(**_minimal_kwargs())
         assert ".pf-kv { flex-direction: column; gap: 2px; }" in html
 
 
-_PRIMARY_RULE = (
-    ".pf-btn-primary { background: var(--ink); color: var(--on-ink); box-shadow: var(--shadow-button); }"
-)
+_PRIMARY_RULE = ".primary { background: var(--ink); color: var(--on-ink); box-shadow: var(--shadow-button); }"
 
 
 class TestPrimaryButtonIsTokenized:
     def test_allow_once_is_the_websites_primary_button_on_tokens(self):
         # #5ba4ff/#4a8fe6 was the one colour in this document that wasn't a
         # token, didn't invert for dark mode, and appeared nowhere else in
-        # the design -- on the single most consequential control. It is now
-        # the website's .primary: dark ink, inverted in dark mode (ADR 0079).
+        # the design -- on the single most consequential control. It is the
+        # website's own .button.primary now (base.css): dark ink, inverted in
+        # dark mode (ADR 0079). Deny is app.css's outlined .button.danger.
         html = build_card_stack_html(**_minimal_kwargs())
+        assert 'class="button primary pf-btn-primary"' in html
+        assert 'class="button danger pf-btn-deny"' in html
         assert _PRIMARY_RULE in html
-        assert ".pf-btn-primary:hover { background: var(--ink-hover); }" in html
-        # The declarations, not the bare hex: the comment above the rule
-        # names the old pair to explain why it went.
+        assert ".primary:hover { background: var(--ink-hover); }" in html
         assert "background: #5ba4ff" not in html
         assert "background: #4a8fe6" not in html
 
@@ -459,6 +465,7 @@ class TestPrimaryButtonIsTokenized:
         # --warning is the "write" family, so a primary in it would read as
         # a caution on exactly the surface where that must not be ambiguous.
         html = build_card_stack_html(**_minimal_kwargs(is_read=False))
+        assert 'class="button primary pf-btn-primary"' in html
         assert _PRIMARY_RULE in html
 
 

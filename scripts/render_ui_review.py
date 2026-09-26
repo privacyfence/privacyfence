@@ -11,10 +11,11 @@ Writes PNGs into DIR, plus an ``index.html`` that lays them out side by side:
   from the design files themselves; it is not a route the app serves. Hover and focus-visible are
   forced through the DevTools protocol on the elements that ask for them (``data-force``), so the
   screenshot shows the state rather than a description of it.
-- ``<page>-<width>-<theme>.png`` for /approvals, one approval card of each kind, every /settings
-  section (an org admin's six, and local mode's Connectors), /connect (and its Telegram sign-in
-  at each step), /security, and the fallback pages with no shell (no longer pending, preparing,
-  not authorized, local mode's /security), from
+- ``<page>-<width>-<theme>.png`` for /approvals, one approval card of each kind, the PII
+  confirmation and the choice dialog, every /settings section (an org admin's six, and local
+  mode's Connectors), /connect (and its Telegram sign-in at each step), /security, and the
+  fallback pages with no shell (no longer pending, preparing, not authorized, local mode's
+  /security), from
   tests/integration/ui_review_capture.py, which this script runs with pytest so the pages come
   from the same in-process servers the browser tests use.
 

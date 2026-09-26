@@ -31,42 +31,47 @@ img { display: block; max-width: 100%; }
 .text-muted { color: var(--muted); }
 ::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 
-/* — cards — (Broadsheet's own .card/.card-kicker/.card-meta, unchanged except
-   margin-bottom, added so a fixed-per-tool layout can compute total height
-   from field/section *counts* alone -- see .pf-kv below for the other half
-   of that: each row's height is capped too, so nothing here ever depends on
-   how long a given call's actual data happens to be.) */
-.card {
-  display: flex; flex-direction: column; gap: var(--space-xs);
-  padding: 15px; border-radius: var(--radius-card); background: var(--surface);
-  border: 1px solid var(--line); margin-bottom: 18px;
+/* — sections — the left column's cards are app.css's .card (and its .card-danger /
+   .card-warning status variants for the risk card), each a .pf-section: a label (base.css's
+   .kicker) above its rows. The preview is an app.css .panel. Labels, the read/write marker and the
+   category tags are .kicker and .badge; nothing here restyles a shared component, it only lays
+   the card's own parts out. */
+.pf-section {
+  display: flex; flex-direction: column; gap: var(--space-xs); margin-bottom: 18px;
 }
-.card:last-child { margin-bottom: 0; }
-.card-kicker { font-size: 10px; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent-dark); }
+.pf-section:last-child { margin-bottom: 0; }
+.pf-section > .kicker, .pf-preview > .kicker { margin: 0; }
+.pf-preview > .kicker { margin-bottom: var(--space-xs); }
+/* A write's section labels take the write colour; the label text is the non-colour cue. */
+.kicker-write, .card-warning .kicker { color: var(--warning); }
+.card-danger .kicker { color: var(--danger); }
 .card-meta {
   display: flex; align-items: center; gap: 6px; font-size: 11px;
   color: var(--muted);
 }
-
-/* — tags — (category pills on the PII/content-flag card; color set per-instance) */
-.tag {
-  display: inline-flex; align-items: center; font-size: 11px;
-  letter-spacing: 0.02em; padding: 3px 10px;
-  border-radius: var(--radius-pill);
-  width: fit-content;
-}
+.pf-risk-message { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.card-danger .pf-risk-message { color: var(--danger); }
+.card-warning .pf-risk-message { color: var(--warning); }
+.pf-temp-accept { flex: none; margin-top: 16px; font-size: 11px; color: var(--muted); }
 
 /* — approval-window-specific — */
 .pf-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 22px; }
+.pf-head-main { min-width: 0; }
 .pf-head h2 { margin: 0; font-size: 25px; white-space: nowrap; }
 .pf-head-title { display: flex; align-items: center; gap: 10px; }
+/* The Read/Write badge next to the title: an app.css .badge in the header's uppercase voice. */
+.pf-head-title .badge { font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; }
 .pf-head-shield { width: 51px; height: 51px; object-fit: contain; opacity: .9; }
+.pf-connector-icon { width: 20px; height: 20px; object-fit: contain; }
+.pf-seen { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
 /* Who is asking (approval_window_html.py's _agent_html; ADR 0006 decision 4:
    the attested and claimed tiers must not look the same). Attested: the
    vendor's mark on a light tile -- light in dark mode too, so a black mark
    (OpenAI, Cursor) stays visible without being recoloured -- and a solid
    "Verified" badge. Claimed/unknown: a dashed "?" glyph where a mark would
-   be, the claim in italics, and a dashed "Not verified" badge. */
+   be, the claim in italics, a dashed "Not verified" badge, and the line
+   that says what that means, in plain view rather than in a tooltip no
+   touch screen can open. */
 .pf-agent {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-top: 10px;
   font-size: 13px; color: var(--ink-soft);
@@ -84,24 +89,8 @@ img { display: block; max-width: 100%; }
 .pf-agent-name { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .pf-agent-claimed .pf-agent-name, .pf-agent-unknown .pf-agent-name { font-weight: 500; }
 .pf-agent-claim { font-style: italic; overflow-wrap: anywhere; }
-.pf-agent-badge {
-  display: inline-flex; align-items: center; white-space: nowrap;
-  font: 700 10px var(--font-sans); letter-spacing: 0.05em; text-transform: uppercase;
-  padding: 2px 8px; border-radius: var(--radius-pill);
-}
-.pf-agent-badge-verified { background: var(--ink); color: var(--on-ink); border: 1px solid var(--ink); }
-.pf-agent-badge-unverified {
-  border: 1px dashed var(--control-line); color: var(--ink-soft); cursor: help;
-}
-/* Read/Write pill, paired with the same-colored rail on <body> (see
-   approval_window_html.py's build_card_stack_html). Background/color set
-   inline per call (accent vs warning tokens), only the shape/type is
-   shared here. */
-.pf-pill {
-  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  font: 700 11px var(--font-sans); letter-spacing: 0.05em; text-transform: uppercase;
-  padding: 4px 10px; border-radius: var(--radius-pill);
-}
+.pf-agent .badge { font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; }
+.pf-agent-note { flex-basis: 100%; font-size: 12px; line-height: 1.45; }
 .pf-kicker {
   display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
   font-size: 12px; color: var(--ink-soft); white-space: nowrap;
@@ -110,19 +99,25 @@ img { display: block; max-width: 100%; }
 .pf-kv span:first-child { color: var(--ink-soft); flex: none; }
 .pf-kv span:last-child {
   font-weight: 600; font-size: 14px; text-align: right; flex: 1; min-width: 0;
-  /* Fixed layout, not reflow: a row's height is capped at 2 lines regardless
-     of value length (e.g. a long attendee list) -- overflow is truncated
-     with an ellipsis, never grows the card or requires scrolling. */
+  /* A value's height is capped at 2 lines by default (line_clamp_for gives some labels
+     more), so one long value (an attendee list) cannot push the rest of the card away. */
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; text-overflow: ellipsis;
 }
 .pf-quote {
   margin: 0; font-style: italic; font-size: 15px; line-height: 1.5;
-  /* Same fixed-height contract as .pf-kv values above, just a slightly
-     taller allowance for Claude's stated-reason sentence. */
+  /* Same cap as .pf-kv values above, a slightly taller allowance for the stated reason. */
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
   overflow: hidden; text-overflow: ellipsis;
 }
+/* A capped value that really is cut off (the card's script checks each .pf-clamp after layout)
+   becomes a button that opens it in place: a dotted underline says there is more, and a tap,
+   a click or Enter shows all of it. This replaced a title= tooltip, which only a mouse could
+   open. */
+.pf-clamp[data-pf-clamped] {
+  cursor: pointer; text-decoration: underline dotted var(--control-line); text-underline-offset: 3px;
+}
+.pf-kv span.pf-clamp-open, .pf-quote.pf-clamp-open { display: block; overflow: visible; text-decoration: none; }
 
 /* Right-pane preview tables (drive_upload_file's precedent: structured,
    many-row/many-field data reads better as an actual table than a plain-
@@ -287,79 +282,64 @@ img { display: block; max-width: 100%; }
   background: color-mix(in srgb, var(--ink) 28%, transparent);
   border-radius: 6px; border: 2px solid transparent; background-clip: padding-box;
 }
-.pf-scroll::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--ink) 45%, transparent);
-  background-clip: padding-box;
+/* — the card's frame — .pf-card-root, the element the whole card sits in, is a size container
+   named pf-card; a host can put the card's markup in any container. Every responsive rule below asks
+   that container how much room the card has, never the viewport, because the same card is a
+   full phone screen, a desktop tab, or one row of the approvals list (shared rule 6: the app has
+   no viewport breakpoints). Two widths matter:
+
+   - below 860px, base.css's .split threshold, WIDE's two columns stack;
+   - below 600px the card is compact: the heading wraps, label/value rows stack, and Deny and
+     Allow once become two equal, full-height touch targets.
+
+   Wide enough for neither, the card is a frame: .pf-card fills the height of the window and each
+   region scrolls on its own, with the decision row pinned below them. Stacked or compact, it is
+   an ordinary page that grows with its content, because two regions that scroll independently
+   inside a phone screen fight over a height neither of them needs. */
+.pf-card-root { container: pf-card / inline-size; margin: 0 auto; }
+.pf-card {
+  box-sizing: border-box; height: 100vh; display: flex; flex-direction: column;
+  padding: 26px 30px 24px 24px;
 }
 
-/* WIDE's two-column split and NARROW's single scroll region -- classes now
-   (approval_window_html.py used to render these as inline style="..." on
-   each element), specifically so the @media block below can override them.
-   An inline style can't carry a @media query at all, and this document no
-   longer only ever renders inside a fixed-size native window frame: the web
-   approval UI can host the same document in an ordinary browser tab, at a
-   phone viewport, or inline in an expandable list row. 420px is
-   approval_window_html.py's own _WIDE_LEFT_COLUMN_WIDTH -- keep the two
-   in sync if that constant ever changes; it's baked in here rather than
-   templated per-document so the
-   @media override below can sit right next to the rule it overrides instead
-   of racing it on source order across two separate <style> blocks. */
+/* WIDE's two columns: the cards on the left at a fixed 420px (approval_window_html.py's
+   _WIDE_LEFT_COLUMN_WIDTH), the preview panel on the right taking the rest. Built on base.css's
+   .split contract -- two columns that stack by their container at the same 860px -- as a flex
+   row rather than .split's grid, because each column here is its own scroll region inside a
+   fixed-height frame and the row itself is the flex child that gets that height. */
 .pf-wide-row { display: flex; gap: 28px; flex: 1; min-height: 0; }
 .pf-wide-left { flex: 0 0 420px; min-width: 0; overflow-y: auto; min-height: 0; }
-.pf-wide-right {
-  flex: 1; min-width: 0; border-left: 1px solid var(--line);
-  padding-left: 24px; overflow-y: auto; min-height: 0;
-}
+.pf-wide-right { flex: 1; min-width: 0; overflow-y: auto; min-height: 0; box-shadow: none; }
 .pf-scroll-region { flex: 1; min-height: 0; overflow-y: auto; }
 
-@media (max-width: 700px) {
-  /* Below this width the document is assumed to be embedded somewhere that
-     isn't a fixed-height native window frame, so it scrolls like an
-     ordinary page instead of clipping to a viewport-height frame -- see
-     approval_window_html.py's build_card_stack_html for the matching
-     `body { height: auto; min-height: 100vh }` override (kept in that
-     function's own per-document <style> block rather than here, since it
-     has to come *after* that function's own unconditional `height: 100vh`
-     rule for the cascade to actually override it).
-
-     flex-direction: column alone is not enough here -- two traps found
-     while building this:
-     .pf-wide-left's flex: 0 0 420px sets a *height* once the parent's main
-     axis is vertical, not a width, so it has to drop to flex: none/height:
-     auto explicitly; and leaving both panes at flex: 1; min-height: 0;
-     overflow-y: auto (correct for two independently-scrolling regions
-     inside a real 100vh window) makes them fight over a height neither
-     needs once body itself has stopped being 100vh, silently clipping
-     content into an invisible nested scroll region instead of just
-     stacking and growing. */
-  .pf-wide-row { flex-direction: column; }
-  .pf-wide-left, .pf-wide-right, .pf-scroll-region {
-    flex: none; height: auto; overflow: visible;
-  }
-  .pf-wide-right {
-    border-left: none; padding-left: 0;
-    border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px;
-  }
+@container pf-card (width < 860px) {
+  /* flex-direction: column alone is not enough -- two traps: .pf-wide-left's flex: 0 0 420px
+     sets a *height* once the row's main axis is vertical, so it drops to flex: none; and two
+     flex: 1; min-height: 0; overflow-y: auto panes fight over a height neither needs once the
+     frame has stopped being the window's height, clipping content into invisible nested
+     scroll regions instead of stacking. */
+  .pf-card-wide { height: auto; min-height: 100vh; }
+  .pf-wide-row { flex-direction: column; gap: 16px; }
+  .pf-wide-left, .pf-wide-right { flex: none; height: auto; overflow: visible; }
 }
 
-/* — action button row — (Deny/Allow once/Always allow) — these three now
-   render as part of this document's own content instead of native
-   NSButtons in a fixed band below the webview (see approval_window.py's
-   module docstring) -- the same hierarchy the native buttons had: a filled
-   primary Allow once, an outlined danger Deny, and a quiet link for Always
-   allow (shared rule 10, ADR 0079: a restyle changes their colour and
-   shape, never which of them is filled, outlined or strongest). Buttons render disabled
-   (aria-disabled="true", no data-pf-action) until the page's own
-   DOMContentLoaded handling enables them -- see build_card_stack_html's
-   _JS, and approval_window.py's module docstring for why a fast/reflexive
-   click can't be allowed to resolve the decision before there's anything
-   on screen to review. */
+/* — action button row — (Deny/Allow once/Always allow): the website's buttons. Allow once is
+   .button.primary, the one filled control; Deny is .button.danger, outlined; Always allow is a
+   quiet underlined link, deliberately not a button shape, so a fast, confident click aimed at
+   the primary action cannot land on it by accident. Shared rule 10 (ADR 0079): a restyle
+   changes their colour and shape, never which of them is filled, outlined or strongest. The
+   pf-btn-* classes stay on them as the names scripts and tests find them by.
+
+   They render disabled (aria-disabled="true", no tabindex) until the page's own
+   DOMContentLoaded handling enables them -- see build_card_stack_html's _JS: a fast, reflexive
+   click must not resolve the decision before there is anything on screen to review. */
 .pf-btn-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: 20px; flex: none; margin-top: 15px;
   padding-top: 15px; border-top: 1px solid var(--line);
 }
 .pf-btn-row-left { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.pf-btn-row .button { min-width: 110px; }
 /* 2+ "Always allow" candidates (one item matches more than one
    auto_accept.SUGGESTION_FAMILIES rule) render here instead of inline in
    .pf-btn-row-left -- its own left-aligned, wrapping row directly above the
@@ -370,93 +350,48 @@ img { display: block; max-width: 100%; }
   gap: var(--space-xs) 20px; flex: none; margin-top: 15px;
   padding-top: 15px; border-top: 1px solid var(--line);
 }
-/* The divider belongs above whichever row comes first -- when a
-   candidates row precedes .pf-btn-row (2+ "Always allow" matches, see
-   above), it already carries its own border-top, so .pf-btn-row's own
-   line would otherwise land a second time, directly between the
-   candidates and Deny/Allow once instead of above both. */
+/* The divider belongs above whichever row comes first. */
 .pf-btn-row-candidates + .pf-btn-row { border-top: none; padding-top: 0; }
-.pf-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 90px; padding: var(--space-xs) 20px;
-  border-radius: var(--radius-s); border: 1px solid transparent;
-  font: 600 13px var(--font-sans); cursor: pointer; user-select: none;
-}
-/* Disabled (pre-DOMContentLoaded) state -- opacity + pointer-events:none is
-   the whole story: these are plain divs (role="button"), not native
-   <button>s with a real disabled attribute, so nothing here needs (or
-   gets) a browser-default disabled visual. */
-.pf-btn[aria-disabled="true"] { opacity: .45; pointer-events: none; cursor: default; }
-/* The website's primary button: dark ink with --on-ink text (inverted in
-   dark mode, where it stays the one filled, strongest control). The same
-   for both directions: neither the read accent nor the write --warning, so
-   the primary never reads as a status colour, least of all a cautionary
-   one on a write card. */
-.pf-btn-primary { background: var(--ink); color: var(--on-ink); box-shadow: var(--shadow-button); }
-.pf-btn-primary:hover { background: var(--ink-hover); }
-.pf-btn-deny {
-  background: transparent; color: var(--danger);
-  border-color: var(--danger);
-}
-.pf-btn-deny:hover { background: var(--danger-soft); }
-/* Always allow -- deliberately not the same pill styling as Deny/Allow
-   once, so a fast, confident click aimed at the primary action can't land
-   on it by accident (same reasoning the native _build_link_button's own
-   docstring gave for its borderless, small, underlined style). */
+/* Not yet enabled: a plain <div role="button"> has no disabled state of its own. */
+[data-pf-action][aria-disabled="true"] { pointer-events: none; cursor: default; }
+.pf-btn-link[aria-disabled="true"] { opacity: .45; }
 .pf-btn-link {
-  min-width: 0; padding: 0; border: none; background: none;
+  cursor: pointer; user-select: none; background: none; border: none; padding: 0;
   font: 400 11px var(--font-sans); color: var(--ink-soft);
   text-decoration: underline; text-underline-offset: 2px;
 }
 
-/* — phone widths — everything above this point assumes a viewport wide
-   enough for a 610px (NARROW) or 980px (WIDE) document. Until
-   build_card_stack_html grew its viewport meta these rules could not run
-   at all: a phone reported a ~980px viewport and scaled the whole
-   document down instead, so the breakpoint never matched.
+/* — compact — the card has under 600px: a phone, or a narrow row. Last in the file because
+   several of these override the rules above at equal specificity. */
+@container pf-card (width < 600px) {
+  .pf-card { height: auto; min-height: 100vh; padding: 18px 12px 18px 10px; }
+  .pf-scroll-region { flex: none; height: auto; overflow: visible; }
 
-   Placed at the end of the file because several of these override the
-   .pf-btn-* and .pf-kv rules above at equal specificity, where later
-   source order is what decides. */
-@media (max-width: 700px) {
-  /* Nothing in the header may be nowrap once the viewport is real:
-     "Create Gmail Reply-All Draft" at 25px overflows a 360px screen
-     horizontally, and a horizontally scrolled decision surface is the one
-     thing 5deef1d8:docs/approval-list-ui-ux.md's "Responsive behavior" rules out. */
+  /* Nothing in the header may be nowrap: "Create Gmail Reply-All Draft" at 25px overflows a
+     360px screen, and a sideways-scrolling decision surface is ruled out. */
   .pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }
   .pf-head-title { flex-wrap: wrap; gap: 8px; }
   .pf-head { gap: 12px; margin-bottom: 16px; }
   .pf-head-shield { width: 36px; height: 36px; flex-shrink: 0; }
   .pf-kicker { white-space: normal; }
 
-  /* A label and its value stop competing for one line -- at this width
-     "Participants" plus three addresses cannot share a row without one of
-     them winning. Stacking also retires the 2-line clamp here: the clamp
-     buys deterministic window height for a fixed native frame, which is
-     exactly what this breakpoint means the document is no longer in. */
+  /* A label and its value stop competing for one line, and the value shows in full: the
+     2-line cap exists to keep a frame's regions steady, and a compact card is not a frame. */
   .pf-kv { flex-direction: column; gap: 2px; }
   .pf-kv span:last-child {
     text-align: left; -webkit-line-clamp: none; display: block;
-    overflow: visible; word-break: break-word;
+    overflow: visible; overflow-wrap: anywhere;
   }
 
-  /* Deny and Allow once become two equal full-width targets on one row,
-     with Always-allow a quiet centred link on the row below -- never a
-     third button in the thumb zone (see .pf-btn-link's own note above).
-     90px-wide pills 8px apart are a mis-tap, and a mis-tap here is
-     irreversible.
+  /* Deny and Allow once become two equal full-width targets on one row, with Always allow a
+     quiet centred link on the row below -- never a third button in the thumb zone. A mis-tap
+     here is irreversible.
 
-     `display: contents` flattens .pf-btn-row-left so its Deny and its
-     optional Always-allow link become direct grid children here; in the
-     2+-candidate layout that wrapper holds Deny alone and the links are
-     already their own .pf-btn-row-candidates row, which needs nothing
-     extra. Explicit placement rather than auto-flow because the link sits
-     between Deny and Allow once in source order and has to end up below
-     both. That is a deliberate source-vs-visual order difference, and the
-     one case where it is the right trade: the alternative is a
-     destructive control and the primary control adjacent again. Allow
-     once stays last in tab order either way, which is the ordering that
-     matters on this surface. */
+     `display: contents` flattens .pf-btn-row-left so its Deny and its optional Always-allow
+     link become direct grid children; in the 2+-candidate layout that wrapper holds Deny alone
+     and the links are their own .pf-btn-row-candidates row. Explicit placement because the
+     link sits between Deny and Allow once in source order and has to end up below both; Allow
+     once stays last in tab order either way. */
   .pf-btn-row {
     display: grid; grid-template-columns: 1fr 1fr;
     gap: var(--space-xs); align-items: stretch;
@@ -465,11 +400,13 @@ img { display: block; max-width: 100%; }
   .pf-btn-row .pf-btn-deny { grid-row: 1; grid-column: 1; }
   .pf-btn-row .pf-btn-primary { grid-row: 1; grid-column: 2; }
   .pf-btn-row .pf-btn-link { grid-row: 2; grid-column: 1 / -1; }
-  .pf-btn-row .pf-btn { min-height: 48px; font-size: 14px; }
-  .pf-btn-row .pf-btn-link {
-    min-height: 0; text-align: center; padding: 4px 0; font-size: 12px;
+  /* A dialog with Cancel alone: one full-width target. */
+  .pf-btn-row-left:only-child .pf-btn-deny { grid-column: 1 / -1; }
+  .pf-btn-row .button { min-width: 0; }
+  .pf-btn-link {
+    display: flex; align-items: center; justify-content: center;
+    min-height: var(--tap); text-align: center; font-size: 12px;
   }
-  /* The 2+-candidate row wraps its links to full width too, rather than
-     leaving them at desktop's left-aligned inline flow. */
-  .pf-btn-row-candidates { gap: var(--space-xs); }
+  .pf-btn-row-candidates { gap: 0 var(--space-xs); }
+  .pf-btn-row-candidates .pf-btn-link { flex-basis: 100%; }
 }
