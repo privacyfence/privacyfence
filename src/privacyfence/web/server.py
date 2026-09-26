@@ -126,6 +126,7 @@ from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
 from .routes_settings import build_routes as build_settings_routes
+from .routes_settings import settings_page_state
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
 from .session_auth import authenticated as _session_authenticated
@@ -1271,7 +1272,12 @@ class WebServer:
         self.state_stream: StateStream | None = None
         if org is None and (controller is not None or web_ui is not None):
             self.state_stream = StateStream(
-                settings_snapshot=(controller.snapshot if controller is not None else lambda: None),
+                # Every settings event carries the same state the page was
+                # first rendered from (settings_page_state), here and in the
+                # change listener below.
+                settings_snapshot=(
+                    (lambda: settings_page_state(controller.snapshot())) if controller is not None else lambda: None
+                ),
                 # ADR 0008: filtered to whichever principal this SSE
                 # connection's own request is scoped to -- an unfiltered
                 # list_pending() would push every principal's pending
@@ -1281,7 +1287,8 @@ class WebServer:
                 list_pending=lambda: web_ui.deferred_registry.list_pending(principal_id=current_principal().id),
             )
             if controller is not None:
-                controller.add_change_listener(self.state_stream.push_settings)
+                stream = self.state_stream
+                controller.add_change_listener(lambda state: stream.push_settings(settings_page_state(state)))
         # Set once this server's own ASGI event loop is captured (see
         # _state_stream_loop_lifespan) -- wait_until_ready() below is what a
         # synchronous caller on another thread (daemon_main.py's run_app(),

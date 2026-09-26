@@ -1136,7 +1136,9 @@ class TestWebServerWiresTheStateStream:
         server = WebServer(WebApprovalUI(), port=0, controller=controller)
 
         assert server.state_stream is not None
-        assert server.state_stream.push_settings in controller._change_listeners
+        # Wrapped (routes_settings.settings_page_state adds the connector icons), so what is
+        # registered is not push_settings itself; the next test follows a change through it.
+        assert len(controller._change_listeners) == 1
 
     def test_controller_mutation_reaches_the_stream(self, tmp_path, monkeypatch):
         controller = _controller(tmp_path, monkeypatch)

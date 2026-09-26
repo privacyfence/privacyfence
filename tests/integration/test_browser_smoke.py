@@ -70,6 +70,7 @@ from privacyfence.web.routes_approvals import _DECIDED_MESSAGE, _DENIED_MESSAGE 
 from privacyfence.web.server import OrgAuth, WebServer  # noqa: E402
 from privacyfence.web.session_auth import PROVENANCE_HUMAN  # noqa: E402
 from privacyfence.web.session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE  # noqa: E402
+from privacyfence.web.state_stream import call_soon_threadsafe  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode  # noqa: E402
 
@@ -2381,6 +2382,24 @@ class TestSettingsPageRendering:
         assert nav_labels == ["General", "Connectors", "Auto-accept", "Privacy Filter", "Audit Log", "About"]
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "local-settings")
+
+    def test_connector_icons_survive_a_live_update(self, page, local_server_with_settings):
+        """The first render and every /api/state/stream event carry the same settings state, so
+        the Connectors page's icons are still there after the page re-renders from a pushed
+        change (routes_settings.settings_page_state)."""
+        server, _web_ui = local_server_with_settings
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/settings/connectors")
+        page.wait_for_selector(".pf-connector-icon img")
+        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
+        icons = page.locator(".pf-connector-icon img").count()
+        page.evaluate(
+            "() => { var render = window.__pfRender; window.__pfRenders = 0;"
+            " window.__pfRender = function (s) { window.__pfRenders++; return render(s); }; }"
+        )
+        call_soon_threadsafe(server.controller._push_snapshot)
+        page.wait_for_function("() => window.__pfRenders > 0")
+        assert page.locator(".pf-connector-icon img").count() == icons
 
     def test_org_settings_page_renders_for_non_admin(self, page, context, org_server):
         server, sessions = org_server

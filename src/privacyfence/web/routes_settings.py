@@ -357,10 +357,15 @@ def _call_action(controller: SettingsController, action: str, payload: dict[str,
     return method(**kwargs)
 
 
-def _augment_connectors_with_icons(state: dict[str, Any]) -> dict[str, Any]:
-    """Adds each connector's icon, loaded through approval_icons.py (the
-    PyObjC-free icon loader that also serves the approval card), so
-    SettingsController itself stays free of any icon-loading concern."""
+def settings_page_state(state: dict[str, Any]) -> dict[str, Any]:
+    """``SettingsController.snapshot()`` as the settings page renders it:
+    each connector gains its icon, loaded through approval_icons.py (the
+    icon loader that also serves the approval card), so SettingsController
+    itself stays free of any icon-loading concern. Every path that hands the
+    page a state goes through this -- the first render, an action's
+    response, and web/server.py's wiring of each /api/state/stream event --
+    because the page re-renders from the whole state each time, and a state
+    without icons blanks them."""
     for connector in state.get("connectors", []):
         icon_path = approval_icons.connector_icon_path(connector.get("icon", ""))
         connector["icon_data_uri"] = approval_icons.icon_data_uri(icon_path)
@@ -368,7 +373,7 @@ def _augment_connectors_with_icons(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _snapshot(controller: SettingsController) -> dict[str, Any]:
-    return _augment_connectors_with_icons(controller.snapshot())
+    return settings_page_state(controller.snapshot())
 
 
 # ---------------------------------------------------------------------------- #
@@ -824,7 +829,7 @@ def build_routes(
         with principal_scope(LOCAL_PRINCIPAL):
             _record_settings_audit(LOCAL_PRINCIPAL, f"Changed setting {action!r} (principal={LOCAL_PRINCIPAL.id})")
         state = result if isinstance(result, dict) else controller.snapshot()
-        return JSONResponse(_augment_connectors_with_icons(state))
+        return JSONResponse(settings_page_state(state))
 
     async def quit_action(request: Request) -> Response:
         if not _authenticated(request):

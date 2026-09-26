@@ -105,6 +105,9 @@ Organization deployments now work from a phone, and the app looks like the websi
   used to leave you on the approvals page with the link lost, which is the usual case when a link
   is tapped inside an AI app on a phone. You still have to sign in as the person the file was
   prepared for.
+- **Connector icons in Settings no longer disappear** the first time the page updates on its own
+  (a sign-in finishing, a rule changed elsewhere); they used to go blank until the page was
+  reloaded.
 - The **Review** button on the approvals list showed its text in almost the same colour as the
   button, several highlighted controls in settings were hard to read in dark mode, and Privacy
   Filter's Allow/Redact/Block choice now uses the same green, amber and red in dark mode as in
