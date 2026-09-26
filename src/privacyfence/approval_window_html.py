@@ -73,6 +73,7 @@ from html import escape as _html_escape
 from pathlib import Path
 
 from .agent_label import NEUTRAL_SUBJECT, NOT_VERIFIED, TIER_ATTESTED, UNKNOWN_AGENT_LABEL, AgentLabel
+from .design_css import SHARED_CSS
 from .markdown_to_html import markdown_to_html
 
 _STYLES_PATH = Path(__file__).parent / "resources" / "approval_window" / "styles.css"
@@ -1000,6 +1001,7 @@ def build_card_stack_html(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
+{SHARED_CSS}
 {_STYLES_CSS}
 html {{ height: 100%; }}
 /* overflow-y:auto here is now a last-resort fallback only, not the

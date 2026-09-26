@@ -183,3 +183,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0075](0075-apps-script-gets-no-run-tool.md) | The Apps Script connector has no tool that runs a script | Accepted (retroactive) |
 | [0076](0076-every-connector-tool-is-advertised-read-only.md) | Every connector tool is advertised to MCP clients as read-only | Accepted (retroactive) |
 | [0077](0077-the-approval-popup-never-proposes-a-rule-for-the-extra-scope-operations.md) | The approval popup never proposes a rule for the extra-scope operations (Apps Script, Gmail filters, Slack group chats) | Accepted (retroactive) |
+| [0078](0078-the-app-shares-the-websites-design-system.md) | The app shares the website's design system, instead of adopting a CSS framework | Accepted |

@@ -113,7 +113,9 @@ PAGES: dict[str, str] = {
 
 # Output path -> source path relative to the repository root, copied byte for byte.
 STATIC: dict[str, str] = {
-    "tokens.css": "website/tokens.css",
+    # The design system shared with the app (ADR 0078): one source, under the package.
+    "tokens.css": "src/privacyfence/resources/design/tokens.css",
+    "base.css": "src/privacyfence/resources/design/base.css",
     "chrome.css": "website/chrome.css",
     "styles.css": "website/styles.css",
     "docs-theme.css": "website/_docs/docs-theme.css",
@@ -893,7 +895,7 @@ def write_docs_project(
             "language": "en",
             "features": ["navigation.sections", "navigation.footer", "toc.follow", "search.highlight"],
         },
-        "extra_css": ["/tokens.css", "/chrome.css", "/docs-theme.css"],
+        "extra_css": ["/tokens.css", "/base.css", "/chrome.css", "/docs-theme.css"],
         "extra": {
             "pf_version": version,
             "pf_version_label": version_label,
