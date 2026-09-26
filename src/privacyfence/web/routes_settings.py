@@ -58,12 +58,10 @@ without contaminating the generic dispatcher with one action's special
 case.
 
 **Standing rule this module exists to keep true:** no route here
-ever calls ``subprocess.run``/``os.system``/``open`` -- the four call sites
-that used to (install_org_config's osascript picker, export_audit_log's
-``open <file>``, the update-available alert's ``open <url>``,
-settings_window.py's ``open_repo``) are each replaced by a route or a
-client-side link/window.open, never a shell-out reachable from this
-process's HTTP listener. TestNoSubprocessFromHttp in this module's test
+ever calls ``subprocess.run``/``os.system``/``open`` -- picking an org
+config file, exporting the audit log, opening an update's page and opening
+the repository are each a route or a client-side link/window.open, never a
+shell-out reachable from this process's HTTP listener. TestNoSubprocessFromHttp in this module's test
 file is what a security review gets to point at instead of re-reading this
 comment.
 

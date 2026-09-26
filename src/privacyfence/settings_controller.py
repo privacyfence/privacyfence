@@ -1323,7 +1323,7 @@ class SettingsController:
     # -- Telegram: bridge-driven multi-step sign-in (phone -> code -> optional
     # 2FA password). Each step opens its own short-lived
     # TelegramClient/connect/disconnect -- no long-lived connection is held across
-    # bridge calls, since a webview round trip can be arbitrarily far apart
+    # bridge calls, since one step's request can be arbitrarily far apart
     # from the next one. self._telegram_auth carries the phone number and
     # phone_code_hash send_code_request returned, needed by the code step;
     # it's None whenever no Telegram sign-in is in progress. The JS side

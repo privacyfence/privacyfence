@@ -30,9 +30,8 @@ This module also owns the one piece of plumbing settings_controller.py's
 ``call_on_main`` dispatcher seam needs once a web server is
 actually running: ``set_loop``/``call_soon_threadsafe`` marshal a
 background-thread callback (an OAuth flow finishing, a rules-changed
-broadcast) onto this stream's own asyncio event loop, the same "some run
-loop is the safe place to touch shared state from" reasoning AppHelper.
-callAfter has always given the native window.
+broadcast) onto this stream's own asyncio event loop, so the subscriber
+queues are only ever touched from that one loop.
 """
 from __future__ import annotations
 

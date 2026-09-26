@@ -7,8 +7,7 @@ behavior change ("Done when": no behavior change to approvals).
 The insight: a worker thread blocked on a human's answer is
 the same mechanism whether the answer is "accept/deny/accept_all" (a card),
 "confirm/cancel" (a PII/rule confirmation), or "which of these N options"
-(settings_controller.py's Atlassian multi-resource picker, today's
-dialog_window.show_choice_dialog on the native side) -- register a
+(settings_controller.py's Atlassian multi-resource picker) -- register a
 ``PendingApproval`` in the one shared registry, render it as HTML, block the
 calling thread on its ``threading.Event``, and read back whatever a human's
 decision POST (web/routes_approvals.py's ``decide`` endpoint, unchanged)

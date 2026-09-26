@@ -1,6 +1,6 @@
 """The web approval surface: WebApprovalUI (web_approval_ui.py) registers a
 pending card or confirmation, and these routes are what let a human actually
-see and decide it from a browser instead of a native dialog. One module now
+see and decide it in a browser (ADR 0001). One module
 builds the route list for *both* local mode's single-secret session and org
 mode's principal-aware one, with an auth adapter per mode (ADR 0033).
 
@@ -82,12 +82,12 @@ unchanged for the same kind of reason in reverse: org mode's equivalent of
 "was this session attributed to a person" is IdP re-auth, not a session
 provenance flag.
 
-The one JS change to approval_window_html.py's/dialog_window_html.py's
-otherwise-untouched documents: a small shim script, injected here rather
-than editing either module, defines ``window.webkit.messageHandlers.pf.
-postMessage`` as a ``fetch()`` POST to this module's own decide endpoint --
-the two shipped documents never need to know whether they're running in a
-WKWebView or a browser tab.
+approval_window_html.py's/dialog_window_html.py's documents post their
+decision through ``window.webkit.messageHandlers.pf.postMessage``; a small
+shim script injected here defines that as a ``fetch()`` POST to this
+module's own decide endpoint, carrying the session's CSRF token, so the
+documents themselves know nothing about the route, the session or the
+mode.
 """
 from __future__ import annotations
 

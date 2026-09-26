@@ -1,9 +1,8 @@
-/* Approval window components, trimmed to only what the approval window actually uses (no
-   deck/landing/print treatments, no form controls, no nav/table -- this window never renders any
-   of those). Inlined into every popup's HTML document rather than linked, so the WKWebView keeps
-   loading via loadHTMLString_baseURL_(html, None) with no external references at all -- see
-   approval_window.py's module docstring for why that matters (no network access, nothing to even
-   attempt to load out to).
+/* Approval card components, trimmed to only what the card and its dialogs actually use (no
+   deck/landing/print treatments, no form controls, no nav/table -- the card never renders any
+   of those). Inlined into every card's HTML document rather than linked, so the document has no
+   external references at all: the page's CSP is default-src 'none' with a nonce for its own
+   <style> (web/csp.py, ADR 0063), and the card never has to fetch anything to render.
 
    Every colour, the type and the shape tokens come from the shared design files the document
    inlines before this one (resources/design/: tokens.css, base.css and the app's app.css, ADR
@@ -283,8 +282,8 @@ img { display: block; max-width: 100%; }
 
 /* Applied to both of build_card_stack_html's two scrollable containers
    (the disclosure section's cap and the WIDE right pane) whenever they're actually capped --
-   see approval_window_html.py. Styling ::-webkit-scrollbar at all opts a
-   WKWebView out of macOS's default overlay scrollbar (invisible until
+   see approval_window_html.py. Styling ::-webkit-scrollbar at all opts
+   Safari and Chromium out of macOS's default overlay scrollbar (invisible until
    actively scrolling/hovering) in favor of a classic, always-visible
    track+thumb -- the reviewer should be able to tell a pane is scrollable
    at a glance, not discover it by accident. */

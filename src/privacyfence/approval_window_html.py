@@ -1,12 +1,11 @@
-"""Card-stack HTML template for the approval window.
+"""Card-stack HTML template for the approval card.
 
-Renders the *entire* content area of a review-gate or popup-gate dialog as one
-self-contained HTML document for a single full-window WKWebView, including its
-own Deny/Allow once/Always allow button row (``_button_row_html``) -- see
-approval_window.py's module docstring for why these moved off native NSButtons
-and into this document, and ``_JS`` below for the click/keyboard-dispatch
-bridge (``window.webkit.messageHandlers.pf``) that replaces native
-``buttonClicked_`` tag dispatch.
+Renders a review-gate or popup-gate approval as one self-contained HTML
+document, which the web UI serves as the card page (web/routes_approvals.py;
+approvals are browser pages, ADR 0001). The document carries its own
+Deny/Allow once/Always allow button row (``_button_row_html``); ``_JS`` below
+turns a click or key into a ``window.webkit.messageHandlers.pf.postMessage``
+call, which the route's injected shim sends to the decide endpoint.
 
 Visual design: the shared design files (``resources/design/``, ADR 0078/0079)
 followed by the card's own ``resources/approval_window/styles.css``, all inlined.
@@ -41,9 +40,8 @@ pairs a connector builds directly (e.g. calendar_get_event_details's
 Attendees/Location/Description), or -- for the handful of tools that also
 carry a privacy-category ``visibility`` policy (Gmail/Drive/Slack/Contacts/
 Tasks/Confluence) -- rows built by disclosure_rows_from_visibility() below.
-Either way this function itself doesn't care; approval_window.py's
-controller decides which source to use per call (its ``new_info`` vs
-``visibility`` attributes).
+Either way this function itself doesn't care; card_builder.py decides which
+source to use per call (gate.py's ``new_info`` vs ``visibility``).
 
 NARROW layout has no preview pane at all -- not a smaller version of WIDE's,
 genuinely absent. A tool gets WIDE only when it has real free-text body
@@ -114,7 +112,7 @@ def extract_csp_nonce(html: str) -> str | None:
 
 # Narrow (single-column, sections only, no preview pane at all) vs wide
 # (two-column, sections + a genuine free-text-body right pane) -- set
-# explicitly per call site (see approval_window.py's `layout` param), not a
+# explicitly per tool (gate.py's ``_TOOL_LAYOUT``), not a
 # length heuristic. See module docstring for exactly which tools get which.
 NARROW = "narrow"
 WIDE = "wide"
@@ -193,9 +191,7 @@ def disclosure_rows_from_visibility(
 # (styles.css's .pf-kv default is 2 lines) instead of growing the row or the
 # window -- keyed by exact label text, since some fields are known to
 # reliably carry longer content than a typical short structured field.
-# Extend here as more tools need a taller allowance; approval_window.py's
-# own height estimate calls this too, so the two never disagree about how
-# tall a given row's worst case is.
+# Extend here as more tools need a taller allowance.
 DEFAULT_LINE_CLAMP = 2
 LINE_CLAMP_BY_LABEL = {
     "Attendees": 3,
@@ -375,10 +371,8 @@ def build_preview_body_html(
 
     ``pdf_data_uri`` takes priority over ``image_data_uri``, which takes
     priority over plain ``details_text``/``tables`` -- rendered inline via
-    a standard ``<embed>``/``<img>`` data URI: the whole content area is
-    already one WKWebView, so WebKit's own built-in PDF renderer and image
-    decoding handle both directly, no native PDFView/NSImageView overlay
-    needed.
+    a standard ``<embed>``/``<img>`` data URI, which the browser's own PDF
+    viewer and image decoding handle.
 
     A PDF renders twice, and a container query on ``.pf-pdf`` (styles.css)
     shows one: the ``<embed>`` when the pane is at least 600px wide, and
@@ -652,19 +646,14 @@ def _risk_section_html(
 
 
 def _button_row_html(accept_all_labels: list[str]) -> str:
-    """Deny/Allow once/Always allow -- rendered as part of this document's
-    own content now (see module docstring), not native NSButtons in a fixed
-    band below the webview. ``accept_all_labels`` is the already-formatted
+    """Deny/Allow once/Always allow, as part of this document's own content
+    (see module docstring). ``accept_all_labels`` is the already-formatted
     "Always allow" / "Always allow — {hint}" string per matching candidate
-    (approval_window.py's ApprovalWindowController computes each one, same
-    as it always computed the single one -- this function just renders
+    (card_builder.py computes each one -- this function just renders
     whatever strings it's given, one button per entry).
 
-    Zero entries: no Always allow button at all, same as
-    ``allow_accept_all=False`` used to render. Exactly one entry: rendered
-    inline in ``.pf-btn-row-left`` alongside Deny -- pixel-identical to
-    today's single-candidate layout, so the ~46 single-candidate operations
-    get zero visual change. Two or more entries (only the four
+    Zero entries: no Always allow button at all. Exactly one entry: rendered
+    inline in ``.pf-btn-row-left`` alongside Deny. Two or more entries (only the four
     ``auto_accept.SUGGESTION_FAMILIES`` operations can ever produce this):
     rendered as their own left-aligned, wrapping button row *above* the
     Deny/Allow once band instead, which keeps its fixed position and drops
@@ -676,26 +665,22 @@ def _button_row_html(accept_all_labels: list[str]) -> str:
     don't rely on a browser default disabled semantic no plain ``<div>``
     gets for free" reasoning). ``_JS``'s ``enableButtons()`` is what clears
     this once the page is actually ready to be looked at -- see that
-    function's own comment for why that's a DOMContentLoaded-driven, fully
-    in-page signal now, not something approval_window.py's
-    WKNavigationDelegate methods drive directly the way they used to.
+    function's own comment for why that's a DOMContentLoaded-driven,
+    in-page signal.
 
     Each Always-allow button carries ``data-pf-choice="{index}"`` (its
     index into ``accept_all_labels``) alongside ``data-pf-action="accept_all"``
     -- ``_JS``'s bridge includes this in the resolve message so
-    approval_window.py/gate.py know *which* candidate rule was picked, not
+    gate.py knows *which* candidate rule was picked, not
     just that some "Always allow" button was clicked.
 
     ``data-pf-primary`` marks Allow once specifically: ``_JS``'s keydown
     handler activates a *focused* Deny/Always-allow control on Enter/Space
     the same way a click would, but deliberately excludes anything carrying
     this attribute -- hitting Enter/Space must never be able to approve a
-    request nobody has actually reviewed yet, the same guarantee the native
-    button's missing ``"\\r"`` keyEquivalent used to give (see
-    approval_window.py's own module docstring). Escape still resolves Deny
-    regardless of focus (``_JS``'s own document-level handler), matching the
-    native Deny button's ``"\\x1b"`` keyEquivalent -- declining via a
-    reflexive keypress stays the safe direction.
+    request nobody has actually reviewed yet. Escape still resolves Deny
+    regardless of focus (``_JS``'s own document-level handler) -- declining
+    via a reflexive keypress stays the safe direction.
     """
     deny_html = (
         '<div class="button danger pf-btn-deny" role="button" aria-disabled="true" '
@@ -733,22 +718,17 @@ def _button_row_html(accept_all_labels: list[str]) -> str:
 
 
 # Click/keyboard dispatch for the button row above, plus the "content is
-# actually ready" gate that used to be a Python-side concern
-# (webView_didFinishNavigation_ enabling native NSButtons). DOMContentLoaded
-# is the right in-page equivalent specifically because this document has
+# actually ready" gate that keeps the buttons disabled until the card has
+# rendered. DOMContentLoaded is the right signal specifically because this document has
 # nothing left to fetch by the time it fires -- fonts/icons/images are all
 # already-inlined base64 data URIs, never a network request (see module
 # docstring) -- so there's no meaningful gap between "DOM built" and
 # "everything that was ever going to render has rendered" the way there
 # would be for a document with real external resources.
 #
-# window.__pfEnableButtons is exposed specifically so approval_window.py's
-# WKNavigationDelegate fail-safes (webView_didFail(Provisional)Navigation_
-# withError_) can still force button click-ability in the one case
-# DOMContentLoaded itself might never fire: an outright load failure. Safe
-# to call more than once (removeAttribute/setAttribute are idempotent), so
-# those fail-safes can call it unconditionally without checking whether the
-# page's own handler already ran.
+# window.__pfEnableButtons exposes the same function to a host that needs to
+# force the buttons on; nothing in the web UI calls it. Safe to call more
+# than once (removeAttribute/setAttribute are idempotent).
 _JS = """
 (function () {
   function post(result, choice) {
@@ -870,9 +850,9 @@ def build_card_stack_html(
     agent_label: AgentLabel | None = None,
     agent_icon_data_uri: str = "",
 ) -> str:
-    """Build the full HTML document for one approval window's content area.
+    """Build the full HTML document for one approval card.
 
-    Pure function -- no AppKit, no filesystem access beyond the module-level
+    Pure function -- no filesystem access beyond the module-level
     styles.css already read at import time -- directly unit-testable.
 
     ``layout`` is ``NARROW`` (the left-column cards only, no preview pane at all --
@@ -880,8 +860,7 @@ def build_card_stack_html(
     ``WIDE`` (the same cards in a fixed-width left column, plus a genuine
     independently-scrolling right-hand preview pane). Callers decide which
     per tool -- see module docstring for the criterion (real free-text body
-    content vs. everything else) and approval_window.py's ``layout``
-    parameter. A row's value is capped at a few lines (styles.css's
+    content vs. everything else) and gate.py's ``_TOOL_LAYOUT``. A row's value is capped at a few lines (styles.css's
     ``.pf-kv``/``.pf-quote``); one that is really cut off opens in place
     when tapped (``_JS``'s ``markClamped``).
 
@@ -924,14 +903,12 @@ def build_card_stack_html(
 
     ``accept_all_labels`` controls the Always allow button(s) (see
     ``_button_row_html``) -- Deny and Allow once always render; an empty
-    list renders no Always allow button at all (same as the old
-    ``allow_accept_all=False``), one entry renders a single Always allow
-    button inline with Deny (pixel-identical to today's single-candidate
-    layout), and 2+ entries render their own button row above Deny/Allow
-    once instead -- one button per matching auto-accept rule candidate.
-    Each entry is already the fully-formatted label string (plain "Always
-    allow", or "Always allow — {hint}"; approval_window.py's controller
-    decides which per entry, same as it always did for the single case).
+    list renders no Always allow button at all, one entry renders a single
+    Always allow button inline with Deny, and 2+ entries render their own
+    button row above Deny/Allow once instead -- one button per matching
+    auto-accept rule candidate. Each entry is already the fully-formatted
+    label string (plain "Always allow", or "Always allow — {hint}";
+    card_builder.py decides which per entry).
     The whole button row is appended last, after ``temp_accept_text``'s own
     caption when present.
 

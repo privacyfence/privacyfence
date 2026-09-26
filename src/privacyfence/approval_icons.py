@@ -7,13 +7,9 @@ card-stack HTML document -- see
 approval_window_html.py's module docstring for why that document must never
 trigger a network fetch to render.
 
-Plain filesystem + base64, no AppKit/PyObjC dependency -- both
-approval_window.py's native host (AppKit/WKWebView) and web_approval_ui.py's
-browser host need the exact same data URIs, so this is factored out here
-rather than duplicated, and importable on any platform. approval_window.py
-keeps its own private _icon_path/_connector_icon_path/_icon_data_uri (not
-migrated onto this module) so this change stays scoped to the new web
-surface without touching the native path's own, separately-tested code.
+Plain filesystem + base64, importable on any platform. The approval card
+(card_builder.py) and the settings page's connector list
+(web/routes_settings.py) both load their icons here.
 """
 from __future__ import annotations
 

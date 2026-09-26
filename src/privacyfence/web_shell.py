@@ -5,27 +5,17 @@ that both ``/approvals`` and
 web/routes_settings.py), so the two pages read as one application instead of
 two applications bolted together.
 
-Deliberately **not** used by:
-
-- the native settings window (settings_window.py's WKWebView) or the native
-  approval window (approval_window.py's) -- both load their own document's
-  markup directly via ``loadHTMLString_baseURL_``, with no HTTP request and
-  no other page to link to. Wrapping their shared documents
-  (settings_window_html.build_html/approval_window_html.build_card_stack_
-  html) in this shell would change what those two already-tested,
-  geometry-tuned documents render, for a native host that has no use for a
-  cross-page nav bar at all.
-- an individual approval card's own page (``GET /approvals/{id}``) -- that
-  page *is* the decision screen, full-window, same as the native dialog it
-  replaces; the list it returns to is where the shell belongs, not the card itself.
+Deliberately **not** used by an individual approval card's own page
+(``GET /approvals/{id}``) or its confirmation dialogs -- that page *is* the
+decision screen, the whole window given to one decision; the list it returns
+to is where the shell belongs, not the card itself.
 
 Owns the one thing every shell-wrapped page needs and none of them should
 reimplement: the ``/api/state/stream`` SSE connection (web/state_stream.py)
 that drives the live indicator and dispatches each event to whichever of
 ``window.__pfRender``/``window.__pfRenderApprovals`` the current page
-happens to define -- settings_window_html.py's own bridge JS already
-defines the former (unchanged, since it also serves the native-window
-push path); approval_list_html.py defines the latter. Centralizing the
+happens to define -- settings_window_html.py's own bridge JS defines the
+former; approval_list_html.py defines the latter. Centralizing the
 connection here, rather than duplicating an EventSource per page, is what
 makes "one live indicator" true instead of aspirational.
 """
@@ -40,7 +30,7 @@ from . import approval_icons
 from .design_css import DOCUMENT_CSS
 
 # Browser-tab favicon -- the same bundled shield mark approval_icons.py
-# already hands the native/web approval cards (resources/icon_32.png, the
+# already hands the approval card (resources/icon_32.png, the
 # size a favicon is actually rendered at), embedded as a data: URI so this
 # shared shell never needs its own unauthenticated route or asset file just
 # to satisfy the browser's automatic GET /favicon.ico.
@@ -263,10 +253,9 @@ _STREAM_JS = """
   var NOTIFICATIONS_DETAIL = %(notifications_detail)s;
   // __pfNotificationsEnabled is exposed globally so the settings page's own
   // notifications card (settings_window_html.py's renderNotificationsCard)
-  // can read the same config flag -- that module's JS is shared with the
-  // native settings window, which never loads this script at all, so it
-  // treats a missing flag as "on" (feature-detecting Notification support
-  // instead) rather than assuming this variable exists. There is no
+  // can read the same config flag. That card treats a missing flag as "on"
+  // (feature-detecting Notification support instead), since a settings
+  // page rendered without this script (org mode's) never sets it. There is no
   // equivalent __pfNotificationsDetail read anywhere else: the card's own
   // detail-level control is a real, mutable setting
   // (SettingsController.set_notifications_detail) sourced from that page's
