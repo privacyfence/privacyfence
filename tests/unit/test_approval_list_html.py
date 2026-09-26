@@ -289,30 +289,58 @@ class TestRowActionOrder:
 
 
 class TestPhoneWidthRules:
-    """Without these rules, at phone widths the row's own ``flex-wrap`` never engages, because
+    """Without these rules, on a narrow list the row's own ``flex-wrap`` never engages, because
     ``.pf-approval-main`` is ``flex:1;min-width:0`` against a
     ``flex-shrink:0`` action cluster -- so the text column shrinks to about
     25px at 393px instead of the row wrapping. These assert the rules that
     make it wrap and give the controls a real target; that the rendered
-    result actually follows is covered by the Playwright suite."""
+    result actually follows is covered by the Playwright suite. The rules
+    are a container query on the list itself, never a viewport query (shared
+    rule 6, resources/design/base.css)."""
 
     def test_text_column_gets_a_basis_too_wide_to_sit_beside_the_actions(self):
         html = approval_list_html.build_list_html([], csrf="t")
-        assert "@media (max-width: 560px)" in html
+        assert "@container (max-width: 560px)" in html
+        assert "@media" not in approval_list_html._CSS
         assert ".pf-approval-main { flex-basis: calc(100% - 96px); }" in html
 
     def test_action_strip_goes_full_width(self):
         html = approval_list_html.build_list_html([], csrf="t")
         assert ".pf-approval-actions { width: 100%; gap: 10px; margin-top: 12px; }" in html
 
-    def test_row_controls_get_a_real_touch_target(self):
+    def test_row_controls_get_a_real_touch_target_at_every_width(self):
         html = approval_list_html.build_list_html([], csrf="t")
-        assert "min-height: 44px; padding: 12px 14px; font-size: 13px;" in html
+        assert ".pf-approvals-page .button { min-height: var(--tap);" in html
+        # A row's checkbox has no text of its own, so its label is the target.
+        row_html = approval_list_html._row_html(approval_list_html.row_from_approval(_real_card()))
+        assert '<label class="pf-approval-select"><input type="checkbox" data-select=' in row_html
+        assert "width: var(--tap); height: var(--tap);" in html
 
     def test_batch_actions_sit_side_by_side_without_reordering_focus(self):
         html = approval_list_html.build_list_html([], csrf="t")
         assert ".pf-btn-approve-selected { grid-column: 1; }" in html
         assert ".pf-btn-deny-selected { grid-column: 2; }" in html
+
+
+class TestRowsAreCards:
+    """Each row is the app's ``card`` component and its controls the shared ``.button``s, in the
+    first paint and the live re-render alike. Review is the one filled control; Deny is the
+    outlined danger one, never filled."""
+
+    def test_first_paint(self):
+        row_html = approval_list_html._row_html(approval_list_html.row_from_approval(_real_card()))
+        assert 'class="pf-approval-row card"' in row_html
+        assert 'class="button primary pf-btn-review"' in row_html
+        assert 'class="button danger pf-btn-deny"' in row_html
+        assert 'class="button secondary pf-btn-details"' in row_html
+
+    def test_live_rerender(self):
+        js = approval_list_html._JS
+        body = js[js.index("function rowHtml("):js.index("function groupHtml(")]
+        assert "' card\"'" in body
+        assert 'class="button primary pf-btn-review"' in body
+        assert 'class="button danger pf-btn-deny"' in body
+        assert 'class="pf-approval-select"' in body
 
 
 class TestRowNamesItsObject:
@@ -410,16 +438,19 @@ class TestHeadingComposition:
 
 class TestApproveSelectedIsNotTheLoudestControl:
     """Approve-selected is the least-informed action -- select-all plus one
-    click, off one-line summaries -- so it must not be as loud (filled
-    ``var(--accent)``) as Review, the one that opens disclosure."""
+    click, off one-line summaries -- so it must not be as loud (the filled
+    ``.button.primary``) as Review, the one that opens disclosure."""
 
     def test_approve_selected_is_an_outline(self):
         html = approval_list_html.build_list_html([], csrf="t")
-        assert "border: 1px solid var(--accent); background: transparent;" in html
+        assert 'class="button secondary pf-btn-approve-selected"' in html
+        assert "button primary pf-btn-approve-selected" not in html
 
     def test_review_keeps_the_fill(self):
-        html = approval_list_html.build_list_html([], csrf="t")
-        assert ".pf-btn-review { background: var(--accent); color: var(--on-accent); }" in html
+        row_html = approval_list_html._row_html(approval_list_html.row_from_approval(_real_card()))
+        assert 'class="button primary pf-btn-review"' in row_html
+        # And it is the only filled control on the row.
+        assert row_html.count("button primary") == 1
 
     def test_the_composition_guard_on_the_label_is_kept(self):
         # The label naming "9 reads, 3 writes" is what stops an unintended

@@ -139,6 +139,72 @@ class TestConnectPage:
         assert f'<div class="pf-shell-principal">{principal.email}</div>' in r.text
 
 
+class TestConnectPageLook:
+    """The page is built from the shared design system: every service is a card, its state a
+    badge whose text names the state (never colour alone), its action a shared button, and no
+    colour of its own (tests/unit/test_design_system.py checks that for every renderer)."""
+
+    def _page(self, *, connected: bool = False, org_config=None) -> str:
+        principal = Principal(id="alice", email="alice@example.com")
+        if connected:
+            token_file = paths.user_dir(principal) / "credentials" / "slack_token.json"
+            token_file.parent.mkdir(parents=True, exist_ok=True)
+            token_file.write_text("{}")
+        return rc._render_connect_page(
+            principal=principal, org_config=_ORG_CONFIG if org_config is None else org_config,
+            telegram_state=rc._TelegramState(), flash_connected="", flash_error="", csrf="c", nonce="n",
+        )
+
+    def test_each_state_is_a_named_badge(self):
+        html = self._page(connected=True)
+        assert '<span class="pf-service-chip">Slack</span><span class="badge badge-success">Connected</span>' in html
+        assert '<span class="pf-service-chip">Gmail</span><span class="badge">Not connected</span>' in html
+        assert 'class="button primary" href="/oauth/start/gmail">Connect<' in html
+        assert 'class="button secondary" href="/oauth/start/slack">Reconnect<' in html
+        unconfigured = self._page(org_config={})
+        assert '<span class="badge badge-dashed">Not set up by your organization</span>' in unconfigured
+
+    def test_rows_are_cards_and_nothing_is_styled_inline(self):
+        html = self._page()
+        # Ten OAuth services, and Telegram, which this install has no app credentials for.
+        assert html.count('<li class="service card cluster">') == 11
+        body = html.split('<div class="pf-connect stack">', 1)[1]
+        assert "style=" not in body
+
+
+class TestTelegramFormOnAPhone:
+    """Each step of the Telegram sign-in asks a phone for the right keyboard (``inputmode``)
+    and tells the browser what it may fill in (``autocomplete``)."""
+
+    @staticmethod
+    def _html(monkeypatch, step: str | None, error: str = "") -> str:
+        monkeypatch.setattr(rc, "telegram_app_credentials", lambda: (123, "apihash"))
+        return rc._telegram_box_html(
+            Principal(id="alice"), _ORG_CONFIG, rc._TelegramState(step=step, error=error), "csrf-token",
+        )
+
+    def test_phone_number_gets_the_phone_pad(self, monkeypatch):
+        html = self._html(monkeypatch, None)
+        assert '<input class="field" type="tel" name="phone" inputmode="tel" autocomplete="tel"' in html
+        assert '<span class="field-label">Phone number</span>' in html
+
+    def test_code_gets_the_digit_pad_and_the_one_time_code_suggestion(self, monkeypatch):
+        html = self._html(monkeypatch, "code")
+        assert 'name="code" inputmode="numeric" autocomplete="one-time-code"' in html
+        # Cancel posts its own form but sits beside Confirm, not nested in its form.
+        assert '<form id="pf-telegram-cancel" method="post" action="/connect/telegram/cancel">' in html
+        assert 'form="pf-telegram-cancel">Cancel</button>' in html
+        assert html.count("<form") == 2 and html.index("</form>") < html.index('<form id="pf-telegram-cancel"')
+
+    def test_two_step_password_is_a_saved_password(self, monkeypatch):
+        html = self._html(monkeypatch, "password")
+        assert '<input class="field" type="password" name="password" autocomplete="current-password" required>' in html
+
+    def test_an_error_is_an_alert_with_its_text(self, monkeypatch):
+        html = self._html(monkeypatch, "code", error="That code has expired.")
+        assert '<p class="card card-danger" role="alert">That code has expired.</p>' in html
+
+
 # ---------------------------------------------------------------------------- #
 # /oauth/start/{service}
 # ---------------------------------------------------------------------------- #

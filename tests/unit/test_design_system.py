@@ -73,7 +73,6 @@ _WIDTH_MEDIA = re.compile(
 
 # file -> (number of width/height @media queries it may still have, phase that removes them)
 MEDIA_ALLOWED: dict[str, tuple[int, str]] = {
-    "src/privacyfence/approval_list_html.py": (1, "p6-remaining-pages"),
     "src/privacyfence/approval_window_html.py": (1, "p5-card-containers"),
     "src/privacyfence/dialog_window_html.py": (1, "p5-card-containers"),
     "src/privacyfence/resources/approval_window/styles.css": (2, "p5-card-containers"),
@@ -86,11 +85,7 @@ _HEX = re.compile(r"(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4}
 _COLOUR_FUNCTION = re.compile(r"\b(?:rgba?|hsla?)\(")
 
 # file -> (number of colour literals it may still have, phase that removes them)
-COLOUR_ALLOWED: dict[str, tuple[int, str]] = {
-    "src/privacyfence/web/routes_connect.py": (14, "p6-remaining-pages"),
-    "src/privacyfence/web/routes_security.py": (15, "p6-remaining-pages"),
-    "src/privacyfence/web/session_auth.py": (1, "p6-remaining-pages"),
-}
+COLOUR_ALLOWED: dict[str, tuple[int, str]] = {}
 
 
 def _count(pattern_count, path: Path) -> int:
@@ -239,6 +234,7 @@ def test_every_app_document_inlines_the_shared_css_before_its_own():
 
     documents = {
         "web_shell": web_shell.wrap("<p>x</p>", title="t", active="approvals", nonce="n"),
+        "fallback": web_shell.plain_page("<p>x</p>", title="t", nonce="n"),
         "settings": settings_window_html.build_html({}, nonce="n"),
         "card": build_card_html(
             title="Send email", preview={"To": "a@b.com"}, details_text="body", is_read=False, layout="narrow",

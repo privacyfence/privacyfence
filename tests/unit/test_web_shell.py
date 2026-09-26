@@ -339,4 +339,39 @@ class TestBareLinksAreStyled:
         # page renders outside the nav/banner/notice classes fell through
         # to #0000ee against a warm grey palette.
         html = web_shell.wrap("", title="t", active="approvals")
-        assert ".pf-shell-main :where(a) { color: var(--accent-dark); }" in html
+        assert ".pf-shell-main :where(a:not(.button)) { color: var(--accent-dark); }" in html
+
+    def test_a_link_drawn_as_a_button_keeps_the_buttons_colours(self):
+        # A bare-link colour on a.button.primary would put accent text on the ink fill.
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert ".pf-shell-main a.button { text-decoration: none; }" in html
+
+
+class TestPlainPage:
+    """The fallback documents (no longer pending, preparing, not authorized, local mode's
+    /security) share one helper: a phone lays them out at its own width, and they carry the
+    design system and dark mode like every other document."""
+
+    def test_is_a_complete_document_a_phone_lays_out_at_its_own_width(self):
+        html = web_shell.plain_page("<p>x</p>", title="t", nonce="n")
+        assert html.startswith("<!DOCTYPE html>")
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+        assert '<meta name="color-scheme" content="light dark">' in html
+
+    def test_inlines_the_design_system_first_under_the_nonce(self):
+        from privacyfence.design_css import DOCUMENT_CSS
+
+        html = web_shell.plain_page("<p>x</p>", title="t", nonce="abc", page_css=".mine{}")
+        style = html.split('<style nonce="abc">', 1)[1].split("</style>", 1)[0]
+        assert style.startswith(DOCUMENT_CSS)
+        assert style.endswith(".mine{}")
+        assert html.count("<style") == 1
+
+    def test_body_sits_in_one_panel_and_head_html_lands_in_head(self):
+        html = web_shell.plain_page(
+            "<p>body</p>", title="<t>", nonce="n", head_html='<meta http-equiv="refresh" content="2">',
+        )
+        head, body = html.split("</head>", 1)
+        assert '<meta http-equiv="refresh" content="2">' in head
+        assert "<title>&lt;t&gt;</title>" in head
+        assert '<div class="panel stack pf-plain-panel"><p>body</p></div>' in body

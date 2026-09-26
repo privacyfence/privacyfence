@@ -141,6 +141,11 @@ _STREAM_POLL_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
 
+# The way back from a fallback page (web_shell.plain_page), as a button-sized target.
+_BACK_TO_APPROVALS = (
+    '<div class="actions cluster"><a class="button secondary" href="/approvals">Back to approvals</a></div>'
+)
+
 # resources/sw.js -- tier 0/1 notifications. Served at the origin root, not under /api, so its default scope
 # covers the whole app (a service worker's scope can never be wider than the
 # path it's served from) -- see web_shell.py's own registration call. Shared
@@ -510,10 +515,12 @@ def _build_route_list(
             # principal's id is indistinguishable from either, same as every
             # other lookup here (module docstring).
             return HTMLResponse(
-                "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px\">"
-                "This approval is no longer pending — it may already have been decided, "
-                "or the link has expired. <a href=\"/approvals\">Back to approvals</a>"
-                "</body></html>",
+                web_shell.plain_page(
+                    "<h1>No longer pending</h1>"
+                    "<p>This approval is no longer pending — it may already have been decided, "
+                    "or the link has expired.</p>" + _BACK_TO_APPROVALS,
+                    title="PrivacyFence — No longer pending", nonce=_csp_nonce_for(request),
+                ),
                 status_code=200,
                 headers={"Cache-Control": "no-store"},
             )
@@ -525,11 +532,12 @@ def _build_route_list(
             # _inject_shim below assumes a real document, so serve a
             # placeholder instead of letting that raise into a 500.
             return HTMLResponse(
-                "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"2\">"
-                "</head><body style=\"font:15px sans-serif;padding:40px\">"
-                "Preparing this request — it will be ready in a moment. "
-                "<a href=\"/approvals\">Back to approvals</a>"
-                "</body></html>",
+                web_shell.plain_page(
+                    "<h1>Preparing this request</h1>"
+                    "<p>Preparing this request — it will be ready in a moment.</p>" + _BACK_TO_APPROVALS,
+                    title="PrivacyFence — Preparing", nonce=_csp_nonce_for(request),
+                    head_html='<meta http-equiv="refresh" content="2">',
+                ),
                 status_code=200,
                 headers={"Cache-Control": "no-store"},
             )

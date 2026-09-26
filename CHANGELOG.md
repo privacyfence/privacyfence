@@ -63,6 +63,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is large enough to tap. In a wide window the section list stays on the left, now as a card.
   Privacy Filter's Allow/Redact/Block choice now uses the same green, amber and red in dark mode
   as in light.
+- **Approvals, connections and passkeys work on a phone too.** Every request on the approvals
+  list is a card, and every button and checkbox on these pages is large enough to tap. The
+  connections page shows each service's state as a label (Connected, Not connected, Not set up
+  by your organization), and the Telegram sign-in brings up the phone keypad for your number and
+  the number pad, with the code suggested, for the verification code. The pages shown when an
+  approval is no longer pending, is still being prepared, or you are not signed in now fit a
+  phone screen instead of appearing zoomed out, and follow the new look and dark mode.
 
 ### Fixed
 

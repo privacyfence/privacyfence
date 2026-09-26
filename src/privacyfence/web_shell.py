@@ -156,8 +156,10 @@ body {
    a page renders outside the nav/banner/notice classes would land on the
    browser's default blue. :where() keeps this at one class's specificity, so a
    page's own link class (a button-styled link, say) still sets its own colour. */
-.pf-shell-main :where(a) { color: var(--accent-dark); }
-.pf-shell-main :where(a):hover { color: var(--accent); }
+.pf-shell-main :where(a:not(.button)) { color: var(--accent-dark); }
+.pf-shell-main :where(a:not(.button)):hover { color: var(--accent); }
+/* A link drawn as a shared .button keeps the button's own colours, without an underline. */
+.pf-shell-main a.button { text-decoration: none; }
 .pf-shell-banner {
   padding: 8px 20px; font-size: 13px; font-weight: 600; text-align: center;
   background: var(--danger); color: var(--surface); flex-shrink: 0;
@@ -171,8 +173,8 @@ body {
 }
 .pf-shell-notice a { color: inherit; font-weight: 600; }
 .pf-shell-notice-close {
-  background: none; border: none; cursor: pointer; font-size: 15px; line-height: 1;
-  color: inherit; opacity: .6; padding: 0 2px; flex-shrink: 0;
+  background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1;
+  color: inherit; opacity: .6; padding: 0; flex-shrink: 0; min-width: var(--tap); min-height: var(--tap);
 }
 .pf-shell-notice-close:hover { opacity: 1; }
 .pf-shell-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -190,7 +192,7 @@ body {
 }
 .pf-shell-notif-enable {
   background: var(--accent); color: var(--on-accent); border: none; border-radius: var(--radius-s);
-  font-size: 12.5px; font-weight: 650; padding: 5px 10px; cursor: pointer; flex-shrink: 0;
+  font-size: 13px; font-weight: 650; padding: 0 14px; min-height: var(--tap); cursor: pointer; flex-shrink: 0;
 }
 .pf-sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
@@ -619,6 +621,55 @@ def wrap(
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
 <div class="pf-sr-only" id="pf-shell-announcer" aria-live="polite"></div>
 {stream_script}
+</body>
+</html>
+"""
+
+
+# The fallback documents: a page with no shell around it because there is nothing to navigate to
+# yet (the "not authorized" page) or because it stands in for a card document, which has no shell
+# either (the "no longer pending" and "preparing" pages, and local mode's /security). One panel in
+# the middle of the page, in the same tokens, components and dark mode as every other document.
+_PLAIN_CSS = """
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body.pf-plain {
+  min-height: 100vh; background: var(--bg); color: var(--ink); font-family: var(--font-sans);
+  font-size: var(--step-body); line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+.pf-plain-main { padding-block: var(--space-l) var(--space-xl); }
+.pf-plain-panel { max-width: 680px; margin-inline: auto; overflow-wrap: anywhere; }
+.pf-plain-panel h1 { font-size: 22px; line-height: 1.25; letter-spacing: -.02em; margin: 0; }
+.pf-plain-panel .actions { margin-top: var(--space-m); }
+.pf-plain :where(a:not(.button)) { color: var(--accent-dark); }
+.pf-plain :where(a:not(.button)):hover { color: var(--accent); }
+.pf-plain a.button { text-decoration: none; }
+.pf-plain :where(code, pre) { font-family: var(--font-mono); font-size: var(--step-small); }
+.pf-plain pre {
+  white-space: pre-wrap; background: var(--surface-soft); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--radius-s); padding: var(--space-xs) var(--space-s);
+}
+"""
+
+
+def plain_page(body_html: str, *, title: str, nonce: str, head_html: str = "", page_css: str = "") -> str:
+    """A complete document for a page that has no shell: ``body_html`` inside one ``panel``, with
+    the viewport meta, the design system and dark mode. ``head_html`` goes into ``<head>`` as is
+    (a ``<meta http-equiv="refresh">``, say); ``page_css`` is appended to the one nonce'd
+    ``<style>``. ``body_html`` is markup: the caller escapes what it interpolates."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="{_FAVICON_DATA_URI}">
+<title>{_html_escape(title)}</title>
+{head_html}
+<style nonce="{nonce}">{DOCUMENT_CSS}{_PLAIN_CSS}{page_css}</style>
+</head>
+<body class="pf-plain">
+<main class="shell pf-plain-main"><div class="panel stack pf-plain-panel">{body_html}</div></main>
 </body>
 </html>
 """
