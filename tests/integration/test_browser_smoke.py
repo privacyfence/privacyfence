@@ -2088,6 +2088,8 @@ def _assert_phone_layout(page, width_name: str, *, main: str) -> None:
     # (d) The viewport meta is present and in effect: the layout viewport is the device's.
     has_meta = page.evaluate("() => !!document.querySelector('meta[name=viewport]')")
     inner_width = page.evaluate("() => window.innerWidth")
+    # A page with the meta but content wider than the device also gets a wider layout viewport,
+    # which is how a phone shows a page that overflows: it zooms out.
     assert has_meta and inner_width == width, (
         f"viewport meta not in effect: meta={has_meta}, layout viewport {inner_width}px on a {width}px device"
     )
@@ -2122,10 +2124,41 @@ def phone_page(browser, request):
     ctx.close()
 
 
+_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "about")
+_MEMBER_SECTIONS = ("auto_accept", "audit", "about")
+_READ_KINDS = ("pdf", "image", "markdown", "table")
+
 # Which phase of docs/org-mode-mobile-plan.md owns the fix for a case that fails today. The keys
 # are the case ids below; a case is marked xfail(strict=True) at exactly the widths listed, so a
 # phase that fixes another phase's case by accident is told so by the suite.
-_PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {}
+_PHONES = ("320", "393")
+_EVERY_WIDTH = tuple(_PHONE_WIDTHS)
+_PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {
+    # The shell's nav links are 25px tall, and the list's checkbox, the Connect/Sign out controls
+    # and the passkey buttons are under 44px; at 320px the page overflows the device.
+    "approvals": ("p6-remaining-pages", _PHONES),
+    "connect": ("p6-remaining-pages", _PHONES),
+    "security": ("p6-remaining-pages", _PHONES),
+    # The fixed 190px nav leaves each section about half the width, and Privacy Filter's editor
+    # about a fifth.
+    **{f"settings-admin-{s}": ("p3-settings", _PHONES) for s in _ADMIN_SECTIONS},
+    **{f"settings-member-{s}": ("p3-settings", _PHONES) for s in _MEMBER_SECTIONS},
+    "settings-privacy-route": ("p3-settings", _PHONES),
+    # No viewport meta at all: a phone lays them out at 980px and zooms out.
+    "no-longer-pending": ("p6-remaining-pages", _EVERY_WIDTH),
+    "preparing": ("p6-remaining-pages", _EVERY_WIDTH),
+    "not-authorized": ("p6-remaining-pages", _EVERY_WIDTH),
+    # The full-page card's preview pane is 81-85% of a phone's width (the card's own padding).
+    **{f"card-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
+    # The PDF is an <embed>, and the 10-column table breaks its words mid-word, at every width.
+    "card-pdf-preview": ("p4-review-content", _EVERY_WIDTH),
+    "card-table-preview": ("p4-review-content", _EVERY_WIDTH),
+    # Inline in a list row there is no card yet, only the Details metadata disclosure: narrower
+    # than 90% on a phone, and with no PDF page or table in it at all.
+    **{f"inline-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
+    "inline-pdf-preview": ("p5-card-containers", _EVERY_WIDTH),
+    "inline-table-preview": ("p5-card-containers", _EVERY_WIDTH),
+}
 
 
 def _phone_cases(case_ids):
@@ -2143,8 +2176,6 @@ def _phone_cases(case_ids):
 _ADMIN = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
 _MEMBER = Principal(id="bob", email="bob@example.com", display_name="Bob")
 
-_ADMIN_SECTIONS = ("general", "autoaccept", "privacy", "audit", "agents", "about")
-_MEMBER_SECTIONS = ("autoaccept", "audit", "about")
 
 # A 10-column record list, the shape Salesforce search results and similar tools send.
 _TEN_COLUMN_TABLE = {
@@ -2202,7 +2233,6 @@ def _register_wide_read_card(web_ui: WebApprovalUI, kind: str) -> tuple[threadin
     return t, approval
 
 
-_READ_KINDS = ("pdf", "image", "markdown", "table")
 
 
 class TestPhoneLayout:
@@ -2250,11 +2280,12 @@ class TestPhoneLayout:
             # A script click: the point is the section's own layout, not whether the nav (which
             # p3 turns into a tab strip) happens to be tappable at this width.
             phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
-        # A section renders into .pf-page; Privacy Filter's editor, beside its group list, into
-        # .pf-detail-page.
-        phone_page.wait_for_selector(".pf-page, .pf-detail-page")
+        # A section renders into .pf-page (About into .pf-about-page); Privacy Filter's editor,
+        # beside its group list, into .pf-detail-page.
+        region = ".pf-page, .pf-detail-page, .pf-about-page"
+        phone_page.wait_for_selector(region)
         _phone_screenshot(phone_page, f"{case}-{width}")
-        _assert_phone_layout(phone_page, width, main=".pf-page, .pf-detail-page")
+        _assert_phone_layout(phone_page, width, main=region)
 
     @pytest.mark.parametrize(("case", "width"), _phone_cases(["no-longer-pending", "preparing", "not-authorized"]))
     def test_fallback_page(self, phone_page, local_server, case, width):
@@ -2283,26 +2314,36 @@ class TestPhoneLayout:
             if approval is not None:
                 web_ui.resolve(approval.id, "deny")
 
-    @pytest.mark.parametrize(("case", "width"), _phone_cases([f"card-{k}" for k in _READ_KINDS]))
+    # The card's layout (a)-(d) and its preview content (e)/(f) are separate cases: they are
+    # fixed by different phases, and one strict xfail cannot name two owners.
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"card-{k}" for k in _READ_KINDS] + ["card-pdf-preview", "card-table-preview"]),
+    )
     def test_read_card_full_page(self, phone_page, local_server, case, width):
         server, web_ui = local_server
-        kind = case.removeprefix("card-")
+        kind = case.removeprefix("card-").removesuffix("-preview")
         _sign_in_local(phone_page, server)
         thread, card = _register_wide_read_card(web_ui, kind)
         try:
             phone_page.goto(f"{server.base_url}/approvals/{card.id}")
             phone_page.wait_for_load_state("load")
             _phone_screenshot(phone_page, f"{case}-{width}")
-            _assert_phone_layout(phone_page, width, main=".pf-wide-right")
-            self._assert_preview(phone_page, kind, root=".pf-wide-right")
+            if case.endswith("-preview"):
+                self._assert_preview(phone_page, kind, root=".pf-wide-right")
+            else:
+                _assert_phone_layout(phone_page, width, main=".pf-wide-right")
         finally:
             web_ui.resolve(card.id, "deny")
             thread.join(timeout=5)
 
-    @pytest.mark.parametrize(("case", "width"), _phone_cases([f"inline-{k}" for k in _READ_KINDS]))
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"inline-{k}" for k in _READ_KINDS] + ["inline-pdf-preview", "inline-table-preview"]),
+    )
     def test_read_card_inline_in_list_row(self, phone_page, local_server, case, width):
         server, web_ui = local_server
-        kind = case.removeprefix("inline-")
+        kind = case.removeprefix("inline-").removesuffix("-preview")
         _sign_in_local(phone_page, server)
         thread, card = _register_wide_read_card(web_ui, kind)
         try:
@@ -2316,8 +2357,10 @@ class TestPhoneLayout:
             )
             _phone_screenshot(phone_page, f"{case}-{width}")
             root = f"#pf-details-{card.id}"
-            _assert_phone_layout(phone_page, width, main=root)
-            self._assert_preview(phone_page, kind, root=root)
+            if case.endswith("-preview"):
+                self._assert_preview(phone_page, kind, root=root)
+            else:
+                _assert_phone_layout(phone_page, width, main=root)
         finally:
             web_ui.resolve(card.id, "deny")
             thread.join(timeout=5)
@@ -2330,6 +2373,8 @@ class TestPhoneLayout:
             assert preview["found"], f"no preview region {root!r}"
             assert preview["pages"] >= 1 and preview["embeds"] == 0, f"PDF preview is not a page image: {preview}"
         if kind == "table":
-            # (f) No word broken across lines.
+            # (f) The record table is shown, and no word in it is broken across lines.
+            cells = page.evaluate("(root) => document.querySelectorAll(root + ' td').length", root)
+            assert cells > 0, f"no table in the preview region {root!r}"
             broken = page.evaluate(_PHONE_BROKEN_WORDS_JS, root)
             assert not broken, f"words broken across lines: {broken}"
