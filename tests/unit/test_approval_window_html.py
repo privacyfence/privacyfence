@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from privacyfence.approval_window_html import (
     CONTENT_WIDTH,
     DEFAULT_LINE_CLAMP,
@@ -718,6 +720,17 @@ class TestPreviewBody:
         assert body.startswith('<div class="pf-table-scope"><table class="pf-table pf-table-stack">')
         assert '<td data-label="Name"><span>Alice</span></td>' in body
         assert '<td data-label="A&amp;B"><span>&lt;x&gt;</span></td>' in body
+
+    @pytest.mark.parametrize(
+        ("columns", "scope"),
+        [(3, "pf-table-scope"), (6, "pf-table-scope"), (7, "pf-table-scope pf-table-cols-8"),
+         (10, "pf-table-scope pf-table-cols-10"), (12, "pf-table-scope pf-table-cols-12"),
+         (13, "pf-table-scope pf-table-cols-many")],
+    )
+    def test_a_record_tables_scope_carries_its_column_band(self, columns, scope):
+        headers = [f"H{i}" for i in range(columns)]
+        body = build_preview_body_html("", tables=[{"headers": headers, "rows": [headers]}])
+        assert body.startswith(f'<div class="{scope}"><table class="pf-table pf-table-stack">')
 
     def test_a_row_longer_than_its_headers_leaves_the_extra_cells_unlabelled(self):
         body = build_preview_body_html(
