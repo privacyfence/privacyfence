@@ -8,6 +8,7 @@ The route side (auth, CSRF, the org-wide switch) is tests/unit/web/test_routes_p
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import logging
 import stat
@@ -316,6 +317,55 @@ class TestSubscriptionStore:
         path.parent.mkdir(parents=True)
         path.write_text("{not json")
         assert store.list("alice") == []
+
+
+class TestSubscriptionsFollowTheSession:
+    """ADR 0081: a subscription records a hash of the session that posted it, so signing out
+    drops that browser's subscriptions and only those."""
+
+    @staticmethod
+    def _sub(endpoint: str, session_id: str):
+        return dataclasses.replace(Browser(endpoint).subscription(), session=web_push.session_tag(session_id))
+
+    def test_the_tag_is_a_hash_never_the_session_id(self, store, tmp_path):
+        store.add("alice", self._sub(FCM, "the-session-secret"))
+        raw = (tmp_path / "users" / "alice" / web_push.SUBSCRIPTIONS_FILE_NAME).read_text()
+        assert "the-session-secret" not in raw
+        assert store.list("alice")[0].session == web_push.session_tag("the-session-secret")
+
+    def test_remove_session_drops_that_browser_and_keeps_the_principals_other_devices(self, store):
+        store.add("alice", self._sub(FCM, "laptop"))
+        store.add("alice", self._sub(APPLE, "phone"))
+        store.add("bob", self._sub(f"{FCM}/bob", "bobs-laptop"))
+        assert store.remove_session(web_push.session_tag("laptop")) == 1
+        assert [s.endpoint for s in store.list("alice")] == [APPLE]
+        assert len(store.list("bob")) == 1
+
+    def test_an_empty_tag_matches_nothing(self, store):
+        store.add("alice", Browser().subscription())  # stored before sessions were recorded
+        assert store.remove_session("") == 0
+        assert len(store.list("alice")) == 1
+
+    def test_a_file_without_session_tags_still_reads(self, store, tmp_path):
+        path = tmp_path / "users" / "alice" / web_push.SUBSCRIPTIONS_FILE_NAME
+        path.parent.mkdir(parents=True)
+        entry = Browser().subscription().to_json()
+        del entry["session"]
+        path.write_text(json.dumps({"subscriptions": [entry]}))
+        assert store.list("alice")[0].session == ""
+
+    def test_replace_session_moves_the_same_principals_subscriptions(self, store):
+        store.add("alice", self._sub(FCM, "old"))
+        store.replace_session(web_push.session_tag("old"), web_push.session_tag("new"), "alice")
+        assert [s.session for s in store.list("alice")] == [web_push.session_tag("new")]
+        assert store.remove_session(web_push.session_tag("new")) == 1
+
+    def test_replace_session_removes_another_principals_subscriptions(self, store):
+        store.add("alice", self._sub(FCM, "old"))
+        store.add("alice", self._sub(APPLE, "alices-phone"))
+        store.replace_session(web_push.session_tag("old"), web_push.session_tag("new"), "bob")
+        assert [s.endpoint for s in store.list("alice")] == [APPLE]
+        assert store.list("bob") == []
 
 
 class TestPayloadIsMinimal:

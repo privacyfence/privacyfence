@@ -1069,6 +1069,7 @@ def _build_org_app(
         # "self-contained, cheap re-parse" pattern StepUpConfig below
         # already uses -- see that call's own comment.
         policy=AuthzPolicyConfig.from_org_config(org.org_config),
+        push_store=org.push_store,
     ))
 
     issuer_host = urlparse(org.issuer_url).hostname or ""

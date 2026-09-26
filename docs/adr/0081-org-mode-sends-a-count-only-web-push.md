@@ -73,6 +73,19 @@ can turn it off; local mode does not have it.**
     AES-GCM record, all in the `cryptography` package the repo already ships. The implementation is
     checked against RFC 8291's Appendix A test vector. The push request uses `requests` with a
     fixed timeout and default TLS verification against certifi, like `org_identity.py`.
+11. **A subscription ends with the session that posted it, not with its expiry.** Each stored
+    subscription records a SHA-256 of the sign-in session id that last posted it, never the id,
+    which is a bearer credential and the page's CSRF token. `POST /logout` removes every
+    subscription that session posted, whichever principal holds it: that browser stops receiving
+    pushes, the same person's other devices do not. A new sign-in over an earlier session in the
+    same browser (the login callback still carries the old cookie) moves the earlier session's
+    subscriptions to the new one if it is the same person and removes them if not, so the next
+    person on a shared browser inherits nothing even when the last one never signed out. This is
+    server-side, so it holds when the page's script never ran; the sign-out form also calls
+    `unsubscribe()` in the browser first, giving up after 1.5 seconds rather than hold up signing
+    out. A session that merely expires (30 minutes idle, 24 hours absolute) keeps its
+    subscriptions, because notifying a phone whose session has idled out is what push is for. The
+    subscription API is unchanged: the session comes from the request's cookie.
 
 **Local mode gets none of this.** It serves plain HTTP on loopback (ADR 0010), which no phone can
 reach, and a desktop browser already gets tier 1 while the page is open. Adding push there would
@@ -98,6 +111,13 @@ route set is pinned by a test.
   ranges. The set of push services browsers use is small and stable.
 - **Only a per-person opt-out.** Not enough: an org whose policy forbids approval metadata leaving
   its infrastructure needs one switch that holds for everyone.
+- **Sign-out only in the page (`unsubscribe()` plus a `DELETE`).** Not enough on its own: the
+  sign-out may come from a page without the script, or the script may fail, and the server would
+  keep sending. The page's `unsubscribe()` stays, as the browser's half.
+- **Ending subscriptions when the session expires.** Rejected: a phone's session idles out after
+  30 minutes, so push would stop for exactly the people it is for.
+- **Storing the session id with the subscription.** Rejected: it is a live credential. Its hash
+  identifies the session just as well, and the id's 256 random bits make the hash irreversible.
 - **A push relay run by the org.** Would still end at Apple's or Google's service for the device;
   it moves the problem without removing it.
 
@@ -107,9 +127,14 @@ route set is pinned by a test.
   on iOS, once they add the app to the Home Screen).
 - Apple, Google, Mozilla or Microsoft learn when each subscribed device was notified. Admins who
   cannot accept that turn push off; the setup guide lists the hosts for egress rules.
-- A browser that signed out keeps receiving count-only notices for the principal who subscribed it
-  until that subscription expires or another person subscribes the same browser. The notice names
-  no one and nothing.
+- Signing out stops pushes to that browser, and signing in as someone else there stops the previous
+  person's. A browser whose session expired and that nobody signs in to again keeps receiving the
+  count-only notice until the push service expires the subscription; the notice names no one and
+  nothing. `OrgSessionStore.destroy_all_for` ("sign out everywhere", not yet called by any route)
+  does not remove subscriptions; a route that calls it should also call
+  `PushSubscriptionStore.remove_session` for each session it ends. Sessions are in memory, so a
+  server restart ends them without a sign-out, and subscriptions stay until the next sign-in over
+  them.
 - Deleting `org/web_push_vapid_key.pem` invalidates every subscription; browsers resubscribe on the
   next visit to `/approvals`, where the page replaces a subscription made for another key.
 - A new browser push service needs a code change to the allowlist.
@@ -120,10 +145,11 @@ route set is pinned by a test.
   `minimal_payload` and that no approval field appears in the request or the log; equal ciphertext
   sizes for different counts; the endpoint allowlist; 404/410 cleanup; the rate limit.
 - `tests/unit/web/test_routes_push.py`: route classification, subscription auth (session, CSRF,
-  Origin), the switch off, and local mode's route set unchanged.
+  Origin), the switch off, local mode's route set unchanged, and sign-out removing that browser's
+  subscriptions only, a later sign-in by someone else inheriting none, and sign-out with push off.
 - `tests/integration/test_browser_smoke.py`'s `TestInstallableOrgApp` and `TestWebPushSubscription`:
   Chromium loads and parses the manifest under the org CSP; the pre-prompt subscribes and the server
-  stores it; the iOS hint.
+  stores it; the sign-out form unsubscribes the browser; the iOS hint.
 - A real delivery to an iPhone (installed) and to Android Chrome is a manual release check.
 
 ## Related

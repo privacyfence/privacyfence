@@ -2164,6 +2164,45 @@ class TestWebPushSubscription:
         finally:
             context.close()
 
+    def test_signing_out_unsubscribes_the_browser(self, browser, org_push_server):
+        """ADR 0081: the browser's half of sign-out stopping pushes. The browser already holds a
+        subscription with permission granted, as it would on a return visit. The server's half
+        (/logout removing what that session posted) is test_routes_push.py's
+        TestSignOutStopsPushToThatBrowser."""
+        server, sessions, _web_ui, store = org_push_server
+        sub = json.loads(_fake_push_subscription_script("https://fcm.googleapis.com/fcm/send/signout")
+                         .split("var json = ", 1)[1].split(";\n", 1)[0])
+        unsubscribed: list[bool] = []
+        context = browser.new_context()
+        try:
+            context.expose_function("__pfUnsubscribed", lambda: unsubscribed.append(True))
+            context.add_init_script(f"""
+              (function () {{
+                var json = {json.dumps(sub)};
+                Object.defineProperty(Notification, "permission", {{ get: function () {{ return "granted"; }} }});
+                var fake = {{ endpoint: json.endpoint, toJSON: function () {{ return json; }},
+                             unsubscribe: function () {{ return window.__pfUnsubscribed().then(function () {{ return true; }}); }} }};
+                PushManager.prototype.getSubscription = function () {{ return Promise.resolve(fake); }};
+              }})();
+            """)
+            _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+            page = context.new_page()
+            # A page load with permission granted posts the browser's subscription.
+            page.goto(f"{server.base_url}/approvals")
+            deadline = time.monotonic() + 10
+            while not store.list("alice") and time.monotonic() < deadline:
+                page.wait_for_timeout(100)
+            assert [s.endpoint for s in store.list("alice")] == [sub["endpoint"]]
+
+            page.goto(f"{server.base_url}/connect")
+            page.locator('form[action="/logout"] button').click(no_wait_after=True)
+            deadline = time.monotonic() + 10
+            while not unsubscribed and time.monotonic() < deadline:
+                page.wait_for_timeout(100)  # not time.sleep: the exposed function needs the event loop
+            assert unsubscribed == [True]
+        finally:
+            context.close()
+
     def test_ios_before_installation_shows_the_home_screen_hint(self, browser, org_push_server):
         server, sessions, _web_ui, store = org_push_server
         context = browser.new_context(user_agent=_IPHONE_UA, viewport={"width": 393, "height": 852}, is_mobile=True, has_touch=True)

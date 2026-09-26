@@ -27,6 +27,7 @@ from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.server import OrgAuth, build_app
 from privacyfence.web.state_stream import StateStream
 from privacyfence.web_approval_ui import WebApprovalUI
+from privacyfence import web_push
 from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode
 
 ISSUER = "https://pf.example.com"
@@ -197,6 +198,94 @@ class TestSubscriptionAuth:
         html = client.get("/approvals").text
         assert f"var PUSH_PUBLIC_KEY = {json.dumps(notifier.public_key)};" in html
         assert f"var PUSH_CSRF = {json.dumps(csrf)};" in html
+
+
+APPLE = "https://web.push.apple.com/QGuQyavXutnMH"
+
+
+def _subscribe(client: TestClient, csrf: str, endpoint: str) -> None:
+    r = client.post("/api/push/subscription", json={"subscription": _subscription(endpoint), "csrf": csrf})
+    assert r.status_code == 200
+
+
+def _idp_sign_in(client: TestClient, monkeypatch, principal_id: str) -> str:
+    """The real /login -> IdP -> /oauth/idp/login-callback round trip, with the IdP's two
+    network calls stubbed. The client's cookie jar carries whatever session it held before, as a
+    browser does. Returns the new session id."""
+    import urllib.parse
+
+    from privacyfence.web import routes_org_identity as roi
+
+    monkeypatch.setattr(roi.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "opaque"})
+    monkeypatch.setattr(
+        roi.org_identity, "verify_id_token",
+        lambda idp, token, *, nonce: {"sub": principal_id, "email": f"{principal_id}@example.com", "nonce": nonce},
+    )
+    state = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(client.get("/login").headers["location"]).query))["state"]
+    r = client.get(f"{roi.LOGIN_CALLBACK_PATH}?code=c&state={state}")
+    assert r.status_code == 302
+    session_id = r.cookies[org_session.SESSION_COOKIE]
+    client.cookies.set(org_session.SESSION_COOKIE, session_id)
+    return session_id
+
+
+class TestSignOutStopsPushToThatBrowser:
+    """ADR 0081: signing out removes the subscriptions that browser's session posted, server-side,
+    whatever the page's own script did."""
+
+    def test_sign_out_removes_that_browsers_subscriptions_only(self, tmp_path, monkeypatch):
+        laptop, sessions, store, _ = _org_app(tmp_path, monkeypatch, push=True)
+        phone = TestClient(laptop.app, base_url=ISSUER, follow_redirects=False)
+        _subscribe(laptop, _sign_in(laptop, sessions), FCM)
+        _subscribe(phone, _sign_in(phone, sessions), APPLE)
+
+        r = laptop.post("/logout")
+
+        assert r.status_code == 302 and r.headers["location"] == "/login"
+        assert [s.endpoint for s in store.list("alice")] == [APPLE]
+
+    def test_the_next_person_on_that_browser_inherits_nothing(self, tmp_path, monkeypatch):
+        client, _sessions, store, _ = _org_app(tmp_path, monkeypatch, push=True)
+        _subscribe(client, _idp_sign_in(client, monkeypatch, "alice"), FCM)
+        client.post("/logout")
+        _idp_sign_in(client, monkeypatch, "bob")
+        assert store.list("alice") == [] and store.list("bob") == []
+
+    def test_a_new_sign_in_over_an_expired_session_does_not_inherit_it(self, tmp_path, monkeypatch):
+        client, sessions, store, _ = _org_app(tmp_path, monkeypatch, push=True)
+        alice_session = _idp_sign_in(client, monkeypatch, "alice")
+        _subscribe(client, alice_session, FCM)
+        sessions.destroy(alice_session)  # idled out; the browser still holds the cookie
+        assert len(store.list("alice")) == 1  # expiry alone keeps it: reaching that phone is the point
+
+        _idp_sign_in(client, monkeypatch, "bob")
+
+        assert store.list("alice") == [] and store.list("bob") == []
+
+    def test_the_same_person_signing_in_again_keeps_it_and_can_still_sign_it_out(self, tmp_path, monkeypatch):
+        client, sessions, store, _ = _org_app(tmp_path, monkeypatch, push=True)
+        old = _idp_sign_in(client, monkeypatch, "alice")
+        _subscribe(client, old, FCM)
+        sessions.destroy(old)
+        new = _idp_sign_in(client, monkeypatch, "alice")
+        assert [s.session for s in store.list("alice")] == [web_push.session_tag(new)]
+        client.post("/logout")
+        assert store.list("alice") == []
+
+    def test_sign_out_with_push_off_org_wide_still_signs_out(self, tmp_path, monkeypatch):
+        client, sessions, _store, _ = _org_app(tmp_path, monkeypatch, push=False)
+        session_id = _sign_in(client, sessions)
+        r = client.post("/logout")
+        assert r.status_code == 302 and r.headers["location"] == "/login"
+        assert sessions.get(session_id) is None
+
+    def test_the_sign_out_form_unsubscribes_the_browser_too(self, tmp_path, monkeypatch):
+        """The browser's half: every org page carries the script that unsubscribes before the
+        sign-out form posts. Its behaviour is test_browser_smoke.py's TestWebPushSubscription."""
+        client, sessions, _store, _ = _org_app(tmp_path, monkeypatch, push=True)
+        _sign_in(client, sessions)
+        for path in ("/approvals", "/settings", "/security"):
+            assert "form.getAttribute('action') !== '/logout'" in client.get(path).text, path
 
 
 class TestOrgWideSwitchOff:

@@ -52,9 +52,11 @@ Organization deployments now work from a phone, and the app looks like the websi
   page closed; tapping it opens your approvals. It only ever says "1 approval pending" (or "N
   approvals pending"), never what the request is, and it travels encrypted through your browser's
   push service (Apple's, Google's, Mozilla's or Microsoft's). On an iPhone or iPad, add PrivacyFence
-  to your Home Screen first; the page tells you how. Administrators can turn this off for the whole
-  organization with `build_org_bundle.py --no-web-push`. Desktop installs are unchanged: their
-  notifications still never leave the machine. See ADR 0081.
+  to your Home Screen first; the page tells you how. Signing out stops these notifications on that
+  browser, and so does someone else signing in on it; your other devices keep receiving them.
+  Administrators can turn this off for the whole organization with `build_org_bundle.py
+  --no-web-push`. Desktop installs are unchanged: their notifications still never leave the
+  machine. See ADR 0081.
 - **The organization app can be installed to a phone's Home Screen** or as a desktop app, and
   opens straight to your approvals.
 
