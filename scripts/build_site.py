@@ -161,7 +161,9 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "packaging.md",
         "connector-qa.md",
         "downloads-and-release-kpi.md",
-        "ai-client-support-plan.md",
+        "ai-agents-foundation-plan.md",
+        "chatgpt-support-plan.md",
+        "gemini-support-plan.md",
     }
 )
 

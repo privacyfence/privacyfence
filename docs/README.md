@@ -83,8 +83,11 @@ privacyfence.eu.
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
-- [`ai-client-support-plan.md`](ai-client-support-plan.md) — the open plan for ChatGPT and Gemini
-  support and the website's AI agents pages; deleted when its work lands.
+- [`ai-agents-foundation-plan.md`](ai-agents-foundation-plan.md) — the open plan for the
+  website's AI agents pages, per-agent setup docs, truthful tool annotations and the AI-client
+  tests, proven on Claude; deleted when its work lands.
+- [`chatgpt-support-plan.md`](chatgpt-support-plan.md), [`gemini-support-plan.md`](gemini-support-plan.md)
+  — the open plans for ChatGPT and Gemini support, which start once the foundation plan is done.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
   are, and what was rejected.
 
