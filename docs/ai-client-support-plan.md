@@ -103,7 +103,7 @@ The issues were written 2026-09-14. These points were re-checked against `main` 
    - `how-it-works.md` → "How an AI system connects"
    - `org-mode-setup-guide.md` §9 → "Add PrivacyFence to an AI client"
 
-   Decision D1 gives these one home.
+   Decision D1 gives each client its own page.
 3. **Org-mode guide numbering.** "Point a client at `/mcp`" is now **§9 → "Add PrivacyFence to an
    AI client"**. The rest of the guide moved too:
    - §4 Identity provider (redirect URIs in its table)
@@ -176,7 +176,7 @@ The issues were written 2026-09-14. These points were re-checked against `main` 
     files (`tests/fixtures/` is exempt). "Verification pending" notes therefore cite a **full issue
     URL** as a link, never `#392`. Any `docs/*.md` path named anywhere must exist
     (`test_docs_references_exist.py`), so a doc a WP names has to be created in that same WP. That is also why this plan writes
-    docs that don't exist yet (`ai-client-qa.md`, `connecting-an-ai-client.md`) without the
+    docs that don't exist yet (`ai-client-qa.md`, `connect-<slug>.md`) without the
     `docs/` prefix.
 11. **Approvals.** In a privilege-separated local install, only a companion-attested browser
     session may approve
@@ -210,17 +210,18 @@ so a client verified once by hand stays covered by a test on every PR.
 
 ---
 
-## 3. Decisions to confirm before Wave 1 (🧑 M0.1)
+## 3. Decisions (🧑 M0.1): confirmed 2026-09-26
 
-Answer these with "as recommended" or your changes. Everything below assumes the recommendation.
+D2–D4 and D6–D12 were accepted as recommended. D1 was changed by the maintainer (below). D5 is
+still open.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | One home for per-client setup instructions | A **new published doc, `connecting-an-ai-client.md`** ("Connecting an AI client"), the counterpart of `connecting-a-service.md`. It gets one `##` per client, with "Local mode" and "Organization mode" subsections and a per-platform table for the token command. List it in `docs/README.md` → "Install and first steps". The `install-*.md` "Connect …" sections keep their one platform-specific command and link to it. `how-it-works.md` and org guide §9 link to it instead of repeating steps. Every AI-agents page's "Set it up" button (§5b) points at its section. WP 1.5 creates it with the three Claude clients. |
+| D1 | Per-client setup docs | **One published docs page per AI agent**, like the platform pages (`install-<os>.md`) and the connector guides (`<name>-setup.md`): `connect-<slug>.md` (`connect-claude-desktop.md`, `connect-claude-code.md`, `connect-claude-ai.md`, later `connect-chatgpt.md`, `connect-gemini-cli.md`, `connect-gemini-enterprise.md`). **Why: monitoring.** Separate pages show which agents users are interested in: each page is its own GA4 page path, and `build_site.content_group()` gives every `connect-*` stem the content group **`ai-agent`**, the same way `install-*` is `platform` and the setup guides are `connector`. The website's `/ai-agents/<slug>/` pages use the same group. Each page has "Local mode" and "Organization mode" sections, a per-platform table for the token command, "Files" and "How the client is identified". They're listed in a new `docs/README.md` section, **"AI agent setup"**, after "Connector setup". The `install-*.md` "Connect …" sections keep their one platform-specific command and link to the agent's page. `how-it-works.md` keeps the concepts, and org guide §9's bullets link to the pages. Each `/ai-agents/<slug>/` page's "Set it up" button goes to `/docs/connect-<slug>/`. **Maintainer decision; replaces the single-doc recommendation.** |
 | D2 | Where the AI-client checklist and evidence log go | A new **contributor** doc, `ai-client-qa.md`, shaped like `connector-qa.md`'s "Recording results". Registered in `CONTRIBUTOR_DOCS` and `docs/README.md`'s contributor half. One bullet from `release-testing.md` → "Human checks". Amend "What stays manual" from "one real MCP client" to "one real client per supported client family, run only when the client-facing surface changed". |
 | D3 | Public claim wording before T4 has run against a release | "Works with ChatGPT (Developer Mode, with an organization deployment) and Gemini CLI". The site shows no dates or versions (they go stale); the evidence table in `ai-client-qa.md` holds them. ChatGPT desktop and Gemini Enterprise are listed only after their own gates. |
 | D4 | How I393 writes a client while the daemon runs → **ADR** | A `privacyfence-app --register-oauth-client` subcommand that **refuses to run while the daemon holds its lock**. It writes through a new `OrgOAuthProvider.register_static_client()`, and the record carries `"source": "admin"` so it's never pruned as stale. It gets a `gemini-enterprise` registry entry with an icon. Later, maybe: the same action on org **Settings → AI systems** with step-up (ADR 0034). |
-| D5 | ChatGPT and ADR 0076's uniform read-only annotations | Keep ADR 0076 as it is. Don't give ChatGPT truthful per-client annotations. The ChatGPT sections of the docs and of `/ai-agents/chatgpt/` say plainly that ChatGPT will list every PrivacyFence tool as read-only, that this is deliberate, and that PrivacyFence's approval card is the confirmation. M1.3 and M3.1 record ChatGPT's actual behaviour. If a ChatGPT workspace setting turns out to treat `readOnlyHint` as a *permission* (for example, "members may use read-only actions only"), that is a trust-boundary problem → stop and write a superseding ADR before Gate B. |
+| D5 | ChatGPT and ADR 0076's uniform read-only annotations (**open**) | Keep ADR 0076 as it is. Don't give ChatGPT truthful per-client annotations. The ChatGPT sections of the docs and of `/ai-agents/chatgpt/` say plainly that ChatGPT will list every PrivacyFence tool as read-only, that this is deliberate, and that PrivacyFence's approval card is the confirmation. M1.3 and M3.1 record ChatGPT's actual behaviour. If a ChatGPT workspace setting turns out to treat `readOnlyHint` as a *permission* (for example, "members may use read-only actions only"), that is a trust-boundary problem → stop and write a superseding ADR before Gate B. |
 | D6 | Do unverified draft instructions land on `main`? | **No.** `/docs/` is built from the latest stable tag, so anything merged ships in the next release's docs. WP 1.3 merges only the contributor-side QA checklist. The ChatGPT/Gemini user-doc sections are written in WP 1.3 as a **draft PR** that WP 2.1 finishes and merges once M1 passes. The 🧑 M1 steps below are self-contained, so they don't need the drafts. |
 | D7 | How CI gets Gemini CLI | A committed `tests/integration/ai_clients/package.json` + `package-lock.json` installed with `npm ci` (integrity-checked, the same posture as the SHA-pinned actions and `--require-hashes` pip). Not `npx --yes @google/gemini-cli@<v>`. The weekly canary alone uses `npx …@latest`, because drift is its job. |
 | D8 | Website: menu name, URL, and which pages | Top-nav **"AI agents"** → `/ai-agents/`, one page per `website/_data/clients.json` entry at `/ai-agents/<slug>/`. **Now:** `claude-desktop`, `claude-code`, `claude-ai`. **Later:** each gate adds its clients' pages. The data file stays `clients.json` (it's already the one list). See §5b. |
@@ -373,8 +374,9 @@ PR A (merge it) "chore: AI-client QA checklist":
    "What stays manual" per D2.
 
 PR B (open as DRAFT, do not merge; WP 2.1 finishes it) "feature: ChatGPT and Gemini CLI setup":
-the ChatGPT and Gemini CLI sections of connecting-an-ai-client.md (created by WP 1.5 — base
-this branch on WP 1.5's branch, or on main once it merged):
+new pages connect-chatgpt.md and connect-gemini-cli.md in the shape WP 1.5 set
+(base this branch on WP 1.5's docs branch, or on main once it merged), listed under "AI agent
+setup":
 - Gemini CLI, local: settings.json httpUrl + headers, and the `gemini mcp add --transport http
   privacyfence <mcp_url> --header "Authorization: Bearer $(<platform binary> --print-mcp-token)"`
   one-liner, per platform; Gemini CLI does not use the .mcpb shim.
@@ -427,23 +429,28 @@ three clients website/_data/clients.json already lists (Claude Desktop, Claude C
 Do not name ChatGPT, Gemini, Copilot or Cursor anywhere on the website (guardrail 10).
 
 Docs (D1):
-1. New published doc connecting-an-ai-client.md: intro (local vs organization, which clients
-   can use which), then one "##" per client with "Local mode" / "Organization mode" subsections
-   (claude.ai: organization only, and why), a per-platform table for the token command, a "Files"
-   line (Claude Desktop via the extension; the others via capability URLs, ADR 0028), and "How
-   the client is identified" (claimed vs pinned, how-it-works.md "Which AI system is asking").
-   Consolidate from install-*.md, how-it-works.md "How an AI system connects" and org guide §9;
-   leave in those pages only what is platform- or mode-specific, plus a link. List it in
-   docs/README.md → "Install and first steps" right after connecting-a-service.md.
+1. New published docs connect-claude-desktop.md, connect-claude-code.md and
+   connect-claude-ai.md, one per client: which deployments it works with (claude.ai:
+   organization only, and why), "Local mode" / "Organization mode" sections, a per-platform table
+   for the token command, "Files" (Claude Desktop via the extension; the others via capability
+   URLs, ADR 0028), and "How the client is identified" (claimed vs pinned, how-it-works.md "Which
+   AI system is asking"). Consolidate from install-*.md, how-it-works.md "How an AI system
+   connects" and org guide §9; leave in those pages only what is platform- or mode-specific, plus
+   a link to the agent's page. List them in a new docs/README.md section "AI agent setup", right
+   after "Connector setup".
+1b. Analytics (the reason for per-agent pages): build_site.content_group() returns "ai-agent" for
+   every "connect-" stem; extend test_website_docs_pages.py's content-group test with
+   connect-claude-code → "ai-agent". Add the ai-agent group to downloads-and-release-kpi.md's
+   measurement section if it lists content groups.
 
 Website (§5b):
-2. clients.json: give every entry a "slug" (claude-desktop, claude-code, claude-ai) and a "docs"
-   anchor into /docs/connecting-an-ai-client/. build_site.render_clients() renders each strip item
+2. clients.json: give every entry a "slug" (claude-desktop, claude-code, claude-ai); its docs page
+   is /docs/connect-<slug>/ by convention. build_site.render_clients() renders each strip item
    as a link to /ai-agents/<slug>/.
 3. website/ai-agents/index.html and website/ai-agents/<slug>/index.html, in the connector pages'
    structure and classes (page-intro, section-heading, card-grid, steps, cta-section): kicker "AI
    agent · <name>"; how it connects; "Set it up" per deployment (local / organization) with the
-   short steps and a "Set it up" button to its docs anchor; what happens with files; how
+   short steps and a "Set it up" button to /docs/connect-<slug>/; what happens with files; how
    PrivacyFence names it on cards (claimed vs verified); client-side settings worth knowing (e.g.
    Claude Desktop's own tool permission prompt; claude.ai owners add the connector for the org);
    CTA to /ai-agents/ and /connectors/. meta pf-content-group "ai-agent". The index has one card
@@ -456,14 +463,15 @@ Website (§5b):
 5. New guardrail 14, tests/unit/test_website_agent_pages.py (modelled on
    test_website_connector_pages.py, guardrail 8): every clients.json entry has exactly one
    /ai-agents/<slug>/ page in PAGES and vice versa; each page has content group "ai-agent", a
-   "Set it up" link to its docs anchor, and names its client; /ai-agents/ links every page; the
+   "Set it up" link to /docs/connect-<slug>/, which is a published doc in docs/README.md's "AI
+   agent setup" section with content group "ai-agent", and names its client; /ai-agents/ links every page; the
    header links /ai-agents/ in both lists. Update test_website_clients.py's hard-coded NAMES only
    if the data file's names change (they don't here).
 6. CHANGELOG [Unreleased]: "Added" — the AI agents section on privacyfence.eu and the Connecting an
    AI client guide.
-Note (D9): the pages link /docs/connecting-an-ai-client/#…, which exists on the site only once a
+Note (D9): the pages link /docs/connect-<slug>/, which exists on the site only once a
 stable release carries that doc. Until then the link check will fail against the stable tag's
-docs, so split the work: PR 1 = the doc (steps 1 and 6's docs half) → merges → cut a release (🧑);
+docs, so split the work: PR 1 = the docs (steps 1, 1b and 6's docs half) → merges → cut a release (🧑);
 PR 2 = the website (steps 2–5), linking to the new doc. If that ordering is unacceptable, point the
 buttons at the existing install-*/how-it-works/org-guide anchors in PR 2 and switch them in a
 follow-up. Say in the PR which you did.
@@ -518,7 +526,7 @@ Depends on: the stable release carrying WP 2.1 is published (its `/docs/` is liv
 
 ```text
 Read docs/ai-client-support-plan.md §3 (D3, D5, D8, D9, D11) and §5b. The latest stable release
-carries connecting-an-ai-client.md's ChatGPT and Gemini CLI sections. Implement WP 2.2:
+carries connect-chatgpt.md and connect-gemini-cli.md. Implement WP 2.2:
 1. website/_data/clients.json: add "ChatGPT" (deployments ["organization"], connects "straight to
    an organization deployment's /mcp over HTTPS, with OAuth sign-in (Developer Mode)", slug
    chatgpt) and "Gemini CLI" (["local","organization"], "straight to /mcp over HTTP", slug
@@ -592,13 +600,13 @@ clients: **AI agents** in the top navigation, `/ai-agents/`, and one page per cl
 PR (WP 2.2, the Gate B and Gate C website PRs).
 
 **Where the data comes from.** `website/_data/clients.json` stays the one list (guardrail 10).
-Each entry grows two fields:
-- `slug`: the page URL
-- `docs`: the anchor in `/docs/connecting-an-ai-client/`
+Each entry grows one field:
+- `slug`: the page URL, and the docs page's name
+- nothing else: the page's docs are `/docs/connect-<slug>/` by convention
 
 The "Works with" strip links each name to its page. Pages are hand-written, like connector pages.
-Their setup text is short and specific to each client, and the exact commands live in the doc
-(D1).
+Their setup text is short and specific to each client, and the exact commands live in the agent's
+docs page (D1).
 
 **Every per-agent page has the same sections:**
 
@@ -606,7 +614,7 @@ Their setup text is short and specific to each client, and the exact commands li
 |---|---|
 | Intro | kicker "AI agent · \<name\>", one-sentence summary, which deployments it works with |
 | How it connects | extension (`.mcpb`) / direct HTTP with a bearer token / OAuth with dynamic registration; why web clients need an organization deployment |
-| Set it up | "Local mode" and "Organization mode" step lists (3–4 steps each), each with a **Set it up** button to its docs anchor |
+| Set it up | "Local mode" and "Organization mode" step lists (3–4 steps each), each with a **Set it up** button to `/docs/connect-<slug>/` |
 | Files | through the extension (Claude Desktop), or through capability URLs (ADR 0028) for everything else |
 | How it's identified | the card says the client *says* it is \<name\> (**Not verified**), and an organization admin can pin it on **Settings → AI systems** to make it verified |
 | Client settings worth knowing | per client, for example: Claude Desktop's own tool prompt; claude.ai Team/Enterprise owners add the connector for everyone; ChatGPT: re-enable in every chat, tools listed as read-only on purpose, workspace connectors must be re-published after connecting a new service |
@@ -627,7 +635,8 @@ Their setup text is short and specific to each client, and the exact commands li
 **Guardrail 14** (`tests/unit/test_website_agent_pages.py`, WP 1.5) holds `clients.json` and the
 pages in both directions, the same way guardrail 8 does for connectors:
 - every client has exactly one page, and every page has a client;
-- each page is in `PAGES` with content group `ai-agent` and a "Set it up" link to its docs anchor;
+- each page is in `PAGES` with content group `ai-agent` and a "Set it up" link to `/docs/connect-<slug>/`,
+  a published doc that is also counted as `ai-agent`;
 - `/ai-agents/` links every page;
 - the header links `/ai-agents/` in both of its nav lists.
 
@@ -637,8 +646,9 @@ A client that isn't in `clients.json` can't have a page, so WS1's rule also cove
 - `website/_partials/header.html` (both lists)
 - `llms.txt`
 - the FAQ's "Which AI clients work?"
-- GA4 content group `ai-agent`, set by the page's `<meta name="pf-content-group">`, which `site.js`
-  reads
+- GA4 content group `ai-agent` on both the website pages (`<meta name="pf-content-group">`, read by
+  `site.js`) and the `connect-*` docs pages (`build_site.content_group()`), so one GA4 report shows
+  interest per agent, next to `platform` and `connector`
 
 ---
 
@@ -649,7 +659,7 @@ Depends on: GATE A. WP 3.1 also needs M1.4's result.
 #### WP 3.1: ChatGPT desktop (I390): run the branch that matches M1.4's result
 
 - **(a) Desktop accepts a remote `url` with custom headers.** Docs only. Add a desktop subsection
-  to `connecting-an-ai-client.md`'s ChatGPT section: `url` plus `Authorization: Bearer <token>`,
+  to `connect-chatgpt.md`: `url` plus `Authorization: Bearer <token>`,
   the same shape as Gemini CLI. No shim involved.
 - **(b) Desktop supports stdio only.** This is packaging work. Install `shim.js` at a stable path
   from all three installers:
@@ -681,7 +691,7 @@ website PR, after the release). Run /dod; one PR; drive to green.
 ```text
 Read docs/ai-client-support-plan.md (D5) and WP 1.4's findings on issue 391. Implement WP 3.2 as
 docs: a "ChatGPT Business/Enterprise/Edu (workspace-published connector)" subsection in
-connecting-an-ai-client.md's ChatGPT section, linked from org-mode-setup-guide.md §9, containing:
+connect-chatgpt.md, linked from org-mode-setup-guide.md §9, containing:
 the admin flow (enable custom MCP connectors → create → Scan Tools → test as draft → publish);
 a callout that Scan Tools lists every PrivacyFence tool as read-only on purpose (ADR 0076) and
 PrivacyFence's approval card is the confirmation; an explicit callout that enabling or disabling
@@ -751,7 +761,7 @@ M4.1 findings on issue 393. Implement WP 4.1:
    with the pre-registered client and client_secret auth.
 5. agent_identity REGISTRY: add "gemini-enterprise" keyed on the client_name the command sets,
    with an icon in resources/agent_icons/ and its license row (test_agent_label.py).
-6. connecting-an-ai-client.md: a "Gemini Enterprise" section; org-mode-setup-guide.md: a "Clients
+6. New connect-gemini-enterprise.md under "AI agent setup"; org-mode-setup-guide.md: a "Clients
    that can't register themselves" subsection under §9, with Gemini Enterprise as the worked
    example (authorization URL https://<host>/authorize, token URL https://<host>/token, redirect
    URI from M4.1), marked "Verification pending" linking the full issue URL. ai-client-qa.md row.
@@ -832,7 +842,7 @@ comment** so WP 2.1 can put it in the docs.
 
 ### M0: before Wave 1
 
-**M0.1 Confirm decisions D1–D12** (10 min)
+**M0.1 Confirm decisions D1–D12** (10 min). Done 2026-09-26, except D5.
 1. Read §3.
 2. Reply in the session with "D1–D12 as recommended", or give your changes.
 3. Merge this plan's docs-only PR (D12).
