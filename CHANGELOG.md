@@ -126,6 +126,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Approval cards show a readable date in the Date column of Slack, Telegram and Jira tables, in
+  one format for all three (`2026-09-16 18:02 UTC`). Slack showed its raw message ID
+  (`1757926320.000100`) and Telegram a full timestamp with seconds and a UTC offset. The data
+  returned to the AI system is unchanged: Slack still returns the raw `ts`, which it needs to
+  address a message or thread.
+
+- Detected PII is now highlighted in table previews too, not only in text. Slack and Telegram
+  message lists, Salesforce records and report rows show their content only as a table, so the
+  approver had to find the match by eye.
+
+- In a two-column table on an approval card, such as a Salesforce record's Field/Value table, a
+  long value no longer squeezes the field name until it breaks mid-word ("Descripti" / "on").
+
 - **Search-engine crawlers no longer inflate the download count.** `downloads.privacyfence.eu`
   now serves a `robots.txt` that keeps crawlers off installer downloads, and every download link
   on the website is marked `nofollow`. Crawlers that ignore both are still counted, and counts

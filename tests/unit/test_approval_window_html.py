@@ -920,3 +920,53 @@ class TestPiiHighlighting:
         html = build_preview_body_html("", highlight=lambda t: [(0, 3)])
         assert "pf-pii-hit" not in html
         assert "(no details)" in html
+
+    # Table cells. Slack/Telegram message lists and Salesforce records are
+    # table_only: a table is the only place their content is on the card, so
+    # an unmarked cell leaves the reviewer searching by eye.
+
+    def test_marks_inside_a_table_cell(self):
+        html = build_preview_body_html(
+            tables=[{"headers": ["Sender", "Message"], "rows": [["alice", "iban 5550001 thx"]]}],
+            highlight=self._spans_for("5550001"),
+        )
+        assert '<td>iban <mark class="pf-pii-hit">5550001</mark> thx</td>' in html
+
+    def test_marks_inside_a_table_block(self):
+        html = build_preview_body_html(
+            blocks=[{"type": "table", "headers": ["Field", "Value"], "rows": [["Phone", "5550001"]]}],
+            highlight=self._spans_for("5550001"),
+        )
+        assert '<td><mark class="pf-pii-hit">5550001</mark></td>' in html
+
+    def test_each_cell_is_scanned_on_its_own(self):
+        # Offsets are relative to the cell being escaped, never to a joined
+        # row -- the highlighter only ever sees one cell's text.
+        seen = []
+
+        def spans(text):
+            seen.append(text)
+            return []
+
+        build_preview_body_html(tables=[{"headers": ["A", "B"], "rows": [["x & y", "z"]]}], highlight=spans)
+        assert seen == ["x & y", "z"]
+
+    def test_escaping_still_holds_in_a_highlighted_cell(self):
+        html = build_preview_body_html(
+            tables=[{"rows": [["<b>5550001</b> & co"]]}], highlight=self._spans_for("5550001"),
+        )
+        assert '<td>&lt;b&gt;<mark class="pf-pii-hit">5550001</mark>&lt;/b&gt; &amp; co</td>' in html
+        assert "<b>" not in html
+
+    def test_headers_caption_and_footer_are_never_marked(self):
+        html = build_preview_body_html(
+            tables=[{
+                "caption": "5550001", "headers": ["5550001"], "rows": [["ok"]], "footer": "5550001",
+            }],
+            highlight=self._spans_for("5550001"),
+        )
+        assert "pf-pii-hit" not in html
+
+    def test_no_table_cell_is_marked_without_a_highlighter(self):
+        html = build_preview_body_html(tables=[{"rows": [["5550001"]]}])
+        assert "pf-pii-hit" not in html

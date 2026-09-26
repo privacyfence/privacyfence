@@ -9,6 +9,7 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
+from ..preview_dates import format_preview_datetime
 from ..telegram_client import TelegramClientError, TelegramPrivacyFenceClient
 
 logger = logging.getLogger(__name__)
@@ -182,7 +183,14 @@ class TelegramConnector(Connector):
         # also shown.
         table = {
             "headers": ["Sender", "Date", "Message"],
-            "rows": [[getattr(m, "sender_name", "unknown"), str(getattr(m, "date", "")), getattr(m, "text", "")] for m in messages],
+            "rows": [
+                [
+                    getattr(m, "sender_name", "unknown"),
+                    format_preview_datetime(getattr(m, "date", "")),
+                    getattr(m, "text", ""),
+                ]
+                for m in messages
+            ],
         }
         return await gated_call(
             connector=self.name,
@@ -232,7 +240,14 @@ class TelegramConnector(Connector):
         ]
         table = {
             "headers": ["Sender", "Date", "Message"],
-            "rows": [[getattr(m, "sender_name", "unknown"), str(getattr(m, "date", "")), getattr(m, "text", "")] for m in messages],
+            "rows": [
+                [
+                    getattr(m, "sender_name", "unknown"),
+                    format_preview_datetime(getattr(m, "date", "")),
+                    getattr(m, "text", ""),
+                ]
+                for m in messages
+            ],
         }
         return await gated_call(
             connector=self.name,

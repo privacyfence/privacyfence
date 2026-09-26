@@ -13,6 +13,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
 from ..jira_client import JiraClient, JiraClientError, _text_to_adf
+from ..preview_dates import format_preview_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,11 @@ class JiraConnector(Connector):
                 "caption": f"Comments ({len(comments)})",
                 "headers": ["Author", "Date", "Comment"],
                 "rows": [
-                    [getattr(c, "author", "unknown"), getattr(c, "created", ""), getattr(c, "body", "")]
+                    [
+                        getattr(c, "author", "unknown"),
+                        format_preview_datetime(getattr(c, "created", "")),
+                        getattr(c, "body", ""),
+                    ]
                     for c in comments
                 ],
             })
