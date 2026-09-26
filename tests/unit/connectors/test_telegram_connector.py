@@ -136,7 +136,7 @@ class TestGetMessages:
         assert result == [{"id": 1, "sender_name": "Alice", "text": "see you tomorrow", "date": "2026-07-06T10:00:00Z"}]
         assert kwargs["preview_tables"] == [{
             "headers": ["Sender", "Date", "Message"],
-            "rows": [["Alice", "2026-07-06T10:00:00Z", "see you tomorrow"]],
+            "rows": [["Alice", "2026-07-06 10:00 UTC", "see you tomorrow"]],
         }]
         assert kwargs["table_only"] is True
 
@@ -197,7 +197,7 @@ class TestSearchMessages:
         }
         assert kwargs["preview_tables"][0] == {
             "headers": ["Sender", "Date", "Message"],
-            "rows": [["Alice", "2026-07-06T10:00:00Z", "see you tomorrow"], ["Alice", "2026-07-06T10:00:00Z", "see you tomorrow"]],
+            "rows": [["Alice", "2026-07-06 10:00 UTC", "see you tomorrow"], ["Alice", "2026-07-06 10:00 UTC", "see you tomorrow"]],
         }
         assert kwargs["table_only"] is True
 

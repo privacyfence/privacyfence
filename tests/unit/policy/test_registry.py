@@ -3,8 +3,8 @@
 The registry's whole job is to be a *superset* of the existing tables it joins -- these tests
 assert exact agreement with `TOOL_TO_GATE`/`TOOL_TO_OPERATION` (so the registry provably changes nothing for
 every consumer that still reads those tables directly) and then assert the registry adds a verb
-and scope subject everywhere those tables don't reach, including the six operation keys that are
-configurable nowhere today.
+and scope subject everywhere those tables don't reach, including the six operation keys the grant
+resource-type manifest does not cover.
 """
 from __future__ import annotations
 
@@ -24,9 +24,11 @@ from privacyfence.policy.registry import (
     operation_verbs,
 )
 
-# The six operation keys that are ungovernable today:
-# TOOL_TO_OPERATION knows about them, but no rule, label or grant capability can ever reach them.
-_UNGOVERNABLE_OPERATIONS = frozenset({
+# The six operation keys no grant capability in the resource-type manifest (GRANT_RESOURCE_TYPES)
+# reaches. They are governable all the same: policy/catalogue.py's EXTRA_SCOPES (apps_script.project,
+# gmail.configure, slack.share_anything) configures them from Settings and
+# privacyfence_propose_policy_change, and the approval popup never proposes a rule for them (ADR 0077).
+_GRANT_MANIFEST_UNREACHABLE_OPERATIONS = frozenset({
     "apps_script.read_content",
     "apps_script.write_content",
     "apps_script.read_execution_log",
@@ -132,16 +134,15 @@ class TestVerbVocabulary:
         assert VERB_SCOPE_SUBJECT[Verb.DRAFT] == ScopeSubject.EVERY_RECIPIENT
 
 
-class TestUngovernableOperationsAreNowCovered:
-    def test_ungovernable_operations_are_absent_from_every_existing_surface(self):
-        # Confirm the gap still exists in the resource-type manifest the
-        # registry is meant to eventually replace, so this test would fail (loudly, as a welcome
-        # sign of progress) once a later phase closes it there instead of just here.
+class TestGrantManifestUnreachableOperationsAreCovered:
+    def test_they_are_absent_from_the_grant_resource_type_manifest(self):
+        # The registry covers what the manifest does not. If a grant capability starts reaching
+        # one of these, this set and its comment are out of date.
         capability_keys = _capability_operation_keys()
-        for op_key in _UNGOVERNABLE_OPERATIONS:
+        for op_key in _GRANT_MANIFEST_UNREACHABLE_OPERATIONS:
             assert op_key not in capability_keys
 
-    @pytest.mark.parametrize("operation", sorted(_UNGOVERNABLE_OPERATIONS))
+    @pytest.mark.parametrize("operation", sorted(_GRANT_MANIFEST_UNREACHABLE_OPERATIONS))
     def test_registry_assigns_a_verb_and_scope_subject_anyway(self, operation):
         verbs = operation_verbs(operation)
         assert verbs, f"{operation} should resolve to at least one verb"

@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.7.0] — 2026-09-26
+
 ### Added
 
 - **New website pages explain PrivacyFence before you install it:** `/how-it-works/` (the request
@@ -59,6 +61,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   goes, which AI clients work, what the AI sees before approval, automating routine requests,
   certification, local or organization mode, cost, and verifying a download. The site's menu
   links the FAQ, and `/connectors/` links each connector's page.
+
+- **The Slack, Salesforce, Jira and Confluence, and Telegram pages on the website now show an
+  approval card** for a read in that service, with the PII check's findings, as the Google
+  Workspace page already did. Each is generated from example data, never a real account.
 
 - **A release history page, `privacyfence.eu/releases/`,** lists every published version on
   every channel (stable, release candidate, beta and alpha), newest first, each with its release
@@ -78,6 +84,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `move_within_approved_folders` auto-approved moving a file out of an approved folder to anywhere
   else. A move now auto-accepts only when both the current folder and the destination are in the
   rule, and an "Always allow" offered for a move names both folders.
+
+- **One approved write could be performed twice.** When you approved a write while the AI client
+  was still waiting for it, the same write sent again within five minutes went through without a
+  new card, and two identical writes sent at the same moment both went through on one approval.
+  Every approved write is now performed once: sending it again asks again, and a second identical
+  write sent while the first is still waiting is refused with nothing written. The audit log also
+  no longer records a released read, or a write approved while the client waited, as `expired`.
+  See [ADR 0073](docs/adr/0073-an-approved-write-is-single-use-and-an-approved-read-replays.md).
+
+- **Organization mode: approving several requests at once skipped step-up when no passkey was
+  enrolled.** With step-up on, `require_passkey` off and no passkey, a batch approval went through
+  without any check, although a single approval would have asked for an identity-provider sign-in.
+  Such a batch is now refused with nothing applied; approve each request from its card, or add a
+  passkey at `/security`. Denying several at once still needs no step-up.
 
 ### Changed
 
@@ -100,8 +120,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mean in words, or name the ADR that explains it. The daemon's insecure-storage warning now reads
   "Insecure storage permissions: …". See
   [ADR 0056](docs/adr/0056-code-carries-no-project-history.md).
+- **The "Not authorized" page describes how sign-in works today instead of what changed.** It now
+  reads "PrivacyFence never gives a sign-in link to the program it governs." and "The link is not
+  written to any file either, where every program running as you could read it."
+  `privacyfence_status`'s "not set up" message to the AI client likewise says PrivacyFence "never
+  issues" it a sign-in link.
 
 ### Fixed
+
+- Approval cards show a readable date in the Date column of Slack, Telegram and Jira tables, in
+  one format for all three (`2026-09-16 18:02 UTC`). Slack showed its raw message ID
+  (`1757926320.000100`) and Telegram a full timestamp with seconds and a UTC offset. The data
+  returned to the AI system is unchanged: Slack still returns the raw `ts`, which it needs to
+  address a message or thread.
+
+- Detected PII is now highlighted in table previews too, not only in text. Slack and Telegram
+  message lists, Salesforce records and report rows show their content only as a table, so the
+  approver had to find the match by eye.
+
+- In a two-column table on an approval card, such as a Salesforce record's Field/Value table, a
+  long value no longer squeezes the field name until it breaks mid-word ("Descripti" / "on").
+
+- **Search-engine crawlers no longer inflate the download count.** `downloads.privacyfence.eu`
+  now serves a `robots.txt` that keeps crawlers off installer downloads, and every download link
+  on the website is marked `nofollow`. Crawlers that ignore both are still counted, and counts
+  from before this change may include crawler downloads.
 
 - The `not_shared_drive` condition read Drive's "shared with someone" flag, so it rejected My
   Drive files you had shared and let files in a shared drive through. It now holds only for files
@@ -2828,7 +2871,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.7.0...HEAD
+[4.7.0]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...v4.7.0
 [4.6.1]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...v4.6.1
 [4.6.0]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...v4.6.0
 [4.5.0]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...v4.5.0

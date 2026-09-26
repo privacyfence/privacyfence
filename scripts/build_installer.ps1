@@ -107,9 +107,11 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 $DistDir = "dist/${AppName}"
 
 # -- 4. Create privacyfence-app.exe alongside PrivacyFenceApp.exe -----------
-# The Task Scheduler task (installed by the .iss script below) and
-# the mcpb shim's own daemon auto-start (daemon.ts's DEFAULT_APP_PATH) both
-# look for this name; the main exe is "PrivacyFenceApp.exe". Windows has no
+# The main exe is "PrivacyFenceApp.exe", but two things start the daemon by
+# this name: the PrivacyFence Windows service, whose binPath
+# scripts/windows_privilege_separation.ps1 builds from $DefaultDaemonExecName
+# (`privacyfence-app.exe --windows-service`), and the .mcpb shim's daemon
+# auto-start (windowsDefaultAppPaths() in mcpb/shim/src/daemon.ts). Windows has no
 # cheap equivalent NTFS behaves well with for a symlink from an unprivileged
 # installer context (unlike the macOS/Linux builds' plain `ln -s`), so this
 # ships as a real copy instead -- same effect (both names resolve on disk).

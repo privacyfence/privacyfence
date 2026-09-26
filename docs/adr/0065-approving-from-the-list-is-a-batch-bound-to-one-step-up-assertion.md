@@ -10,8 +10,8 @@ binder work: `4dcc1b4b` ([#505](https://github.com/privacyfence/privacyfence/pul
 ([#512](https://github.com/privacyfence/privacyfence/pull/512)). The server-minted `batch_id`
 followed in `94960763` ([#516](https://github.com/privacyfence/privacyfence/pull/516)). The design
 note that recorded it was deleted in `f5b57380`: read it with
-`git show f5b57380^:docs/approval-list-ui-ux.md`. Implemented except the org-mode refusal of a
-batch with nothing enrolled, tracked in https://github.com/privacyfence/privacyfence/issues/741.
+`git show f5b57380^:docs/approval-list-ui-ux.md`. The org-mode refusal of a batch with nothing
+enrolled is implemented, fixing https://github.com/privacyfence/privacyfence/issues/741.
 
 ## Context
 
@@ -95,9 +95,11 @@ card, with its own passkey ceremony, was the stall the approval binder set out t
   `test_a_client_supplied_batch_id_is_never_recorded_verbatim`) and `TestBatchStepUp` (set
   binding, flipped results, replay, `require_passkey`, and both `per_item` cases).
 - `tests/unit/web/test_routes_org_approvals.py`: `TestBatchStepUp`
-  (`test_no_assertion_offers_a_428_with_no_idp_url`). The org-mode refusal of a batch with nothing
-  enrolled replaces `test_require_passkey_off_with_nothing_enrolled_lets_it_through_with_no_idp_link`
-  when it is implemented.
+  (`test_no_assertion_offers_a_428_with_no_idp_url`,
+  `test_require_passkey_off_with_nothing_enrolled_refuses_the_batch_with_nothing_applied` and
+  `test_require_passkey_off_with_nothing_enrolled_still_applies_a_deny_only_batch`).
+- `tests/unit/web/test_approval_step_up.py`: `TestBatchStepUpResponse` and
+  `TestGuardBatchDecision` (`unenrolled_batch_message` absent and set).
 
 ## Related
 

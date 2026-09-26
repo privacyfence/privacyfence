@@ -127,6 +127,10 @@ STATIC: dict[str, str] = {
     "assets/icon.png": "src/privacyfence/resources/icon_512.png",
     "assets/gmail-read-thread.png": "docs/images/screenshots/gmail-read-thread.png",
     "assets/sheets-write.png": "docs/images/screenshots/sheets-write.png",
+    "assets/slack-read-thread.png": "docs/images/screenshots/slack-read-thread.png",
+    "assets/salesforce-read-record.png": "docs/images/screenshots/salesforce-read-record.png",
+    "assets/jira-read-issue.png": "docs/images/screenshots/jira-read-issue.png",
+    "assets/telegram-read-chat.png": "docs/images/screenshots/telegram-read-chat.png",
 }
 
 # Files under website/ this script reads to build other files, and never publishes themselves.
@@ -416,7 +420,10 @@ def render_download_cards(manifest: dict) -> str:
         if detail:
             parts.append(f'<p class="download-detail">{e(detail)}</p>')
         parts.append(
-            f'<a class="button primary download-button" href="{DOWNLOAD_ORIGIN}/download/{e(channel)}/{e(artifact_id)}"'
+            # nofollow on every installer link: a crawler that followed it would be counted as a
+            # download (docs/downloads-and-release-kpi.md). The Worker's robots.txt says the same.
+            f'<a class="button primary download-button" rel="nofollow"'
+            f' href="{DOWNLOAD_ORIGIN}/download/{e(channel)}/{e(artifact_id)}"'
             f' aria-label="Download {e(name)}: {e(filename)}">Download</a>'
         )
         parts.append(f'<p class="download-meta">{e(f"{filename} · {size}" if size else filename)}</p>')
@@ -560,7 +567,8 @@ def render_release_rows(releases: list[dict]) -> str:
             size = _format_size(artifact.get("size"))
             parts.append(
                 "<li>"
-                f'<a class="release-download" href="{DOWNLOAD_ORIGIN}/download/version/{e(version)}/{e(artifact_id)}"'
+                f'<a class="release-download" rel="nofollow"'
+                f' href="{DOWNLOAD_ORIGIN}/download/version/{e(version)}/{e(artifact_id)}"'
                 f' aria-label="Download {e(name)} {e(version)}: {e(filename)}">{e(name)}</a>'
             )
             if size:

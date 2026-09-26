@@ -267,8 +267,11 @@ class TestGetChannelHistory:
         assert "First message" not in kwargs["new_info"]
         assert kwargs["preview_tables"] == [{
             "headers": ["Sender", "Date", "Message"],
-            "rows": [["alice", "1720000000.000100", "a" * 100]],
+            # The approver sees a readable date; the ts itself stays in the
+            # result below, where Claude needs it to address the message.
+            "rows": [["alice", "2024-07-03 09:46 UTC", "a" * 100]],
         }]
+        assert kwargs["filtered_data"]["messages"][0]["ts"] == "1720000000.000100"
         assert kwargs["table_only"] is True
         assert kwargs["raw_data"] == [make_message(text="a" * 100)]
         assert kwargs["args"] == {"channel_id": "C123", "is_group_dm": False, "is_self_dm": False}
@@ -530,9 +533,9 @@ class TestGetThreadReplies:
         assert kwargs["preview_tables"] == [{
             "headers": ["Sender", "Date", "Message"],
             "rows": [
-                ["alice", "1720000000.000100", "starter"],
-                ["alice", "1720000000.000100", "reply 1"],
-                ["alice", "1720000000.000100", "reply 2"],
+                ["alice", "2024-07-03 09:46 UTC", "starter"],
+                ["alice", "2024-07-03 09:46 UTC", "reply 1"],
+                ["alice", "2024-07-03 09:46 UTC", "reply 2"],
             ],
         }]
         assert kwargs["table_only"] is True
@@ -590,8 +593,8 @@ class TestSearchMessages:
         assert kwargs["preview_tables"] == [{
             "headers": ["Channel", "Sender", "Date", "Message"],
             "rows": [
-                ["general", "alice", "1720000000.000100", "hello team"],
-                ["general", "alice", "2", "hello team"],
+                ["general", "alice", "2024-07-03 09:46 UTC", "hello team"],
+                ["general", "alice", "1970-01-01 00:00 UTC", "hello team"],
             ],
         }]
         assert kwargs["table_only"] is True

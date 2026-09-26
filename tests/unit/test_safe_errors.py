@@ -93,6 +93,12 @@ class TestRealNamedRuntimeErrorSubclasses:
         msg = "Too many approvals are already pending (5)"
         assert public_message(TooManyPendingApprovalsError(msg)) == msg
 
+    def test_identical_write_awaiting_approval_error_passes_through(self):
+        from privacyfence.approvals import IdenticalWriteAwaitingApprovalError
+
+        msg = "An identical write is already awaiting approval"
+        assert public_message(IdenticalWriteAwaitingApprovalError(msg)) == msg
+
     def test_too_many_principals_error_passes_through(self):
         from privacyfence.connector_registry import TooManyPrincipalsError
 
