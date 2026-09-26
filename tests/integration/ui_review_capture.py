@@ -18,8 +18,10 @@ import pytest
 
 from privacyfence import paths as paths_module
 from privacyfence.card_builder import build_card_html
+from privacyfence.dialog_window_html import build_choice_html, build_confirmation_html
 from privacyfence.principal import Principal, principal_scope
 
+from ..unit.test_pdf_render import text_pdf
 from . import test_browser_smoke as _smoke
 
 # The browser tests' own fixtures, bound here by name so pytest finds them for this module.
@@ -124,6 +126,15 @@ _READ = {"title": "Get file content", "preview": {"File": "Quarterly report", "O
          "details_text": "", "is_read": True, "claude_reason": "To summarise the quarter for you."}
 
 
+# A three-page document with a line of text on each page, so the review shows the page images
+# doing their job (_pdf_bytes() is one blank page, which renders as a white box).
+_REPORT_PDF = text_pdf([
+    ["Quarterly report, Q3", "Revenue up 12% on the quarter.", "Two new regions opened."],
+    ["Regional results", "EMEA 1.2M (+8%)", "AMER 2.4M (+15%)"],
+    ["Open risks", "One supplier contract renews in November."],
+])
+
+
 def _card_kinds() -> dict[str, dict]:
     icon = (Path(paths_module.__file__).parent / "resources" / "icon_512.png").read_bytes()
     return {
@@ -133,7 +144,7 @@ def _card_kinds() -> dict[str, dict]:
         "read": {**_READ, "layout": "narrow", "accept_all_choices": [("a", "this folder"), ("b", "this owner")]},
         "read-pii": {**_READ, "layout": "wide", "pii_categories": ["Email address", "National ID"],
                      "preview_blocks": [{"type": "markdown", "text": _MARKDOWN_PREVIEW}]},
-        "read-pdf": {**_READ, "layout": "wide", "pdf_bytes": _pdf_bytes()},
+        "read-pdf": {**_READ, "layout": "wide", "pdf_bytes": _REPORT_PDF},
         "read-image": {**_READ, "layout": "wide", "preview_bytes": icon, "preview_mime_type": "image/png"},
         "read-markdown": {**_READ, "layout": "wide", "preview_blocks": [{"type": "markdown", "text": _MARKDOWN_PREVIEW}]},
         "read-table": {**_READ, "layout": "wide", "preview_tables": [_TEN_COLUMN_TABLE], "table_only": True},
@@ -149,3 +160,27 @@ def test_card(shot, kind):
     # sees them, not in their pre-load disabled state.
     page.wait_for_function("() => !document.querySelector('.pf-btn-primary[aria-disabled=\"true\"]')")
     save(f"card-{kind}")
+
+
+_DIALOGS = {
+    # web_approval_ui.py's show_pii_confirmation_popup, and a choice picker (show_rule_choice_popup).
+    "pii": lambda: build_confirmation_html(
+        title="PrivacyFence — Possible PII Detected",
+        message_lines=["PrivacyFence detected possible personal data in this content: Email address, National ID.",
+                       "Are you sure you want to proceed?"],
+        cancel_label="Cancel", confirm_label="Proceed",
+    ),
+    "choice": lambda: build_choice_html(
+        title="PrivacyFence — Choose Auto-Accept Rule", prompt="Which rule should always allow this?",
+        options=["i_am_owner", "approved_folder: Finance", "approved_sender: alice@example.com"],
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", list(_DIALOGS))
+def test_dialog(shot, kind):
+    """The PII confirmation and the choice dialog, as GET /approvals/{id} serves them."""
+    page, save = shot
+    page.set_content(_DIALOGS[kind]())
+    page.wait_for_function("() => !document.querySelector('[data-pf-action][aria-disabled=\"true\"]')")
+    save(f"dialog-{kind}")

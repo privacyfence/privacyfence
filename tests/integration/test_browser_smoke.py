@@ -1770,8 +1770,8 @@ class TestPdfPreview:
     def test_the_preview_width_picks_the_embed_or_the_page_images(self, page, pane, embeds, pages):
         """ADR 0080: the <embed> where the preview is at least 600px wide, the server-rendered
         page images below that. A container query, so it is the preview's own width that
-        decides, wherever the card sits. Measured on the fragment in a box of a set width: the
-        WIDE card is 980px wide, so its pane never reaches 600px today."""
+        decides, wherever the card sits. Measured on the fragment in a box of a set width; the
+        whole card at a desktop width is the test below."""
         fragment = approval_window_html.build_preview_body_html(
             pdf_data_uri="data:application/pdf;base64," + base64.b64encode(_pdf_bytes()).decode("ascii"),
             pdf_page_uris=["data:image/png;base64," + base64.b64encode(
@@ -1791,6 +1791,120 @@ class TestPdfPreview:
         assert shown == {"embeds": embeds, "pages": pages}
         if pages:
             assert page.inner_text(".pf-pdf-note") == "Showing page 1 of 3"
+
+
+    def test_a_wide_pdf_card_on_a_desktop_shows_the_browsers_viewer(self, page, local_server):
+        """A WIDE card in a 1280px tab has room for the embed: its preview panel passes 600px, so
+        a desktop reviewer can read past the pages the server rendered. (A 980px card left the
+        panel at about 448px, and a desktop showed page images only.)"""
+        server, web_ui = local_server
+        page.set_viewport_size({"width": 1280, "height": 800})
+        _sign_in_local(page, server)
+        thread, card = _register_card(web_ui, read=True, pdf_bytes=_pdf_bytes(), layout="wide")
+        try:
+            page.goto(f"{server.base_url}/approvals/{card.id}")
+            page.wait_for_load_state("load")
+            shown = page.evaluate("""() => {
+                const width = (sel) => [...document.querySelectorAll(sel)]
+                    .map((el) => el.getBoundingClientRect().width).filter((w) => w > 0);
+                return {embeds: width('embed.pf-pdf-embed').length, pages: width('img.pf-pdf-page').length,
+                        preview: document.querySelector('.pf-pdf').getBoundingClientRect().width};
+            }""")
+            assert shown["embeds"] == 1 and shown["pages"] == 0, shown
+            assert shown["preview"] >= 600, shown
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
+def _card_markup(html: str) -> tuple[str, str]:
+    """A card document's stylesheet and its card root, for putting the card in a container of
+    a set width the way a host page would."""
+    css = re.search(r'<style nonce="[^"]+">(.*?)</style>', html, flags=re.S).group(1)
+    markup = html[html.index("<body>") + len("<body>"):html.index("<script nonce=")]
+    return css, markup
+
+
+class TestCardContainers:
+    """The card sizes itself by the room its container gives it, never by the viewport: the same
+    markup is a phone screen, a desktop tab or a row of the approvals list. These put it in a box
+    of a set width on a desktop-sized page, where a viewport query would see 1280px."""
+
+    @staticmethod
+    def _card_in_a_box(page, box: int, **card) -> None:
+        from privacyfence.card_builder import build_card_html
+
+        css, markup = _card_markup(build_card_html(**card))
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.set_content(f'<style>{css}</style><div style="width:{box}px">{markup}</div>')
+
+    _WIDE = {"title": "Get file content", "preview": {"File": "Quarterly report"}, "details_text": "Body.",
+             "is_read": True, "layout": "wide"}
+
+    def test_a_wide_card_stacks_in_a_list_row_sized_box_on_a_desktop(self, page):
+        self._card_in_a_box(page, 700, **self._WIDE)
+        layout = page.evaluate("""() => ({
+            row: getComputedStyle(document.querySelector('.pf-wide-row')).flexDirection,
+            heading: getComputedStyle(document.querySelector('.pf-head h2')).whiteSpace,
+            overflow: document.documentElement.scrollWidth,
+        })""")
+        # Stacked (under 860px of card) but not compact (600px or more): the desktop heading.
+        assert layout == {"row": "column", "heading": "nowrap", "overflow": 1280}, layout
+
+    def test_the_same_card_keeps_its_columns_in_a_wide_box(self, page):
+        self._card_in_a_box(page, 1000, **self._WIDE)
+        assert page.evaluate("getComputedStyle(document.querySelector('.pf-wide-row')).flexDirection") == "row"
+
+    def test_a_card_is_compact_in_a_phone_sized_box_on_a_desktop(self, page):
+        self._card_in_a_box(page, 380, title="Send email", preview={"To": "a@b.com"}, details_text="body",
+                            is_read=False, layout="narrow")
+        assert page.evaluate("getComputedStyle(document.querySelector('.pf-head h2')).whiteSpace") == "normal"
+        deny = page.locator('[data-pf-action="deny"]').bounding_box()
+        accept = page.locator('[data-pf-action="accept"]').bounding_box()
+        assert deny["height"] >= 44 and accept["height"] >= 44
+        assert abs(deny["y"] - accept["y"]) < 1
+
+    def test_a_cut_off_value_opens_on_a_tap_and_one_that_fits_is_plain_text(self, page):
+        from privacyfence.card_builder import build_card_html
+
+        names = ", ".join(f"Attendee number {i}" for i in range(40))
+        html = build_card_html(title="Read event", preview={"Title": "Standup", "Attendees": names},
+                               details_text="", is_read=True, layout="narrow")
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.set_content(html)
+        cut = page.locator('.pf-kv .pf-clamp[data-pf-clamped]')
+        assert cut.count() == 1 and page.locator(".pf-clamp").count() == 2
+        assert cut.get_attribute("role") == "button" and cut.get_attribute("aria-expanded") == "false"
+        before = cut.bounding_box()["height"]
+        cut.click()
+        assert cut.get_attribute("aria-expanded") == "true"
+        assert cut.bounding_box()["height"] > before
+        # The decision was not touched by opening it.
+        assert page.evaluate("document.querySelector('[data-pf-action=\"accept\"]').getAttribute('aria-disabled')") is None
+
+
+    @pytest.mark.parametrize("shape", ["confirm", "choice"])
+    @pytest.mark.parametrize("width", [320, 393])
+    def test_the_dialogs_are_touch_sized_on_a_phone(self, browser, shape, width):
+        from privacyfence.dialog_window_html import build_choice_html, build_confirmation_html
+
+        html = (
+            build_confirmation_html(title="PrivacyFence — Possible PII Detected", message_lines=["An email address."],
+                                    cancel_label="Cancel", confirm_label="Allow")
+            if shape == "confirm" else
+            build_choice_html(title="PrivacyFence — Choose Auto-Accept Rule", prompt="Pick one",
+                              options=["i_am_owner", "approved_folder: Finance"])
+        )
+        ctx = browser.new_context(**{**_MOBILE_EMULATION, "viewport": {"width": width, "height": 800}})
+        try:
+            page = ctx.new_page()
+            page.set_content(html)
+            page.wait_for_function("() => !document.querySelector('[aria-disabled=\"true\"]')")
+            assert page.evaluate("document.documentElement.scrollWidth") <= width
+            small = page.evaluate(_PHONE_SMALL_TARGETS_JS, _PHONE_MIN_TAP)
+            assert not small, small
+        finally:
+            ctx.close()
 
 
 class TestPreviewTableLayout:
@@ -2311,8 +2425,6 @@ _PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {
     "no-longer-pending": ("p6-remaining-pages", _EVERY_WIDTH),
     "preparing": ("p6-remaining-pages", _EVERY_WIDTH),
     "not-authorized": ("p6-remaining-pages", _EVERY_WIDTH),
-    # The full-page card's preview pane is 81-85% of a phone's width (the card's own padding).
-    **{f"card-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
     # Inline in a list row there is no card yet, only the Details metadata disclosure: narrower
     # than 90% on a phone, and with no PDF page or table in it at all.
     **{f"inline-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
