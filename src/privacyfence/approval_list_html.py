@@ -118,7 +118,7 @@ _EMPTY_STATE_NOTHING_AUTHED = (
     "PrivacyFence sits between Claude and your real accounts. Until a connector is "
     "authenticated, there is nothing for it to hold back."
     "</div>"
-    '<a class="pf-approvals-empty-cta" href="/settings/connectors">Authenticate a connector</a>'
+    '<a class="button primary pf-approvals-empty-cta" href="/settings/connectors">Authenticate a connector</a>'
     "</div>"
 )
 
@@ -126,27 +126,31 @@ _EMPTY_STATE_NOTHING_AUTHED = (
 def _empty_state_html(*, any_authed: bool) -> str:
     return _EMPTY_STATE if any_authed else _EMPTY_STATE_NOTHING_AUTHED
 
+# The list is built on the shared design system (resources/design/, ADR 0078): every row is a
+# `card`, the row controls are `.button`s, and colours are tokens, so app.css's dark mode needs no
+# rule here. It has no viewport breakpoint (shared rule 6): .pf-approvals-page is a size
+# container, and the phone layout below engages when *it* is narrow, which is also what a narrow
+# desktop window gets. Every control is a 44px target at every width (shared rule 4).
 _CSS = """
-.pf-approvals-page { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; width: 100%; }
+.pf-approvals-page {
+  width: min(720px, 100% - 2 * var(--gutter)); margin-inline: auto;
+  padding-block: var(--space-m) var(--space-xl); container-type: inline-size;
+}
 .pf-approvals-heading {
-  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: var(--space-s);
 }
 .pf-approvals-heading:empty { margin-bottom: 0; }
-.pf-approvals-count { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
-.pf-approvals-composition { font-size: 12.5px; color: var(--muted); }
+.pf-approvals-count { font-size: 22px; font-weight: 750; letter-spacing: -0.02em; color: var(--ink); }
+.pf-approvals-composition { font-size: var(--step-small); color: var(--muted); }
 .pf-approvals-empty {
-  text-align: center; padding: 80px 20px; color: var(--muted);
+  text-align: center; padding: 72px var(--space-m); color: var(--muted);
 }
-.pf-approvals-empty-title { font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
-.pf-approvals-empty-sub { font-size: 13px; }
+.pf-approvals-empty-title { font-size: 18px; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
+.pf-approvals-empty-sub { font-size: var(--step-small); }
 .pf-approvals-empty-body { line-height: 1.6; max-width: 330px; margin: 0 auto 18px; }
-.pf-approvals-empty-cta {
-  display: inline-block; font-size: 12.5px; font-weight: 600; padding: 9px 14px;
-  border-radius: var(--radius-s); background: var(--accent); color: var(--on-accent); text-decoration: none;
-}
 .pf-approvals-toolbar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 10px 14px; margin-bottom: 12px; background: var(--surface); border-radius: var(--radius-s);
+  padding: 6px var(--space-s); margin-bottom: 12px;
 }
 /* An attribute selector, needed only because the rule above sets its own
    `display` unconditionally: author-origin CSS always wins over the
@@ -155,42 +159,35 @@ _CSS = """
    bare `hidden` attribute (see build_list_html/updateToolbar) would do
    nothing at all. */
 .pf-approvals-toolbar[hidden] { display: none; }
-.pf-select-all { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
-.pf-selected-count { font-size: 12.5px; color: var(--muted); flex: 1; min-width: 0; }
-.pf-btn-deny-selected {
-  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-s);
-  border: 1px solid var(--line); background: transparent; color: var(--danger); cursor: pointer;
-}
-.pf-btn-deny-selected:disabled { opacity: 0.5; cursor: default; }
-/* Outline, not filled. Review is the one filled control on this page and
-   it is the one that opens disclosure; approving a whole queue off
-   one-line summaries is the habituation failure the card exists to
-   prevent, so the least-informed action must not also be the loudest. The
-   composition label on it ("Approve 12 · 9 reads, 3 writes") stays -- that
-   part is the guard, not the problem. */
-.pf-btn-approve-selected {
-  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-s);
-  border: 1px solid var(--accent); background: transparent;
-  color: var(--accent-dark); cursor: pointer;
-}
-.pf-btn-approve-selected:disabled { opacity: 0.5; cursor: default; }
-.pf-approval-group { margin-bottom: 14px; }
+.pf-select-all { display: flex; align-items: center; gap: 8px; min-height: var(--tap); font-size: var(--step-small); font-weight: 650; cursor: pointer; }
+.pf-selected-count { font-size: var(--step-small); color: var(--muted); flex: 1; min-width: 0; }
+/* Approve-selected is outlined (.secondary), not filled. Review is the one
+   filled control on this page and it is the one that opens disclosure;
+   approving a whole queue off one-line summaries is the habituation
+   failure the card exists to prevent, so the least-informed action must
+   not also be the loudest. The composition label on it ("Approve 12 · 9
+   reads, 3 writes") stays -- that part is the guard, not the problem. */
+.pf-approvals-page .button { min-height: var(--tap); padding: 0 14px; font-size: var(--step-small); white-space: nowrap; }
+.pf-approval-group { margin-bottom: var(--space-s); }
 .pf-approval-group-header {
-  display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 12.5px;
-  font-weight: 600; color: var(--muted);
+  display: flex; align-items: center; gap: 8px; padding: 0 4px; font-size: var(--step-small);
+  font-weight: 650; color: var(--muted);
 }
-.pf-approval-group-header label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.pf-approval-group-header label { display: flex; align-items: center; gap: 8px; min-height: var(--tap); cursor: pointer; }
+/* Native checkboxes render near 13px, well under any usable target: each
+   one is drawn larger and sits in a label that is the 44px tap target. */
+.pf-approvals-page input[type="checkbox"] { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+.pf-approval-select {
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: var(--tap); height: var(--tap); margin: -8px -6px 0 -10px; cursor: pointer;
+}
 .pf-approval-row {
-  display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px;
-  background: var(--surface); border-radius: var(--radius-s); margin-bottom: 10px; flex-wrap: wrap;
+  display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
 }
-/* The row is two lines now (meta above, object below), so its controls
-   align to the top of the text block rather than to its centre. */
-.pf-approval-row > input[type="checkbox"] { margin-top: 5px; }
 .pf-approval-actions { margin-top: 1px; }
 .pf-approval-icon {
-  width: 28px; height: 28px; border-radius: var(--radius-s); flex-shrink: 0; object-fit: contain;
-  background: var(--surface-soft);
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; object-fit: contain;
+  background: var(--surface-soft); border: 1px solid var(--line);
 }
 .pf-approval-icon-fallback {
   display: flex; align-items: center; justify-content: center;
@@ -201,19 +198,19 @@ _CSS = """
    not which tool touches it. See _row_html. */
 .pf-approval-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pf-approval-title {
-  font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.35;
+  font-size: var(--step-body); font-weight: 650; color: var(--ink); line-height: 1.35;
   /* Clamped rather than free-flowing: a summary is short by construction
      (see gate.py's call sites) but nothing enforces it, and an unbounded
      title would let one row push the rest of the queue off screen. */
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; text-overflow: ellipsis;
 }
-.pf-approval-kicker { font-size: 12px; color: var(--muted); }
+.pf-approval-kicker { font-size: 12.5px; color: var(--muted); }
 /* Who is asking -- the card header's .pf-agent in miniature, with the same
    tier rule (ADR 0006 decision 4): only an attested row draws the vendor's
    mark; a claimed or unknown one gets a dashed "?" and "not verified". */
 .pf-approval-agent {
-  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted);
   min-width: 0; overflow-wrap: anywhere;
 }
 .pf-approval-agent-mark {
@@ -224,74 +221,63 @@ _CSS = """
 .pf-approval-agent-glyph {
   display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
   flex-shrink: 0; box-sizing: border-box; border-radius: 4px; border: 1px dashed var(--control-line);
-  font: 600 10px ui-monospace, Menlo, monospace;
+  font: 600 10px var(--font-mono);
 }
 .pf-approval-agent-attested .pf-approval-agent-name { font-weight: 600; color: var(--ink); }
 .pf-approval-agent-unverified { font-style: italic; }
 /* Read/write direction, from gate_kind -- the same two token families and
    the same wording as the card's own .pf-pill, so a row and the card it
-   opens agree on sight. Both pairs invert in app.css's dark mode. */
+   opens agree on sight. Both pairs invert in app.css's dark mode. The
+   word is the cue, not the colour. */
 .pf-approval-pill {
-  font: 600 10px ui-monospace, Menlo, monospace; letter-spacing: 0.05em;
-  text-transform: uppercase; padding: 2px 8px; border-radius: 20px; flex-shrink: 0;
+  font: 700 10.5px var(--font-mono); letter-spacing: 0.05em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: var(--radius-pill); flex-shrink: 0;
+  border: 1px solid currentColor;
 }
 .pf-approval-pill-read { background: var(--accent-soft); color: var(--accent-dark); }
 .pf-approval-pill-write { background: var(--warning-soft); color: var(--warning); }
-.pf-approval-blocked-reason { font-size: 11.5px; color: var(--muted); margin-top: 4px; font-style: italic; }
+.pf-approval-blocked-reason { font-size: 12.5px; color: var(--muted); margin-top: 4px; font-style: italic; }
 .pf-approval-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.pf-btn-deny, .pf-btn-review, .pf-btn-details {
-  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-s);
-  border: none; cursor: pointer; text-decoration: none; white-space: nowrap;
-}
-.pf-btn-deny { background: transparent; color: var(--danger); border: 1px solid var(--line); }
-.pf-btn-review { background: var(--accent); color: var(--on-accent); }
-.pf-btn-details { background: transparent; color: var(--ink); border: 1px solid var(--line); }
 .pf-approval-details {
-  flex-basis: 100%; font-size: 12.5px; color: var(--muted);
-  border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px;
+  flex-basis: 100%; font-size: var(--step-small); color: var(--muted);
+  border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px;
 }
-.pf-approval-details-row { display: flex; gap: 6px; }
+.pf-approval-details-row { display: flex; gap: 6px; overflow-wrap: anywhere; }
 .pf-approval-details-row + .pf-approval-details-row { margin-top: 3px; }
 .pf-approval-details-key { font-weight: 600; color: var(--ink); }
 
-/* — phone widths — the row's own flex-wrap never engages on its own:
-   .pf-approval-actions is flex-shrink:0 and holds ~220px of buttons, while
-   .pf-approval-main is flex:1;min-width:0, so the text column can legally
-   shrink to zero and does. At 393px the title truncates after two or three
-   characters and the kicker goes with it. Giving the text column a basis
-   too wide to sit beside the actions is what makes the wrap actually fire,
-   which turns the row into what it should have been: identity on top, a
-   full-width action strip underneath. */
-@media (max-width: 560px) {
-  .pf-approval-row { align-items: flex-start; row-gap: 0; }
+/* — a narrow list (a phone, or a narrow window) — the row's own flex-wrap
+   never engages on its own: .pf-approval-actions is flex-shrink:0 and
+   holds ~230px of buttons, while .pf-approval-main is flex:1;min-width:0,
+   so the text column can legally shrink to zero and does. At 393px the
+   title truncates after two or three characters and the kicker goes with
+   it. Giving the text column a basis too wide to sit beside the actions is
+   what makes the wrap actually fire, which turns the row into what it
+   should have been: identity on top, a full-width action strip
+   underneath. */
+@container (max-width: 560px) {
+  .pf-approval-row { row-gap: 0; }
   .pf-approval-main { flex-basis: calc(100% - 96px); }
   .pf-approval-actions { width: 100%; gap: 10px; margin-top: 12px; }
   /* Review takes the remaining width; Deny and Details stay at their own
      intrinsic size, so the destructive control is never the easiest one to
      hit with a thumb. */
-  .pf-btn-review { flex: 1; text-align: center; }
-  .pf-btn-deny, .pf-btn-review, .pf-btn-details {
-    min-height: 44px; padding: 12px 14px; font-size: 13px;
-  }
-  /* Native checkboxes render near 13px, well under any usable target. */
-  .pf-approval-row > input[type="checkbox"],
-  .pf-approval-group-header input[type="checkbox"],
-  .pf-select-all input[type="checkbox"] { width: 20px; height: 20px; }
-  .pf-approval-row > input[type="checkbox"] { margin-top: 6px; }
-  .pf-select-all, .pf-approval-group-header label { min-height: 44px; }
+  .pf-btn-review { flex: 1; }
   /* Select-all, the count, and the two batch actions stop sharing one
      line. A grid rather than a wrapping flex row because the two buttons
      have to end up side by side and equal, which wrapping alone decides by
      whatever happens to fit -- and grid keeps source and visual order
      identical, so nothing here reorders focus. */
   .pf-approvals-toolbar {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center;
   }
+  /* Two columns on a 320px phone are ~120px each: the labels wrap inside
+     their buttons rather than push the second one out of the toolbar. */
+  .pf-btn-approve-selected, .pf-btn-deny-selected { white-space: normal; padding: 6px 10px; line-height: 1.25; }
   .pf-select-all, .pf-selected-count { grid-column: 1 / -1; }
   .pf-selected-count:empty { display: none; }
   .pf-btn-approve-selected { grid-column: 1; }
   .pf-btn-deny-selected { grid-column: 2; }
-  .pf-btn-approve-selected, .pf-btn-deny-selected { min-height: 44px; }
 }
 """
 
@@ -422,10 +408,11 @@ _JS = """
       relAge(row.created_at)].filter(Boolean).join(' \\u00b7 ');
     var initial = (row.connector || '?').charAt(0).toUpperCase();
     var checkbox = row.batchable
-      ? '<input type="checkbox" data-select="' + esc(row.id) + '" aria-label="Select this approval">' : '';
+      ? '<label class="pf-approval-select"><input type="checkbox" data-select="' + esc(row.id) +
+        '" aria-label="Select this approval"></label>' : '';
     var blockedNote = (!row.batchable && row.blocked_reason)
       ? '<div class="pf-approval-blocked-reason">' + esc(row.blocked_reason) + '</div>' : '';
-    return '<div class="pf-approval-row' + (row.batchable ? '' : ' pf-approval-row-unbatchable') + '"' +
+    return '<div class="pf-approval-row' + (row.batchable ? '' : ' pf-approval-row-unbatchable') + ' card"' +
       ' data-approval-id="' + esc(row.id) + '" data-tool="' + esc(row.tool || '') + '"' +
       ' data-batchable="' + (row.batchable ? '1' : '0') + '">' +
       checkbox +
@@ -435,9 +422,9 @@ _JS = """
       '<span class="pf-approval-kicker">' + esc(kicker) + '</span>' + agentHtml(row.agent) + '</div>' +
       '<div class="pf-approval-title">' + title + '</div>' + blockedNote + '</div>' +
       '<div class="pf-approval-actions">' +
-      '<button type="button" class="pf-btn-details" data-details="' + esc(row.id) + '">Details</button>' +
-      '<a class="pf-btn-review" href="/approvals/' + esc(row.id) + '">Review \\u2192</a>' +
-      '<button type="button" class="pf-btn-deny" data-deny="' + esc(row.id) + '">Deny</button></div>' +
+      '<button type="button" class="button secondary pf-btn-details" data-details="' + esc(row.id) + '">Details</button>' +
+      '<a class="button primary pf-btn-review" href="/approvals/' + esc(row.id) + '">Review \\u2192</a>' +
+      '<button type="button" class="button danger pf-btn-deny" data-deny="' + esc(row.id) + '">Deny</button></div>' +
       detailsHtml(row.id) +
       '</div>';
   }
@@ -1098,7 +1085,8 @@ def _row_html(row: dict[str, Any]) -> str:
         has_icon=bool(_connector_icon_uri(row.get("connector") or "")),
     )
     checkbox_html = (
-        f'<input type="checkbox" data-select="{_html_escape(rid)}" aria-label="Select this approval">'
+        '<label class="pf-approval-select">'
+        f'<input type="checkbox" data-select="{_html_escape(rid)}" aria-label="Select this approval"></label>'
         if batchable else ""
     )
     blocked_reason = row.get("blocked_reason") or ""
@@ -1106,7 +1094,7 @@ def _row_html(row: dict[str, Any]) -> str:
         f'<div class="pf-approval-blocked-reason">{_html_escape(blocked_reason)}</div>'
         if not batchable and blocked_reason else ""
     )
-    row_class = "pf-approval-row" if batchable else "pf-approval-row pf-approval-row-unbatchable"
+    row_class = "pf-approval-row card" if batchable else "pf-approval-row pf-approval-row-unbatchable card"
     return (
         f'<div class="{row_class}" data-approval-id="{_html_escape(rid)}" '
         f'data-tool="{_html_escape(row.get("tool") or "")}" '
@@ -1123,9 +1111,9 @@ def _row_html(row: dict[str, Any]) -> str:
         f"{blocked_html}"
         "</div>"
         '<div class="pf-approval-actions">'
-        f'<button type="button" class="pf-btn-details" data-details="{_html_escape(rid)}">Details</button>'
-        f'<a class="pf-btn-review" href="/approvals/{_html_escape(rid)}">Review →</a>'
-        f'<button type="button" class="pf-btn-deny" data-deny="{_html_escape(rid)}">Deny</button>'
+        f'<button type="button" class="button secondary pf-btn-details" data-details="{_html_escape(rid)}">Details</button>'
+        f'<a class="button primary pf-btn-review" href="/approvals/{_html_escape(rid)}">Review →</a>'
+        f'<button type="button" class="button danger pf-btn-deny" data-deny="{_html_escape(rid)}">Deny</button>'
         "</div>"
         f"{_details_html(rid)}"
         "</div>"
@@ -1204,15 +1192,16 @@ def _toolbar_html(*, any_batchable: bool, hidden: bool) -> str:
     select_all_disabled = "" if any_batchable else " disabled"
     hidden_attr = " hidden" if hidden else ""
     return (
-        f'<div class="pf-approvals-toolbar" id="pf-approvals-toolbar"{hidden_attr}>'
+        f'<div class="pf-approvals-toolbar card" id="pf-approvals-toolbar"{hidden_attr}>'
         '<label class="pf-select-all">'
         f'<input type="checkbox" id="pf-select-all-cb" aria-label="Select all batchable approvals"'
         f"{select_all_disabled}>"
         "<span>Select all</span></label>"
         '<span class="pf-selected-count" id="pf-selected-count"></span>'
-        '<button type="button" class="pf-btn-approve-selected" id="pf-approve-selected" disabled>'
+        '<button type="button" class="button secondary pf-btn-approve-selected" id="pf-approve-selected" disabled>'
         "Approve selected</button>"
-        '<button type="button" class="pf-btn-deny-selected" id="pf-deny-selected" disabled>Deny selected</button>'
+        '<button type="button" class="button danger pf-btn-deny-selected" id="pf-deny-selected" disabled>'
+        "Deny selected</button>"
         "</div>"
     )
 

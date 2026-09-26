@@ -792,28 +792,29 @@ def build_routes(
 # ``nav_items`` paragraph and build_routes' docstring on ``back_link``.
 # --------------------------------------------------------------------- #
 
+# On the shared design system (resources/design/, ADR 0078): each passkey is a `card` with a
+# `badge`, the controls are `.button`s, and colours are tokens, so app.css's dark mode needs no rule
+# here. Inside the shell the page is a readable column; local mode's bare document puts it in
+# web_shell.plain_page's panel instead, which already is one.
 _STYLE = """
-#pf-security-page{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
-  padding:24px 20px 64px}
-h1{font-size:20px;margin:0 0 4px}
-p.lead{color:var(--muted, #555);margin-top:0}
-.flash{border-radius:8px;padding:10px 14px;margin:16px 0;font-size:14px}
-.flash.ok{background:#e6f4ea;color:#1e7e34}
-.flash.err{background:#fdecea;color:#a02a2a}
-ul.creds{list-style:none;padding:0;margin:24px 0}
-li.cred{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid #eee}
-li.cred:last-child{border-bottom:none}
-.name{font-weight:600}
-.meta{color:#888;font-size:12px}
-.badge{font-size:12px;padding:2px 8px;border-radius:999px;margin-left:8px;background:#f1f1f3;color:#555}
-button.add{padding:8px 16px;border:none;border-radius:6px;background:#2451c9;color:#fff;font-size:14px;cursor:pointer}
-button.remove{background:none;color:#a02a2a;text-decoration:underline;border:none;padding:0;font-size:13px;cursor:pointer}
-.empty{color:#888;padding:20px 0}
-h2{font-size:16px;margin:32px 0 4px}
-ul.mints{list-style:none;padding:0;margin:8px 0 0}
-li.mint{padding:8px 0;border-bottom:1px solid #eee;font-size:13px}
-li.mint:last-child{border-bottom:none}
-li.mint .when{color:#888;font-size:12px;display:block}
+.pf-shell-main #pf-security-page{width:min(680px,100% - 2 * var(--gutter));margin-inline:auto;
+  padding-block:var(--space-m) var(--space-xl)}
+#pf-security-page{--stack-gap:var(--space-s);font-size:var(--step-body);line-height:1.55;color:var(--ink)}
+#pf-security-page h1{font-size:26px;line-height:1.2;letter-spacing:-.02em;margin:0}
+#pf-security-page h2{font-size:18px;margin-top:var(--space-l)}
+#pf-security-page .lead{color:var(--ink-soft)}
+#pf-security-page .meta{color:var(--muted);font-size:var(--step-small)}
+#pf-security-page .button{min-height:var(--tap)}
+ul.creds,ul.mints{list-style:none;--stack-gap:var(--space-xs)}
+ul.creds{padding:0}
+ul.mints{padding:var(--space-s)}
+li.cred{--cluster-gap:var(--space-xs) var(--space-s);justify-content:space-between}
+li.cred .name{font-weight:650;margin-right:var(--space-2xs)}
+li.cred .badge{vertical-align:middle}
+.empty{color:var(--muted)}
+li.mint{font-size:var(--step-small);overflow-wrap:anywhere}
+li.mint + li.mint{border-top:1px solid var(--line);padding-top:var(--space-xs)}
+li.mint .when{color:var(--muted);font-size:12.5px;display:block}
 """
 
 _PAGE_JS = """
@@ -973,16 +974,20 @@ def _credential_row_html(cred) -> str:
         created = _dt.datetime.fromtimestamp(cred.created_at, tz=_dt.timezone.utc).strftime("%Y-%m-%d")
     except (OSError, OverflowError, ValueError):
         pass
-    synced = '<span class="badge">Synced</span>' if cred.backed_up else '<span class="badge">Device-bound</span>'
+    synced = (
+        '<span class="badge badge-accent">Synced</span>' if cred.backed_up
+        else '<span class="badge">Device-bound</span>'
+    )
     # Plain JS-driven button, not a <form> -- removal is a fetch() POST
     # (module docstring: the last-credential case needs a 428-then-retry
     # WebAuthn round trip a plain form submit can't carry). data-credential-id
     # is read by _PAGE_JS's own remove handler below.
     return (
-        f'<li class="cred" data-credential-id="{_esc(cred.credential_id)}"><span>'
+        f'<li class="cred card cluster" data-credential-id="{_esc(cred.credential_id)}"><span>'
         f'<span class="name">{_esc(cred.label)}</span>{synced}'
         f'<div class="meta">Added {_esc(created)}</div></span>'
-        f'<button type="button" class="remove" data-credential-id="{_esc(cred.credential_id)}">Remove</button></li>'
+        f'<button type="button" class="button danger remove" data-credential-id="{_esc(cred.credential_id)}">'
+        "Remove</button></li>"
     )
 
 
@@ -1053,7 +1058,7 @@ def _recent_mints_html(rows: list[tuple[str, str]]) -> str:
         '<p class="meta">Every sign-in link this install has issued, and every one it refused. '
         "A link that can approve is only ever issued through PrivacyFence's companion app -- if "
         "you see one here you did not ask for, treat this install as compromised.</p>"
-        f'<ul class="mints">{items}</ul>'
+        f'<ul class="mints card stack">{items}</ul>'
     )
 
 
@@ -1065,32 +1070,39 @@ def _render_security_page(
     who = principal.email or principal.display_name or principal.id
     who_esc = _esc(who)
     rows = "".join(_credential_row_html(c) for c in creds)
-    creds_html = f'<ul class="creds">{rows}</ul>' if creds else '<div class="empty">No passkeys added yet.</div>'
+    creds_html = (
+        f'<ul class="creds stack">{rows}</ul>' if creds
+        else '<div class="empty card">No passkeys added yet.</div>'
+    )
     scope_note = _SCOPE_NOTES.get(step_up.scope, _SCOPE_NOTES["writes"])
     # ADR 0003 decision 7: shown at the top of the page body, so it lands
     # inside whichever shell is used below -- web_shell.wrap()'s nav in org
     # mode, the bare document in local mode, which is the only one that ever
     # passes a non-None notice.
     dev_notice_html = (
-        f'<p class="flash err">{_esc(dev_unseparated_notice)}</p>' if dev_unseparated_notice else ""
+        f'<p class="card card-danger" role="alert">{_esc(dev_unseparated_notice)}</p>'
+        if dev_unseparated_notice else ""
     )
     # Only rendered when there's no persistent nav to get back with (module
     # docstring's own ``nav_items`` paragraph) -- with one, this link would
     # just duplicate the nav's own "Connections"/"Settings" items.
     back_link_html = (
-        "" if nav_items is not None else f'<p><a href="{_esc(back_link[0])}">{_esc(back_link[1])}</a></p>'
+        "" if nav_items is not None
+        else f'<div class="cluster"><a class="button secondary" href="{_esc(back_link[0])}">{_esc(back_link[1])}</a></div>'
     )
     content = (
-        f'<div id="pf-security-page" data-csrf="{_esc(csrf)}">'
+        f'<div id="pf-security-page" class="stack" data-csrf="{_esc(csrf)}">'
         "<h1>Passkeys</h1>"
         f"{dev_notice_html}"
         f'<p class="lead">Signed in as {who_esc}. A passkey (Face ID, Touch ID, fingerprint, or Windows Hello) proves it\'s '
         f"really you before a write approval is released, even if someone else has your unlocked phone. {_esc(scope_note)}</p>"
         f"{creds_html}"
-        '<p><button type="button" class="add" id="pf-add-passkey">Add a passkey</button>'
-        '<span id="pf-passkey-status" class="meta"></span></p>'
-        '<p>Lost every passkey enrolled here? <button type="button" class="remove" id="pf-use-recovery-code">Use your recovery code</button>'
-        '<span id="pf-recovery-status" class="meta"></span></p>'
+        '<div class="cluster"><button type="button" class="button primary add" id="pf-add-passkey">Add a passkey</button>'
+        '<span id="pf-passkey-status" class="meta" role="status"></span></div>'
+        "<p>Lost every passkey enrolled here?</p>"
+        '<div class="cluster"><button type="button" class="button secondary" id="pf-use-recovery-code">'
+        "Use your recovery code</button>"
+        '<span id="pf-recovery-status" class="meta" role="status"></span></div>'
         f"{_recent_mints_html(_recent_mints())}"
         f"{back_link_html}"
         f'<script nonce="{nonce}">{_PAGE_JS}</script>'
@@ -1102,12 +1114,7 @@ def _render_security_page(
             title="PrivacyFence — Passkeys", active="passkeys", nonce=nonce,
             nav_items=nav_items, principal_label=who, live_updates=False, notifications_enabled=False,
         )
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PrivacyFence -- Security</title><style nonce="{nonce}">{_STYLE}</style></head>
-<body>
-{content}
-</body></html>"""
+    return web_shell.plain_page(content, title="PrivacyFence — Passkeys", nonce=nonce, page_css=_STYLE)
 
 
 __all__ = ["PF_WEBAUTHN_JS", "build_routes"]

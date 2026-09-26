@@ -28,6 +28,7 @@ pf_home = _smoke.pf_home
 org_server = _smoke.org_server
 org_server_and_ui = _smoke.org_server_and_ui
 local_server_with_settings = _smoke.local_server_with_settings
+local_server = _smoke.local_server
 
 _MARKDOWN_PREVIEW = _smoke._MARKDOWN_PREVIEW
 _MOBILE_EMULATION = _smoke._MOBILE_EMULATION
@@ -88,6 +89,74 @@ def test_shell_page(shot, org_server_and_ui, path):
         save(path)
     finally:
         for approval in pending:
+            web_ui.resolve(approval.id, "deny")
+
+
+@pytest.mark.parametrize("step", ["phone", "code", "password"])
+def test_connect_telegram(shot, monkeypatch, step):
+    """/connect's Telegram sign-in at each step, with an error showing. The org fixture's bundle
+    has no Telegram app credentials, so the page is rendered directly."""
+    from privacyfence.web import routes_connect
+
+    page, save = shot
+    monkeypatch.setattr(routes_connect, "telegram_app_credentials", lambda: (123, "apihash"))
+    page.set_content(routes_connect._render_connect_page(
+        principal=_ADMIN, org_config={}, flash_connected="", flash_error="", csrf="c", nonce="n",
+        telegram_state=routes_connect._TelegramState(
+            step=None if step == "phone" else step, error="That did not work. Try again.",
+        ),
+    ))
+    save(f"connect-telegram-{step}")
+
+
+def test_local_security(shot, monkeypatch):
+    """Local mode's /security, a web_shell.plain_page document, with two passkeys enrolled. The
+    in-process local server mounts no /security, so the page is rendered directly."""
+    from types import SimpleNamespace
+
+    from privacyfence.step_up_config import StepUpConfig
+    from privacyfence.web import routes_security
+
+    page, save = shot
+    monkeypatch.setattr(routes_security, "_recent_mints", lambda: [
+        ("2026-09-26 09:14:02 UTC", "Issued a sign-in code that can approve (confirmed in the companion)"),
+        ("2026-09-25 17:40:51 UTC", "Refused a sign-in code that can approve: the companion did not confirm it"),
+    ])
+    creds = [
+        SimpleNamespace(credential_id="c1", label="MacBook Touch ID", created_at=1_780_000_000, backed_up=True),
+        SimpleNamespace(credential_id="c2", label="YubiKey", created_at=1_785_000_000, backed_up=False),
+    ]
+    page.set_content(routes_security._render_security_page(
+        principal=Principal(id="local", display_name="You"), creds=creds, csrf="c", step_up=StepUpConfig(),
+        nonce="n", back_link=("/settings", "Back to settings"),
+    ))
+    save("fallback-local-security")
+
+
+@pytest.mark.parametrize("case", ["no-longer-pending", "preparing", "not-authorized"])
+def test_fallback_page(shot, local_server, case):
+    """The documents with no shell (web_shell.plain_page): the two stand-ins for a card and the
+    unauthenticated page."""
+    page, save = shot
+    server, web_ui = local_server
+    approval = None
+    if case != "not-authorized":
+        _sign_in_local(page, server)
+    try:
+        if case == "not-authorized":
+            page.goto(f"{server.base_url}/approvals")
+        elif case == "preparing":
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="review-preparing", connector="gmail", tool="gmail_get_message",
+                gate_kind="review", request_id="review-preparing",
+            )
+            page.goto(f"{server.base_url}/approvals/{approval.id}")
+        else:
+            page.goto(f"{server.base_url}/approvals/no-such-approval")
+        page.wait_for_load_state("load")
+        save(f"fallback-{case}")
+    finally:
+        if approval is not None:
             web_ui.resolve(approval.id, "deny")
 
 

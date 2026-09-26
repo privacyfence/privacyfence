@@ -548,43 +548,41 @@ def build_routes(
 # not what this page is a view of.
 # ---------------------------------------------------------------------------- #
 
+# On the shared design system (resources/design/, ADR 0078): each service is a `card`, its name in
+# the website's connector-chip look (website/styles.css's .connector-list span), its state a
+# `badge` whose text says the state, and its action a `.button`; colours are tokens, so app.css's
+# dark mode needs no rule here.
 _STYLE = """
-.pf-connect{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
-  padding:24px 20px 64px}
-h1{font-size:20px;margin:0 0 4px}
-p.lead{color:var(--muted);margin-top:0}
-.flash{border-radius:8px;padding:10px 14px;margin:16px 0;font-size:14px}
-.flash.ok{background:#e6f4ea;color:#1e7e34}
-.flash.err{background:#fdecea;color:#a02a2a}
-ul.services{list-style:none;padding:0;margin:24px 0}
-li.service{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line)}
-li.service:last-child{border-bottom:none}
-.name{font-weight:600}
-.badge{font-size:12px;padding:2px 8px;border-radius:999px;margin-left:8px}
-.badge.connected{background:#e6f4ea;color:#1e7e34}
-.badge.not-configured{background:var(--bg);color:var(--muted)}
-a.connect-link{color:#fff;background:#2451c9;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:14px}
-a.connect-link.reconnect{background:#555}
-.telegram-box{margin-top:8px;padding:14px;border:1px solid var(--line);border-radius:8px}
-.telegram-box input[type=text],.telegram-box input[type=password]{width:100%;box-sizing:border-box;padding:8px;
-  margin:6px 0;border:1px solid #ccc;border-radius:6px;font-size:14px}
-.telegram-box button{padding:8px 16px;border:none;border-radius:6px;background:#2451c9;color:#fff;font-size:14px}
-.telegram-box .cancel{background:none;color:#888;text-decoration:underline;border:none;padding:0;margin-left:10px;
-  font-size:13px;cursor:pointer}
-.telegram-box .error{color:#a02a2a;font-size:13px;margin:4px 0}
+.pf-connect{width:min(680px,100% - 2 * var(--gutter));margin-inline:auto;padding-block:var(--space-m) var(--space-xl);
+  --stack-gap:var(--space-s);font-size:var(--step-body);line-height:1.55;color:var(--ink)}
+.pf-connect h1{font-size:26px;line-height:1.2;letter-spacing:-.02em;margin:0}
+.pf-connect .lead{color:var(--ink-soft)}
+.pf-connect .button{min-height:var(--tap)}
+ul.services{list-style:none;padding:0;--stack-gap:var(--space-xs)}
+li.service{--cluster-gap:var(--space-xs) var(--space-s);justify-content:space-between}
+.pf-service-head{--cluster-gap:var(--space-xs)}
+.pf-service-chip{display:inline-flex;align-items:center;padding:8px 12px;border:1px solid var(--line);
+  background:var(--surface);border-radius:9px;color:var(--ink-soft);font-size:13px;font-weight:650}
+li.telegram{--stack-gap:var(--space-s)}
+.pf-telegram-form{--stack-gap:var(--space-xs)}
 """
 
 
 def _flash_html(flash_connected: str, flash_error: str) -> str:
     parts = []
     if flash_connected and flash_connected in SERVICE_LABELS:
-        parts.append(f'<div class="flash ok">{_esc(SERVICE_LABELS[flash_connected])} connected.</div>')
+        parts.append(
+            f'<div class="card card-success" role="status">{_esc(SERVICE_LABELS[flash_connected])} connected.</div>'
+        )
     if flash_error and flash_error in SERVICE_LABELS:
         parts.append(
-            f'<div class="flash err">Could not connect {_esc(SERVICE_LABELS[flash_error])} -- '
+            f'<div class="card card-danger" role="alert">Could not connect {_esc(SERVICE_LABELS[flash_error])} -- '
             "either sign-in was declined, or your organization hasn't configured it yet.</div>"
         )
     return "".join(parts)
+
+
+_CONNECTED_BADGE = '<span class="badge badge-success">Connected</span>'
 
 
 def _service_row_html(principal: Principal, org_config: dict[str, Any], service: str) -> str:
@@ -592,15 +590,18 @@ def _service_row_html(principal: Principal, org_config: dict[str, Any], service:
     connected = _is_connected(principal, service)
     configured = _is_configured(org_config, service)
     if not configured:
-        badge = '<span class="badge not-configured">Not set up by your organization</span>'
+        badge = '<span class="badge badge-dashed">Not set up by your organization</span>'
         action = ""
     elif connected:
-        badge = '<span class="badge connected">Connected</span>'
-        action = f'<a class="connect-link reconnect" href="/oauth/start/{service}">Reconnect</a>'
+        badge = _CONNECTED_BADGE
+        action = f'<a class="button secondary" href="/oauth/start/{service}">Reconnect</a>'
     else:
-        badge = ""
-        action = f'<a class="connect-link" href="/oauth/start/{service}">Connect</a>'
-    return f'<li class="service"><span><span class="name">{_esc(label)}</span>{badge}</span>{action}</li>'
+        badge = '<span class="badge">Not connected</span>'
+        action = f'<a class="button primary" href="/oauth/start/{service}">Connect</a>'
+    return (
+        f'<li class="service card cluster"><span class="pf-service-head cluster">'
+        f'<span class="pf-service-chip">{_esc(label)}</span>{badge}</span>{action}</li>'
+    )
 
 
 def _telegram_box_html(principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState, csrf: str) -> str:
@@ -609,41 +610,54 @@ def _telegram_box_html(principal: Principal, org_config: dict[str, Any], telegra
     if not configured:
         return _service_row_html(principal, org_config, "telegram")
 
-    header_badge = '<span class="badge connected">Connected</span>' if connected else ""
-    error_html = f'<div class="error">{_esc(telegram_state.error)}</div>' if telegram_state.error else ""
+    header_badge = _CONNECTED_BADGE if connected else '<span class="badge">Not connected</span>'
+    error_html = (
+        f'<p class="card card-danger" role="alert">{_esc(telegram_state.error)}</p>' if telegram_state.error else ""
+    )
     csrf_field = f'<input type="hidden" name="csrf" value="{_esc(csrf)}">'
+    # Cancel is its own form (it posts somewhere else) but sits beside the step's submit button,
+    # which the form= attribute allows without nesting one form in another.
+    cancel_form = (
+        f'<form id="pf-telegram-cancel" method="post" action="/connect/telegram/cancel">{csrf_field}</form>'
+    )
+    cancel_button = '<button type="submit" class="button secondary" form="pf-telegram-cancel">Cancel</button>'
 
+    # Each field names the keyboard a phone should show (inputmode) and what the browser or a
+    # password manager may fill in (autocomplete): the phone pad for the number, the digit pad
+    # and the SMS/app code suggestion for the code, the saved password for two-step verification.
     if telegram_state.step == "code":
         body = (
-            f"{error_html}"
-            f'<form method="post" action="/connect/telegram/code">{csrf_field}'
-            '<input type="text" name="code" placeholder="Verification code" autocomplete="one-time-code" required>'
-            '<button type="submit">Confirm code</button></form>'
-            f'<form method="post" action="/connect/telegram/cancel" style="display:inline">{csrf_field}'
-            '<button type="submit" class="cancel">Cancel</button></form>'
+            f'<form class="pf-telegram-form stack" method="post" action="/connect/telegram/code">{csrf_field}'
+            '<label><span class="field-label">Verification code</span>'
+            '<input class="field" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" '
+            'autocapitalize="off" spellcheck="false" placeholder="12345" required></label>'
+            '<div class="field-help">Telegram sent it to your Telegram app, or by SMS.</div>'
+            f'<div class="cluster"><button type="submit" class="button primary">Confirm code</button>{cancel_button}</div>'
+            f"</form>{cancel_form}"
         )
     elif telegram_state.step == "password":
         body = (
-            f"{error_html}"
-            f'<form method="post" action="/connect/telegram/2fa">{csrf_field}'
-            '<input type="password" name="password" placeholder="Two-step verification password" required>'
-            '<button type="submit">Confirm</button></form>'
-            f'<form method="post" action="/connect/telegram/cancel" style="display:inline">{csrf_field}'
-            '<button type="submit" class="cancel">Cancel</button></form>'
+            f'<form class="pf-telegram-form stack" method="post" action="/connect/telegram/2fa">{csrf_field}'
+            '<label><span class="field-label">Two-step verification password</span>'
+            '<input class="field" type="password" name="password" autocomplete="current-password" required></label>'
+            f'<div class="cluster"><button type="submit" class="button primary">Confirm</button>{cancel_button}</div>'
+            f"</form>{cancel_form}"
         )
     else:
         body = (
-            f"{error_html}"
-            f'<form method="post" action="/connect/telegram/start">{csrf_field}'
-            '<input type="text" name="phone" placeholder="+1 555 0100" autocomplete="tel" required>'
-            f'<button type="submit">{"Reconnect" if connected else "Connect"} Telegram</button></form>'
+            f'<form class="pf-telegram-form stack" method="post" action="/connect/telegram/start">{csrf_field}'
+            '<label><span class="field-label">Phone number</span>'
+            '<input class="field" type="tel" name="phone" inputmode="tel" autocomplete="tel" '
+            'placeholder="+1 555 0100" required></label>'
+            '<div class="field-help">With the country code. Telegram sends a code to confirm it.</div>'
+            '<div class="cluster"><button type="submit" class="button primary">'
+            f'{"Reconnect" if connected else "Connect"} Telegram</button></div></form>'
         )
 
     return (
-        f'<li class="service"><div style="width:100%">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center">'
-        f'<span class="name">Telegram</span>{header_badge}</div>'
-        f'<div class="telegram-box">{body}</div></div></li>'
+        '<li class="service telegram card stack">'
+        f'<div class="pf-service-head cluster"><span class="pf-service-chip">Telegram</span>{header_badge}</div>'
+        f"{error_html}{body}</li>"
     )
 
 
@@ -658,13 +672,14 @@ def _render_connect_page(
 
     body = (
         f'<style nonce="{nonce}">{_STYLE}</style>'
-        '<div class="pf-connect">'
+        '<div class="pf-connect stack">'
         "<h1>Connect your accounts</h1>"
         f'<p class="lead">Signed in as {_esc(who)}. Connecting a service lets PrivacyFence act on it for you, still gated by '
         "the same approval rules as everything else.</p>"
         f"{_flash_html(flash_connected, flash_error)}"
-        f'<ul class="services">{google_rows}{other_rows}{telegram_row}</ul>'
-        '<form method="post" action="/logout"><button type="submit" class="cancel" style="cursor:pointer">Sign out</button></form>'
+        f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}</ul>'
+        '<form class="cluster" method="post" action="/logout">'
+        '<button type="submit" class="button secondary">Sign out</button></form>'
         "</div>"
     )
     return web_shell.wrap(

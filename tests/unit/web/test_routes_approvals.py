@@ -355,6 +355,7 @@ class TestShowApproval:
         r = client.get("/approvals/does-not-exist")
         assert r.status_code == 200
         assert "no longer pending" in r.text
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in r.text
 
     def test_pending_card_renders_with_the_bridge_shim_injected(self, client, sessions, web_ui):
         _signed_in(client, sessions)
@@ -418,6 +419,9 @@ class TestShowApproval:
         assert r.status_code == 200
         assert "Preparing this request" in r.text
         assert 'href="/approvals"' in r.text
+        # web_shell.plain_page: laid out at a phone's width, and still reloading itself.
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in r.text
+        assert '<meta http-equiv="refresh" content="2">' in r.text.split("</head>", 1)[0]
 
 
 class TestDecide:

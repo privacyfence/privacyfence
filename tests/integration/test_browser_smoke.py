@@ -2302,15 +2302,6 @@ _READ_KINDS = ("pdf", "image", "markdown", "table")
 _PHONES = ("320", "393")
 _EVERY_WIDTH = tuple(_PHONE_WIDTHS)
 _PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {
-    # The shell's nav links are 25px tall, and the list's checkbox, the Connect/Sign out controls
-    # and the passkey buttons are under 44px; at 320px the page overflows the device.
-    "approvals": ("p6-remaining-pages", _PHONES),
-    "connect": ("p6-remaining-pages", _PHONES),
-    "security": ("p6-remaining-pages", _PHONES),
-    # No viewport meta at all: a phone lays them out at 980px and zooms out.
-    "no-longer-pending": ("p6-remaining-pages", _EVERY_WIDTH),
-    "preparing": ("p6-remaining-pages", _EVERY_WIDTH),
-    "not-authorized": ("p6-remaining-pages", _EVERY_WIDTH),
     # The full-page card's preview pane is 81-85% of a phone's width (the card's own padding).
     **{f"card-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
     # Inline in a list row there is no card yet, only the Details metadata disclosure: narrower
@@ -2446,6 +2437,24 @@ class TestPhoneLayout:
         phone_page.wait_for_selector(region)
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=region)
+
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["telegram-phone", "telegram-code", "telegram-password"]))
+    def test_telegram_form(self, phone_page, monkeypatch, case, width):
+        """/connect's Telegram sign-in at each of its steps, with an error showing. The org
+        fixture's bundle has no Telegram app credentials, so the page is rendered directly."""
+        from privacyfence.web import routes_connect
+
+        monkeypatch.setattr(routes_connect, "telegram_app_credentials", lambda: (123, "apihash"))
+        step = case.removeprefix("telegram-")
+        html = routes_connect._render_connect_page(
+            principal=_ADMIN, org_config={}, flash_connected="", flash_error="", csrf="c", nonce="n",
+            telegram_state=routes_connect._TelegramState(
+                step=None if step == "phone" else step, error="That did not work. Try again.",
+            ),
+        )
+        phone_page.set_content(html)
+        _phone_screenshot(phone_page, f"connect-{case}-{width}")
+        _assert_phone_layout(phone_page, width, main=".pf-shell-main > *")
 
     @pytest.mark.parametrize(("case", "width"), _phone_cases(["no-longer-pending", "preparing", "not-authorized"]))
     def test_fallback_page(self, phone_page, local_server, case, width):
