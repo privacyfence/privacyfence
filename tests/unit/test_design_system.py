@@ -156,7 +156,7 @@ def test_the_check_sees_what_it_is_meant_to():
     assert _media_count("@media (prefers-color-scheme: dark) {") == 0
     assert _media_count("@media (prefers-reduced-motion: reduce) {") == 0
     assert _colour_count("color:#fff;background:#1d1d1f;border:1px solid rgba(0,0,0,.1)") == 3
-    assert _colour_count('href="#pf-content" &#8230; #add-passkey id="#12"') == 0
+    assert _colour_count('href="#pf-content" &#8230; #add-passkey #fade-in') == 0
     assert _colour_count("color: var(--ink); color-mix(in srgb, var(--ink) 16%, transparent)") == 0
 
 
