@@ -2,12 +2,10 @@
 /approvals and /settings."""
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
 from privacyfence import web_shell
-from privacyfence.approval_window_html import _STYLES_CSS
 
 
 class TestWrap:
@@ -29,7 +27,7 @@ class TestWrap:
 
     def test_embeds_the_shared_tokens(self):
         html = web_shell.wrap("", title="t", active="approvals")
-        assert "--color-accent:" in html
+        assert "--accent:" in html
         assert "prefers-color-scheme: dark" in html
 
     def test_wires_the_state_stream_and_render_dispatch(self):
@@ -233,20 +231,38 @@ class TestNotifications:
         assert "document.hasFocus()" in html
 
 
-class TestTokensCssStaysInSyncWithTheApprovalCard:
-    """resources/tokens.css is a manual export of approval_window/styles.css's
-    own :root block (see that file's docstring for why it isn't a single
-    shared @import source) -- this guards against the two silently drifting
-    apart the next time either palette changes."""
+class TestWebsiteHeader:
+    """The shell's header is the website's (website/_partials/header.html): brand mark, inline
+    links, and the same links in a <details> menu that replaces them when the header is narrow."""
 
-    def test_every_token_value_in_tokens_css_appears_in_the_approval_stylesheet(self):
-        tokens_css = (Path(web_shell.__file__).parent / "resources" / "tokens.css").read_text()
-        for line in tokens_css.splitlines():
-            line = line.strip()
-            if not line.startswith("--") or ":" not in line:
-                continue
-            value = line.split(":", 1)[1].strip().rstrip(";")
-            assert value in _STYLES_CSS, f"tokens.css value {value!r} ({line!r}) not found in approval styles.css"
+    def test_the_menu_repeats_every_inline_link(self):
+        html = web_shell.wrap("", title="t", active="connections", nav_items=web_shell.ORG_NAV_ITEMS)
+        inline = html.split('<div class="pf-shell-nav-links">', 1)[1].split("</div>", 1)[0]
+        menu = html.split('<div class="pf-shell-menu-panel">', 1)[1].split("</div></details>", 1)[0]
+        for _key, label, href in web_shell.ORG_NAV_ITEMS:
+            assert f'href="{href}"' in inline and f'href="{href}"' in menu, label
+        assert '<details class="pf-shell-menu"><summary>' in html
+
+    def test_the_current_page_is_marked_for_assistive_technology_too(self):
+        html = web_shell.wrap("", title="t", active="settings")
+        assert 'class="pf-shell-nav-item active" href="/settings" aria-current="page"' in html
+        assert html.count('aria-current="page"') == 2  # inline and in the menu
+
+    def test_the_brand_links_home_with_the_shield_mark(self):
+        html = web_shell.wrap("", title="t", active="settings")
+        assert '<a class="pf-shell-brand" href="/approvals" aria-label="PrivacyFence home">' in html
+        assert f'<img src="{web_shell._BRAND_ICON_DATA_URI}" alt=""' in html
+
+    def test_the_nav_collapses_by_container_not_viewport(self):
+        # Shared rule 6: the app has no viewport breakpoints.
+        assert "@container (max-width: 900px)" in web_shell._SHELL_CSS
+        assert "@media" not in web_shell._SHELL_CSS
+
+    def test_the_principal_is_also_in_the_menu(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS, principal_label="carol@example.com",
+        )
+        assert '<div class="pf-shell-menu-principal">Signed in as carol@example.com</div>' in html
 
 
 class TestNavItems:
@@ -323,4 +339,4 @@ class TestBareLinksAreStyled:
         # page renders outside the nav/banner/notice classes fell through
         # to #0000ee against a warm grey palette.
         html = web_shell.wrap("", title="t", active="approvals")
-        assert ".pf-shell-main a { color: var(--color-accent-700); }" in html
+        assert ".pf-shell-main :where(a) { color: var(--accent-dark); }" in html

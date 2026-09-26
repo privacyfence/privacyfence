@@ -1538,6 +1538,26 @@ class TestResponsiveLayout:
 # --------------------------------------------------------------------- #
 
 
+# The page's own background and text colour, and what --bg and --ink are and resolve to, read off
+# the live document.
+_THEME_PROBE_JS = """() => {
+  const root = getComputedStyle(document.documentElement);
+  const resolve = (token) => {
+    const probe = document.createElement('div');
+    probe.style.color = `var(${token})`;
+    document.body.appendChild(probe);
+    const value = getComputedStyle(probe).color;
+    probe.remove();
+    return value;
+  };
+  return {
+    bgToken: root.getPropertyValue('--bg').trim(), inkToken: root.getPropertyValue('--ink').trim(),
+    bgResolved: resolve('--bg'), inkResolved: resolve('--ink'),
+    body: getComputedStyle(document.body).backgroundColor, text: getComputedStyle(document.body).color,
+  };
+}"""
+
+
 class TestColorScheme:
     @pytest.mark.parametrize("color_scheme", ["light", "dark"])
     def test_approval_list_renders_in_both_color_schemes(self, page, local_server, color_scheme):
@@ -1578,17 +1598,136 @@ class TestColorScheme:
         browser context."""
         server, _web_ui = local_server
         _sign_in_local(page, server)
-        page.emulate_media(color_scheme="light")
-        page.goto(f"{server.base_url}/approvals")
-        page.wait_for_load_state("load")
-        light_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        seen = {}
+        for scheme in ("light", "dark"):
+            page.emulate_media(color_scheme=scheme)
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_load_state("load")
+            seen[scheme] = page.evaluate(_THEME_PROBE_JS)
 
-        page.emulate_media(color_scheme="dark")
-        page.reload()
-        page.wait_for_load_state("load")
-        dark_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        # The page is painted from the shared token names (resources/design/), and app.css's dark
+        # block redefines those same names: --bg and --ink, not a parallel set.
+        assert seen["light"]["bgToken"] == "#f6f8fb" and seen["dark"]["bgToken"] == "#0e1f1f"
+        assert seen["light"]["inkToken"] == "#14212b" and seen["dark"]["inkToken"] == "#eaf4f3"
+        for scheme in ("light", "dark"):
+            assert seen[scheme]["body"] == seen[scheme]["bgResolved"], scheme
+            assert seen[scheme]["text"] == seen[scheme]["inkResolved"], scheme
+        assert seen["light"]["body"] != seen["dark"]["body"]
 
-        assert light_bg != dark_bg
+    @pytest.mark.parametrize("color_scheme", ["light", "dark"])
+    def test_the_list_rows_review_link_is_readable_on_its_fill(self, page, local_server, color_scheme):
+        """The Review control is an <a>; a page-wide link colour must not repaint its text in the
+        colour of its own fill (which it did: teal on teal)."""
+        server, web_ui = local_server
+        page.emulate_media(color_scheme=color_scheme)
+        _sign_in_local(page, server)
+        approval, _ = web_ui.deferred_registry.register_or_coalesce(
+            dedupe_key="contrast", connector="gmail", tool="gmail_get_message", gate_kind="review",
+            request_id="contrast", summary="Quarterly numbers", tool_name="Get message",
+        )
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(".pf-btn-review")
+            fg, bg = page.evaluate(
+                "() => { const s = getComputedStyle(document.querySelector('.pf-btn-review'));"
+                " return [s.color, s.backgroundColor]; }"
+            )
+            assert _contrast(fg, bg) >= 4.5, (fg, bg)
+        finally:
+            web_ui.resolve(approval.id, "deny")
+
+    def test_the_card_takes_the_dark_tokens_too(self, page, local_server):
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread, card = _register_card(web_ui, read=False, layout="narrow")
+        try:
+            seen = {}
+            for scheme in ("light", "dark"):
+                page.emulate_media(color_scheme=scheme)
+                page.goto(f"{server.base_url}/approvals/{card.id}")
+                page.wait_for_load_state("load")
+                seen[scheme] = page.evaluate(_THEME_PROBE_JS)
+            for scheme in ("light", "dark"):
+                assert seen[scheme]["body"] == seen[scheme]["bgResolved"], scheme
+                assert seen[scheme]["text"] == seen[scheme]["inkResolved"], scheme
+            assert seen["light"]["body"] != seen["dark"]["body"]
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
+# --------------------------------------------------------------------- #
+# The approval card's action hierarchy (shared rule 10, ADR 0079): a
+# restyle changes the three decisions' colour and shape, never which one is
+# filled, outlined or strongest. Measured on the rendered buttons, in both
+# themes, at a phone and a desktop width.
+# --------------------------------------------------------------------- #
+
+_ACTION_STYLES_JS = """() => {
+  document.querySelectorAll('[aria-disabled]').forEach((el) => el.setAttribute('aria-disabled', 'false'));
+  const read = (selector) => {
+    const el = document.querySelector(selector);
+    const s = getComputedStyle(el);
+    return {bg: s.backgroundColor, borderWidth: parseFloat(s.borderTopWidth), borderStyle: s.borderTopStyle,
+            fontSize: parseFloat(s.fontSize), underline: s.textDecorationLine.includes('underline'),
+            height: el.getBoundingClientRect().height};
+  };
+  return {page: getComputedStyle(document.body).backgroundColor,
+          allowOnce: read('.pf-btn-primary'), deny: read('.pf-btn-deny'), always: read('.pf-btn-link')};
+}"""
+
+
+def _css_rgba(value: str) -> tuple[float, float, float, float]:
+    numbers = [float(n) for n in re.findall(r"[\d.]+", value)]
+    return (*numbers[:3], numbers[3] if len(numbers) > 3 else 1.0)  # type: ignore[return-value]
+
+
+def _contrast(fg: str, bg: str) -> float:
+    """WCAG contrast of two computed ``rgb()`` colours (tests/unit/test_design_contrast.py does the
+    same over the token files)."""
+    def luminance(value: str) -> float:
+        def channel(c: float) -> float:
+            c /= 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b, _a = _css_rgba(value)
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+    lighter, darker = sorted((luminance(fg), luminance(bg)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+class TestActionHierarchy:
+    @pytest.mark.parametrize("color_scheme", ["light", "dark"])
+    @pytest.mark.parametrize("width", [393, 1000])
+    @pytest.mark.parametrize("candidates", [1, 2])
+    def test_allow_once_is_the_one_filled_action_deny_is_outlined_always_allow_is_a_link(
+        self, browser, color_scheme, width, candidates,
+    ):
+        from privacyfence.card_builder import build_card_html
+
+        html = build_card_html(
+            title="Send email", preview={"To": "a@b.com"}, details_text="body", is_read=False, layout="narrow",
+            accept_all_choices=[(f"rule-{i}", f"Always allow — option {i}") for i in range(candidates)],
+        )
+        ctx = browser.new_context(viewport={"width": width, "height": 800}, color_scheme=color_scheme)
+        try:
+            page = ctx.new_page()
+            page.set_content(html)
+            styles = page.evaluate(_ACTION_STYLES_JS)
+        finally:
+            ctx.close()
+        allow_once, deny, always = styles["allowOnce"], styles["deny"], styles["always"]
+        # Filled: only Allow once has an opaque fill, and it differs from the page.
+        assert _css_rgba(allow_once["bg"])[3] == 1 and allow_once["bg"] != styles["page"], styles
+        assert _css_rgba(deny["bg"])[3] == 0 and _css_rgba(always["bg"])[3] == 0, styles
+        # Outlined: Deny has a visible solid border; the Always-allow link has none.
+        assert deny["borderWidth"] >= 1 and deny["borderStyle"] == "solid", styles
+        assert always["borderWidth"] == 0 or always["borderStyle"] == "none", styles
+        # Strongest to quietest: the two buttons match in size; the link is underlined, in
+        # smaller type and shorter than either.
+        assert always["underline"] and not deny["underline"] and not allow_once["underline"], styles
+        assert always["fontSize"] < deny["fontSize"] == allow_once["fontSize"], styles
+        assert always["height"] < deny["height"] == allow_once["height"], styles
 
 
 # --------------------------------------------------------------------- #

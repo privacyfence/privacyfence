@@ -132,21 +132,21 @@ _CSS = """
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;
 }
 .pf-approvals-heading:empty { margin-bottom: 0; }
-.pf-approvals-count { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); }
-.pf-approvals-composition { font-size: 12.5px; color: var(--color-neutral-600); }
+.pf-approvals-count { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.pf-approvals-composition { font-size: 12.5px; color: var(--muted); }
 .pf-approvals-empty {
-  text-align: center; padding: 80px 20px; color: var(--color-neutral-600);
+  text-align: center; padding: 80px 20px; color: var(--muted);
 }
-.pf-approvals-empty-title { font-size: 16px; font-weight: 600; color: var(--color-text); margin-bottom: 4px; }
+.pf-approvals-empty-title { font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
 .pf-approvals-empty-sub { font-size: 13px; }
 .pf-approvals-empty-body { line-height: 1.6; max-width: 330px; margin: 0 auto 18px; }
 .pf-approvals-empty-cta {
   display: inline-block; font-size: 12.5px; font-weight: 600; padding: 9px 14px;
-  border-radius: var(--radius-md); background: var(--color-accent); color: #fff; text-decoration: none;
+  border-radius: var(--radius-s); background: var(--accent); color: var(--on-accent); text-decoration: none;
 }
 .pf-approvals-toolbar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 10px 14px; margin-bottom: 12px; background: var(--color-surface); border-radius: var(--radius-lg);
+  padding: 10px 14px; margin-bottom: 12px; background: var(--surface); border-radius: var(--radius-s);
 }
 /* An attribute selector, needed only because the rule above sets its own
    `display` unconditionally: author-origin CSS always wins over the
@@ -156,10 +156,10 @@ _CSS = """
    nothing at all. */
 .pf-approvals-toolbar[hidden] { display: none; }
 .pf-select-all { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
-.pf-selected-count { font-size: 12.5px; color: var(--color-neutral-600); flex: 1; min-width: 0; }
+.pf-selected-count { font-size: 12.5px; color: var(--muted); flex: 1; min-width: 0; }
 .pf-btn-deny-selected {
-  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-divider); background: transparent; color: var(--color-danger); cursor: pointer;
+  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-s);
+  border: 1px solid var(--line); background: transparent; color: var(--danger); cursor: pointer;
 }
 .pf-btn-deny-selected:disabled { opacity: 0.5; cursor: default; }
 /* Outline, not filled. Review is the one filled control on this page and
@@ -169,90 +169,90 @@ _CSS = """
    composition label on it ("Approve 12 · 9 reads, 3 writes") stays -- that
    part is the guard, not the problem. */
 .pf-btn-approve-selected {
-  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-accent); background: transparent;
-  color: var(--color-accent-700); cursor: pointer;
+  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-s);
+  border: 1px solid var(--accent); background: transparent;
+  color: var(--accent-dark); cursor: pointer;
 }
 .pf-btn-approve-selected:disabled { opacity: 0.5; cursor: default; }
 .pf-approval-group { margin-bottom: 14px; }
 .pf-approval-group-header {
   display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 12.5px;
-  font-weight: 600; color: var(--color-neutral-600);
+  font-weight: 600; color: var(--muted);
 }
 .pf-approval-group-header label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .pf-approval-row {
   display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px;
-  background: var(--color-surface); border-radius: var(--radius-lg); margin-bottom: 10px; flex-wrap: wrap;
+  background: var(--surface); border-radius: var(--radius-s); margin-bottom: 10px; flex-wrap: wrap;
 }
 /* The row is two lines now (meta above, object below), so its controls
    align to the top of the text block rather than to its centre. */
 .pf-approval-row > input[type="checkbox"] { margin-top: 5px; }
 .pf-approval-actions { margin-top: 1px; }
 .pf-approval-icon {
-  width: 28px; height: 28px; border-radius: var(--radius-md); flex-shrink: 0; object-fit: contain;
-  background: var(--color-neutral-200);
+  width: 28px; height: 28px; border-radius: var(--radius-s); flex-shrink: 0; object-fit: contain;
+  background: var(--surface-soft);
 }
 .pf-approval-icon-fallback {
   display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700; color: var(--color-neutral-600);
+  font-size: 12px; font-weight: 700; color: var(--muted);
 }
 .pf-approval-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 /* Meta above, object below -- the row's headline is what is being touched,
    not which tool touches it. See _row_html. */
 .pf-approval-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pf-approval-title {
-  font-size: 15px; font-weight: 600; color: var(--color-text); line-height: 1.35;
+  font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.35;
   /* Clamped rather than free-flowing: a summary is short by construction
      (see gate.py's call sites) but nothing enforces it, and an unbounded
      title would let one row push the rest of the queue off screen. */
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; text-overflow: ellipsis;
 }
-.pf-approval-kicker { font-size: 12px; color: var(--color-neutral-600); }
+.pf-approval-kicker { font-size: 12px; color: var(--muted); }
 /* Who is asking -- the card header's .pf-agent in miniature, with the same
    tier rule (ADR 0006 decision 4): only an attested row draws the vendor's
    mark; a claimed or unknown one gets a dashed "?" and "not verified". */
 .pf-approval-agent {
-  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--color-neutral-600);
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted);
   min-width: 0; overflow-wrap: anywhere;
 }
 .pf-approval-agent-mark {
   width: 16px; height: 16px; flex-shrink: 0; box-sizing: border-box; border-radius: 4px;
-  background-color: #fff; background-size: 12px 12px; background-repeat: no-repeat; background-position: center;
-  box-shadow: 0 0 0 1px var(--color-divider);
+  background-color: var(--mark-tile); background-size: 12px 12px; background-repeat: no-repeat; background-position: center;
+  box-shadow: 0 0 0 1px var(--line);
 }
 .pf-approval-agent-glyph {
   display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
-  flex-shrink: 0; box-sizing: border-box; border-radius: 4px; border: 1px dashed var(--color-neutral-500);
+  flex-shrink: 0; box-sizing: border-box; border-radius: 4px; border: 1px dashed var(--control-line);
   font: 600 10px ui-monospace, Menlo, monospace;
 }
-.pf-approval-agent-attested .pf-approval-agent-name { font-weight: 600; color: var(--color-text); }
+.pf-approval-agent-attested .pf-approval-agent-name { font-weight: 600; color: var(--ink); }
 .pf-approval-agent-unverified { font-style: italic; }
 /* Read/write direction, from gate_kind -- the same two token families and
    the same wording as the card's own .pf-pill, so a row and the card it
-   opens agree on sight. Both pairs invert in tokens.css's dark block. */
+   opens agree on sight. Both pairs invert in app.css's dark mode. */
 .pf-approval-pill {
   font: 600 10px ui-monospace, Menlo, monospace; letter-spacing: 0.05em;
   text-transform: uppercase; padding: 2px 8px; border-radius: 20px; flex-shrink: 0;
 }
-.pf-approval-pill-read { background: var(--color-accent-100); color: var(--color-accent-700); }
-.pf-approval-pill-write { background: var(--color-accent-2-100); color: var(--color-accent-2-700); }
-.pf-approval-blocked-reason { font-size: 11.5px; color: var(--color-neutral-600); margin-top: 4px; font-style: italic; }
+.pf-approval-pill-read { background: var(--accent-soft); color: var(--accent-dark); }
+.pf-approval-pill-write { background: var(--warning-soft); color: var(--warning); }
+.pf-approval-blocked-reason { font-size: 11.5px; color: var(--muted); margin-top: 4px; font-style: italic; }
 .pf-approval-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .pf-btn-deny, .pf-btn-review, .pf-btn-details {
-  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-md);
+  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-s);
   border: none; cursor: pointer; text-decoration: none; white-space: nowrap;
 }
-.pf-btn-deny { background: transparent; color: var(--color-danger); border: 1px solid var(--color-divider); }
-.pf-btn-review { background: var(--color-accent); color: #fff; }
-.pf-btn-details { background: transparent; color: var(--color-text); border: 1px solid var(--color-divider); }
+.pf-btn-deny { background: transparent; color: var(--danger); border: 1px solid var(--line); }
+.pf-btn-review { background: var(--accent); color: var(--on-accent); }
+.pf-btn-details { background: transparent; color: var(--ink); border: 1px solid var(--line); }
 .pf-approval-details {
-  flex-basis: 100%; font-size: 12.5px; color: var(--color-neutral-600);
-  border-top: 1px solid var(--color-divider); margin-top: 8px; padding-top: 8px;
+  flex-basis: 100%; font-size: 12.5px; color: var(--muted);
+  border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px;
 }
 .pf-approval-details-row { display: flex; gap: 6px; }
 .pf-approval-details-row + .pf-approval-details-row { margin-top: 3px; }
-.pf-approval-details-key { font-weight: 600; color: var(--color-text); }
+.pf-approval-details-key { font-weight: 600; color: var(--ink); }
 
 /* — phone widths — the row's own flex-wrap never engages on its own:
    .pf-approval-actions is flex-shrink:0 and holds ~220px of buttons, while

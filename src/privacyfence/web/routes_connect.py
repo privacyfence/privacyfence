@@ -552,20 +552,20 @@ _STYLE = """
 .pf-connect{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
   padding:24px 20px 64px}
 h1{font-size:20px;margin:0 0 4px}
-p.lead{color:var(--color-neutral-600);margin-top:0}
+p.lead{color:var(--muted);margin-top:0}
 .flash{border-radius:8px;padding:10px 14px;margin:16px 0;font-size:14px}
 .flash.ok{background:#e6f4ea;color:#1e7e34}
 .flash.err{background:#fdecea;color:#a02a2a}
 ul.services{list-style:none;padding:0;margin:24px 0}
-li.service{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-divider)}
+li.service{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line)}
 li.service:last-child{border-bottom:none}
 .name{font-weight:600}
 .badge{font-size:12px;padding:2px 8px;border-radius:999px;margin-left:8px}
 .badge.connected{background:#e6f4ea;color:#1e7e34}
-.badge.not-configured{background:var(--color-bg);color:var(--color-neutral-600)}
+.badge.not-configured{background:var(--bg);color:var(--muted)}
 a.connect-link{color:#fff;background:#2451c9;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:14px}
 a.connect-link.reconnect{background:#555}
-.telegram-box{margin-top:8px;padding:14px;border:1px solid var(--color-divider);border-radius:8px}
+.telegram-box{margin-top:8px;padding:14px;border:1px solid var(--line);border-radius:8px}
 .telegram-box input[type=text],.telegram-box input[type=password]{width:100%;box-sizing:border-box;padding:8px;
   margin:6px 0;border:1px solid #ccc;border-radius:6px;font-size:14px}
 .telegram-box button{padding:8px 16px;border:none;border-radius:6px;background:#2451c9;color:#fff;font-size:14px}

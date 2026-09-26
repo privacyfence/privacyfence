@@ -376,8 +376,8 @@ class TestReadWriteDirectionOnTheRow:
 
     def test_pill_uses_the_same_token_families_as_the_card(self):
         html = approval_list_html.build_list_html([], csrf="t")
-        assert "var(--color-accent-100)" in html and "var(--color-accent-700)" in html
-        assert "var(--color-accent-2-100)" in html and "var(--color-accent-2-700)" in html
+        assert "var(--accent-soft)" in html and "var(--accent-dark)" in html
+        assert "var(--warning-soft)" in html and "var(--warning)" in html
 
     def test_live_rerender_mirrors_the_pill(self):
         js = approval_list_html._JS
@@ -411,15 +411,15 @@ class TestHeadingComposition:
 class TestApproveSelectedIsNotTheLoudestControl:
     """Approve-selected is the least-informed action -- select-all plus one
     click, off one-line summaries -- so it must not be as loud (filled
-    ``var(--color-accent)``) as Review, the one that opens disclosure."""
+    ``var(--accent)``) as Review, the one that opens disclosure."""
 
     def test_approve_selected_is_an_outline(self):
         html = approval_list_html.build_list_html([], csrf="t")
-        assert "border: 1px solid var(--color-accent); background: transparent;" in html
+        assert "border: 1px solid var(--accent); background: transparent;" in html
 
     def test_review_keeps_the_fill(self):
         html = approval_list_html.build_list_html([], csrf="t")
-        assert ".pf-btn-review { background: var(--color-accent); color: #fff; }" in html
+        assert ".pf-btn-review { background: var(--accent); color: var(--on-accent); }" in html
 
     def test_the_composition_guard_on_the_label_is_kept(self):
         # The label naming "9 reads, 3 writes" is what stops an unintended

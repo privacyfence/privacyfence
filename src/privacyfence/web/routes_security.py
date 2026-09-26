@@ -796,7 +796,7 @@ _STYLE = """
 #pf-security-page{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
   padding:24px 20px 64px}
 h1{font-size:20px;margin:0 0 4px}
-p.lead{color:var(--color-neutral-600, #555);margin-top:0}
+p.lead{color:var(--muted, #555);margin-top:0}
 .flash{border-radius:8px;padding:10px 14px;margin:16px 0;font-size:14px}
 .flash.ok{background:#e6f4ea;color:#1e7e34}
 .flash.err{background:#fdecea;color:#a02a2a}

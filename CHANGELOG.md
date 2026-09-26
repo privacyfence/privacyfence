@@ -50,6 +50,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   connection pages working on a phone and looking like the website. Nothing looks different yet,
   except that keyboard focus in the app now shows the website's clear focus ring instead of the
   browser's default outline.
+- **The app now looks like the website.** Approvals, settings, connections and passkeys use the
+  website's colours, rounded cards, buttons and header (which folds its links into a menu when
+  the window is narrow), in light and in a dark mode based on the website's own dark panel. The
+  approval card uses your system font instead of a serif, which also makes every card smaller.
+  Allow once is still the one filled button, Deny still outlined, and Always allow still a small
+  link. Writes, possible personal data and unverified requesters still each have their own
+  label or icon, not only a colour.
+
+### Fixed
+
+- The **Review** button on the approvals list showed its text in almost the same colour as the
+  button, and several highlighted controls in settings were hard to read in dark mode.
 
 ## [4.7.0] — 2026-09-26
 

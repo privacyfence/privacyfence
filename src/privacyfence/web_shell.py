@@ -37,9 +37,7 @@ from html import escape as _html_escape
 from pathlib import Path
 
 from . import approval_icons
-from .design_css import SHARED_CSS
-
-_TOKENS_CSS = (Path(__file__).parent / "resources" / "tokens.css").read_text(encoding="utf-8")
+from .design_css import DOCUMENT_CSS
 
 # Browser-tab favicon -- the same bundled shield mark approval_icons.py
 # already hands the native/web approval cards (resources/icon_32.png, the
@@ -49,62 +47,126 @@ _TOKENS_CSS = (Path(__file__).parent / "resources" / "tokens.css").read_text(enc
 _FAVICON_DATA_URI = approval_icons.icon_data_uri(
     str(Path(__file__).parent / "resources" / "icon_32.png")
 )
+# The header's brand mark, as the website's header shows its icon: the same shield, at twice the
+# size it is drawn so it stays sharp on a 2x screen.
+_BRAND_ICON_DATA_URI = approval_icons.icon_data_uri(
+    str(Path(__file__).parent / "resources" / "icon_64.png")
+)
 
+# The header is the website's (website/_partials/header.html and website/chrome.css): a floating,
+# rounded, sticky bar with the brand mark on the left and the navigation on the right, whose
+# links collapse into a <details> menu when there is no room for them. The website switches at a
+# 900 px viewport; the app has no viewport breakpoints (shared rule 6, base.css), so the same
+# switch is a container query on .pf-shell-top, the header's full-width wrapper. Everything is
+# tokens, so app.css's dark mode applies without a rule here.
 _SHELL_CSS = """
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  background: var(--color-bg); color: var(--color-text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--ink); font-family: var(--font-sans);
   font-size: 14px; min-height: 100vh; display: flex; flex-direction: column;
+  -webkit-font-smoothing: antialiased;
 }
+.pf-shell-top { position: sticky; top: 0; z-index: 20; flex-shrink: 0; container-type: inline-size; padding-top: 14px; }
 .pf-shell-header {
-  display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
-  padding: 10px 20px; background: var(--color-surface);
-  border-bottom: 1px solid var(--color-divider); flex-shrink: 0;
+  position: relative; width: min(1220px, 100% - 2 * var(--gutter) + 12px); margin: 0 auto 14px;
+  min-height: 64px; display: flex; align-items: center; gap: var(--space-s);
+  padding: 8px 10px 8px 16px; border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--line); backdrop-filter: blur(16px); box-shadow: var(--shadow-header);
 }
-.pf-shell-brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; }
-.pf-shell-nav { display: flex; gap: 4px; flex: 1; }
+.pf-shell-brand {
+  display: flex; align-items: center; gap: 10px; min-height: var(--tap); min-width: var(--tap);
+  font-weight: 750; font-size: 16px; letter-spacing: -.02em; color: var(--ink); text-decoration: none;
+}
+.pf-shell-brand img { width: 34px; height: 34px; border-radius: 8px; }
+.pf-shell-nav { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2xs); flex: 1; font-size: var(--step-small); }
+.pf-shell-nav-links { display: flex; align-items: center; gap: 4px; }
 .pf-shell-nav-item {
-  padding: 5px 10px; border-radius: var(--radius-md); font-size: 13px;
-  color: var(--color-text); text-decoration: none; opacity: .7;
+  display: inline-flex; align-items: center; min-height: var(--tap); min-width: var(--tap);
+  padding: 0 11px; border-radius: var(--radius-s); color: var(--ink-soft); text-decoration: none;
 }
-.pf-shell-nav-item:hover { opacity: 1; background: var(--color-bg); }
-.pf-shell-nav-item.active { opacity: 1; font-weight: 600; background: var(--color-bg); }
+.pf-shell-nav-item:hover { color: var(--accent-dark); }
+/* The current page: ink, weight and a soft surface, not the colour alone. */
+.pf-shell-nav-item.active { color: var(--ink); font-weight: 650; background: var(--surface-soft); }
+.pf-shell-menu { display: none; }
+.pf-shell-menu summary {
+  display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); min-width: var(--tap);
+  padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-s);
+  background: var(--surface); color: var(--ink); font-weight: 650; cursor: pointer; list-style: none;
+}
+.pf-shell-menu summary::-webkit-details-marker { display: none; }
+.pf-shell-menu summary::before {
+  content: ""; width: 16px; height: 12px;
+  background: linear-gradient(currentColor 0 0) top / 100% 2px no-repeat,
+    linear-gradient(currentColor 0 0) center / 100% 2px no-repeat,
+    linear-gradient(currentColor 0 0) bottom / 100% 2px no-repeat;
+}
+.pf-shell-menu[open] summary::before {
+  background: linear-gradient(45deg, transparent 45%, currentColor 45% 55%, transparent 55%),
+    linear-gradient(-45deg, transparent 45%, currentColor 45% 55%, transparent 55%);
+}
+/* Anchored to the header, so it never runs off a narrow screen. */
+.pf-shell-menu-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); width: min(280px, 100%); display: grid;
+  padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.pf-shell-menu-panel .pf-shell-nav-item { font-size: 16px; color: var(--ink); padding: 0 12px; border-radius: 8px; }
+.pf-shell-menu-panel .pf-shell-nav-item + .pf-shell-nav-item { border-top: 1px solid var(--surface-soft); }
+.pf-shell-menu-principal { padding: 10px 12px 4px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .pf-shell-live {
-  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-neutral-600);
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
   white-space: nowrap;
 }
+/* The label always says the state; the dot's colour repeats it. */
 .pf-shell-live-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--color-neutral-400); flex-shrink: 0;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--control-line); flex-shrink: 0;
 }
-.pf-shell-live-dot.live { background: #2fa84f; }
-.pf-shell-live-dot.reconnecting { background: #d9a520; }
-.pf-shell-live-dot.down { background: var(--color-danger); }
+.pf-shell-live-dot.live { background: var(--success); }
+.pf-shell-live-dot.reconnecting { background: var(--warning); }
+.pf-shell-live-dot.down { background: var(--danger); }
 /* Who this queue belongs to -- org mode only (see wrap's principal_label);
    local mode doesn't render one here, even on a separated install with more
    than one OS-user principal (ADR 0008) -- each one's own page already only
    ever shows their own queue, it just doesn't caption whose it is. */
 .pf-shell-principal {
-  font-size: 12px; color: var(--color-neutral-700); white-space: nowrap;
-  padding-left: 10px; border-left: 1px solid var(--color-divider);
+  font-size: 12px; color: var(--ink-soft); white-space: nowrap;
+  padding-left: 10px; border-left: 1px solid var(--line);
 }
-.pf-shell-live + .pf-shell-principal { margin-left: 0; }
-/* Neither tokens.css nor anything above styles a bare <a>, so any link a
-   page renders outside the nav/banner/notice classes lands on the
-   browser's default blue -- against a warm grey palette, on pages that
-   are otherwise fully tokenized. */
-.pf-shell-main a { color: var(--color-accent-700); }
-.pf-shell-main a:hover { color: var(--color-accent); }
+@container (max-width: 900px) {
+  .pf-shell-nav-links, .pf-shell-principal { display: none; }
+  .pf-shell-menu { display: block; }
+}
+@container (max-width: 560px) {
+  .pf-shell-top { padding-top: 8px; }
+  .pf-shell-header { gap: var(--space-xs); padding: 6px 6px 6px 10px; margin-bottom: 8px; }
+  .pf-shell-brand { font-size: 15px; }
+}
+/* The narrowest phones: the menu toggle and the live indicator show only their icon (the text
+   stays for screen readers), and below 350 px so does the brand. */
+@container (max-width: 420px) {
+  .pf-shell-menu summary { padding: 0; justify-content: center; width: var(--tap); }
+  .pf-shell-menu-label, .pf-shell-live-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+@container (max-width: 350px) {
+  .pf-shell-brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+/* Neither the shared files nor anything above styles a bare <a>, so any link
+   a page renders outside the nav/banner/notice classes would land on the
+   browser's default blue. :where() keeps this at one class's specificity, so a
+   page's own link class (a button-styled link, say) still sets its own colour. */
+.pf-shell-main :where(a) { color: var(--accent-dark); }
+.pf-shell-main :where(a):hover { color: var(--accent); }
 .pf-shell-banner {
   padding: 8px 20px; font-size: 13px; font-weight: 600; text-align: center;
-  background: var(--color-danger); color: #fff; flex-shrink: 0;
+  background: var(--danger); color: var(--surface); flex-shrink: 0;
 }
-.pf-shell-banner a { color: #fff; text-decoration: underline; }
+.pf-shell-banner a { color: var(--surface); text-decoration: underline; }
 .pf-shell-notice {
   padding: 8px 20px; font-size: 13px; text-align: center; flex-shrink: 0;
-  background: var(--color-accent-100); color: var(--color-accent-800);
-  border-bottom: 1px solid var(--color-divider);
+  background: var(--accent-soft); color: var(--accent-dark);
+  border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: center; gap: 10px;
 }
 .pf-shell-notice a { color: inherit; font-weight: 600; }
@@ -116,9 +178,9 @@ body {
 .pf-shell-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pf-shell-toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
-  background: var(--color-neutral-900); color: var(--color-neutral-100);
-  padding: 10px 16px; border-radius: var(--radius-lg); font-size: 13px;
-  max-width: min(480px, calc(100vw - 32px)); box-shadow: 0 8px 24px rgba(0,0,0,.25);
+  background: var(--ink); color: var(--on-ink);
+  padding: 10px 16px; border-radius: var(--radius-s); font-size: 13px;
+  max-width: min(480px, calc(100vw - 32px)); box-shadow: var(--shadow);
   opacity: 0; pointer-events: none; transition: opacity .15s ease;
   z-index: 1000;
 }
@@ -127,16 +189,12 @@ body {
   bottom: 72px; display: flex; align-items: center; gap: 10px; pointer-events: auto;
 }
 .pf-shell-notif-enable {
-  background: var(--color-accent); color: #fff; border: none; border-radius: var(--radius-md);
-  font-size: 12.5px; font-weight: 600; padding: 5px 10px; cursor: pointer; flex-shrink: 0;
+  background: var(--accent); color: var(--on-accent); border: none; border-radius: var(--radius-s);
+  font-size: 12.5px; font-weight: 650; padding: 5px 10px; cursor: pointer; flex-shrink: 0;
 }
 .pf-sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0,0,0,0); white-space: nowrap; border: 0;
-}
-@media (max-width: 480px) {
-  .pf-shell-header { padding: 8px 12px; gap: 10px; }
-  .pf-shell-brand { display: none; }
 }
 """
 
@@ -382,8 +440,39 @@ def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
     items = []
     for key, label, href in nav_items:
         cls = "pf-shell-nav-item active" if key == active else "pf-shell-nav-item"
-        items.append(f'<a class="{cls}" href="{href}">{_html_escape(label)}</a>')
+        current = ' aria-current="page"' if key == active else ""
+        items.append(f'<a class="{cls}" href="{href}"{current}>{_html_escape(label)}</a>')
     return "".join(items)
+
+
+def header_html(
+    active: str, nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS, *,
+    live_html: str = "", principal_label: str = "",
+) -> str:
+    """The shell's header, in the website's markup pattern (website/_partials/header.html): the
+    brand mark, the links inline, and the same links again in a ``<details>`` menu that replaces
+    them when the header is narrow (``_SHELL_CSS``'s container queries). Keep the two lists
+    equal; both come from ``nav_items``. The signed-in principal, when there is one, is shown in
+    the header when there is room and at the top of the menu when there is not."""
+    links = _nav_html(active, nav_items)
+    home = nav_items[0][2] if nav_items else "/"
+    principal_html = principal_menu_html = ""
+    if principal_label:
+        label = _html_escape(principal_label)
+        principal_html = f'<div class="pf-shell-principal">{label}</div>'
+        principal_menu_html = f'<div class="pf-shell-menu-principal">Signed in as {label}</div>'
+    return (
+        '<div class="pf-shell-top"><header class="pf-shell-header">'
+        f'<a class="pf-shell-brand" href="{home}" aria-label="PrivacyFence home">'
+        f'<img src="{_BRAND_ICON_DATA_URI}" alt="" width="34" height="34"><span>PrivacyFence</span></a>'
+        '<nav class="pf-shell-nav" aria-label="Primary navigation">'
+        f'<div class="pf-shell-nav-links">{links}</div>'
+        '<details class="pf-shell-menu"><summary><span class="pf-shell-menu-label">Menu</span></summary>'
+        f'<div class="pf-shell-menu-panel">{principal_menu_html}{links}</div></details>'
+        '</nav>'
+        f'{live_html}{principal_html}'
+        '</header></div>'
+    )
 
 
 def wrap(
@@ -396,7 +485,7 @@ def wrap(
     live_updates: bool = True,
     stream_url: str = "/api/state/stream",
 ) -> str:
-    """Full ``<!DOCTYPE html>`` document: tokens.css + the shell's own CSS,
+    """Full ``<!DOCTYPE html>`` document: the design files + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
     ``body_html`` dropped into ``<main>`` unescaped -- callers own their own
     content's escaping, same convention web/routes_approvals.py's existing
@@ -499,13 +588,9 @@ def wrap(
     live_html = (
         '<div class="pf-shell-live" role="status" aria-live="polite">'
         '<span class="pf-shell-live-dot" id="pf-shell-live-dot"></span>'
-        '<span id="pf-shell-live-label">connecting…</span>'
+        '<span class="pf-shell-live-label" id="pf-shell-live-label">connecting…</span>'
         "</div>"
     ) if live_updates else ""
-    principal_html = (
-        f'<div class="pf-shell-principal">{_html_escape(principal_label)}</div>'
-        if principal_label else ""
-    )
     banner = f'<div class="pf-shell-banner" role="alert">{banner_html}</div>' if banner_html else ""
     notice = ""
     if dismissible_notice_html:
@@ -524,14 +609,10 @@ def wrap(
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="{_FAVICON_DATA_URI}">
 <title>{_html_escape(title)}</title>
-<style nonce="{nonce}">{SHARED_CSS}{_TOKENS_CSS}{_SHELL_CSS}</style>
+<style nonce="{nonce}">{DOCUMENT_CSS}{_SHELL_CSS}</style>
 </head>
 <body>
-<header class="pf-shell-header">
-<div class="pf-shell-brand">PrivacyFence</div>
-<nav class="pf-shell-nav">{_nav_html(active, nav_items)}</nav>
-{live_html}{principal_html}
-</header>
+{header_html(active, nav_items, live_html=live_html, principal_label=principal_label)}
 {banner}
 {notice}
 <main class="pf-shell-main">{body_html}</main>
