@@ -347,7 +347,11 @@ to build the card, detect personal data or check a rule. That data stays inside 
 - **Errors** returned over MCP carry no credentials, session or sign-in codes, secret paths, or
   unreleased content; details go to the daemon log.
 - **Notifications** follow `notifications.detail`: `minimal` and `standard` (the default) carry no
-  gated content; `detailed` adds the approval's summary line and can put it on a lock screen.
+  gated content; `detailed` adds the approval's summary line and can put it on a lock screen. An
+  organization deployment's push notifications always carry the count only, encrypted and padded
+  to a fixed size; the browser's push service (Apple, Google, Mozilla or Microsoft) sees when one
+  was sent, and the bundle can turn them off
+  ([ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md)).
 
 See [Approvals and policy](approvals-and-policy.md) for the approval list, cards and PII handling.
 

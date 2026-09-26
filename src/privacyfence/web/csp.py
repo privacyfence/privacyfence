@@ -82,7 +82,7 @@ def set_nonce(request: Request, nonce: str) -> None:
     setattr(request.state, _STATE_KEY, nonce)
 
 
-def build_csp(nonce: str) -> str:
+def build_csp(nonce: str, *, app_origin: str = "") -> str:
     """The full policy for a fully self-contained document (see
     approval_window_html.py's own module docstring: fonts/icons/PDFs are
     base64 ``data:`` URIs, never a network fetch) -- ``default-src 'none'``
@@ -110,14 +110,23 @@ def build_csp(nonce: str) -> str:
 
     See this module's own docstring for why ``script-src``/``style-src-elem``
     take a nonce while ``style-src-attr`` keeps ``'unsafe-inline'``.
+
+    ``app_origin`` is org mode's own origin (``issuer_url``), given only by org mode's app: it
+    adds ``manifest-src 'self'`` so the org pages' ``<link rel="manifest">`` loads (ADR 0081), and
+    widens ``img-src`` by exactly the manifest's icon folder, ``<origin>/icons/``, for a browser
+    that fetches manifest icons under the page's policy. Local mode links no manifest, so its
+    policy stays as it was.
     """
+    img_src = f"data: {app_origin.rstrip('/')}/icons/" if app_origin else "data:"
+    manifest_src = "manifest-src 'self'; " if app_origin else ""
     return (
         "default-src 'none'; "
         f"script-src 'nonce-{nonce}'; "
         f"style-src-elem 'nonce-{nonce}'; "
         "style-src-attr 'unsafe-inline'; "
-        "img-src data:; font-src data:; object-src data:; frame-src data:; "
+        f"img-src {img_src}; font-src data:; object-src data:; frame-src data:; "
         "connect-src 'self'; worker-src 'self'; "
+        f"{manifest_src}"
         "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     )
 

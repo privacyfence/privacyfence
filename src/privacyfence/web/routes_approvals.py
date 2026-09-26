@@ -423,7 +423,9 @@ def _inject_shim(html: str, shim: str) -> str:
     return html[:body_start] + shim + html[body_start:]
 
 
-def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Principal) -> str:
+def _render_org_list_page(
+    rows: list, *, csrf: str, nonce: str, principal: Principal, push_public_key: str = "",
+) -> str:
     """Org mode's ``/approvals`` page, in the same shell local mode uses.
 
     Live updates come from ``GET /api/approvals/stream`` (``stream_url``),
@@ -436,7 +438,10 @@ def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Princ
     without a manual reload, and the live indicator reflects a real
     connection. Tier-0/1 notifications stay off: they are local mode's
     settings.yaml-configured feature, and org mode has no per-principal
-    setting for them yet.
+    setting for them yet. Org mode's notifications are web push instead
+    (ADR 0081): ``push_public_key`` is the server's VAPID public key when the
+    org has push on, and the shell's permission pre-prompt then subscribes
+    this browser (web_shell.wrap's own docstring). Empty means push is off.
 
     ``principal_label``: every read and write on this page is authorized
     against this principal, and the page never said whose queue it was --
@@ -457,6 +462,8 @@ def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Princ
         principal_label=principal.email or principal.display_name or principal.id,
         stream_url="/api/approvals/stream",
         notifications_enabled=False,
+        push_public_key=push_public_key,
+        csrf=csrf,
     )
 
 
@@ -913,6 +920,7 @@ def create_app(
 
 def build_routes(
     *, web_ui: WebApprovalUI, sessions: org_session.OrgSessionStore, step_up: StepUpConfig, issuer_url: str,
+    push_public_key: str = "",
 ) -> list[Route]:
     """Build org mode's own ``/approvals`` route list -- extended into
     ``_build_org_app``'s larger app the same way web/routes_security.py's
@@ -930,10 +938,16 @@ def build_routes(
     ``/oauth/stepup/callback``) are *not* included here -- see module
     docstring: they live in web/routes_org_stepup.py, mounted separately by
     ``_build_org_app`` alongside this function's own return value, since
-    they have no local-mode analogue to share code with at all."""
+    they have no local-mode analogue to share code with at all.
+
+    ``push_public_key`` is the server's VAPID public key when the org has web
+    push on (ADR 0081), else empty; see ``_render_org_list_page``."""
 
     def _resolve_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
+
+    def _render_list_page(rows: list, *, csrf: str, nonce: str, principal: Principal) -> str:
+        return _render_org_list_page(rows, csrf=csrf, nonce=nonce, principal=principal, push_public_key=push_public_key)
 
     def _unauthenticated_page(request: Request, next_path: str) -> Response:
         return RedirectResponse(
@@ -956,7 +970,7 @@ def build_routes(
         step_up_origin=issuer_url,
         step_up_response=_org_step_up_response,
         bridge_shim=_org_bridge_shim,
-        render_list_page=_render_org_list_page,
+        render_list_page=_render_list_page,
         per_item_message=(
             "This organization requires a separate passkey check per decision -- "
             "decide these individually instead of as a batch."

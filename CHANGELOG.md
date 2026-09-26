@@ -43,6 +43,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Organization deployments can notify your phone when an approval is waiting.** Allow
+  notifications when the Approvals page offers them, and a push notification arrives even with the
+  page closed; tapping it opens your approvals. It only ever says "1 approval pending" (or "N
+  approvals pending"), never what the request is, and it travels encrypted through your browser's
+  push service (Apple's, Google's, Mozilla's or Microsoft's). On an iPhone or iPad, add PrivacyFence
+  to your Home Screen first; the page tells you how. Administrators can turn this off for the whole
+  organization with `build_org_bundle.py --no-web-push`. Desktop installs are unchanged: their
+  notifications still never leave the machine. See ADR 0081.
+- **The organization app can be installed to a phone's Home Screen** or as a desktop app, and
+  opens straight to your approvals.
+
 ### Changed
 
 - **The app and the website now share one set of design files** (colours, spacing, layout

@@ -102,6 +102,7 @@ from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current
 from ..settings_controller import SettingsController, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
+from ..web_push import PushNotifier, PushSubscriptionStore
 from . import org_session
 from . import routes_connect
 from . import routes_downloads
@@ -416,9 +417,10 @@ class _SecurityHeadersMiddleware:
     anything a route handler already added under the same name.
     """
 
-    def __init__(self, app: ASGIApp, *, hsts: bool = False) -> None:
+    def __init__(self, app: ASGIApp, *, hsts: bool = False, app_origin: str = "") -> None:
         self._app = app
         self._hsts = hsts
+        self._app_origin = app_origin
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -435,7 +437,7 @@ class _SecurityHeadersMiddleware:
                 headers["x-frame-options"] = "DENY"
                 headers["x-content-type-options"] = "nosniff"
                 headers["referrer-policy"] = "no-referrer"
-                headers["content-security-policy"] = build_csp(nonce)
+                headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
                 headers["cross-origin-opener-policy"] = "same-origin"
                 if self._hsts:
@@ -487,6 +489,13 @@ class OrgAuth:
     # exactly what an OrgAuth built by a test that never had a real
     # settings.yaml on disk should do.
     install_wide_settings_path: str = ""
+    # Org mode's web push (ADR 0081): the notifier daemon_main.py registered on the approval
+    # registry, and the per-principal subscription store it reads. Both None when the org has
+    # turned push off (org_config.json's web_push.enabled: false) and in any test that does not
+    # care about push: the subscription routes are then not mounted and no page offers to
+    # subscribe. The manifest is mounted either way.
+    push_notifier: "PushNotifier | None" = None
+    push_store: "PushSubscriptionStore | None" = None
 
 
 def _local_principal_resolver(sessions: LocalSessionStore) -> Callable[[Request], Principal]:
@@ -1012,7 +1021,7 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig
-    from . import routes_approvals, routes_org_stepup, routes_security
+    from . import routes_approvals, routes_org_stepup, routes_push, routes_security
     from .routes_settings import build_org_routes
 
     extra_routes: list[Route] = []
@@ -1067,8 +1076,14 @@ def _build_org_app(
     # One approval route module builds both modes' routes (ADR 0033) --
     # only the IdP step-up routes (no local-mode analogue at all) stay a
     # separate mount, see routes_org_stepup.py's own module docstring.
+    # The installable app (manifest, icons) always; the push subscription routes only when the
+    # org has push on (ADR 0081). The approvals page is the one that offers to subscribe.
+    push_store = org.push_store if org.push_notifier is not None else None
+    push_public_key = org.push_notifier.public_key if org.push_notifier is not None and push_store else ""
+    extra_routes.extend(routes_push.build_routes(sessions=org.sessions, store=push_store))
     extra_routes.extend(routes_approvals.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
+        push_public_key=push_public_key,
     ))
     extra_routes.extend(routes_org_stepup.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
@@ -1118,7 +1133,7 @@ def _build_org_app(
     resolver = principal_resolver or _org_principal_resolver(org.sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(app, resolver)
     wrapped: ASGIApp = _HostAllowlistMiddleware(scoped, allowed_hosts)
-    return _SecurityHeadersMiddleware(wrapped, hsts=True)
+    return _SecurityHeadersMiddleware(wrapped, hsts=True, app_origin=org.issuer_url)
 
 
 class WebServer:

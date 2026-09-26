@@ -375,3 +375,44 @@ class TestPlainPage:
         assert '<meta http-equiv="refresh" content="2">' in head
         assert "<title>&lt;t&gt;</title>" in head
         assert '<div class="panel stack pf-plain-panel"><p>body</p></div>' in body
+
+
+class TestInstallableOrgAppAndPush:
+    """Org mode's manifest link and web push hook-up (ADR 0081). Local mode gets neither."""
+
+    def test_org_pages_link_the_manifest_and_home_screen_icon(self):
+        html = web_shell.wrap("", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS, live_updates=False)
+        assert '<link rel="manifest" href="/manifest.webmanifest">' in html
+        assert '<link rel="apple-touch-icon" href="/icons/icon-192.png">' in html
+
+    def test_local_pages_link_neither(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert "rel=\"manifest\"" not in html and "apple-touch-icon" not in html
+
+    def test_without_a_key_push_is_inert_and_the_csrf_is_not_echoed(self):
+        html = web_shell.wrap("", title="t", active="approvals", csrf="session-id")
+        assert 'var PUSH_PUBLIC_KEY = "";' in html
+        assert 'var PUSH_CSRF = "";' in html
+        assert "session-id" not in html
+
+    def test_with_a_key_the_page_subscribes_once_permission_is_granted(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS,
+            notifications_enabled=False, push_public_key="BKEY", csrf="session-id",
+        )
+        assert 'var PUSH_PUBLIC_KEY = "BKEY";' in html
+        assert 'var PUSH_CSRF = "session-id";' in html
+        # The service worker registers for push even with tiers 0-1 off, as org mode has them.
+        assert "if ((NOTIFICATIONS_ENABLED || PUSH_PUBLIC_KEY) && 'serviceWorker' in navigator)" in html
+        assert "userVisibleOnly: true" in html
+        assert "fetch('/api/push/subscription'" in html
+        # subscribePush() itself refuses unless permission is already granted, so the page-load
+        # call never prompts: only __pfNotifPrompt asks, after a decision.
+        start = html.index("function subscribePush")
+        assert "Notification.permission !== 'granted'" in html[start:start + 200]
+
+    def test_ios_before_installation_gets_the_home_screen_hint_instead(self):
+        html = web_shell.wrap("", title="t", active="approvals", push_public_key="BKEY", csrf="c")
+        prompt = html[html.index("window.__pfNotifPrompt = function"):]
+        assert prompt.index("iosNotInstalled()") < prompt.index("Notification.permission !== 'default'")
+        assert "Add PrivacyFence to your Home Screen to get notifications" in prompt

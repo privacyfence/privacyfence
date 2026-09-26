@@ -27,3 +27,16 @@ APP_CSS = (DESIGN_DIR / "app.css").read_text(encoding="utf-8")
 # and adds components.
 SHARED_CSS = TOKENS_CSS + BASE_CSS
 DOCUMENT_CSS = SHARED_CSS + APP_CSS
+
+
+def token_value(name: str) -> str:
+    """A light-theme token's value from ``tokens.css``'s ``:root`` block (``"--bg"`` ->
+    ``"#f6f8fb"``), for the few places that need a colour outside CSS: the web app manifest's
+    ``theme_color``/``background_color`` (web/routes_push.py), which the website's own
+    ``<meta name="theme-color">`` also takes from ``--bg``."""
+    import re
+
+    match = re.search(rf"(?m)^\s*{re.escape(name)}\s*:\s*([^;]+);", TOKENS_CSS)
+    if match is None:
+        raise KeyError(name)
+    return match.group(1).strip()

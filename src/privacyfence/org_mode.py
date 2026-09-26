@@ -363,6 +363,32 @@ class AuthzPolicyConfig:
         )
 
 
+@dataclass(frozen=True)
+class WebPushConfig:
+    """Whether org mode sends a web push notification when an approval is waiting (ADR 0081).
+
+    Lives in ``org_config.json``'s ``web_push`` section and is written by
+    ``scripts/build_org_bundle.py --no-web-push``. On by default: push is what lets a phone user
+    learn about an approval at all, since mobile browsers suspend background tabs. Turning it off
+    is the org-wide switch for an organization that does not want approval metadata, however
+    little, to pass through Apple's, Google's or Mozilla's push services. Local mode never reads
+    this class and never pushes.
+    """
+
+    enabled: bool = True
+
+    @staticmethod
+    def from_org_config(org_config: dict[str, Any]) -> "WebPushConfig":
+        raw = org_config.get("web_push")
+        raw = raw if isinstance(raw, dict) else {}
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ConfigurationError(
+                f"org_config.json's \"web_push\".\"enabled\" must be true or false, got {enabled!r}"
+            )
+        return WebPushConfig(enabled=enabled)
+
+
 __all__ = [
     "AuditForwardingConfig",
     "AuditForwardingKind",
@@ -378,5 +404,6 @@ __all__ = [
     "Mode",
     "ServerConfig",
     "SyslogProtocol",
+    "WebPushConfig",
     "resolve_mode",
 ]

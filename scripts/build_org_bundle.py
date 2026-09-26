@@ -376,6 +376,15 @@ def build_parser() -> argparse.ArgumentParser:
              "the signed-in browser route (/downloads/<token>) instead.",
     )
 
+    push = parser.add_argument_group("Web push notifications (org mode, docs/adr/0081-*)")
+    push.add_argument(
+        "--web-push", action=argparse.BooleanOptionalAction, default=None,
+        help="Push a notification (\"N approvals pending\", nothing more) to a user's phone or "
+             "browser when an approval is waiting. It travels through the browser vendor's push "
+             "service (Apple, Google, Mozilla or Microsoft). On by default; --no-web-push writes "
+             "web_push.enabled=false and turns it off for the whole organization.",
+    )
+
     audit_forwarding = parser.add_argument_group(
         "Centralized audit-log forwarding (org mode, src/privacyfence/audit_forwarding.py)",
     )
@@ -537,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
         bundle.pop("download_delivery", None)
         bundle.pop("authz", None)
         bundle.pop("audit_forwarding", None)
+        bundle.pop("web_push", None)
     elif any([
         args.server_issuer_url, args.idp_issuer, args.idp_client_id, args.idp_client_secret,
         args.server_tls_cert, args.server_tls_key, args.server_trusted_proxies, args.idp_step_up_acr_values,
@@ -590,6 +600,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_links is not None:
             downloads_section["agent_links"] = args.agent_links
         bundle["download_delivery"] = downloads_section
+
+    if args.web_push is not None:
+        if bundle.get("mode") != "org":
+            raise SystemExit("--web-push/--no-web-push require --mode org (or --merge against an existing org-mode bundle).")
+        bundle["web_push"] = {"enabled": args.web_push}
 
     if args.authz_allowed_domains or args.authz_groups_claim or args.authz_required_groups:
         if bundle.get("mode") != "org":
@@ -692,6 +707,8 @@ def main(argv: list[str] | None = None) -> int:
         summary += f", authz.allowed_domains={n_domains}, authz.required_groups={n_groups}"
     if "audit_forwarding" in bundle:
         summary += f", audit_forwarding.enabled={bundle['audit_forwarding'].get('enabled', False)}"
+    if bundle.get("mode") == "org":
+        summary += f", web_push.enabled={(bundle.get('web_push') or {}).get('enabled', True)}"
     summary += f", signed={'signature' in bundle}"
     print(f"Wrote {out_path} with: {summary}")
     if bundle.get("mode") == "org":
