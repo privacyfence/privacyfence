@@ -57,6 +57,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Allow once is still the one filled button, Deny still outlined, and Always allow still a small
   link. Writes, possible personal data and unverified requesters still each have their own
   label or icon, not only a colour.
+- **Settings work on a phone.** In a narrow window the section list becomes a row of tabs above
+  the page (and Privacy Filter's services a second row), so each section gets the full width;
+  every setting shows its label and description above its switch or choice, and every control
+  is large enough to tap. In a wide window the section list stays on the left, now as a card.
+  Privacy Filter's Allow/Redact/Block choice now uses the same green, amber and red in dark mode
+  as in light.
 
 ### Fixed
 
