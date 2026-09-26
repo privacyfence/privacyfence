@@ -45,55 +45,44 @@ from __future__ import annotations
 
 import json
 import secrets
-from pathlib import Path
 from typing import Any
 
-from .design_css import SHARED_CSS
+from .design_css import DOCUMENT_CSS
 from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 
-# The settings page's own
-# palette is restyled onto the same tokens the approval card already
-# defines (resources/tokens.css, extracted from resources/approval_window/
-# styles.css's own :root block -- see that file's own docstring for why it
-# stays a separate export rather than a single shared @import source),
-# rather than the two documents' hand-tuned, independently-drifting hex
-# values they had before this phase. This is a palette swap, not a layout
-# change -- every rule below keeps its original spacing/
-# radius/structure; only color values became var(--pf-*)/var(--color-*)
-# references, which is also what makes @media(prefers-color-scheme: dark)
-# (embedded in tokens.css) apply here for the first time, with no second
-# dark block needed in this file.
-_TOKENS_CSS = (Path(__file__).parent / "resources" / "tokens.css").read_text(encoding="utf-8")
+# The settings page's colours are the shared design tokens (resources/design/, ADR 0078/0079),
+# which DOCUMENT_CSS inlines ahead of this module's own rules -- dark mode included: app.css
+# redefines the same token names under prefers-color-scheme, so no rule below needs a dark
+# override of its own. The layout here is still the page's own (p3-settings of
+# docs/org-mode-mobile-plan.md moves it onto the shared primitives).
 
 # ---------------------------------------------------------------------------- #
 # CSS -- values copied from the design source's inline styles, then (see
 # above) recolored onto the shared token set via a small number of
 # settings-page-specific role aliases (--pf-*) defined here rather than
-# referencing --color-* directly everywhere below: a page-local name for
+# referencing the tokens directly everywhere below: a page-local name for
 # "the muted secondary text color" reads at the call site, and it's one
-# place to reconsider which --color-neutral-N step plays that role, instead
-# of several hundred. Every --pf-* value here is itself just a --color-*
-# reference (or, for the two /-tint colors that need one, a color-mix of
-# one), so nothing below needs its own dark-mode override: tokens.css's
-# @media block already redefines the --color-* values these derive from.
+# place to reconsider which token plays that role, instead of several
+# hundred. Every --pf-* value here is itself a token reference (or a
+# color-mix of one), so nothing below needs its own dark-mode override.
 # ---------------------------------------------------------------------------- #
 
 _CSS = """
 :root {
-  --pf-page-bg: var(--color-bg);
-  --pf-content-bg: var(--color-bg);
-  --pf-nav-bg: var(--color-surface);
-  --pf-surface: var(--color-surface);
-  --pf-surface-2: var(--color-neutral-200);
-  --pf-border: var(--color-divider);
-  --pf-border-strong: var(--color-neutral-400);
-  --pf-text: var(--color-text);
-  --pf-text-muted: var(--color-neutral-600);
-  --pf-text-dim: var(--color-neutral-500);
-  --pf-accent: var(--color-accent);
-  --pf-danger: var(--color-danger);
-  --pf-danger-tint: var(--color-danger-tint);
-  --pf-danger-border: color-mix(in srgb, var(--color-danger) 35%, transparent);
+  --pf-page-bg: var(--bg);
+  --pf-content-bg: var(--bg);
+  --pf-nav-bg: var(--surface);
+  --pf-surface: var(--surface);
+  --pf-surface-2: var(--surface-soft);
+  --pf-border: var(--line);
+  --pf-border-strong: var(--control-line);
+  --pf-text: var(--ink);
+  --pf-text-muted: var(--muted);
+  --pf-text-dim: var(--muted);
+  --pf-accent: var(--accent);
+  --pf-danger: var(--danger);
+  --pf-danger-tint: var(--danger-soft);
+  --pf-danger-border: color-mix(in srgb, var(--danger) 35%, transparent);
   --pf-warn: #8a5a00;
   --pf-warn-tint: #fff3cd;
 }
@@ -127,7 +116,7 @@ input[type=text]:focus { outline: 2px solid var(--pf-accent); outline-offset: 0;
   padding: 8px 12px; border-radius: 7px; font-size: 13px; cursor: pointer; font-weight: 400;
   color: var(--pf-text); background: transparent;
 }
-.pf-navitem.active { font-weight: 600; background: var(--pf-accent); color: #fff; }
+.pf-navitem.active { font-weight: 600; background: var(--pf-accent); color: var(--on-accent); }
 .pf-nav-spacer { flex: 1; }
 .pf-nav-version { padding: 8px 10px; font-size: 11px; color: var(--pf-text-dim); }
 
@@ -175,7 +164,7 @@ input[type=text]:focus { outline: 2px solid var(--pf-accent); outline-offset: 0;
 
 /* ---- Buttons ---- */
 .pf-btn-primary {
-  background: var(--pf-accent); color: #fff; border: none; border-radius: 7px; padding: 7px 14px;
+  background: var(--pf-accent); color: var(--on-accent); border: none; border-radius: 7px; padding: 7px 14px;
   font-size: 13px; font-weight: 500; cursor: pointer;
 }
 .pf-btn-secondary {
@@ -235,7 +224,7 @@ select.pf-input { cursor: pointer; }
   padding: 7px 10px; border-radius: 7px; font-size: 13px; cursor: pointer; display: flex;
   justify-content: space-between; margin-bottom: 1px; color: var(--pf-text); font-weight: 400;
 }
-.pf-subnav-item.active { background: var(--pf-accent); color: #fff; font-weight: 600; }
+.pf-subnav-item.active { background: var(--pf-accent); color: var(--on-accent); font-weight: 600; }
 .pf-subnav-count { font-size: 11px; opacity: .75; }
 .pf-detail-page { flex: 1; overflow-y: auto; padding: 28px 36px; }
 .pf-detail-title { font-size: 18px; font-weight: 700; color: var(--pf-text); margin-bottom: 2px; }
@@ -246,7 +235,7 @@ select.pf-input { cursor: pointer; }
 .pf-group-title { font-size: 13px; font-weight: 600; color: var(--pf-text-muted); margin-bottom: 8px; }
 .pf-caps-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .pf-cap-chip { padding: 4px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; font-weight: 500; background: var(--pf-surface-2); color: var(--pf-text-muted); }
-.pf-cap-chip.on { background: var(--pf-accent); color: #fff; }
+.pf-cap-chip.on { background: var(--pf-accent); color: var(--on-accent); }
 
 /* ---- Auto-accept (policy v2) ---- */
 .pf-rules-empty { font-size: 13px; color: var(--pf-text-dim); }
@@ -256,7 +245,7 @@ select.pf-input { cursor: pointer; }
   font-size: 11.5px; font-weight: 500; padding: 4px 10px; border-radius: 12px; cursor: pointer;
   background: var(--pf-surface-2); color: var(--pf-text-muted); white-space: nowrap;
 }
-.pf-fchip.active { background: var(--pf-accent); color: #fff; }
+.pf-fchip.active { background: var(--pf-accent); color: var(--on-accent); }
 .pf-verb-chip {
   display: inline-block; font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px;
   margin: 0 4px 4px 0;
@@ -344,7 +333,7 @@ select.pf-input { cursor: pointer; }
   align-items: center; text-align: center;
 }
 .pf-about-icon {
-  width: 76px; height: 76px; border-radius: 18px; background: var(--pf-accent); color: #fff; font-size: 26px;
+  width: 76px; height: 76px; border-radius: 18px; background: var(--pf-accent); color: var(--on-accent); font-size: 26px;
   font-weight: 700; display: flex; align-items: center; justify-content: center; margin-bottom: 18px;
 }
 .pf-about-name { font-size: 20px; font-weight: 700; color: var(--pf-text); }
@@ -1601,7 +1590,7 @@ def build_html(
         section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
     return (
         "<title>PrivacyFence Settings</title>"
-        f'<style nonce="{nonce}">{SHARED_CSS}{_TOKENS_CSS}{_CSS}</style>'
+        f'<style nonce="{nonce}">{DOCUMENT_CSS}{_CSS}</style>'
         '<div id="app"></div>'
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'
         f'<script nonce="{nonce}">window.__pfCapabilities = {caps_json};</script>'

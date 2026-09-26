@@ -52,7 +52,7 @@ from __future__ import annotations
 from html import escape as _html_escape
 
 from .approval_window_html import _STYLES_CSS, _new_nonce
-from .design_css import SHARED_CSS
+from .design_css import DOCUMENT_CSS
 
 # Public (no leading underscore): dialog_window.py's own window-width
 # constants derive from these directly rather than duplicating them, so the
@@ -188,7 +188,7 @@ def _document(*, width: int, body_html: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
-{SHARED_CSS}
+{DOCUMENT_CSS}
 {_STYLES_CSS}
 html {{ height: 100%; }}
 html, body {{ overflow-y: auto; }}
@@ -220,14 +220,14 @@ h2 {{ font-size: 19px; margin-bottom: 12px; }}
 .pf-choice-list {{
   display: flex; flex-direction: column; gap: 6px;
   flex: 1; min-height: 0; overflow-y: auto;
-  margin: 4px 0 var(--space-3);
+  margin: 4px 0 15px;
 }}
 .pf-choice-row {{
-  padding: 10px 12px; border-radius: var(--radius-md);
-  background: var(--color-surface); font-size: 13px;
+  padding: 10px 12px; border-radius: var(--radius-s);
+  background: var(--surface); font-size: 13px;
   cursor: pointer; user-select: none;
 }}
-.pf-choice-row:hover {{ background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface)); }}
+.pf-choice-row:hover {{ background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }}
 .pf-choice-row[aria-disabled="true"] {{ opacity: .45; pointer-events: none; cursor: default; }}
 </style>
 </head>

@@ -1,0 +1,173 @@
+/* PrivacyFence app layer: what the app needs on top of the website's design system and the
+   website does not have (ADR 0079). Only the app loads this file; scripts/build_site.py never
+   publishes it. design_css.py inlines it after tokens.css and base.css into every document the app
+   renders, so it may override a shared token or rule and a page's own rules still override it.
+
+   Three things live here, all on the shared tokens and primitives (base.css's header comment has
+   the rules they follow; there is no viewport @media in this file):
+
+   1. Dark mode. The website has none (shared rule 9). The app's dark palette is derived from the
+      website's one dark surface, the home page's .privacy-card (#142b2b surface, #eaf4f3 text,
+      #8fd3ca accent, #c6d8d5 copy, #8fa7a4 quiet text): that card is the page, a step darker is
+      the background, a step lighter is the soft surface. It overrides the shared token names and
+      nothing else, so every shared primitive and every page picks it up without a rule of its own.
+   2. Status semantics the approval card shows and the website never had to: danger (deny,
+      destructive, sensitive data), warning (a write), info, success, each with a -soft tint for
+      a background, plus the focus ring and the boundary of a form control. Colour is never the
+      only cue: every place one of these is used also carries text, an icon or a border style.
+   3. Application components: field (input, select, textarea), toggle, tabstrip, badge, card and
+      panel. Each has hover, focus-visible, disabled and dark states, and every interactive one
+      is at least --tap (44 px) in both directions.
+
+   tests/unit/test_design_contrast.py checks every text/background and boundary pair below in both
+   themes against WCAG AA. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Status */
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --warning: #8a5300;
+  --warning-soft: #fdf3dc;
+  --info: #1f5f99;
+  --info-soft: #e6eff8;
+  --success: #1d7038;
+  --success-soft: #e3f3e7;
+  --focus-ring: #167a70;
+  /* The edge of a form control: a UI boundary, so 3:1 against what it sits on (--line is a
+     decorative hairline and is not). */
+  --control-line: #74858f;
+
+  /* Shape: the website's cards sit between --radius-s (controls) and --radius (panels). */
+  --radius-card: 16px;
+  --radius-pill: 999px;
+
+  /* Text on an --accent fill. */
+  --on-accent: #ffffff;
+
+  /* The tile behind a vendor's logo mark: white in both themes, so a black mark stays visible. */
+  --mark-tile: #ffffff;
+
+  /* The floating header's shadow (website/chrome.css's .site-header uses the same value). */
+  --shadow-header: 0 8px 28px rgba(20, 33, 43, .05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1f1f;
+    --surface: #142b2b;
+    --surface-soft: #1c3837;
+    --ink: #eaf4f3;
+    --ink-soft: #c6d8d5;
+    --muted: #98b0ad;
+    --line: #2a4543;
+    --accent: #8fd3ca;
+    --accent-dark: #a6ddd5;
+    --accent-soft: #1d3d3a;
+    --accent-line: #2f5a55;
+    --accent-wash: #1d3d3a;
+    --shadow: 0 22px 70px rgba(0, 0, 0, .35);
+    --on-ink: #142b2b;
+    --ink-hover: #ffffff;
+    --shadow-button: 0 8px 24px rgba(0, 0, 0, .3);
+    --shadow-header: 0 8px 28px rgba(0, 0, 0, .3);
+
+    --danger: #ff9a8b;
+    --danger-soft: #3d201c;
+    --warning: #f0c36a;
+    --warning-soft: #352a12;
+    --info: #94c6f0;
+    --info-soft: #16304a;
+    --success: #8fd6a0;
+    --success-soft: #173923;
+    --on-accent: #0e1f1f;
+    --focus-ring: #8fd3ca;
+    --control-line: #648a86;
+  }
+}
+
+/* ---- Focus and buttons ------------------------------------------------------------------ */
+
+:focus-visible { outline-color: var(--focus-ring); }
+.button:disabled, .button[aria-disabled="true"] { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+.secondary:hover { border-color: var(--control-line); }
+/* A destructive action: outlined, never filled, so it never reads as the default. */
+.button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+.button.danger:hover { background: var(--danger-soft); }
+
+/* ---- Field: input, select, textarea ------------------------------------------------------- */
+
+.field-label { display: block; font-size: var(--step-small); font-weight: 650; color: var(--ink); margin-bottom: var(--space-2xs); }
+.field-help { font-size: var(--step-small); color: var(--muted); margin-top: var(--space-2xs); }
+.field {
+  display: block; width: 100%; min-height: var(--tap); padding: 10px 12px;
+  font: inherit; font-size: var(--step-body); color: var(--ink); background: var(--surface);
+  border: 1px solid var(--control-line); border-radius: var(--radius-s);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.field::placeholder { color: var(--muted); }
+.field:hover { border-color: var(--ink-soft); }
+.field:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1px; border-color: var(--focus-ring); }
+.field:disabled { background: var(--surface-soft); color: var(--muted); border-style: dashed; cursor: not-allowed; }
+.field[aria-invalid="true"] { border-color: var(--danger); border-width: 2px; }
+textarea.field { min-height: 96px; resize: vertical; line-height: 1.5; }
+select.field { appearance: none; padding-right: 36px; background-image: linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%), linear-gradient(-45deg, transparent 50%, var(--ink-soft) 50%); background-position: right 18px center, right 13px center; background-size: 5px 5px; background-repeat: no-repeat; }
+
+/* ---- Toggle: a checkbox with role="switch" -------------------------------------------------
+   <label class="toggle"><input type="checkbox" role="switch"><span class="toggle-track"></span>
+   <span>Label</span></label>. The label is the tap target; the input stays focusable and
+   announced, only its box is hidden. On and off also differ by the knob's side. */
+
+.toggle { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: var(--tap); min-width: var(--tap); cursor: pointer; color: var(--ink); }
+.toggle input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+.toggle-track { position: relative; flex: none; width: 44px; height: 26px; border-radius: var(--radius-pill); background: var(--surface-soft); border: 1px solid var(--control-line); transition: background .15s ease, border-color .15s ease; }
+.toggle-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--ink-soft); transition: transform .15s ease, background .15s ease; }
+.toggle:hover .toggle-track { border-color: var(--ink-soft); }
+.toggle input:checked + .toggle-track { background: var(--accent); border-color: var(--accent); }
+.toggle input:checked + .toggle-track::after { transform: translateX(18px); background: var(--surface); }
+.toggle input:focus-visible + .toggle-track { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
+.toggle input:disabled + .toggle-track { opacity: .5; border-style: dashed; }
+.toggle:has(input:disabled) { cursor: not-allowed; color: var(--muted); }
+
+/* ---- Tabstrip: a row of tabs that scrolls inside itself when it does not fit --------------- */
+
+.tabstrip { display: flex; gap: 4px; padding: 4px; overflow-x: auto; scrollbar-width: thin; background: var(--surface-soft); border: 1px solid var(--line); border-radius: calc(var(--radius-s) + 4px); }
+.tab { flex: none; display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap); min-width: var(--tap); padding: 0 14px; font: inherit; font-size: var(--step-small); font-weight: 650; color: var(--ink-soft); background: transparent; border: 1px solid transparent; border-radius: var(--radius-s); cursor: pointer; white-space: nowrap; text-decoration: none; }
+.tab:hover { color: var(--ink); background: var(--surface); }
+/* The selected tab: a raised surface, a border and the ink colour, not the colour alone. */
+.tab[aria-selected="true"], .tab.active { color: var(--ink); background: var(--surface); border-color: var(--line); box-shadow: var(--shadow-button); }
+.tab:disabled, .tab[aria-disabled="true"] { color: var(--muted); cursor: not-allowed; background: transparent; }
+
+/* ---- Badge: a small status pill. Text is always part of it; the dashed variant is the cue for
+   something unconfirmed (a requester that is not verified). ------------------------------------ */
+
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; font-size: 12px; font-weight: 700; letter-spacing: .02em; line-height: 1.4; white-space: nowrap; color: var(--ink-soft); background: var(--surface-soft); border: 1px solid var(--line); border-radius: var(--radius-pill); }
+.badge-accent { color: var(--accent-dark); background: var(--accent-soft); border-color: var(--accent-line); }
+.badge-danger { color: var(--danger); background: var(--danger-soft); border-color: currentColor; }
+.badge-warning { color: var(--warning); background: var(--warning-soft); border-color: currentColor; }
+.badge-info { color: var(--info); background: var(--info-soft); border-color: currentColor; }
+.badge-success { color: var(--success); background: var(--success-soft); border-color: currentColor; }
+.badge-solid { color: var(--on-ink); background: var(--ink); border-color: var(--ink); }
+.badge-dashed { background: transparent; border-style: dashed; border-color: var(--control-line); }
+
+/* ---- Card and panel ------------------------------------------------------------------------
+   A card is one item (a setting, a request, a connection); a panel groups cards or a whole
+   section, like the website's large rounded blocks. Both are plain surfaces with a hairline. */
+
+.card { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-card); padding: var(--space-s); }
+a.card { display: block; text-decoration: none; }
+a.card:hover, .card-interactive:hover { border-color: var(--control-line); }
+.card[aria-disabled="true"] { background: var(--surface-soft); color: var(--muted); }
+.panel { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: clamp(18px, 4cqi, 34px); box-shadow: var(--shadow); container-type: inline-size; }
+.panel-soft { background: var(--surface-soft); box-shadow: none; }
+/* Status variants of a card: a tinted surface and a 4 px edge in the status colour. */
+.card-danger, .card-warning, .card-info, .card-success { border-left-width: 4px; }
+.card-danger { background: var(--danger-soft); border-color: var(--danger); }
+.card-warning { background: var(--warning-soft); border-color: var(--warning); }
+.card-info { background: var(--info-soft); border-color: var(--info); }
+.card-success { background: var(--success-soft); border-color: var(--success); }
+
+@media (prefers-reduced-motion: reduce) {
+  .field, .toggle-track, .toggle-track::after, .button { transition: none; }
+}

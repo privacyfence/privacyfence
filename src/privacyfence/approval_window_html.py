@@ -8,11 +8,10 @@ and into this document, and ``_JS`` below for the click/keyboard-dispatch
 bridge (``window.webkit.messageHandlers.pf``) that replaces native
 ``buttonClicked_`` tag dispatch.
 
-Visual design assets (styles.css, with Source Serif 4 embedded as base64 data
-URIs; see that directory's fonts/OFL.txt for licensing) are vendored into
-``resources/approval_window/``. Google Fonts' ``@import`` is replaced with the
-vendored local ``@font-face`` -- this document must never trigger a network
-fetch just to render a popup.
+Visual design: the shared design files (``resources/design/``, ADR 0078/0079)
+followed by the card's own ``resources/approval_window/styles.css``, all inlined.
+The card uses the system sans stack in ``--font-sans`` and embeds no webfont --
+this document must never trigger a network fetch just to render a popup.
 
 The left column stacks up to four cards, top to bottom: the action card
 ("Action to perform" on a write, "What Claude already knows" on a read),
@@ -73,7 +72,7 @@ from html import escape as _html_escape
 from pathlib import Path
 
 from .agent_label import NEUTRAL_SUBJECT, NOT_VERIFIED, TIER_ATTESTED, UNKNOWN_AGENT_LABEL, AgentLabel
-from .design_css import SHARED_CSS
+from .design_css import DOCUMENT_CSS
 from .markdown_to_html import markdown_to_html
 
 _STYLES_PATH = Path(__file__).parent / "resources" / "approval_window" / "styles.css"
@@ -513,11 +512,11 @@ def _card(kicker: str, inner_html: str, *, style: str = "", kicker_color: str = 
 
 
 # The action and reason cards' kicker color for a write dialog -- read stays the plain
-# .card-kicker default (var(--color-accent), teal); write gets the same
+# .card-kicker default (var(--accent), teal); write gets the same
 # accent-2 (magenta) family the pill/rail already use, so the two kinds
 # of dialog read as visually distinct at the section-header level too,
 # not just via the header pill/rail.
-_WRITE_KICKER_COLOR = "var(--color-accent-2-700)"
+_WRITE_KICKER_COLOR = "var(--warning)"
 
 
 def _section_1_html(is_read: bool, preview: dict[str, str], agent_display_name: str) -> str:
@@ -574,10 +573,11 @@ def _risk_section_html(
 ) -> str:
     """The PII/content-flag card.
     ``variant`` is one of:
-      - "read": review-gate PII match. Accent-2 tokens -- see module
-        docstring, this card's job is to look distinct from "write" below.
-      - "write": popup-gate content-flag match, informational only. Uses
-        the pii-write-bg amber/ochre tokens.
+      - "read": review-gate PII match. The --danger status family -- see
+        module docstring, this card's job is to look distinct from "write"
+        below.
+      - "write": popup-gate content-flag match, informational only. The
+        lower-alarm --warning family.
       - "write-forced": drive_upload_file's own PII match, which forces the
         same second-confirmation flow "read" does despite being a write --
         reuses "read"'s styling. See module docstring.
@@ -586,14 +586,14 @@ def _risk_section_html(
         return ""
     kicker = "Possible PII detected"
     if variant == "write":
-        card_style = "background:var(--pii-w-bg);border:1px solid var(--pii-w-border)"
-        ink = "var(--pii-w-ink)"
-        tag_bg, tag_color = "var(--pii-w-tagbg)", "var(--pii-w-ink)"
+        card_style = "background:var(--warning-soft);border:1px solid var(--warning)"
+        ink = "var(--warning)"
+        tag_bg, tag_color = "var(--surface)", "var(--warning)"
         message = "This message appears to contain"
     else:  # "read" and the "write-forced" placeholder
-        card_style = "background:var(--color-accent-2-100);border:1px solid var(--color-accent-2-300)"
-        ink = "var(--color-accent-2-800)"
-        tag_bg, tag_color = "var(--color-accent-2-200)", "var(--color-accent-2-800)"
+        card_style = "background:var(--danger-soft);border:1px solid var(--danger)"
+        ink = "var(--danger)"
+        tag_bg, tag_color = "var(--surface)", "var(--danger)"
         message = "Review carefully before approving"
     tags = "".join(_tag_html(c, bg=tag_bg, color=tag_color) for c in categories)
     body = (
@@ -975,7 +975,7 @@ def build_card_stack_html(
         # flex:none).
         body_html += (
             f'<div style="flex:none;margin-top:16px;font-size:11px;'
-            f'color:color-mix(in srgb, var(--color-text) 55%, transparent)">'
+            f'color:var(--muted)">'
             f'{_html_escape(temp_accept_text)}</div>'
         )
 
@@ -988,7 +988,7 @@ def build_card_stack_html(
     # magenta/accent-2 for writes. Left padding is reduced by the rail's
     # own width so the total left inset (rail + padding) still matches the
     # 30px used everywhere else.
-    rail_color = "var(--color-accent-500)" if is_read else "var(--color-accent-2-500)"
+    rail_color = "var(--accent)" if is_read else "var(--warning)"
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -1001,7 +1001,7 @@ def build_card_stack_html(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
-{SHARED_CSS}
+{DOCUMENT_CSS}
 {_STYLES_CSS}
 html {{ height: 100%; }}
 /* overflow-y:auto here is now a last-resort fallback only, not the
@@ -1098,7 +1098,7 @@ def _header_html(
         if shield_icon_data_uri else ""
     )
     seen_html = (
-        f'<div style="font-size:12px;color:var(--color-neutral-700);margin-bottom:6px">'
+        f'<div style="font-size:12px;color:var(--ink-soft);margin-bottom:6px">'
         f'{_html_escape(seen_count_text)}</div>'
         if seen_count_text else ""
     )
@@ -1107,8 +1107,8 @@ def _header_html(
     # token families the rest of this template already uses (e.g. the read
     # vs write PII/content-flag card variants), visible on every dialog,
     # not only ones carrying a PII match.
-    pill_bg = "var(--color-accent-100)" if is_read else "var(--color-accent-2-100)"
-    pill_color = "var(--color-accent-700)" if is_read else "var(--color-accent-2-700)"
+    pill_bg = "var(--accent-soft)" if is_read else "var(--warning-soft)"
+    pill_color = "var(--accent-dark)" if is_read else "var(--warning)"
     pill_label = "Read" if is_read else "Write"
     pill_html = f'<span class="pf-pill" style="background:{pill_bg};color:{pill_color}">{pill_label}</span>'
     return (

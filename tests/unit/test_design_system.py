@@ -77,7 +77,6 @@ MEDIA_ALLOWED: dict[str, tuple[int, str]] = {
     "src/privacyfence/approval_window_html.py": (1, "p5-card-containers"),
     "src/privacyfence/dialog_window_html.py": (1, "p5-card-containers"),
     "src/privacyfence/resources/approval_window/styles.css": (2, "p5-card-containers"),
-    "src/privacyfence/web_shell.py": (1, "p2-design-system"),
 }
 
 
@@ -88,13 +87,10 @@ _COLOUR_FUNCTION = re.compile(r"\b(?:rgba?|hsla?)\(")
 
 # file -> (number of colour literals it may still have, phase that removes them)
 COLOUR_ALLOWED: dict[str, tuple[int, str]] = {
-    "src/privacyfence/approval_list_html.py": (3, "p6-remaining-pages"),
-    "src/privacyfence/resources/approval_window/styles.css": (72, "p5-card-containers"),
-    "src/privacyfence/settings_window_html.py": (29, "p3-settings"),
+    "src/privacyfence/settings_window_html.py": (23, "p3-settings"),
     "src/privacyfence/web/routes_connect.py": (14, "p6-remaining-pages"),
     "src/privacyfence/web/routes_security.py": (15, "p6-remaining-pages"),
     "src/privacyfence/web/session_auth.py": (1, "p6-remaining-pages"),
-    "src/privacyfence/web_shell.py": (6, "p2-design-system"),
 }
 
 
@@ -176,12 +172,6 @@ FOREIGN_PROPERTIES = re.compile(r"md-[\w-]+")  # the /docs/ generator's theme (w
 
 # (file, property-name pattern) -> phase that removes the definitions.
 TOKEN_DEFINITIONS_ALLOWED: dict[tuple[str, str], str] = {
-    ("src/privacyfence/resources/tokens.css", r"(color|space|radius)-[\w-]+"): "p2-design-system",
-    (
-        "src/privacyfence/resources/approval_window/styles.css",
-        r"(color|space|radius|font)-[\w-]+",
-    ): "p2-design-system",
-    ("src/privacyfence/resources/approval_window/styles.css", r"pii-w-[\w-]+"): "p5-card-containers",
     ("src/privacyfence/settings_window_html.py", r"pf-[\w-]+"): "p3-settings",
 }
 
@@ -263,3 +253,26 @@ def test_every_app_document_inlines_the_shared_css_before_its_own():
     for name, html in documents.items():
         style = html.split('<style nonce="', 1)[1].split('">', 1)[1]
         assert style.lstrip().startswith(design_css.SHARED_CSS), name
+
+
+# ---- The app layer (ADR 0079) ------------------------------------------------------------
+
+def test_the_app_layer_is_the_apps_alone_and_has_no_viewport_query():
+    import sys
+
+    sys.path.insert(0, str(REPO / "scripts"))
+    import build_site  # noqa: PLC0415 -- scripts/ is not a package
+
+    # Dark mode and the app's components never reach the website (shared rule 9).
+    assert not any("app.css" in str(source) for source in build_site.STATIC.values())
+    assert _media_count(_code(DESIGN / "app.css")) == 0
+    assert design_css.DOCUMENT_CSS == design_css.SHARED_CSS + design_css.APP_CSS
+
+
+def test_the_old_palette_and_the_serif_are_gone():
+    assert not (SRC / "resources" / "tokens.css").exists()
+    assert not (SRC / "resources" / "approval_window" / "fonts").exists()
+    for path in _styled_files():
+        code = _code(path)
+        assert "@font-face" not in code, _rel(path)
+        assert not re.search(r"var\(--color-", code), _rel(path)

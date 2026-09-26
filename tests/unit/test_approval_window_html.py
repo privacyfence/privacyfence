@@ -217,15 +217,15 @@ class TestSectionPresenceAndOrder:
 class TestRiskCardVariants:
     def test_read_variant_uses_accent_2_tokens_and_review_carefully_copy(self):
         html = build_card_stack_html(**_minimal_kwargs(pii_categories=["IBAN (bank account number)"]))
-        assert "var(--color-accent-2-100)" in html
+        assert "var(--warning-soft)" in html
         assert "Review carefully before approving" in html
         assert "IBAN (bank account number)" in html
 
-    def test_write_variant_uses_the_new_pii_write_bg_tokens(self):
+    def test_write_variant_uses_the_warning_status_tokens(self):
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=False, write_content_flags=["Phone number"],
         ))
-        assert "var(--pii-w-bg)" in html
+        assert "background:var(--warning-soft);border:1px solid var(--warning)" in html
         assert "This message appears to contain" in html
 
     def test_upload_forced_placeholder_reuses_read_styling_not_write(self):
@@ -235,8 +235,8 @@ class TestRiskCardVariants:
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=False, write_content_flags=["Phone number"], upload_forced=True,
         ))
-        assert "var(--color-accent-2-100)" in html
-        assert "var(--pii-w-bg)" not in html
+        assert "background:var(--danger-soft);border:1px solid var(--danger)" in html
+        assert "background:var(--warning-soft);border:1px solid var(--warning)" not in html
 
     def test_upload_forced_is_ignored_when_there_is_no_write_content_flag(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=False, upload_forced=True))
@@ -245,23 +245,24 @@ class TestRiskCardVariants:
 
 class TestReadWriteDifferentiation:
     """Design canvas turn 3, option "3b" -- a colored side rail on <body>'s
-    left edge plus a matching "Read"/"Write" pill next to the title, cyan/
-    accent tokens for reads and magenta/accent-2 for writes, on every
-    dialog (not just ones carrying a PII/content-flag card)."""
+    left edge plus a matching "Read"/"Write" pill next to the title, the
+    accent tokens for reads and the --warning status tokens for writes, on
+    every dialog (not just ones carrying a PII/content-flag card). The pill's
+    text is the non-colour cue."""
 
     def test_read_gets_the_read_pill_and_accent_rail(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=True))
-        assert '<span class="pf-pill" style="background:var(--color-accent-100);color:var(--color-accent-700)">Read</span>' in html
-        assert "border-left: 6px solid var(--color-accent-500)" in html
+        assert '<span class="pf-pill" style="background:var(--accent-soft);color:var(--accent-dark)">Read</span>' in html
+        assert "border-left: 6px solid var(--accent)" in html
         assert ">Write</span>" not in html
-        assert "var(--color-accent-2-500)" not in html
+        assert "6px solid var(--warning)" not in html
 
     def test_write_gets_the_write_pill_and_accent_2_rail(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=False))
-        assert '<span class="pf-pill" style="background:var(--color-accent-2-100);color:var(--color-accent-2-700)">Write</span>' in html
-        assert "border-left: 6px solid var(--color-accent-2-500)" in html
+        assert '<span class="pf-pill" style="background:var(--warning-soft);color:var(--warning)">Write</span>' in html
+        assert "border-left: 6px solid var(--warning)" in html
         assert ">Read</span>" not in html
-        assert "var(--color-accent-500)" not in html
+        assert "6px solid var(--accent)" not in html
 
     def test_pill_sits_next_to_the_title(self):
         html = build_card_stack_html(**_minimal_kwargs(is_read=True, title="Read Calendar Event"))
@@ -277,7 +278,7 @@ class TestReadWriteDifferentiation:
         html = build_card_stack_html(**_minimal_kwargs(
             is_read=False, claude_reason="Doing this as requested.",
         ))
-        assert html.count('class="card-kicker" style="color:var(--color-accent-2-700)"') == 2
+        assert html.count('class="card-kicker" style="color:var(--warning)"') == 2
 
 
 class TestLayoutShapes:
@@ -422,7 +423,7 @@ class TestResponsiveBreakpoint:
         assert ".pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }" in html
 
     def test_decision_controls_get_a_real_touch_target_below_the_breakpoint(self):
-        # 90px-wide pills one var(--space-2) apart, on the one surface
+        # 90px-wide pills one var(--space-xs) apart, on the one surface
         # where a mis-tap is irreversible.
         html = build_card_stack_html(**_minimal_kwargs())
         assert ".pf-btn-row .pf-btn { min-height: 48px; font-size: 14px; }" in html
@@ -435,24 +436,30 @@ class TestResponsiveBreakpoint:
         assert ".pf-kv { flex-direction: column; gap: 2px; }" in html
 
 
+_PRIMARY_RULE = (
+    ".pf-btn-primary { background: var(--ink); color: var(--on-ink); box-shadow: var(--shadow-button); }"
+)
+
+
 class TestPrimaryButtonIsTokenized:
-    def test_allow_once_uses_the_accent_token_not_a_hard_coded_blue(self):
+    def test_allow_once_is_the_websites_primary_button_on_tokens(self):
         # #5ba4ff/#4a8fe6 was the one colour in this document that wasn't a
         # token, didn't invert for dark mode, and appeared nowhere else in
-        # the design -- on the single most consequential control.
+        # the design -- on the single most consequential control. It is now
+        # the website's .primary: dark ink, inverted in dark mode (ADR 0079).
         html = build_card_stack_html(**_minimal_kwargs())
-        assert ".pf-btn-primary { background: var(--color-accent); color: #fff; }" in html
-        assert ".pf-btn-primary:hover { background: var(--color-accent-600); }" in html
+        assert _PRIMARY_RULE in html
+        assert ".pf-btn-primary:hover { background: var(--ink-hover); }" in html
         # The declarations, not the bare hex: the comment above the rule
         # names the old pair to explain why it went.
         assert "background: #5ba4ff" not in html
         assert "background: #4a8fe6" not in html
 
     def test_a_write_card_does_not_recolour_it_to_the_risk_family(self):
-        # --color-accent-2 is both "write" and the PII/risk tint family
-        # here, so a magenta primary would read as destructive.
+        # --warning is the "write" family, so a primary in it would read as
+        # a caution on exactly the surface where that must not be ambiguous.
         html = build_card_stack_html(**_minimal_kwargs(is_read=False))
-        assert ".pf-btn-primary { background: var(--color-accent); color: #fff; }" in html
+        assert _PRIMARY_RULE in html
 
 
 class TestTempAcceptDisclosure:
@@ -809,10 +816,14 @@ class TestEscapingAndNoNetwork:
         assert "http://" not in html
         assert "https://" not in html
 
-    def test_fonts_are_embedded_as_data_uris(self):
+    def test_no_webfont_is_embedded_or_fetched(self):
+        # The card uses the system sans stack in --font-sans, like the
+        # website (ADR 0079); Source Serif 4 and its embedded files are gone.
         html = build_card_stack_html(**_minimal_kwargs())
-        assert "@font-face" in html
-        assert "data:font/woff2;base64," in html
+        assert "@font-face" not in html
+        assert "data:font/" not in html
+        assert "Source Serif" not in html
+        assert "font-family: var(--font-sans)" in html
 
 
 class TestCardStackIsAPureFunction:
