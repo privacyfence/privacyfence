@@ -1968,6 +1968,25 @@ class TestPreviewTableLayout:
             thread.join(timeout=5)
 
 
+    @pytest.mark.parametrize(("columns", "stacked"), [(10, True), (3, False)])
+    def test_a_wide_table_stacks_by_its_column_count_in_a_desktop_sized_preview(self, page, columns, stacked):
+        """A preview about 650px wide, what a WIDE card's preview gets on a desktop: ten columns
+        at 65px each break words mid-word ("Negotiati/on"), so that table stacks; three columns
+        have room and stay a table. The stacking width grows with the column count."""
+        table = {"headers": _TEN_COLUMN_TABLE["headers"][:columns],
+                 "rows": [row[:columns] for row in _TEN_COLUMN_TABLE["rows"]]}
+        fragment = approval_window_html.build_preview_body_html(tables=[table])
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.set_content(
+            f"<style>{approval_window_html.DOCUMENT_CSS}{approval_window_html._STYLES_CSS}</style>"
+            f'<div style="width:650px">{fragment}</div>'
+        )
+        display = page.evaluate("getComputedStyle(document.querySelector('.pf-table tr')).display")
+        assert display == ("block" if stacked else "table-row"), display
+        assert page.evaluate(_PHONE_BROKEN_WORDS_JS, "") == []
+        assert page.evaluate("document.documentElement.scrollWidth") <= 1280
+
+
 # --------------------------------------------------------------------- #
 # CSP: no-inline-script
 # --------------------------------------------------------------------- #
@@ -2544,30 +2563,8 @@ _ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "abou
 _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 
-# Which phase of docs/org-mode-mobile-plan.md owns the fix for a case that fails today. The keys
-# are the case ids below; a case is marked xfail(strict=True) at exactly the widths listed, so a
-# phase that fixes another phase's case by accident is told so by the suite.
-_PHONES = ("320", "393")
-_EVERY_WIDTH = tuple(_PHONE_WIDTHS)
-_PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {
-    # Inline in a list row there is no card yet, only the Details metadata disclosure: narrower
-    # than 90% on a phone, and with no PDF page or table in it at all.
-    **{f"inline-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
-    "inline-pdf-preview": ("p5-card-containers", _EVERY_WIDTH),
-    "inline-table-preview": ("p5-card-containers", _EVERY_WIDTH),
-}
-
-
 def _phone_cases(case_ids):
-    params = []
-    for case in case_ids:
-        for width in _PHONE_WIDTHS:
-            marks = []
-            owner = _PHONE_XFAIL.get(case)
-            if owner and width in owner[1]:
-                marks.append(pytest.mark.xfail(strict=True, reason=owner[0]))
-            params.append(pytest.param(case, width, marks=marks, id=f"{case}-{width}"))
-    return params
+    return [pytest.param(case, width, id=f"{case}-{width}") for case in case_ids for width in _PHONE_WIDTHS]
 
 
 _ADMIN = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
@@ -2606,8 +2603,7 @@ def _read_card_kwargs(kind: str) -> dict:
 
 
 def _register_wide_read_card(web_ui: WebApprovalUI, kind: str) -> tuple[threading.Thread, object]:
-    """A WIDE read card of the given preview kind, registered the way gate.py registers one, so
-    its list row has a stamped preview for the inline Details disclosure."""
+    """A WIDE read card of the given preview kind, registered the way gate.py registers one."""
     approval, _created = web_ui.deferred_registry.register_or_coalesce(
         dedupe_key=f"phone-{kind}-{uuid.uuid4().hex[:8]}", connector="drive", tool="drive_get_file_content",
         gate_kind="review", request_id=f"req-{kind}", summary="Quarterly report", tool_name="Get file content",
@@ -2634,8 +2630,11 @@ def _register_wide_read_card(web_ui: WebApprovalUI, kind: str) -> tuple[threadin
 
 class TestPhoneLayout:
     """The measurable shared rules on every app surface, at 320px, a real 393px phone and a 1024px
-    tablet. Every case that fails today is xfail(strict=True) with the id of the phase of
-    docs/org-mode-mobile-plan.md that owns its fix; see _PHONE_XFAIL."""
+    tablet.
+
+    There is no case for a card inline in an expanded /approvals row: the row's Details
+    disclosure shows only request metadata and Review opens the full card page, so that context
+    does not exist (ADR 0078). TestCardContainers proves the card in narrow and wide containers."""
 
     @pytest.mark.parametrize(("case", "width"), _phone_cases(["approvals", "connect", "security"]))
     def test_shell_page(self, phone_page, org_server_and_ui, case, width):
@@ -2729,8 +2728,8 @@ class TestPhoneLayout:
             if approval is not None:
                 web_ui.resolve(approval.id, "deny")
 
-    # The card's layout (a)-(d) and its preview content (e)/(f) are separate cases: they are
-    # fixed by different phases, and one strict xfail cannot name two owners.
+    # The card's layout (a)-(d) and its preview content (e)/(f) are separate cases, so a failure
+    # names which of the two broke.
     @pytest.mark.parametrize(
         ("case", "width"),
         _phone_cases([f"card-{k}" for k in _READ_KINDS] + ["card-pdf-preview", "card-table-preview"]),
@@ -2748,34 +2747,6 @@ class TestPhoneLayout:
                 self._assert_preview(phone_page, kind, root=".pf-wide-right")
             else:
                 _assert_phone_layout(phone_page, width, main=".pf-wide-right")
-        finally:
-            web_ui.resolve(card.id, "deny")
-            thread.join(timeout=5)
-
-    @pytest.mark.parametrize(
-        ("case", "width"),
-        _phone_cases([f"inline-{k}" for k in _READ_KINDS] + ["inline-pdf-preview", "inline-table-preview"]),
-    )
-    def test_read_card_inline_in_list_row(self, phone_page, local_server, case, width):
-        server, web_ui = local_server
-        kind = case.removeprefix("inline-").removesuffix("-preview")
-        _sign_in_local(phone_page, server)
-        thread, card = _register_wide_read_card(web_ui, kind)
-        try:
-            phone_page.goto(f"{server.base_url}/approvals")
-            phone_page.wait_for_selector(f'[data-details="{card.id}"]')
-            phone_page.locator(f'[data-details="{card.id}"]').click()
-            phone_page.wait_for_function(
-                "(id) => { var el = document.getElementById('pf-details-' + id); "
-                "return !!el && !el.hasAttribute('hidden') && el.textContent.trim().length > 0; }",
-                arg=card.id,
-            )
-            _phone_screenshot(phone_page, f"{case}-{width}")
-            root = f"#pf-details-{card.id}"
-            if case.endswith("-preview"):
-                self._assert_preview(phone_page, kind, root=root)
-            else:
-                _assert_phone_layout(phone_page, width, main=root)
         finally:
             web_ui.resolve(card.id, "deny")
             thread.join(timeout=5)

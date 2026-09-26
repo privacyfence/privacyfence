@@ -2,9 +2,7 @@
 ``src/privacyfence/resources/design/`` and nowhere else, and renderers compose them instead of
 writing their own breakpoints and colours.
 
-Three source checks, each with an allow-list seeded with what the code had when the checks
-arrived. Every entry names the phase of docs/org-mode-mobile-plan.md that removes it, and an entry
-that no longer matches anything fails too, so an allow-list only ever shrinks:
+Three source checks, with no exceptions:
 
 (a) no ``@media`` width/height query in a renderer or in resources/approval_window/styles.css
     (``prefers-color-scheme`` and ``prefers-reduced-motion`` are fine): the app lays out with the
@@ -71,18 +69,11 @@ _WIDTH_MEDIA = re.compile(
     r"@media\b[^{]*?\b(?:min-|max-)?(?:device-)?(?:width|height|aspect-ratio|orientation)\b"
 )
 
-# file -> (number of width/height @media queries it may still have, phase that removes them)
-MEDIA_ALLOWED: dict[str, tuple[int, str]] = {
-}
-
 
 # ---- (b) no colour literals in renderers ----------------------------------------------------
 
 _HEX = re.compile(r"(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])")
 _COLOUR_FUNCTION = re.compile(r"\b(?:rgba?|hsla?)\(")
-
-# file -> (number of colour literals it may still have, phase that removes them)
-COLOUR_ALLOWED: dict[str, tuple[int, str]] = {}
 
 
 def _count(pattern_count, path: Path) -> int:
@@ -98,42 +89,18 @@ def _colour_count(text: str) -> int:
 
 
 @pytest.mark.parametrize(
-    ("counter", "allowed", "what"),
-    [
-        (_media_count, MEDIA_ALLOWED, "@media width/height queries"),
-        (_colour_count, COLOUR_ALLOWED, "colour literals"),
-    ],
+    ("counter", "what"),
+    [(_media_count, "@media width/height queries"), (_colour_count, "colour literals")],
     ids=["media-queries", "colour-literals"],
 )
-def test_renderers_use_the_shared_primitives_and_tokens(counter, allowed, what):
-    renderers = _renderers()
-    counts = {_rel(path): _count(counter, path) for path in renderers}
-    over = {
-        name: f"{count} {what}, {allowed.get(name, (0, ''))[0]} allowed"
-        for name, count in counts.items() if count > allowed.get(name, (0, ""))[0]
+def test_renderers_use_the_shared_primitives_and_tokens(counter, what):
+    offenders = {
+        name: count for name, count in ((_rel(path), _count(counter, path)) for path in _renderers()) if count
     }
-    assert not over, (
+    assert not offenders, (
         f"Renderers with {what} (use the shared tokens and primitives in "
-        f"src/privacyfence/resources/design/, and container queries, instead): {over}"
+        f"src/privacyfence/resources/design/, and container queries, instead): {offenders}"
     )
-    # The allow-list only shrinks: an entry above what its file has now must be lowered (or
-    # removed at zero) by the change that fixed it.
-    stale = {
-        name: f"allows {limit}, has {counts.get(name, 0)} ({phase})"
-        for name, (limit, phase) in allowed.items() if counts.get(name, 0) != limit
-    }
-    assert not stale, f"Lower these allow-list entries to what the file has now: {stale}"
-
-
-def test_every_allow_list_entry_names_a_phase_and_a_renderer():
-    renderers = {_rel(path) for path in _renderers()}
-    for allowed in (MEDIA_ALLOWED, COLOUR_ALLOWED):
-        for name, (_limit, phase) in allowed.items():
-            assert name in renderers, name
-            assert re.fullmatch(r"p[1-8]-[a-z-]+", phase), phase
-    for (name, _pattern), phase in TOKEN_DEFINITIONS_ALLOWED.items():
-        assert (REPO / name).is_file(), name
-        assert re.fullmatch(r"p[1-8]-[a-z-]+", phase), phase
 
 
 def test_the_check_sees_what_it_is_meant_to():
@@ -161,9 +128,6 @@ def _primitive_knobs() -> set[str]:
 # Properties another tool owns, which it documents and reads itself.
 FOREIGN_PROPERTIES = re.compile(r"md-[\w-]+")  # the /docs/ generator's theme (website/_docs/)
 
-# (file, property-name pattern) -> phase that removes the definitions.
-TOKEN_DEFINITIONS_ALLOWED: dict[tuple[str, str], str] = {}
-
 
 def _styled_files() -> list[Path]:
     website = REPO / "website"
@@ -175,26 +139,16 @@ def test_design_tokens_are_defined_only_in_resources_design():
     knobs = _primitive_knobs()
     assert {"min", "split-cols", "stack-gap", "cluster-gap"} <= knobs, knobs
     offenders: dict[str, set[str]] = {}
-    used: set[tuple[str, str]] = set()
     for path in _styled_files():
         name = _rel(path)
         for prop in set(_DEFINITION.findall(_code(path))):
             if prop in knobs or FOREIGN_PROPERTIES.fullmatch(prop):
-                continue
-            entry = next(
-                (key for key in TOKEN_DEFINITIONS_ALLOWED if key[0] == name and re.fullmatch(key[1], prop)),
-                None,
-            )
-            if entry is not None:
-                used.add(entry)
                 continue
             offenders.setdefault(name, set()).add(f"--{prop}")
     assert not offenders, (
         "Custom properties defined outside src/privacyfence/resources/design/ (define the token "
         f"there, or use one that exists): { {k: sorted(v) for k, v in offenders.items()} }"
     )
-    unused = {key: phase for key, phase in TOKEN_DEFINITIONS_ALLOWED.items() if key not in used}
-    assert not unused, f"Remove these allow-list entries, nothing matches them any more: {unused}"
 
 
 def test_every_token_is_defined_once():
