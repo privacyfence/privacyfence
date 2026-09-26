@@ -26,11 +26,11 @@ def text_pdf(pages: list[list[str]], *, width: int = 595, height: int = 842) -> 
     next_id = 4
     for lines in pages:
         text = " ".join("(%s) '" % line for line in lines)
-        content = f"BT /F1 11 Tf 56 {height - 72} Td 14 TL {text} ET".encode("latin-1")
+        content = f"BT /Helv 11 Tf 56 {height - 72} Td 14 TL {text} ET".encode("latin-1")
         objects[next_id] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content)
         objects[next_id + 1] = (
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] "
-            b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>" % (width, height, next_id)
+            b"/Resources << /Font << /Helv 3 0 R >> >> /Contents %d 0 R >>" % (width, height, next_id)
         )
         page_ids.append(next_id + 1)
         next_id += 2
