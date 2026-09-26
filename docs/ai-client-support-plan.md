@@ -315,15 +315,47 @@ Read docs/ai-client-support-plan.md and the evidence comments the maintainer pos
    a follow-up note, add an ADR that amends it — never edit 0035's body.
 3. Remove the "Verification pending" admonitions for every path that passed; keep them, with the
    observed failure, for any that didn't. Fill the ai-client-qa.md evidence table.
-4. Claim: README.md (the "MCP-compatible AI assistant" intro + the architecture diagram's client
-   list), website/index.html (client list / FAQ, wherever Claude is named as the client), and a
-   CHANGELOG [Unreleased] "Added" line — wording per decision D3.
+4. Claim, per decision D3 and §5a item WS1 (the website is data-driven now; don't edit pages by
+   hand): add each verified client to website/_data/clients.json with its deployments and how it
+   connects. If the client list in website/canonical-description.md changes, change README.md's
+   opening description in the same commit (guardrail 1 holds them verbatim equal). Then README's
+   other client mentions, and a CHANGELOG [Unreleased] "Added" line.
 5. Tick the finished checkboxes in #391 (Route A) and #392 and close #392 if all of it passed.
 Run /dod; one PR "feature: verified ChatGPT (Developer Mode) and Gemini CLI support"; drive green.
 ```
 
 **★ GATE A is passed when:** WP 2.1 is merged to `main` (`pages.yml` then deploys the website).
 **This is the earliest point you can say "works with ChatGPT and Gemini".**
+
+### 5a. Website items (moved from the website follow-up plan, 2026-09-26)
+
+These were T1 and T2 of the website follow-up plan (`docs/website-followup-plan.md` on
+`claude/gracious-cerf-4pnoha`). They are renamed WS1/WS2 here because T1–T4 in this plan are test
+tiers.
+
+**WS1 — the website names a client only once its support has shipped.** The site's AI-client list
+is one data file, `website/_data/clients.json`. `scripts/build_site.py` renders the homepage's
+"Works with" strip and the JSON-LD `softwareRequirements` of `/` and `/download/` from it.
+Guardrail 10 (`tests/unit/test_website_clients.py`) fails the build if any page names an AI client
+the file doesn't list. So:
+- no website page names ChatGPT or Gemini before its gate. That includes WP 1.3's draft docs if
+  they are linked from a page. The published `/docs/` are built from the latest stable tag, so
+  their drafts reach the site only with a release;
+- at each gate the claim grows through the same file. Gate A adds ChatGPT (Developer Mode,
+  organization deployments) and Gemini CLI (WP 2.1 step 4). Gate B adds ChatGPT workspace
+  connectors, and ChatGPT desktop if WP 3.1 took branch (a) or (b). Gate C adds Gemini Enterprise.
+  Each is its gate's docs PR's one-line change to `clients.json`, plus a CHANGELOG line;
+- claude.ai-style web clients reach PrivacyFence only through an organization deployment. The data
+  file's `deployments` must say `["organization"]` for them, as it does for claude.ai.
+
+**WS2 — AI assistants describe PrivacyFence correctly.** After Gate A's deploy, and monthly with
+the website plan's measurement, ask ChatGPT, Copilot, Gemini and Claude "What is PrivacyFence?" and
+"Which AI clients does PrivacyFence work with?". Note whether the answers match
+`website/canonical-description.md` and `clients.json`. If ChatGPT or Copilot, which are fed by
+Bing's index, lag behind Google-backed answers, re-add Bing Webmaster Tools (a ~5-minute import
+from Search Console) and submit the sitemap there. That reverses part of
+[ADR 0050](adr/0050-website-analytics-is-ga4-behind-consent.md) (Google-only search tooling), so it
+gets a superseding ADR in the same change.
 
 ---
 
@@ -607,9 +639,11 @@ from a public CA.
 1. Review and merge WP 2.1's PR: GitHub → **Pull requests** → the PR → **Files changed** →
    **Review changes** → **Approve** → **Merge pull request** (merge commit, not squash).
 2. Check the website after `pages.yml` finishes: GitHub → **Actions** → **pages** → latest run is
-   green. Then open <https://privacyfence.eu> and confirm the new client list.
+   green. Then open <https://privacyfence.eu> and confirm the new client list in the "Works with"
+   strip (rendered from `website/_data/clients.json`, §5a WS1).
 3. The claim is public. It ships in the next release's notes from `CHANGELOG.md` (`/cut-release`
    when you're ready).
+4. Start WS2's check (§5a) a week or two after the deploy, once crawlers have picked it up.
 
 ### M3: after Wave 3
 
