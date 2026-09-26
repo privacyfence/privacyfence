@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Generates the screenshots top-level README.md shows, from the real embedded web UI in a real
-browser (Playwright/Chromium), seeded with synthetic demo data only:
+"""Generates the approval-card screenshots README.md and the website show, from the real embedded
+web UI in a real browser (Playwright/Chromium), seeded with synthetic demo data only.
 
-- ``settings-connectors.png`` and ``settings-auto-accept-rules.png``: two pages of the local
-  settings UI (``/settings``).
-- ``gmail-read-thread.png`` and ``sheets-write.png``: two approval cards, opened from the
-  approvals list (``/approvals`` -> Review) the way a person reaches them. Each one is produced by
-  calling the real connector tool (``gmail_get_thread``, ``drive_sheets_write_range``) against a
-  fake Google client, so the card is whatever the real gate builds for that call -- PII scan and
-  highlighting, the "AI will receive" checklist, the stated reason and the calling AI system
-  included. Nothing is hand-edited or mocked up.
+Every image is one approval card, opened from the approvals list (``/approvals`` -> Review) the way
+a person reaches it. Each one is produced by calling the real connector tool against a fake client
+that returns synthetic content, so the card is whatever the real gate builds for that call -- PII
+scan and highlighting, the "AI will receive" checklist, the stated reason and the calling AI system
+included. Nothing is hand-edited or mocked up. The cards, by ``--only`` name:
+
+- ``gmail``: ``gmail-read-thread.png`` (``gmail_get_thread``)
+- ``sheets``: ``sheets-write.png`` (``drive_sheets_write_range``)
+- ``slack``: ``slack-read-thread.png`` (``slack_get_thread_replies``)
+- ``salesforce``: ``salesforce-read-record.png`` (``salesforce_get_record``)
+- ``jira``: ``jira-read-issue.png`` (``jira_get_issue``)
+- ``telegram``: ``telegram-read-chat.png`` (``telegram_get_messages``)
 
 Requires ``playwright``, which comes with the ``[test]`` extra (``pip install -e '.[test]'``),
 and a Chromium binary for it (``playwright install chromium``); see qa_web_smoke.py's own
@@ -17,11 +21,11 @@ docstring for where to point --chromium-path if you'd rather use one already on 
 
     .venv/bin/pip install -e '.[test]'           # once; brings playwright
     .venv/bin/playwright install chromium        # once; the browser it drives
-    .venv/bin/python scripts/qa_readme_screenshots.py                  # all four
-    .venv/bin/python scripts/qa_readme_screenshots.py --only approvals # just the two cards
+    .venv/bin/python scripts/qa_readme_screenshots.py              # every card
+    .venv/bin/python scripts/qa_readme_screenshots.py --only slack # just one
 
-Regenerate only when the settings page's or the approval card's visual design changes
-meaningfully -- not for every settings_controller.py/card_builder.py change.
+Regenerate only when the approval card's visual design changes meaningfully -- not for every
+card_builder.py change.
 """
 from __future__ import annotations
 
@@ -40,41 +44,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "images" / "screenshots"
 
-# Representative, fake-but-plausible state -- enough for the two screenshots
-# to show a populated, real-looking page rather than every field empty.
-# Seeded in the auto_accept: schema (policy.store).
 _SETTINGS_YAML = """\
 connectors: {}
 pii_detection:
   enabled: true
-auto_accept:
-  version: 2
-  rules:
-    - id: r-gmail-sender
-      predicate: i_am_sender
-      value: null
-      operations: [gmail.read_message]
-      conditions: []
-    - id: r-gmail-domain
-      predicate: trusted_sender_domain
-      value: ["example.com", "partner.example.org"]
-      operations: [gmail.read_message]
-      conditions: []
-    - id: r-gmail-label
-      predicate: label_match
-      value: ["Newsletters"]
-      operations: [gmail.archive_message]
-      conditions: []
-    - id: r-drive-folder
-      predicate: approved_folder
-      value: ["1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"]
-      operations: [drive.read_file_contents, drive.download_file]
-      conditions: []
 """
 
 # Connectors shown as "connected" -- SettingsController marks a connector
 # authed purely by name membership in this list, no real client needed.
-_FAKE_CONNECTED = ["gmail", "drive", "slack", "calendar"]
+_FAKE_CONNECTED = ["gmail", "drive", "slack", "salesforce", "jira", "telegram"]
 
 
 def _sign_in_url(server, path: str) -> str:
@@ -191,6 +169,131 @@ def _demo_drive_connector():
     return connector
 
 
+_DEMO_SLACK_REASON = "Summarising the open questions in the payroll thread for your Friday update."
+_DEMO_SLACK_REPLIES = [
+    ("Priya Shah", "1757926320.000100",
+     "Finance needs Jordan's bank details before the 25th run. Can someone confirm them here?"),
+    ("Sam Lee", "1757926980.000200",
+     "Jordan sent them this morning: IBAN GB82WEST12345698765432. Starting salary is €62,000 a year."),
+    ("Priya Shah", "1757927460.000300", "Thanks, adding it to the September run now."),
+]
+
+_DEMO_SALESFORCE_REASON = "Pulling the billing contact's details for the renewal quote, as you asked."
+_DEMO_SALESFORCE_FIELDS = {
+    "Name": "Maria Duarte",
+    "Title": "Head of Finance",
+    "Account": "Northwind Logistics",
+    "Email": "maria.duarte@example.org",
+    "Phone": "+44 20 7946 0000",
+    "Description": (
+        "Billing contact for the annual contract. Invoices are paid by transfer to "
+        "IBAN DE89370400440532013000."
+    ),
+}
+
+_DEMO_JIRA_REASON = "Checking whether the refund on SUP-318 is ready for you to approve."
+_DEMO_JIRA_DESCRIPTION = (
+    "Customer asked for a refund of the duplicate charge on 12 September.\n\n"
+    "Card used for the order: 4111 1111 1111 1111. Refund amount: €249.00."
+)
+_DEMO_JIRA_COMMENTS = [
+    ("Alex Kim", "2026-09-15 10:04", "Confirmed the duplicate in the payment provider's dashboard."),
+    ("Sam Lee", "2026-09-15 14:31", "Refund prepared, waiting for finance sign-off."),
+]
+
+_DEMO_TELEGRAM_REASON = "Finding the account details Robin sent you for the flat deposit."
+_DEMO_TELEGRAM_MESSAGES = [
+    ("Robin Weber", "2026-09-16T18:02:00+00:00", "Hi! Here are the details for the deposit, as promised."),
+    ("Robin Weber", "2026-09-16T18:03:00+00:00", "Account holder Robin Weber, IBAN DE89370400440532013000."),
+    ("Sam Lee", "2026-09-16T18:10:00+00:00", "Thanks, I'll transfer it tomorrow morning."),
+]
+
+
+def _demo_slack_connector():
+    from privacyfence.connectors.slack import SlackConnector
+    from privacyfence.slack_client import SlackMessage
+
+    replies = [
+        SlackMessage(id=ts, channel_id="C-demo", channel_name="finance-ops", user_id=f"U{i}",
+                     user_name=user, text=text, thread_ts=_DEMO_SLACK_REPLIES[0][1])
+        for i, (user, ts, text) in enumerate(_DEMO_SLACK_REPLIES, 1)
+    ]
+    client = SimpleNamespace(
+        get_thread_replies=lambda channel_id, thread_ts: (replies, False),
+        resolve_is_group_dm=lambda channel_id: False,
+        resolve_is_self_dm=lambda channel_id: False,
+    )
+    connector = SlackConnector(client)
+    connector.my_email = _DEMO_MY_EMAIL
+    return connector
+
+
+def _demo_salesforce_connector():
+    from privacyfence.connectors.salesforce import SalesforceConnector
+    from privacyfence.salesforce_client import SalesforceRecord
+
+    record = SalesforceRecord(object_type="Contact", id="003DEMO0000000001", fields=_DEMO_SALESFORCE_FIELDS)
+    connector = SalesforceConnector(SimpleNamespace(get_record=lambda object_type, record_id: record))
+    connector.my_email = _DEMO_MY_EMAIL
+    return connector
+
+
+def _demo_jira_connector():
+    from privacyfence.connectors.jira import JiraConnector
+    from privacyfence.jira_client import JiraComment, JiraIssue
+
+    issue = JiraIssue(
+        key="SUP-318", summary="Refund duplicate charge for order 10442", status="In Progress",
+        issue_type="Task", assignee="Sam Lee", reporter="Alex Kim", description=_DEMO_JIRA_DESCRIPTION,
+    )
+    comments = [
+        JiraComment(id=f"c{i}", author=author, created=created, body=body)
+        for i, (author, created, body) in enumerate(_DEMO_JIRA_COMMENTS, 1)
+    ]
+    client = SimpleNamespace(get_issue=lambda key: issue, get_issue_comments=lambda key: comments)
+    connector = JiraConnector(client)
+    connector.my_email = _DEMO_MY_EMAIL
+    return connector
+
+
+def _demo_telegram_connector():
+    from privacyfence.connectors.telegram import TelegramConnector
+    from privacyfence.telegram_client import TelegramMessage
+
+    messages = [
+        TelegramMessage(
+            id=i, chat_id=4242, chat_name="Robin Weber", sender_id=i, sender_name=sender, text=text,
+            date=date, is_outgoing=sender == "Sam Lee", media_type="", media_filename="",
+        )
+        for i, (sender, date, text) in enumerate(_DEMO_TELEGRAM_MESSAGES, 1)
+    ]
+
+    async def get_messages(chat_id, limit):
+        return messages
+
+    return TelegramConnector(SimpleNamespace(get_messages=get_messages))
+
+
+# --only name -> (connector factory, tool, arguments, stated reason, output file, viewport height).
+_DEMO_CARDS = {
+    "gmail": (_demo_gmail_connector, "gmail_get_thread", {"thread_id": "t-demo"},
+              _DEMO_THREAD_REASON, "gmail-read-thread.png", 1010),
+    "sheets": (_demo_drive_connector, "drive_sheets_write_range",
+               {"spreadsheet_id": "demo-sheet", "range_a1": "Budget!A1:D5", "values": json.dumps(_DEMO_SHEET_VALUES)},
+               _DEMO_SHEET_REASON, "sheets-write.png", 780),
+    "slack": (_demo_slack_connector, "slack_get_thread_replies",
+              {"channel_id": "C-demo", "thread_ts": _DEMO_SLACK_REPLIES[0][1]},
+              _DEMO_SLACK_REASON, "slack-read-thread.png", 850),
+    "salesforce": (_demo_salesforce_connector, "salesforce_get_record",
+                   {"object_type": "Contact", "record_id": "003DEMO0000000001"},
+                   _DEMO_SALESFORCE_REASON, "salesforce-read-record.png", 800),
+    "jira": (_demo_jira_connector, "jira_get_issue", {"issue_key": "SUP-318"},
+             _DEMO_JIRA_REASON, "jira-read-issue.png", 900),
+    "telegram": (_demo_telegram_connector, "telegram_get_messages", {"chat_id": 4242, "limit": 50},
+                 _DEMO_TELEGRAM_REASON, "telegram-read-chat.png", 750),
+}
+
+
 class _GatedCallRunner:
     """Runs real connector tool calls on a private event loop in a background thread, attributed
     to the demo AI system with its stated reason -- the same two scopes the MCP dispatcher enters
@@ -246,7 +349,7 @@ def _capture_approval_card(page, server, approval, out_name: str, *, height: int
     print(f"wrote {path}")
 
 
-def _capture_approvals(page, server, web_ui, tmp_dir: Path) -> None:
+def _capture_approvals(page, server, web_ui, tmp_dir: Path, names: list[str]) -> None:
     from privacyfence.approval_ui import init_approval_ui
     from privacyfence.audit_log import init_audit_logger
     from privacyfence.pii_detector import init_pii_detection
@@ -258,21 +361,16 @@ def _capture_approvals(page, server, web_ui, tmp_dir: Path) -> None:
     runner = _GatedCallRunner()
     calls = []
     try:
-        calls.append(runner.submit(
-            _demo_gmail_connector(), "gmail_get_thread", {"thread_id": "t-demo"}, _DEMO_THREAD_REASON,
-        ))
-        thread_card = _wait_for_pending(web_ui, "gmail_get_thread")
-        calls.append(runner.submit(
-            _demo_drive_connector(), "drive_sheets_write_range",
-            {"spreadsheet_id": "demo-sheet", "range_a1": "Budget!A1:D5", "values": json.dumps(_DEMO_SHEET_VALUES)},
-            _DEMO_SHEET_REASON,
-        ))
-        sheet_card = _wait_for_pending(web_ui, "drive_sheets_write_range")
+        cards = []
+        for name in names:
+            make_connector, tool, args, reason, out_name, height = _DEMO_CARDS[name]
+            calls.append(runner.submit(make_connector(), tool, args, reason))
+            cards.append((_wait_for_pending(web_ui, tool), out_name, height))
 
-        _capture_approval_card(page, server, thread_card, "gmail-read-thread.png", height=1010)
-        _capture_approval_card(page, server, sheet_card, "sheets-write.png", height=780)
+        for approval, out_name, height in cards:
+            _capture_approval_card(page, server, approval, out_name, height=height)
     finally:
-        # Deny both, then let each tool call finish (a denied call raises) before stopping the loop.
+        # Deny every card, then let each tool call finish (a denied call raises) before stopping the loop.
         for approval in web_ui.deferred_registry.list_pending():
             web_ui.resolve(approval.id, "deny")
         for call in calls:
@@ -281,22 +379,6 @@ def _capture_approvals(page, server, web_ui, tmp_dir: Path) -> None:
             except Exception:  # noqa: BLE001 - a denied call is expected to raise
                 pass
         runner.stop()
-
-
-def _capture_settings(page, server) -> None:
-    page.goto(_sign_in_url(server, "/settings"))
-    page.wait_for_selector("#app")
-    page.click("[data-nav='connectors']")
-    page.wait_for_timeout(200)
-    path = OUT_DIR / "settings-connectors.png"
-    page.locator("#app").screenshot(path=str(path))
-    print(f"wrote {path}")
-
-    page.click("[data-nav='auto_accept']")
-    page.wait_for_timeout(200)
-    path = OUT_DIR / "settings-auto-accept-rules.png"
-    page.locator("#app").screenshot(path=str(path))
-    print(f"wrote {path}")
 
 
 def _run(chromium_path: str | None, only: str) -> None:
@@ -315,15 +397,11 @@ def _run(chromium_path: str | None, only: str) -> None:
 
         with sync_playwright() as p:
             browser = p.chromium.launch(**launch_kwargs)
-            if only in ("all", "settings"):
-                page = browser.new_page(viewport={"width": 1000, "height": 720}, color_scheme="light")
-                _capture_settings(page, server)
-            if only in ("all", "approvals"):
-                # 2x for a sharp README image; each capture sets its own viewport height.
-                page = browser.new_page(
-                    viewport={"width": 1000, "height": 900}, device_scale_factor=2, color_scheme="light",
-                )
-                _capture_approvals(page, server, web_ui, tmp_dir)
+            # 2x for a sharp image; each capture sets its own viewport height.
+            page = browser.new_page(
+                viewport={"width": 1000, "height": 900}, device_scale_factor=2, color_scheme="light",
+            )
+            _capture_approvals(page, server, web_ui, tmp_dir, list(_DEMO_CARDS) if only == "all" else [only])
             browser.close()
 
         server.stop()
@@ -338,8 +416,8 @@ def main() -> None:
         help="Path to a Chromium/Chrome binary, if Playwright's own bundled browser isn't installed.",
     )
     parser.add_argument(
-        "--only", choices=("all", "settings", "approvals"), default="all",
-        help="Which screenshots to regenerate (default: all four).",
+        "--only", choices=("all", *_DEMO_CARDS), default="all",
+        help="Which card to regenerate (default: all of them).",
     )
     args = parser.parse_args()
 

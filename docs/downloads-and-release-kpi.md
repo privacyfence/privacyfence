@@ -163,6 +163,7 @@ itself:
 | `/api/releases/history` | `GET` | `{"releases": [...]}`: every published version on every channel, newest first (see below) |
 | `/api/stats/downloads` | `GET` | `{total, by_channel, by_platform}` from D1; 503 on a D1 error, never a fake zero |
 | `/health` | `GET`, `HEAD` | `{"status":"ok"}`; touches neither binding |
+| `/robots.txt` | `GET`, `HEAD` | `User-agent: *` / `Disallow: /download/` as `text/plain`, cacheable for a day; touches neither binding (see [Crawlers](#crawlers)) |
 
 `<channel>` is one of `stable`, `alpha`, `beta`, `rc`; `<artifact-id>` is a manifest `id`
 (`macos-arm64`, `windows-x64`, `linux-x64`). Downloads are streamed, never redirected. Anything
@@ -223,10 +224,27 @@ start (`isDownloadStart()` in `src/artifacts.ts`):
 | `GET` with a suffix range `Range: bytes=-<N>` | no |
 | `GET` answered 304 (failed precondition) | no |
 | `HEAD`, `OPTIONS` | no |
-| 404s, `/api/*`, `/health` | no |
+| 404s, `/api/*`, `/health`, `/robots.txt` | no |
 
 Not counting resumes is what keeps a dropped connection from inflating the KPI. These rules are
 covered by `cloudflare/downloads/test/download.test.ts` and `artifacts.test.ts`.
+
+### Crawlers
+
+The Worker cannot tell a crawler from a person, and does not try: it stores no User-Agent (see
+below). Installer links are in the site's pre-rendered HTML (`/download/`, and `/releases/` has one
+per installer per version), so a crawler that followed them would be counted like anyone else.
+Two things keep well-behaved crawlers out of the counts:
+
+- the download host's `robots.txt` disallows `/download/` for every user agent. `/api/*` and
+  `/health` stay allowed: they serve metadata only and never count. Before this route existed
+  the host answered `robots.txt` with a 404, which a crawler reads as "allow everything";
+- every download link the site renders or builds carries `rel="nofollow"` (see
+  [The website](#the-website)).
+
+Neither stops a crawler that ignores `robots.txt` and `nofollow`; its `GET`s are counted. And
+**counts recorded before the `robots.txt` route was deployed may include crawler downloads**:
+there is no way to separate them afterwards, since nothing about the requester is stored.
 
 The write goes through `ctx.waitUntil()` and is best-effort: a D1 failure is logged and swallowed
 and never blocks the byte stream; an R2 miss returns 404 before any count.
@@ -293,6 +311,8 @@ release's channel) and `deploy-download-worker.yml`'s `/health` check both use `
 `website/download/` builds every card at runtime from `GET /api/releases/<channel>` — filenames,
 sizes, SHA-256 and which platforms exist all come from the manifest, so a new build needs no
 website change. Download buttons point at `downloads.privacyfence.eu/download/<channel>/<id>`.
+Every download link, pre-rendered by `scripts/build_site.py` or built by `download.js` and
+`releases.js`, carries `rel="nofollow"` (see [Crawlers](#crawlers)).
 An artifact id missing from the page's `PLATFORMS` map still renders under its raw id. Browser OS
 detection only highlights the likely installer; it never hides the others.
 

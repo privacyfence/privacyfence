@@ -51,15 +51,21 @@
       </div>
     </section>
 
-    <section class="page-section shell" aria-labelledby="pii-heading">
-      <div class="section-heading">
-        <p class="kicker">Personal data</p>
-        <h2 id="pii-heading">Customer records are checked before you see them.</h2>
-      </div>
-      <div class="page-copy stack">
-        <p>CRM data is where personal data lives. Before a record or a report is shown to you, PrivacyFence scans the field values and report rows on the card locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Email addresses and phone numbers are deliberately not flagged, because they are in almost every record.</p>
-        <p>A match sends the read to a card even if an always-allow rule covers it, highlights what was found, and asks for a second confirmation. On a packaged install, approving a flagged read also asks for your passkey. The audit log records the category, never the matched text.</p>
-        <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a></p>
+    <section class="page-section proof-section" aria-labelledby="pii-heading">
+      <div class="shell walkthrough split">
+        <div class="stack">
+          <p class="kicker">Personal data</p>
+          <h2 id="pii-heading">Customer records are checked before you see them.</h2>
+          <div class="page-copy stack">
+            <p>CRM data is where personal data lives. Before a record or a report is shown to you, PrivacyFence scans the field values and report rows on the card locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Email addresses and phone numbers are deliberately not flagged, because they are in almost every record.</p>
+            <p>A match sends the read to a card even if an always-allow rule covers it, highlights what was found, and asks for a second confirmation. On a packaged install, approving a flagged read also asks for your passkey. The audit log records the category, never the matched text.</p>
+            <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a></p>
+          </div>
+        </div>
+        <figure class="screenshot-frame">
+          <a href="/assets/salesforce-read-record.png"><img src="/assets/salesforce-read-record.png" width="2000" height="1600" alt="PrivacyFence approval card for reading a Salesforce Contact record: the object type and record ID, the requesting AI system marked Not verified, its stated reason, a possible-PII warning for an IBAN, which fields will be provided to the AI system, and a field and value preview of the record" loading="lazy"></a>
+          <figcaption>Reading a Salesforce contact: an IBAN in the description is flagged before anything is released. Example data only.</figcaption>
+        </figure>
       </div>
     </section>
 

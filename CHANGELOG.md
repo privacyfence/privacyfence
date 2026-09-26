@@ -60,6 +60,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   certification, local or organization mode, cost, and verifying a download. The site's menu
   links the FAQ, and `/connectors/` links each connector's page.
 
+- **The Slack, Salesforce, Jira and Confluence, and Telegram pages on the website now show an
+  approval card** for a read in that service, with the PII check's findings, as the Google
+  Workspace page already did. Each is generated from example data, never a real account.
+
 - **A release history page, `privacyfence.eu/releases/`,** lists every published version on
   every channel (stable, release candidate, beta and alpha), newest first, each with its release
   date, its installers and their SHA-256 checksums, and a link to its release notes. It works
@@ -121,6 +125,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   issues" it a sign-in link.
 
 ### Fixed
+
+- **Search-engine crawlers no longer inflate the download count.** `downloads.privacyfence.eu`
+  now serves a `robots.txt` that keeps crawlers off installer downloads, and every download link
+  on the website is marked `nofollow`. Crawlers that ignore both are still counted, and counts
+  from before this change may include crawler downloads.
 
 - The `not_shared_drive` condition read Drive's "shared with someone" flag, so it rejected My
   Drive files you had shared and let files in a shared drive through. It now holds only for files
