@@ -34,9 +34,9 @@ The app's constraints narrow the options:
   small.
 - **No frontend build.** Markup lives in Python f-strings and JavaScript string concatenation; a
   runtime framework (React, Vue, Lit) would mean rewriting the rendering model.
-- **One component, several containers.** The approval card renders full-screen on a phone, in a
-  desktop tab, and inline in an expanded list row, so its layout must follow its container's
-  width, not the viewport's.
+- **One component, several containers.** The approval card renders full-screen on a phone and in
+  a desktop tab of any width, and a host page may put it in a box of its own, so its layout must
+  follow its container's width, not the viewport's.
 
 ## Decision
 
@@ -63,10 +63,21 @@ The app's constraints narrow the options:
    checks the measurable rules on every app surface in a real phone emulation and at 320 and
    1024 px, as `test_website_layout.py` does for the site. `tests/unit/test_design_system.py`
    fails on a width `@media` query or a colour literal in a renderer, and on a custom property
-   defined outside `resources/design/` other than a knob the shared primitives expose. Each
-   starts with an allow-list of the code that predates it, which only shrinks.
+   defined outside `resources/design/` other than a knob the shared primitives expose. None of
+   these checks has an exception list: every renderer was moved onto the shared system before
+   they became unconditional.
 5. Anything the app needs and the website does not (dark mode, status colours, form components)
    goes in an app-only file next to the shared ones, never into the website's files.
+6. **The card is not embedded in an approvals list row.** Planning this work assumed a card also
+   renders inline in an expanded `/approvals` row. It never has: the row's Details disclosure
+   shows only the request's metadata, and Review opens the full card page. Embedding the card
+   there was considered and rejected (decided with the user on 2026-09-26): the card document is
+   self-contained and carries its own nonce'd `<style>` and `<script>`, so putting it in a row
+   would take an `<iframe>` and a CSP `frame-src`/`frame-ancestors` change for a context that
+   adds nothing the card page does not already give. The browser tests therefore have no
+   "card inline in a list row" case; `TestCardContainers` proves the card lays out correctly in
+   380, 700 and 1000 px containers on a desktop-sized page, which is what a container-query
+   layout has to guarantee for any host.
 
 ## Alternatives considered
 

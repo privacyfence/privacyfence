@@ -236,12 +236,14 @@ def _table_html(
 
     A table with more than two headed columns -- a record list, the shape
     that stops fitting first -- is wrapped in ``.pf-table-scope`` and gets
-    ``.pf-table-stack``: below the preview pane's narrow width (a container
-    query in styles.css) each row becomes a block of label/value lines,
-    the label taken from the cell's ``data-label``. Five columns squeezed
-    into a phone-width pane otherwise break every word ("Anders/on"). A
-    two-column table (Field/Value) already reads as label/value pairs and
-    stays a table."""
+    ``.pf-table-stack``: below a preview width that grows with the column
+    count (a container query in styles.css) each row becomes a block of
+    label/value lines, the label taken from the cell's ``data-label``.
+    Five columns squeezed into a phone-width pane otherwise break every
+    word ("Anders/on"), and ten squeezed into a desktop pane do the same
+    ("Negotiati/on"). The scope's ``pf-table-cols-*`` band class (see
+    ``_table_cols_band``) sets that width. A two-column table (Field/Value)
+    already reads as label/value pairs and stays a table."""
     caption = table.get("caption", "")
     headers = [str(h) for h in table.get("headers") or []]
     rows = table.get("rows") or []
@@ -269,10 +271,26 @@ def _table_html(
     )
     table_class = "pf-table pf-table-stack" if stack else "pf-table"
     table_html = f'<table class="{table_class}">{thead_html}<tbody>{rows_html}</tbody></table>'
-    parts.append(f'<div class="pf-table-scope">{table_html}</div>' if stack else table_html)
+    if stack:
+        band = _table_cols_band(len(headers))
+        scope_class = f"pf-table-scope pf-table-cols-{band}" if band else "pf-table-scope"
+        table_html = f'<div class="{scope_class}">{table_html}</div>'
+    parts.append(table_html)
     if footer:
         parts.append(f'<div class="pf-table-footer">{_html_escape(footer)}</div>')
     return "".join(parts)
+
+
+# A record table stacks once its preview is narrower than about 100px per column (styles.css):
+# the band a table's column count falls in, keyed by the widest count in the band. Up to six
+# columns need no class (600px, the pane's own narrow width); past twelve it always stacks.
+_TABLE_COLS_BANDS = (8, 10, 12)
+
+
+def _table_cols_band(columns: int) -> str:
+    if columns <= 6:
+        return ""
+    return next((str(band) for band in _TABLE_COLS_BANDS if columns <= band), "many")
 
 
 def _table_cell_html(

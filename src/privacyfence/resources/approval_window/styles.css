@@ -242,15 +242,27 @@ img { display: block; max-width: 100%; }
 
 /* Record tables (approval_window_html.py's _table_html gives a table with
    more than two headed columns .pf-table-stack, inside a .pf-table-scope).
-   Below the same 600px of preview width each row becomes a block of
-   label/value lines, the label from the cell's data-label, because ten
-   columns squeezed side by side break every word in them. The header row
-   stays in the document for assistive technology, only out of sight. The
-   value keeps .pf-table td's overflow-wrap: anywhere, which in a block
-   breaks a word only when that one word is wider than the line (a long
-   email address), never to squeeze a column. */
-.pf-table-scope { container-type: inline-size; }
-@container (width < 600px) {
+   Once the preview gives it less than about 100px a column, each row
+   becomes a block of label/value lines, the label from the cell's
+   data-label, because columns squeezed narrower than that break every word
+   in them ("Negotiati/on"). The header row stays in the document for
+   assistive technology, only out of sight. The value keeps .pf-table td's
+   overflow-wrap: anywhere, which in a block breaks a word only when that
+   one word is wider than the line (a long email address), never to squeeze
+   a column.
+
+   One query serves every column count: a container query's em is the query
+   container's font-size, so the scope's font-size is its column band in px
+   and 100em is 100px a column. Up to six columns the threshold is 600px,
+   the pane's own narrow width; _table_cols_band picks the class above
+   that, and past twelve columns the table always stacks. Nothing inside
+   inherits the scope's font-size: .pf-table sets its own. */
+.pf-table-scope { container-type: inline-size; font-size: 6px; }
+.pf-table-scope.pf-table-cols-8 { font-size: 8px; }
+.pf-table-scope.pf-table-cols-10 { font-size: 10px; }
+.pf-table-scope.pf-table-cols-12 { font-size: 12px; }
+.pf-table-scope.pf-table-cols-many { font-size: 1000px; }
+@container (width < 100em) {
   .pf-table-stack, .pf-table-stack tbody, .pf-table-stack tr { display: block; }
   .pf-table-stack thead {
     position: absolute; width: 1px; height: 1px; overflow: hidden;

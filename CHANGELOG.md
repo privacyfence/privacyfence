@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Organization deployments now work from a phone, and the app looks like the website.
+
 ### Added
 
 - **Organization deployments can notify your phone when an approval is waiting.** Allow
@@ -58,57 +60,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **The app and the website now share one set of design files** (colours, spacing, layout
-  building blocks and the rules they follow), the first step toward the approval, settings and
-  connection pages working on a phone and looking like the website. Nothing looks different yet,
-  except that keyboard focus in the app now shows the website's clear focus ring instead of the
-  browser's default outline.
-- **The app now looks like the website.** Approvals, settings, connections and passkeys use the
-  website's colours, rounded cards, buttons and header (which folds its links into a menu when
-  the window is narrow), in light and in a dark mode based on the website's own dark panel. The
-  approval card uses your system font instead of a serif, which also makes every card smaller.
-  Allow once is still the one filled button, Deny still outlined, and Always allow still a small
-  link. Writes, possible personal data and unverified requesters still each have their own
-  label or icon, not only a colour.
-- **Settings work on a phone.** In a narrow window the section list becomes a row of tabs above
-  the page (and Privacy Filter's services a second row), so each section gets the full width;
-  every setting shows its label and description above its switch or choice, and every control
-  is large enough to tap. In a wide window the section list stays on the left, now as a card.
-  Privacy Filter's Allow/Redact/Block choice now uses the same green, amber and red in dark mode
-  as in light.
-- **Approvals, connections and passkeys work on a phone too.** Every request on the approvals
-  list is a card, and every button and checkbox on these pages is large enough to tap. The
-  connections page shows each service's state as a label (Connected, Not connected, Not set up
-  by your organization), and the Telegram sign-in brings up the phone keypad for your number and
-  the number pad, with the code suggested, for the verification code. The pages shown when an
-  approval is no longer pending, is still being prepared, or you are not signed in now fit a
-  phone screen instead of appearing zoomed out, and follow the new look and dark mode.
+- **The app now looks like the website.** The app and the website share one set of design files
+  (colours, spacing, layout building blocks and the rules they follow; ADR 0078), so approvals,
+  settings, connections and passkeys use the website's colours, rounded cards, buttons and header
+  (which folds its links into a menu when the window is narrow), in light and in a dark mode based
+  on the website's own dark panel (ADR 0079). Keyboard focus shows the website's clear focus ring
+  instead of the browser's default outline. The approval card uses your system font instead of a
+  serif, which also makes every card smaller. Allow once is still the one filled button, Deny
+  still outlined, and Always allow still a small link. Writes, possible personal data and
+  unverified requesters still each have their own label or icon, not only a colour.
+- **Every page works on a phone.**
+  - **Settings:** in a narrow window the section list becomes a row of tabs above the page (and
+    Privacy Filter's services a second row), so each section gets the full width; every setting
+    shows its label and description above its switch or choice. In a wide window the section
+    list stays on the left, now as a card.
+  - **Approvals, connections and passkeys:** every request on the approvals list is a card. The
+    connections page shows each service's state as a label (Connected, Not connected, Not set up
+    by your organization), and the Telegram sign-in brings up the phone keypad for your number
+    and the number pad, with the code suggested, for the verification code.
+  - **The approval card and its confirmation dialogs** fit the space they are shown in, not only
+    the width of the screen: in a narrow browser window or a tablet the card's two columns stack
+    instead of squeezing the preview. In a wide desktop window the card uses more of the width,
+    so a PDF preview there has room for the browser's own viewer.
+  - **The pages shown when an approval is no longer pending, is still being prepared, or you are
+    not signed in** fit a phone screen instead of appearing zoomed out.
+  - Every button, checkbox and option on these pages is large enough to tap, and nothing needs a
+    mouse: a value cut short on the approval card (a long list of attendees, a long stated
+    reason) opens in full when you tap or click it, and what "Not verified" means next to a
+    requester is written under it rather than hidden in a tooltip.
 
 ### Fixed
 
 - **A PDF in an approval can now be read on a phone.** Phone browsers do not show a PDF inside
   a page (Android shows nothing, iPhone one page that cannot scroll), so the approval card now
   shows the document's first five pages as pictures, with a note such as "Showing pages 1–5 of
-  12". If a PDF cannot be drawn, its text is shown instead.
-- **Tables in an approval stay readable on a phone.** A list of records with many columns, such
-  as Salesforce search results, is shown one record at a time as label and value lines instead
-  of squeezing every column until the words break apart.
+  12". If a PDF cannot be drawn, its text is shown instead. See ADR 0080.
+- **Tables in an approval stay readable at any width.** A list of records with many columns, such
+  as Salesforce search results, is shown one record at a time as label and value lines whenever
+  the card has too little room for its columns — on a phone, and also on a desktop when the table
+  has many columns — instead of squeezing every column until the words break apart.
 - **A download link opened while signed out comes back to the download after you sign in.** It
   used to leave you on the approvals page with the link lost, which is the usual case when a link
   is tapped inside an AI app on a phone. You still have to sign in as the person the file was
   prepared for.
 - The **Review** button on the approvals list showed its text in almost the same colour as the
-  button, and several highlighted controls in settings were hard to read in dark mode.
-- **The approval card and its confirmation dialogs fit the space they are shown in**, not only
-  the width of the screen: in a narrow browser window or a tablet the card's two columns stack
-  instead of squeezing the preview, and the card, the "Possible PII detected" confirmation and
-  the rule picker each look like the rest of the app, with every button and option large
-  enough to tap. In a wide desktop window the card uses more of the width, so a PDF preview
-  there has room for the browser's own viewer and can be read past its first five pages.
-- **Nothing on the approval card needs a mouse to read any more.** A value cut short (a long
-  list of attendees, a long stated reason) opens in full when you tap or click it, and what
-  "Not verified" means next to a requester is written under it rather than hidden in a
-  tooltip.
+  button, several highlighted controls in settings were hard to read in dark mode, and Privacy
+  Filter's Allow/Redact/Block choice now uses the same green, amber and red in dark mode as in
+  light.
 
 ## [4.7.0] — 2026-09-26
 

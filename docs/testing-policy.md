@@ -125,6 +125,36 @@ connectors, so it cannot see a principal's tool list or auto-accept rules; those
   `test_download_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
   sites and the layout screenshots. Not in `REQUIRED_STATUS_CHECKS`.
 
+### The shared design system
+
+The app and the website share one design system from `src/privacyfence/resources/design/`
+([ADR 0078](adr/0078-the-app-shares-the-websites-design-system.md),
+[ADR 0079](adr/0079-the-apps-visual-language-is-the-websites.md)). Four tests hold it, all in the
+`test` job:
+
+- **Phone layout** — `test_browser_smoke.py`'s `TestPhoneLayout` loads every app surface
+  (`/approvals`, every `/settings` section as admin and as a member, `/settings/privacy`,
+  `/connect` and its Telegram sign-in steps, `/security`, the three fallback pages without a
+  shell, and a WIDE read card of each preview kind) at 320 px, in the 393 px phone emulation
+  and at 1024 px, and checks the measurable shared rules the way `test_website_layout.py` does
+  for the site: no sideways scroll, the main region at least 90 % of the viewport, 44 px tap
+  targets below 1024 px, the viewport meta in effect, a PDF preview drawn as page images and no
+  word broken across lines in a record table. `TestCardContainers` puts the card in 380, 700 and
+  1000 px boxes on a desktop-sized page, because the card follows its container, not the
+  viewport; `TestPreviewTableLayout` checks that a record table stacks by its column count.
+  Screenshots go to `test-results/phone-layout/`, a review artifact only.
+- **Contrast** — `tests/unit/test_design_contrast.py` computes WCAG 2.2 AA contrast from the token
+  files for every text/background and UI-boundary pair, in light and dark: 4.5:1 for text, 3:1
+  for control edges and focus.
+- **No width `@media` and no colour literals** — `tests/unit/test_design_system.py` fails on a
+  width/height `@media` query or a hex, `rgb()` or `hsl()` colour in any renderer under
+  `src/privacyfence` or in `resources/approval_window/styles.css`, and on a design token defined
+  anywhere but `resources/design/`. There is no allow-list: lay out with the shared primitives and
+  container queries, and colour with tokens.
+
+`scripts/render_ui_review.py --out DIR` renders the style guide and every surface at 393 and
+1280 px in both themes for a human look; it asserts nothing.
+
 ### `qa_web_smoke.py` (layer 4, by hand)
 
 `scripts/qa_web_smoke.py` drives the real embedded server in real Chromium for what a pytest
