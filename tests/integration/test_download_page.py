@@ -195,6 +195,9 @@ class TestStableDownloads:
             assert hrefs, "no download buttons rendered"
             for href in hrefs:
                 assert href.startswith(f"{API_ORIGIN}/download/"), href
+            # A crawler following a button would be counted as a download.
+            rels = page.eval_on_selector_all(".download-button", "links => links.map(a => a.rel)")
+            assert rels == ["nofollow"] * len(hrefs)
 
             # The stable grid specifically serves the stable channel (the pre-release block
             # below it serves whichever pre-release channel has a build, which is why the
@@ -300,6 +303,8 @@ class TestPreReleaseSection:
             assert "4.4.0b1" in page.inner_text("#prerelease-summary")
             hrefs = page.eval_on_selector_all("#prerelease-grid .download-button", "links => links.map(a => a.href)")
             assert hrefs == [f"{API_ORIGIN}/download/beta/macos-arm64"]
+            rels = page.eval_on_selector_all("#prerelease-grid .download-button", "links => links.map(a => a.rel)")
+            assert rels == ["nofollow"]
         finally:
             context.close()
 

@@ -61,6 +61,55 @@ describe("GET /health", () => {
   });
 });
 
+describe("/robots.txt", () => {
+  /** An Env whose every binding throws on any use, so a route that touches one fails loudly. */
+  const bindinglessEnv = new Proxy(env, {
+    get(target, prop, receiver) {
+      if (prop === "RELEASES" || prop === "DB") throw new Error(`robots.txt touched the ${String(prop)} binding`);
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
+  it("disallows /download/ for every crawler and leaves /api/ and /health allowed", async () => {
+    const response = await call("/robots.txt");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+    expect(response.headers.get("Cache-Control")).toMatch(/^public, max-age=\d+$/);
+    const body = await response.text();
+    expect(body).toBe("User-agent: *\nDisallow: /download/\n");
+    expect(body).not.toMatch(/Disallow: \/(api|health)/);
+    expect(body).not.toMatch(/Disallow: \/\s*$/m);
+  });
+
+  it("answers HEAD with the same headers and no body", async () => {
+    const response = await call("/robots.txt", { method: "HEAD" });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+    expect(await response.text()).toBe("");
+  });
+
+  it.each(["GET", "HEAD"])("%s touches neither R2 nor D1", async (method) => {
+    const ctx = createExecutionContext();
+    const request = new Request(`${ORIGIN}/robots.txt`, { method }) as Request<unknown, IncomingRequestCfProperties>;
+    const response = await worker.fetch(request, bindinglessEnv, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+  });
+
+  it("records no download", async () => {
+    const before = await statsTotal();
+    await call("/robots.txt");
+    await call("/robots.txt", { method: "HEAD" });
+    expect(await statsTotal()).toBe(before);
+  });
+
+  it("rejects POST", async () => {
+    const response = await call("/robots.txt", { method: "POST" });
+    expect(response.status).toBe(405);
+    expect(response.headers.get("Allow")).toBe("GET, HEAD");
+  });
+});
+
 describe("channel resolution", () => {
   it.each([
     ["stable", "PrivacyFence-4.3.0.dmg"],

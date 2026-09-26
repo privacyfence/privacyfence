@@ -122,6 +122,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Search-engine crawlers no longer inflate the download count.** `downloads.privacyfence.eu`
+  now serves a `robots.txt` that keeps crawlers off installer downloads, and every download link
+  on the website is marked `nofollow`. Crawlers that ignore both are still counted, and counts
+  from before this change may include crawler downloads.
+
 - The `not_shared_drive` condition read Drive's "shared with someone" flag, so it rejected My
   Drive files you had shared and let files in a shared drive through. It now holds only for files
   that are not in a shared drive.

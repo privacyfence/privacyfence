@@ -92,6 +92,8 @@
     const link = element('a', {
       className: 'release-download',
       href: `${API}/download/version/${encodeURIComponent(release.version)}/${encodeURIComponent(artifact.id)}`,
+      // A crawler following this would be counted as a download (docs/downloads-and-release-kpi.md).
+      rel: 'nofollow',
       textContent: name,
     });
     link.setAttribute('aria-label', `Download ${name} ${release.version}: ${artifact.filename}`);
