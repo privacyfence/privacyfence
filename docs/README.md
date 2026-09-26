@@ -83,6 +83,8 @@ privacyfence.eu.
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
+- [`ai-client-support-plan.md`](ai-client-support-plan.md) — the open plan for ChatGPT and Gemini
+  support and the website's AI agents pages; deleted when its work lands.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
   are, and what was rejected.
 
