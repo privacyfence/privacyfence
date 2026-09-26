@@ -17,7 +17,9 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable
 
-from . import agent_label, approval_icons, approval_window_html, pii_detector, write_effects
+from . import (
+    agent_label, approval_icons, approval_window_html, pdf_render, pii_detector, text_extraction, write_effects,
+)
 from .agent_identity import UNKNOWN_AGENT, AgentIdentity
 
 # Shown above the button row for operations
@@ -164,8 +166,21 @@ def build_card_html(
     label = agent_label.label_for(agent)
     agent_display_name = label.subject
     pdf_data_uri = ""
+    pdf_page_uris: list[str] = []
+    pdf_page_count = 0
+    pdf_fallback_text = ""
     if pdf_bytes:
         pdf_data_uri = f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode('ascii')}"
+        # The pages a phone shows instead of the <embed> (see build_preview_body_html). A PDF
+        # that will not render shows its extracted text there instead, never nothing.
+        rendered = pdf_render.render_first_pages(pdf_bytes)
+        if rendered is not None:
+            pdf_page_uris = [
+                f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}" for png in rendered.pages
+            ]
+            pdf_page_count = rendered.page_count
+        else:
+            pdf_fallback_text = text_extraction.extract_text(pdf_bytes, "application/pdf")
     image_data_uri = ""
     if not pdf_data_uri and preview_bytes and preview_mime_type.startswith("image/"):
         image_data_uri = (
@@ -179,6 +194,7 @@ def build_card_html(
     body_text = "" if table_only and preview_tables and not preview_blocks else details_text
     preview_body_html = approval_window_html.build_preview_body_html(
         body_text, image_data_uri=image_data_uri, pdf_data_uri=pdf_data_uri,
+        pdf_page_uris=pdf_page_uris, pdf_page_count=pdf_page_count, pdf_fallback_text=pdf_fallback_text,
         tables=preview_tables, blocks=preview_blocks,
         highlight=_pii_highlighter(pii_categories),
     )

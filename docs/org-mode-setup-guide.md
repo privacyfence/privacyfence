@@ -661,6 +661,10 @@ Which link a staged file gets:
 | Agent links on (default) | `https://<host>/mcp-files/fetch/<token>` | Whoever holds the link, once, before it expires. The token is the credential, so the AI client can fetch the file itself. |
 | `--no-agent-links` | `https://<host>/downloads/<token>` | Only the person the file belongs to, signed in, in a browser. |
 
+Opening a `/downloads/` link while signed out goes through sign-in and then back to the same
+link, so the link still works if it has not expired by then. Signing in as someone else does
+not claim it: the file is released only to the person it was staged for.
+
 A missing, expired, already-used or other person's token all get the same `404`. With
 `--downloads-disable-staging`, a file too large to return inline is refused instead of staged, and
 nothing is written to disk. With `--downloads-inline-max-bytes 0`, every file goes through a link.

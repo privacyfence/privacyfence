@@ -185,3 +185,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0077](0077-the-approval-popup-never-proposes-a-rule-for-the-extra-scope-operations.md) | The approval popup never proposes a rule for the extra-scope operations (Apps Script, Gmail filters, Slack group chats) | Accepted (retroactive) |
 | [0078](0078-the-app-shares-the-websites-design-system.md) | The app shares the website's design system, instead of adopting a CSS framework | Accepted |
 | [0079](0079-the-apps-visual-language-is-the-websites.md) | The app's visual language is the website's, with a dark mode derived from it | Accepted |
+| [0080](0080-pdf-previews-are-rasterised-on-the-server.md) | PDF previews are rasterised on the server for narrow screens, instead of pdf.js or a new route | Accepted |

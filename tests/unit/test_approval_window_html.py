@@ -623,6 +623,39 @@ class TestPreviewBody:
     def test_is_a_pure_function(self):
         assert build_preview_body_html("abc") == build_preview_body_html("abc")
 
+    def test_a_pdf_carries_the_embed_and_its_page_images_side_by_side(self):
+        body = build_preview_body_html(
+            pdf_data_uri="data:application/pdf;base64,BBBB",
+            pdf_page_uris=["data:image/png;base64,P1", "data:image/png;base64,P2"],
+            pdf_page_count=9,
+        )
+        assert body.startswith('<div class="pf-pdf"><embed class="pf-pdf-embed" src="data:application/pdf;base64,BBBB"')
+        assert '<span class="badge">Showing pages 1–2 of 9</span>' in body
+        assert '<img class="pf-pdf-page" src="data:image/png;base64,P1" alt="Page 1 of 9">' in body
+        assert '<img class="pf-pdf-page" src="data:image/png;base64,P2" alt="Page 2 of 9">' in body
+
+    def test_a_single_page_note_is_singular(self):
+        body = build_preview_body_html(
+            pdf_data_uri="data:application/pdf;base64,BBBB", pdf_page_uris=["data:image/png;base64,P1"],
+            pdf_page_count=1,
+        )
+        assert "Showing page 1 of 1" in body
+
+    def test_a_pdf_with_no_page_images_shows_its_text_escaped_and_highlighted(self):
+        text = "Contact <b>alice@example.com</b>"
+        body = build_preview_body_html(
+            pdf_data_uri="data:application/pdf;base64,BBBB", pdf_fallback_text=text,
+            highlight=lambda t: [(t.index("alice"), t.index("</b>"))],
+        )
+        assert "so its text is shown instead" in body
+        assert "&lt;b&gt;" in body and "<b>" not in body
+        assert '<mark class="pf-pii-hit">alice@example.com</mark>' in body
+        assert "<img" not in body
+
+    def test_a_pdf_with_neither_pages_nor_text_still_says_something(self):
+        body = build_preview_body_html(pdf_data_uri="data:application/pdf;base64,BBBB")
+        assert "no text could be read from it" in body
+
     def test_table_renders_headers_and_rows(self):
         body = build_preview_body_html(
             "", tables=[{"headers": ["Field", "Value"], "rows": [["Name", "Acme Corp"], ["Phone", "555-0100"]]}],
@@ -670,6 +703,27 @@ class TestPreviewBody:
     def test_table_alone_does_not_show_no_details_placeholder(self):
         body = build_preview_body_html("", tables=[{"headers": ["A"], "rows": [["1"]]}])
         assert "(no details)" not in body
+
+    def test_a_record_table_stacks_with_a_label_on_every_cell(self):
+        body = build_preview_body_html(
+            "", tables=[{"headers": ["Name", "Email", "A&B"], "rows": [["Alice", "a@example.com", "<x>"]]}],
+        )
+        assert body.startswith('<div class="pf-table-scope"><table class="pf-table pf-table-stack">')
+        assert '<td data-label="Name"><span>Alice</span></td>' in body
+        assert '<td data-label="A&amp;B"><span>&lt;x&gt;</span></td>' in body
+
+    def test_a_row_longer_than_its_headers_leaves_the_extra_cells_unlabelled(self):
+        body = build_preview_body_html(
+            "", tables=[{"headers": ["A", "B", "C"], "rows": [["1", "2", "3", "4"]]}],
+        )
+        assert "<td><span>4</span></td>" in body
+
+    def test_a_two_column_table_stays_a_table(self):
+        body = build_preview_body_html(
+            "", tables=[{"headers": ["Field", "Value"], "rows": [["Name", "Acme"]]}],
+        )
+        assert "pf-table-stack" not in body and "pf-table-scope" not in body
+        assert "<td>Name</td>" in body
 
     def test_table_without_headers_omits_thead(self):
         body = build_preview_body_html("", tables=[{"rows": [["1", "2"]]}])

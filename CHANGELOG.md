@@ -60,6 +60,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A PDF in an approval can now be read on a phone.** Phone browsers do not show a PDF inside
+  a page (Android shows nothing, iPhone one page that cannot scroll), so the approval card now
+  shows the document's first five pages as pictures, with a note such as "Showing pages 1–5 of
+  12". If a PDF cannot be drawn, its text is shown instead.
+- **Tables in an approval stay readable on a phone.** A list of records with many columns, such
+  as Salesforce search results, is shown one record at a time as label and value lines instead
+  of squeezing every column until the words break apart.
+- **A download link opened while signed out comes back to the download after you sign in.** It
+  used to leave you on the approvals page with the link lost, which is the usual case when a link
+  is tapped inside an AI app on a phone. You still have to sign in as the person the file was
+  prepared for.
 - The **Review** button on the approvals list showed its text in almost the same colour as the
   button, and several highlighted controls in settings were hard to read in dark mode.
 
