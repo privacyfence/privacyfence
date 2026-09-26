@@ -299,18 +299,22 @@ class TestUnauthorizedHtml:
         assert response.headers["cache-control"] == "no-store"
 
     def test_does_not_send_the_reader_to_the_redacted_log_or_a_file(self):
-        """Two dead ends this page has pointed at over time. The log line
-        always reads bootstrap=[REDACTED] (SecretRedactingFormatter), so "open the newest sign-in link PrivacyFence logged" never
-        worked, and no discovery file carries a link either: one would work
-        for anything running as this user."""
+        """Neither the log nor a file is a way back in. The log line reads
+        bootstrap=[REDACTED] (SecretRedactingFormatter), so it never holds a usable link, and no
+        discovery file carries a link either: one would work for anything running as this user."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
         assert "approvals_url" not in body
         assert "settings_url" not in body
         assert "PrivacyFence logged" not in body
-        # Both dead ends are still *named*, so a reader who remembers one
-        # learns why it is not there rather than going to look.
+        # Both dead ends are *named*, so a reader who expects one learns why it is not there
+        # rather than going to look.
         assert "redact" in body.lower()
-        assert "no longer writes the link to a file" in body
+        assert "The link is not written to any file either" in body
+        assert "no longer" not in body
+
+    def test_says_the_ai_client_never_gets_a_sign_in_link(self):
+        body = sa.unauthorized_html(Request(self._scope())).body.decode()
+        assert "PrivacyFence never gives a sign-in link to the program it governs." in body
 
     def test_still_offers_the_on_demand_bootstrap_command(self):
         # The on-demand mint goes through the control channel, not a

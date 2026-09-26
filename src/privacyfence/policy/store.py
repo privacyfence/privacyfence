@@ -109,10 +109,9 @@ def _sortable(value: Any) -> Any:
 
 
 def rule_id_for_rule(rule: PolicyRule) -> str:
-    """The canonical, content-derived id for an already-compiled ``PolicyRule``, recomputed from
-    its own ``(predicate, value, conditions)`` rather than trusting ``rule.id`` -- which is what
-    lets gate.py attribute a live decision to the identical row the Settings Rules page lists, even
-    for a rule built in memory rather than read back from disk."""
+    """The canonical, content-derived id (ADR 0074) for an already-compiled ``PolicyRule``,
+    recomputed from its own ``(predicate, value, conditions)`` rather than read from ``rule.id``.
+    For a rule read back from disk the two agree; this is the check that they do."""
     return rule_id_for(rule.predicate, rule.value, rule.conditions)
 
 
