@@ -187,6 +187,8 @@ privacyfence = [
     "resources/connector_icons/README.md",
     "resources/agent_icons/*.png",
     "resources/agent_icons/README.md",
+    # The design system shared with the website (ADR 0078).
+    "resources/design/*.css",
 ]
 
 [project.optional-dependencies]

@@ -52,6 +52,7 @@ from __future__ import annotations
 from html import escape as _html_escape
 
 from .approval_window_html import _STYLES_CSS, _new_nonce
+from .design_css import SHARED_CSS
 
 # Public (no leading underscore): dialog_window.py's own window-width
 # constants derive from these directly rather than duplicating them, so the
@@ -187,6 +188,7 @@ def _document(*, width: int, body_html: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
+{SHARED_CSS}
 {_STYLES_CSS}
 html {{ height: 100%; }}
 html, body {{ overflow-y: auto; }}

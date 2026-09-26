@@ -48,6 +48,7 @@ import secrets
 from pathlib import Path
 from typing import Any
 
+from .design_css import SHARED_CSS
 from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 
 # The settings page's own
@@ -1600,7 +1601,7 @@ def build_html(
         section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
     return (
         "<title>PrivacyFence Settings</title>"
-        f'<style nonce="{nonce}">{_TOKENS_CSS}{_CSS}</style>'
+        f'<style nonce="{nonce}">{SHARED_CSS}{_TOKENS_CSS}{_CSS}</style>'
         '<div id="app"></div>'
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'
         f'<script nonce="{nonce}">window.__pfCapabilities = {caps_json};</script>'

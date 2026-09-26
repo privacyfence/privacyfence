@@ -54,6 +54,7 @@ from pypdf import PdfWriter  # noqa: E402
 
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
+from privacyfence.connector_registry import ConnectorRegistry  # noqa: E402
 from privacyfence.principal import Principal, principal_scope  # noqa: E402
 from privacyfence.settings_controller import SettingsController  # noqa: E402
 from privacyfence.web import org_session  # noqa: E402
@@ -68,6 +69,10 @@ from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 pytestmark = pytest.mark.timeout(60)
 
 ISSUER = "https://idp.example.com"
+
+# A syntactically complete Slack section for the org bundle -- routes_connect._is_configured only
+# asks for a client_id; nothing ever contacts Slack.
+_SLACK_ORG_CONFIG = {"client_id": "slack-client-id", "client_secret": "slack-client-secret"}
 
 
 def _free_port() -> int:
@@ -267,7 +272,11 @@ def org_server_and_ui(pf_home, tmp_path, monkeypatch):
         # step_up.enabled doesn't need to be True for this suite -- only
         # /security (webauthn_stepup.py's enrollment ceremony) is under
         # test here, not the write-approval step-up gate itself.
-        org_config={"step_up": {"enabled": True}},
+        org_config={"step_up": {"enabled": True}, "slack": dict(_SLACK_ORG_CONFIG)},
+        # A registry mounts /connect (web/routes_connect.py), and the Slack section above
+        # gives it one configured service to offer, so the phone-layout tests measure a real
+        # connections page rather than a 404. No test here connects anything.
+        connector_registry=ConnectorRegistry(factory=lambda principal: []),
     )
     web_ui = WebApprovalUI()
     server = WebServer(web_ui, host="localhost", port=port, org=org)
@@ -1947,3 +1956,425 @@ class TestSettingsPageRendering:
         page.wait_for_selector(".pf-navitem")
         assert page.get_by_text("Privacy Filter").is_visible()
         self._screenshot(page, "org-settings-admin-privacy")
+
+
+# --------------------------------------------------------------------- #
+# Phone layout: the shared rules (resources/design/base.css's header
+# comment, ADR 0078) on every app surface, the way
+# tests/integration/test_website_layout.py checks them on the website.
+# --------------------------------------------------------------------- #
+
+# The real phone above, a 320px phone, and a 1024px touch tablet in landscape. All three are
+# is_mobile contexts, so a document without a working viewport meta is laid out in the ~980px
+# fallback viewport and caught by (d) at every width, 1024 included.
+_PHONE_WIDTHS = {
+    "320": {
+        **_MOBILE_EMULATION,
+        "viewport": {"width": 320, "height": 640}, "screen": {"width": 320, "height": 640},
+    },
+    "393": _MOBILE_EMULATION,
+    "1024": {
+        **_MOBILE_EMULATION,
+        "viewport": {"width": 1024, "height": 768}, "screen": {"width": 1024, "height": 768},
+        "device_scale_factor": 2,
+    },
+}
+# Rule 4: tap targets at least 44 x 44 below 1024px. Rule (b), the main content region taking
+# the width, applies below it too: at 1024 a page may deliberately keep a readable measure or a
+# side navigation.
+_PHONE_BELOW = 1024
+_PHONE_MIN_TAP = 44
+_PHONE_MAIN_SHARE = 0.9
+_PHONE_SCREENSHOTS = Path(__file__).resolve().parents[2] / "test-results" / "phone-layout"
+
+# Every visible interactive element narrower or shorter than the minimum. A checkbox or radio is
+# measured by its <label> when it has one (the label is the tap target), and a link that sits
+# inside a line of running text is exempt, as WCAG 2.5.8 exempts it: it cannot be 44px tall
+# without breaking the paragraph it is part of.
+_PHONE_SMALL_TARGETS_JS = """
+(min) => {
+  const selector = 'a[href], button, input:not([type=hidden]), select, textarea, summary, '
+    + '[role=button], [role=tab], [role=switch], [role=checkbox], [role=link], '
+    + '[tabindex]:not([tabindex="-1"])';
+  const box = (el) => el.getBoundingClientRect();
+  const inRunningText = (el) => {
+    if (el.tagName !== 'A' || getComputedStyle(el).display !== 'inline') return false;
+    let block = el.parentElement;
+    while (block && getComputedStyle(block).display === 'inline') block = block.parentElement;
+    return !!block && block.textContent.trim().length > el.textContent.trim().length;
+  };
+  const small = [];
+  for (const el of document.querySelectorAll(selector)) {
+    let rect = box(el);
+    if (rect.width === 0 || rect.height === 0) continue;
+    if (getComputedStyle(el).visibility === 'hidden') continue;
+    if (el.closest('details:not([open]) > :not(summary)')) continue;
+    if (inRunningText(el)) continue;
+    if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+      const label = el.closest('label') || (el.labels && el.labels[0]);
+      if (label) {
+        const l = box(label);
+        rect = {width: Math.max(rect.width, l.width), height: Math.max(rect.height, l.height)};
+      }
+    }
+    if (rect.width < min - 0.5 || rect.height < min - 0.5) {
+      const name = el.tagName.toLowerCase() + (el.className && typeof el.className === 'string'
+        ? '.' + el.className.trim().split(/\\s+/).join('.') : '');
+      small.push(`${name} "${(el.textContent || el.value || '').trim().slice(0, 24)}" `
+        + `${Math.round(rect.width)}x${Math.round(rect.height)}`);
+    }
+  }
+  return small;
+}
+"""
+
+# The widest visible element matching the selector, as a share of the viewport.
+_PHONE_MAIN_SHARE_JS = """
+(selector) => {
+  const widths = [...document.querySelectorAll(selector)]
+    .map((el) => el.getBoundingClientRect())
+    .filter((r) => r.width > 0 && r.height > 0)
+    .map((r) => r.width);
+  return widths.length ? Math.max(...widths) / window.innerWidth : null;
+}
+"""
+
+# Every word in a table cell whose own text runs onto more than one line.
+_PHONE_BROKEN_WORDS_JS = """
+(root) => {
+  const scope = root ? document.querySelector(root) : document;
+  const broken = [];
+  for (const cell of scope.querySelectorAll('td, th')) {
+    if (cell.getBoundingClientRect().width === 0) continue;
+    const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const words = /\\S+/g;
+      let match;
+      while ((match = words.exec(node.data))) {
+        const range = document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, match.index + match[0].length);
+        const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0)
+          .map((r) => Math.round(r.top)));
+        if (tops.size > 1) broken.push(match[0]);
+      }
+    }
+  }
+  return broken;
+}
+"""
+
+# The PDF preview is a rendered page: a visible <img> at least half the preview's width, and no
+# visible <embed>.
+_PHONE_PDF_PREVIEW_JS = """
+(root) => {
+  const scope = document.querySelector(root);
+  if (!scope) return {found: false};
+  const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const width = scope.getBoundingClientRect().width;
+  return {
+    found: true,
+    embeds: [...scope.querySelectorAll('embed, object, iframe')].filter(visible).length,
+    pages: [...scope.querySelectorAll('img')].filter((i) => visible(i)
+      && i.getBoundingClientRect().width >= width / 2).length,
+  };
+}
+"""
+
+
+def _assert_phone_layout(page, width_name: str, *, main: str) -> None:
+    """Assertions (a)-(d) of the phone-layout harness on the page as it stands."""
+    width = _PHONE_WIDTHS[width_name]["viewport"]["width"]
+    # (d) The viewport meta is present and in effect: the layout viewport is the device's.
+    has_meta = page.evaluate("() => !!document.querySelector('meta[name=viewport]')")
+    inner_width = page.evaluate("() => window.innerWidth")
+    # A page with the meta but content wider than the device also gets a wider layout viewport,
+    # which is how a phone shows a page that overflows: it zooms out.
+    assert has_meta and inner_width == width, (
+        f"viewport meta not in effect: meta={has_meta}, layout viewport {inner_width}px on a {width}px device"
+    )
+    # (a) No horizontal document overflow.
+    scroll_width = page.evaluate("() => document.documentElement.scrollWidth")
+    assert scroll_width <= inner_width, f"page scrolls sideways ({scroll_width} > {inner_width})"
+    if width < _PHONE_BELOW:
+        # (b) The main content region takes the width.
+        share = page.evaluate(_PHONE_MAIN_SHARE_JS, main)
+        assert share is not None, f"no visible main content region {main!r}"
+        assert share >= _PHONE_MAIN_SHARE, f"main content region {main!r} is {share:.0%} of the viewport"
+        # (c) Tap targets.
+        small = page.evaluate(_PHONE_SMALL_TARGETS_JS, _PHONE_MIN_TAP)
+        assert not small, f"interactive elements under {_PHONE_MIN_TAP}px: {small}"
+
+
+def _phone_screenshot(page, name: str) -> None:
+    # A review artifact, never an assertion (same posture as test_website_layout.py's).
+    _PHONE_SCREENSHOTS.mkdir(parents=True, exist_ok=True)
+    try:
+        page.screenshot(path=str(_PHONE_SCREENSHOTS / f"{name}.png"), full_page=True)
+    except PlaywrightError:  # pragma: no cover -- best-effort review artifact
+        pass
+
+
+@pytest.fixture
+def phone_page(browser, request):
+    """A page in the phone context named by the test's ``width`` parameter."""
+    ctx = browser.new_context(ignore_https_errors=True, **_PHONE_WIDTHS[request.getfixturevalue("width")])
+    pg = ctx.new_page()
+    yield pg
+    ctx.close()
+
+
+_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "about")
+_MEMBER_SECTIONS = ("auto_accept", "audit", "about")
+_READ_KINDS = ("pdf", "image", "markdown", "table")
+
+# Which phase of docs/org-mode-mobile-plan.md owns the fix for a case that fails today. The keys
+# are the case ids below; a case is marked xfail(strict=True) at exactly the widths listed, so a
+# phase that fixes another phase's case by accident is told so by the suite.
+_PHONES = ("320", "393")
+_EVERY_WIDTH = tuple(_PHONE_WIDTHS)
+_PHONE_XFAIL: dict[str, tuple[str, tuple[str, ...]]] = {
+    # The shell's nav links are 25px tall, and the list's checkbox, the Connect/Sign out controls
+    # and the passkey buttons are under 44px; at 320px the page overflows the device.
+    "approvals": ("p6-remaining-pages", _PHONES),
+    "connect": ("p6-remaining-pages", _PHONES),
+    "security": ("p6-remaining-pages", _PHONES),
+    # The fixed 190px nav leaves each section about half the width, and Privacy Filter's editor
+    # about a fifth.
+    **{f"settings-admin-{s}": ("p3-settings", _PHONES) for s in _ADMIN_SECTIONS},
+    **{f"settings-member-{s}": ("p3-settings", _PHONES) for s in _MEMBER_SECTIONS},
+    "settings-privacy-route": ("p3-settings", _PHONES),
+    # No viewport meta at all: a phone lays them out at 980px and zooms out.
+    "no-longer-pending": ("p6-remaining-pages", _EVERY_WIDTH),
+    "preparing": ("p6-remaining-pages", _EVERY_WIDTH),
+    "not-authorized": ("p6-remaining-pages", _EVERY_WIDTH),
+    # The full-page card's preview pane is 81-85% of a phone's width (the card's own padding).
+    **{f"card-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
+    # The PDF is an <embed>, and the 10-column table breaks its words mid-word, at every width.
+    "card-pdf-preview": ("p4-review-content", _EVERY_WIDTH),
+    "card-table-preview": ("p4-review-content", _EVERY_WIDTH),
+    # Inline in a list row there is no card yet, only the Details metadata disclosure: narrower
+    # than 90% on a phone, and with no PDF page or table in it at all.
+    **{f"inline-{k}": ("p5-card-containers", _PHONES) for k in _READ_KINDS},
+    "inline-pdf-preview": ("p5-card-containers", _EVERY_WIDTH),
+    "inline-table-preview": ("p5-card-containers", _EVERY_WIDTH),
+}
+
+
+def _phone_cases(case_ids):
+    params = []
+    for case in case_ids:
+        for width in _PHONE_WIDTHS:
+            marks = []
+            owner = _PHONE_XFAIL.get(case)
+            if owner and width in owner[1]:
+                marks.append(pytest.mark.xfail(strict=True, reason=owner[0]))
+            params.append(pytest.param(case, width, marks=marks, id=f"{case}-{width}"))
+    return params
+
+
+_ADMIN = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
+_MEMBER = Principal(id="bob", email="bob@example.com", display_name="Bob")
+
+
+# A 10-column record list, the shape Salesforce search results and similar tools send.
+_TEN_COLUMN_TABLE = {
+    "headers": ["Name", "Title", "Email", "Phone", "Account", "Owner", "Stage", "Amount", "Close date", "Region"],
+    "rows": [
+        ["Alice Anderson", "VP Sales", "alice@example.com", "+1 555 0100", "Acme Corp", "Carol Chen",
+         "Negotiation", "120000", "2026-11-30", "EMEA"],
+        ["Bob Brown", "Buyer", "bob@example.com", "+1 555 0101", "Globex", "Dan Diaz",
+         "Prospecting", "45000", "2026-12-15", "AMER"],
+    ],
+}
+
+_MARKDOWN_PREVIEW = (
+    "# Quarterly review\n\nThe **summary** of the quarter, with a short list:\n\n"
+    "- Revenue up 12%\n- Two new regions\n- One open risk\n\n"
+    "| Region | Revenue | Change |\n|---|---|---|\n| EMEA | 1.2M | +8% |\n| AMER | 2.4M | +15% |\n"
+)
+
+
+def _read_card_kwargs(kind: str) -> dict:
+    if kind == "pdf":
+        return {"pdf_bytes": _pdf_bytes()}
+    if kind == "image":
+        png = (Path(paths_module.__file__).parent / "resources" / "icon_512.png").read_bytes()
+        return {"preview_bytes": png, "preview_mime_type": "image/png"}
+    if kind == "markdown":
+        return {"preview_blocks": [{"type": "markdown", "text": _MARKDOWN_PREVIEW}]}
+    if kind == "table":
+        return {"preview_tables": [_TEN_COLUMN_TABLE], "table_only": True}
+    raise ValueError(kind)
+
+
+def _register_wide_read_card(web_ui: WebApprovalUI, kind: str) -> tuple[threading.Thread, object]:
+    """A WIDE read card of the given preview kind, registered the way gate.py registers one, so
+    its list row has a stamped preview for the inline Details disclosure."""
+    approval, _created = web_ui.deferred_registry.register_or_coalesce(
+        dedupe_key=f"phone-{kind}-{uuid.uuid4().hex[:8]}", connector="drive", tool="drive_get_file_content",
+        gate_kind="review", request_id=f"req-{kind}", summary="Quarterly report", tool_name="Get file content",
+        operation_key="drive.drive_get_file_content",
+        preview={"File": "Quarterly report", "Owner": "alice@example.com"},
+    )
+
+    def run():
+        web_ui.show_read_popup(
+            "Get file content", {"File": "Quarterly report"}, "", None,
+            layout="wide", approval=approval, **_read_card_kwargs(kind),
+        )
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not approval.html:
+        time.sleep(0.01)
+    assert approval.html, "card never parked on its approval"
+    return t, approval
+
+
+
+
+class TestPhoneLayout:
+    """The measurable shared rules on every app surface, at 320px, a real 393px phone and a 1024px
+    tablet. Every case that fails today is xfail(strict=True) with the id of the phase of
+    docs/org-mode-mobile-plan.md that owns its fix; see _PHONE_XFAIL."""
+
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["approvals", "connect", "security"]))
+    def test_shell_page(self, phone_page, org_server_and_ui, case, width):
+        server, sessions, web_ui = org_server_and_ui
+        _sign_in_org(phone_page.context, server, sessions, principal=_ADMIN)
+        pending = None
+        if case == "approvals":
+            with principal_scope(_ADMIN):
+                pending, _ = web_ui.deferred_registry.register_or_coalesce(
+                    dedupe_key="phone-list", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                    request_id="phone-list", summary="Quarterly numbers from Alice", tool_name="Get message",
+                )
+        try:
+            response = phone_page.goto(f"{server.base_url}/{case}")
+            assert response.status == 200, f"/{case} answered {response.status}"
+            phone_page.wait_for_load_state("load")
+            if pending is not None:
+                phone_page.wait_for_selector(f'[data-approval-id="{pending.id}"]')
+            _phone_screenshot(phone_page, f"{case}-{width}")
+            _assert_phone_layout(phone_page, width, main=".pf-shell-main > *")
+        finally:
+            if pending is not None:
+                web_ui.resolve(pending.id, "deny")
+
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"settings-admin-{s}" for s in _ADMIN_SECTIONS]
+                     + [f"settings-member-{s}" for s in _MEMBER_SECTIONS]
+                     + ["settings-privacy-route"]),
+    )
+    def test_settings(self, phone_page, org_server, case, width):
+        server, sessions = org_server
+        role, section = case.removeprefix("settings-").split("-", 1)
+        principal = _MEMBER if role == "member" else _ADMIN
+        _sign_in_org(phone_page.context, server, sessions, principal=principal)
+        phone_page.goto(f"{server.base_url}/settings{'/privacy' if case == 'settings-privacy-route' else ''}")
+        phone_page.wait_for_selector(".pf-navitem")
+        if case != "settings-privacy-route":
+            # A script click: the point is the section's own layout, not whether the nav (which
+            # p3 turns into a tab strip) happens to be tappable at this width.
+            phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
+        # A section renders into .pf-page (About into .pf-about-page); Privacy Filter's editor,
+        # beside its group list, into .pf-detail-page.
+        region = ".pf-page, .pf-detail-page, .pf-about-page"
+        phone_page.wait_for_selector(region)
+        _phone_screenshot(phone_page, f"{case}-{width}")
+        _assert_phone_layout(phone_page, width, main=region)
+
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["no-longer-pending", "preparing", "not-authorized"]))
+    def test_fallback_page(self, phone_page, local_server, case, width):
+        """The three bare documents: routes_approvals.py's "no longer pending" and "preparing"
+        pages, and session_auth.py's unauthenticated page."""
+        server, web_ui = local_server
+        approval = None
+        if case == "not-authorized":
+            phone_page.goto(f"{server.base_url}/approvals")
+        else:
+            _sign_in_local(phone_page, server)
+            if case == "preparing":
+                # Registered but never rendered: card.html stays empty.
+                approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                    dedupe_key="phone-preparing", connector="gmail", tool="gmail_get_message",
+                    gate_kind="review", request_id="phone-preparing",
+                )
+                phone_page.goto(f"{server.base_url}/approvals/{approval.id}")
+            else:
+                phone_page.goto(f"{server.base_url}/approvals/no-such-approval")
+        try:
+            phone_page.wait_for_load_state("load")
+            _phone_screenshot(phone_page, f"fallback-{case}-{width}")
+            _assert_phone_layout(phone_page, width, main="body")
+        finally:
+            if approval is not None:
+                web_ui.resolve(approval.id, "deny")
+
+    # The card's layout (a)-(d) and its preview content (e)/(f) are separate cases: they are
+    # fixed by different phases, and one strict xfail cannot name two owners.
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"card-{k}" for k in _READ_KINDS] + ["card-pdf-preview", "card-table-preview"]),
+    )
+    def test_read_card_full_page(self, phone_page, local_server, case, width):
+        server, web_ui = local_server
+        kind = case.removeprefix("card-").removesuffix("-preview")
+        _sign_in_local(phone_page, server)
+        thread, card = _register_wide_read_card(web_ui, kind)
+        try:
+            phone_page.goto(f"{server.base_url}/approvals/{card.id}")
+            phone_page.wait_for_load_state("load")
+            _phone_screenshot(phone_page, f"{case}-{width}")
+            if case.endswith("-preview"):
+                self._assert_preview(phone_page, kind, root=".pf-wide-right")
+            else:
+                _assert_phone_layout(phone_page, width, main=".pf-wide-right")
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"inline-{k}" for k in _READ_KINDS] + ["inline-pdf-preview", "inline-table-preview"]),
+    )
+    def test_read_card_inline_in_list_row(self, phone_page, local_server, case, width):
+        server, web_ui = local_server
+        kind = case.removeprefix("inline-").removesuffix("-preview")
+        _sign_in_local(phone_page, server)
+        thread, card = _register_wide_read_card(web_ui, kind)
+        try:
+            phone_page.goto(f"{server.base_url}/approvals")
+            phone_page.wait_for_selector(f'[data-details="{card.id}"]')
+            phone_page.locator(f'[data-details="{card.id}"]').click()
+            phone_page.wait_for_function(
+                "(id) => { var el = document.getElementById('pf-details-' + id); "
+                "return !!el && !el.hasAttribute('hidden') && el.textContent.trim().length > 0; }",
+                arg=card.id,
+            )
+            _phone_screenshot(phone_page, f"{case}-{width}")
+            root = f"#pf-details-{card.id}"
+            if case.endswith("-preview"):
+                self._assert_preview(phone_page, kind, root=root)
+            else:
+                _assert_phone_layout(phone_page, width, main=root)
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    @staticmethod
+    def _assert_preview(page, kind: str, *, root: str) -> None:
+        if kind == "pdf":
+            # (e) A rendered page image, not the browser's PDF plugin.
+            preview = page.evaluate(_PHONE_PDF_PREVIEW_JS, root)
+            assert preview["found"], f"no preview region {root!r}"
+            assert preview["pages"] >= 1 and preview["embeds"] == 0, f"PDF preview is not a page image: {preview}"
+        if kind == "table":
+            # (f) The record table is shown, and no word in it is broken across lines.
+            cells = page.evaluate("(root) => document.querySelectorAll(root + ' td').length", root)
+            assert cells > 0, f"no table in the preview region {root!r}"
+            broken = page.evaluate(_PHONE_BROKEN_WORDS_JS, root)
+            assert not broken, f"words broken across lines: {broken}"

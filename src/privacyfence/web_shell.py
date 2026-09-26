@@ -37,6 +37,7 @@ from html import escape as _html_escape
 from pathlib import Path
 
 from . import approval_icons
+from .design_css import SHARED_CSS
 
 _TOKENS_CSS = (Path(__file__).parent / "resources" / "tokens.css").read_text(encoding="utf-8")
 
@@ -523,7 +524,7 @@ def wrap(
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="{_FAVICON_DATA_URI}">
 <title>{_html_escape(title)}</title>
-<style nonce="{nonce}">{_TOKENS_CSS}{_SHELL_CSS}</style>
+<style nonce="{nonce}">{SHARED_CSS}{_TOKENS_CSS}{_SHELL_CSS}</style>
 </head>
 <body>
 <header class="pf-shell-header">

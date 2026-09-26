@@ -43,6 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The app and the website now share one set of design files** (colours, spacing, layout
+  building blocks and the rules they follow), the first step toward the approval, settings and
+  connection pages working on a phone and looking like the website. Nothing looks different yet,
+  except that keyboard focus in the app now shows the website's clear focus ring instead of the
+  browser's default outline.
+
 ## [4.7.0] — 2026-09-26
 
 ### Added
