@@ -10,6 +10,7 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
+from ..preview_dates import format_preview_datetime
 from ..privacy_filter import apply_list, apply_text, category_policy
 from ..slack_client import SlackClient, SlackClientError
 
@@ -458,7 +459,10 @@ class SlackConnector(Connector):
         details = "\n".join(lines)
         table = {
             "headers": ["Sender", "Date", "Message"],
-            "rows": [[d["user_name"] or d["user_id"] or "unknown", d["ts"], d["text"]] for d in filtered],
+            "rows": [
+                [d["user_name"] or d["user_id"] or "unknown", format_preview_datetime(d["ts"]), d["text"]]
+                for d in filtered
+            ],
         }
         return await gated_call(
             connector=self.name,
@@ -507,7 +511,10 @@ class SlackConnector(Connector):
         details = f"Thread: {thread_ts}\n\n" + "\n".join(lines)
         table = {
             "headers": ["Sender", "Date", "Message"],
-            "rows": [[d["user_name"] or d["user_id"] or "unknown", d["ts"], d["text"]] for d in filtered],
+            "rows": [
+                [d["user_name"] or d["user_id"] or "unknown", format_preview_datetime(d["ts"]), d["text"]]
+                for d in filtered
+            ],
         }
         return await gated_call(
             connector=self.name,
@@ -570,7 +577,10 @@ class SlackConnector(Connector):
         table = {
             "headers": ["Channel", "Sender", "Date", "Message"],
             "rows": [
-                [d["channel_name"], d["user_name"] or d["user_id"] or "unknown", d["ts"], d["text"]]
+                [
+                    d["channel_name"], d["user_name"] or d["user_id"] or "unknown",
+                    format_preview_datetime(d["ts"]), d["text"],
+                ]
                 for d in filtered
             ],
         }
