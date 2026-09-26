@@ -7,7 +7,9 @@
 - ``POST``/``DELETE /api/push/subscription``: store or remove the signed-in principal's push
   subscription. Same auth as every other org-mode write: the ``pf_org_session`` cookie, the
   double-submit CSRF token in the body, and the Origin check. Mounted only when push is on for the
-  org (``org_config.json``'s ``web_push.enabled``, default on).
+  org (``org_config.json``'s ``web_push.enabled``, default on). A stored subscription records a
+  hash of the session that posted it, which is how ``POST /logout`` stops pushes to the browser
+  that signs out.
 
 **Every route here is classified, or the app refuses to start** -- ADR 0014's rule, applied to
 this module: ``ROUTE_CLASSIFICATION`` names each path's auth and why, and ``build_routes`` raises
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from starlette.requests import Request
@@ -24,7 +27,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ..design_css import token_value
-from ..web_push import InvalidSubscription, PushSubscriptionStore, parse_subscription, validate_endpoint
+from ..web_push import (
+    InvalidSubscription, PushSubscriptionStore, parse_subscription, session_tag, validate_endpoint,
+)
 from . import org_session
 from .org_session import OrgSessionStore
 
@@ -122,7 +127,10 @@ def build_routes(*, sessions: OrgSessionStore, store: PushSubscriptionStore | No
                     endpoint = validate_endpoint(body.get("endpoint"))
                     removed = store.remove(principal.id, endpoint)
                     return JSONResponse({"removed": removed}, headers={"Cache-Control": "no-store"})
-                store.add(principal.id, parse_subscription(body.get("subscription")))
+                # Tagged with this sign-in session, so /logout can drop this browser's copy
+                # (routes_org_identity.py) and leave the principal's other devices alone.
+                tag = session_tag(request.cookies.get(org_session.SESSION_COOKIE, ""))
+                store.add(principal.id, replace(parse_subscription(body.get("subscription")), session=tag))
             except InvalidSubscription as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
             return JSONResponse({"subscribed": True}, headers={"Cache-Control": "no-store"})

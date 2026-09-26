@@ -30,6 +30,7 @@ and default TLS verification against the certifi bundle.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -39,7 +40,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -213,13 +214,28 @@ def minimal_payload(count: int) -> bytes:
 
 @dataclass(frozen=True)
 class PushSubscription:
+    """``session`` is ``session_tag()`` of the sign-in session that last posted this
+    subscription, so signing out can find this browser's subscriptions and only those. Empty on
+    a subscription stored before sessions were recorded; such a subscription is never matched."""
+
     endpoint: str
     p256dh: str
     auth: str
     created_at: float = 0.0
+    session: str = ""
 
     def to_json(self) -> dict[str, Any]:
-        return {"endpoint": self.endpoint, "p256dh": self.p256dh, "auth": self.auth, "created_at": self.created_at}
+        return {
+            "endpoint": self.endpoint, "p256dh": self.p256dh, "auth": self.auth,
+            "created_at": self.created_at, "session": self.session,
+        }
+
+
+def session_tag(session_id: str) -> str:
+    """What a stored subscription records about the session that posted it: a SHA-256 of the
+    session id, never the id itself, which is a live bearer credential and the page's CSRF token.
+    The id is 256 random bits, so an unsalted hash cannot be reversed by guessing."""
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
 
 def validate_endpoint(endpoint: Any) -> str:
@@ -279,7 +295,13 @@ class PushSubscriptionStore:
 
     An endpoint belongs to one principal at a time. Two people signing in to the same browser
     profile get the same endpoint for the same server key, and the later subscription takes it
-    over, so the earlier person's notices stop going to a browser someone else now uses."""
+    over, so the earlier person's notices stop going to a browser someone else now uses.
+
+    Each subscription also records the session that posted it (``PushSubscription.session``), and
+    ``remove_session`` drops every subscription a session posted: the browser that signs out stops
+    receiving pushes, the same person's other devices do not. ``replace_session`` does the same
+    for a sign-in that replaces an earlier session in one browser, except that the same person's
+    own subscriptions move to the new session instead."""
 
     def __init__(self, users_dir: Callable[[], Path] = _default_users_dir) -> None:
         self._users_dir = users_dir
@@ -298,7 +320,7 @@ class PushSubscriptionStore:
             return [
                 PushSubscription(
                     endpoint=str(item["endpoint"]), p256dh=str(item["p256dh"]), auth=str(item["auth"]),
-                    created_at=float(item.get("created_at", 0.0)),
+                    created_at=float(item.get("created_at", 0.0)), session=str(item.get("session", "")),
                 )
                 for item in raw.get("subscriptions", [])
             ]
@@ -335,20 +357,50 @@ class PushSubscriptionStore:
             self._write(path, kept)
             return True
 
+    def remove_session(self, tag: str) -> int:
+        """Remove every subscription posted by the session whose ``session_tag`` is ``tag``,
+        whichever principal holds it. Returns how many were removed. Every principal's file is
+        checked, not only the signed-in one's, because a session that has already expired no
+        longer says whose it was."""
+        if not tag:
+            return 0
+        with self._lock:
+            return self._remove_matching_locked(lambda entry, s: s.session == tag)
+
+    def replace_session(self, old_tag: str, new_tag: str, principal_id: str) -> None:
+        """A new sign-in (``new_tag``) replaced session ``old_tag`` in the same browser. The
+        subscriptions ``old_tag`` posted move to ``new_tag`` if they are ``principal_id``'s own,
+        so signing out later still finds them, and are removed if they are anyone else's, so the
+        next person to sign in on a browser does not inherit the last one's notices."""
+        if not old_tag:
+            return
+        with self._lock:
+            self._remove_matching_locked(lambda entry, s: entry != principal_id and s.session == old_tag)
+            path = self._file(principal_id)
+            current = self._read(path)
+            if any(s.session == old_tag for s in current):
+                self._write(path, [replace(s, session=new_tag) if s.session == old_tag else s for s in current])
+
     def _remove_from_others_locked(self, principal_id: str, endpoint: str) -> None:
+        self._remove_matching_locked(lambda entry, s: entry != principal_id and s.endpoint == endpoint)
+
+    def _remove_matching_locked(self, matches: Callable[[str, PushSubscription], bool]) -> int:
         users = self._users_dir()
         if not users.is_dir():
-            return
+            return 0
+        removed = 0
         for entry in users.iterdir():
-            if entry.name == principal_id or safe_principal_id(entry.name) != entry.name:
+            if safe_principal_id(entry.name) != entry.name:
                 continue
             path = entry / SUBSCRIPTIONS_FILE_NAME
             if not path.exists():
                 continue
             current = self._read(path)
-            kept = [s for s in current if s.endpoint != endpoint]
+            kept = [s for s in current if not matches(entry.name, s)]
             if len(kept) != len(current):
                 self._write(path, kept)
+                removed += len(current) - len(kept)
+        return removed
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -489,6 +541,7 @@ __all__ = [
     "load_or_create_vapid_key",
     "minimal_payload",
     "parse_subscription",
+    "session_tag",
     "validate_endpoint",
     "vapid_authorization",
 ]

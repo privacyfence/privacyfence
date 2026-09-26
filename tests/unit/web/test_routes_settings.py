@@ -40,6 +40,7 @@ from privacyfence.web.routes_settings import (
     build_routes,
     create_app,
 )
+from privacyfence.web_approval_ui import WebApprovalUI
 from privacyfence.web.session_auth import (
     PROVENANCE_HUMAN,
     PROVENANCE_UNATTESTED,
@@ -265,6 +266,33 @@ class TestActionDispatch:
         r = client.post("/api/settings/refresh_connectors", json={"csrf": csrf})
         connectors = r.json()["connectors"]
         assert any("icon_data_uri" in c for c in connectors)
+
+    async def test_every_live_update_carries_the_connector_icons_too(self, controller):
+        """The initial page load and every /api/state/stream event render the same settings state:
+        the stream's first event on connect and each pushed change carry the connector icons the
+        page itself was rendered with, or the settings page's icons go blank on the first update."""
+        from privacyfence.web.server import WebServer
+
+        server = WebServer(WebApprovalUI(), port=0, controller=controller)
+        calls = 0
+
+        async def disconnected() -> bool:
+            nonlocal calls
+            calls += 1
+            return calls > 1
+
+        events = server.state_stream.subscribe(disconnected)
+        first = await events.__anext__()
+        controller._push_snapshot()
+        await events.__anext__()  # the initial approvals event
+        pushed = await events.__anext__()
+        await events.aclose()
+        page_icons = [c["icon_data_uri"] for c in rs._snapshot(controller)["connectors"]]
+        assert any(page_icons)
+        for chunk in (first, pushed):
+            assert chunk.startswith("event: settings\n")
+            connectors = json.loads(chunk.split("data: ", 1)[1])["connectors"]
+            assert [c.get("icon_data_uri") for c in connectors] == page_icons
 
     def test_missing_csrf_is_401(self, client, sessions):
         _authed(client, sessions)

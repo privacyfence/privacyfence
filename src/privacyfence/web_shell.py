@@ -5,27 +5,17 @@ that both ``/approvals`` and
 web/routes_settings.py), so the two pages read as one application instead of
 two applications bolted together.
 
-Deliberately **not** used by:
-
-- the native settings window (settings_window.py's WKWebView) or the native
-  approval window (approval_window.py's) -- both load their own document's
-  markup directly via ``loadHTMLString_baseURL_``, with no HTTP request and
-  no other page to link to. Wrapping their shared documents
-  (settings_window_html.build_html/approval_window_html.build_card_stack_
-  html) in this shell would change what those two already-tested,
-  geometry-tuned documents render, for a native host that has no use for a
-  cross-page nav bar at all.
-- an individual approval card's own page (``GET /approvals/{id}``) -- that
-  page *is* the decision screen, full-window, same as the native dialog it
-  replaces; the list it returns to is where the shell belongs, not the card itself.
+Deliberately **not** used by an individual approval card's own page
+(``GET /approvals/{id}``) or its confirmation dialogs -- that page *is* the
+decision screen, the whole window given to one decision; the list it returns
+to is where the shell belongs, not the card itself.
 
 Owns the one thing every shell-wrapped page needs and none of them should
 reimplement: the ``/api/state/stream`` SSE connection (web/state_stream.py)
 that drives the live indicator and dispatches each event to whichever of
 ``window.__pfRender``/``window.__pfRenderApprovals`` the current page
-happens to define -- settings_window_html.py's own bridge JS already
-defines the former (unchanged, since it also serves the native-window
-push path); approval_list_html.py defines the latter. Centralizing the
+happens to define -- settings_window_html.py's own bridge JS defines the
+former; approval_list_html.py defines the latter. Centralizing the
 connection here, rather than duplicating an EventSource per page, is what
 makes "one live indicator" true instead of aspirational.
 """
@@ -40,7 +30,7 @@ from . import approval_icons
 from .design_css import DOCUMENT_CSS
 
 # Browser-tab favicon -- the same bundled shield mark approval_icons.py
-# already hands the native/web approval cards (resources/icon_32.png, the
+# already hands the approval card (resources/icon_32.png, the
 # size a favicon is actually rendered at), embedded as a data: URI so this
 # shared shell never needs its own unauthenticated route or asset file just
 # to satisfy the browser's automatic GET /favicon.ico.
@@ -263,10 +253,9 @@ _STREAM_JS = """
   var NOTIFICATIONS_DETAIL = %(notifications_detail)s;
   // __pfNotificationsEnabled is exposed globally so the settings page's own
   // notifications card (settings_window_html.py's renderNotificationsCard)
-  // can read the same config flag -- that module's JS is shared with the
-  // native settings window, which never loads this script at all, so it
-  // treats a missing flag as "on" (feature-detecting Notification support
-  // instead) rather than assuming this variable exists. There is no
+  // can read the same config flag. That card treats a missing flag as "on"
+  // (feature-detecting Notification support instead), since a settings
+  // page rendered without this script (org mode's) never sets it. There is no
   // equivalent __pfNotificationsDetail read anywhere else: the card's own
   // detail-level control is a real, mutable setting
   // (SettingsController.set_notifications_detail) sourced from that page's
@@ -537,6 +526,28 @@ _ORG_APP_LINKS = (
 )
 
 
+# Org mode's sign-out also unsubscribes this browser from web push (ADR 0081) before the form
+# posts, so the browser forgets the subscription as well as the server. The server drops it at
+# /logout either way (web/routes_org_identity.py); this is the browser's half, and it gives up
+# after a moment rather than hold up signing out. Every org page carries it, whether or not it
+# has the stream script, because the sign-out form is on a page that has none.
+_ORG_SIGN_OUT_JS = """
+(function () {
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form || form.getAttribute('action') !== '/logout' || !('serviceWorker' in navigator)) { return; }
+    e.preventDefault();
+    var sent = false;
+    function send() { if (!sent) { sent = true; form.submit(); } }
+    setTimeout(send, 1500);
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      return reg && reg.pushManager ? reg.pushManager.getSubscription() : null;
+    }).then(function (sub) { return sub ? sub.unsubscribe() : null; }).then(send, send);
+  });
+})();
+"""
+
+
 def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
     items = []
     for key, label, href in nav_items:
@@ -679,7 +690,8 @@ def wrap(
 
     Org mode (``nav_items`` is ``ORG_NAV_ITEMS``) also links the Web App
     Manifest and its icon (web/routes_push.py), which makes the org app
-    installable; local mode serves neither route and links neither.
+    installable, and adds the sign-out script (``_ORG_SIGN_OUT_JS``); local
+    mode serves neither route and gets neither.
     ``push_public_key`` is org mode's VAPID public key when the org has web
     push on (ADR 0081): the pre-prompt then subscribes this browser, posting
     ``csrf`` (the page's session CSRF token) with the subscription. It needs
@@ -716,7 +728,9 @@ def wrap(
             '<button type="button" class="pf-shell-notice-close" data-dismiss-notice '
             'aria-label="Dismiss">&times;</button></div>'
         )
-    app_links = _ORG_APP_LINKS if nav_items == ORG_NAV_ITEMS else ""
+    is_org = nav_items == ORG_NAV_ITEMS
+    app_links = _ORG_APP_LINKS if is_org else ""
+    sign_out_script = f'<script nonce="{nonce}">{_ORG_SIGN_OUT_JS}</script>' if is_org else ""
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -734,7 +748,7 @@ def wrap(
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
 <div class="pf-sr-only" id="pf-shell-announcer" aria-live="polite"></div>
-{stream_script}
+{stream_script}{sign_out_script}
 </body>
 </html>
 """

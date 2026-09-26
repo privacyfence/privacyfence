@@ -18,15 +18,12 @@ Two shapes:
     ``approval_window_html.py``'s own Allow once button uses), which
     ``_JS``'s keydown handler deliberately excludes from the Enter/Space-
     activates-a-focused-control path -- hitting Enter can never silently
-    accept. Escape resolves Cancel from anywhere in the document, matching
-    ``_display_dialog``'s old default-button-is-Cancel contract exactly.
+    accept. Escape resolves Cancel from anywhere in the document.
   - ``build_choice_html()``: a vertical list of clickable option rows plus a
     Cancel button -- the shape both ``show_rule_choice_popup`` and
-    ``settings_controller._osascript_pick``'s Atlassian multi-resource
-    picker render. Escape or Cancel resolve to no selection, matching
-    ``_run``'s old "non-zero osascript exit returns None" contract (see
-    ``dialog_window.py``'s ``show_choice_dialog`` for where that None
-    actually gets produced from the bridge's own result).
+    ``settings_controller._pick_resource_index``'s Atlassian multi-resource
+    picker render. Escape or Cancel resolve to no selection: the caller gets
+    ``None`` rather than an index (web_prompt.py).
 
 Bridge protocol (JS -> Python only, same shape as approval_window_html.py's
 own): the page posts
@@ -38,14 +35,9 @@ number) / ``'cancel'`` for the choice shape.
 Every value interpolated into these documents -- button labels, dialog copy,
 and (for the choice shape) each option's own display text -- is run through
 ``_html_escape()`` before interpolation, the same defensive posture
-``build_card_stack_html`` takes with ``details_text``. This is a real fix,
-not just a precaution: ``_osascript_pick``'s options previously went
-unescaped into AppleScript source text (a real OAuth ``accessible-resources``
-URL containing a literal quote could break out of the string literal); a
-webview bridge call takes the string as a real DOM text value, never source
-text to be interpreted, so that injection class doesn't exist here at all --
-escaping is still applied to keep the HTML itself well-formed, not to guard
-against script execution.
+``build_card_stack_html`` takes with ``details_text``. An option's text can
+come from outside (an OAuth ``accessible-resources`` site name or URL), so it
+must stay text and never become markup.
 """
 from __future__ import annotations
 
@@ -54,11 +46,8 @@ from html import escape as _html_escape
 from .approval_window_html import _STYLES_CSS, _new_nonce
 from .design_css import DOCUMENT_CSS
 
-# Public (no leading underscore): dialog_window.py's own window-width
-# constants derive from these directly rather than duplicating them, so the
-# native window frame and the HTML body rendered inside it can never drift
-# out of sync -- same discipline approval_window.py's _WINDOW_WIDTH takes
-# with approval_window_html.CONTENT_WIDTH.
+# The widest each dialog's card gets; a narrower screen gets all of its
+# width (``_document``'s ``min(..., 100%)``).
 CONFIRM_WIDTH = 440
 PICKER_WIDTH = 480
 
@@ -66,9 +55,8 @@ PICKER_WIDTH = 480
 # same DOMContentLoaded-is-the-right-signal reasoning as approval_window_
 # html.py's own _JS (nothing here ever fetches anything either: fonts/colors
 # come from the same already-inlined styles.css, and there are no images at
-# all in these two shapes). window.__pfEnableButtons is exposed for the same
-# reason too: dialog_window.py's WKNavigationDelegate fail-safes can force
-# button click-ability if DOMContentLoaded itself never fires.
+# all in these two shapes). window.__pfEnableButtons is exposed the same way
+# too, and likewise nothing in the web UI calls it.
 _JS = """
 (function () {
   function post(result) {
@@ -225,8 +213,7 @@ def build_confirmation_html(
     *, title: str, message_lines: list[str], cancel_label: str, confirm_label: str,
 ) -> str:
     """Two-button Cancel/<confirm_label> dialog. See module docstring for
-    the Cancel-is-default security behavior this preserves from
-    ``_display_dialog``."""
+    why Cancel is the default."""
     body_html = (
         '<div class="pf-kicker"><span>PrivacyFence</span></div>'
         f'<h2>{_html_escape(title)}</h2>'
@@ -240,8 +227,7 @@ def build_choice_html(
     *, title: str, prompt: str, options: list[str], cancel_label: str = "Cancel",
 ) -> str:
     """A vertical list of clickable option rows plus Cancel. See module
-    docstring for the escape/cancel-returns-no-selection contract this
-    preserves from ``_run``'s old "non-zero osascript exit" behavior."""
+    docstring for why Escape and Cancel return no selection."""
     rows = "".join(
         '<div class="pf-choice-row" role="button" aria-disabled="true" '
         f'aria-label="{_html_escape(opt)}" data-pf-action="choice" data-pf-index="{i}">'

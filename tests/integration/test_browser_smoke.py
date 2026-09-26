@@ -70,6 +70,7 @@ from privacyfence.web.routes_approvals import _DECIDED_MESSAGE, _DENIED_MESSAGE 
 from privacyfence.web.server import OrgAuth, WebServer  # noqa: E402
 from privacyfence.web.session_auth import PROVENANCE_HUMAN  # noqa: E402
 from privacyfence.web.session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE  # noqa: E402
+from privacyfence.web.state_stream import call_soon_threadsafe  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode  # noqa: E402
 
@@ -2164,6 +2165,45 @@ class TestWebPushSubscription:
         finally:
             context.close()
 
+    def test_signing_out_unsubscribes_the_browser(self, browser, org_push_server):
+        """ADR 0081: the browser's half of sign-out stopping pushes. The browser already holds a
+        subscription with permission granted, as it would on a return visit. The server's half
+        (/logout removing what that session posted) is test_routes_push.py's
+        TestSignOutStopsPushToThatBrowser."""
+        server, sessions, _web_ui, store = org_push_server
+        sub = json.loads(_fake_push_subscription_script("https://fcm.googleapis.com/fcm/send/signout")
+                         .split("var json = ", 1)[1].split(";\n", 1)[0])
+        unsubscribed: list[bool] = []
+        context = browser.new_context()
+        try:
+            context.expose_function("__pfUnsubscribed", lambda: unsubscribed.append(True))
+            context.add_init_script(f"""
+              (function () {{
+                var json = {json.dumps(sub)};
+                Object.defineProperty(Notification, "permission", {{ get: function () {{ return "granted"; }} }});
+                var fake = {{ endpoint: json.endpoint, toJSON: function () {{ return json; }},
+                             unsubscribe: function () {{ return window.__pfUnsubscribed().then(function () {{ return true; }}); }} }};
+                PushManager.prototype.getSubscription = function () {{ return Promise.resolve(fake); }};
+              }})();
+            """)
+            _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+            page = context.new_page()
+            # A page load with permission granted posts the browser's subscription.
+            page.goto(f"{server.base_url}/approvals")
+            deadline = time.monotonic() + 10
+            while not store.list("alice") and time.monotonic() < deadline:
+                page.wait_for_timeout(100)
+            assert [s.endpoint for s in store.list("alice")] == [sub["endpoint"]]
+
+            page.goto(f"{server.base_url}/connect")
+            page.locator('form[action="/logout"] button').click(no_wait_after=True)
+            deadline = time.monotonic() + 10
+            while not unsubscribed and time.monotonic() < deadline:
+                page.wait_for_timeout(100)  # not time.sleep: the exposed function needs the event loop
+            assert unsubscribed == [True]
+        finally:
+            context.close()
+
     def test_ios_before_installation_shows_the_home_screen_hint(self, browser, org_push_server):
         server, sessions, _web_ui, store = org_push_server
         context = browser.new_context(user_agent=_IPHONE_UA, viewport={"width": 393, "height": 852}, is_mobile=True, has_touch=True)
@@ -2342,6 +2382,24 @@ class TestSettingsPageRendering:
         assert nav_labels == ["General", "Connectors", "Auto-accept", "Privacy Filter", "Audit Log", "About"]
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "local-settings")
+
+    def test_connector_icons_survive_a_live_update(self, page, local_server_with_settings):
+        """The first render and every /api/state/stream event carry the same settings state, so
+        the Connectors page's icons are still there after the page re-renders from a pushed
+        change (routes_settings.settings_page_state)."""
+        server, _web_ui = local_server_with_settings
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/settings/connectors")
+        page.wait_for_selector(".pf-connector-icon img")
+        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
+        icons = page.locator(".pf-connector-icon img").count()
+        page.evaluate(
+            "() => { var render = window.__pfRender; window.__pfRenders = 0;"
+            " window.__pfRender = function (s) { window.__pfRenders++; return render(s); }; }"
+        )
+        call_soon_threadsafe(server.controller._push_snapshot)
+        page.wait_for_function("() => window.__pfRenders > 0")
+        assert page.locator(".pf-connector-icon img").count() == icons
 
     def test_org_settings_page_renders_for_non_admin(self, page, context, org_server):
         server, sessions = org_server

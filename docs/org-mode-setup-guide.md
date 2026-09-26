@@ -655,6 +655,9 @@ that a request arrived. Organization mode sends a **web push notification** inst
   offers to turn notifications on. Once they allow it, their browser subscribes, and the server
   notifies that browser whenever a new approval is waiting for them (at most one notification every
   5 seconds). Tapping the notification opens `/approvals`.
+- **Shared browsers.** Signing out stops the notifications on that browser, and so does someone
+  else signing in on it; the person's other devices keep theirs. A session that only times out
+  keeps notifying, since reaching a phone whose session has lapsed is the point.
 - **iPhone and iPad.** Safari offers web push only to a site added to the Home Screen. Until it is
   added, the page shows "Add PrivacyFence to your Home Screen to get notifications" instead of the
   offer. Added from Safari's Share menu, PrivacyFence opens as its own app, starting on

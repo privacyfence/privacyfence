@@ -1,4 +1,4 @@
-"""HTML/CSS/vanilla-JS for the webview settings window (settings_window.py).
+"""HTML/CSS/vanilla-JS for the settings page (web/routes_settings.py serves it).
 
 Originally transcribed from a Claude Design prototype export (not shipped
 with this repo); its look is now the shared design system's (see the note
@@ -6,27 +6,25 @@ above ``_CSS``), and only its structure and wording remain. What was never
 transcribed is that file's own rendering machinery (a small
 declarative-component runtime, ``sc-if``/``sc-for``/``{{ }}`` tags): this
 module is plain string templating plus a small amount of vanilla JS driving
-the DOM directly, with no framework and no build step -- this is a fully
-offline, file:// document (loaded via ``loadHTMLString_baseURL_``), so
+the DOM directly, with no framework and no build step -- the page's CSP is
+``default-src 'none'`` plus a per-response nonce (web/csp.py, ADR 0063), so
 nothing here may reference a CDN, a bundler-emitted asset, or the network.
 
-No AppKit/WebKit import here either (see settings_controller.py's own
-docstring for why) -- ``test_settings_window_html.py`` asserts on
-``build_html()``'s output on any platform, and this module must stay
-importable there.
+``test_settings_window_html.py`` asserts on ``build_html()``'s output
+directly, so this module stays a pure function of the state it is given.
 
 State shape consumed by ``build_html()``/the JS ``render()`` function is
 exactly ``SettingsController.snapshot()``'s return value, plus a per-
-connector ``icon_data_uri`` field settings_window.py adds before handing the
-dict here (icon embedding needs ``approval_window._icon_data_uri()``, which
-*is* AppKit/WebKit-tainted -- see that module's docstring -- so it can't
-happen in this file).
+connector ``icon_data_uri`` field web/routes_settings.py's
+``settings_page_state`` adds before handing the dict here (the icons are
+files, loaded by approval_icons.py).
 
-Bridge protocol (see settings_window.py's module docstring for the Python
-side): the page's own ``post(action, payload)`` posts
-``window.webkit.messageHandlers.pf.postMessage({action, ...payload})``;
-Python answers by calling ``window.__pfRender(newState)`` after handling a
-message or finishing a background op. Ephemeral, client-only UI state (which
+Bridge protocol: the page's own ``post(action, payload)`` posts
+``window.webkit.messageHandlers.pf.postMessage({action, ...payload})``, which
+web/routes_settings.py's injected shim sends to ``/api/settings/<action>``;
+the page re-renders through ``window.__pfRender(newState)`` from the action's
+response or from an ``/api/state/stream`` event (a background operation
+finishing). Ephemeral, client-only UI state (which
 nav section is active, which privacy group is selected, the Auto-accept
 page's own search/filter/add-rule-form state) lives in the JS-side ``ui``
 object below and is merged with the Python-pushed state on every render,
@@ -58,7 +56,7 @@ from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 #
 # Layout. #app is a .shell, named as the pf-settings size container, and every width decision
 # below is a container query on it, so the page responds to the room it is given -- a phone, a
-# narrow desktop window, the native settings window -- rather than to the viewport. The base
+# narrow desktop window -- rather than to the viewport. The base
 # rules are the narrow layout: the section nav is a tabstrip above the content, Privacy Filter's
 # group list a second tabstrip below it, and a settings row stacks its label and description
 # above its control. From the website's 900 px nav breakpoint up, the nav becomes a card-styled
@@ -357,11 +355,10 @@ _JS = r"""
 
   // Right-click-to-copy for a grant row's resource ID (data-copy-id, see
   // renderRules) -- document.execCommand('copy') rather than
-  // navigator.clipboard.writeText, since this is an offline file:// document
-  // (loadHTMLString_baseURL_, see this module's docstring) and the async
-  // Clipboard API is only available in a secure context; the legacy
-  // execCommand path has no such restriction and still works from a
-  // contextmenu event's user activation.
+  // navigator.clipboard.writeText: the async Clipboard API needs a secure
+  // context and, in some browsers, a permission, while the legacy
+  // execCommand path needs neither and works from a contextmenu event's
+  // user activation.
   function copyToClipboard(text) {
     var ta = document.createElement('textarea');
     ta.value = text;
@@ -457,13 +454,10 @@ _JS = r"""
   //
   // window.__pfNotificationsEnabled (set by web_shell.py's own script,
   // which runs before this one's DOMContentLoaded-deferred first render --
-  // see that module's docstring) is undefined in the one place this
-  // function's shared JS also runs without that script at all: the native
-  // settings window (loadHTMLString_baseURL_(html, None), no origin at
-  // all). `Notification` is typically unsupported there too for the same
-  // reason, so the feature-detect below already hides this card on native
-  // in the common case; the config-disabled branch only ever applies to
-  // the web surface, where that flag is always set.
+  // see that module's docstring) is undefined on a settings page rendered
+  // without that script (org mode's, which has no live stream). The
+  // feature-detect below then decides alone; the config-disabled branch
+  // only ever applies where the flag is set.
   //
   // web.notifications.detail (settings.yaml.example; how much a notification
   // body may say, ADR 0064) -- unlike the enabled flag above, this one
@@ -1424,8 +1418,8 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 
     Local mode (every existing caller) gets every section and no
     suppressed action -- this function must be a no-op for ``mode !=
-    ORG_MODE``, since that's what keeps every local rendering path
-    (webview and web alike) independent of org mode's filtering.
+    ORG_MODE``, since that's what keeps local mode's settings page
+    independent of org mode's filtering.
 
     Org mode gets ``org_settings_scope.NOT_APPLICABLE_ACTIONS`` (every
     action with no real org route at all -- see that module for the
@@ -1466,7 +1460,7 @@ def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
     mode: str = LOCAL_MODE, is_admin: bool = False,
 ) -> str:
-    """Full self-contained HTML document for the settings window's WKWebView
+    """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
     org mode's own ``GET /settings``/``GET /settings/privacy`` -- one
     implementation rendering a capability-filtered subset for each, not one
