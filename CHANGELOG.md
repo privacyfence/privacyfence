@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.7.0] — 2026-09-26
+
 ### Added
 
 - **New website pages explain PrivacyFence before you install it:** `/how-it-works/` (the request
@@ -2869,7 +2871,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.7.0...HEAD
+[4.7.0]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...v4.7.0
 [4.6.1]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...v4.6.1
 [4.6.0]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...v4.6.0
 [4.5.0]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...v4.5.0
