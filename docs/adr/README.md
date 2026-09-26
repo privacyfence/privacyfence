@@ -169,7 +169,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0061](0061-the-mcp-token-and-the-browser-session-are-audience-separated.md) | The MCP token and the browser session are audience-separated | Accepted (retroactive) |
 | [0062](0062-only-a-companion-attested-session-may-approve.md) | Only a companion-attested session may approve | Accepted (retroactive) |
 | [0063](0063-the-web-ui-csp-uses-per-response-nonces-not-unsafe-inline.md) | The web UI's CSP uses nonces, not `'unsafe-inline'` | Accepted (retroactive) |
-| [0064](0064-browser-notifications-stay-on-the-machine.md) | Browser notifications stay on the machine | Accepted (retroactive) |
+| [0064](0064-browser-notifications-stay-on-the-machine.md) | Browser notifications stay on the machine | Accepted (retroactive); amended by 0081 |
 | [0065](0065-approving-from-the-list-is-a-batch-bound-to-one-step-up-assertion.md) | Approving from the list is a batch bound to one step-up assertion | Accepted (retroactive) |
 | [0066](0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md) | Step-up falls back by mode, and `require_passkey` closes the fallback | Accepted (retroactive) |
 | [0067](0067-the-default-step-up-scope-is-writes-and-pii-reads.md) | The default step-up scope is writes and PII-flagged reads | Accepted (retroactive) |
@@ -186,3 +186,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0078](0078-the-app-shares-the-websites-design-system.md) | The app shares the website's design system, instead of adopting a CSS framework | Accepted |
 | [0079](0079-the-apps-visual-language-is-the-websites.md) | The app's visual language is the website's, with a dark mode derived from it | Accepted |
 | [0080](0080-pdf-previews-are-rasterised-on-the-server.md) | PDF previews are rasterised on the server for narrow screens, instead of pdf.js or a new route | Accepted |
+| [0081](0081-org-mode-sends-a-count-only-web-push.md) | Org mode sends a count-only, padded web push through the browser's push service, with an org-wide off switch; local mode sends none | Accepted |

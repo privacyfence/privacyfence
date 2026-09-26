@@ -260,6 +260,7 @@ How the daemon treats the file:
 | `--downloads-link-ttl-seconds SECONDS` | not written (`300`) | `download_delivery.link_ttl_seconds` | How long a one-time download link can be claimed. Must be above 0. |
 | `--downloads-disable-staging` | not written (staging on) | `download_delivery.allow_disk_staging: false` | Refuse a download too large to return inline instead of staging it (encrypted) for a link. |
 | `--agent-links` / `--no-agent-links` | not written (on) | `download_delivery.agent_links` | On: a staged download is a link the AI system can fetch itself (`/mcp-files/fetch/…`). Off: only a signed-in browser can fetch it (`/downloads/…`). |
+| `--web-push` / `--no-web-push` | not written (on) | `web_push.enabled` | On: a person who allows notifications gets a count-only push ("N approvals pending") through their browser's push service when an approval is waiting. Off: nothing is pushed and no page offers it. See [ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md). |
 | `--enable-audit-forwarding` / `--disable-audit-forwarding` | not written (off) | `audit_forwarding.enabled` | Forward every audit entry to a syslog server or an HTTPS endpoint as well. The local audit log stays the authoritative record. |
 | `--audit-forwarding-kind {syslog,http}` | not written (`syslog`) | `audit_forwarding.kind` | |
 | `--audit-forwarding-syslog-host HOST` | none | `audit_forwarding.syslog.host` | Required when forwarding to syslog. |
@@ -271,7 +272,7 @@ How the daemon treats the file:
 | `--sign-key PATH` | none | `signing_public_key`, `signature` | Sign the bundle. Required with `--mode org`; recommended otherwise. |
 
 The organization-only options (`--server-*`, `--idp-*`, `--authz-*`, `--step-up-*`,
-`--downloads-*`, `--agent-links`, `--audit-forwarding-*`) are refused unless the bundle is in
+`--downloads-*`, `--agent-links`, `--web-push`, `--audit-forwarding-*`) are refused unless the bundle is in
 organization mode (`--mode org`, or `--merge` into a bundle that already has it).
 
 ### Bundle keys not written by build_org_bundle.py

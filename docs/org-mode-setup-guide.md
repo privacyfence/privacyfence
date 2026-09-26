@@ -66,7 +66,9 @@ client.
   hostname must be reachable from the internet if people will use claude.ai, because claude.ai
   connects from Anthropic's servers, not from the person's browser.
 - **Outbound HTTPS** from the server to your identity provider and to the APIs of every connector
-  you offer.
+  you offer, and, unless you turn push notifications off, to the browser push services:
+  `*.push.apple.com`, `fcm.googleapis.com`, `*.push.services.mozilla.com` and
+  `*.notify.windows.com` ([section 12](#notifications-on-a-phone)).
 - **Admin access to your identity provider**, to register one OIDC client.
 - **Admin access to each connector's developer console** for the services you want to offer.
 - **`build_org_bundle.py`**, which is not part of the PyPI package. Download it from the GitHub
@@ -278,6 +280,7 @@ The script writes `org_config.json` with mode `0600` and prints what it contains
 | `--downloads-link-ttl-seconds SECONDS` | `300` | How long a download link stays valid. |
 | `--downloads-disable-staging` | staging on | Refuse a file too large to return inline instead of staging it on disk. |
 | `--agent-links` / `--no-agent-links` | agent links on | Whether the AI client can fetch a download link itself, or only a signed-in person in a browser can. |
+| `--web-push` / `--no-web-push` | on | Push a notification to a person's phone or browser when an approval is waiting. `--no-web-push` turns it off for the whole organization ([section 12](#notifications-on-a-phone)). |
 | `--enable-audit-forwarding` / `--disable-audit-forwarding` | off | Send audit entries to syslog or an HTTPS endpoint ([section 14](#monitoring)). |
 | `--audit-forwarding-kind syslog\|http` | `syslog` | The forwarding target. |
 | `--audit-forwarding-syslog-host HOST` | none | The syslog server (required for `syslog`). |
@@ -643,6 +646,38 @@ they need only a signed-in session. A fresh identity-provider sign-in is never a
 The full comparison of step-up on desktop and organization installs is in
 [security and compliance](security-and-compliance.md).
 
+### Notifications on a phone
+
+A phone browser suspends a tab it is not showing, so an open `/approvals` tab cannot tell anyone
+that a request arrived. Organization mode sends a **web push notification** instead:
+
+- **Turning it on, per person.** Right after someone decides a request on `/approvals`, the page
+  offers to turn notifications on. Once they allow it, their browser subscribes, and the server
+  notifies that browser whenever a new approval is waiting for them (at most one notification every
+  5 seconds). Tapping the notification opens `/approvals`.
+- **iPhone and iPad.** Safari offers web push only to a site added to the Home Screen. Until it is
+  added, the page shows "Add PrivacyFence to your Home Screen to get notifications" instead of the
+  offer. Added from Safari's Share menu, PrivacyFence opens as its own app, starting on
+  `/approvals`, and can then turn notifications on. Android Chrome and desktop browsers need no
+  installation, though they can install it too.
+- **What it says.** "PrivacyFence", and "1 approval pending" (or "N approvals pending"). Never the
+  tool, the connector, the content, who is asking or anything else about the request, whatever
+  the notification detail level a desktop install uses.
+- **Where it goes.** The notification is sent from this server to the push service of the person's
+  browser: Apple (`*.push.apple.com`), Google (`fcm.googleapis.com`), Mozilla
+  (`*.push.services.mozilla.com`) or Microsoft (`*.notify.windows.com`), which delivers it to the
+  device. It is encrypted to the browser, so the push service cannot read the text, but it does see
+  that this server sent a notification to that device, and when. The server sends to no other
+  host: a subscription for any other address is refused. Allow outbound HTTPS to those hosts if
+  your firewall restricts egress.
+- **Turning it off for everyone.** Rebuild the bundle with `--no-web-push` (`web_push.enabled:
+  false`), install it and restart. The subscription routes are then not served, nothing is sent,
+  and the pages no longer offer notifications. Subscriptions already stored stay on disk unused;
+  delete `users/*/push_subscriptions.json` to remove them.
+
+The reasoning, and why a desktop install has no push at all, is in
+[ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md).
+
 ## 13. File delivery
 
 The server cannot write into a person's own folders, so download tools (`drive_download_file`,
@@ -697,6 +732,7 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 | `org/oauth_clients.json` | Registered AI clients. Without it every client has to register again. |
 | `org/oauth_refresh.json` | AI clients' refresh tokens, each sealed under its own token. |
 | `org/agent_pins.json` | AI-system pins. |
+| `org/web_push_vapid_key.pem` | The server's push-notification key. Without it every browser has to subscribe again. |
 | `authority/config/settings.yaml` | Install-wide policy. |
 | `authority/logs/audit/` | The install's own audit log and its chain key. |
 | `deployment_id` | The install's ID, stamped on every audit entry. |
@@ -704,6 +740,7 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 | `users/<principal>/authority/config/settings.yaml` | Each person's always-allow rules. |
 | `users/<principal>/authority/webauthn_credentials.json`, `webauthn_recovery_code.json`, `step_up_state.json` | Each person's passkeys and recovery code. |
 | `users/<principal>/logs/audit/` | Each person's audit log and its chain key. |
+| `users/<principal>/push_subscriptions.json` | Each person's subscribed browsers. |
 | `users/<principal>/downloads/`, `users/<principal>/uploads/` | Skip: short-lived encrypted staging. |
 | `logs/privacyfence.log` | Optional: the runtime log. |
 
@@ -767,6 +804,9 @@ are removed and the file is rewritten.
   `--idp-*` flag ([section 6](#changing-a-bundle-later)), install, restart.
 - **Connector client secrets:** rebuild with `--merge` and that connector's flags, install,
   restart. People's existing connector tokens keep working unless the provider revokes them.
+- **Push-notification key:** stop the daemon, delete `org/web_push_vapid_key.pem` and start; the
+  daemon generates a new one. Every browser's subscription is bound to the old key, so each person's
+  browser subscribes again, under the new key, the next time they open `/approvals`.
 
 ### Limits
 

@@ -34,7 +34,9 @@ web/csp.py's ``build_csp()`` for the policy they check (ADR 0063).
 from __future__ import annotations
 
 import base64
+import dataclasses
 import http.server
+import json
 import logging
 import re
 import socket
@@ -51,6 +53,8 @@ pytest.importorskip(
 )
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from pypdf import PdfWriter  # noqa: E402
 
 from privacyfence import approval_window_html  # noqa: E402
@@ -67,6 +71,7 @@ from privacyfence.web.server import OrgAuth, WebServer  # noqa: E402
 from privacyfence.web.session_auth import PROVENANCE_HUMAN  # noqa: E402
 from privacyfence.web.session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
+from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode  # noqa: E402
 
 pytestmark = pytest.mark.timeout(60)
 
@@ -257,6 +262,12 @@ def org_server(org_server_and_ui):
 def org_server_and_ui(pf_home, tmp_path, monkeypatch):
     """``org_server`` plus the ``WebApprovalUI`` it serves, for the tests
     that need to register an approval against a running org-mode server."""
+    yield from _running_org_server(tmp_path, monkeypatch)
+
+
+def _running_org_server(tmp_path, monkeypatch, *, push: bool = False):
+    """A running org-mode ``WebServer``. ``push=True`` also turns web push on (ADR 0081) with a
+    notifier whose sends go nowhere, and yields its subscription store as a fourth item."""
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "oauth_clients.json"),
     )
@@ -281,11 +292,19 @@ def org_server_and_ui(pf_home, tmp_path, monkeypatch):
         connector_registry=ConnectorRegistry(factory=lambda principal: []),
     )
     web_ui = WebApprovalUI()
+    store = None
+    if push:
+        store = PushSubscriptionStore(lambda: tmp_path / "users")
+        notifier = PushNotifier(
+            store=store, vapid_key=ec.generate_private_key(ec.SECP256R1()), subject=issuer_url,
+            registry=web_ui.deferred_registry, post=lambda *args, **kwargs: None,
+        )
+        org = dataclasses.replace(org, push_notifier=notifier, push_store=store)
     server = WebServer(web_ui, host="localhost", port=port, org=org)
     server.start()
     try:
         _wait_until_connectable("localhost", port)
-        yield server, sessions, web_ui
+        yield (server, sessions, web_ui, store) if push else (server, sessions, web_ui)
     finally:
         server.stop()
 
@@ -2026,6 +2045,121 @@ class TestSecurityHeadersCsp:
         )
         page.wait_for_timeout(200)
         assert page.evaluate("window.__pfNoncedRan") is True
+
+
+# --------------------------------------------------------------------- #
+# Org mode: the installable app and web push (ADR 0081)
+# --------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def org_push_server(pf_home, tmp_path, monkeypatch):
+    yield from _running_org_server(tmp_path, monkeypatch, push=True)
+
+
+_IPHONE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+)
+
+
+def _fake_push_subscription_script(endpoint: str) -> str:
+    """Headless Chromium has no push service to subscribe to, and reports
+    ``Notification.permission`` as "denied" whatever the context grants. So
+    the permission starts at "default" and ``requestPermission`` grants it, as
+    a person tapping Allow would, and the page's ``pushManager`` hands back a
+    subscription shaped exactly like a real browser's ``toJSON()``, with a
+    real P-256 key. Everything else -- the pre-prompt, the page's own
+    subscribe logic, CSRF, the route, the store -- is real."""
+    point = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
+    )
+    sub = {"endpoint": endpoint, "keys": {"p256dh": b64url_encode(point), "auth": b64url_encode(b"k" * 16)}}
+    return f"""
+      (function () {{
+        var json = {json.dumps(sub)};
+        var fake = null;
+        var permission = "default";
+        Object.defineProperty(Notification, "permission", {{ get: function () {{ return permission; }} }});
+        Notification.requestPermission = function () {{ permission = "granted"; return Promise.resolve(permission); }};
+        PushManager.prototype.getSubscription = function () {{ return Promise.resolve(fake); }};
+        PushManager.prototype.subscribe = function (options) {{
+          window.__pfSubscribeOptions = options;
+          fake = {{ endpoint: json.endpoint, options: options, toJSON: function () {{ return json; }},
+                   unsubscribe: function () {{ fake = null; return Promise.resolve(true); }} }};
+          return Promise.resolve(fake);
+        }};
+      }})();
+    """
+
+
+class TestInstallableOrgApp:
+    def test_manifest_is_linked_served_and_parsed_by_the_browser(self, page, context, org_server):
+        server, sessions = org_server
+        _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+        violations: list[str] = []
+        page.on("console", lambda msg: violations.append(msg.text) if "Content Security Policy" in msg.text else None)
+        page.goto(f"{server.base_url}/approvals")
+        href = page.get_attribute('link[rel="manifest"]', "href")
+        assert href == "/manifest.webmanifest"
+        response = page.request.get(f"{server.base_url}{href}")
+        assert response.status == 200
+        assert response.json()["start_url"] == "/approvals"
+        # The browser's own view: Chromium fetched the manifest under the page's CSP (manifest-src)
+        # and parsed it without errors.
+        manifest = context.new_cdp_session(page).send("Page.getAppManifest")
+        assert manifest["url"].endswith("/manifest.webmanifest")
+        assert manifest["errors"] == []
+        assert json.loads(manifest["data"])["display"] == "standalone"
+        assert not [v for v in violations if "manifest" in v or "/icons/" in v], violations
+
+    def test_local_mode_links_no_manifest(self, page, local_server):
+        server, _web_ui = local_server
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/approvals")
+        assert page.locator('link[rel="manifest"]').count() == 0
+        assert page.request.get(f"{server.base_url}/manifest.webmanifest").status == 404
+
+
+class TestWebPushSubscription:
+    def test_the_pre_prompt_subscribes_and_the_server_stores_it(self, browser, org_push_server):
+        server, sessions, _web_ui, store = org_push_server
+        endpoint = "https://fcm.googleapis.com/fcm/send/browser-smoke"
+        context = browser.new_context()
+        try:
+            context.add_init_script(_fake_push_subscription_script(endpoint))
+            _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+            page = context.new_page()
+            page.goto(f"{server.base_url}/approvals")
+            # No permission yet, so loading the page subscribed nothing and asked nothing.
+            page.wait_for_timeout(300)
+            assert store.list("alice") == []
+            # approval_list_html.py calls this after a decision; the person taps Enable.
+            page.evaluate("window.__pfNotifPrompt()")
+            page.locator(".pf-shell-notif-enable").click()
+            deadline = time.monotonic() + 10
+            while not store.list("alice") and time.monotonic() < deadline:
+                page.wait_for_timeout(100)
+            assert [s.endpoint for s in store.list("alice")] == [endpoint]
+            assert page.evaluate("window.__pfSubscribeOptions.userVisibleOnly") is True
+        finally:
+            context.close()
+
+    def test_ios_before_installation_shows_the_home_screen_hint(self, browser, org_push_server):
+        server, sessions, _web_ui, store = org_push_server
+        context = browser.new_context(user_agent=_IPHONE_UA, viewport={"width": 393, "height": 852}, is_mobile=True, has_touch=True)
+        try:
+            _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+            page = context.new_page()
+            page.goto(f"{server.base_url}/approvals")
+            page.evaluate("window.__pfNotifPrompt()")
+            hint = page.locator("#pf-shell-ios-push-hint")
+            assert hint.is_visible()
+            assert "Add PrivacyFence to your Home Screen" in hint.inner_text()
+            _assert_no_horizontal_overflow(page)
+            assert store.list("alice") == []
+        finally:
+            context.close()
 
 
 # --------------------------------------------------------------------- #

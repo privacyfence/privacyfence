@@ -210,8 +210,8 @@ body {
 # own page's markup entirely, same separation settings_window_html.py's own
 # bridge already has between "receive a message" and "render it".
 #
-# Notifications, tiers 0-1 only -- no push, no VAPID, nothing leaving the
-# machine (a push tier would be org mode's; see ADR 0064):
+# Notifications, tiers 0-1 -- no push, nothing leaving the machine (ADR
+# 0064; org mode's tier 2 is described at the end of this comment):
 #   - tier 0: the document title gains a "(N) " badge and a visually
 #     hidden aria-live region announces the count, whenever the approvals
 #     event's row count changes -- works with no permission at all.
@@ -239,6 +239,16 @@ body {
 #     called by approval_list_html.py's own script right after a decision
 #     is made (never on page load: a cold
 #     Notification.requestPermission() is what browsers now penalize).
+#
+# Tier 2, web push, is org mode's alone (ADR 0081) and is on only when the
+# page is given the server's VAPID key (wrap's push_public_key). Then the
+# same pre-prompt, once permission is granted, subscribes this browser and
+# posts the subscription to /api/push/subscription (web/routes_push.py); a
+# page load with permission already granted re-posts it, so the server's
+# copy follows the browser's. The push itself is shown by resources/sw.js
+# and says only what minimal says: a count. iOS offers push only to a site
+# added to the Home Screen, so there, before installation, the pre-prompt
+# is replaced by a hint that says so.
 _STREAM_JS = """
 (function () {
   // web.notifications.enabled (settings.yaml.example) -- config wiring for
@@ -265,6 +275,10 @@ _STREAM_JS = """
   // to this closure, used only by notificationBody() to decide what an
   // actual browser notification on *this* page is allowed to say.
   window.__pfNotificationsEnabled = NOTIFICATIONS_ENABLED;
+  // Org mode's web push (see this file's comment above _STREAM_JS): the
+  // server's VAPID public key, or "" when push is off (always, in local mode).
+  var PUSH_PUBLIC_KEY = %(push_public_key)s;
+  var PUSH_CSRF = %(push_csrf)s;
 
   var dot = document.getElementById('pf-shell-live-dot');
   var label = document.getElementById('pf-shell-live-label');
@@ -336,34 +350,111 @@ _STREAM_JS = """
     lastCount = count;
   }
 
-  if (NOTIFICATIONS_ENABLED && 'serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  function pushSupported() {
+    return !!PUSH_PUBLIC_KEY && 'serviceWorker' in navigator && 'PushManager' in window
+      && 'Notification' in window;
   }
 
-  window.__pfNotifPrompt = function () {
-    if (!NOTIFICATIONS_ENABLED) { return; }
-    if (!('Notification' in window) || Notification.permission !== 'default') { return; }
-    var already;
-    try { already = localStorage.getItem('pf_notif_prompted'); } catch (e) { already = null; }
-    if (already) { return; }
-    try { localStorage.setItem('pf_notif_prompted', '1'); } catch (e) {}
+  // iPhone and iPad (which reports itself as a Mac with a touch screen)
+  // expose web push only to a site opened from the Home Screen.
+  function iosNotInstalled() {
+    var ua = navigator.userAgent || '';
+    var ios = /iPhone|iPad|iPod/.test(ua)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    return ios && navigator.standalone !== true;
+  }
+
+  function keyBytes(b64url) {
+    var s = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length %% 4) { s += '='; }
+    var raw = atob(s);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) { out[i] = raw.charCodeAt(i); }
+    return out;
+  }
+
+  function sameKey(buffer, bytes) {
+    if (!buffer) { return false; }
+    var a = new Uint8Array(buffer);
+    if (a.length !== bytes.length) { return false; }
+    for (var i = 0; i < a.length; i++) { if (a[i] !== bytes[i]) { return false; } }
+    return true;
+  }
+
+  function subscribePush() {
+    if (!pushSupported() || Notification.permission !== 'granted') { return; }
+    var key = keyBytes(PUSH_PUBLIC_KEY);
+    navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription().then(function (existing) {
+        // A subscription made for another server key cannot receive this
+        // server's pushes; replace it rather than posting a dead one.
+        if (existing && existing.options && !sameKey(existing.options.applicationServerKey, key)) {
+          return existing.unsubscribe().then(function () { return null; });
+        }
+        return existing;
+      }).then(function (existing) {
+        return existing || reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key});
+      });
+    }).then(function (sub) {
+      return fetch('/api/push/subscription', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({subscription: sub.toJSON(), csrf: PUSH_CSRF})
+      });
+    }).catch(function () {});
+  }
+
+  function promptBar(message, buttonLabel, onClick) {
     var bar = document.createElement('div');
     bar.className = 'pf-shell-toast pf-shell-notif-prompt shown';
     bar.setAttribute('role', 'status');
     var text = document.createElement('span');
-    text.textContent = 'Want PrivacyFence to notify you when Claude needs approval?';
+    text.textContent = message;
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'pf-shell-notif-enable';
-    btn.textContent = 'Enable';
+    btn.textContent = buttonLabel;
     btn.addEventListener('click', function () {
-      Notification.requestPermission();
+      if (onClick) { onClick(); }
       bar.remove();
     });
     bar.appendChild(text);
     bar.appendChild(btn);
     document.body.appendChild(bar);
     setTimeout(function () { if (bar.parentNode) { bar.remove(); } }, 10000);
+    return bar;
+  }
+
+  function onceIn(key) {
+    var already;
+    try { already = localStorage.getItem(key); } catch (e) { already = null; }
+    if (already) { return false; }
+    try { localStorage.setItem(key, '1'); } catch (e) {}
+    return true;
+  }
+
+  if ((NOTIFICATIONS_ENABLED || PUSH_PUBLIC_KEY) && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  }
+  if (PUSH_PUBLIC_KEY) { subscribePush(); }
+
+  window.__pfNotifPrompt = function () {
+    if (!NOTIFICATIONS_ENABLED && !PUSH_PUBLIC_KEY) { return; }
+    if (PUSH_PUBLIC_KEY && iosNotInstalled()) {
+      if (!onceIn('pf_push_ios_hint')) { return; }
+      promptBar(
+        'Add PrivacyFence to your Home Screen to get notifications: tap Share, then Add to Home Screen.',
+        'OK', null
+      ).id = 'pf-shell-ios-push-hint';
+      return;
+    }
+    if (!NOTIFICATIONS_ENABLED && !pushSupported()) { return; }
+    if (!('Notification' in window) || Notification.permission !== 'default') { return; }
+    if (!onceIn('pf_notif_prompted')) { return; }
+    promptBar('Want PrivacyFence to notify you when Claude needs approval?', 'Enable', function () {
+      var asked = Notification.requestPermission();
+      if (asked && asked.then) { asked.then(function () { subscribePush(); }); }
+    });
   };
 
   // The dismissible notice strip is
@@ -437,6 +528,14 @@ ORG_NAV_ITEMS = (
     ("settings", "Settings", "/settings"),
 )
 
+# The installable org app (ADR 0081): the manifest, and the icon iOS uses for the Home Screen,
+# which it reads from this link rather than from the manifest. Both routes are org mode's
+# alone (web/routes_push.py).
+_ORG_APP_LINKS = (
+    '\n<link rel="manifest" href="/manifest.webmanifest">'
+    '\n<link rel="apple-touch-icon" href="/icons/icon-192.png">'
+)
+
 
 def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
     items = []
@@ -486,6 +585,8 @@ def wrap(
     principal_label: str = "",
     live_updates: bool = True,
     stream_url: str = "/api/state/stream",
+    push_public_key: str = "",
+    csrf: str = "",
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: the design files + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -575,6 +676,16 @@ def wrap(
     same ``approvals`` event for just the signed-in principal and no
     ``settings`` event -- the org pages with no stream at all (connect,
     security, settings) still pass ``live_updates=False``.
+
+    Org mode (``nav_items`` is ``ORG_NAV_ITEMS``) also links the Web App
+    Manifest and its icon (web/routes_push.py), which makes the org app
+    installable; local mode serves neither route and links neither.
+    ``push_public_key`` is org mode's VAPID public key when the org has web
+    push on (ADR 0081): the pre-prompt then subscribes this browser, posting
+    ``csrf`` (the page's session CSRF token) with the subscription. It needs
+    ``live_updates``, since the pre-prompt lives in the stream script; empty
+    (the default, and always in local mode) leaves tiers 0-1 exactly as
+    described above.
     """
     if dismissible_notice_html and not dismissible_notice_key:
         raise ValueError("wrap(): dismissible_notice_html needs a dismissible_notice_key")
@@ -585,6 +696,8 @@ def wrap(
             "notifications_enabled": "true" if notifications_enabled else "false",
             "notifications_detail": json.dumps(notifications_detail),
             "stream_url": json.dumps(stream_url),
+            "push_public_key": json.dumps(push_public_key),
+            "push_csrf": json.dumps(csrf if push_public_key else ""),
         }
         stream_script = f'<script nonce="{nonce}">{stream_js}</script>'
     live_html = (
@@ -603,13 +716,14 @@ def wrap(
             '<button type="button" class="pf-shell-notice-close" data-dismiss-notice '
             'aria-label="Dismiss">&times;</button></div>'
         )
+    app_links = _ORG_APP_LINKS if nav_items == ORG_NAV_ITEMS else ""
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<link rel="icon" href="{_FAVICON_DATA_URI}">
+<link rel="icon" href="{_FAVICON_DATA_URI}">{app_links}
 <title>{_html_escape(title)}</title>
 <style nonce="{nonce}">{DOCUMENT_CSS}{_SHELL_CSS}</style>
 </head>
