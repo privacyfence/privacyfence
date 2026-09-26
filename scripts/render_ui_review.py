@@ -11,8 +11,8 @@ Writes PNGs into DIR, plus an ``index.html`` that lays them out side by side:
   from the design files themselves; it is not a route the app serves. Hover and focus-visible are
   forced through the DevTools protocol on the elements that ask for them (``data-force``), so the
   screenshot shows the state rather than a description of it.
-- ``<page>-<width>-<theme>.png`` for /approvals, one approval card of each kind, /settings
-  (General and Privacy Filter), /connect and /security, from
+- ``<page>-<width>-<theme>.png`` for /approvals, one approval card of each kind, every /settings
+  section (an org admin's six, and local mode's Connectors), /connect and /security, from
   tests/integration/ui_review_capture.py, which this script runs with pytest so the pages come
   from the same in-process servers the browser tests use.
 

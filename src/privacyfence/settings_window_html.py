@@ -1,10 +1,9 @@
 """HTML/CSS/vanilla-JS for the webview settings window (settings_window.py).
 
-Visually transcribed from the design source (a Claude Design prototype
-export, not shipped with this repo -- see the PR description for where it
-lives) -- colors, spacing, radii, and the toggle/segmented-control visuals
-below are copied from that file's inline styles, not approximated. What
-*isn't* transcribed is that file's own rendering machinery (a small
+Originally transcribed from a Claude Design prototype export (not shipped
+with this repo); its look is now the shared design system's (see the note
+above ``_CSS``), and only its structure and wording remain. What was never
+transcribed is that file's own rendering machinery (a small
 declarative-component runtime, ``sc-if``/``sc-for``/``{{ }}`` tags): this
 module is plain string templating plus a small amount of vanilla JS driving
 the DOM directly, with no framework and no build step -- this is a fully
@@ -50,317 +49,221 @@ from typing import Any
 from .design_css import DOCUMENT_CSS
 from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 
-# The settings page's colours are the shared design tokens (resources/design/, ADR 0078/0079),
-# which DOCUMENT_CSS inlines ahead of this module's own rules -- dark mode included: app.css
-# redefines the same token names under prefers-color-scheme, so no rule below needs a dark
-# override of its own. The layout here is still the page's own (p3-settings of
-# docs/org-mode-mobile-plan.md moves it onto the shared primitives).
-
-# ---------------------------------------------------------------------------- #
-# CSS -- values copied from the design source's inline styles, then (see
-# above) recolored onto the shared token set via a small number of
-# settings-page-specific role aliases (--pf-*) defined here rather than
-# referencing the tokens directly everywhere below: a page-local name for
-# "the muted secondary text color" reads at the call site, and it's one
-# place to reconsider which token plays that role, instead of several
-# hundred. Every --pf-* value here is itself a token reference (or a
-# color-mix of one), so nothing below needs its own dark-mode override.
-# ---------------------------------------------------------------------------- #
+# The settings page is built from the shared design system (resources/design/, ADR 0078/0079),
+# which DOCUMENT_CSS inlines ahead of this module's own rules: the tokens (dark mode included --
+# app.css redefines the same names under prefers-color-scheme, so nothing below needs a dark
+# override of its own), the .shell and .split primitives, and app.css's components (tabstrip/tab,
+# card, toggle, field, badge, button). The rules below only arrange them for this page, and use
+# no colour literal and no viewport query (tests/unit/test_design_system.py).
+#
+# Layout. #app is a .shell, named as the pf-settings size container, and every width decision
+# below is a container query on it, so the page responds to the room it is given -- a phone, a
+# narrow desktop window, the native settings window -- rather than to the viewport. The base
+# rules are the narrow layout: the section nav is a tabstrip above the content, Privacy Filter's
+# group list a second tabstrip below it, and a settings row stacks its label and description
+# above its control. From the website's 900 px nav breakpoint up, the nav becomes a card-styled
+# column to the left (.split's two columns) and Privacy Filter's groups a column beside the
+# editor.
 
 _CSS = """
-:root {
-  --pf-page-bg: var(--bg);
-  --pf-content-bg: var(--bg);
-  --pf-nav-bg: var(--surface);
-  --pf-surface: var(--surface);
-  --pf-surface-2: var(--surface-soft);
-  --pf-border: var(--line);
-  --pf-border-strong: var(--control-line);
-  --pf-text: var(--ink);
-  --pf-text-muted: var(--muted);
-  --pf-text-dim: var(--muted);
-  --pf-accent: var(--accent);
-  --pf-danger: var(--danger);
-  --pf-danger-tint: var(--danger-soft);
-  --pf-danger-border: color-mix(in srgb, var(--danger) 35%, transparent);
-  --pf-warn: #8a5a00;
-  --pf-warn-tint: #fff3cd;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --pf-warn: #e0a94a;
-    --pf-warn-tint: color-mix(in srgb, #e0a94a 20%, transparent);
-  }
-}
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; background: var(--pf-page-bg); }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Helvetica, Arial, sans-serif;
-  color: var(--pf-text);
-  overflow: hidden;
-}
-::selection { background: rgba(0, 113, 227, .25); }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--pf-border-strong); border-radius: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-input[type=text]:focus { outline: 2px solid var(--pf-accent); outline-offset: 0; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere; }
 
-#app { display: flex; height: 100vh; overflow: hidden; }
+#app.pf-settings { container-name: pf-settings; padding-block: var(--space-s) var(--space-xl); }
+.split.pf-settings-layout { --split-cols: minmax(0, 1fr); --split-gap: var(--space-s); align-items: start; }
+.pf-settings-layout > * { min-width: 0; }
 
-/* ---- Left nav ---- */
-.pf-nav {
-  width: 190px; flex-shrink: 0; background: var(--pf-nav-bg); border-right: 1px solid var(--pf-border);
-  padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; height: 100%;
+/* ---- Section nav: a tabstrip; a card-styled column from 900 px up ---- */
+.pf-nav-version { display: none; padding: 8px 14px 4px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+@container pf-settings (min-width: 900px) {
+  .split.pf-settings-layout { --split-cols: 220px minmax(0, 1fr); --split-gap: var(--space-l); }
+  .tabstrip.pf-nav, .tabstrip.pf-subnav {
+    flex-direction: column; overflow: visible; padding: 8px; background: var(--surface);
+    border-radius: var(--radius-card);
+  }
+  .pf-nav .tab, .pf-subnav .tab { justify-content: flex-start; white-space: normal; text-align: left; }
+  .pf-nav .tab[aria-selected="true"], .pf-subnav .tab[aria-selected="true"] {
+    color: var(--accent-dark); background: var(--accent-soft); border-color: var(--accent-line); box-shadow: none;
+  }
+  .pf-nav-version { display: block; }
 }
-.pf-navitem {
-  padding: 8px 12px; border-radius: 7px; font-size: 13px; cursor: pointer; font-weight: 400;
-  color: var(--pf-text); background: transparent;
-}
-.pf-navitem.active { font-weight: 600; background: var(--pf-accent); color: var(--on-accent); }
-.pf-nav-spacer { flex: 1; }
-.pf-nav-version { padding: 8px 10px; font-size: 11px; color: var(--pf-text-dim); }
 
-/* ---- Content shell ---- */
-.pf-content { flex: 1; overflow: hidden; display: flex; background: var(--pf-content-bg); min-width: 0; }
-.pf-page { flex: 1; overflow-y: auto; padding: 36px 44px; }
-.pf-page-title { font-size: 22px; font-weight: 700; color: var(--pf-text); margin: 0 0 22px; }
-.pf-page-subtitle { font-size: 12px; color: var(--pf-text-muted); margin-bottom: 22px; max-width: 600px; line-height: 1.5; }
+/* ---- Content ---- */
+.pf-content { display: flex; flex-direction: column; gap: var(--space-s); }
+.pf-page, .pf-detail-page { display: flex; flex-direction: column; gap: var(--space-s); }
+.pf-page > *, .pf-detail-page > * { margin: 0; max-width: 760px; }
+.pf-page-title { font-size: clamp(24px, 2vw + 16px, 32px); font-weight: 750; letter-spacing: -.02em; line-height: 1.15; color: var(--ink); }
+.pf-page-subtitle { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.55; }
+.pf-detail-title { font-size: var(--step-h3); font-weight: 750; color: var(--ink); }
+.pf-detail-subtitle { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.55; }
+.pf-group-title { font-size: 13px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: var(--space-2xs); }
+.pf-hint { font-size: var(--step-small); color: var(--muted); line-height: 1.5; }
+.pf-empty { font-size: var(--step-small); color: var(--muted); }
 
-/* ---- Error banner ---- */
-.pf-error-banner {
-  background: var(--pf-danger-tint); border: 1px solid var(--pf-danger-border); color: var(--pf-danger); border-radius: 8px;
-  padding: 10px 14px; font-size: 12.5px; margin: 16px 44px 0; display: flex;
-  align-items: center; justify-content: space-between; gap: 12px;
+/* ---- Banners (error, update, welcome): status cards ---- */
+.pf-banner { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-xs); font-size: var(--step-small); line-height: 1.5; }
+.pf-banner-dismiss {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: var(--tap); min-height: var(--tap);
+  margin: -10px -10px -10px 0; border-radius: var(--radius-s); cursor: pointer; font-weight: 700; color: inherit;
 }
-.pf-error-dismiss { cursor: pointer; color: var(--pf-danger); font-weight: 600; flex-shrink: 0; }
-.pf-update-banner { border-color: var(--pf-accent); }
-.pf-welcome-banner { border-color: var(--pf-accent); }
-.pf-welcome-dismiss { cursor: pointer; color: var(--pf-text-muted); font-weight: 600; flex-shrink: 0; }
+.pf-banner-dismiss:hover { background: var(--surface-soft); }
+.card-danger .pf-banner-dismiss { color: var(--danger); }
 
-/* ---- Cards / rows shared across pages ---- */
-.pf-card {
-  background: var(--pf-surface); border: 1px solid var(--pf-border); border-radius: 10px; padding: 16px 20px;
-  margin-bottom: 16px; max-width: 620px;
+/* ---- A settings row: its label and description, then its control. Stacked by default; side by
+   side from 900 px up. ---- */
+.pf-card { display: flex; flex-direction: column; gap: var(--space-s); }
+.pf-card > h2 { margin: 0; }
+.pf-row { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-xs); }
+.pf-row-text { min-width: 0; }
+.pf-row-title { font-size: var(--step-body); font-weight: 650; color: var(--ink); }
+.pf-row-desc { font-size: var(--step-small); color: var(--ink-soft); margin-top: 4px; line-height: 1.5; }
+.pf-row-sub { padding-top: var(--space-s); border-top: 1px solid var(--line); }
+.pf-row-sub .pf-row-title { font-size: var(--step-small); font-weight: 500; }
+.pf-row-sub[aria-disabled="true"] .pf-row-title { color: var(--muted); }
+.pf-row-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+@container pf-settings (min-width: 900px) {
+  .pf-row { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-m); }
+  .pf-row-text { flex: 1 1 0; }
+  .pf-row > :last-child:not(.pf-row-text) { flex: 0 1 auto; max-width: 50%; }
 }
-.pf-card-row { display: flex; align-items: center; justify-content: space-between; }
-.pf-card-title { font-size: 14px; font-weight: 600; color: var(--pf-text); }
-.pf-card-desc { font-size: 12px; color: var(--pf-text-muted); margin-top: 3px; max-width: 440px; line-height: 1.4; }
-.pf-divider { height: 1px; background: var(--pf-border); margin: 14px 0; }
-.pf-subrow { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
-.pf-subrow-label { font-size: 13px; color: var(--pf-text); }
 
-/* ---- Toggle switch ---- */
-.pf-toggle {
-  width: 40px; height: 24px; border-radius: 12px; cursor: pointer; transition: background .15s;
-  background: var(--pf-border-strong); position: relative; flex-shrink: 0;
+/* ---- Segmented control: tab-shaped options in a soft well; wraps rather than overflows ---- */
+.pf-seg-group { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: calc(var(--radius-s) + 4px); }
+.pf-seg-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap); min-width: var(--tap);
+  padding: 0 14px; font-size: var(--step-small); font-weight: 650; color: var(--ink-soft);
+  border: 1px solid transparent; border-radius: var(--radius-s); cursor: pointer; white-space: nowrap;
 }
-.pf-toggle.on { background: var(--pf-accent); }
-.pf-toggle.disabled { cursor: default; opacity: .5; }
-.pf-knob {
-  width: 20px; height: 20px; border-radius: 50%; background: #fff; position: relative;
-  top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25);
-}
-.pf-toggle.on .pf-knob { left: 20px; }
+.pf-seg-btn:hover { color: var(--ink); background: var(--surface); }
+/* The chosen option: a raised surface and a border, not the colour alone; a policy's option also
+   takes that policy's status colour, and always names it. */
+.pf-seg-btn.plain-active { color: var(--ink); background: var(--surface); border-color: var(--line); box-shadow: var(--shadow-button); }
+.pf-seg-btn.policy-allow { color: var(--success); background: var(--success-soft); border-color: currentColor; }
+.pf-seg-btn.policy-redact { color: var(--warning); background: var(--warning-soft); border-color: currentColor; }
+.pf-seg-btn.policy-block { color: var(--danger); background: var(--danger-soft); border-color: currentColor; }
 
-/* ---- Buttons ---- */
-.pf-btn-primary {
-  background: var(--pf-accent); color: var(--on-accent); border: none; border-radius: 7px; padding: 7px 14px;
-  font-size: 13px; font-weight: 500; cursor: pointer;
+/* ---- Buttons and links drawn as <div role=button>: the shared .button, and tap-sized links ---- */
+.button { text-decoration: none; }
+.pf-link, .pf-link-danger {
+  display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 4px;
+  font-size: var(--step-small); font-weight: 650; color: var(--accent-dark); cursor: pointer; white-space: nowrap;
 }
-.pf-btn-secondary {
-  background: var(--pf-surface-2); color: var(--pf-text); border: none; border-radius: 7px; padding: 8px 16px;
-  font-size: 13px; font-weight: 500; cursor: pointer;
-}
-.pf-btn-danger {
-  background: var(--pf-content-bg); color: var(--pf-danger); border: 1px solid var(--pf-danger-border); border-radius: 7px;
-  padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
-}
-.pf-link { font-size: 12.5px; color: var(--pf-accent); cursor: pointer; }
-.pf-link-danger { font-size: 12px; color: var(--pf-danger); cursor: pointer; white-space: nowrap; }
+.pf-link:hover { color: var(--accent); }
+.pf-link-danger { color: var(--danger); }
+.pf-link[aria-disabled="true"] { color: var(--muted); cursor: default; pointer-events: none; }
+.button[aria-disabled="true"] { pointer-events: none; }
+.pf-input-mono { font-family: var(--font-mono); }
 
-/* ---- Segmented controls ---- */
-.pf-seg-group { display: flex; background: var(--pf-surface-2); border-radius: 7px; padding: 2px; flex-shrink: 0; }
-.pf-seg-btn { padding: 5px 12px; font-size: 12px; font-weight: 500; border-radius: 5px; cursor: pointer; color: var(--pf-text-muted); }
-.pf-seg-btn.plain-active { background: var(--pf-content-bg); box-shadow: 0 1px 2px rgba(0,0,0,.15); color: var(--pf-text); }
-.pf-seg-btn.policy-allow { background: #0071e3; color: #fff; }
-.pf-seg-btn.policy-redact { background: #b76e00; color: #fff; }
-.pf-seg-btn.policy-block { background: #d92d20; color: #fff; }
-
-/* ---- Text inputs ---- */
-.pf-input {
-  border: 1px solid var(--pf-border); border-radius: 6px; padding: 5px 8px; font-size: 12.5px; background: var(--pf-content-bg);
+/* ---- Chips that filter or pick: pill toggles, aria-pressed/aria-checked carry the state ---- */
+.pf-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs); }
+.pf-chip {
+  display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap); min-width: var(--tap);
+  padding: 0 14px; font-size: var(--step-small); font-weight: 650; color: var(--ink-soft); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius-pill); cursor: pointer; white-space: nowrap;
 }
-.pf-input-mono { font-family: ui-monospace, monospace; }
-select.pf-input { cursor: pointer; }
+.pf-chip:hover { border-color: var(--control-line); color: var(--ink); }
+.pf-chip[aria-pressed="true"], .pf-chip[aria-checked="true"] { color: var(--accent-dark); background: var(--accent-soft); border-color: var(--accent-dark); }
+.pf-chip[aria-pressed="true"]::before, .pf-chip[aria-checked="true"]::before { content: "\\2713"; margin-right: 6px; }
 
-/* ---- Connectors page ---- */
-.pf-connector-row {
-  display: flex; align-items: center; gap: 14px; padding: 12px 4px; border-bottom: 1px solid var(--pf-border);
-  max-width: 760px;
-}
+/* ---- Connectors (local mode) ---- */
+.pf-connector-list { display: flex; flex-direction: column; gap: var(--space-xs); }
+.pf-connector-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-s); }
+.pf-connector-name { display: flex; align-items: center; gap: var(--space-xs); flex: 1 1 200px; min-width: 0; font-weight: 650; }
 .pf-connector-icon {
-  width: 34px; height: 34px; border-radius: 9px; background: var(--pf-surface-2); display: flex;
-  align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden;
+  width: 36px; height: 36px; border-radius: var(--radius-s); background: var(--mark-tile); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center; flex: none; overflow: hidden;
 }
 .pf-connector-icon img { width: 22px; height: 22px; object-fit: contain; }
-.pf-connector-label { width: 150px; font-size: 13.5px; color: var(--pf-text); font-weight: 500; flex-shrink: 0; }
-.pf-pill { font-size: 11px; padding: 3px 9px; border-radius: 10px; white-space: nowrap; }
-.pf-pill-connected { background: rgba(0,113,227,.1); color: var(--pf-accent); }
-.pf-pill-neutral { background: var(--pf-surface-2); color: var(--pf-text-muted); }
-.pf-pill-warn { background: var(--pf-warn-tint); color: var(--pf-warn); }
-.pf-pill-missing { background: var(--pf-danger-tint); color: var(--pf-danger); }
-.pf-spacer { flex: 1; }
-.pf-auth-link { font-size: 12.5px; color: var(--pf-accent); cursor: pointer; white-space: nowrap; }
-.pf-auth-link.disabled { color: var(--pf-text-dim); cursor: default; pointer-events: none; }
-
-/* ---- Privacy's 2-pane layout -- Auto-accept (below) is a single flat page, no subnav: one
-   filterable list across every connector ---- */
-.pf-subnav {
-  width: 170px; flex-shrink: 0; background: var(--pf-surface); border-right: 1px solid var(--pf-border);
-  padding: 12px 10px; display: flex; flex-direction: column; overflow-y: auto;
-}
-.pf-subnav-search { margin-bottom: 10px; width: 100%; }
-.pf-subnav-item {
-  padding: 7px 10px; border-radius: 7px; font-size: 13px; cursor: pointer; display: flex;
-  justify-content: space-between; margin-bottom: 1px; color: var(--pf-text); font-weight: 400;
-}
-.pf-subnav-item.active { background: var(--pf-accent); color: var(--on-accent); font-weight: 600; }
-.pf-subnav-count { font-size: 11px; opacity: .75; }
-.pf-detail-page { flex: 1; overflow-y: auto; padding: 28px 36px; }
-.pf-detail-title { font-size: 18px; font-weight: 700; color: var(--pf-text); margin-bottom: 2px; }
-.pf-detail-subtitle { font-size: 12px; color: var(--pf-text-muted); margin-bottom: 20px; max-width: 520px; line-height: 1.5; }
-
-/* ---- Recent-decisions group heading (Audit page) / verb-selection chips (Auto-accept's own
-   "add a rule" form, below) ---- */
-.pf-group-title { font-size: 13px; font-weight: 600; color: var(--pf-text-muted); margin-bottom: 8px; }
-.pf-caps-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-.pf-cap-chip { padding: 4px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; font-weight: 500; background: var(--pf-surface-2); color: var(--pf-text-muted); }
-.pf-cap-chip.on { background: var(--pf-accent); color: var(--on-accent); }
+.pf-connector-actions { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
 
 /* ---- Auto-accept (policy v2) ---- */
-.pf-rules-empty { font-size: 13px; color: var(--pf-text-dim); }
-.pf-aa-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 18px; max-width: 720px; }
-.pf-aa-search { flex: 1 1 220px; min-width: 180px; }
-.pf-fchip {
-  font-size: 11.5px; font-weight: 500; padding: 4px 10px; border-radius: 12px; cursor: pointer;
-  background: var(--pf-surface-2); color: var(--pf-text-muted); white-space: nowrap;
-}
-.pf-fchip.active { background: var(--pf-accent); color: var(--on-accent); }
-.pf-verb-chip {
-  display: inline-block; font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px;
-  margin: 0 4px 4px 0;
-}
-.pf-verb-chip-read { background: rgba(0,113,227,.12); color: var(--pf-accent); }
-.pf-verb-chip-write { background: var(--pf-surface-2); color: var(--pf-text-muted); }
-.pf-verb-chip-send { background: var(--pf-warn-tint); color: var(--pf-warn); }
-.pf-verb-chip-destructive { background: var(--pf-danger-tint); color: var(--pf-danger); }
-.pf-aa-row {
-  background: var(--pf-surface); border: 1px solid var(--pf-border); border-radius: 8px;
-  padding: 12px 14px; margin-bottom: 8px; max-width: 720px;
-}
-.pf-aa-row-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.pf-aa-sentence { font-size: 13.5px; color: var(--pf-text); flex: 1 1 300px; }
-.pf-aa-verbs { flex-shrink: 0; }
-.pf-aa-tools { font-size: 12px; color: var(--pf-text-muted); margin-top: 8px; line-height: 1.5; }
-.pf-aa-usage { font-size: 12px; color: var(--pf-text-muted); }
-.pf-aa-usage-stale { color: var(--pf-warn); font-weight: 600; }
-.pf-aa-add { max-width: 620px; }
-.pf-aa-add .pf-input { margin-top: 10px; width: 100%; }
+.pf-aa-search { flex: 1 1 100%; }
+.pf-aa-row-main { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-xs); }
+.pf-aa-sentence { flex: 1 1 260px; min-width: 0; font-size: var(--step-body); color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
+.pf-aa-verbs { display: flex; flex-wrap: wrap; gap: 4px; }
+.pf-aa-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-s); margin-top: 4px; }
+.pf-aa-tools { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.5; overflow-wrap: anywhere; }
+.pf-aa-usage { font-size: 13px; color: var(--muted); }
+.pf-aa-usage-stale { color: var(--warning); font-weight: 650; }
+.pf-aa-usage-stale::before { content: "\\26A0\\FE0E  "; }
+.pf-aa-row { gap: var(--space-2xs); }
 
 /* ---- Copy-ID toast (right-click a grant row -- see data-copy-id) ---- */
 .pf-copy-toast {
-  position: fixed; background: #1d1d1f; color: #fff; font-size: 11px; font-weight: 500;
-  padding: 4px 9px; border-radius: 5px; pointer-events: none; z-index: 999; opacity: .95;
+  position: fixed; background: var(--ink); color: var(--on-ink); font-size: 12px; font-weight: 600;
+  padding: 4px 9px; border-radius: 6px; pointer-events: none; z-index: 999; opacity: .95;
   transform: translate(-50%, -100%);
 }
 
-/* ---- Privacy ---- */
-.pf-policy-row {
-  display: flex; align-items: center; justify-content: space-between; padding: 12px 14px;
-  background: var(--pf-surface); border: 1px solid var(--pf-border); border-radius: 8px; margin-bottom: 14px; max-width: 560px;
+/* ---- Privacy Filter: its group list, then the editor ---- */
+.pf-privacy { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-s); align-items: start; }
+.pf-privacy > * { min-width: 0; }
+@container pf-settings (min-width: 900px) {
+  .pf-privacy { grid-template-columns: 180px minmax(0, 1fr); gap: var(--space-m); }
 }
-.pf-policy-row-label { font-size: 13px; font-weight: 600; color: var(--pf-text); }
-.pf-policy-row-label .pf-muted { font-weight: 400; color: var(--pf-text-dim); }
-.pf-category-row {
-  display: flex; align-items: center; justify-content: space-between; padding: 11px 14px;
-  border-bottom: 1px solid var(--pf-border); max-width: 560px;
-}
-.pf-category-label { font-size: 13.5px; color: var(--pf-text); font-weight: 500; }
-.pf-category-key { font-size: 11.5px; color: var(--pf-text-dim); font-family: ui-monospace, monospace; margin-top: 2px; }
+.pf-category-list { padding: 0; }
+.pf-category-row { padding: var(--space-s); }
+.pf-category-row + .pf-category-row { border-top: 1px solid var(--line); }
+.pf-category-label { font-size: var(--step-body); font-weight: 600; color: var(--ink); }
+.pf-category-key { font-size: 13px; color: var(--muted); font-family: var(--font-mono); margin-top: 2px; overflow-wrap: anywhere; }
+.pf-muted { font-weight: 400; color: var(--muted); }
 
 /* ---- Audit ---- */
-.pf-export-row { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
-.pf-export-hint { font-size: 12px; color: var(--pf-text-muted); }
-.pf-audit-card { max-width: 640px; margin-bottom: 22px; }
-.pf-audit-card-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.pf-audit-card-row:last-child { margin-bottom: 0; }
-.pf-audit-card-title { font-size: 13.5px; font-weight: 600; color: var(--pf-text); }
-.pf-audit-logfile { font-size: 12px; color: var(--pf-text-muted); font-family: ui-monospace, monospace; }
-.pf-audit-list { max-width: 640px; border: 1px solid var(--pf-border); border-radius: 10px; overflow: hidden; }
-.pf-audit-row {
-  display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--pf-content-bg);
-  border-bottom: 1px solid var(--pf-border);
-}
-.pf-audit-row:last-child { border-bottom: none; }
-.pf-audit-connector { width: 80px; font-size: 12px; color: var(--pf-text-muted); flex-shrink: 0; }
-.pf-audit-tool { flex: 1; font-size: 12.5px; color: var(--pf-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-audit-badge { font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 9px; flex-shrink: 0; }
-.pf-audit-badge.denied { background: var(--pf-danger-tint); color: var(--pf-danger); }
-.pf-audit-badge.auto_accepted { background: rgba(0,113,227,.1); color: var(--pf-accent); }
-.pf-audit-badge.other { background: var(--pf-surface-2); color: var(--pf-text-muted); }
-/* Who asked, with its tier -- agent_label.py's wording, the approval list's tiers. */
-.pf-audit-agent { width: 190px; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--pf-text-muted); flex-shrink: 0; min-width: 0; }
+.pf-audit-logfile { font-size: 13px; color: var(--ink-soft); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.pf-list { padding: 0; overflow: hidden; }
+.pf-audit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--space-xs); padding: 12px var(--space-s); }
+.pf-audit-row + .pf-audit-row, .pf-agents-row + .pf-agents-row { border-top: 1px solid var(--line); }
+/* Who asked, with its tier -- agent_label.py's wording, the approval list's tiers. On its own
+   line when narrow; a fixed column beside the rest from 900 px up. */
+.pf-audit-agent { flex: 1 1 100%; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-soft); min-width: 0; }
 /* The name gives way, never the tier marker: a truncated claim must still say it is a claim. */
 .pf-audit-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-audit-agent-attested .pf-audit-agent-name { color: var(--pf-text); font-weight: 600; }
+.pf-audit-agent-attested .pf-audit-agent-name { color: var(--ink); font-weight: 650; }
 .pf-audit-agent-claimed .pf-audit-agent-name, .pf-audit-agent-unknown .pf-audit-agent-name { font-style: italic; }
-.pf-audit-tier { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; white-space: nowrap; }
-.pf-audit-tier.attested { background: rgba(0,113,227,.1); color: var(--pf-accent); }
-.pf-audit-tier.claimed, .pf-audit-tier.unknown { background: var(--pf-surface-2); color: var(--pf-text-muted); }
+.pf-audit-tier { flex: none; }
+.pf-audit-connector { font-size: 13px; color: var(--muted); flex: none; }
+.pf-audit-tool { flex: 1 1 120px; font-size: var(--step-small); color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.pf-audit-badge { flex: none; }
+.pf-audit-time { flex: none; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+@container pf-settings (min-width: 900px) {
+  .pf-audit-agent { flex: 0 0 200px; }
+  .pf-audit-connector { width: 80px; }
+  .pf-audit-time { width: 70px; text-align: right; }
+}
 /* The admin's AI-system pin page (ADR 0035 decision 3). */
-.pf-agents-list { max-width: 640px; border: 1px solid var(--pf-border); border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
-.pf-agents-row { padding: 10px 14px; border-bottom: 1px solid var(--pf-border); }
-.pf-agents-row:last-child { border-bottom: none; }
-.pf-agents-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.pf-agents-name { font-size: 13px; font-weight: 600; color: var(--pf-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-agents-meta { font-size: 11.5px; color: var(--pf-text-dim); font-family: ui-monospace, monospace; }
-.pf-agents-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--pf-text-muted); }
-.pf-audit-time { width: 70px; text-align: right; font-size: 11.5px; color: var(--pf-text-dim); flex-shrink: 0; }
+.pf-agents-row { padding: 12px var(--space-s); display: flex; flex-direction: column; gap: 4px; }
+.pf-agents-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px var(--space-xs); }
+.pf-agents-name { font-size: var(--step-body); font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.pf-agents-meta { font-size: 13px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.pf-agents-controls { display: flex; flex-wrap: wrap; gap: var(--space-2xs); align-items: center; margin-top: 6px; font-size: var(--step-small); color: var(--ink-soft); }
 
 /* ---- About ---- */
-.pf-about-page {
-  flex: 1; overflow-y: auto; padding: 56px 44px; display: flex; flex-direction: column;
-  align-items: center; text-align: center;
-}
+.pf-about-page { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding-block: var(--space-l); }
 .pf-about-icon {
-  width: 76px; height: 76px; border-radius: 18px; background: var(--pf-accent); color: var(--on-accent); font-size: 26px;
-  font-weight: 700; display: flex; align-items: center; justify-content: center; margin-bottom: 18px;
+  width: 76px; height: 76px; border-radius: 20px; background: var(--accent); color: var(--on-accent); font-size: 26px;
+  font-weight: 750; display: flex; align-items: center; justify-content: center; margin-bottom: var(--space-xs);
 }
-.pf-about-name { font-size: 20px; font-weight: 700; color: var(--pf-text); }
-.pf-about-version { font-size: 13px; color: var(--pf-text-muted); margin-top: 4px; }
-.pf-about-desc { font-size: 13px; color: var(--pf-text-muted); margin-top: 18px; max-width: 420px; line-height: 1.5; }
-.pf-about-repo { margin-top: 20px; font-size: 13px; color: var(--pf-accent); cursor: pointer; }
-.pf-about-license { font-size: 12px; color: var(--pf-text-dim); margin-top: 6px; }
-.pf-about-buttons { display: flex; gap: 12px; margin-top: 28px; }
+.pf-about-name { font-size: var(--step-h3); font-weight: 750; color: var(--ink); }
+.pf-about-version { font-size: var(--step-small); color: var(--ink-soft); }
+.pf-about-desc { font-size: var(--step-small); color: var(--ink-soft); margin-top: var(--space-xs); max-width: 420px; line-height: 1.55; }
+.pf-about-license { font-size: 13px; color: var(--muted); }
+.pf-about-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-xs); margin-top: var(--space-m); }
 
 /* ---- Telegram sign-in modal ---- */
-/* Not part of the design mockup (which has no multi-step-form concept
-   anywhere) -- kept visually consistent with the rest of the app (same
-   fonts/colors/button styles already defined above) rather than a new
-   look of its own. */
 .pf-modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex;
-  align-items: center; justify-content: center; z-index: 100;
+  position: fixed; inset: 0; background: var(--scrim); display: flex;
+  align-items: center; justify-content: center; z-index: 100; padding: var(--gutter);
 }
 .pf-modal {
-  background: var(--pf-content-bg); border-radius: 12px; padding: 24px 28px; width: 360px;
-  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-card);
+  padding: var(--space-m); width: min(400px, 100%); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: var(--space-xs);
 }
-.pf-modal-title { font-size: 15px; font-weight: 600; color: var(--pf-text); margin-bottom: 4px; }
-.pf-modal-desc { font-size: 12px; color: var(--pf-text-muted); margin-bottom: 14px; line-height: 1.4; }
-.pf-modal-error { font-size: 12px; color: var(--pf-danger); margin-bottom: 10px; }
-.pf-modal-input { width: 100%; margin-bottom: 16px; }
-.pf-modal-buttons { display: flex; justify-content: flex-end; gap: 10px; }
+.pf-modal-title { font-size: var(--step-h3); font-weight: 750; }
+.pf-modal-desc { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.5; }
+.pf-modal-error { font-size: var(--step-small); color: var(--danger); font-weight: 600; }
+.pf-modal-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-xs); margin-top: var(--space-xs); }
 """
 
 # ---------------------------------------------------------------------------- #
@@ -439,12 +342,17 @@ _JS = r"""
     // binary on/off control, and a QA/AT script needs a real checked state
     // to read back, not just a clickable target. See the PR report for
     // exactly which System-Events AX path reads this in practice.
-    var cls = 'pf-toggle' + (on ? ' on' : '') + (disabled ? ' disabled' : '');
-    var attrs = disabled ? '' : dataAttr(action, payload);
-    return '<div class="' + cls + '" role="switch" aria-checked="' + (on ? 'true' : 'false') + '" ' +
-      (disabled ? 'aria-disabled="true"' : 'tabindex="0"') +
-      (ariaLabel ? ' aria-label="' + esc(ariaLabel) + '"' : '') + ' ' + attrs +
-      '><div class="pf-knob"></div></div>';
+    //
+    // app.css's toggle component: a real checkbox (so it is focusable and
+    // announced, and Space flips it) inside a <label> that is the 44 px tap
+    // target. The data-action sits on the input, so a tap on the label is
+    // one click on the input, one post. onClick cancels the browser's own
+    // flip: the switch shows what Python's next render says, as before.
+    var attrs = disabled ? ' disabled' : ' ' + dataAttr(action, payload);
+    return '<label class="toggle pf-toggle"><input type="checkbox" role="switch"' + (on ? ' checked' : '') +
+      ' aria-checked="' + (on ? 'true' : 'false') + '"' +
+      (ariaLabel ? ' aria-label="' + esc(ariaLabel) + '"' : '') + attrs +
+      '><span class="toggle-track"></span></label>';
   }
 
   // Right-click-to-copy for a grant row's resource ID (data-copy-id, see
@@ -493,6 +401,18 @@ _JS = r"""
     return html;
   }
 
+  // One settings row: its title and description, then its control
+  // (_CSS's .pf-row: stacked when the page is narrow, side by side from
+  // 900 px up). `title` is text; `descHtml` and `controlHtml` are markup the
+  // caller has already escaped. A `dimmed` row is one whose parent switch is
+  // off: it says so to assistive tech as well as by its colour.
+  function rowHtml(title, descHtml, controlHtml, cls, dimmed) {
+    return '<div class="pf-row' + (cls ? ' ' + cls : '') + '"' + (dimmed ? ' aria-disabled="true"' : '') + '>' +
+      '<div class="pf-row-text"><div class="pf-row-title">' + esc(title) + '</div>' +
+      (descHtml ? '<div class="pf-row-desc">' + descHtml + '</div>' : '') + '</div>' +
+      (controlHtml || '') + '</div>';
+  }
+
   // -------------------------------------------------------------------- //
   // Nav
   // -------------------------------------------------------------------- //
@@ -502,16 +422,17 @@ _JS = r"""
     ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
   ];
 
+  // A tabstrip (app.css) above the content when the page is narrow, a
+  // card-styled column beside it from 900 px up (_CSS's container queries).
   function renderNav(state) {
-    var html = '<div class="pf-nav" role="tablist" aria-label="Settings sections">';
+    var html = '<div class="tabstrip pf-nav" role="tablist" aria-label="Settings sections">';
     NAV_ITEMS.forEach(function (item) {
       var key = item[0], label = item[1];
       if (CAPS.sections[key] === false) { return; }
       var active = ui.section === key;
-      html += '<div class="pf-navitem' + (active ? ' active' : '') + '" role="tab" aria-selected="' +
+      html += '<div class="tab pf-navitem' + (active ? ' active' : '') + '" role="tab" aria-selected="' +
         (active ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(label) + '" data-nav="' + key + '">' + esc(label) + '</div>';
     });
-    html += '<div class="pf-nav-spacer"></div>';
     html += '<div class="pf-nav-version">PrivacyFence ' + esc(state.about.version) + '</div>';
     html += '</div>';
     return html;
@@ -563,38 +484,32 @@ _JS = r"""
   };
 
   function renderNotificationsDetailControl(state) {
-    // pf-audit-card-row/pf-audit-card-title -- the same stacked-row
-    // treatment renderAudit's own "Log level" segmented control uses below
-    // (a second row inside the same card, not a fresh pf-card-row, which
-    // has no bottom-margin-between-rows rule of its own).
+    // A second row inside the notifications card, divided from the first --
+    // the same shape renderAudit's own "Log level" row uses below.
     var current = state.general.notifications_detail || 'minimal';
-    var html = '<div class="pf-audit-card-row"><div>';
-    html += '<div class="pf-audit-card-title">Detail level</div>';
-    html += '<div class="pf-card-desc">' + esc(NOTIFICATIONS_DETAIL_DESCRIPTIONS[current] || '') + '</div></div>';
-    html += segGroupHtml(['minimal', 'standard', 'detailed'].map(function (lvl) {
-      return { label: NOTIFICATIONS_DETAIL_LABELS[lvl], active: current === lvl, action: 'set_notifications_detail', payload: { level: lvl } };
-    }), 'Notification detail level');
-    html += '</div>';
-    return html;
+    return rowHtml('Detail level', esc(NOTIFICATIONS_DETAIL_DESCRIPTIONS[current] || ''),
+      segGroupHtml(['minimal', 'standard', 'detailed'].map(function (lvl) {
+        return { label: NOTIFICATIONS_DETAIL_LABELS[lvl], active: current === lvl, action: 'set_notifications_detail', payload: { level: lvl } };
+      }), 'Notification detail level'), 'pf-row-sub');
   }
 
   function renderNotificationsCard(state) {
-    var html = '<div class="pf-card pf-audit-card">';
-    html += '<div class="pf-audit-card-row"><div>';
-    html += '<div class="pf-card-title">Approval Notifications</div>';
-    html += '<div class="pf-card-desc">A desktop notification when Claude needs your approval and this tab isn\'t focused -- from your browser, no server or push service involved.</div></div>';
+    var control;
     if (typeof Notification === 'undefined') {
-      html += '<div class="pf-export-hint">Not supported in this window.</div>';
+      control = '<div class="pf-hint">Not supported in this window.</div>';
     } else if (window.__pfNotificationsEnabled === false) {
-      html += '<div class="pf-export-hint">Turned off in configuration (web.notifications.enabled).</div>';
+      control = '<div class="pf-hint">Turned off in configuration (web.notifications.enabled).</div>';
     } else if (Notification.permission === 'granted') {
-      html += '<div class="pf-export-hint">Enabled</div>';
+      control = '<span class="badge badge-success">Enabled</span>';
     } else if (Notification.permission === 'denied') {
-      html += '<div class="pf-export-hint">Blocked -- allow notifications for this site in your browser\'s settings, then reload.</div>';
+      control = '<div class="pf-hint">Blocked -- allow notifications for this site in your browser\'s settings, then reload.</div>';
     } else {
-      html += '<div class="pf-btn-primary" role="button" tabindex="0" aria-label="Enable notifications" data-notif-enable="1">Enable</div>';
+      control = '<div class="button primary" role="button" tabindex="0" aria-label="Enable notifications" data-notif-enable="1">Enable</div>';
     }
-    html += '</div>';
+    var html = '<div class="card pf-card">';
+    html += rowHtml('Approval Notifications',
+      'A desktop notification when Claude needs your approval and this tab isn\'t focused -- from your browser, no server or push service involved.',
+      control);
     // The detail-level control is independent of Notification.permission
     // (it's a config value, not a browser grant) -- shown whenever this
     // surface could act on it at all, i.e. whenever the card itself isn't
@@ -609,7 +524,7 @@ _JS = r"""
   function renderGeneral(state) {
     var g = state.general;
     var html = '<div class="pf-page">';
-    html += '<div class="pf-page-title">General</div>';
+    html += '<h1 class="pf-page-title">General</h1>';
     html += renderNotificationsCard(state);
 
     // The update-available notice is an in-page banner whose three
@@ -617,40 +532,36 @@ _JS = r"""
     // later / download), rather than a blocking native modal an
     // HTTP request has no business popping up on the daemon's machine.
     if (g.update_available) {
-      html += '<div class="pf-card pf-update-banner"><div class="pf-card-row">';
-      html += '<div><div class="pf-card-title">Update available</div>';
-      html += '<div class="pf-card-desc">PrivacyFence ' + esc(g.update_latest_version) +
-        (g.update_is_beta ? ' (beta)' : '') + ' is available (you have ' + esc(g.version) + ').</div></div>';
-      html += '<div style="display:flex;gap:8px;flex-shrink:0;">';
-      html += '<a class="pf-btn-secondary" style="text-decoration:none;display:inline-block" href="' +
-        esc(g.update_release_url || '') + '" target="_blank" rel="noopener">Download</a>';
-      html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Remind me later" ' +
-        dataAttr('remind_later_update', {}) + '>Remind Me Later</div>';
-      html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Skip this version" ' +
-        dataAttr('skip_update', {}) + '>Skip</div>';
-      html += '</div></div></div>';
+      html += '<div class="card card-info pf-card pf-update-banner">';
+      html += rowHtml('Update available', 'PrivacyFence ' + esc(g.update_latest_version) +
+        (g.update_is_beta ? ' (beta)' : '') + ' is available (you have ' + esc(g.version) + ').',
+        '<div class="pf-row-controls">' +
+        '<a class="button primary" href="' + esc(g.update_release_url || '') + '" target="_blank" rel="noopener">Download</a>' +
+        '<div class="button secondary" role="button" tabindex="0" aria-label="Remind me later" ' +
+        dataAttr('remind_later_update', {}) + '>Remind Me Later</div>' +
+        '<div class="button secondary" role="button" tabindex="0" aria-label="Skip this version" ' +
+        dataAttr('skip_update', {}) + '>Skip</div></div>');
+      html += '</div>';
     }
 
-    html += '<div class="pf-card">';
-    html += '<div class="pf-card-row"><div><div class="pf-card-title">PII Detection Gate</div>';
-    html += '<div class="pf-card-desc">Scans review-popup content for likely personal data (IBANs, national IDs, financial figures) before you approve it. A match requires a second confirmation.</div></div>';
-    html += toggleHtml(g.pii_enabled, 'toggle_pii_detection', {}, false, 'PII Detection Gate');
+    html += '<div class="card pf-card">';
+    html += rowHtml('PII Detection Gate',
+      'Scans review-popup content for likely personal data (IBANs, national IDs, financial figures) before you approve it. A match requires a second confirmation.',
+      toggleHtml(g.pii_enabled, 'toggle_pii_detection', {}, false, 'PII Detection Gate'));
+    html += rowHtml('Detect IP addresses', '',
+      toggleHtml(g.pii_ip, 'toggle_pii_category', { category_key: 'detect_ip_addresses' }, !g.pii_enabled, 'Detect IP addresses'),
+      'pf-row-sub', !g.pii_enabled);
+    html += rowHtml('Detect financial figures', '',
+      toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures'),
+      'pf-row-sub', !g.pii_enabled);
     html += '</div>';
-    html += '<div class="pf-divider"></div>';
-    html += '<div class="pf-subrow" style="opacity:' + (g.pii_enabled ? 1 : .4) + '"><div class="pf-subrow-label">Detect IP addresses</div>';
-    html += toggleHtml(g.pii_ip, 'toggle_pii_category', { category_key: 'detect_ip_addresses' }, !g.pii_enabled, 'Detect IP addresses');
-    html += '</div>';
-    html += '<div class="pf-subrow" style="opacity:' + (g.pii_enabled ? 1 : .4) + '"><div class="pf-subrow-label">Detect financial figures</div>';
-    html += toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures');
-    html += '</div></div>';
 
     // A plain same-origin <a>, not a data-action AJAX call --
     // /security is its own standalone page (web/routes_security.py), not
     // part of this SPA's own render() dispatch.
-    html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Security</div>';
-    html += '<div class="pf-card-desc">Manage passkeys (Face ID, Touch ID, Windows Hello) enrolled against this install.</div></div>';
-    html += '<a class="pf-btn-secondary" style="text-decoration:none;display:inline-block" href="/security">Manage passkeys</a>';
-    html += '</div>';
+    html += '<div class="card pf-card">';
+    html += rowHtml('Security', 'Manage passkeys (Face ID, Touch ID, Windows Hello) enrolled against this install.',
+      '<a class="button secondary" href="/security">Manage passkeys</a>');
     // The "turn step-up on" control -- one-directional (see
     // SettingsController.enable_step_up's own docstring for why turning
     // it back off stays a config.yaml-plus-restart operation with no
@@ -667,22 +578,16 @@ _JS = r"""
     // correctly for.
     var stepUpApplicable = g.step_up_available && !notApplicable('enable_step_up');
     if (stepUpApplicable && g.step_up_on) {
-      html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
-      html += '<div class="pf-card-title">Step-up for approvals</div>';
-      html += '<div class="pf-card-desc">On -- a write approval or a sensitive settings change demands your passkey. ' +
-        'To turn this off, edit <code>step_up.require_passkey</code> in <code>config/settings.yaml</code> and restart PrivacyFence.</div>';
-      html += '</div></div>';
+      html += rowHtml('Step-up for approvals', 'On -- a write approval or a sensitive settings change demands your passkey. ' +
+        'To turn this off, edit <code>step_up.require_passkey</code> in <code>config/settings.yaml</code> and restart PrivacyFence.',
+        '', 'pf-row-sub');
     } else if (stepUpApplicable && !g.step_up_has_passkey) {
-      html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
-      html += '<div class="pf-card-title">Step-up for approvals</div>';
-      html += '<div class="pf-card-desc">Off. Add a passkey above first, then come back here to require it for every write approval.</div>';
-      html += '</div></div>';
+      html += rowHtml('Step-up for approvals', 'Off. Add a passkey above first, then come back here to require it for every write approval.',
+        '', 'pf-row-sub');
     } else if (stepUpApplicable) {
-      html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
-      html += '<div class="pf-card-title">Step-up for approvals</div>';
-      html += '<div class="pf-card-desc">Off. Require your passkey for every write approval and every sensitive settings change.</div>';
-      html += '</div><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Turn on step-up for approvals" ' +
-        dataAttr('enable_step_up', {}) + '>Turn on</div></div>';
+      html += rowHtml('Step-up for approvals', 'Off. Require your passkey for every write approval and every sensitive settings change.',
+        '<div class="button primary" role="button" tabindex="0" aria-label="Turn on step-up for approvals" ' +
+        dataAttr('enable_step_up', {}) + '>Turn on</div>', 'pf-row-sub');
     }
     html += '</div>';
 
@@ -694,27 +599,24 @@ _JS = r"""
     // one of the generic dispatcher's actions -- both are the same "hidden
     // for org" decision).
     if (!notApplicable('toggle_update_check')) {
-      html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Check for Updates</div>';
-      html += '<div class="pf-card-desc">Once-a-day check against GitHub Releases. Never installs anything automatically.</div></div>';
-      html += toggleHtml(g.update_check_enabled, 'toggle_update_check', {}, false, 'Check for Updates');
-      html += '</div><div class="pf-divider"></div>';
-      html += '<div class="pf-subrow" style="opacity:' + (g.update_check_enabled ? 1 : .4) + '"><div class="pf-subrow-label">Receive beta releases</div>';
-      html += toggleHtml(g.update_check_beta, 'toggle_update_check_beta', {}, !g.update_check_enabled, 'Receive beta releases');
-      html += '</div></div>';
+      html += '<div class="card pf-card">';
+      html += rowHtml('Check for Updates', 'Once-a-day check against GitHub Releases. Never installs anything automatically.',
+        toggleHtml(g.update_check_enabled, 'toggle_update_check', {}, false, 'Check for Updates'));
+      html += rowHtml('Receive beta releases', '',
+        toggleHtml(g.update_check_beta, 'toggle_update_check_beta', {}, !g.update_check_enabled, 'Receive beta releases'),
+        'pf-row-sub', !g.update_check_enabled);
+      html += '</div>';
     }
 
     if (!notApplicable('install_org_config')) {
-      html += '<div class="pf-card"><div class="pf-card-title">Organization Configuration</div>';
-      html += '<div class="pf-card-desc" style="margin-bottom:12px;">OAuth app credentials and unattended-session policy, provided by your IT administrator.</div>';
-      html += '<div style="display:flex;align-items:center;gap:14px;">';
-      html += '<div class="pf-btn-primary" role="button" tabindex="0" aria-label="' + esc(g.org_button_label) + '" ' +
-        dataAttr('install_org_config', {}) + '>' + esc(g.org_button_label) + '</div>';
-      if (g.org_installed && g.org_installed_date) {
-        html += '<div class="pf-export-hint">Installed ' + esc(g.org_installed_date) + '</div>';
-      } else if (!g.org_installed) {
-        html += '<div class="pf-export-hint">Not installed</div>';
-      }
-      html += '</div></div>';
+      var installed = g.org_installed && g.org_installed_date
+        ? '<div class="pf-hint">Installed ' + esc(g.org_installed_date) + '</div>'
+        : (!g.org_installed ? '<span class="badge">Not installed</span>' : '');
+      html += '<div class="card pf-card">';
+      html += rowHtml('Organization Configuration', 'OAuth app credentials and unattended-session policy, provided by your IT administrator.',
+        '<div class="pf-row-controls"><div class="button primary" role="button" tabindex="0" aria-label="' + esc(g.org_button_label) + '" ' +
+        dataAttr('install_org_config', {}) + '>' + esc(g.org_button_label) + '</div>' + installed + '</div>');
+      html += '</div>';
     }
 
     html += '</div>';
@@ -726,13 +628,14 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   function connectorStatus(c) {
-    if (c.busy) return { text: 'Connecting…', cls: 'pf-pill-warn' };
-    if (c.authed) return { text: 'Connected', cls: 'pf-pill-connected' };
-    if (!c.enabled) return { text: 'Disabled', cls: 'pf-pill-neutral' };
+    // app.css badges: the text always names the state, the colour repeats it.
+    if (c.busy) return { text: 'Connecting…', cls: 'badge-warning' };
+    if (c.authed) return { text: 'Connected', cls: 'badge-success' };
+    if (!c.enabled) return { text: 'Disabled', cls: 'badge-dashed' };
     if (!c.has_org) {
-      return { text: c.key === 'telegram' ? 'App credentials missing' : 'Organization config missing', cls: 'pf-pill-missing' };
+      return { text: c.key === 'telegram' ? 'App credentials missing' : 'Organization config missing', cls: 'badge-danger' };
     }
-    return { text: 'Not connected', cls: 'pf-pill-neutral' };
+    return { text: 'Not connected', cls: '' };
   }
 
   // Shown on first run (nothing authenticated yet) so
@@ -746,14 +649,14 @@ _JS = r"""
     if (ui.welcomeBannerDismissed) return '';
     var anyAuthed = state.connectors.some(function (c) { return c.authed; });
     if (anyAuthed) return '';
-    var html = '<div class="pf-card pf-welcome-banner"><div class="pf-card-row">';
-    html += '<div><div class="pf-card-title">Welcome to PrivacyFence</div>';
-    html += '<div class="pf-card-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
+    var html = '<div class="card card-info pf-welcome-banner"><div class="pf-banner">';
+    html += '<div><div class="pf-row-title">Welcome to PrivacyFence</div>';
+    html += '<div class="pf-row-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
       'real accounts (Gmail, Drive, Slack, and similar) -- it governs access to them, it does not provide them ' +
       'itself. Nothing is governed until at least one connector below is authenticated. If your IT team gave ' +
       'you an organization config bundle, install it first from the General page; otherwise authenticate a ' +
       'connector directly below, then go back to Claude.</div></div>';
-    html += '<div class="pf-welcome-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
+    html += '<div class="pf-banner-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
       'data-dismiss-welcome="1">✕</div>';
     html += '</div></div>';
     return html;
@@ -761,17 +664,18 @@ _JS = r"""
 
   function renderConnectors(state) {
     var html = '<div class="pf-page">';
-    html += '<div class="pf-page-title">Connectors</div>';
+    html += '<h1 class="pf-page-title">Connectors</h1>';
     html += '<div class="pf-page-subtitle">Authenticate a connector to let Claude access it, subject to approval and policy. ' +
       'Signing in opens a browser window on the machine running PrivacyFence -- not necessarily this device.</div>';
     html += renderWelcomeBanner(state);
+    html += '<div class="pf-connector-list">';
     state.connectors.forEach(function (c) {
       var status = connectorStatus(c);
-      html += '<div class="pf-connector-row">';
-      html += '<div class="pf-connector-icon">' + (c.icon_data_uri ? '<img src="' + esc(c.icon_data_uri) + '" alt="' + esc(c.label) + '"/>' : '') + '</div>';
-      html += '<div class="pf-connector-label">' + esc(c.label) + '</div>';
-      html += '<div class="pf-pill ' + status.cls + '">' + esc(status.text) + '</div>';
-      html += '<div class="pf-spacer"></div>';
+      html += '<div class="card pf-connector-row">';
+      html += '<div class="pf-connector-name"><div class="pf-connector-icon">' +
+        (c.icon_data_uri ? '<img src="' + esc(c.icon_data_uri) + '" alt="" width="22" height="22"/>' : '') + '</div>';
+      html += '<span>' + esc(c.label) + '</span><span class="badge ' + status.cls + '">' + esc(status.text) + '</span></div>';
+      html += '<div class="pf-connector-actions">';
       var authDisabled = c.busy;
       if (c.key === 'telegram') {
         // Telegram's phone/code/2FA flow needs its own multi-step modal
@@ -781,13 +685,11 @@ _JS = r"""
         // modal at the phone-entry step needs no round trip to Python;
         // the first real bridge call is telegram_start_auth() once a
         // phone number is actually submitted.
-        html += '<div class="pf-auth-link' + (authDisabled ? ' disabled' : '') +
-          '" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Telegram"' +
-          (authDisabled ? '' : ' data-telegram-auth="1"') + '>' + esc(c.auth_label) + '</div>';
+        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Telegram"' +
+          (authDisabled ? ' aria-disabled="true"' : ' data-telegram-auth="1"') + '>' + esc(c.auth_label) + '</div>';
       } else {
-        html += '<div class="pf-auth-link' + (authDisabled ? ' disabled' : '') +
-          '" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' ' + esc(c.label) + '" ' +
-          (authDisabled ? '' : dataAttr('authenticate_connector', { connector: c.key })) + '>' + esc(c.auth_label) + '</div>';
+        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' ' + esc(c.label) + '" ' +
+          (authDisabled ? 'aria-disabled="true"' : dataAttr('authenticate_connector', { connector: c.key })) + '>' + esc(c.auth_label) + '</div>';
       }
       // Directional, not a single
       // toggle_connector -- re-enabling a connector is gated
@@ -796,9 +698,9 @@ _JS = r"""
       // action this click sends has to match which direction the very
       // next click will actually take (ADR 0070).
       html += toggleHtml(c.enabled, c.enabled ? 'disable_connector' : 'enable_connector', { connector: c.key }, false, c.label + ' enabled');
-      html += '</div>';
+      html += '</div></div>';
     });
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
 
@@ -816,9 +718,13 @@ _JS = r"""
   // has, answering "which of my rules have never matched".
   // -------------------------------------------------------------------- //
 
+  // A verb's family as a badge: read is the accent, send a warning,
+  // destructive a danger; the verb's own name is always the text.
+  var VERB_BADGE = { read: 'badge-accent', write: '', send: 'badge-warning', destructive: 'badge-danger' };
+
   function verbChipsHtml(verbs) {
     return verbs.map(function (v) {
-      return '<span class="pf-verb-chip pf-verb-chip-' + esc(v.family) + '">' + esc(v.verb) + '</span>';
+      return '<span class="badge ' + (VERB_BADGE[v.family] || '') + ' pf-verb-chip">' + esc(v.verb) + '</span>';
     }).join('');
   }
 
@@ -830,21 +736,21 @@ _JS = r"""
     var expanded = ui.aaExpanded || {};
 
     var html = '<div class="pf-page">';
-    html += '<div class="pf-page-title">Auto-accept</div>';
+    html += '<h1 class="pf-page-title">Auto-accept</h1>';
     html += '<div class="pf-page-subtitle">Every standing rule that lets Claude act without asking first, across every connector -- what a rule actually unblocks is shown before you add it, and again on its own row below.</div>';
 
-    html += '<div class="pf-aa-filterbar">';
-    html += '<input type="text" class="pf-input pf-aa-search" placeholder="Filter by connector, tool, or value…" aria-label="Filter rules" value="' +
+    html += '<div class="pf-chips pf-aa-filterbar">';
+    html += '<input type="text" class="field pf-aa-search" placeholder="Filter by connector, tool, or value…" aria-label="Filter rules" value="' +
       esc(ui.aaSearch) + '" data-aa-search="1"/>';
     aa.connectors.forEach(function (cname) {
       var active = connFilter.indexOf(cname) !== -1;
-      html += '<div class="pf-fchip' + (active ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
+      html += '<div class="pf-chip' + (active ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
         (active ? 'true' : 'false') + '" aria-label="Filter to ' + esc(cname) + '" data-aa-connector-filter="' +
         esc(cname) + '">' + esc(cname) + '</div>';
     });
     ['read', 'write', 'send', 'destructive'].forEach(function (fam) {
       var active = famFilter.indexOf(fam) !== -1;
-      html += '<div class="pf-fchip pf-verb-chip-' + fam + (active ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
+      html += '<div class="pf-chip' + (active ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
         (active ? 'true' : 'false') + '" aria-label="Filter to ' + esc(fam) + ' rules" data-aa-family-filter="' +
         fam + '">' + esc(fam) + '</div>';
     });
@@ -859,7 +765,7 @@ _JS = r"""
     });
 
     if (rows.length === 0) {
-      html += '<div class="pf-rules-empty">' +
+      html += '<div class="pf-empty pf-rules-empty">' +
         (aa.rules.length ? 'No rules match this filter.' : 'No auto-accept rules configured yet -- add one below.') +
         '</div>';
     }
@@ -867,10 +773,10 @@ _JS = r"""
       var isExpanded = !!expanded[r.id];
       var copyAttr = r.value_ids.length ? ' data-copy-id="' + esc(r.value_ids.join(', ')) +
         '" title="' + esc(r.value_ids.join(', ')) + ' -- right-click to copy"' : '';
-      html += '<div class="pf-aa-row"' + copyAttr + '>';
+      html += '<div class="card pf-card pf-aa-row"' + copyAttr + '>';
       html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + esc(r.sentence) + '</div>';
       html += '<div class="pf-aa-verbs">' + verbChipsHtml(r.verbs) + '</div></div>';
-      html += '<div style="display:flex;align-items:center;gap:14px;margin-top:6px;">';
+      html += '<div class="pf-aa-links">';
       html += '<div class="pf-link" role="button" tabindex="0" aria-expanded="' + (isExpanded ? 'true' : 'false') +
         '" aria-label="What this unblocks" data-aa-expand="' + esc(r.id) + '">' + (isExpanded ? '▾' : '▸') +
         ' Unblocks ' + r.covered_tools.length + ' tool' + (r.covered_tools.length === 1 ? '' : 's') + '</div>';
@@ -895,27 +801,26 @@ _JS = r"""
     aa.scope_groups.forEach(function (g) { if (g.id === ui.aaGroup) group = g; });
     var checkedVerbs = ui.aaCheckedVerbs || {};
 
-    html += '<div class="pf-card pf-aa-add"><div class="pf-card-title">Add a rule</div>';
-    html += '<select class="pf-input" aria-label="Scope" data-aa-group-select="1">';
+    html += '<div class="card pf-card pf-aa-add"><h2 class="pf-row-title">Add a rule</h2>';
+    html += '<label><span class="field-label">Scope</span><select class="field" data-aa-group-select="1">';
     aa.scope_groups.forEach(function (g) {
       html += '<option value="' + esc(g.id) + '"' + (g.id === ui.aaGroup ? ' selected' : '') + '>' + esc(g.label) + '</option>';
     });
-    html += '</select>';
+    html += '</select></label>';
     if (group && group.needs_value) {
-      html += '<input type="text" class="pf-input pf-input-mono" placeholder="' + esc(group.value_hint) +
+      html += '<input type="text" class="field pf-input-mono" placeholder="' + esc(group.value_hint) +
         '" aria-label="Value (comma-separated for more than one)" value="' + esc(ui.aaValue) + '" data-aa-value="1"/>';
     }
     if (group) {
-      html += '<div class="pf-caps-row">';
+      html += '<div class="pf-chips pf-caps-row">';
       group.verbs.forEach(function (verb) {
         var on = !!checkedVerbs[verb];
-        html += '<div class="pf-cap-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
+        html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
           '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc(verb) + '</div>';
       });
       html += '</div>';
     }
-    html += '<div class="pf-btn-primary" role="button" tabindex="0" aria-label="Add rule" data-aa-add="1" ' +
-      'style="margin-top:12px;display:inline-block;">Add rule</div>';
+    html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Add rule" data-aa-add="1">Add rule</div></div>';
     html += '</div>';
 
     html += '</div>';
@@ -939,10 +844,13 @@ _JS = r"""
     var privacy = state.privacy;
     if (!ui.privacyGroup && privacy.groups.length) ui.privacyGroup = privacy.groups[0].key;
 
-    var html = '<div class="pf-subnav" role="tablist" aria-label="Privacy Filter group">';
+    // The group list is a second tabstrip under the section nav when the
+    // page is narrow, and a column beside the editor from 900 px up.
+    var html = '<div class="pf-privacy">';
+    html += '<div class="tabstrip pf-subnav" role="tablist" aria-label="Privacy Filter group">';
     privacy.groups.forEach(function (pg) {
       var active = ui.privacyGroup === pg.key;
-      html += '<div class="pf-subnav-item' + (active ? ' active' : '') + '" role="tab" aria-selected="' +
+      html += '<div class="tab pf-subnav-item' + (active ? ' active' : '') + '" role="tab" aria-selected="' +
         (active ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(pg.label) +
         '" data-privacy-nav="' + esc(pg.key) + '"><span>' + esc(pg.label) + '</span></div>';
     });
@@ -950,12 +858,11 @@ _JS = r"""
 
     html += '<div class="pf-detail-page">';
     if (ui.privacyGroup === 'calendar') {
-      html += '<div class="pf-detail-title">Calendar</div>';
+      html += '<h1 class="pf-detail-title">Calendar</h1>';
       html += '<div class="pf-detail-subtitle">Calendar has no category schema — this is its one privacy-relevant setting.</div>';
-      html += '<div class="pf-card" style="max-width:560px;"><div class="pf-card-row"><div>';
-      html += '<div class="pf-card-title" style="font-size:13.5px;">Show full event details in free/busy</div>';
-      html += '<div class="pf-card-desc">When off, calendar_get_free_busy always returns busy/free blocks only, never titles or status, regardless of access.</div>';
-      html += '</div>' + toggleHtml(privacy.calendar_free_busy, 'toggle_calendar_free_busy', {}, false, 'Show full event details in free/busy') + '</div></div>';
+      html += '<div class="card pf-card">' + rowHtml('Show full event details in free/busy',
+        'When off, calendar_get_free_busy always returns busy/free blocks only, never titles or status, regardless of access.',
+        toggleHtml(privacy.calendar_free_busy, 'toggle_calendar_free_busy', {}, false, 'Show full event details in free/busy')) + '</div>';
     } else {
       var group = ui.privacyGroup;
       var label = '';
@@ -963,28 +870,30 @@ _JS = r"""
       var defaultPolicy = privacy.default_policy[group];
       var categories = privacy.categories[group] || [];
 
-      html += '<div class="pf-detail-title">' + esc(label) + '</div>';
+      html += '<h1 class="pf-detail-title">' + esc(label) + '</h1>';
       html += '<div class="pf-detail-subtitle">Applied before this data reaches the review popup, Claude, or the audit log — a floor under human review, not a substitute for it.</div>';
 
-      html += '<div class="pf-policy-row"><div class="pf-policy-row-label">Default policy <span class="pf-muted">(unlisted categories)</span></div>';
-      html += policySegHtml(defaultPolicy, 'set_default_policy', { group: group }, 'Default policy');
-      html += '</div>';
+      html += '<div class="card pf-card pf-policy-row">' + rowHtml('Default policy', 'For categories not listed below.',
+        policySegHtml(defaultPolicy, 'set_default_policy', { group: group }, 'Default policy')) + '</div>';
 
-      categories.forEach(function (cat) {
-        html += '<div class="pf-category-row"><div><div class="pf-category-label">' + esc(cat.label) + '</div>';
-        html += '<div class="pf-category-key">' + esc(cat.key) + '</div></div>';
-        html += policySegHtml(cat.policy, 'set_category_policy', { group: group, category: cat.key }, cat.label + ' policy');
+      if (categories.length) {
+        html += '<div class="card pf-list pf-category-list">';
+        categories.forEach(function (cat) {
+          html += '<div class="pf-row pf-category-row"><div class="pf-row-text"><div class="pf-category-label">' + esc(cat.label) + '</div>';
+          html += '<div class="pf-category-key">' + esc(cat.key) + '</div></div>';
+          html += policySegHtml(cat.policy, 'set_category_policy', { group: group, category: cat.key }, cat.label + ' policy');
+          html += '</div>';
+        });
         html += '</div>';
-      });
+      }
 
       if (group === 'privacy' && typeof privacy.gmail_append_signature === 'boolean') {
-        html += '<div class="pf-card" style="max-width:560px;margin-top:16px;"><div class="pf-card-row"><div>';
-        html += '<div class="pf-card-title" style="font-size:13.5px;">Append Gmail signature to drafts</div>';
-        html += '<div class="pf-card-desc">Adds your Gmail signature to the end of every draft Claude creates, unless a call says otherwise. It is shown in the approval popup with the rest of the draft.</div>';
-        html += '</div>' + toggleHtml(privacy.gmail_append_signature, 'toggle_gmail_signature', {}, false, 'Append Gmail signature to drafts') + '</div></div>';
+        html += '<div class="card pf-card">' + rowHtml('Append Gmail signature to drafts',
+          'Adds your Gmail signature to the end of every draft Claude creates, unless a call says otherwise. It is shown in the approval popup with the rest of the draft.',
+          toggleHtml(privacy.gmail_append_signature, 'toggle_gmail_signature', {}, false, 'Append Gmail signature to drafts')) + '</div>';
       }
     }
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
 
@@ -993,11 +902,13 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   var LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
+  // The decision is the badge's text; its colour repeats it.
+  var AUDIT_BADGE = { denied: 'badge-danger', auto_accepted: 'badge-accent', other: '' };
 
   function renderAudit(state) {
     var audit = state.audit;
     var html = '<div class="pf-page">';
-    html += '<div class="pf-page-title">Audit Log</div>';
+    html += '<h1 class="pf-page-title">Audit Log</h1>';
     html += notApplicable('export_audit_log')
       ? '<div class="pf-page-subtitle">Your own recent decisions — accepted, denied, or auto-accepted — and which AI system asked for each.</div>'
       : '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
@@ -1005,27 +916,24 @@ _JS = r"""
     // Org mode shows each principal's own recent decisions, but has no export
     // route and no install log level to set -- both controls are local-only actions.
     if (!notApplicable('export_audit_log')) {
-      html += '<div class="pf-export-row"><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Export Audit Log" ' +
+      html += '<div class="pf-row-controls pf-export-row"><div class="button primary" role="button" tabindex="0" aria-label="Export Audit Log" ' +
         dataAttr('export_audit_log', {}) + '>Export Audit Log…</div>';
-      html += '<div class="pf-export-hint">' + esc(audit.export_hint) + '</div></div>';
+      html += '<div class="pf-hint">' + esc(audit.export_hint) + '</div></div>';
     }
 
     if (!notApplicable('set_log_level')) {
-      html += '<div class="pf-card pf-audit-card">';
-      html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log level</div>';
-      html += segGroupHtml(LOG_LEVELS.map(function (lvl) {
+      html += '<div class="card pf-card pf-audit-card">';
+      html += rowHtml('Log level', '', segGroupHtml(LOG_LEVELS.map(function (lvl) {
         return { label: lvl, active: audit.log_level === lvl, action: 'set_log_level', payload: { level: lvl } };
-      }), 'Log level');
-      html += '</div>';
-      html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log file</div>';
-      html += '<div class="pf-audit-logfile">' + esc(audit.log_file) + '</div></div>';
+      }), 'Log level'));
+      html += rowHtml('Log file', '<span class="pf-audit-logfile">' + esc(audit.log_file) + '</span>', '', 'pf-row-sub');
       html += '</div>';
     }
 
-    html += '<div class="pf-group-title">Recent decisions</div>';
-    html += '<div class="pf-audit-list">';
+    html += '<h2 class="pf-group-title">Recent decisions</h2>';
+    html += '<div class="card pf-list pf-audit-list">';
     if (audit.recent.length === 0) {
-      html += '<div class="pf-audit-row"><div class="pf-audit-tool" style="color:#8a8a8e;">Nothing logged yet.</div></div>';
+      html += '<div class="pf-audit-row"><div class="pf-empty">Nothing logged yet.</div></div>';
     }
     audit.recent.forEach(function (a) {
       var badgeCls = a.decision === 'denied' || a.decision === 'rejected' ? 'denied' : (a.decision === 'auto_accepted' ? 'auto_accepted' : 'other');
@@ -1033,7 +941,7 @@ _JS = r"""
       html += auditAgentHtml(a.agent);
       html += '<div class="pf-audit-connector">' + esc(a.connector) + '</div>';
       html += '<div class="pf-audit-tool">' + esc(a.tool) + '</div>';
-      html += '<div class="pf-audit-badge ' + badgeCls + '">' + esc(a.decision) + '</div>';
+      html += '<span class="badge ' + AUDIT_BADGE[badgeCls] + ' pf-audit-badge ' + badgeCls + '">' + esc(a.decision) + '</span>';
       html += '<div class="pf-audit-time">' + esc(a.time) + '</div>';
       html += '</div>';
     });
@@ -1046,6 +954,8 @@ _JS = r"""
   // before attribution) reads as unknown: never blank, never "Claude". No brand mark here --
   // the tier marker carries the distinction on a page this dense.
   var TIER_MARKERS = { attested: 'Verified', claimed: 'Not verified', unknown: 'Unknown' };
+  // The approval card's badges for the same tiers: solid for verified, dashed for a claim.
+  var TIER_BADGE = { attested: 'badge-solid', claimed: 'badge-dashed', unknown: 'badge-dashed' };
 
   function auditAgentHtml(agent) {
     agent = agent || {};
@@ -1053,7 +963,7 @@ _JS = r"""
     var headline = agent.headline || 'Unrecognised AI system';
     var text = agent.claim ? headline + ' \u201c' + agent.claim + '\u201d' : headline;
     return '<div class="pf-audit-agent pf-audit-agent-' + tier + '" data-agent-tier="' + tier + '" title="' + esc(text) + '">' +
-      '<span class="pf-audit-agent-name">' + esc(text) + '</span><span class="pf-audit-tier ' + tier + '">' +
+      '<span class="pf-audit-agent-name">' + esc(text) + '</span><span class="badge ' + TIER_BADGE[tier] + ' pf-audit-tier ' + tier + '">' +
       esc(TIER_MARKERS[tier]) + '</span></div>';
   }
 
@@ -1064,11 +974,11 @@ _JS = r"""
   function renderAgents(state) {
     var agents = state.agents || { clients: [], stale_pins: [], registry: [] };
     var html = '<div class="pf-page">';
-    html += '<div class="pf-page-title">AI systems</div>';
+    html += '<h1 class="pf-page-title">AI systems</h1>';
     html += '<div class="pf-page-subtitle">Every OAuth client registered with this server names itself — anything that can reach the server can register as "ChatGPT". Pin a registration you have checked to the AI system it really is: only a pinned client is shown as verified, and a pin never moves to another registration.</div>';
 
-    html += '<div class="pf-group-title">Registered clients</div>';
-    html += '<div class="pf-agents-list">';
+    html += '<h2 class="pf-group-title">Registered clients</h2>';
+    html += '<div class="card pf-list pf-agents-list">';
     if (agents.clients.length === 0) {
       html += '<div class="pf-agents-row"><div class="pf-agents-meta">No OAuth clients are registered yet.</div></div>';
     }
@@ -1081,12 +991,12 @@ _JS = r"""
       html += '<div class="pf-agents-controls">';
       if (c.pinned_agent_id) {
         html += '<span>Pinned to <strong>' + esc(c.pinned_agent_name) + '</strong></span>';
-        html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Unpin" ' +
+        html += '<div class="button secondary" role="button" tabindex="0" aria-label="Unpin" ' +
           dataAttr('unpin_agent_client', { client_id: c.client_id }) + '>Unpin</div>';
       } else {
         html += '<span>Not verified. Pin to:</span>';
         agents.registry.forEach(function (r) {
-          html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Pin to ' + esc(r.name) + '" ' +
+          html += '<div class="button secondary" role="button" tabindex="0" aria-label="Pin to ' + esc(r.name) + '" ' +
             dataAttr('pin_agent_client', { client_id: c.client_id, agent_id: r.id }) + '>' + esc(r.name) + '</div>';
         });
       }
@@ -1095,14 +1005,14 @@ _JS = r"""
     html += '</div>';
 
     if (agents.stale_pins.length > 0) {
-      html += '<div class="pf-group-title">Stale pins</div>';
+      html += '<h2 class="pf-group-title">Stale pins</h2>';
       html += '<div class="pf-page-subtitle">These registrations were removed after going unused. Their pins no longer apply to anything; a client that registers again is a new registration and starts unverified.</div>';
-      html += '<div class="pf-agents-list">';
+      html += '<div class="card pf-list pf-agents-list">';
       agents.stale_pins.forEach(function (p) {
         html += '<div class="pf-agents-row" data-agent-stale-pin="' + esc(p.client_id) + '">';
         html += '<div class="pf-agents-head"><div class="pf-agents-name">' + esc(p.agent_name) + '</div></div>';
         html += '<div class="pf-agents-meta">' + esc(p.client_id) + '</div>';
-        html += '<div class="pf-agents-controls"><div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Remove pin" ' +
+        html += '<div class="pf-agents-controls"><div class="button secondary" role="button" tabindex="0" aria-label="Remove pin" ' +
           dataAttr('unpin_agent_client', { client_id: p.client_id }) + '>Remove pin</div></div>';
         html += '</div>';
       });
@@ -1120,10 +1030,10 @@ _JS = r"""
     var about = state.about;
     var html = '<div class="pf-about-page">';
     html += '<div class="pf-about-icon">PF</div>';
-    html += '<div class="pf-about-name">PrivacyFence</div>';
+    html += '<h1 class="pf-about-name">PrivacyFence</h1>';
     html += '<div class="pf-about-version">Version ' + esc(about.version) + '</div>';
     html += '<div class="pf-about-desc">Human control and policy enforcement for AI access to enterprise data.</div>';
-    html += '<div class="pf-about-repo" role="button" tabindex="0" aria-label="Open GitHub repository" ' +
+    html += '<div class="pf-link pf-about-repo" role="button" tabindex="0" aria-label="Open GitHub repository" ' +
       dataAttr('open_repo', {}) + '>' + esc(about.repo_url.replace('https://', '')) + ' ↗</div>';
     html += '<div class="pf-about-license">' + esc(about.license) + '</div>';
     html += '<div class="pf-about-buttons">';
@@ -1133,11 +1043,11 @@ _JS = r"""
     // never mounts either), so both are unconditionally in this
     // capability set's not_applicable_actions for org mode.
     if (!notApplicable('check_for_updates')) {
-      html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Check for Updates" ' +
+      html += '<div class="button secondary" role="button" tabindex="0" aria-label="Check for Updates" ' +
         dataAttr('check_for_updates', {}) + '>Check for Updates</div>';
     }
     if (!notApplicable('quit_app')) {
-      html += '<div class="pf-btn-danger" role="button" tabindex="0" aria-label="Quit PrivacyFence" ' +
+      html += '<div class="button danger" role="button" tabindex="0" aria-label="Quit PrivacyFence" ' +
         dataAttr('quit_app', {}) + '>Quit PrivacyFence</div>';
     }
     html += '</div></div>';
@@ -1202,15 +1112,26 @@ _JS = r"""
     html += '<div class="pf-modal-title">' + esc(copy.title) + '</div>';
     html += '<div class="pf-modal-desc">' + esc(copy.desc) + '</div>';
     if (auth.error) html += '<div class="pf-modal-error">' + esc(auth.error) + '</div>';
-    html += '<input type="' + copy.type + '" class="pf-input pf-modal-input" placeholder="' + esc(copy.placeholder) +
+    html += '<input type="' + copy.type + '" class="field pf-modal-input" placeholder="' + esc(copy.placeholder) +
       '" data-telegram-field="' + copy.field + '" aria-label="' + esc(copy.placeholder) + '"' + (busy ? ' disabled' : '') + '/>';
     html += '<div class="pf-modal-buttons">';
-    html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Cancel Telegram sign-in" data-telegram-cancel="1">Cancel</div>';
-    html += '<div class="pf-btn-primary" role="button" tabindex="0" aria-label="' + esc(copy.submitLabel) +
-      '" data-telegram-submit="' + copy.submitAction + '"' + (busy ? ' style="opacity:.5;pointer-events:none;"' : '') + '>' +
+    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel Telegram sign-in" data-telegram-cancel="1">Cancel</div>';
+    html += '<div class="button primary" role="button" tabindex="0" aria-label="' + esc(copy.submitLabel) +
+      '" data-telegram-submit="' + copy.submitAction + '"' + (busy ? ' aria-disabled="true"' : '') + '>' +
       (busy ? 'Working…' : esc(copy.submitLabel)) + '</div>';
     html += '</div></div></div>';
     return html;
+  }
+
+  // A narrow tabstrip scrolls sideways inside itself, and a re-render starts
+  // it back at the left: bring the selected tab into view without moving the
+  // page itself (scrollIntoView would also scroll the document vertically).
+  function revealSelectedTabs() {
+    document.querySelectorAll('.pf-nav, .pf-subnav').forEach(function (strip) {
+      var tab = strip.querySelector('[aria-selected="true"]');
+      if (!tab || strip.scrollWidth <= strip.clientWidth) return;
+      strip.scrollLeft = Math.max(0, tab.offsetLeft - strip.offsetLeft - (strip.clientWidth - tab.offsetWidth) / 2);
+    });
   }
 
   function render(state) {
@@ -1228,17 +1149,17 @@ _JS = r"""
       ui.telegramModalOpen = false;
       ui.telegramAuthWasActive = false;
     }
-    var html = renderNav(state);
+    // .split (base.css): the nav and the content, one column when narrow
+    // and two from 900 px up (see _CSS).
+    var html = '<div class="split pf-settings-layout">' + renderNav(state) + '<div class="pf-content">';
     if (state.error) {
-      html += '<div class="pf-content" style="flex-direction:column;">' +
-        '<div class="pf-error-banner" role="alert"><div>' + esc(state.error) + '</div>' +
-        '<div class="pf-error-dismiss" role="button" tabindex="0" aria-label="Dismiss error" data-dismiss-error="1">✕</div></div>' +
-        '<div style="flex:1;display:flex;overflow:hidden;">' + renderSection(state) + '</div></div>';
-    } else {
-      html += '<div class="pf-content">' + renderSection(state) + '</div>';
+      html += '<div class="card card-danger pf-banner pf-error-banner" role="alert"><div>' + esc(state.error) + '</div>' +
+        '<div class="pf-banner-dismiss pf-error-dismiss" role="button" tabindex="0" aria-label="Dismiss error" data-dismiss-error="1">✕</div></div>';
     }
+    html += renderSection(state) + '</div></div>';
     html += renderTelegramModal(state);
     document.getElementById('app').innerHTML = html;
+    revealSelectedTabs();
     if (ui.telegramModalOpen) {
       var input = document.querySelector('[data-telegram-field]');
       if (input) input.focus();
@@ -1335,6 +1256,9 @@ _JS = r"""
 
     var actionEl = e.target.closest('[data-action]');
     if (actionEl) {
+      // A toggle's checkbox: keep it showing what Python says (the next
+      // render), not the browser's own flip -- see toggleHtml.
+      if (actionEl.tagName === 'INPUT' && actionEl.type === 'checkbox') e.preventDefault();
       var action = actionEl.getAttribute('data-action');
       var payload = {};
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }
@@ -1440,6 +1364,9 @@ _JS = r"""
     if (e.key !== 'Enter') return;
     var el = e.target;
     if (!el.tagName || el.tagName !== 'INPUT') return;
+    // A toggle's checkbox answers Space natively; Enter as well, as the
+    // div-based switch it replaced did.
+    if (el.getAttribute('role') === 'switch') { e.preventDefault(); el.click(); return; }
     if (el.hasAttribute('data-aa-value')) {
       submitAddPolicyRule();
       return;
@@ -1591,7 +1518,7 @@ def build_html(
     return (
         "<title>PrivacyFence Settings</title>"
         f'<style nonce="{nonce}">{DOCUMENT_CSS}{_CSS}</style>'
-        '<div id="app"></div>'
+        '<div id="app" class="shell pf-settings"></div>'
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'
         f'<script nonce="{nonce}">window.__pfCapabilities = {caps_json};</script>'
         f"{section_script}"

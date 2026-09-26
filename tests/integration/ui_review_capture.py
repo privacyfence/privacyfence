@@ -27,12 +27,14 @@ browser = _smoke.browser
 pf_home = _smoke.pf_home
 org_server = _smoke.org_server
 org_server_and_ui = _smoke.org_server_and_ui
+local_server_with_settings = _smoke.local_server_with_settings
 
 _MARKDOWN_PREVIEW = _smoke._MARKDOWN_PREVIEW
 _MOBILE_EMULATION = _smoke._MOBILE_EMULATION
 _TEN_COLUMN_TABLE = _smoke._TEN_COLUMN_TABLE
 _pdf_bytes = _smoke._pdf_bytes
 _sign_in_org = _smoke._sign_in_org
+_sign_in_local = _smoke._sign_in_local
 
 OUT = Path(os.environ.get("PF_UI_REVIEW_OUT", "test-results/ui-review"))
 
@@ -89,16 +91,31 @@ def test_shell_page(shot, org_server_and_ui, path):
             web_ui.resolve(approval.id, "deny")
 
 
-@pytest.mark.parametrize("section", ["general", "privacy"])
+def _open_settings_section(page, base_url: str, section: str) -> None:
+    page.goto(f"{base_url}/settings")
+    page.wait_for_selector(".pf-navitem")
+    page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
+    page.wait_for_selector(".pf-page, .pf-detail-page, .pf-about-page")
+
+
+# Every section an org admin sees; Connectors is local mode's alone (below).
+@pytest.mark.parametrize("section", ["general", "auto_accept", "privacy", "audit", "agents", "about"])
 def test_settings(shot, org_server, section):
     page, save = shot
     server, sessions = org_server
     _sign_in_org(page.context, server, sessions, principal=_ADMIN)
-    page.goto(f"{server.base_url}/settings")
-    page.wait_for_selector(".pf-navitem")
-    page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
-    page.wait_for_selector(".pf-page, .pf-detail-page")
+    _open_settings_section(page, server.base_url, section)
     save(f"settings-{section}")
+
+
+def test_settings_local_connectors(shot, local_server_with_settings):
+    """Local mode's Connectors section, the one section org mode never draws: every connector
+    row, none of them authenticated."""
+    page, save = shot
+    server, _web_ui = local_server_with_settings
+    _sign_in_local(page, server)
+    _open_settings_section(page, server.base_url, "connectors")
+    save("settings-local-connectors")
 
 
 _WRITE = {"title": "Send email", "preview": {"To": "alice@example.com", "Subject": "Q3 numbers"},
@@ -111,10 +128,9 @@ def _card_kinds() -> dict[str, dict]:
     icon = (Path(paths_module.__file__).parent / "resources" / "icon_512.png").read_bytes()
     return {
         "write": {**_WRITE, "layout": "narrow", "claude_reason": "You asked me to send Alice the numbers.",
-                  "accept_all_choices": [("rule", "Always allow — this recipient")]},
+                  "accept_all_choices": [("rule", "this recipient")]},
         "write-flagged": {**_WRITE, "layout": "narrow", "write_content_flags": ["Phone number", "IBAN"]},
-        "read": {**_READ, "layout": "narrow", "accept_all_choices": [("a", "Always allow — this folder"),
-                                                                     ("b", "Always allow — this owner")]},
+        "read": {**_READ, "layout": "narrow", "accept_all_choices": [("a", "this folder"), ("b", "this owner")]},
         "read-pii": {**_READ, "layout": "wide", "pii_categories": ["Email address", "National ID"],
                      "preview_blocks": [{"type": "markdown", "text": _MARKDOWN_PREVIEW}]},
         "read-pdf": {**_READ, "layout": "wide", "pdf_bytes": _pdf_bytes()},
