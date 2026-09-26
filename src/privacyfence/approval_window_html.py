@@ -231,7 +231,9 @@ def line_clamp_for(label: str) -> int:
     return LINE_CLAMP_BY_LABEL.get(label, DEFAULT_LINE_CLAMP)
 
 
-def _table_html(table: dict) -> str:
+def _table_html(
+    table: dict, highlight: Callable[[str], list[tuple[int, int]]] | None = None,
+) -> str:
     """One ``<table>`` for the right-hand preview pane -- record field
     lists, search results, message lists, report rows all read better as
     an actual table than a plain-text dump (drive_upload_file's own
@@ -239,7 +241,13 @@ def _table_html(table: dict) -> str:
     disclosure for this pane). ``table`` is ``{"caption": str (optional),
     "headers": list[str], "rows": list[list[str]], "footer": str
     (optional)}`` -- every cell individually escaped, header/footer text
-    included, same discipline as everywhere else in this module."""
+    included, same discipline as everywhere else in this module.
+
+    ``highlight`` (see ``build_preview_body_html``) is applied to each body
+    cell on its own, through the same ``_escape_with_highlights`` a text
+    block uses, so a match is scanned against -- and marked within -- the
+    exact string being escaped. Headers, caption and footer are the
+    connector's own labels, not fetched content, and are never marked."""
     caption = table.get("caption", "")
     headers = table.get("headers") or []
     rows = table.get("rows") or []
@@ -252,13 +260,19 @@ def _table_html(table: dict) -> str:
         header_html = "".join(f"<th>{_html_escape(str(h))}</th>" for h in headers)
         thead_html = f"<thead><tr>{header_html}</tr></thead>"
     rows_html = "".join(
-        "<tr>" + "".join(f"<td>{_html_escape(str(cell))}</td>" for cell in row) + "</tr>"
+        "<tr>" + "".join(f"<td>{_table_cell_html(str(cell), highlight)}</td>" for cell in row) + "</tr>"
         for row in rows
     )
     parts.append(f'<table class="pf-table">{thead_html}<tbody>{rows_html}</tbody></table>')
     if footer:
         parts.append(f'<div class="pf-table-footer">{_html_escape(footer)}</div>')
     return "".join(parts)
+
+
+def _table_cell_html(
+    text: str, highlight: Callable[[str], list[tuple[int, int]]] | None,
+) -> str:
+    return _escape_with_highlights(text, highlight(text)) if highlight else _html_escape(text)
 
 
 def _field_block_html(label: str, value: str) -> str:
@@ -312,7 +326,7 @@ def _render_block(block: dict, highlight: Callable[[str], list[tuple[int, int]]]
     if kind == "heading":
         return _heading_block_html(block.get("label", ""))
     if kind == "table":
-        return _table_html(block)
+        return _table_html(block, highlight)
     if kind == "markdown":
         return _markdown_block_html(block.get("text", ""))
     return ""
@@ -387,10 +401,13 @@ def build_preview_body_html(
     work the card exists to have already done; with it, those tags become
     a legend.
 
-    Markdown blocks and table cells are deliberately not highlighted:
-    markdown has already become HTML by the time it is rendered, and
-    offsets into its source do not survive that. Plain body text and text
-    blocks -- where free-text PII actually lands -- are covered.
+    Plain body text, text blocks and table body cells are covered -- each
+    cell scanned on its own, so a match never has to span a cell boundary.
+    Table cells matter as much as prose: Slack and Telegram message lists
+    and Salesforce records are ``table_only``, so a table is the only place
+    their content appears on the card. Markdown blocks are deliberately not
+    highlighted: markdown has already become HTML by the time it is
+    rendered, and offsets into its source do not survive that.
     """
     if pdf_data_uri:
         return (
@@ -401,7 +418,7 @@ def build_preview_body_html(
         return f'<img src="{image_data_uri}" style="max-width:100%;display:block">'
     if blocks:
         return "".join(_render_block(b, highlight) for b in blocks)
-    tables_html = "".join(_table_html(t) for t in (tables or []))
+    tables_html = "".join(_table_html(t, highlight) for t in (tables or []))
     if not details_text and not tables_html:
         return _escaped_text_fragment(details_text)  # "(no details)" placeholder
     text_html = (
