@@ -42,3 +42,7 @@ class TestFormatPreviewDatetime:
     @pytest.mark.parametrize("value", ["yesterday", "nan", "inf", "2026-13-45", "1e400"])
     def test_unparseable_is_shown_raw_rather_than_dropped(self, value):
         assert format_preview_datetime(value) == value
+
+    def test_an_unsupported_type_is_shown_as_its_string(self):
+        assert format_preview_datetime(["x"]) == "['x']"
+        assert format_preview_datetime(True) == "True"
