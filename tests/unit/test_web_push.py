@@ -282,8 +282,10 @@ class TestSubscriptionStore:
         assert path.exists()
         if sys.platform != "win32":
             assert stat.S_IMODE(path.stat().st_mode) == 0o600
-        assert store.remove("alice", FCM) is True
-        assert store.remove("alice", FCM) is False
+        removed_first = store.remove("alice", FCM)
+        removed_again = store.remove("alice", FCM)
+        assert removed_first is True
+        assert removed_again is False
         assert store.list("alice") == [] and len(store.list("bob")) == 1
 
     def test_the_same_endpoint_is_stored_once(self, store):

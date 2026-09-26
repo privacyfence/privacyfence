@@ -18,7 +18,6 @@ if it builds a route that is not in it. A public route has to say why it can be 
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import replace
 from pathlib import Path
 
@@ -33,7 +32,6 @@ from ..web_push import (
 from . import org_session
 from .org_session import OrgSessionStore
 
-logger = logging.getLogger(__name__)
 
 MANIFEST_PATH = "/manifest.webmanifest"
 SUBSCRIPTION_PATH = "/api/push/subscription"

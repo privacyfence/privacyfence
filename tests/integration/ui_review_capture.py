@@ -35,7 +35,6 @@ local_server = _smoke.local_server
 _MARKDOWN_PREVIEW = _smoke._MARKDOWN_PREVIEW
 _MOBILE_EMULATION = _smoke._MOBILE_EMULATION
 _TEN_COLUMN_TABLE = _smoke._TEN_COLUMN_TABLE
-_pdf_bytes = _smoke._pdf_bytes
 _sign_in_org = _smoke._sign_in_org
 _sign_in_local = _smoke._sign_in_local
 
@@ -196,7 +195,7 @@ _READ = {"title": "Get file content", "preview": {"File": "Quarterly report", "O
 
 
 # A three-page document with a line of text on each page, so the review shows the page images
-# doing their job (_pdf_bytes() is one blank page, which renders as a white box).
+# doing their job (_smoke._pdf_bytes() is one blank page, which renders as a white box).
 _REPORT_PDF = text_pdf([
     ["Quarterly report, Q3", "Revenue up 12% on the quarter.", "Two new regions opened."],
     ["Regional results", "EMEA 1.2M (+8%)", "AMER 2.4M (+15%)"],

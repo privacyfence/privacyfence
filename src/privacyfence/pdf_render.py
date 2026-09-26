@@ -93,6 +93,8 @@ def render_first_pages(
             finally:
                 _PDFIUM_LOCK.release()
         except _Cancelled:
+            # The deadline passed while waiting for the lock or between pages. The caller has
+            # already fallen back to text and logged the timeout, so there is nothing to add.
             pass
         except Exception:  # noqa: BLE001 -- any failure in a parser of untrusted input means "no pages"
             logger.warning("pdf_render: could not render a PDF preview", exc_info=True)

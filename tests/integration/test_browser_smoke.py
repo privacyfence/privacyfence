@@ -1701,7 +1701,8 @@ _ACTION_STYLES_JS = """() => {
 
 def _css_rgba(value: str) -> tuple[float, float, float, float]:
     numbers = [float(n) for n in re.findall(r"[\d.]+", value)]
-    return (*numbers[:3], numbers[3] if len(numbers) > 3 else 1.0)  # type: ignore[return-value]
+    r, g, b = (numbers + [0.0, 0.0, 0.0])[:3]
+    return r, g, b, numbers[3] if len(numbers) > 3 else 1.0
 
 
 def _contrast(fg: str, bg: str) -> float:
