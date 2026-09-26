@@ -247,6 +247,32 @@ class TestLogout:
         r = _client(app).get("/logout")
         assert r.status_code == 405
 
+    def test_without_a_session_cookie_still_redirects_to_login(self):
+        app, _sessions = _app()
+        r = _client(app).post("/logout")
+        assert r.status_code == 302 and r.headers["location"] == "/login"
+
+    def test_a_push_store_that_cannot_be_written_does_not_stop_sign_out(self, caplog):
+        """ADR 0081: sign-out removes the browser's push subscriptions, but a disk error doing so
+        must not leave the person signed in."""
+        class _BrokenStore:
+            def remove_session(self, tag):
+                raise OSError("disk full")
+
+        sessions = org_session.OrgSessionStore()
+        app = Starlette(routes=roi.build_routes(
+            idp=_idp(), sessions=sessions, base_url=BASE_URL, push_store=_BrokenStore(),
+        ))
+        alice_session = sessions.create(Principal(id="alice"))
+        client = _client(app)
+        client.cookies.set(org_session.SESSION_COOKIE, alice_session)
+
+        r = client.post("/logout")
+
+        assert r.status_code == 302 and r.headers["location"] == "/login"
+        assert sessions.get(alice_session) is None
+        assert "Could not update this browser's push subscriptions: OSError" in caplog.text
+
 
 class TestSafeNextPath:
     """Unit-level coverage of the open-redirect defense -- see
