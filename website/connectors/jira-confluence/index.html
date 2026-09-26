@@ -55,16 +55,22 @@
       </div>
     </section>
 
-    <section class="page-section shell" aria-labelledby="pii-heading">
-      <div class="section-heading">
-        <p class="kicker">Personal data</p>
-        <h2 id="pii-heading">Tickets and pages are checked before you see them.</h2>
-      </div>
-      <div class="page-copy stack">
-        <p>Before a reviewed read is shown to you, PrivacyFence scans it locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. It scans a Jira issue's description and comments, a Confluence page's body, and the text it can extract from an attachment (up to 20,000 characters; files over 5 MB and images are not scanned).</p>
-        <p>A match sends the read to a card even if an always-allow rule covers it, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
-        <p>The privacy filter, separately, decides what may leave PrivacyFence at all. Out of the box it blocks Confluence search excerpts and attachments until you allow them in <strong>Settings → Privacy Filter → Confluence</strong>.</p>
-        <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>
+    <section class="page-section proof-section" aria-labelledby="pii-heading">
+      <div class="shell walkthrough split">
+        <div class="stack">
+          <p class="kicker">Personal data</p>
+          <h2 id="pii-heading">Tickets and pages are checked before you see them.</h2>
+          <div class="page-copy stack">
+            <p>Before a reviewed read is shown to you, PrivacyFence scans it locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. It scans a Jira issue's description and comments, a Confluence page's body, and the text it can extract from an attachment (up to 20,000 characters; files over 5 MB and images are not scanned).</p>
+            <p>A match sends the read to a card even if an always-allow rule covers it, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
+            <p>The privacy filter, separately, decides what may leave PrivacyFence at all. Out of the box it blocks Confluence search excerpts and attachments until you allow them in <strong>Settings → Privacy Filter → Confluence</strong>.</p>
+            <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>
+          </div>
+        </div>
+        <figure class="screenshot-frame">
+          <a href="/assets/jira-read-issue.png"><img src="/assets/jira-read-issue.png" width="2000" height="1800" alt="PrivacyFence approval card for reading a Jira issue: its project, key, summary, status and assignee, the requesting AI system marked Not verified, its stated reason, a possible-PII warning for a credit card number and financial figures, the matches highlighted in the issue description, and the comments" loading="lazy"></a>
+          <figcaption>Reading a Jira issue: the card number and amount in the description are highlighted before anything is released. Example data only.</figcaption>
+        </figure>
       </div>
     </section>
 

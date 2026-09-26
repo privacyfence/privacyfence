@@ -43,7 +43,7 @@ and releasing a gated call needs a passkey ([Passkey step-up](#passkey-step-up))
 
 The result on a packaged install:
 
-- **Integrity is the strong guarantee.** An AI client with shell access cannot approve its own
+- **Integrity is the strongest property.** An AI client with shell access cannot approve its own
   request, add an always-allow rule, change the PII policy, enroll its own passkey, or rewrite the
   audit log without it showing.
 - **Confidentiality of the review screen is weaker.** A process running as you can open the

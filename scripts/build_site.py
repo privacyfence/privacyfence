@@ -127,6 +127,10 @@ STATIC: dict[str, str] = {
     "assets/icon.png": "src/privacyfence/resources/icon_512.png",
     "assets/gmail-read-thread.png": "docs/images/screenshots/gmail-read-thread.png",
     "assets/sheets-write.png": "docs/images/screenshots/sheets-write.png",
+    "assets/slack-read-thread.png": "docs/images/screenshots/slack-read-thread.png",
+    "assets/salesforce-read-record.png": "docs/images/screenshots/salesforce-read-record.png",
+    "assets/jira-read-issue.png": "docs/images/screenshots/jira-read-issue.png",
+    "assets/telegram-read-chat.png": "docs/images/screenshots/telegram-read-chat.png",
 }
 
 # Files under website/ this script reads to build other files, and never publishes themselves.
