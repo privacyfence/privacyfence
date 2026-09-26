@@ -83,6 +83,8 @@ privacyfence.eu.
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
+- [`deny-with-feedback-plan.md`](deny-with-feedback-plan.md) — the open plan for letting a
+  person tell the agent why they denied a request; deleted when its work lands.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
   are, and what was rejected.
 

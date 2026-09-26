@@ -161,6 +161,7 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "packaging.md",
         "connector-qa.md",
         "downloads-and-release-kpi.md",
+        "deny-with-feedback-plan.md",
     }
 )
 
