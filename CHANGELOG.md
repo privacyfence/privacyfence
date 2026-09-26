@@ -3,43 +3,72 @@
 <!--
 HOW TO USE THIS FILE
 
-1. `## [Unreleased]` is permanent. A feature branch adds its user-visible change under that
-   heading and nothing else. Do NOT open a concrete `## [X.Y.Z]` heading on a feature branch:
-   two branches in flight would both claim the same next version, which is the exact failure
-   CLAUDE.md records at commit d929510 ("Revert version bump -- will release together with other
-   pending CRs") from the era when versions were hand-bumped in two files. Only the PR that cuts
-   a release turns `## [Unreleased]` into `## [X.Y.Z] -- YYYY-MM-DD`, adds a fresh empty
-   `## [Unreleased]` above it, and updates the two link definitions at the bottom. If a section for
-   that version already exists (4.0.0's was opened early), MERGE `[Unreleased]`'s entries into it
-   and fix its date -- renaming the heading would create a second one, and
-   scripts/changelog_section.py refuses to render a version that has two.
+1. `## [Unreleased]
 
-2. This file is NEVER a version source. setuptools_scm derives the version from the git tag and
-   remains the only one -- see CLAUDE.md's "Releasing" section. Nothing may parse this file to
-   determine a version, and no version string lives in the source tree. The dependency runs the
-   other way: scripts/changelog_section.py reads a version *out* of this file to produce the
-   GitHub Release body for that tag (see .github/workflows/build.yml).
+Organization deployments now work from a phone, and the app looks like the website.
 
-3. Pre-release tags (`aN`/`bN`/`rcN`, and the older `-alphaN`/`-betaN` spellings) get no entry of
-   their own. Their content is folded into the final version they led to, per Keep a Changelog.
+### Added
 
-4. A version that was tagged but never published (its release build failed before anything
-   reached a GitHub Release or PyPI) gets no section of its own either. Fold its entries into the
-   version that does ship, note the supersession at the top of that section, and point the shipped
-   version's compare link at the last version that really shipped -- 4.1.5 does this for both 4.1.4
-   and 4.1.3, chained: each failed tag folds into whichever section eventually ships, however many
-   attempts that takes. The tag stays in git; the changelog describes what people can actually
-   install.
+- **Organization deployments can notify your phone when an approval is waiting.** Allow
+  notifications when the Approvals page offers them, and a push notification arrives even with the
+  page closed; tapping it opens your approvals. It only ever says "1 approval pending" (or "N
+  approvals pending"), never what the request is, and it travels encrypted through your browser's
+  push service (Apple's, Google's, Mozilla's or Microsoft's). On an iPhone or iPad, add PrivacyFence
+  to your Home Screen first; the page tells you how. Administrators can turn this off for the whole
+  organization with `build_org_bundle.py --no-web-push`. Desktop installs are unchanged: their
+  notifications still never leave the machine. See ADR 0081.
+- **The organization app can be installed to a phone's Home Screen** or as a desktop app, and
+  opens straight to your approvals.
 
-5. Entries are ordered by version, NOT by date. The 3.4.x maintenance line and the 4.0 line ran
-   in parallel, so 3.4.5-3.4.7 (2026-09-02/03) were cut after v4.0.0-alpha1..alpha4
-   (2026-08-28/29). Sorting by date here would be actively misleading.
--->
+### Changed
 
-All notable changes to PrivacyFence are documented here.
+- **The app now looks like the website.** The app and the website share one set of design files
+  (colours, spacing, layout building blocks and the rules they follow; ADR 0078), so approvals,
+  settings, connections and passkeys use the website's colours, rounded cards, buttons and header
+  (which folds its links into a menu when the window is narrow), in light and in a dark mode based
+  on the website's own dark panel (ADR 0079). Keyboard focus shows the website's clear focus ring
+  instead of the browser's default outline. The approval card uses your system font instead of a
+  serif, which also makes every card smaller. Allow once is still the one filled button, Deny
+  still outlined, and Always allow still a small link. Writes, possible personal data and
+  unverified requesters still each have their own label or icon, not only a colour.
+- **Every page works on a phone.**
+  - **Settings:** in a narrow window the section list becomes a row of tabs above the page (and
+    Privacy Filter's services a second row), so each section gets the full width; every setting
+    shows its label and description above its switch or choice. In a wide window the section
+    list stays on the left, now as a card.
+  - **Approvals, connections and passkeys:** every request on the approvals list is a card. The
+    connections page shows each service's state as a label (Connected, Not connected, Not set up
+    by your organization), and the Telegram sign-in brings up the phone keypad for your number
+    and the number pad, with the code suggested, for the verification code.
+  - **The approval card and its confirmation dialogs** fit the space they are shown in, not only
+    the width of the screen: in a narrow browser window or a tablet the card's two columns stack
+    instead of squeezing the preview. In a wide desktop window the card uses more of the width,
+    so a PDF preview there has room for the browser's own viewer.
+  - **The pages shown when an approval is no longer pending, is still being prepared, or you are
+    not signed in** fit a phone screen instead of appearing zoomed out.
+  - Every button, checkbox and option on these pages is large enough to tap, and nothing needs a
+    mouse: a value cut short on the approval card (a long list of attendees, a long stated
+    reason) opens in full when you tap or click it, and what "Not verified" means next to a
+    requester is written under it rather than hidden in a tooltip.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### Fixed
+
+- **A PDF in an approval can now be read on a phone.** Phone browsers do not show a PDF inside
+  a page (Android shows nothing, iPhone one page that cannot scroll), so the approval card now
+  shows the document's first five pages as pictures, with a note such as "Showing pages 1–5 of
+  12". If a PDF cannot be drawn, its text is shown instead. See ADR 0080.
+- **Tables in an approval stay readable at any width.** A list of records with many columns, such
+  as Salesforce search results, is shown one record at a time as label and value lines whenever
+  the card has too little room for its columns — on a phone, and also on a desktop when the table
+  has many columns — instead of squeezing every column until the words break apart.
+- **A download link opened while signed out comes back to the download after you sign in.** It
+  used to leave you on the approvals page with the link lost, which is the usual case when a link
+  is tapped inside an AI app on a phone. You still have to sign in as the person the file was
+  prepared for.
+- The **Review** button on the approvals list showed its text in almost the same colour as the
+  button, several highlighted controls in settings were hard to read in dark mode, and Privacy
+  Filter's Allow/Redact/Block choice now uses the same green, amber and red in dark mode as in
+  light.
 
 ## [Unreleased]
 

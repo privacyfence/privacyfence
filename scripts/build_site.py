@@ -163,7 +163,6 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "packaging.md",
         "connector-qa.md",
         "downloads-and-release-kpi.md",
-        "org-mode-mobile-plan.md",
     }
 )
 
