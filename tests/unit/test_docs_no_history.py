@@ -49,6 +49,9 @@ PUBLISHED_DOCS = (
     "docs/salesforce-setup.md",
     "docs/atlassian-setup.md",
     "docs/telegram-setup.md",
+    "docs/connect-claude-desktop.md",
+    "docs/connect-claude-code.md",
+    "docs/connect-claude-ai.md",
 )
 
 CONTRIBUTOR_DOCS = (

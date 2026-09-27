@@ -71,18 +71,11 @@ as long as it asks for your PIN, fingerprint or face.
 
 ## Connect Claude Code
 
-From your own account, after logging back in:
-
-```bash
-PF_HANDOFF=/var/lib/privacyfence/handoff
-claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mcp_url")" \
-  --header "Authorization: Bearer $(privacyfence-app --print-mcp-token)"
-```
-
-`mcp_url` holds `http://127.0.0.1:8765/mcp` unless you changed `web.port`. `--print-mcp-token`
-mints your account's token the first time and prints the same one afterwards. Any other
-Streamable HTTP MCP client takes the same URL and header. To give Claude Code a local file, see
-[How it works](how-it-works.md).
+Claude Code talks to the daemon's local `/mcp` endpoint with your own bearer token. On Linux the
+URL is in `/var/lib/privacyfence/handoff/mcp_url` and the token comes from
+`privacyfence-app --print-mcp-token`, run from your own account after logging back in. The full
+command is in [Connect Claude Code](connect-claude-code.md#local-mode). Claude Desktop does not run
+on Linux, so the `.deb` carries no extension.
 
 ## Troubleshooting
 
