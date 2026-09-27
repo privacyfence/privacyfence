@@ -43,6 +43,7 @@ import json
 import re
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1091,7 +1092,7 @@ class TestV1PerUserSettings:
         r = client.get("/settings")
         assert r.status_code == 500
         assert "auto_accept_rules" in r.text
-        assert "users/carol/authority/config/settings.yaml" in r.text
+        assert str(Path("users", "carol", "authority", "config", "settings.yaml")) in r.text
 
     def test_non_admin_page_explains_without_the_server_path(self, tmp_path, monkeypatch):
         self._seed_v1(tmp_path, monkeypatch, "alice")
