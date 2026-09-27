@@ -85,7 +85,7 @@ fi
 # through the playwright package. The web container ships one at $PLAYWRIGHT_BROWSERS_PATH
 # and sets PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1, so `playwright install` is off the table.
 # That browser is whatever revision the container image was built with, not the one the
-# locked playwright expects (issue #760: playwright 1.63 wants build 1243, the image ships
+# locked playwright expects (at the time of writing, playwright 1.63 wants build 1243, the image ships
 # 1194), and the browser fixture's deliberate "Chromium not available" skip then turns the
 # whole suite into a green run of skips. A directory existing proves nothing, so launch it:
 # first the way the tests do by default, then through PRIVACYFENCE_TEST_CHROMIUM (the
