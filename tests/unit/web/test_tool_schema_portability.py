@@ -7,9 +7,9 @@ The limits are the intersection of the clients' own: the input schema's root is 
 into their own function-calling format resolve neither); the name matches
 ``^[a-zA-Z0-9_-]{1,64}$`` (OpenAI's function-name rule, the strictest); the description is non-empty
 and at most 1024 characters (OpenAI's function-description limit); and every tool carries all three
-annotation hints in either annotation mode, so no client falls back to the MCP defaults (a tool without ``readOnlyHint`` is
-assumed to write, and without ``destructiveHint`` to destroy). Which values the hints take is not
-this file's business -- see test_mcp_tools.py.
+annotation hints in either annotation mode, so no client falls back to the MCP defaults (a tool
+without ``readOnlyHint`` is assumed to write, and without ``destructiveHint`` to destroy). Which
+values the hints take is not this file's business -- see test_mcp_tools.py.
 
 The tools are built from every connector class the tools-reference generator discovers, the way
 test_systemic_gate_invariants.py does, so a new connector is covered the moment it exists; one test
