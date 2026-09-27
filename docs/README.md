@@ -88,6 +88,8 @@ privacyfence.eu.
   built, signed and installed.
 - [`connector-qa.md`](connector-qa.md) — QA accounts and seed data, the self-hosted live-check
   runner, recorded fixtures, and exploratory connector QA.
+- [`ai-client-qa.md`](ai-client-qa.md) — the manual check of each real AI client: the test
+  organization deployment, the per-client script, the evidence to record, and the results table.
 - [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation

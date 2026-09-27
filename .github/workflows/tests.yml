@@ -56,7 +56,9 @@ jobs:
           # this, `npm ci` below is a fully cold install from the registry
           # on every run (no lockfile changes needed to trigger it).
           cache: npm
-          cache-dependency-path: mcpb/shim/package-lock.json
+          cache-dependency-path: |
+            mcpb/shim/package-lock.json
+            tests/integration/ai_clients/package-lock.json
 
       - name: Install dependencies
         run: pip install -e ".[test]"
@@ -94,6 +96,14 @@ jobs:
         run: npm run build
         working-directory: mcpb/shim
 
+      # The exact-pinned AI-client CLIs the T3 contract tests run
+      # (tests/integration/test_claude_code_contract.py), integrity-checked
+      # against the committed lockfile. The pytest step below names the
+      # installed binary in CLAUDE_CODE_BIN, which turns the test's
+      # "not installed" skip into a failure: here it must run.
+      - name: Install AI-client CLIs
+        run: npm ci --prefix tests/integration/ai_clients
+
       # Plain `pytest` already fails the step (non-zero exit) on the first
       # failing test — no extra flags needed to enforce a 100% pass rate.
       # pytest-timeout (configured in pyproject.toml) also fails any test
@@ -103,6 +113,8 @@ jobs:
       # feed the coverage-floor check and the uploaded artifact below; this
       # step itself still only gates on the pass rate, not coverage.
       - name: Run test suite (100% pass rate required)
+        env:
+          CLAUDE_CODE_BIN: ${{ github.workspace }}/tests/integration/ai_clients/node_modules/.bin/claude
         run: |
           pytest -v --cov=src/privacyfence --cov-branch \
             --cov-report=term-missing \
