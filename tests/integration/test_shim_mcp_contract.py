@@ -386,9 +386,8 @@ async def test_each_extensions_manifest_args_get_the_annotations_it_promises(
     assert write_tool.read_only_hint is write_read_only_hint
     assert write_tool.destructive_hint is False
 
-    meta = {tool.name: tool.annotations for tool in mcp_tools_module.META_TOOLS}
-    for name, annotations in meta.items():
-        assert tools[name].annotations == annotations, name
+    for meta_tool in mcp_tools_module.META_TOOLS:
+        assert tools[meta_tool.name].annotations == meta_tool.annotations, meta_tool.name
 
 
 async def test_shim_file_bridge_upload_and_download_round_trip(
