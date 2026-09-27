@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 
 from privacyfence import deny_note_html
 from privacyfence.deny_feedback import INTENTS, MAX_NOTE_CHARS
-from privacyfence.deny_note_html import PANEL_JS, panel_html
+from privacyfence.deny_note_html import PANEL_JS, batch_panel_html, panel_html
 
 # The markup a card's content could carry, if anything ever copied it into the panel.
 HOSTILE = '</textarea><script>alert(1)</script>" value="PWNED" \' onfocus="x()"'
@@ -154,3 +154,35 @@ class TestScript:
 
     def test_ctrl_or_cmd_enter_submits_and_plain_enter_does_not(self):
         assert "e.key === 'Enter' && (e.ctrlKey || e.metaKey)" in PANEL_JS
+
+
+class TestBatchPanel:
+    """batch_panel_html: the approval list's panel, whose note goes to every selected request. It
+    is panel_html's panel plus one help line, and takes no content argument either."""
+
+    def test_is_the_card_panel_plus_the_same_note_line(self):
+        batch = batch_panel_html("pf-deny-note", "Deny selected and send")
+        single = panel_html("pf-deny-note", "Deny selected and send")
+        line = '<div class="field-help" id="pf-deny-note-help-batch">The same note goes to every selected request.</div>'
+        assert line in batch and line not in single
+        assert batch.replace(line, "").replace(
+            'aria-describedby="pf-deny-note-count pf-deny-note-help pf-deny-note-help-batch"',
+            'aria-describedby="pf-deny-note-count pf-deny-note-help"',
+        ) == single
+
+    def test_the_textarea_is_described_by_the_extra_line_too(self):
+        parsed = _parse(batch_panel_html("p", "Deny 2 and send"))
+        (textarea,) = [a for tag, a in parsed.tags if tag == "textarea"]
+        assert textarea["aria-describedby"] == "p-count p-help p-help-batch"
+
+    def test_takes_only_its_prefix_and_submit_label_and_renders_empty(self):
+        assert list(inspect.signature(batch_panel_html).parameters) == ["prefix", "submit_label"]
+        parsed = _parse(batch_panel_html("p", "Deny 2 and send"))
+        assert parsed.textarea_text == [""]
+        assert all("checked" not in a for tag, a in parsed.tags if tag == "input")
+        assert isinstance(deny_note_html.BATCH_HELP, str)
+
+    def test_carries_no_decision_attribute_and_keeps_the_submit_hook(self):
+        html = batch_panel_html("p", "Deny 2 and send")
+        assert "data-pf-action" not in html
+        assert '<button type="button" class="button danger" data-pf-note-submit>Deny 2 and send</button>' in html

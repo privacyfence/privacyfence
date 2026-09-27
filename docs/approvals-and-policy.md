@@ -88,7 +88,9 @@ shows:
 
 **Details** expands a short, metadata-only summary of the request (for example sender, file name,
 recipients). **Review →** opens the full [card](#the-approval-card), which is the only place you can
-approve a single request. **Deny** refuses it outright; there is no undo.
+approve a single request. **Deny** refuses it outright with no note; there is no undo. To tell the
+AI system why, open the card with **Review →** and use [Deny with a note…](#deny-with-a-note), or
+select the row and use **Deny selected with a note…** (below).
 
 When nothing is waiting the page says "Nothing is waiting. PrivacyFence is watching." — or, if no
 connector has been authenticated yet, "Nothing is governed yet." with a link to
@@ -100,6 +102,14 @@ Rows are grouped by connector and operation. Each row that can be batched has a 
 is a **Select all** per group and for the whole page. With rows selected:
 
 - **Deny selected** denies them all. Denying never needs a passkey.
+- **Deny selected with a note…** opens the card's [note panel](#deny-with-a-note) below the
+  toolbar: the same reasons, the same 500-character note, and the line "The same note goes to every
+  selected request." Its button names how many you are denying ("Deny 3 and send") and follows
+  your selection. Each selected request is denied with the same reason and note, and each AI system
+  that made one of them receives it. A request that was already decided elsewhere by then keeps the
+  answer it had and does not get the note. **Cancel** or **Esc** closes the panel and keeps what you
+  typed; unselecting everything closes it too. After the batch is denied, the panel starts empty
+  again.
 - **Approve selected** approves them all. Its label names what you are approving, for example
   "Approve 12 · 9 reads, 3 writes", so a write can't hide inside a batch of reads. If step-up
   applies to anything in the batch, one passkey prompt covers exactly the selected set — see
