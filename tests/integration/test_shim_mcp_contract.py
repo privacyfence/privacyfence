@@ -10,11 +10,9 @@ that drives the shim's stdio transport with the mcp client against a real
 /mcp, asserting that one initialize and one tools/call make the round trip
 with the bearer header attached and the mcp_url file honoured. That is a
 passthrough test, not a schema test: the shim knows no schemas, so there is
-nothing else to assert. The one thing a manifest can change about that
-passthrough is a header (``--tool-annotations``, ADR 0086/0087), and
-``test_each_extensions_manifest_args_get_the_annotations_it_promises`` proves
-each of the two extensions' own command lines ends up with the annotations it
-is named for.
+nothing else to assert -- except that the passthrough leaves the daemon's
+truthful tool annotations (ADR 0088) exactly as the daemon sent them, which
+``test_the_shim_passes_the_daemons_truthful_annotations_through`` checks.
 
 Requires Node on PATH; skipped automatically otherwise -- same posture as
 test_bridge_daemon_contract.py, and for the same reason this lives under
@@ -24,7 +22,6 @@ tests/integration/ rather than tests/unit/. Also requires the `mcp` package
 
 from __future__ import annotations
 
-import importlib.util
 import shutil
 import socket
 import subprocess
@@ -51,14 +48,6 @@ from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIM_DIR = REPO_ROOT / "mcpb" / "shim"
 SHIM_ENTRY = SHIM_DIR / "dist" / "shim.js"
-
-# The same renderer scripts/build_mcpb.sh writes both manifests with, loaded by path since
-# scripts/ is not part of the installed package.
-_MANIFEST_SPEC = importlib.util.spec_from_file_location(
-    "mcpb_manifest", REPO_ROOT / "scripts" / "mcpb_manifest.py"
-)
-mcpb_manifest = importlib.util.module_from_spec(_MANIFEST_SPEC)
-_MANIFEST_SPEC.loader.exec_module(mcpb_manifest)
 
 pytestmark = [
     pytest.mark.skipif(
@@ -158,10 +147,8 @@ class FileBridgeTestConnector(Connector):
         raise ValueError(f"unknown tool: {tool!r}")
 
 
-class ReadAndWriteConnector(Connector):
-    """One read and one write, so the two extensions' annotation modes are
-    distinguishable over the wire: truthful keeps the write a write,
-    all-read-only advertises it read-only."""
+class ReadWriteDeleteConnector(Connector):
+    """One tool of each kind truthful annotations tell apart (ADR 0088)."""
 
     @property
     def name(self) -> str:
@@ -170,7 +157,8 @@ class ReadAndWriteConnector(Connector):
     def tool_specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="annotations_test_read", description="A read.", params=[], read_only=True),
-            ToolSpec(name="annotations_test_write", description="A write.", params=[], read_only=False),
+            ToolSpec(name="annotations_test_write", description="A write.", params=[]),
+            ToolSpec(name="annotations_test_delete", description="A delete.", params=[], destructive=True),
         ]
 
     async def call(self, tool: str, args: dict) -> object:
@@ -249,9 +237,9 @@ async def running_mcp_server(shim_home, monkeypatch):
 
 @pytest.fixture
 async def running_annotations_server(shim_home, monkeypatch):
-    """Same shape as running_mcp_server, registering ReadAndWriteConnector."""
+    """Same shape as running_mcp_server, registering ReadWriteDeleteConnector."""
     monkeypatch.setattr(paths_module, "data_dir", lambda: _shim_data_dir(shim_home))
-    dispatcher = McpDispatcher(lambda: {"annotations_test": ReadAndWriteConnector()})
+    dispatcher = McpDispatcher(lambda: {"annotations_test": ReadWriteDeleteConnector()})
     port = _free_port()
     server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
     server.start()
@@ -351,43 +339,34 @@ async def test_shim_proxies_a_real_initialize_and_tool_call_over_mcp(
     assert running_mcp_server.calls == [("contract_test_echo", {"message": "hello through the shim"})]
 
 
-@pytest.mark.parametrize(
-    ("variant", "write_read_only_hint"),
-    [("default", False), ("no-prompts", True)],
-)
-async def test_each_extensions_manifest_args_get_the_annotations_it_promises(
-    running_annotations_server, built_shim_entry, shim_home, variant, write_read_only_hint,
+async def test_the_shim_passes_the_daemons_truthful_annotations_through(
+    running_annotations_server, built_shim_entry, shim_home,
 ):
-    """ADR 0087: the two ``.mcpb`` files run the same shim.js and differ only
-    in their manifest. This starts the real shim with exactly the ``args``
-    each manifest gives Claude Desktop (``${__dirname}`` resolved the way the
-    host resolves it) and reads back what the real ``/mcp`` advertises: the
-    default extension gets the daemon's truthful default, the no-prompts one
-    gets every connector tool read-only, and PrivacyFence's own meta-tools
-    keep their declared annotations under both (ADR 0086)."""
-    manifest = mcpb_manifest.render(variant, "0.0.0")
-    args = [
-        arg.replace("${__dirname}/server/shim.js", str(built_shim_entry))
-        for arg in manifest["server"]["mcp_config"]["args"]
-    ]
+    """ADR 0088: the one extension there is starts the real shim with no
+    arguments, and what reaches Claude Desktop is what the daemon says --
+    the read read-only and idempotent, the write neither, only the delete
+    destructive -- with PrivacyFence's own meta-tools unchanged too."""
     params = StdioServerParameters(
         command="node",
-        args=args,
+        args=[str(built_shim_entry)],
         env={"HOME": str(shim_home), "USERPROFILE": str(shim_home), "LOCALAPPDATA": str(shim_home)},
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            tools = {t.name: t for t in (await session.list_tools()).tools}
+            tools = {t.name: t.annotations for t in (await session.list_tools()).tools}
 
-    read_tool = tools["annotations_test_read"].annotations
-    write_tool = tools["annotations_test_write"].annotations
-    assert read_tool.read_only_hint is True
-    assert write_tool.read_only_hint is write_read_only_hint
-    assert write_tool.destructive_hint is False
-
+    triples = {
+        name: (a.read_only_hint, a.destructive_hint, a.idempotent_hint)
+        for name, a in tools.items() if name.startswith("annotations_test_")
+    }
+    assert triples == {
+        "annotations_test_read": (True, False, True),
+        "annotations_test_write": (False, False, False),
+        "annotations_test_delete": (False, True, False),
+    }
     for meta_tool in mcp_tools_module.META_TOOLS:
-        assert tools[meta_tool.name].annotations == meta_tool.annotations, meta_tool.name
+        assert tools[meta_tool.name] == meta_tool.annotations, meta_tool.name
 
 
 async def test_shim_file_bridge_upload_and_download_round_trip(

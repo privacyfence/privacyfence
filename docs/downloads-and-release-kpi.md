@@ -67,7 +67,7 @@ every job that resolves a version runs `r2_release.py check-tag` before publishi
 | `publish-pypi.yml` · `publish-r2` | the sdist and wheel (`dist/*`); runs after `build` and `wait_for_build` |
 | `build.yml` · `finalize-release` | `manifest.json`, then `latest.json` (`r2_release.py finalize`) |
 
-The macOS `.pkg` and both `.mcpb` files travel inside the DMG and are never uploaded on their own
+The macOS `.pkg` and `.mcpb` travel inside the DMG and are never uploaded on their own
 (`scripts/build_dmg.sh`).
 
 ### Public distribution per channel

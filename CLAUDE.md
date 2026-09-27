@@ -82,16 +82,15 @@ to move the release forward onto a new commit, or to delete the unwanted tag bef
 retagging. A version that has already published artifacts stays published; cut the next one. See
 [ADR 0022](docs/adr/0022-one-release-tag-per-commit.md).
 
-**macOS ships one file.** The DMG carries the `.pkg` and the two Claude Desktop extensions
-(`PrivacyFence.mcpb` and `PrivacyFence-no-prompts.mcpb`, which differ only in their manifest — see
-[ADR 0087](docs/adr/0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md))
-and nothing else; the `.pkg` and the `.mcpb` files are never uploaded or attached on their own, so
-releasing the DMG releases all of them. How each artifact
+**macOS ships one file.** The DMG carries the `.pkg` and the one Claude Desktop extension,
+`PrivacyFence.mcpb` ([ADR 0088](docs/adr/0088-tool-annotations-are-always-truthful.md) removed the
+second one ADR 0087 added), and nothing else; the `.pkg` and the `.mcpb` are never uploaded or
+attached on their own, so releasing the DMG releases all three. How each artifact
 is built and signed is [`docs/packaging.md`](docs/packaging.md).
 
 That tag push is what `.github/workflows/build.yml` **and** `.github/workflows/publish-pypi.yml`
 both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
-macOS `.pkg` installer and both `.mcpb` files; `scripts/build_dmg.sh` builds all of them), the Windows
+macOS `.pkg` installer and the `.mcpb`; `scripts/build_dmg.sh` builds all three), the Windows
 installer and the `.deb` (running each one's own packaged-artifact smoke test, see "Packaged-artifact
 release gating" below) and generates the SBOMs, the latter builds the sdist/wheel from the same tag. The two
 workflows trigger independently but no longer publish independently: `publish-pypi.yml`'s

@@ -53,30 +53,23 @@ install. Setting it up takes one to three hours the first time.
 5. Sign in at `/login`. On `/connect`, connect **Google Calendar** (for the read and the gated
    write) and **Google Drive** (for the file steps). Enroll a passkey on `/security` if step-up is
    on.
-6. Build a second bundle, identical except for `--tool-annotations all-read-only`, and keep both.
-   The runs under the all-read-only mode install that one
-   ([section 6, "Changing a bundle later"](org-mode-setup-guide.md#changing-a-bundle-later)) and
-   switch back afterwards.
 
 For the local-mode rows, use a packaged install of the build under test (the `build.yml`
 pre-flight's artifact, see [`release-testing.md`](release-testing.md#gates-in-order)), connected to
 the same Google Calendar and Drive accounts.
 
-## Annotation modes
+## What the client receives
 
-Each client is run twice, once per tool-annotation mode:
-
-| Mode | What the client receives | How to select it |
-|---|---|---|
-| **truthful** (default) | Read tools with `readOnlyHint=true`; write tools with `readOnlyHint=false`; the tools that delete with `destructiveHint=true`. | Organization mode: the default bundle. Local mode: nothing to set. |
-| **all-read-only** | Every tool with `readOnlyHint=true, destructiveHint=false, idempotentHint=true`. | Organization mode: the bundle built with `--tool-annotations all-read-only`. Local mode: the `X-PrivacyFence-Tool-Annotations: all-read-only` header on the connection (Claude Code: an extra `--header`). |
-
-The question each pair of runs answers is whether the client asks for its own confirmation before a
-write. PrivacyFence's approval card appears either way; a client prompt comes on top of it.
+PrivacyFence advertises every tool truthfully, and there is only one annotation mode
+([ADR 0088](adr/0088-tool-annotations-are-always-truthful.md)): read tools with
+`readOnlyHint=true`; write tools with `readOnlyHint=false`; the tools that delete with
+`destructiveHint=true`. The question each run answers is whether the client asks for its own
+confirmation before a write, and whether it lets the user always allow the tool so that it stops
+asking. PrivacyFence's approval card appears either way; a client prompt comes on top of it.
 
 ## Per-client script
 
-Take each client through these steps, in order, once per annotation mode. Set the client up as its
+Take each client through these steps, in order. Set the client up as its
 own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude Code" sections of
 [`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md) and
 [`install-linux.md`](install-linux.md); for organization mode,
@@ -89,7 +82,9 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
    It returns without an approval card.
 3. **One gated write.** Ask for a write, for example a new event with `calendar_create_event`.
    - Note whether the client showed **its own confirmation first**, before any call reached
-     PrivacyFence, and what it said.
+     PrivacyFence, and what it said, and whether it offered to always allow the tool. If it did,
+     always-allow it and repeat the write: the client no longer asks, and PrivacyFence's card
+     still does.
    - An approval card appears: in local mode through the companion's **Open Approvals**
      ([ADR 0062](adr/0062-only-a-companion-attested-session-may-approve.md)), in organization mode
      at `/approvals` after sign-in. Note its "AI system" line.
@@ -132,10 +127,10 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
 
 Post one comment per client run on the issue or pull request the run belongs to, with:
 
-- **The client:** name and version, OS, date, the PrivacyFence version, and the annotation mode.
+- **The client:** name and version, OS, date, and the PrivacyFence version.
 - **The result:** pass or fail per step of the script, and screenshots of any failure.
-- **Client confirmation:** whether the client asked for its own confirmation before the write, and
-  its wording.
+- **Client confirmation:** whether the client asked for its own confirmation before the write, its
+  wording, and whether always-allowing the tool stopped it asking.
 - **Attribution:** the approval card's "AI system" line, and the audit entry's `agent_id`,
   `agent_name`, `agent_version` and `agent_source`.
 - **Organization mode only:**
@@ -145,20 +140,15 @@ Post one comment per client run on the issue or pull request the run belongs to,
 ## Recording results
 
 Add a row per run to the table below in the pull request that saves its fixture, replacing the row
-of the same client, mode and annotation mode. **Result** is `pass`, or `fail` with a link to the
-evidence. **Registered `client_name`** is organization mode only (`—` for local mode). **Client
-confirmation?** is `yes` (and what it asked) or `no`. **Fixture captured** links the fixture
-directory, or says `no` and why.
+of the same client and mode. **Result** is `pass`, or `fail` with a link to the evidence.
+**Registered `client_name`** is organization mode only (`—` for local mode). **Client
+confirmation?** is `yes` (what it asked, and whether always-allowing the tool stopped it) or `no`.
+**Fixture captured** links the fixture directory, or says `no` and why.
 
-| Client | Version | OS | Mode | Annotations | Date | Result | Registered `client_name` | `clientInfo` name | Client confirmation? | Fixture captured |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Claude Desktop (extension) | | | local | truthful | | not run | — | | | |
-| Claude Desktop (extension) | | | local | all-read-only | | not run | — | | | |
-| Claude Desktop (custom connector) | | | org | truthful | | not run | | | | |
-| Claude Desktop (custom connector) | | | org | all-read-only | | not run | | | | |
-| Claude Code | | | local | truthful | | not run | — | | | |
-| Claude Code | | | local | all-read-only | | not run | — | | | |
-| Claude Code | | | org | truthful | | not run | | | | |
-| Claude Code | | | org | all-read-only | | not run | | | | |
-| claude.ai | | web | org | truthful | | not run | | | | |
-| claude.ai | | web | org | all-read-only | | not run | | | | |
+| Client | Version | OS | Mode | Date | Result | Registered `client_name` | `clientInfo` name | Client confirmation? | Fixture captured |
+|---|---|---|---|---|---|---|---|---|---|
+| Claude Desktop (extension) | | | local | | not run | — | | | |
+| Claude Desktop (custom connector) | | | org | | not run | | | | |
+| Claude Code | | | local | | not run | — | | | |
+| Claude Code | | | org | | not run | | | | |
+| claude.ai | | web | org | | not run | | | | |

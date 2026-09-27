@@ -3,8 +3,7 @@
 Claude Desktop works with both deployments:
 
 - **Local mode**: PrivacyFence installed on the same computer. Claude Desktop connects through
-  one of PrivacyFence's two extensions, `PrivacyFence.mcpb` or `PrivacyFence-no-prompts.mcpb`,
-  which finds the running daemon by itself.
+  PrivacyFence's extension, `PrivacyFence.mcpb`, which finds the running daemon by itself.
 - **Organization mode**: PrivacyFence run centrally by your organization. Claude Desktop connects
   to it as a custom connector and you sign in with your organization account.
 
@@ -14,13 +13,12 @@ runs on macOS and Windows; on Linux, use [Claude Code](connect-claude-code.md).
 
 ## Local mode
 
-PrivacyFence comes with two extensions. Install **one** of them; which one is explained in
-[Confirmations](#confirmations):
+Install the extension that came with PrivacyFence:
 
-| Platform | Where the extensions are | How to install one |
+| Platform | Where the extension is | How to install it |
 |---|---|---|
-| macOS | `PrivacyFence.mcpb` and `PrivacyFence-no-prompts.mcpb` on the DMG | Double-click it; see [Install on macOS](install-macos.md#connect-claude-desktop). |
-| Windows | `PrivacyFence-<version>.mcpb` and `PrivacyFence-no-prompts-<version>.mcpb` in `%ProgramFiles%\PrivacyFence\` | The installer's last page offers the default one; see [Install on Windows](install-windows.md#connect-claude-desktop). |
+| macOS | `PrivacyFence.mcpb` on the DMG | Double-click it; see [Install on macOS](install-macos.md#connect-claude-desktop). |
+| Windows | `%ProgramFiles%\PrivacyFence\PrivacyFence-<version>.mcpb` | The installer's last page offers it; see [Install on Windows](install-windows.md#connect-claude-desktop). |
 | Linux | none | Claude Desktop does not run on Linux. |
 
 Claude Desktop opens and offers to install the extension; accept. There is nothing to configure and
@@ -80,33 +78,13 @@ Two things can ask you before a tool runs:
    Desktop was told or allowed. This is the confirmation that decides; see
    [Approvals and policy](approvals-and-policy.md).
 
-By default PrivacyFence tells the client what each tool does: reads are read-only, writes are
-writes, and the two tools that delete something are destructive
+PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
+and the two tools that delete something are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So Claude Desktop may
-ask before a write, in front of PrivacyFence's own card.
-
-In local mode, the extension you install decides which of the two you get:
-
-| Extension | Shown in Claude Desktop as | Claude Desktop asks before a write | PrivacyFence's approval |
-|---|---|---|---|
-| `PrivacyFence.mcpb` | PrivacyFence | It may, depending on your Claude Desktop settings | Asks, as configured |
-| `PrivacyFence-no-prompts.mcpb` | PrivacyFence (no Claude prompts) | No: every tool is advertised read-only | Asks, as configured |
-
-- **Pick `PrivacyFence.mcpb`** if you want Claude Desktop to tell you, before a write, what it is
-  about to do, or if you have set Claude Desktop to allow PrivacyFence's tools anyway.
-- **Pick `PrivacyFence-no-prompts.mcpb`** if you would otherwise confirm the same write twice, once
-  in Claude Desktop and once on PrivacyFence's card. Nothing is less protected: every call still
-  goes through PrivacyFence's gate, and the card is the confirmation that decides.
-
-Install only one. With both, Claude Desktop lists every tool twice; to switch, remove the one you
-have under **Settings → Extensions** and install the other. The no-prompts extension sends
-`X-PrivacyFence-Tool-Annotations: all-read-only` on every request, which wins over the
-organization bundle's setting on this computer.
-
-In organization mode there is no extension to choose: the administrator decides for everyone by
-building the organization bundle with `--tool-annotations all-read-only`, which also applies in
-local mode when no extension asks otherwise. The organization bundle options are listed in
-[Configuration reference](configuration-reference.md#organization-config-bundle-org_configjson).
+ask before a write, in front of PrivacyFence's own card. There is one extension and no switch that
+advertises writes as read-only. If you would rather confirm only once, on PrivacyFence's card,
+choose to always allow the tool the first time Claude Desktop asks about it; it does not ask about
+that tool again. Every call still goes through PrivacyFence's gate.
 
 ## How the client is identified
 
@@ -123,7 +101,7 @@ See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking).
 |---|---|
 | Claude Desktop reports no PrivacyFence server, or the extension's tools never appear | The daemon is stopped. Choose **Start PrivacyFence…** from the companion's menu; the extension picks it up by itself. |
 | Double-clicking `PrivacyFence.mcpb` does nothing on Windows | Drag the file onto Claude Desktop's **Settings → Extensions** page instead; see [Install on Windows](install-windows.md#connect-claude-desktop). |
-| Every tool appears twice | Two PrivacyFence connections are installed: both extensions, or an extension and a custom connector. Remove one. |
+| Every tool appears twice | The extension and a custom connector are both installed. Remove one. |
 | Tools are listed but none of your services' tools | No service is connected yet. Ask Claude to call `privacyfence_status`; connect services in Settings (local mode) or at `/connect` (organization mode). See [Connecting a service](connecting-a-service.md). |
 | The custom connector's **Connect** fails | The URL must end in `/mcp` and be reachable over public HTTPS. Your administrator can check it with [the validation checklist](org-mode-setup-guide.md#validation-checklist). |
 | A call waits and nothing happens | It is waiting for your approval. Open Approvals from the companion, or `/approvals` in organization mode. |

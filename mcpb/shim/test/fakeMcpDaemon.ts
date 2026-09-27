@@ -18,7 +18,6 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 export class FakeMcpDaemon {
   url = "";
   receivedAuthHeaders: (string | undefined)[] = [];
-  receivedToolAnnotationsHeaders: (string | undefined)[] = [];
   echoedArgs: unknown[] = [];
   private server: http.Server | null = null;
   private mcpServer: McpServer;
@@ -46,8 +45,6 @@ export class FakeMcpDaemon {
     await new Promise<void>((resolve) => {
       this.server = http.createServer((req, res) => {
         this.receivedAuthHeaders.push(req.headers.authorization);
-        const annotations = req.headers["x-privacyfence-tool-annotations"];
-        this.receivedToolAnnotationsHeaders.push(Array.isArray(annotations) ? annotations.join(",") : annotations);
         if (req.headers.authorization !== `Bearer ${this.requiredToken}`) {
           res.writeHead(401).end();
           return;
