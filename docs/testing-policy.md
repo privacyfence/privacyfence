@@ -59,7 +59,10 @@ and on dispatch. A 100% pass rate is required to merge.
 
 `pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
 also runs `playwright install --with-deps chromium`. Browser tests skip when Playwright or Chromium
-is missing, and layer-6 tests skip when no built artifact is under `dist/`.
+is missing, and layer-6 tests skip when no built artifact is under `dist/`. On a machine whose
+Chromium is not the revision the installed `playwright` expects, set `PRIVACYFENCE_TEST_CHROMIUM`
+to that binary rather than accepting the skips; the Claude Code on the web session-start hook
+probes for this and exports it.
 
 **Coverage is a ratchet.** `check_coverage_floor.py` fails if overall coverage, or any module on its
 security-critical list (`MODULE_FLOORS`), drops below its recorded floor. Raise a floor in the PR

@@ -180,7 +180,10 @@ def render_style_guide(out: Path) -> list[str]:
     guide.write_text(style_guide_html(), encoding="utf-8")
     written = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        # Same escape hatch as tests/website_site.py's chromium_launch_kwargs(), which the capture
+        # run below goes through too: a Chromium whose revision the installed playwright doesn't expect.
+        chromium = os.environ.get("PRIVACYFENCE_TEST_CHROMIUM")
+        browser = p.chromium.launch(**({"executable_path": chromium} if chromium else {}))
         for name, size in WIDTHS.items():
             for scheme in SCHEMES:
                 ctx = browser.new_context(
