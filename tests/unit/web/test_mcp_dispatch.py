@@ -23,6 +23,7 @@ from privacyfence import local_files
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolSpec
+from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedback
 from privacyfence.gate import is_unattended
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.web.mcp_dispatch import McpDispatcher
@@ -751,3 +752,111 @@ class TestAwaitApproval:
             result = await dispatcher.await_approval([approval.id], timeout_seconds=1)
 
         assert result == {approval.id: "unknown"}
+
+
+class TestAwaitApprovalDenialFeedback:
+    """ADR 0082: every approval_id value stays a bare status string; a denied
+    id with feedback also appears under the one reserved denial_feedback key."""
+
+    FB = DenialFeedback("rewrite", "Make it shorter.")
+
+    def _setup(self):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        return registry, _dispatcher({}, registry=registry)
+
+    def _card(self, registry, key):
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key=key, connector="gmail", tool="gmail_create_draft", gate_kind="popup", request_id=key,
+        )
+        return approval
+
+    def _deny(self, registry, approval, feedback):
+        registry.answer(approval.id, "deny", feedback=feedback)
+        registry.finalize(approval.id, "deny")
+
+    async def test_denied_with_feedback_adds_the_reserved_key(self):
+        registry, dispatcher = self._setup()
+        denied = self._card(registry, "k1")
+        approved = self._card(registry, "k2")
+        self._deny(registry, denied, self.FB)
+        registry.finalize(approved.id, "accept")
+
+        result = await dispatcher.await_approval([denied.id, approved.id], timeout_seconds=1)
+
+        assert result == {
+            denied.id: "denied",
+            approved.id: "approved",
+            "denial_feedback": {
+                denied.id: {
+                    "intent": "rewrite", "note": "Make it shorter.",
+                    "guidance": "The user wants the content changed. Revise it, then ask again.",
+                },
+            },
+        }
+        json.dumps(result)  # plain JSON all the way down
+
+    async def test_plain_deny_has_no_reserved_key(self):
+        registry, dispatcher = self._setup()
+        denied = self._card(registry, "k1")
+        self._deny(registry, denied, DenialFeedback())
+        result = await dispatcher.await_approval([denied.id], timeout_seconds=1)
+        assert result == {denied.id: "denied"}
+
+    async def test_only_denied_ids_with_feedback_are_listed(self):
+        registry, dispatcher = self._setup()
+        noted, plain, pending = (self._card(registry, k) for k in ("k1", "k2", "k3"))
+        self._deny(registry, noted, DenialFeedback(intent="stop"))
+        self._deny(registry, plain, DenialFeedback())
+
+        result = await dispatcher.await_approval([noted.id, plain.id, pending.id], timeout_seconds=1)
+
+        assert result["denial_feedback"] == {
+            noted.id: {"intent": "stop", "note": None, "guidance": INTENTS["stop"][1]},
+        }
+        assert result[pending.id] == "pending"
+        assert all(isinstance(v, str) for k, v in result.items() if k != "denial_feedback")
+
+    async def test_foreign_principal_sees_neither_status_nor_feedback(self):
+        registry, dispatcher = self._setup()
+        with principal_scope(Principal(id="alice")):
+            denied = self._card(registry, "k1")
+        self._deny(registry, denied, self.FB)
+
+        with principal_scope(Principal(id="bob")):
+            result = await dispatcher.await_approval([denied.id], timeout_seconds=1)
+
+        assert result == {denied.id: "unknown"}
+
+    async def test_owner_sees_their_own_feedback_in_org_mode(self):
+        registry, dispatcher = self._setup()
+        with principal_scope(Principal(id="alice")):
+            denied = self._card(registry, "k1")
+        self._deny(registry, denied, self.FB)
+
+        with principal_scope(Principal(id="alice")):
+            result = await dispatcher.await_approval([denied.id], timeout_seconds=1)
+
+        assert result["denial_feedback"][denied.id]["note"] == "Make it shorter."
+
+    async def test_approval_ids_are_uuid4_hex_and_cannot_be_the_reserved_key(self):
+        import uuid
+
+        registry, _ = self._setup()
+        approval = self._card(registry, "k1")
+        assert uuid.UUID(hex=approval.id).version == 4
+        assert uuid.UUID(hex=approval.id).hex == approval.id
+        assert approval.id != DENIAL_FEEDBACK_KEY
+        assert len(DENIAL_FEEDBACK_KEY) != 32  # a uuid4().hex is always 32 hex characters
+
+    def test_tool_description_mentions_denial_feedback(self):
+        from privacyfence.web.mcp_tools import AWAIT_APPROVAL_TOOL
+
+        description = AWAIT_APPROVAL_TOOL.description
+        assert (
+            "'denied' (a human said no -- re-issuing will not change that; don't retry, ask the user "
+            "how to proceed unless denial_feedback says otherwise)"
+        ) in description
+        assert (
+            "A 'denied' approval may also have an entry under denial_feedback: that is the user's own "
+            "instruction for what to do instead, so follow it rather than retrying."
+        ) in description

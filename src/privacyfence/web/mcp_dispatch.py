@@ -23,6 +23,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
 from .. import local_files
 from ..connector import Connector
+from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
 from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe as policy_describe
@@ -530,7 +531,7 @@ class McpDispatcher:
         except Exception as exc:
             logger.warning("Audit log write failed for status: %s", exc)
 
-    async def await_approval(self, approval_ids: list[str], timeout_seconds: int = 30) -> dict[str, str]:
+    async def await_approval(self, approval_ids: list[str], timeout_seconds: int = 30) -> dict[str, Any]:
         """privacyfence_await_approval's handler: long-poll ``approval_ids``
         against the registry and return their current status once anything
         changes, or once the (clamped) timeout elapses -- whichever comes
@@ -538,7 +539,13 @@ class McpDispatcher:
         approvals.PendingApprovalRegistry.await_status's own docstring for
         the exact vocabulary). Scoped to current_principal(): an id
         belonging to another principal reads as "unknown", the same
-        cross-principal check every other approval read makes."""
+        cross-principal check every other approval read makes.
+
+        Every ``approval_id`` value stays a bare status string. A denied id
+        whose human left feedback also appears under the one reserved
+        top-level key ``DENIAL_FEEDBACK_KEY`` (ADR 0082), which no approval
+        id can equal (they are ``uuid4().hex``); the key is absent unless at
+        least one denied id in this call has non-empty feedback."""
         ids = [str(i) for i in (approval_ids or [])]
         if not ids:
             return {}
@@ -556,8 +563,22 @@ class McpDispatcher:
                 for approval_id in ids
             }
             if time.time() >= deadline or any(s != "pending" for s in statuses.values()):
-                return statuses
+                return self._with_denial_feedback(statuses, principal_id)
             await asyncio.sleep(self._AWAIT_APPROVAL_POLL_SECONDS)
+
+    def _with_denial_feedback(self, statuses: dict[str, str], principal_id: str) -> dict[str, Any]:
+        assert self._registry is not None  # nosec B101  # await_approval returned early without one
+        entries: dict[str, Any] = {}
+        for approval_id, status in statuses.items():
+            if status != "denied":
+                continue
+            feedback = self._registry.denial_feedback(approval_id, principal_id=principal_id)
+            if feedback is not None and not feedback.is_empty:
+                entries[approval_id] = await_entry(feedback)
+        result: dict[str, Any] = dict(statuses)
+        if entries:
+            result[DENIAL_FEEDBACK_KEY] = entries
+        return result
 
     # ------------------------------------------------------------------ #
     # Unattended sessions -- cleared explicitly by end_unattended_session,

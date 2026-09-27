@@ -168,6 +168,7 @@ from .auto_accept import (
     remove_policy_v2_rule,
     temp_accept_key,
 )
+from .deny_feedback import DenialFeedback, denial_message
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
@@ -187,7 +188,12 @@ class GateDeniedError(RuntimeError):
     """Raised by ``gated_call()``/``propose_policy_change()``/
     ``_deny_unattended()`` for a call denied by policy or by the user's own
     decision -- "denied", never "failed". Composed only of static text (see
-    each raise site below): unlike the bare ``RuntimeError(str(exc))`` every
+    each raise site below), with one exception: ``by_user()``, the human
+    denial, may carry the deciding human's own deny note -- sanitized,
+    capped and JSON-quoted behind a static label by
+    deny_feedback.denial_message (ADR 0082). That text is the user's own
+    words to their own agent, never connector or request data. Unlike the
+    bare ``RuntimeError(str(exc))`` every
     connector's own ``_fetch``-style helper raises to wrap a ``*ClientError``
     (gmail_client.py and friends -- see that pattern in connectors/*.py),
     this type never carries a third party's own exception text.
@@ -200,6 +206,14 @@ class GateDeniedError(RuntimeError):
     reason -- use this instead so a future call site here gets the same
     trust by construction rather than by accident.
     """
+
+    @classmethod
+    def by_user(cls, feedback: DenialFeedback) -> GateDeniedError:
+        """A human's Deny, with whatever feedback they gave (ADR 0082). The
+        message always starts "Request denied by user." -- see
+        deny_feedback.denial_message. The only constructor that may carry
+        user text; unattended and policy denials keep their static text."""
+        return cls(denial_message(feedback))
 
 
 # Thin delegations to the pluggable ApprovalUI seam (approval_ui.py), kept as
@@ -414,14 +428,14 @@ async def _resolve_decision(
     pii_categories: list[str],
     claude_reason: str,
     interact: Any,
-) -> tuple[Any, str, float | None, str, str]:
+) -> tuple[Any, Any, float | None, str, str, DenialFeedback]:
     """Shared plumbing for the review/popup gate branches: get a decision
     for this call, either by running ``interact`` (see each branch's own
     definition of it) directly, or -- when ``registry`` is not None --
     checking the decision ledger first, then registering (or coalescing
     onto) a pending approval and waiting up to ``registry.hold_window``.
 
-    Returns ``(decision, rule_name, decided_at, decided_via, batch_id)``.
+    Returns ``(decision, rule_name, decided_at, decided_via, batch_id, feedback)``.
     ``decision`` is one of "accept"/"deny"/"accept_all"/"auto_accepted", or
     the module-level ``_PENDING`` sentinel -- in which case ``rule_name``
     is instead the ``PendingApproval`` the caller should build a pending
@@ -431,7 +445,10 @@ async def _resolve_decision(
     "no registry" / legacy path never had a separate decide-then-release
     split to time, so there is nothing new to report for it.
     ``decided_via``/``batch_id`` are "" unless the human decided this through the binder's batch decide
-    endpoint -- see approvals.PendingApproval's own fields.
+    endpoint -- see approvals.PendingApproval's own fields. ``feedback`` is
+    the human's deny feedback (ADR 0082): empty unless ``decision`` is
+    "deny" and the human gave some, and always empty on the no-registry
+    path, which has no approval for a decide POST to attach it to.
 
     Raises approvals.IdenticalWriteAwaitingApprovalError, releasing nothing,
     for a write whose identical twin is still waiting on its own approval
@@ -440,11 +457,14 @@ async def _resolve_decision(
     """
     if registry is None:
         decision, rule_name = await interact(None)
-        return decision, rule_name, None, "", ""
+        return decision, rule_name, None, "", "", DenialFeedback()
 
     ledger_hit = registry.consume_ledger(dedupe_key)
     if ledger_hit is not None:
-        return ledger_hit.decision, ledger_hit.rule_name, ledger_hit.decided_at, ledger_hit.decided_via, ledger_hit.batch_id
+        return (
+            ledger_hit.decision, ledger_hit.rule_name, ledger_hit.decided_at, ledger_hit.decided_via,
+            ledger_hit.batch_id, ledger_hit.feedback,
+        )
 
     approval, created = registry.register_or_coalesce(
         dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind=gate_kind,
@@ -469,7 +489,7 @@ async def _resolve_decision(
 
         decided = await registry.wait_async(approval, hold_window)
         if not decided:
-            return _PENDING, approval, None, "", ""
+            return _PENDING, approval, None, "", "", DenialFeedback()
         # Decided within the hold window: this call collects the outcome
         # directly, so a write is consumed exactly as a ledger hit would be,
         # and an identical write afterwards goes back through the gate
@@ -478,7 +498,11 @@ async def _resolve_decision(
         registry.mark_collected(approval)
     finally:
         registry.release_waiter(approval)
-    return approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via, approval.batch_id
+    feedback = approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback()
+    return (
+        approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via,
+        approval.batch_id, feedback,
+    )
 
 
 async def _drive_interaction(registry: PendingApprovalRegistry, approval: PendingApproval, interact: Any) -> None:
@@ -495,6 +519,9 @@ async def _drive_interaction(registry: PendingApprovalRegistry, approval: Pendin
     except Exception:
         logger.exception("Approval interaction for %s failed -- resolving as denied", approval.id)
         decision, rule_name = "deny", ""
+        # Not the human's deny: whatever feedback a decide POST attached
+        # does not describe this outcome, so the agent gets the default text.
+        approval.deny_feedback = DenialFeedback()
     registry.finalize(approval.id, decision, rule_name)
 
 
@@ -576,6 +603,11 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
                 decision="expired", auto_accept_rule=approval.final_rule_name,
                 pii_detected=approval.pii_detected, pii_categories=approval.pii_categories,
                 claude_reason=approval.claude_reason,
+                # A deny nobody collected -- the normal case when the agent
+                # learned of it through privacyfence_await_approval and never
+                # re-issued. Records that feedback was given, never its text
+                # (ADR 0083).
+                deny_feedback=approval.deny_feedback if approval.final_decision == "deny" else None,
             )
 
 
@@ -957,7 +989,7 @@ async def gated_call(
 
     def audit(
         *, decision: str, auto_accept_rule: str, pii_detected: bool, decided_at: float | None = None,
-        decided_via: str = "", batch_id: str = "", rule_id: str = "",
+        decided_via: str = "", batch_id: str = "", rule_id: str = "", deny_feedback: DenialFeedback | None = None,
     ) -> None:
         nonlocal audited
         audited = True
@@ -968,7 +1000,7 @@ async def gated_call(
             pii_categories=audit_pii_categories,
             pii_match_details=_pii_match_details_for_audit(audit_pii_matches, decision),
             claude_reason=claude_reason, decided_at=decided_at, delivery=delivery,
-            decided_via=decided_via, batch_id=batch_id, rule_id=rule_id,
+            decided_via=decided_via, batch_id=batch_id, rule_id=rule_id, deny_feedback=deny_feedback,
         )
 
     try:
@@ -1062,7 +1094,7 @@ async def gated_call(
                     d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at, decided_via, batch_id = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id, feedback = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="review",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
@@ -1088,9 +1120,9 @@ async def gated_call(
             if decision == "deny":
                 audit(
                     decision="rejected", auto_accept_rule="", pii_detected=bool(pii_categories),
-                    decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
+                    decided_at=decided_at, decided_via=decided_via, batch_id=batch_id, deny_feedback=feedback,
                 )
-                raise GateDeniedError("Request denied by user")
+                raise GateDeniedError.by_user(feedback)
 
             if decision == "accept_all":
                 audit(
@@ -1181,7 +1213,7 @@ async def gated_call(
                         d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at, decided_via, batch_id = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id, feedback = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="popup",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
@@ -1235,9 +1267,9 @@ async def gated_call(
 
             audit(
                 decision="rejected", auto_accept_rule="", pii_detected=bool(upload_pii_categories),
-                decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
+                decided_at=decided_at, decided_via=decided_via, batch_id=batch_id, deny_feedback=feedback,
             )
-            raise GateDeniedError("Request denied by user")
+            raise GateDeniedError.by_user(feedback)
     except asyncio.CancelledError:
         # The MCP client gave up on this request -- its request task gets
         # cancelled when the Streamable HTTP connection drops, most often
@@ -1353,7 +1385,9 @@ async def propose_policy_change(
             tool_name="", summary=summary, sender="", decision="rejected",
             auto_accept_rule="", pii_detected=False, claude_reason=reason,
         )
-        raise GateDeniedError("Request denied by user")
+        # A confirm dialog's Cancel carries no feedback (out of scope for
+        # ADR 0082), but still gets the clearer default text.
+        raise GateDeniedError.by_user(DenialFeedback())
 
     if operation == "remove":
         changed = remove_policy_v2_rule(rule_id)
@@ -1454,8 +1488,9 @@ def _default_details(raw_data: Any) -> str:
 def _audit(
     *, created_at, request_id, connector, tool, tool_name, summary, sender, decision, auto_accept_rule,
     pii_detected=False, pii_categories=None, pii_match_details="", claude_reason="", decided_at=None,
-    delivery="", decided_via="", batch_id="", rule_id="",
+    delivery="", decided_via="", batch_id="", rule_id="", deny_feedback: DenialFeedback | None = None,
 ) -> None:
+    feedback = deny_feedback if deny_feedback is not None else DenialFeedback()
     try:
         get_audit_logger().record(AuditEntry(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1494,6 +1529,9 @@ def _audit(
             # "auto_accepted" audit() calls above that resolved a canonical id; every other
             # decision keeps the default.
             rule_id=rule_id,
+            # ADR 0083: that a deny carried feedback, never the note's text.
+            deny_intent=feedback.intent,
+            deny_note_chars=len(feedback.note),
         ))
     except Exception as exc:
         logger.warning("Audit log write failed: %s", exc)

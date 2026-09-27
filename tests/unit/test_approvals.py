@@ -19,6 +19,7 @@ from privacyfence.approvals import (
     _NON_BATCHABLE_KINDS,
     canonical_key,
 )
+from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, DenialFeedback
 from privacyfence.principal import Principal, principal_scope
 
 
@@ -1021,3 +1022,134 @@ class TestIsBatchableAndBlockedReason:
         registry = make_registry()
         approval = registry.register_confirm()
         assert approval.to_summary_dict()["operation_key"] == ""
+
+
+class TestDenyFeedback:
+    """ADR 0082: a human's deny feedback rides on the approval, first answer wins, and only a
+    deny may carry it."""
+
+    _FB = DenialFeedback("wrong_target", "only Anna")
+
+    def _card(self, registry, gate_kind="popup", key="k1"):
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key=key, connector="c", tool="t", gate_kind=gate_kind, request_id="r1",
+        )
+        return approval
+
+    def test_default_is_empty(self):
+        approval = self._card(make_registry())
+        assert approval.deny_feedback == DenialFeedback()
+
+    def test_answer_stores_it_before_the_event_is_set(self):
+        registry = make_registry()
+        approval = self._card(registry)
+        assert registry.answer(approval.id, "deny", feedback=self._FB)
+        assert approval.event.is_set()
+        assert approval.deny_feedback == self._FB
+
+    @pytest.mark.parametrize("result", ["accept", "accept_all", "confirm", "0"])
+    def test_feedback_on_a_non_deny_result_raises(self, result):
+        registry = make_registry()
+        approval = self._card(registry)
+        with pytest.raises(ValueError):
+            registry.answer(approval.id, result, feedback=self._FB)
+        # Nothing was recorded: the card is still open.
+        assert not approval.event.is_set()
+        assert approval.result is None
+
+    def test_empty_feedback_is_fine_with_any_result(self):
+        registry = make_registry()
+        approval = self._card(registry)
+        assert registry.answer(approval.id, "accept", feedback=DenialFeedback())
+
+    def test_first_answer_wins_keeps_the_first_feedback(self):
+        registry = make_registry()
+        approval = self._card(registry)
+        assert registry.answer(approval.id, "deny", feedback=self._FB)
+        assert not registry.answer(approval.id, "deny", feedback=DenialFeedback("stop", "second"))
+        assert approval.deny_feedback == self._FB
+
+    def test_a_plain_first_deny_is_not_upgraded_by_a_later_noted_one(self):
+        registry = make_registry()
+        approval = self._card(registry)
+        assert registry.answer(approval.id, "deny")
+        assert not registry.answer(approval.id, "deny", feedback=self._FB)
+        assert approval.deny_feedback.is_empty
+
+    def test_foreign_principal_cannot_answer_with_feedback(self):
+        registry = make_registry()
+        with principal_scope(Principal(id="alice")):
+            approval = self._card(registry)
+        assert not registry.answer(approval.id, "deny", principal_id="bob", feedback=self._FB)
+        assert approval.deny_feedback.is_empty
+
+    def test_consume_ledger_copies_it(self):
+        registry = make_registry()
+        approval = self._card(registry)
+        registry.answer(approval.id, "deny", feedback=self._FB)
+        registry.finalize(approval.id, "deny")
+        hit = registry.consume_ledger("k1")
+        assert hit == LedgerHit(decision="deny", rule_name="", decided_at=hit.decided_at, feedback=self._FB)
+
+    def test_ledger_hit_default_is_empty(self):
+        registry = make_registry()
+        approval = self._card(registry, gate_kind="review")
+        registry.finalize(approval.id, "accept")
+        assert registry.consume_ledger("k1").feedback == DenialFeedback()
+
+    def test_ledger_hit_carries_no_feedback_for_a_non_deny_final_decision(self):
+        # A noted deny whose approval was nonetheless finalized otherwise (a
+        # rule auto-accepted it in between) must not hand the note out.
+        registry = make_registry()
+        approval = self._card(registry)
+        registry.answer(approval.id, "deny", feedback=self._FB)
+        registry.finalize(approval.id, "auto_accepted", "r")
+        assert registry.consume_ledger("k1").feedback == DenialFeedback()
+
+    def test_denial_feedback_read(self):
+        registry = make_registry()
+        approval = self._card(registry)
+        assert registry.denial_feedback(approval.id) is None  # still pending
+        registry.answer(approval.id, "deny", feedback=self._FB)
+        assert registry.denial_feedback(approval.id) is None  # answered, not finalized yet
+        registry.finalize(approval.id, "deny")
+        assert registry.denial_feedback(approval.id) == self._FB
+        assert registry.denial_feedback(approval.id, principal_id="local") == self._FB
+
+    def test_denial_feedback_is_empty_for_a_plain_deny(self):
+        registry = make_registry()
+        approval = self._card(registry)
+        registry.answer(approval.id, "deny")
+        registry.finalize(approval.id, "deny")
+        assert registry.denial_feedback(approval.id) == DenialFeedback()
+
+    def test_denial_feedback_is_none_for_approved_and_unknown(self):
+        registry = make_registry()
+        accepted = self._card(registry, key="a")
+        registry.finalize(accepted.id, "accept")
+        assert registry.denial_feedback(accepted.id) is None
+        assert registry.denial_feedback("nope") is None
+
+    def test_denial_feedback_foreign_principal_reads_as_nothing(self):
+        registry = make_registry()
+        with principal_scope(Principal(id="alice")):
+            approval = self._card(registry)
+        registry.answer(approval.id, "deny", feedback=self._FB)
+        registry.finalize(approval.id, "deny")
+        assert registry.denial_feedback(approval.id, principal_id="bob") is None
+        assert registry.denial_feedback(approval.id, principal_id="alice") == self._FB
+
+    def test_approval_ids_are_uuid4_hex_and_never_the_reserved_key(self):
+        import uuid
+
+        registry = make_registry(max_pending=50)
+        ids = [self._card(registry, key=f"k{i}").id for i in range(20)]
+        ids.append(registry.register_confirm().id)
+        for approval_id in ids:
+            parsed = uuid.UUID(hex=approval_id)
+            assert parsed.version == 4
+            assert parsed.hex == approval_id
+            assert approval_id != DENIAL_FEEDBACK_KEY
+        # The reserved key is not even valid hex, so no uuid4().hex can equal it.
+        with pytest.raises(ValueError):
+            uuid.UUID(hex=DENIAL_FEEDBACK_KEY)

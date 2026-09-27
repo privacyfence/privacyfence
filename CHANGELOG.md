@@ -62,6 +62,14 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Changed
 
+- **A denied request tells the AI system what to do next.** A plain Deny now reaches it as
+  "Request denied by user. Don't retry the same call; ask the user how to proceed." instead of a
+  bare "Request denied by user", so it stops retrying the same call blindly. A deny can also carry
+  a reason chosen from a short list (stop, wrong target, change the content, try another way) and a
+  short note of up to 500 characters; the AI system receives both, whether the deny reaches it
+  directly or through `privacyfence_await_approval` (under a new `denial_feedback` key). The note
+  goes only to the AI system that made the request: the audit log records the reason and the
+  note's length, never its text. See ADR 0082 and ADR 0083.
 - **The app now looks like the website.** The app and the website share one set of design files
   (colours, spacing, layout building blocks and the rules they follow; ADR 0078), so approvals,
   settings, connections and passkeys use the website's colours, rounded cards, buttons and header
