@@ -5,21 +5,22 @@
 a plan document per [`adr/README.md`](adr/README.md): it is deleted when its work lands, after its
 decisions have been extracted into ADRs 0082 and 0083 (below).
 
-**Starts only after org-mode-mobile has shipped.** This plan is written against the code as it
-stands on `feature/org-mode-mobile` (tip `ce901da5` when this was written), not against today's
-`main`. That branch rewrites every surface this plan touches: the approval card's markup and CSS
-(`approval_window_html.py`, `resources/approval_window/styles.css`), the approval list
-(`approval_list_html.py`), the design system (`resources/design/`), and it adds web push
-(`web_push.py`, `web/routes_push.py`). Starting earlier would mean building the deny-note UI twice,
-or merging it into a rewrite. The gate is phase p1's step 0: `feature/org-mode-mobile`'s work must
-be on `main` **and** inside a pushed release tag (`git tag --contains <its merge commit> --list
-'v*'` is non-empty, either channel). If it is not, p1 stops as `blocked`. Holding back until the
-release tag exists keeps the mobile release's notes and its release testing
-(`docs/release-testing.md`'s manual phone checks) separate from this change.
+**Builds on org-mode-mobile, and merges only after its release.** This plan is written against the
+code org-mode-mobile landed on `main` (in #756, merge commit `504988de`). That work rewrote every
+surface this plan touches: the approval card's markup and CSS (`approval_window_html.py`,
+`resources/approval_window/styles.css`), the approval list (`approval_list_html.py`), the design
+system (`resources/design/`), and it added web push (`web_push.py`, `web/routes_push.py`). Phase
+p1's step 0 checks that `504988de` is an ancestor of the base, and stops as `blocked` if it is not.
 
-**To run it:** `/implement <GitHub URL of this file>`, after the gate above holds. Merge
-`origin/main` into the plan's branch first, so the orchestrator cuts `feature/deny-with-feedback`
-from a base that already carries the mobile work.
+The work may start before the mobile work ships in a release tag. **The final PR may not merge until a
+release tag contains `504988de`** (`git tag --contains 504988de --list 'v*'` is non-empty, either
+channel). That keeps the mobile release's notes and its release testing
+(`docs/release-testing.md`'s manual phone checks) separate from this change. The orchestrator opens
+the PR and drives it to green, but keeps it a draft, stating this hold in its description, until
+that tag exists.
+
+**To run it:** `/implement <GitHub URL of this file>`, from a plan branch that already has
+`origin/main` merged in.
 
 ## Goal
 
@@ -386,6 +387,7 @@ final_checks:
   - ADRs 0082 and 0083 (or their renumbered successors) exist, are Accepted and are listed in docs/adr/README.md
   - CHANGELOG.md has [Unreleased] entries and no version heading
   - docs/deny-with-feedback-plan.md is deleted and nothing links to it
+  - "the PR stays a draft until `git tag --contains 504988de --list 'v*'` is non-empty (the org-mode-mobile release); say so in the PR description"
 manual:
   - "Real iPhone (Safari and the installed Home Screen app) and real Android Chrome, org mode: open a card, Deny with a note using the on-screen keyboard (Deny and send stays reachable), then Deny selected with a note on two requests; the agent's reply quotes the note"
   - "Local mode companion window on macOS and Windows: Escape closes the open panel, and a second Escape denies; Ctrl/Cmd+Enter sends"
@@ -396,10 +398,8 @@ phases:
     title: Deny feedback end to end on the server, no UI
     depends_on: []
     brief: |
-      0. Gate. Confirm feature/org-mode-mobile's work is on origin/main and inside a pushed release
-         tag: find its merge into main (git log origin/main --merges --grep 'org-mode-mobile'), then
-         `git tag --contains <sha> --list 'v*'` must be non-empty. If not, stop with
-         PHASE-REPORT status=blocked and say so. Do not start on a pre-mobile base.
+      0. Gate. `git merge-base --is-ancestor 504988de HEAD` must succeed (org-mode-mobile's merge
+         into main is in this base). If not, stop with PHASE-REPORT status=blocked and say so.
       Read the plan's "Design" section in full; it is the spec. Then:
       1. New src/privacyfence/deny_feedback.py: INTENTS (value -> chip label, guidance text, exactly
          as the plan's table), MAX_NOTE_CHARS = 500, DenialFeedback, sanitize_note, parse,
@@ -449,7 +449,7 @@ phases:
          CHANGELOG [Unreleased]: one entry for the agent-visible behaviour (clearer default text,
          and feedback when given).
     acceptance:
-      - gate step 0 checked and quoted in the report
+      - gate step 0 checked and its result quoted in the report
       - a deny POSTed with note+intent reaches the agent on the sync path, the await path and a re-issue inside the ledger TTL (tests named in the report)
       - plain deny returns the new default text starting "Request denied by user."
       - note never in audit, logs, SSE or push (tests named)
