@@ -43,6 +43,7 @@ import json
 import re
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1067,3 +1068,47 @@ class TestStepUpBridgeShim:
             body = client.get(url).text
             assert "pfWebauthnGet" in body, url
             assert "window.webkit.messageHandlers.pf" in body, url
+
+
+class TestV1PerUserSettings:
+    """A per-user settings.yaml still carrying a pre-``auto_accept:`` section is refused by
+    ``policy.store.reject_v1_sections``. The daemon loads that file per principal, on first use, so
+    the page must say what is wrong rather than fail with a bare 500."""
+
+    @staticmethod
+    def _seed_v1(tmp_path, monkeypatch, principal_id: str) -> None:
+        _seed(tmp_path, monkeypatch, principal_id)
+        settings_path = tmp_path / "users" / principal_id / "authority" / "config" / "settings.yaml"
+        settings_path.write_text(
+            yaml.safe_dump({"auto_accept_rules": {"contacts.edit": [{"rule": "no_contact_info_change"}]}}),
+            encoding="utf-8",
+        )
+
+    def test_admin_page_names_the_file_and_the_fix(self, tmp_path, monkeypatch):
+        self._seed_v1(tmp_path, monkeypatch, "carol")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ADMIN)
+        r = client.get("/settings")
+        assert r.status_code == 500
+        assert "auto_accept_rules" in r.text
+        assert str(Path("users", "carol", "authority", "config", "settings.yaml")) in r.text
+
+    def test_non_admin_page_explains_without_the_server_path(self, tmp_path, monkeypatch):
+        self._seed_v1(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/settings")
+        assert r.status_code == 500
+        assert "An administrator needs to update it" in r.text
+        assert str(tmp_path) not in r.text
+
+    def test_settings_action_returns_the_message_as_json(self, tmp_path, monkeypatch):
+        self._seed_v1(tmp_path, monkeypatch, "carol")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ADMIN)
+        r = _post_action(client, "toggle_pii_detection", {}, csrf)
+        assert r.status_code == 500
+        assert "auto_accept_rules" in r.json()["error"]

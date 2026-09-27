@@ -136,6 +136,11 @@ Organization deployments now work from a phone, and the app looks like the websi
   path.** If the folder the extension was installed in was reached through a symbolic link, the
   extension quit at once without connecting or logging anything, and Claude Desktop reported no
   PrivacyFence server. It now starts whichever path it is launched from.
+- **Organization mode: Settings explains an outdated per-user settings file instead of showing
+  "Internal server error".** A user's own settings file that still has the old
+  `auto_accept_rules:` or `auto_accept_grants:` section made the Settings page fail with a bare
+  error. An administrator now sees which file to fix and how; other users are told to ask an
+  administrator. The file itself still has to be updated by hand, as the install-wide one does.
 - **Organization mode: signing out from the connections page and connecting Telegram work again
   in a browser.** The page's security policy refused to send either form, so neither button did
   anything. Signing out now lands on a "You're signed out" page with a **Sign in** link, rather

@@ -129,6 +129,7 @@ import threading
 import typing
 import uuid
 from datetime import datetime, timezone
+from html import escape as _html_escape
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -143,6 +144,7 @@ from starlette.routing import BaseRoute, Route
 from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepup, web_shell
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
+from ..policy import store as policy_store
 from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
@@ -1290,10 +1292,37 @@ def build_org_routes(
         threading.Thread(target=_run, name=f"rule-names-{principal.id}", daemon=True).start()
         await asyncio.to_thread(done.wait, _RULE_NAME_WAIT_SECONDS)
 
+    def _v1_settings_message(principal: Principal, exc: policy_store.V1PolicyConfigError) -> str:
+        """What the page tells ``principal`` about a per-user settings.yaml ``reject_v1_sections``
+        refused. The daemon loads that file per principal, on first use, so this is the only place
+        the refusal can surface -- without it the page is a bare 500. An admin gets the full message
+        (the file's path and the fix); anyone else gets only who can fix it, since the path is a
+        server-side detail they cannot act on. Logged in full either way."""
+        logger.error("Settings for principal %s could not be loaded: %s", principal.id, exc)
+        if principal.is_admin:
+            return str(exc)
+        return (
+            "Your PrivacyFence settings file uses an auto-accept format this version no longer reads. "
+            "An administrator needs to update it; the server log names the file."
+        )
+
     async def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
         nonce = _csp_nonce_for(request)
         with principal_scope(principal):
-            _ensure_principal_settings_loaded()
+            try:
+                _ensure_principal_settings_loaded()
+            except policy_store.V1PolicyConfigError as exc:
+                body = (
+                    '<section class="pf-settings-error" role="alert"><h1>Settings could not be loaded</h1>'
+                    f"<p>{_html_escape(_v1_settings_message(principal, exc))}</p></section>"
+                )
+                page = web_shell.wrap(
+                    body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
+                    nav_items=web_shell.ORG_NAV_ITEMS,
+                    principal_label=principal.email or principal.display_name or principal.id,
+                    live_updates=False, notifications_enabled=False,
+                )
+                return HTMLResponse(page, status_code=500, headers={"Cache-Control": "no-store"})
         await _await_rule_names(principal)
         with principal_scope(principal):
             state = _org_state(principal)
@@ -1451,7 +1480,10 @@ def build_org_routes(
         if step_up_response is not None:
             return step_up_response
         with principal_scope(principal):
-            _ensure_principal_settings_loaded()
+            try:
+                _ensure_principal_settings_loaded()
+            except policy_store.V1PolicyConfigError as exc:
+                return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
             try:
                 summary = _apply_org_action(principal, action, body)
             except org_install_policy.PolicyChangeRejected as exc:
