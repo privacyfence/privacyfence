@@ -51,8 +51,9 @@ from dataclasses import dataclass
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
-from .. import paths, privilege_separation
+from .. import paths, privilege_separation, web_shell
 from ..principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
+from .csp import nonce_for
 
 SESSION_COOKIE = "pf_session"
 BOOTSTRAP_QUERY_PARAM = "bootstrap"
@@ -397,8 +398,8 @@ def unauthorized_html(request: Request) -> Response:
     What is still spelled out last, for a reader who has neither of the
     first two, is the control channel's own raw command
     (``web/control_channel.py``) -- that one mints an unattested code, which
-    is enough to see what is waiting. ``request`` is otherwise
-    unused here: unlike the old bearer-header ``curl`` command, the control
+    is enough to see what is waiting. ``request`` is used only for the
+    response's CSP nonce: unlike the old bearer-header ``curl`` command, the control
     channel is a local socket/pipe, not another HTTP endpoint on this
     page's own origin, so there's no origin left to splice into the
     recovery command.
@@ -445,9 +446,9 @@ def unauthorized_html(request: Request) -> Response:
         sock_root = handoff if privilege_separation.is_enabled() else data_dir / "authority"
         sock_path = socket_path_under(sock_root)
         command = f"printf 'MINT\\n' | nc -U '{sock_path}'"
-    return HTMLResponse(
-        "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
-        "<p><strong>Not authorized.</strong> Open PrivacyFence's companion app -- a "
+    body = (
+        "<h1>Not authorized</h1>"
+        "<p>Open PrivacyFence's companion app -- a "
         "tray/menu-bar icon on macOS/Windows, or its entry in your Applications menu on Linux -- "
         "and use its Open Approvals (or Open Settings) item to get back in. "
         + _companion_availability_sentence() +
@@ -464,9 +465,10 @@ def unauthorized_html(request: Request) -> Response:
         "running as you could read it.)</p>"
         "<p>Neither of the above available? From a terminal on this machine, mint a "
         "view-only link on demand and open what it returns:</p>"
-        "<pre style=\"white-space:pre-wrap;background:#f0f0f0;padding:10px;"
-        f"border-radius:4px\">{command}</pre>"
-        "</body></html>",
+        f"<pre>{command}</pre>"
+    )
+    return HTMLResponse(
+        web_shell.plain_page(body, title="PrivacyFence — Not authorized", nonce=nonce_for(request)),
         status_code=401,
         # This
         # page carries a live control-channel path/pipe name (the exact

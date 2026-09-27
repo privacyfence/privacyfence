@@ -181,6 +181,34 @@ npm run dry-run
 `npm test` runs entirely against local Miniflare/workerd -- no Cloudflare credentials or network
 access to the real R2/D1 resources involved.
 
+### 1.10 Design system
+
+The app's pages and the website share one design system
+([ADR 0078](adr/0078-the-app-shares-the-websites-design-system.md),
+[ADR 0079](adr/0079-the-apps-visual-language-is-the-websites.md)):
+
+- **Tokens and primitives live in `src/privacyfence/resources/design/`**, shared with the website:
+  `tokens.css` (colour, type scale, spacing, radii, the 44 px `--tap`), `base.css` (the layout
+  primitives `.shell`, `.stack`, `.cluster`, `.grid-auto`, `.split`, buttons, focus, labels) and
+  the app-only `app.css` (dark theme, status tokens, `field`, `toggle`, `tabstrip`, `badge`,
+  `card`, `panel`). `design_css.py` inlines them into every app document's nonce'd `<style>`.
+  `scripts/build_site.py` publishes the shared two on the website. A token is defined there and
+  nowhere else.
+- **Pages compose them.** A renderer builds its layout from the primitives and components and
+  adds only page-specific rules. Where it needs a responsive change, it is a container query on
+  the space the element has, never a viewport breakpoint: a page that seems to need its own width
+  `@media` query is missing a primitive, which goes in `resources/design/`.
+- **No width `@media` queries and no colour literals in renderers** — no `@media (max-width: …)`
+  and no hex, `rgb()` or `hsl()` value in any module under `src/privacyfence` or in
+  `resources/approval_window/styles.css`. `prefers-color-scheme` and `prefers-reduced-motion`
+  are fine. Colours are tokens; a new colour is a new token in `tokens.css` or `app.css`, with
+  its contrast pair added to `tests/unit/test_design_contrast.py`.
+- **The rules** for what responsive means are written once, in `base.css`'s header comment,
+  including the app's own: the approval card's action hierarchy never changes with styling.
+
+`tests/unit/test_design_system.py` enforces the source rules, and `TestPhoneLayout` the measurable
+layout rules — see [`testing-policy.md`](testing-policy.md#the-shared-design-system).
+
 
 ## 2. Testing guidelines
 
@@ -396,7 +424,8 @@ provider payloads in fixtures.
 Use the existing Playwright harness (`tests/integration/test_browser_smoke.py`, marker `browser`)
 for behavior that only a real browser can prove: CSP enforcement, browser session behavior, JS/DOM
 ordering, approval interactions, responsive structure, service-worker/notification behavior, and
-org-mode WebAuthn UI.
+org-mode WebAuthn UI. A new app surface gets a `TestPhoneLayout` case; its layout comes from the
+shared design files (§1.10), not hand-written breakpoints.
 
 Do not use pixel-perfect screenshots as the primary correctness assertion. Subjective visual
 quality belongs in [`release-testing.md`](release-testing.md).

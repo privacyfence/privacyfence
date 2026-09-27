@@ -72,6 +72,29 @@ never on a machine whose data you need.
    `auto_accept.py`, `policy/resource_registry.py` or the approval UI, or an unexplained provider
    regression: [`connector-qa.md`](connector-qa.md).
 
+### Org mode on a phone
+
+When org-mode pages, the design files (`src/privacyfence/resources/design/`), the approval card,
+`pdf_render.py`, `web_push.py` or `resources/sw.js` changed, and for every stable release that
+ships org mode. The layout itself is automated (`TestPhoneLayout`, see
+[`testing-policy.md`](testing-policy.md#the-shared-design-system)); these are what a phone emulation
+cannot prove.
+
+1. **Real devices**: on a real iPhone, in Safari and again in the app installed to the Home Screen,
+   and on a real Android phone in Chrome:
+   - sign in through the IdP;
+   - approve a write with passkey step-up;
+   - approve a write with the IdP step-up fallback (`web/routes_org_stepup.py`);
+   - read a PDF review card: the page images show, with the "Showing pages 1–N of M" note;
+   - open a staged download link from inside the Claude app: it survives the sign-in bounce and
+     the file lands in Files/Downloads;
+   - receive a push notification for a new approval, and tap it through to `/approvals`
+     ([ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md)).
+2. **Look**: light and dark, at phone and desktop width, in `scripts/render_ui_review.py --out DIR`'s
+   output and in `scripts/qa_web_smoke.py`'s report. The app should read as the website does
+   ([ADR 0079](adr/0079-the-apps-visual-language-is-the-websites.md)), and on every approval card
+   the same decision must still look like the default.
+
 ### macOS
 
 1. **Installer**, every stable release: double-click `PrivacyFence.pkg` from the mounted DMG.

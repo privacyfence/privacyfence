@@ -5,27 +5,17 @@ that both ``/approvals`` and
 web/routes_settings.py), so the two pages read as one application instead of
 two applications bolted together.
 
-Deliberately **not** used by:
-
-- the native settings window (settings_window.py's WKWebView) or the native
-  approval window (approval_window.py's) -- both load their own document's
-  markup directly via ``loadHTMLString_baseURL_``, with no HTTP request and
-  no other page to link to. Wrapping their shared documents
-  (settings_window_html.build_html/approval_window_html.build_card_stack_
-  html) in this shell would change what those two already-tested,
-  geometry-tuned documents render, for a native host that has no use for a
-  cross-page nav bar at all.
-- an individual approval card's own page (``GET /approvals/{id}``) -- that
-  page *is* the decision screen, full-window, same as the native dialog it
-  replaces; the list it returns to is where the shell belongs, not the card itself.
+Deliberately **not** used by an individual approval card's own page
+(``GET /approvals/{id}``) or its confirmation dialogs -- that page *is* the
+decision screen, the whole window given to one decision; the list it returns
+to is where the shell belongs, not the card itself.
 
 Owns the one thing every shell-wrapped page needs and none of them should
 reimplement: the ``/api/state/stream`` SSE connection (web/state_stream.py)
 that drives the live indicator and dispatches each event to whichever of
 ``window.__pfRender``/``window.__pfRenderApprovals`` the current page
-happens to define -- settings_window_html.py's own bridge JS already
-defines the former (unchanged, since it also serves the native-window
-push path); approval_list_html.py defines the latter. Centralizing the
+happens to define -- settings_window_html.py's own bridge JS defines the
+former; approval_list_html.py defines the latter. Centralizing the
 connection here, rather than duplicating an EventSource per page, is what
 makes "one live indicator" true instead of aspirational.
 """
@@ -37,87 +27,152 @@ from html import escape as _html_escape
 from pathlib import Path
 
 from . import approval_icons
-
-_TOKENS_CSS = (Path(__file__).parent / "resources" / "tokens.css").read_text(encoding="utf-8")
+from .design_css import DOCUMENT_CSS
 
 # Browser-tab favicon -- the same bundled shield mark approval_icons.py
-# already hands the native/web approval cards (resources/icon_32.png, the
+# already hands the approval card (resources/icon_32.png, the
 # size a favicon is actually rendered at), embedded as a data: URI so this
 # shared shell never needs its own unauthenticated route or asset file just
 # to satisfy the browser's automatic GET /favicon.ico.
 _FAVICON_DATA_URI = approval_icons.icon_data_uri(
     str(Path(__file__).parent / "resources" / "icon_32.png")
 )
+# The header's brand mark, as the website's header shows its icon: the same shield, at twice the
+# size it is drawn so it stays sharp on a 2x screen.
+_BRAND_ICON_DATA_URI = approval_icons.icon_data_uri(
+    str(Path(__file__).parent / "resources" / "icon_64.png")
+)
 
+# The header is the website's (website/_partials/header.html and website/chrome.css): a floating,
+# rounded, sticky bar with the brand mark on the left and the navigation on the right, whose
+# links collapse into a <details> menu when there is no room for them. The website switches at a
+# 900 px viewport; the app has no viewport breakpoints (shared rule 6, base.css), so the same
+# switch is a container query on .pf-shell-top, the header's full-width wrapper. Everything is
+# tokens, so app.css's dark mode applies without a rule here.
 _SHELL_CSS = """
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  background: var(--color-bg); color: var(--color-text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--ink); font-family: var(--font-sans);
   font-size: 14px; min-height: 100vh; display: flex; flex-direction: column;
+  -webkit-font-smoothing: antialiased;
 }
+.pf-shell-top { position: sticky; top: 0; z-index: 20; flex-shrink: 0; container-type: inline-size; padding-top: 14px; }
 .pf-shell-header {
-  display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
-  padding: 10px 20px; background: var(--color-surface);
-  border-bottom: 1px solid var(--color-divider); flex-shrink: 0;
+  position: relative; width: min(1220px, 100% - 2 * var(--gutter) + 12px); margin: 0 auto 14px;
+  min-height: 64px; display: flex; align-items: center; gap: var(--space-s);
+  padding: 8px 10px 8px 16px; border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--line); backdrop-filter: blur(16px); box-shadow: var(--shadow-header);
 }
-.pf-shell-brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; }
-.pf-shell-nav { display: flex; gap: 4px; flex: 1; }
+.pf-shell-brand {
+  display: flex; align-items: center; gap: 10px; min-height: var(--tap); min-width: var(--tap);
+  font-weight: 750; font-size: 16px; letter-spacing: -.02em; color: var(--ink); text-decoration: none;
+}
+.pf-shell-brand img { width: 34px; height: 34px; border-radius: 8px; }
+.pf-shell-nav { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2xs); flex: 1; font-size: var(--step-small); }
+.pf-shell-nav-links { display: flex; align-items: center; gap: 4px; }
 .pf-shell-nav-item {
-  padding: 5px 10px; border-radius: var(--radius-md); font-size: 13px;
-  color: var(--color-text); text-decoration: none; opacity: .7;
+  display: inline-flex; align-items: center; min-height: var(--tap); min-width: var(--tap);
+  padding: 0 11px; border-radius: var(--radius-s); color: var(--ink-soft); text-decoration: none;
 }
-.pf-shell-nav-item:hover { opacity: 1; background: var(--color-bg); }
-.pf-shell-nav-item.active { opacity: 1; font-weight: 600; background: var(--color-bg); }
+.pf-shell-nav-item:hover { color: var(--accent-dark); }
+/* The current page: ink, weight and a soft surface, not the colour alone. */
+.pf-shell-nav-item.active { color: var(--ink); font-weight: 650; background: var(--surface-soft); }
+.pf-shell-menu { display: none; }
+.pf-shell-menu summary {
+  display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); min-width: var(--tap);
+  padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-s);
+  background: var(--surface); color: var(--ink); font-weight: 650; cursor: pointer; list-style: none;
+}
+.pf-shell-menu summary::-webkit-details-marker { display: none; }
+.pf-shell-menu summary::before {
+  content: ""; width: 16px; height: 12px;
+  background: linear-gradient(currentColor 0 0) top / 100% 2px no-repeat,
+    linear-gradient(currentColor 0 0) center / 100% 2px no-repeat,
+    linear-gradient(currentColor 0 0) bottom / 100% 2px no-repeat;
+}
+.pf-shell-menu[open] summary::before {
+  background: linear-gradient(45deg, transparent 45%, currentColor 45% 55%, transparent 55%),
+    linear-gradient(-45deg, transparent 45%, currentColor 45% 55%, transparent 55%);
+}
+/* Anchored to the header, so it never runs off a narrow screen. */
+.pf-shell-menu-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); width: min(280px, 100%); display: grid;
+  padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.pf-shell-menu-panel .pf-shell-nav-item { font-size: 16px; color: var(--ink); padding: 0 12px; border-radius: 8px; }
+.pf-shell-menu-panel .pf-shell-nav-item + .pf-shell-nav-item { border-top: 1px solid var(--surface-soft); }
+.pf-shell-menu-principal { padding: 10px 12px 4px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .pf-shell-live {
-  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-neutral-600);
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
   white-space: nowrap;
 }
+/* The label always says the state; the dot's colour repeats it. */
 .pf-shell-live-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--color-neutral-400); flex-shrink: 0;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--control-line); flex-shrink: 0;
 }
-.pf-shell-live-dot.live { background: #2fa84f; }
-.pf-shell-live-dot.reconnecting { background: #d9a520; }
-.pf-shell-live-dot.down { background: var(--color-danger); }
+.pf-shell-live-dot.live { background: var(--success); }
+.pf-shell-live-dot.reconnecting { background: var(--warning); }
+.pf-shell-live-dot.down { background: var(--danger); }
 /* Who this queue belongs to -- org mode only (see wrap's principal_label);
    local mode doesn't render one here, even on a separated install with more
    than one OS-user principal (ADR 0008) -- each one's own page already only
    ever shows their own queue, it just doesn't caption whose it is. */
 .pf-shell-principal {
-  font-size: 12px; color: var(--color-neutral-700); white-space: nowrap;
-  padding-left: 10px; border-left: 1px solid var(--color-divider);
+  font-size: 12px; color: var(--ink-soft); white-space: nowrap;
+  padding-left: 10px; border-left: 1px solid var(--line);
 }
-.pf-shell-live + .pf-shell-principal { margin-left: 0; }
-/* Neither tokens.css nor anything above styles a bare <a>, so any link a
-   page renders outside the nav/banner/notice classes lands on the
-   browser's default blue -- against a warm grey palette, on pages that
-   are otherwise fully tokenized. */
-.pf-shell-main a { color: var(--color-accent-700); }
-.pf-shell-main a:hover { color: var(--color-accent); }
+@container (max-width: 900px) {
+  .pf-shell-nav-links, .pf-shell-principal { display: none; }
+  .pf-shell-menu { display: block; }
+}
+@container (max-width: 560px) {
+  .pf-shell-top { padding-top: 8px; }
+  .pf-shell-header { gap: var(--space-xs); padding: 6px 6px 6px 10px; margin-bottom: 8px; }
+  .pf-shell-brand { font-size: 15px; }
+}
+/* The narrowest phones: the menu toggle and the live indicator show only their icon (the text
+   stays for screen readers), and below 350 px so does the brand. */
+@container (max-width: 420px) {
+  .pf-shell-menu summary { padding: 0; justify-content: center; width: var(--tap); }
+  .pf-shell-menu-label, .pf-shell-live-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+@container (max-width: 350px) {
+  .pf-shell-brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+/* Neither the shared files nor anything above styles a bare <a>, so any link
+   a page renders outside the nav/banner/notice classes would land on the
+   browser's default blue. :where() keeps this at one class's specificity, so a
+   page's own link class (a button-styled link, say) still sets its own colour. */
+.pf-shell-main :where(a:not(.button)) { color: var(--accent-dark); }
+.pf-shell-main :where(a:not(.button)):hover { color: var(--accent); }
+/* A link drawn as a shared .button keeps the button's own colours, without an underline. */
+.pf-shell-main a.button { text-decoration: none; }
 .pf-shell-banner {
   padding: 8px 20px; font-size: 13px; font-weight: 600; text-align: center;
-  background: var(--color-danger); color: #fff; flex-shrink: 0;
+  background: var(--danger); color: var(--surface); flex-shrink: 0;
 }
-.pf-shell-banner a { color: #fff; text-decoration: underline; }
+.pf-shell-banner a { color: var(--surface); text-decoration: underline; }
 .pf-shell-notice {
   padding: 8px 20px; font-size: 13px; text-align: center; flex-shrink: 0;
-  background: var(--color-accent-100); color: var(--color-accent-800);
-  border-bottom: 1px solid var(--color-divider);
+  background: var(--accent-soft); color: var(--accent-dark);
+  border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: center; gap: 10px;
 }
 .pf-shell-notice a { color: inherit; font-weight: 600; }
 .pf-shell-notice-close {
-  background: none; border: none; cursor: pointer; font-size: 15px; line-height: 1;
-  color: inherit; opacity: .6; padding: 0 2px; flex-shrink: 0;
+  background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1;
+  color: inherit; opacity: .6; padding: 0; flex-shrink: 0; min-width: var(--tap); min-height: var(--tap);
 }
 .pf-shell-notice-close:hover { opacity: 1; }
 .pf-shell-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pf-shell-toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
-  background: var(--color-neutral-900); color: var(--color-neutral-100);
-  padding: 10px 16px; border-radius: var(--radius-lg); font-size: 13px;
-  max-width: min(480px, calc(100vw - 32px)); box-shadow: 0 8px 24px rgba(0,0,0,.25);
+  background: var(--ink); color: var(--on-ink);
+  padding: 10px 16px; border-radius: var(--radius-s); font-size: 13px;
+  max-width: min(480px, calc(100vw - 32px)); box-shadow: var(--shadow);
   opacity: 0; pointer-events: none; transition: opacity .15s ease;
   z-index: 1000;
 }
@@ -126,16 +181,12 @@ body {
   bottom: 72px; display: flex; align-items: center; gap: 10px; pointer-events: auto;
 }
 .pf-shell-notif-enable {
-  background: var(--color-accent); color: #fff; border: none; border-radius: var(--radius-md);
-  font-size: 12.5px; font-weight: 600; padding: 5px 10px; cursor: pointer; flex-shrink: 0;
+  background: var(--accent); color: var(--on-accent); border: none; border-radius: var(--radius-s);
+  font-size: 13px; font-weight: 650; padding: 0 14px; min-height: var(--tap); cursor: pointer; flex-shrink: 0;
 }
 .pf-sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0,0,0,0); white-space: nowrap; border: 0;
-}
-@media (max-width: 480px) {
-  .pf-shell-header { padding: 8px 12px; gap: 10px; }
-  .pf-shell-brand { display: none; }
 }
 """
 
@@ -149,8 +200,8 @@ body {
 # own page's markup entirely, same separation settings_window_html.py's own
 # bridge already has between "receive a message" and "render it".
 #
-# Notifications, tiers 0-1 only -- no push, no VAPID, nothing leaving the
-# machine (a push tier would be org mode's; see ADR 0064):
+# Notifications, tiers 0-1 -- no push, nothing leaving the machine (ADR
+# 0064; org mode's tier 2 is described at the end of this comment):
 #   - tier 0: the document title gains a "(N) " badge and a visually
 #     hidden aria-live region announces the count, whenever the approvals
 #     event's row count changes -- works with no permission at all.
@@ -178,6 +229,16 @@ body {
 #     called by approval_list_html.py's own script right after a decision
 #     is made (never on page load: a cold
 #     Notification.requestPermission() is what browsers now penalize).
+#
+# Tier 2, web push, is org mode's alone (ADR 0081) and is on only when the
+# page is given the server's VAPID key (wrap's push_public_key). Then the
+# same pre-prompt, once permission is granted, subscribes this browser and
+# posts the subscription to /api/push/subscription (web/routes_push.py); a
+# page load with permission already granted re-posts it, so the server's
+# copy follows the browser's. The push itself is shown by resources/sw.js
+# and says only what minimal says: a count. iOS offers push only to a site
+# added to the Home Screen, so there, before installation, the pre-prompt
+# is replaced by a hint that says so.
 _STREAM_JS = """
 (function () {
   // web.notifications.enabled (settings.yaml.example) -- config wiring for
@@ -192,10 +253,9 @@ _STREAM_JS = """
   var NOTIFICATIONS_DETAIL = %(notifications_detail)s;
   // __pfNotificationsEnabled is exposed globally so the settings page's own
   // notifications card (settings_window_html.py's renderNotificationsCard)
-  // can read the same config flag -- that module's JS is shared with the
-  // native settings window, which never loads this script at all, so it
-  // treats a missing flag as "on" (feature-detecting Notification support
-  // instead) rather than assuming this variable exists. There is no
+  // can read the same config flag. That card treats a missing flag as "on"
+  // (feature-detecting Notification support instead), since a settings
+  // page rendered without this script (org mode's) never sets it. There is no
   // equivalent __pfNotificationsDetail read anywhere else: the card's own
   // detail-level control is a real, mutable setting
   // (SettingsController.set_notifications_detail) sourced from that page's
@@ -204,6 +264,10 @@ _STREAM_JS = """
   // to this closure, used only by notificationBody() to decide what an
   // actual browser notification on *this* page is allowed to say.
   window.__pfNotificationsEnabled = NOTIFICATIONS_ENABLED;
+  // Org mode's web push (see this file's comment above _STREAM_JS): the
+  // server's VAPID public key, or "" when push is off (always, in local mode).
+  var PUSH_PUBLIC_KEY = %(push_public_key)s;
+  var PUSH_CSRF = %(push_csrf)s;
 
   var dot = document.getElementById('pf-shell-live-dot');
   var label = document.getElementById('pf-shell-live-label');
@@ -275,34 +339,111 @@ _STREAM_JS = """
     lastCount = count;
   }
 
-  if (NOTIFICATIONS_ENABLED && 'serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  function pushSupported() {
+    return !!PUSH_PUBLIC_KEY && 'serviceWorker' in navigator && 'PushManager' in window
+      && 'Notification' in window;
   }
 
-  window.__pfNotifPrompt = function () {
-    if (!NOTIFICATIONS_ENABLED) { return; }
-    if (!('Notification' in window) || Notification.permission !== 'default') { return; }
-    var already;
-    try { already = localStorage.getItem('pf_notif_prompted'); } catch (e) { already = null; }
-    if (already) { return; }
-    try { localStorage.setItem('pf_notif_prompted', '1'); } catch (e) {}
+  // iPhone and iPad (which reports itself as a Mac with a touch screen)
+  // expose web push only to a site opened from the Home Screen.
+  function iosNotInstalled() {
+    var ua = navigator.userAgent || '';
+    var ios = /iPhone|iPad|iPod/.test(ua)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    return ios && navigator.standalone !== true;
+  }
+
+  function keyBytes(b64url) {
+    var s = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length %% 4) { s += '='; }
+    var raw = atob(s);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) { out[i] = raw.charCodeAt(i); }
+    return out;
+  }
+
+  function sameKey(buffer, bytes) {
+    if (!buffer) { return false; }
+    var a = new Uint8Array(buffer);
+    if (a.length !== bytes.length) { return false; }
+    for (var i = 0; i < a.length; i++) { if (a[i] !== bytes[i]) { return false; } }
+    return true;
+  }
+
+  function subscribePush() {
+    if (!pushSupported() || Notification.permission !== 'granted') { return; }
+    var key = keyBytes(PUSH_PUBLIC_KEY);
+    navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription().then(function (existing) {
+        // A subscription made for another server key cannot receive this
+        // server's pushes; replace it rather than posting a dead one.
+        if (existing && existing.options && !sameKey(existing.options.applicationServerKey, key)) {
+          return existing.unsubscribe().then(function () { return null; });
+        }
+        return existing;
+      }).then(function (existing) {
+        return existing || reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key});
+      });
+    }).then(function (sub) {
+      return fetch('/api/push/subscription', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({subscription: sub.toJSON(), csrf: PUSH_CSRF})
+      });
+    }).catch(function () {});
+  }
+
+  function promptBar(message, buttonLabel, onClick) {
     var bar = document.createElement('div');
     bar.className = 'pf-shell-toast pf-shell-notif-prompt shown';
     bar.setAttribute('role', 'status');
     var text = document.createElement('span');
-    text.textContent = 'Want PrivacyFence to notify you when Claude needs approval?';
+    text.textContent = message;
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'pf-shell-notif-enable';
-    btn.textContent = 'Enable';
+    btn.textContent = buttonLabel;
     btn.addEventListener('click', function () {
-      Notification.requestPermission();
+      if (onClick) { onClick(); }
       bar.remove();
     });
     bar.appendChild(text);
     bar.appendChild(btn);
     document.body.appendChild(bar);
     setTimeout(function () { if (bar.parentNode) { bar.remove(); } }, 10000);
+    return bar;
+  }
+
+  function onceIn(key) {
+    var already;
+    try { already = localStorage.getItem(key); } catch (e) { already = null; }
+    if (already) { return false; }
+    try { localStorage.setItem(key, '1'); } catch (e) {}
+    return true;
+  }
+
+  if ((NOTIFICATIONS_ENABLED || PUSH_PUBLIC_KEY) && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  }
+  if (PUSH_PUBLIC_KEY) { subscribePush(); }
+
+  window.__pfNotifPrompt = function () {
+    if (!NOTIFICATIONS_ENABLED && !PUSH_PUBLIC_KEY) { return; }
+    if (PUSH_PUBLIC_KEY && iosNotInstalled()) {
+      if (!onceIn('pf_push_ios_hint')) { return; }
+      promptBar(
+        'Add PrivacyFence to your Home Screen to get notifications: tap Share, then Add to Home Screen.',
+        'OK', null
+      ).id = 'pf-shell-ios-push-hint';
+      return;
+    }
+    if (!NOTIFICATIONS_ENABLED && !pushSupported()) { return; }
+    if (!('Notification' in window) || Notification.permission !== 'default') { return; }
+    if (!onceIn('pf_notif_prompted')) { return; }
+    promptBar('Want PrivacyFence to notify you when Claude needs approval?', 'Enable', function () {
+      var asked = Notification.requestPermission();
+      if (asked && asked.then) { asked.then(function () { subscribePush(); }); }
+    });
   };
 
   // The dismissible notice strip is
@@ -376,13 +517,74 @@ ORG_NAV_ITEMS = (
     ("settings", "Settings", "/settings"),
 )
 
+# The installable org app (ADR 0081): the manifest, and the icon iOS uses for the Home Screen,
+# which it reads from this link rather than from the manifest. Both routes are org mode's
+# alone (web/routes_push.py).
+_ORG_APP_LINKS = (
+    '\n<link rel="manifest" href="/manifest.webmanifest">'
+    '\n<link rel="apple-touch-icon" href="/icons/icon-192.png">'
+)
+
+
+# Org mode's sign-out also unsubscribes this browser from web push (ADR 0081) before the form
+# posts, so the browser forgets the subscription as well as the server. The server drops it at
+# /logout either way (web/routes_org_identity.py); this is the browser's half, and it gives up
+# after a moment rather than hold up signing out. Every org page carries it, whether or not it
+# has the stream script, because the sign-out form is on a page that has none.
+_ORG_SIGN_OUT_JS = """
+(function () {
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form || form.getAttribute('action') !== '/logout' || !('serviceWorker' in navigator)) { return; }
+    e.preventDefault();
+    var sent = false;
+    function send() { if (!sent) { sent = true; form.submit(); } }
+    setTimeout(send, 1500);
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      return reg && reg.pushManager ? reg.pushManager.getSubscription() : null;
+    }).then(function (sub) { return sub ? sub.unsubscribe() : null; }).then(send, send);
+  });
+})();
+"""
+
 
 def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
     items = []
     for key, label, href in nav_items:
         cls = "pf-shell-nav-item active" if key == active else "pf-shell-nav-item"
-        items.append(f'<a class="{cls}" href="{href}">{_html_escape(label)}</a>')
+        current = ' aria-current="page"' if key == active else ""
+        items.append(f'<a class="{cls}" href="{href}"{current}>{_html_escape(label)}</a>')
     return "".join(items)
+
+
+def header_html(
+    active: str, nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS, *,
+    live_html: str = "", principal_label: str = "",
+) -> str:
+    """The shell's header, in the website's markup pattern (website/_partials/header.html): the
+    brand mark, the links inline, and the same links again in a ``<details>`` menu that replaces
+    them when the header is narrow (``_SHELL_CSS``'s container queries). Keep the two lists
+    equal; both come from ``nav_items``. The signed-in principal, when there is one, is shown in
+    the header when there is room and at the top of the menu when there is not."""
+    links = _nav_html(active, nav_items)
+    home = nav_items[0][2] if nav_items else "/"
+    principal_html = principal_menu_html = ""
+    if principal_label:
+        label = _html_escape(principal_label)
+        principal_html = f'<div class="pf-shell-principal">{label}</div>'
+        principal_menu_html = f'<div class="pf-shell-menu-principal">Signed in as {label}</div>'
+    return (
+        '<div class="pf-shell-top"><header class="pf-shell-header">'
+        f'<a class="pf-shell-brand" href="{home}" aria-label="PrivacyFence home">'
+        f'<img src="{_BRAND_ICON_DATA_URI}" alt="" width="34" height="34"><span>PrivacyFence</span></a>'
+        '<nav class="pf-shell-nav" aria-label="Primary navigation">'
+        f'<div class="pf-shell-nav-links">{links}</div>'
+        '<details class="pf-shell-menu"><summary><span class="pf-shell-menu-label">Menu</span></summary>'
+        f'<div class="pf-shell-menu-panel">{principal_menu_html}{links}</div></details>'
+        '</nav>'
+        f'{live_html}{principal_html}'
+        '</header></div>'
+    )
 
 
 def wrap(
@@ -394,8 +596,10 @@ def wrap(
     principal_label: str = "",
     live_updates: bool = True,
     stream_url: str = "/api/state/stream",
+    push_public_key: str = "",
+    csrf: str = "",
 ) -> str:
-    """Full ``<!DOCTYPE html>`` document: tokens.css + the shell's own CSS,
+    """Full ``<!DOCTYPE html>`` document: the design files + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
     ``body_html`` dropped into ``<main>`` unescaped -- callers own their own
     content's escaping, same convention web/routes_approvals.py's existing
@@ -483,6 +687,17 @@ def wrap(
     same ``approvals`` event for just the signed-in principal and no
     ``settings`` event -- the org pages with no stream at all (connect,
     security, settings) still pass ``live_updates=False``.
+
+    Org mode (``nav_items`` is ``ORG_NAV_ITEMS``) also links the Web App
+    Manifest and its icon (web/routes_push.py), which makes the org app
+    installable, and adds the sign-out script (``_ORG_SIGN_OUT_JS``); local
+    mode serves neither route and gets neither.
+    ``push_public_key`` is org mode's VAPID public key when the org has web
+    push on (ADR 0081): the pre-prompt then subscribes this browser, posting
+    ``csrf`` (the page's session CSRF token) with the subscription. It needs
+    ``live_updates``, since the pre-prompt lives in the stream script; empty
+    (the default, and always in local mode) leaves tiers 0-1 exactly as
+    described above.
     """
     if dismissible_notice_html and not dismissible_notice_key:
         raise ValueError("wrap(): dismissible_notice_html needs a dismissible_notice_key")
@@ -493,18 +708,16 @@ def wrap(
             "notifications_enabled": "true" if notifications_enabled else "false",
             "notifications_detail": json.dumps(notifications_detail),
             "stream_url": json.dumps(stream_url),
+            "push_public_key": json.dumps(push_public_key),
+            "push_csrf": json.dumps(csrf if push_public_key else ""),
         }
         stream_script = f'<script nonce="{nonce}">{stream_js}</script>'
     live_html = (
         '<div class="pf-shell-live" role="status" aria-live="polite">'
         '<span class="pf-shell-live-dot" id="pf-shell-live-dot"></span>'
-        '<span id="pf-shell-live-label">connecting…</span>'
+        '<span class="pf-shell-live-label" id="pf-shell-live-label">connecting…</span>'
         "</div>"
     ) if live_updates else ""
-    principal_html = (
-        f'<div class="pf-shell-principal">{_html_escape(principal_label)}</div>'
-        if principal_label else ""
-    )
     banner = f'<div class="pf-shell-banner" role="alert">{banner_html}</div>' if banner_html else ""
     notice = ""
     if dismissible_notice_html:
@@ -515,28 +728,76 @@ def wrap(
             '<button type="button" class="pf-shell-notice-close" data-dismiss-notice '
             'aria-label="Dismiss">&times;</button></div>'
         )
+    is_org = nav_items == ORG_NAV_ITEMS
+    app_links = _ORG_APP_LINKS if is_org else ""
+    sign_out_script = f'<script nonce="{nonce}">{_ORG_SIGN_OUT_JS}</script>' if is_org else ""
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<link rel="icon" href="{_FAVICON_DATA_URI}">
+<link rel="icon" href="{_FAVICON_DATA_URI}">{app_links}
 <title>{_html_escape(title)}</title>
-<style nonce="{nonce}">{_TOKENS_CSS}{_SHELL_CSS}</style>
+<style nonce="{nonce}">{DOCUMENT_CSS}{_SHELL_CSS}</style>
 </head>
 <body>
-<header class="pf-shell-header">
-<div class="pf-shell-brand">PrivacyFence</div>
-<nav class="pf-shell-nav">{_nav_html(active, nav_items)}</nav>
-{live_html}{principal_html}
-</header>
+{header_html(active, nav_items, live_html=live_html, principal_label=principal_label)}
 {banner}
 {notice}
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
 <div class="pf-sr-only" id="pf-shell-announcer" aria-live="polite"></div>
-{stream_script}
+{stream_script}{sign_out_script}
+</body>
+</html>
+"""
+
+
+# The fallback documents: a page with no shell around it because there is nothing to navigate to
+# yet (the "not authorized" page) or because it stands in for a card document, which has no shell
+# either (the "no longer pending" and "preparing" pages, and local mode's /security). One panel in
+# the middle of the page, in the same tokens, components and dark mode as every other document.
+_PLAIN_CSS = """
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body.pf-plain {
+  min-height: 100vh; background: var(--bg); color: var(--ink); font-family: var(--font-sans);
+  font-size: var(--step-body); line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+.pf-plain-main { padding-block: var(--space-l) var(--space-xl); }
+.pf-plain-panel { max-width: 680px; margin-inline: auto; overflow-wrap: anywhere; }
+.pf-plain-panel h1 { font-size: 22px; line-height: 1.25; letter-spacing: -.02em; margin: 0; }
+.pf-plain-panel .actions { margin-top: var(--space-m); }
+.pf-plain :where(a:not(.button)) { color: var(--accent-dark); }
+.pf-plain :where(a:not(.button)):hover { color: var(--accent); }
+.pf-plain a.button { text-decoration: none; }
+.pf-plain :where(code, pre) { font-family: var(--font-mono); font-size: var(--step-small); }
+.pf-plain pre {
+  white-space: pre-wrap; background: var(--surface-soft); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--radius-s); padding: var(--space-xs) var(--space-s);
+}
+"""
+
+
+def plain_page(body_html: str, *, title: str, nonce: str, head_html: str = "", page_css: str = "") -> str:
+    """A complete document for a page that has no shell: ``body_html`` inside one ``panel``, with
+    the viewport meta, the design system and dark mode. ``head_html`` goes into ``<head>`` as is
+    (a ``<meta http-equiv="refresh">``, say); ``page_css`` is appended to the one nonce'd
+    ``<style>``. ``body_html`` is markup: the caller escapes what it interpolates."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="{_FAVICON_DATA_URI}">
+<title>{_html_escape(title)}</title>
+{head_html}
+<style nonce="{nonce}">{DOCUMENT_CSS}{_PLAIN_CSS}{page_css}</style>
+</head>
+<body class="pf-plain">
+<main class="shell pf-plain-main"><div class="panel stack pf-plain-panel">{body_html}</div></main>
 </body>
 </html>
 """

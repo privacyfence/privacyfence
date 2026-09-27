@@ -1,5 +1,6 @@
-/* The /docs/ theme on the site's tokens (website/tokens.css), loaded after the docs generator's
-   own stylesheet together with chrome.css through its extra_css hook (scripts/build_site.py).
+/* The /docs/ theme on the site's tokens (src/privacyfence/resources/design/tokens.css), loaded
+   after the docs generator's own stylesheet together with base.css and chrome.css through its
+   extra_css hook (scripts/build_site.py).
    The generator keeps its layout -- navigation drawer, table of contents, search, fluid tables --
    and takes the site's colour and type from here, so /docs/ and the hand-written pages read as
    one site. Light only: dark mode is out of scope for the whole site. */

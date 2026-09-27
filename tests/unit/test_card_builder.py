@@ -19,6 +19,7 @@ from privacyfence.agent_identity import (
     identify,
 )
 from privacyfence.approval_window_html import NARROW, WIDE
+from tests.unit.test_pdf_render import encrypted_pdf, text_pdf
 
 
 class TestReadingTimeLabel:
@@ -119,6 +120,35 @@ class TestBuildCardHtml:
     def test_pdf_bytes_render_as_an_embed_data_uri(self):
         html = card_builder.build_card_html(**self._kwargs(layout=WIDE, pdf_bytes=b"%PDF-1.4 fake"))
         assert "data:application/pdf;base64," in html
+
+    def test_a_pdf_also_renders_its_first_pages_for_a_narrow_pane(self):
+        html = card_builder.build_card_html(
+            **self._kwargs(layout=WIDE, pdf_bytes=text_pdf([["Quarterly revenue"], ["Outlook"]]))
+        )
+        assert '<embed class="pf-pdf-embed" src="data:application/pdf;base64,' in html
+        assert html.count('<img class="pf-pdf-page" src="data:image/png;base64,') == 2
+        assert "Showing pages 1–2 of 2" in html
+
+    def test_a_pdf_that_will_not_render_falls_back_to_its_text(self, monkeypatch):
+        # A PDF PDFium rejects while pypdf still reads its text: the narrow pane shows the text.
+        monkeypatch.setattr(card_builder.pdf_render, "render_first_pages", lambda data: None)
+        html = card_builder.build_card_html(
+            **self._kwargs(layout=WIDE, pdf_bytes=text_pdf([["Quarterly revenue up 12 percent"]]))
+        )
+        assert 'class="pf-pdf-page"' not in html
+        assert "so its text is shown instead" in html
+        assert "Quarterly revenue up 12 percent" in html
+
+    def test_a_malformed_pdf_falls_back_to_text_never_to_nothing(self):
+        # Neither parser can read it, so the "text" is the notice saying so.
+        html = card_builder.build_card_html(**self._kwargs(layout=WIDE, pdf_bytes=b"%PDF-1.4 fake"))
+        assert "data:application/pdf;base64," in html
+        assert "could not be shown at this width, and no text could be read from it" in html
+
+    def test_an_encrypted_pdf_falls_back_to_text_never_to_nothing(self):
+        html = card_builder.build_card_html(**self._kwargs(layout=WIDE, pdf_bytes=encrypted_pdf()))
+        assert 'class="pf-pdf-page"' not in html
+        assert "could not be shown at this width, and no text could be read from it" in html
 
     def test_image_bytes_render_as_an_img_data_uri(self):
         html = card_builder.build_card_html(

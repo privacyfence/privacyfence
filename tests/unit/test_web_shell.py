@@ -2,12 +2,10 @@
 /approvals and /settings."""
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
 from privacyfence import web_shell
-from privacyfence.approval_window_html import _STYLES_CSS
 
 
 class TestWrap:
@@ -29,7 +27,7 @@ class TestWrap:
 
     def test_embeds_the_shared_tokens(self):
         html = web_shell.wrap("", title="t", active="approvals")
-        assert "--color-accent:" in html
+        assert "--accent:" in html
         assert "prefers-color-scheme: dark" in html
 
     def test_wires_the_state_stream_and_render_dispatch(self):
@@ -233,20 +231,38 @@ class TestNotifications:
         assert "document.hasFocus()" in html
 
 
-class TestTokensCssStaysInSyncWithTheApprovalCard:
-    """resources/tokens.css is a manual export of approval_window/styles.css's
-    own :root block (see that file's docstring for why it isn't a single
-    shared @import source) -- this guards against the two silently drifting
-    apart the next time either palette changes."""
+class TestWebsiteHeader:
+    """The shell's header is the website's (website/_partials/header.html): brand mark, inline
+    links, and the same links in a <details> menu that replaces them when the header is narrow."""
 
-    def test_every_token_value_in_tokens_css_appears_in_the_approval_stylesheet(self):
-        tokens_css = (Path(web_shell.__file__).parent / "resources" / "tokens.css").read_text()
-        for line in tokens_css.splitlines():
-            line = line.strip()
-            if not line.startswith("--") or ":" not in line:
-                continue
-            value = line.split(":", 1)[1].strip().rstrip(";")
-            assert value in _STYLES_CSS, f"tokens.css value {value!r} ({line!r}) not found in approval styles.css"
+    def test_the_menu_repeats_every_inline_link(self):
+        html = web_shell.wrap("", title="t", active="connections", nav_items=web_shell.ORG_NAV_ITEMS)
+        inline = html.split('<div class="pf-shell-nav-links">', 1)[1].split("</div>", 1)[0]
+        menu = html.split('<div class="pf-shell-menu-panel">', 1)[1].split("</div></details>", 1)[0]
+        for _key, label, href in web_shell.ORG_NAV_ITEMS:
+            assert f'href="{href}"' in inline and f'href="{href}"' in menu, label
+        assert '<details class="pf-shell-menu"><summary>' in html
+
+    def test_the_current_page_is_marked_for_assistive_technology_too(self):
+        html = web_shell.wrap("", title="t", active="settings")
+        assert 'class="pf-shell-nav-item active" href="/settings" aria-current="page"' in html
+        assert html.count('aria-current="page"') == 2  # inline and in the menu
+
+    def test_the_brand_links_home_with_the_shield_mark(self):
+        html = web_shell.wrap("", title="t", active="settings")
+        assert '<a class="pf-shell-brand" href="/approvals" aria-label="PrivacyFence home">' in html
+        assert f'<img src="{web_shell._BRAND_ICON_DATA_URI}" alt=""' in html
+
+    def test_the_nav_collapses_by_container_not_viewport(self):
+        # Shared rule 6: the app has no viewport breakpoints.
+        assert "@container (max-width: 900px)" in web_shell._SHELL_CSS
+        assert "@media" not in web_shell._SHELL_CSS
+
+    def test_the_principal_is_also_in_the_menu(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS, principal_label="carol@example.com",
+        )
+        assert '<div class="pf-shell-menu-principal">Signed in as carol@example.com</div>' in html
 
 
 class TestNavItems:
@@ -323,4 +339,80 @@ class TestBareLinksAreStyled:
         # page renders outside the nav/banner/notice classes fell through
         # to #0000ee against a warm grey palette.
         html = web_shell.wrap("", title="t", active="approvals")
-        assert ".pf-shell-main a { color: var(--color-accent-700); }" in html
+        assert ".pf-shell-main :where(a:not(.button)) { color: var(--accent-dark); }" in html
+
+    def test_a_link_drawn_as_a_button_keeps_the_buttons_colours(self):
+        # A bare-link colour on a.button.primary would put accent text on the ink fill.
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert ".pf-shell-main a.button { text-decoration: none; }" in html
+
+
+class TestPlainPage:
+    """The fallback documents (no longer pending, preparing, not authorized, local mode's
+    /security) share one helper: a phone lays them out at its own width, and they carry the
+    design system and dark mode like every other document."""
+
+    def test_is_a_complete_document_a_phone_lays_out_at_its_own_width(self):
+        html = web_shell.plain_page("<p>x</p>", title="t", nonce="n")
+        assert html.startswith("<!DOCTYPE html>")
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+        assert '<meta name="color-scheme" content="light dark">' in html
+
+    def test_inlines_the_design_system_first_under_the_nonce(self):
+        from privacyfence.design_css import DOCUMENT_CSS
+
+        html = web_shell.plain_page("<p>x</p>", title="t", nonce="abc", page_css=".mine{}")
+        style = html.split('<style nonce="abc">', 1)[1].split("</style>", 1)[0]
+        assert style.startswith(DOCUMENT_CSS)
+        assert style.endswith(".mine{}")
+        assert html.count("<style") == 1
+
+    def test_body_sits_in_one_panel_and_head_html_lands_in_head(self):
+        html = web_shell.plain_page(
+            "<p>body</p>", title="<t>", nonce="n", head_html='<meta http-equiv="refresh" content="2">',
+        )
+        head, body = html.split("</head>", 1)
+        assert '<meta http-equiv="refresh" content="2">' in head
+        assert "<title>&lt;t&gt;</title>" in head
+        assert '<div class="panel stack pf-plain-panel"><p>body</p></div>' in body
+
+
+class TestInstallableOrgAppAndPush:
+    """Org mode's manifest link and web push hook-up (ADR 0081). Local mode gets neither."""
+
+    def test_org_pages_link_the_manifest_and_home_screen_icon(self):
+        html = web_shell.wrap("", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS, live_updates=False)
+        assert '<link rel="manifest" href="/manifest.webmanifest">' in html
+        assert '<link rel="apple-touch-icon" href="/icons/icon-192.png">' in html
+
+    def test_local_pages_link_neither(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert "rel=\"manifest\"" not in html and "apple-touch-icon" not in html
+
+    def test_without_a_key_push_is_inert_and_the_csrf_is_not_echoed(self):
+        html = web_shell.wrap("", title="t", active="approvals", csrf="session-id")
+        assert 'var PUSH_PUBLIC_KEY = "";' in html
+        assert 'var PUSH_CSRF = "";' in html
+        assert "session-id" not in html
+
+    def test_with_a_key_the_page_subscribes_once_permission_is_granted(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS,
+            notifications_enabled=False, push_public_key="BKEY", csrf="session-id",
+        )
+        assert 'var PUSH_PUBLIC_KEY = "BKEY";' in html
+        assert 'var PUSH_CSRF = "session-id";' in html
+        # The service worker registers for push even with tiers 0-1 off, as org mode has them.
+        assert "if ((NOTIFICATIONS_ENABLED || PUSH_PUBLIC_KEY) && 'serviceWorker' in navigator)" in html
+        assert "userVisibleOnly: true" in html
+        assert "fetch('/api/push/subscription'" in html
+        # subscribePush() itself refuses unless permission is already granted, so the page-load
+        # call never prompts: only __pfNotifPrompt asks, after a decision.
+        start = html.index("function subscribePush")
+        assert "Notification.permission !== 'granted'" in html[start:start + 200]
+
+    def test_ios_before_installation_gets_the_home_screen_hint_instead(self):
+        html = web_shell.wrap("", title="t", active="approvals", push_public_key="BKEY", csrf="c")
+        prompt = html[html.index("window.__pfNotifPrompt = function"):]
+        assert prompt.index("iosNotInstalled()") < prompt.index("Notification.permission !== 'default'")
+        assert "Add PrivacyFence to your Home Screen to get notifications" in prompt

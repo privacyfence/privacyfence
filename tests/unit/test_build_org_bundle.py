@@ -602,3 +602,43 @@ class TestInstructionsPrintedAfterWriting:
         out = " ".join(capsys.readouterr().out.split())
         assert out.count("/oauth/stepup/callback") == 2
         assert "Contacts, Tasks, Apps Script)" in out
+
+
+class TestWebPushFlag:
+    """org_config.json's "web_push" section: the org-wide off switch (ADR 0081)."""
+
+    def _args(self, tmp_path, *extra):
+        key_path = tmp_path / "key.pem"
+        if not key_path.exists():
+            build_org_bundle._generate_signing_key(str(key_path))
+        return [
+            "-o", str(tmp_path / "org_config.json"), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path), *extra,
+        ]
+
+    def _bundle(self, tmp_path) -> dict:
+        return json.loads((tmp_path / "org_config.json").read_text())
+
+    def test_absent_by_default_which_means_on(self, tmp_path):
+        from privacyfence.org_mode import WebPushConfig
+
+        assert build_org_bundle.main(self._args(tmp_path)) == 0
+        bundle = self._bundle(tmp_path)
+        assert "web_push" not in bundle
+        assert WebPushConfig.from_org_config(bundle).enabled is True
+
+    def test_no_web_push_turns_it_off_and_web_push_back_on(self, tmp_path):
+        from privacyfence.org_mode import WebPushConfig
+
+        assert build_org_bundle.main(self._args(tmp_path, "--no-web-push")) == 0
+        assert self._bundle(tmp_path)["web_push"] == {"enabled": False}
+        assert WebPushConfig.from_org_config(self._bundle(tmp_path)).enabled is False
+        assert build_org_bundle.main(self._args(tmp_path, "--merge", "--web-push")) == 0
+        assert self._bundle(tmp_path)["web_push"] == {"enabled": True}
+
+    def test_requires_org_mode(self, tmp_path):
+        with pytest.raises(SystemExit, match="require --mode org"):
+            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--no-web-push"])

@@ -1,0 +1,58 @@
+/* PrivacyFence design tokens: colour, type scale, spacing and shape.
+
+   The one source of these values for the website and the app (ADR 0078). The website loads it
+   before base.css, chrome.css and styles.css, and the /docs/ theme loads it through its extra_css
+   hook (website/_docs/); scripts/build_site.py publishes it at /tokens.css from here. The app
+   inlines it, with base.css, into every document it renders (web_shell.py,
+   settings_window_html.py, approval_window_html.py, dialog_window_html.py). No custom property
+   named like one of these is defined anywhere else (tests/unit/test_design_system.py). The rules
+   the shared files follow are in base.css's header comment. */
+
+:root {
+  /* Colour */
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --surface-soft: #eef3f8;
+  --ink: #14212b;
+  --ink-soft: #43535f;
+  --muted: #60707d;
+  --line: #dbe3e9;
+  --accent: #167a70;
+  --accent-dark: #0e5f57;
+  --accent-soft: #e1f2ef;
+  --shadow: 0 22px 70px rgba(25, 48, 62, .11);
+
+  /* Text and fills on an --ink background (.primary), its hover fill and its shadow. */
+  --on-ink: #ffffff;
+  --ink-hover: #253743;
+  --shadow-button: 0 8px 24px rgba(20, 33, 43, .13);
+  /* The .eyebrow pill: a line and a translucent wash of --accent-soft. */
+  --accent-line: #cfe4e1;
+  --accent-wash: rgba(225, 242, 239, .6);
+
+  /* Type scale */
+  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --step-h1: clamp(40px, 6vw + 8px, 82px);
+  --step-h2: clamp(30px, 4vw, 55px);
+  --step-h3: 21px;
+  --step-lede: clamp(17px, 1vw + 12px, 20px);
+  --step-body: 16px;
+  --step-small: 14px;
+  --measure: 70ch;
+
+  /* Spacing */
+  --space-2xs: 6px;
+  --space-xs: 10px;
+  --space-s: 16px;
+  --space-m: 24px;
+  --space-l: 34px;
+  --space-xl: clamp(48px, 7vw, 70px);
+  --space-section: clamp(72px, 9vw, 120px);
+  --gutter: clamp(15px, 3vw, 24px);
+
+  /* Shape */
+  --radius: 22px;
+  --radius-s: 10px;
+  --tap: 44px;
+}

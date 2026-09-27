@@ -5,7 +5,8 @@ needs a browser. It loads every page in the build manifest -- each hand-written 
 of /docs/ pages when the docs were built (getting-started, tools-reference for its wide tables,
 the organization guide for its long code blocks) -- from the site exactly as
 scripts/build_site.py builds it (see tests/website_site.py), at each tested viewport, and checks
-the measurable rules from the header comment of `website/styles.css`:
+the measurable rules from the header comment of `src/privacyfence/resources/design/base.css`
+(the shared rules, which `website/styles.css` points at):
 
 - no page-level horizontal scroll;
 - no element's box extends past the viewport, except inside a scroll container (wide code and

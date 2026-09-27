@@ -1298,9 +1298,10 @@ async def _resolve_pending_card(
         # Matches both the plain and the binder's "unbatchable" modifier
         # class (approval_list_html.py's _row_html: a confirm-kind card,
         # like the rule-confirmation one this scenario drives, is never
-        # batchable) -- see approval_list_html.py's own row_class comment.
+        # batchable) -- see approval_list_html.py's own row_class comment --
+        # followed by the design system's "card" class every row carries.
         match = re.search(
-            r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?" data-approval-id="([0-9a-f]{16,})"',
+            r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?(?: card)?" data-approval-id="([0-9a-f]{16,})"',
             page.text,
         )
         if match:

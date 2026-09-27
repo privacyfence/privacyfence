@@ -753,9 +753,10 @@ async def _resolve_pending_card(
         # The class attribute's optional trailing " pf-approval-row-
         # unbatchable" modifier (approval_list_html.py's _row_html) is what
         # a confirm-kind card -- like the rule-confirmation one this
-        # scenario drives, never batchable -- actually carries.
+        # scenario drives, never batchable -- actually carries, followed by
+        # the design system's "card" class every row carries.
         match = re.search(
-            r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?" data-approval-id="([0-9a-f]{16,})"',
+            r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?(?: card)?" data-approval-id="([0-9a-f]{16,})"',
             page.text,
         )
         if match:
