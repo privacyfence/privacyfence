@@ -143,32 +143,26 @@ def error_result(message: str) -> types.CallToolResult:
 
 
 # --------------------------------------------------------------------------- #
-# Meta-tools -- ported verbatim (name, description, schema) from
-# bridge/src/tools.ts's registerMetaTools(). See routes_mcp.py for the
-# handlers dispatching these to gate.py/auto_accept.py.
+# Meta-tools. See routes_mcp.py for the handlers dispatching these to
+# gate.py/auto_accept.py. Every description stays within 1024 characters,
+# the strictest client limit (test_tool_schema_portability.py).
 # --------------------------------------------------------------------------- #
 
 CHECK_POLICY_TOOL = types.Tool(
     name="privacyfence_check_policy",
     description=(
-        "Ask PrivacyFence, before calling a gated tool, whether that specific call would "
-        "auto-accept or need a human. Pass the same connector, tool, and args you're about "
-        "to call, plus reason: one sentence on why you're checking this right now (logged, "
-        "self-reported, unverified -- same as every gated tool's reason param). Returns "
-        "{gate, verdict, matched_rule, matched_rule_id, reason, pii_gate_may_apply}, where "
-        "verdict is one of: 'auto_accept' (the real call will pass through identically), "
-        "'requires_review' (no configured rule can match these arguments, with or without "
-        "fetching anything), or 'unknown' (whether it auto-accepts depends on the actual "
-        "fetched content, which this can't see in advance). matched_rule_id is null unless "
-        "verdict is 'auto_accept': when set, it's the exact rule id privacyfence_list_policy "
-        "lists for whatever will let this call through -- pass it straight to "
-        "privacyfence_propose_policy_change's rule_id if you also want to narrow or remove that "
-        "rule. For 'review'-gated (read) tools, pii_gate_may_apply is always true: PrivacyFence's "
-        "PII detection gate scans real content and can force a popup even when a rule matches, "
-        "and that can never be predicted ahead of time. This makes no external API call, opens no "
-        "popup, and has no side effects -- call it as often as you want while planning a task. "
-        "Most useful before and during a scheduled/unattended Cowork run, to plan around steps "
-        "that would otherwise need a human who isn't there."
+        "Before calling a gated tool, ask whether that exact call would auto-accept or need a human. "
+        "Pass the connector, tool and args you're about to call. Returns {gate, verdict, "
+        "matched_rule, matched_rule_id, reason, pii_gate_may_apply}. verdict is 'auto_accept' (the "
+        "real call will pass through identically), 'requires_review' (no configured rule can match "
+        "these args), or 'unknown' (it depends on fetched content this can't see in advance). "
+        "matched_rule_id is set only for 'auto_accept': the privacyfence_list_policy rule id that "
+        "lets this call through, usable as privacyfence_propose_policy_change's rule_id. For "
+        "'review'-gated (read) tools pii_gate_may_apply is always true: the PII gate scans real "
+        "content and can force a popup even when a rule matches, which can't be predicted. No "
+        "external API call, no popup, no side effects -- call it freely while planning, especially "
+        "before and during an unattended run. reason: one sentence on why you're checking now "
+        "(logged, self-reported, unverified)."
     ),
     input_schema={
         "type": "object",
@@ -186,26 +180,17 @@ CHECK_POLICY_TOOL = types.Tool(
 LIST_POLICY_TOOL = types.Tool(
     name="privacyfence_list_policy",
     description=(
-        "List every auto-accept rule currently configured under PrivacyFence's policy engine "
-        "(the redesigned, single scope+verb vocabulary that replaces the older rule/grant split -- "
-        "see privacyfence_propose_policy_change for the write side), plus the scope catalogue that "
-        "tool accepts. Returns {rules, scope_groups}. Each entry of rules carries: id (pass this "
-        "to privacyfence_propose_policy_change's rule_id to update or remove exactly this rule), "
-        "sentence (a human-readable rendering, e.g. \"Drive - folder 1CdeF...: allow read, update, "
-        "format\"), connector, scope_type, value, operations (the engine's own internal keys -- "
-        "informational only), verbs (the same rule stated as {verb, family} pairs -- family is one "
-        "of 'read'/'write'/'send'/'destructive', so a rule granting delete or send is visible "
-        "without reading the sentence closely), conditions, and covered_tools (every real tool "
-        "name this rule can auto-accept -- one operation, or several, stated plainly rather than "
-        "left for you to infer from the operation keys). scope_groups is the catalogue "
-        "privacyfence_propose_policy_change's own group/verbs validates against: each entry gives "
-        "an id (pass as group), the verbs that scope type can actually govern (pass a subset as "
-        "verbs -- naming one this list doesn't include is rejected before any popup is shown), "
-        "and whether it needs a value at all. Call this before proposing a change: "
-        "an id or group only matches something real if you listed it first rather than guessed. "
-        "Read-only, no popup -- reason: one sentence on why you're listing the current policy "
-        "right now (logged, self-reported, same as every other gated/meta tool's reason param, "
-        "since this discloses the full current rule set)."
+        "List every configured auto-accept rule, plus the scope catalogue "
+        "privacyfence_propose_policy_change accepts. Returns {rules, scope_groups}. Each rule has: id "
+        "(pass as privacyfence_propose_policy_change's rule_id to update or remove it), sentence "
+        "(human-readable), connector, scope_type, value, operations (internal keys, informational), "
+        "verbs ({verb, family} pairs; family is 'read', 'write', 'send' or 'destructive'), "
+        "conditions, and covered_tools (every tool name the rule can auto-accept). Each scope_groups "
+        "entry has an id (pass as group), the verbs that scope can govern (pass a subset as verbs; "
+        "any other verb is rejected before a popup), and whether it needs a value. Call this before "
+        "proposing a change: an id or group only matches something real if you listed it rather than "
+        "guessed. Read-only, no popup. reason: one sentence on why you're listing the policy now "
+        "(logged, self-reported; this discloses the full rule set)."
     ),
     input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
     annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
@@ -214,30 +199,19 @@ LIST_POLICY_TOOL = types.Tool(
 PROPOSE_POLICY_CHANGE_TOOL = types.Tool(
     name="privacyfence_propose_policy_change",
     description=(
-        "Propose adding, updating, or removing an auto-accept rule under PrivacyFence's policy "
-        "engine -- one rule shape (a scope plus the verbs it allows). This ALWAYS blocks on a "
-        "native confirmation dialog a human must approve -- there is no way to change this "
-        "config without one, even if an identical rule already exists. If declined, or if this "
-        "connection is in an unattended session, the call throws "
-        "-- never assume success without checking the result. Call privacyfence_list_policy "
-        "first: group/verbs/rule_id only match something real if you listed them rather than "
-        "guessed, and a verb a scope type cannot govern (one privacyfence_list_policy's own "
-        "scope_groups doesn't list for that group) is rejected here, before any popup is shown, "
-        "rather than silently stored as a rule nothing could ever render or remove.\n\n"
-        "operation='add' or 'update' need group (one of privacyfence_list_policy's scope_groups "
-        "ids, e.g. 'drive.folder'), value (a list of resource ids/names the scope matches, e.g. a "
-        "Drive folder id or a sender domain -- omit for a value-less scope like \"if I own it\", "
-        "which scope_groups' own needs_value tells you), and verbs (a non-empty list from that "
-        "group's own verbs, e.g. ['read', 'update']). operation='update' additionally takes "
-        "rule_id (the existing rule being replaced -- removed, then re-added under the new "
-        "group/value/verbs, since rules are additive by construction). operation='remove' needs "
-        "only rule_id.\n\n"
-        "Returns {confirmed, changed, description, rule_ids}: changed is false when the human "
-        "confirmed but nothing on disk actually differed (e.g. removing a rule id already gone); "
-        "rule_ids names the rule(s) actually affected, for a follow-up privacyfence_list_policy "
-        "or propose call to target directly.\n\n"
-        "reason: one sentence on why you're proposing this change -- logged, self-reported, "
-        "unverified, same as every other gated tool's reason param."
+        "Propose adding, updating or removing an auto-accept rule (a scope plus allowed verbs). "
+        "ALWAYS blocks on a dialog a human must approve. If declined, or in an unattended session, it "
+        "errors -- check the result, never assume success. Call privacyfence_list_policy first: "
+        "group, verbs and rule_id must be listed, not guessed; a verb not in that group's "
+        "scope_groups entry is rejected before any popup.\n\n"
+        "operation='add'/'update' need group (a scope_groups id, e.g. 'drive.folder'), value "
+        "(resource ids/names the scope matches, e.g. a Drive folder id; omit when the group's "
+        "needs_value is false) and verbs (a non-empty subset of the group's verbs, e.g. ['read', "
+        "'update']). 'update' also takes rule_id (that rule is removed, then re-added). 'remove' "
+        "needs only rule_id.\n\n"
+        "Returns {confirmed, changed, description, rule_ids}: changed is false when confirmed but "
+        "nothing differed; rule_ids names the rules affected.\n\n"
+        "reason: one sentence on why you're proposing this (logged, unverified)."
     ),
     input_schema={
         "type": "object",
@@ -277,35 +251,18 @@ BEGIN_UNATTENDED_SESSION_TOOL = types.Tool(
 AWAIT_APPROVAL_TOOL = types.Tool(
     name="privacyfence_await_approval",
     description=(
-        "Long-poll one or more pending approvals returned by a gated tool call's "
-        "{status: 'approval_pending', approval_id, pending_count, binder_url, url, ...} result, "
-        "and report their status -- status only, never "
-        "content. Passing every outstanding approval_id in one call is the expected use, not a "
-        "fallback for an edge case: if pending_count on the latest pending result is greater than "
-        "one, issue whatever other gated calls are independently ready rather than waiting on this "
-        "one first, then call this tool once with all of those approval_ids together -- one human "
-        "decision pass over the whole batch (the result's binder_url) instead of one prompt per "
-        "call. Before your first call to this tool for a given approval, make sure the human has "
-        "actually been told: relay that result's own message and url (or binder_url, once there's "
-        "more than one) to the user in your reply so they know a decision is waiting on them -- do "
-        "not call this (or anything else) silently first. Pass every approval_id "
-        "you're waiting on, plus timeout_seconds (how long to wait before returning regardless of "
-        "outcome; keep this comfortably under your own client's tool-call timeout -- it's capped "
-        "server-side regardless). Returns {approval_id: status}, one of: 'pending' (still "
-        "undecided -- if your environment can schedule a follow-up (a reminder, a background check, "
-        "a cron-style trigger), schedule one to call this again in a bit rather than blocking the "
-        "conversation on a long wait; otherwise call it again with a fresh timeout), 'approved' (a "
-        "human said yes -- re-issue the ORIGINAL gated tool call with the exact same arguments to "
-        "actually receive the data; this tool never returns content itself, there is no other way "
-        "to collect it), 'denied' (a human said no -- re-issuing will not change that; don't retry, ask the user how "
-        "to proceed unless denial_feedback says otherwise), 'expired' "
-        "(nobody decided in time -- re-issuing starts a fresh approval, not a retry of the old one), "
-        "or 'unknown' (not a real approval_id this connection can see -- wrong id, or it belongs to "
-        "a different install). A 'denied' approval may also have an entry under denial_feedback: "
-        "that is the user's own instruction for what to do instead, so follow it rather than "
-        "retrying. Prefer this over polling the same original tool call repeatedly: it "
-        "returns as soon as any status changes, or once timeout_seconds elapses, whichever comes "
-        "first."
+        "Long-poll pending approvals from gated calls' {status: 'approval_pending', approval_id, ...} "
+        "results; status only, never content. Before the first call for an approval, relay that "
+        "result's message and url (binder_url if several) to the user -- never wait silently. If "
+        "pending_count > 1, first issue your other ready gated calls, then pass all approval_ids in "
+        "one call (one human pass). Keep timeout_seconds under your client's tool-call timeout. "
+        "Returns {approval_id: status}: 'pending' (schedule a follow-up if you can, else call again), "
+        "'approved' (re-issue the ORIGINAL call with identical arguments -- the only way to get the data), "
+        "'denied' (a human said no -- re-issuing will not change that; "
+        "don't retry, ask the user how to proceed unless denial_feedback says otherwise), 'expired' "
+        "(re-issuing starts a fresh approval) or 'unknown' (no such id here). denial_feedback holds "
+        "the user's instruction for a denial: follow it. Returns on any change or at the timeout. "
+        "Prefer this over re-issuing the original call to poll."
     ),
     input_schema={
         "type": "object",
@@ -321,30 +278,18 @@ AWAIT_APPROVAL_TOOL = types.Tool(
 PRIVACYFENCE_STATUS_TOOL = types.Tool(
     name="privacyfence_status",
     description=(
-        "Check whether THIS PrivacyFence install is actually set up -- call this before the "
-        "first PrivacyFence-governed action in a conversation, or whenever a human asks why a "
-        "connector (gmail_*, drive_*, slack_*, ...) isn't available. An empty or partial tool "
-        "list from this server means connectors aren't authenticated yet, NOT that PrivacyFence "
-        "has nothing to do with the current request -- this is the one tool guaranteed to exist "
-        "even when every other tool is missing. Returns {mode, setup_complete, connectors, "
-        "next_step, message} and, whenever setup isn't complete, sign_in_url: mode is 'local' or "
-        "'org'; connectors is a list of {name, enabled, authenticated, blocked_by} (blocked_by is "
-        "null once authenticated or if a human deliberately disabled it, otherwise "
-        "'no_org_config' -- never configured -- 'not_authenticated' -- never signed in or the "
-        "token expired -- or a short redacted reason); setup_complete is true once at least one "
-        "connector is authenticated; next_step and message tell the model what to do next in "
-        "plain language -- relay message to the human as-is when setup isn't complete. This tool "
-        "never mints a sign-in credential itself, and no tool on this server does any more, so "
-        "sign_in_url is always null here. In local mode when un-onboarded, next_step is "
-        "'open_privacyfence_companion' -- tell the human to open PrivacyFence's companion app "
-        "(the menu-bar/tray icon on macOS and Windows, the PrivacyFence entry in the "
-        "applications menu on Linux) and choose Open Settings; you cannot do this for them, and "
-        "there is no link for you to hand them. In "
-        "org mode it's 'contact_your_administrator' -- org mode signs in through its own IdP and "
-        "has no local link to offer at all. Makes no external API call and has no side effects "
-        "other than its own audit entry. reason: one sentence on why this is being checked right "
-        "now -- logged, self-reported, unverified, same as every other meta tool's reason param, "
-        "since this discloses which connectors are authenticated."
+        "Check whether THIS PrivacyFence install is set up: call it before the first "
+        "PrivacyFence-governed action in a conversation, or when asked why a connector (gmail_*, "
+        "...) is missing. An empty or partial tool list means connectors aren't authenticated yet, "
+        "NOT that PrivacyFence is irrelevant -- this is the one tool guaranteed to exist even when "
+        "every other tool is missing. Returns {mode ('local'/'org'), setup_complete (any connector "
+        "authenticated), connectors [{name, enabled, authenticated, blocked_by: null, "
+        "'no_org_config', 'not_authenticated' or a reason}], next_step, message, sign_in_url "
+        "(always null)}. If setup isn't complete, relay message to the human as-is. next_step "
+        "'open_privacyfence_companion' (local): the human opens PrivacyFence's companion app "
+        "(menu-bar/tray icon; Linux: applications menu) and chooses Open Settings; you can't, and "
+        "have no link. 'contact_your_administrator' (org): sign-in is via the org's IdP. Only side "
+        "effect: an audit entry. reason: one sentence on why you're checking now (logged)."
     ),
     input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
     annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
@@ -367,22 +312,17 @@ END_UNATTENDED_SESSION_TOOL = types.Tool(
 CREATE_UPLOAD_SLOT_TOOL = types.Tool(
     name="privacyfence_create_upload_slot",
     description=(
-        "Get a URL to upload a local file's bytes to PrivacyFence directly, for a client with "
-        "no PrivacyFence extension (Claude Code, or any other direct HTTP MCP client) -- the "
-        "way forward when a tool's local_path/attachments parameter fails with a message about "
-        "PrivacyFence being unable to read files in your home folder directly. Returns "
-        "{upload_id, upload_url, method: 'PUT', max_bytes, expires_at, example}: PUT the file's "
-        "raw bytes to upload_url (e.g. the shown curl -T example) -- no Authorization header or "
-        "anything else is needed, the URL itself is the one-time credential. Once the upload "
-        "succeeds, pass upload_id back to the tool that needed the file (as its own upload_id "
-        "parameter, e.g. drive_upload_file, or as an 'upload:<upload_id>' entry in a tool's "
-        "attachments list, e.g. the gmail_*_with_attachments tools) -- do not try to fetch "
-        "upload_url yourself, and do not pass it as local_path. The slot is single-use, expires "
-        "10 minutes after this call, and can only ever be claimed by the tool call you make "
-        "next in this same conversation -- calling this tool does not itself upload, gate, "
-        "preview, or approve anything; that all still happens when the file's actual "
-        "destination tool runs. reason: one sentence on why this file is needed right now -- "
-        "logged, self-reported, unverified, same as every other meta tool's reason param."
+        "Get a one-time URL to upload a local file to PrivacyFence, for a client without the "
+        "PrivacyFence extension (e.g. Claude Code) -- use it when a tool's local_path/attachments "
+        "parameter says PrivacyFence can't read your files directly. Returns {upload_id, upload_url, "
+        "method: 'PUT', max_bytes, expires_at, example}: PUT the raw bytes to upload_url (e.g. the "
+        "curl -T example); no Authorization header -- the URL is the credential. Then pass upload_id "
+        "to the tool that needs the file (its upload_id parameter, e.g. drive_upload_file, or an "
+        "'upload:<upload_id>' attachments entry, e.g. gmail_*_with_attachments). Never fetch "
+        "upload_url yourself or pass it as local_path. Single-use, expires in 10 minutes, claimable "
+        "only by your next tool call in this conversation. This uploads, gates and approves nothing: "
+        "that happens when the destination tool runs. reason: one sentence on why this file is needed "
+        "now (logged, self-reported, unverified)."
     ),
     input_schema={
         "type": "object",
