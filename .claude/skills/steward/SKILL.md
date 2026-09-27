@@ -55,7 +55,11 @@ Two things that look local-only but may not be, in this container specifically:
 - `scripts/qa_web_smoke.py` needs a real browser, which is why `docs/testing-policy.md` ("`qa_web_smoke.py` (layer 4, by hand)") lists
   it as local-only. The web container ships Chromium and Playwright already (see the
   `PLAYWRIGHT_BROWSERS_PATH` note in `.claude/hooks/session-start.sh`), so try it before declaring
-  it impossible.
+  it impossible -- with `--chromium-path "$PRIVACYFENCE_TEST_CHROMIUM"` when the hook exported
+  that variable, because the container's Chromium is not the build the locked `playwright` expects.
+- The browser tests themselves (`test_browser_smoke.py`, the website tests) run here too, through
+  the same `PRIVACYFENCE_TEST_CHROMIUM` the hook exports. Read the hook's `==>` Chromium line: a
+  `WARNING` there means every browser test will report SKIPPED, and a green run is then not a pass.
 - Pushing a release tag directly is **not** possible here — the container can push branches but not
   `refs/tags/*`. Don't try; a failed push can leave a local tag behind that makes
   `tag_release.py`'s later checks lie. Dispatch `release.yml` instead (table above), and note that

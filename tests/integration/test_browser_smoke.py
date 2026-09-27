@@ -59,6 +59,8 @@ from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from pypdf import PdfWriter  # noqa: E402
 
+from tests.website_site import chromium_launch_kwargs  # noqa: E402
+
 from privacyfence import approval_window_html  # noqa: E402
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
@@ -159,9 +161,12 @@ def browser():
     with), without holding it open past this module's own last test."""
     with sync_playwright() as p:
         try:
-            b = p.chromium.launch()
+            b = p.chromium.launch(**chromium_launch_kwargs())
         except PlaywrightError as exc:
-            pytest.skip(f"Chromium not available for Playwright ({exc}) -- run `playwright install chromium`")
+            pytest.skip(
+                f"Chromium not available for Playwright ({exc}) -- run `playwright install chromium`, "
+                "or set PRIVACYFENCE_TEST_CHROMIUM to a Chromium binary already on this machine"
+            )
             return
         yield b
         b.close()
