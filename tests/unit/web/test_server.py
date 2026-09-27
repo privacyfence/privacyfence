@@ -300,6 +300,7 @@ class TestSecurityHeaders:
         csp = r.headers.get("content-security-policy", "")
         assert "default-src 'none'" in csp
         assert "frame-ancestors 'none'" in csp
+        assert "form-action 'none'" in csp  # local mode has no native form (ADR 0082)
 
     def test_frame_options_deny(self):
         r = self._client().get("/approvals")
@@ -460,6 +461,25 @@ class TestBuildCsp:
         assert "style-src" not in directive_names
         assert "style-src-elem" in directive_names
         assert "style-src-attr" in directive_names
+
+    @staticmethod
+    def _directives(csp: str) -> dict[str, str]:
+        return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
+
+    def test_local_mode_allows_no_form_submission(self):
+        """ADR 0082: local mode renders no native form, so it keeps form-action 'none'."""
+        directives = self._directives(build_csp("n"))
+        assert directives["form-action"] == "'none'"
+        assert directives["base-uri"] == "'none'"
+        assert directives["frame-ancestors"] == "'none'"
+
+    def test_org_mode_allows_form_posts_back_to_the_app_only(self):
+        """ADR 0082: org /connect's native forms post to this origin, and every redirect they
+        follow stays on it, so 'self' and nothing wider -- not the IdP, not a wildcard."""
+        directives = self._directives(build_csp("n", app_origin="https://org.example.com"))
+        assert directives["form-action"] == "'self'"
+        assert directives["base-uri"] == "'none'"
+        assert directives["frame-ancestors"] == "'none'"
 
 
 class TestWebServerConstruction:

@@ -107,6 +107,7 @@ class TestManifest:
         client, *_ = _org_app(tmp_path, monkeypatch, push=True)
         csp = client.get("/manifest.webmanifest").headers["content-security-policy"]
         assert "manifest-src 'self'" in csp
+        assert "form-action 'self';" in csp  # org /connect's native forms (ADR 0082)
         assert f"img-src data: {ISSUER}/icons/;" in csp
 
     def test_org_pages_link_the_manifest(self, tmp_path, monkeypatch):
@@ -241,7 +242,7 @@ class TestSignOutStopsPushToThatBrowser:
 
         r = laptop.post("/logout")
 
-        assert r.status_code == 302 and r.headers["location"] == "/login"
+        assert r.status_code == 303 and r.headers["location"] == "/signed-out"
         assert [s.endpoint for s in store.list("alice")] == [APPLE]
 
     def test_the_next_person_on_that_browser_inherits_nothing(self, tmp_path, monkeypatch):
@@ -276,7 +277,7 @@ class TestSignOutStopsPushToThatBrowser:
         client, sessions, _store, _ = _org_app(tmp_path, monkeypatch, push=False)
         session_id = _sign_in(client, sessions)
         r = client.post("/logout")
-        assert r.status_code == 302 and r.headers["location"] == "/login"
+        assert r.status_code == 303 and r.headers["location"] == "/signed-out"
         assert sessions.get(session_id) is None
 
     def test_the_sign_out_form_unsubscribes_the_browser_too(self, tmp_path, monkeypatch):

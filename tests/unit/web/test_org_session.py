@@ -1,6 +1,7 @@
 """Tests for web/org_session.py: the org-mode browser session store."""
 from __future__ import annotations
 
+import pytest
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -162,6 +163,19 @@ class TestCsrfAndOrigin:
             "scheme": "https", "server": ("pf.example.com", 443),
         }
         assert os_.check_origin(Request(scope)) is False
+
+    @pytest.mark.parametrize(("fetch_site", "accepted"), [
+        (b"same-origin", True), (b"same-site", False), (b"cross-site", False), (None, False),
+    ])
+    def test_null_origin_is_accepted_only_from_this_origin(self, fetch_site, accepted):
+        """A native form post under Referrer-Policy: no-referrer sends Origin: null (ADR 0082);
+        Sec-Fetch-Site, which only the browser sets, tells this origin's own forms apart."""
+        headers = [(b"host", b"pf.example.com"), (b"origin", b"null")]
+        if fetch_site is not None:
+            headers.append((b"sec-fetch-site", fetch_site))
+        scope = {"type": "http", "method": "POST", "path": "/", "headers": headers,
+                 "scheme": "https", "server": ("pf.example.com", 443)}
+        assert os_.check_origin(Request(scope)) is accepted
 
     def test_check_csrf_compares_via_hmac_compare_digest(self, monkeypatch):
         # Mirrors web/session_auth.py's own equivalent spy: pins that this module's check_csrf
