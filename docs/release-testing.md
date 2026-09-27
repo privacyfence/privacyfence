@@ -11,7 +11,8 @@ A check stays manual only when automation cannot reliably decide pass or fail. T
 
 - visual and subjective judgment — contrast, spacing, light vs. dark, phone width;
 - a first-time OAuth/consent screen, which the provider renders and which differs per account;
-- one real MCP client (Claude Desktop with the `.mcpb`) against the packaged application;
+- one real client per supported AI-client family, run only when the client-facing surface
+  changed ([`ai-client-qa.md`](ai-client-qa.md#when-to-run-it));
 - OS-native presentation — Gatekeeper, the macOS Installer and its password prompt, SmartScreen,
   UAC, the Windows uninstaller's own dialog;
 - a real interactive sign-in, which no hosted runner can produce (the Windows `LogonTrigger`);
@@ -71,6 +72,10 @@ never on a machine whose data you need.
 4. **Connector QA**, for a new connector, a major connector rewrite, a broad change to `gate.py`,
    `auto_accept.py`, `policy/resource_registry.py` or the approval UI, or an unexplained provider
    regression: [`connector-qa.md`](connector-qa.md).
+5. **AI clients**, when `/mcp`, the organization-mode OAuth server, `web/routes_mcp.py`,
+   `web/mcp_tools.py` or `agent_identity.py` changed: every client in
+   [`ai-client-qa.md`](ai-client-qa.md)'s results table, through its per-client script, under both
+   annotation modes, ending with a saved fixture.
 
 ### Org mode on a phone
 
