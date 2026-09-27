@@ -59,30 +59,22 @@ menu-bar icon is not running, that starts it; if it is, you are asked to confirm
 
 Double-click **PrivacyFence.mcpb** on the DMG. Claude Desktop opens and offers to install the
 extension; accept. There is nothing to configure: the extension finds the running daemon by
-itself. On a separated install it never starts the daemon: the daemon belongs to launchd and its
-own account. If the daemon is stopped, the extension waits for it and logs that you should choose
-**Start PrivacyFence…** from the menu-bar icon.
+itself, and never starts it on a separated install (the daemon belongs to launchd and its own
+account).
 
 The first time a tool reads or saves a file outside Claude's own folders, macOS may ask
 "Claude would like to access files in your Downloads folder". The extension runs inside Claude, so
 macOS attributes the access to Claude. Allow it once per folder.
 
+The rest, including organization mode, is in [Connect Claude Desktop](connect-claude-desktop.md).
+
 ## Connect Claude Code
 
-Claude Code talks to the daemon's local `/mcp` endpoint with your own bearer token. From your own
-account, after logging back in:
-
-```bash
-PF_HANDOFF="/Library/Application Support/PrivacyFence/handoff"
-claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mcp_url")" \
-  --header "Authorization: Bearer $(/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp --print-mcp-token)"
-```
-
-`mcp_url` holds `http://127.0.0.1:8765/mcp` unless you changed `web.port`. `--print-mcp-token`
-mints your account's token the first time and prints the same one afterwards. Any other
-Streamable HTTP MCP client takes the same URL and header. Claude Code cannot read local files
-through PrivacyFence the way the Claude Desktop extension does; see
-[How it works](how-it-works.md) for how it uploads a file instead.
+Claude Code talks to the daemon's local `/mcp` endpoint with your own bearer token. On macOS the
+URL is in `/Library/Application Support/PrivacyFence/handoff/mcp_url` and the token comes from
+`/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp --print-mcp-token`, run from your
+own account after logging back in. The full command is in
+[Connect Claude Code](connect-claude-code.md#local-mode).
 
 ## Troubleshooting
 

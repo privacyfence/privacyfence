@@ -22,8 +22,9 @@ what you need, which guide to follow, and what your first approval looks like.
 - [Install on Windows](install-windows.md)
 - [Install on Linux](install-linux.md)
 
-Each guide covers download and checksum, install, connecting Claude Desktop and Claude Code,
-troubleshooting, uninstall and purge.
+Each guide covers download and checksum, install, troubleshooting, uninstall and purge. Then
+connect your AI client: [Claude Desktop](connect-claude-desktop.md),
+[Claude Code](connect-claude-code.md) or [claude.ai](connect-claude-ai.md).
 
 ## Local or organization deployment
 

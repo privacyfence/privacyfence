@@ -12,8 +12,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 - [`getting-started.md`](getting-started.md) — what you need, which install fits, your first
   approval, and troubleshooting shared by every platform.
 - [`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md),
-  [`install-linux.md`](install-linux.md) — install, connect Claude Desktop and Claude Code,
-  troubleshoot, uninstall. One page per platform.
+  [`install-linux.md`](install-linux.md) — install, first start, troubleshoot, uninstall. One page
+  per platform; connecting an AI client is under "AI agent setup" below.
 - [`platform-support.md`](platform-support.md) — supported OS versions and architectures, where
   PrivacyFence keeps its data, logs, and start/stop commands.
 - [`connecting-a-service.md`](connecting-a-service.md) — connecting Gmail, Slack and the other
@@ -47,6 +47,15 @@ bundle:
 - [`salesforce-setup.md`](salesforce-setup.md)
 - [`atlassian-setup.md`](atlassian-setup.md) — Jira and Confluence
 - [`telegram-setup.md`](telegram-setup.md)
+
+### AI agent setup
+
+Connecting each AI client, in local mode and in an organization deployment:
+
+- [`connect-claude-desktop.md`](connect-claude-desktop.md) — Claude Desktop, through the extension
+  or as a custom connector
+- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code
+- [`connect-claude-ai.md`](connect-claude-ai.md) — claude.ai, through an organization deployment
 
 ### Reference appendices
 
