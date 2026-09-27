@@ -44,6 +44,7 @@
  * logging.StreamHandler setup.
  */
 
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -340,13 +341,29 @@ export async function main(argv = process.argv.slice(2), opts: MainOptions = {})
   }
 }
 
+/** Whether the script Node was started with (``argv1``) is the module at
+ * ``moduleUrl``. Compared through the real path: Node resolves symlinks
+ * before it sets ``import.meta.url`` but leaves ``process.argv[1]`` as
+ * given, so a shim started through any symlinked path -- macOS's own
+ * ``/var`` -> ``/private/var`` included, or a symlinked home or extensions
+ * directory -- would otherwise never match, and would exit at once without
+ * running main() or printing a word. */
+export function isEntryPoint(argv1: string | undefined, moduleUrl: string): boolean {
+  if (argv1 === undefined) return false;
+  let resolved = argv1;
+  try {
+    resolved = realpathSync(argv1);
+  } catch {
+    // Not a file on disk (e.g. a loader-provided name): compare as given.
+  }
+  return moduleUrl === pathToFileURL(resolved).href;
+}
+
 // Only auto-run when this module is the actual entry point (the bundled
 // dist/shim.js Claude Desktop spawns, or `node`/`tsx src/index.ts` in dev)
 // -- not when index.test.ts imports main() directly to drive it in an
 // in-process integration test.
-const isEntryPoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (isEntryPoint) {
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   main().catch((exc: unknown) => {
     // ShimExitError carries its own fully-formatted, user-facing message
     // (see daemon.ts) -- print it plainly, no "Error:" prefix/stack trace,

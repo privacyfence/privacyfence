@@ -132,6 +132,10 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Fixed
 
+- **The Claude Desktop extension no longer exits silently when started through a symlinked
+  path.** If the folder the extension was installed in was reached through a symbolic link, the
+  extension quit at once without connecting or logging anything, and Claude Desktop reported no
+  PrivacyFence server. It now starts whichever path it is launched from.
 - **Organization mode: signing out from the connections page and connecting Telegram work again
   in a browser.** The page's security policy refused to send either form, so neither button did
   anything. Signing out now lands on a "You're signed out" page with a **Sign in** link, rather

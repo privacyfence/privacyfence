@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ControlChannelError } from "../src/controlChannel.js";
 import { ShimExitError } from "../src/errors.js";
-import { daemonHeaders, main, parseArgs, TOOL_ANNOTATIONS_HEADER } from "../src/index.js";
+import { daemonHeaders, isEntryPoint, main, parseArgs, TOOL_ANNOTATIONS_HEADER } from "../src/index.js";
 import { FakeMcpDaemon } from "./fakeMcpDaemon.js";
 import { makeTempMcpFiles } from "./testFiles.js";
 
@@ -58,6 +62,46 @@ describe("parseArgs", () => {
     assert.deepEqual(parseArgs(["--config", "/tmp/x.yaml", "--pool", "--tool-annotations=all-read-only"]), {
       toolAnnotations: "all-read-only",
     });
+  });
+});
+
+// Regression: the entry-point check compared import.meta.url (which Node
+// resolves through symlinks) with process.argv[1] (which it does not), so a
+// shim started through a symlinked path -- on macOS, anything under /var --
+// exited at once without running main() or logging anything.
+describe("isEntryPoint", () => {
+  it("matches the module started through a symlinked directory", () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "shim-entry-")));
+    try {
+      const real = path.join(dir, "real");
+      const link = path.join(dir, "link");
+      symlinkSync(dir, link, "dir");
+      writeFileSync(real, "");
+      const moduleUrl = pathToFileURL(real).href;
+      assert.equal(isEntryPoint(path.join(link, "real"), moduleUrl), true);
+      assert.equal(isEntryPoint(real, moduleUrl), true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not match another module, or no argv[1] at all", () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "shim-entry-")));
+    try {
+      const a = path.join(dir, "a.js");
+      const b = path.join(dir, "b.js");
+      writeFileSync(a, "");
+      writeFileSync(b, "");
+      assert.equal(isEntryPoint(b, pathToFileURL(a).href), false);
+      assert.equal(isEntryPoint(undefined, pathToFileURL(a).href), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the path as given when it does not exist", () => {
+    const missing = path.join(tmpdir(), "shim-entry-missing", "shim.js");
+    assert.equal(isEntryPoint(missing, pathToFileURL(missing).href), true);
   });
 });
 
