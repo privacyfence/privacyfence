@@ -82,6 +82,7 @@ class _OrgVerifier(TokenVerifier):
 @contextlib.asynccontextmanager
 async def _connected_session(
     dispatcher: McpDispatcher, *, token: str = TOKEN, verifier: TokenVerifier | None = None,
+    headers: dict[str, str] | None = None,
 ):
     """Builds the /mcp app for ``dispatcher`` and yields a live, initialized
     ClientSession against it -- the happy-path fixture every wire-level test
@@ -98,7 +99,8 @@ async def _connected_session(
 
     async with mcp_lifespan(session_manager):
         async with httpx2.AsyncClient(
-            transport=transport, base_url="http://testserver", headers={"Authorization": f"Bearer {token}"},
+            transport=transport, base_url="http://testserver",
+            headers={"Authorization": f"Bearer {token}", **(headers or {})},
         ) as http_client:
             async with streamable_http_client(
                 "http://testserver/mcp", http_client=http_client,
@@ -126,6 +128,24 @@ async def _raw_client_on_a_running_app(dispatcher: McpDispatcher, *, token: str 
             headers={"Authorization": f"Bearer {token}"},
         ) as client:
             yield client
+
+
+class ReadWriteDeleteConnector(Connector):
+    """One tool of each kind ADR 0086's truthful annotations tell apart."""
+
+    @property
+    def name(self) -> str:
+        return "rwd"
+
+    def tool_specs(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(name="rwd_read", description="Reads.", read_only=True),
+            ToolSpec(name="rwd_write", description="Writes."),
+            ToolSpec(name="rwd_delete", description="Deletes.", destructive=True),
+        ]
+
+    async def call(self, tool: str, args: dict) -> object:
+        return {}
 
 
 def _dispatcher(connectors: dict[str, Connector] | None = None, **kwargs) -> McpDispatcher:
@@ -320,16 +340,6 @@ class TestListTools:
         names = {t.name for t in result.tools}
         assert "echo_say" in names
         assert META_TOOL_NAMES <= names
-
-    async def test_connector_tool_is_advertised_uniformly_read_only(self):
-        # Every tool -- write tools included -- is advertised
-        # read-only/non-destructive; the real gate is server-side (ADR 0076).
-        dispatcher = _dispatcher({"echo": EchoConnector()})
-        async with _connected_session(dispatcher) as session:
-            result = await session.list_tools()
-        tool = next(t for t in result.tools if t.name == "echo_say")
-        assert tool.annotations.read_only_hint is True
-        assert tool.annotations.destructive_hint is False
 
     async def test_reflects_a_live_connector_set_change_between_calls(self):
         store: dict[str, Connector] = {}
@@ -848,3 +858,92 @@ class TestRehomingAStaleSessionId:
                 "/mcp", json=_INIT_BODY, headers={**_WIRE_HEADERS, "mcp-session-id": session_id},
             )
         assert again.headers.get("mcp-session-id", session_id) == session_id
+
+
+_HEADER = "X-PrivacyFence-Tool-Annotations"
+# (readOnlyHint, destructiveHint, idempotentHint) per tool, per mode (ADR 0086).
+_EXPECTED = {
+    "truthful": {
+        "rwd_read": (True, False, True), "rwd_write": (False, False, False), "rwd_delete": (False, True, False),
+    },
+    "all_read_only": {
+        "rwd_read": (True, False, True), "rwd_write": (True, False, True), "rwd_delete": (True, False, True),
+    },
+}
+
+
+def _triples(tools) -> dict[str, tuple]:
+    return {
+        t.name: (t.annotations.read_only_hint, t.annotations.destructive_hint, t.annotations.idempotent_hint)
+        for t in tools
+    }
+
+
+class TestToolAnnotationsOverTheWire:
+    """ADR 0086, checked on a live ``/mcp`` ``list_tools``: which annotation mode a session gets,
+    and that the meta-tools keep their own annotations whichever it is."""
+
+    @pytest.mark.parametrize("dispatcher_mode", ["local", "org"])
+    @pytest.mark.parametrize("bundle", ["truthful", "all_read_only"])
+    @pytest.mark.parametrize("header", [None, "truthful", "all-read-only"])
+    async def test_mode_precedence(self, dispatcher_mode, bundle, header):
+        # Local mode: the connection's header wins over the bundle. Org mode: the header is
+        # ignored and the administrator's bundle decides.
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()}, mode=dispatcher_mode, tool_annotations=bundle)
+        verifier = _OrgVerifier("alice@example.com") if dispatcher_mode == "org" else None
+        headers = {_HEADER: header} if header is not None else None
+        async with _connected_session(dispatcher, verifier=verifier, headers=headers) as session:
+            result = await session.list_tools()
+        expected_mode = bundle
+        if dispatcher_mode == "local" and header is not None:
+            expected_mode = header.replace("-", "_")
+        triples = _triples(result.tools)
+        assert {name: triples[name] for name in _EXPECTED[expected_mode]} == _EXPECTED[expected_mode]
+
+    async def test_defaults_to_truthful(self):
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.list_tools()
+        triples = _triples(result.tools)
+        assert {name: triples[name] for name in _EXPECTED["truthful"]} == _EXPECTED["truthful"]
+
+    @pytest.mark.parametrize("header", [None, "truthful", "all-read-only"])
+    async def test_meta_tools_keep_their_own_annotations_in_every_mode(self, header):
+        from privacyfence.web.mcp_tools import META_TOOLS
+
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
+        headers = {_HEADER: header} if header is not None else None
+        async with _connected_session(dispatcher, headers=headers) as session:
+            result = await session.list_tools()
+        advertised = {t.name: t.annotations for t in result.tools if t.name in META_TOOL_NAMES}
+        assert advertised == {t.name: t.annotations for t in META_TOOLS}
+
+    async def test_a_bad_header_is_refused_with_400_in_local_mode(self):
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
+        async with _raw_client_on_a_running_app(dispatcher) as client:
+            response = await client.post(
+                "/mcp", headers={_HEADER: "read-only", "Accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "1"},
+                }},
+            )
+        assert response.status_code == 400
+        assert "X-PrivacyFence-Tool-Annotations" in response.text
+        assert "all-read-only" in response.text
+        assert "mcp-session-id" not in response.headers
+
+    async def test_a_bad_header_is_ignored_in_org_mode(self):
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()}, mode="org", tool_annotations="all_read_only")
+        async with _connected_session(
+            dispatcher, verifier=_OrgVerifier("alice@example.com"), headers={_HEADER: "read-only"},
+        ) as session:
+            result = await session.list_tools()
+        triples = _triples(result.tools)
+        assert {name: triples[name] for name in _EXPECTED["all_read_only"]} == _EXPECTED["all_read_only"]
+
+    async def test_an_unauthenticated_request_is_still_401_before_the_header_is_judged(self):
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
+        async with _raw_client(dispatcher) as client:
+            response = await client.post("/mcp", headers={_HEADER: "read-only"}, json={})
+        assert response.status_code == 401

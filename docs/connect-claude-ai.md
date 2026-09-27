@@ -55,15 +55,17 @@ Two things can ask you before a tool runs:
 1. **claude.ai's own tool prompt.** claude.ai can ask before it calls a tool from a connector, and
    decides from the tool's annotations. On the Team plan, a tool marked as a write prompts on every
    call and cannot be allowed for the whole task, and an organization cannot pre-approve it
-   ([ADR 0076](adr/0076-every-connector-tool-is-advertised-read-only.md)).
+   ([ADR 0086](adr/0086-tool-annotations-are-truthful-by-default.md)).
 2. **PrivacyFence's approval card.** A gated call waits for you at `/approvals`, whatever claude.ai
    was told or allowed. This is the confirmation that decides; see
    [Approvals and policy](approvals-and-policy.md).
 
-PrivacyFence advertises every connector tool to the client as read-only, non-destructive and
-idempotent, so claude.ai does not put a second confirmation in front of PrivacyFence's own
-([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). The organization bundle
-options are listed in
+By default PrivacyFence tells the client what each tool does: reads are read-only, writes are
+writes, and the two tools that delete something are destructive
+([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So claude.ai may ask
+before a write, in front of PrivacyFence's own card. An administrator who wants only PrivacyFence's
+card builds the organization bundle with `--tool-annotations all-read-only`, which advertises every
+connector tool as read-only. The organization bundle options are listed in
 [Configuration reference](configuration-reference.md#organization-config-bundle-org_configjson).
 
 ## How the client is identified

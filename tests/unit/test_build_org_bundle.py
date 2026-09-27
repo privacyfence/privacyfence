@@ -642,3 +642,63 @@ class TestWebPushFlag:
     def test_requires_org_mode(self, tmp_path):
         with pytest.raises(SystemExit, match="require --mode org"):
             build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--no-web-push"])
+
+
+class TestToolAnnotationsFlag:
+    """--tool-annotations (ADR 0086): written only when given, in either mode, in the spelling
+    org_mode.resolve_tool_annotations reads."""
+
+    def _out(self, tmp_path):
+        return tmp_path / "org_config.json"
+
+    def _build(self, tmp_path, *extra):
+        argv = ["-o", str(self._out(tmp_path)), "--slack-client-id", "id", "--slack-client-secret", "secret"]
+        assert build_org_bundle.main([*argv, *extra]) == 0
+        return json.loads(self._out(tmp_path).read_text())
+
+    def test_absent_leaves_the_key_out_so_the_daemon_default_applies(self, tmp_path):
+        from privacyfence import org_mode
+
+        bundle = self._build(tmp_path)
+        assert "mcp" not in bundle
+        assert org_mode.resolve_tool_annotations(bundle) == "truthful"
+
+    @pytest.mark.parametrize(("flag", "written"), [("truthful", "truthful"), ("all-read-only", "all_read_only")])
+    def test_written_value_is_what_the_daemon_reads(self, tmp_path, flag, written):
+        from privacyfence import org_mode
+
+        bundle = self._build(tmp_path, "--tool-annotations", flag)
+        assert bundle["mcp"] == {"tool_annotations": written}
+        assert org_mode.resolve_tool_annotations(bundle) == written
+
+    def test_applies_in_org_mode_too(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        assert build_org_bundle.main([
+            "-o", str(self._out(tmp_path)), "--sign-key", str(key_path),
+            "--mode", "org", "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--tool-annotations", "all-read-only",
+        ]) == 0
+        assert json.loads(self._out(tmp_path).read_text())["mcp"] == {"tool_annotations": "all_read_only"}
+
+    def test_is_enough_on_its_own_to_write_a_bundle(self, tmp_path):
+        assert build_org_bundle.main(["-o", str(self._out(tmp_path)), "--tool-annotations", "all-read-only"]) == 0
+        assert json.loads(self._out(tmp_path).read_text())["mcp"] == {"tool_annotations": "all_read_only"}
+
+    def test_merge_switches_it_back_and_keeps_the_rest(self, tmp_path):
+        self._build(tmp_path, "--tool-annotations", "all-read-only")
+        assert build_org_bundle.main([
+            "-o", str(self._out(tmp_path)), "--merge", "--tool-annotations", "truthful",
+        ]) == 0
+        bundle = json.loads(self._out(tmp_path).read_text())
+        assert bundle["mcp"] == {"tool_annotations": "truthful"}
+        assert "slack" in bundle
+
+    def test_an_unknown_value_is_rejected_by_the_parser(self, tmp_path):
+        with pytest.raises(SystemExit):
+            build_org_bundle.main(["-o", str(self._out(tmp_path)), "--tool-annotations", "all_read_only"])
+
+    def test_summary_line_reports_it(self, tmp_path, capsys):
+        self._build(tmp_path, "--tool-annotations", "all-read-only")
+        assert "mcp.tool_annotations=all_read_only" in capsys.readouterr().out
