@@ -45,7 +45,7 @@ def resolve_mode(org_config: dict[str, Any]) -> Mode:
     return mode
 
 
-# How /mcp's tools/list annotates connector tools (ADR 0085): "truthful" derives each tool's hints
+# How /mcp's tools/list annotates connector tools (ADR 0086): "truthful" derives each tool's hints
 # from its ToolSpec; "all_read_only" advertises every connector tool read-only, non-destructive and
 # idempotent (ADR 0076's uniform triple), so a client does not put its own confirmation in front of
 # PrivacyFence's approval. The bundle's ``mcp.tool_annotations`` sets it for both modes; absent means

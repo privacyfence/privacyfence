@@ -131,7 +131,7 @@ async def _raw_client_on_a_running_app(dispatcher: McpDispatcher, *, token: str 
 
 
 class ReadWriteDeleteConnector(Connector):
-    """One tool of each kind ADR 0085's truthful annotations tell apart."""
+    """One tool of each kind ADR 0086's truthful annotations tell apart."""
 
     @property
     def name(self) -> str:
@@ -861,7 +861,7 @@ class TestRehomingAStaleSessionId:
 
 
 _HEADER = "X-PrivacyFence-Tool-Annotations"
-# (readOnlyHint, destructiveHint, idempotentHint) per tool, per mode (ADR 0085).
+# (readOnlyHint, destructiveHint, idempotentHint) per tool, per mode (ADR 0086).
 _EXPECTED = {
     "truthful": {
         "rwd_read": (True, False, True), "rwd_write": (False, False, False), "rwd_delete": (False, True, False),
@@ -880,7 +880,7 @@ def _triples(tools) -> dict[str, tuple]:
 
 
 class TestToolAnnotationsOverTheWire:
-    """ADR 0085, checked on a live ``/mcp`` ``list_tools``: which annotation mode a session gets,
+    """ADR 0086, checked on a live ``/mcp`` ``list_tools``: which annotation mode a session gets,
     and that the meta-tools keep their own annotations whichever it is."""
 
     @pytest.mark.parametrize("dispatcher_mode", ["local", "org"])

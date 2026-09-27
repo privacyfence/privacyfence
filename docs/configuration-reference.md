@@ -308,7 +308,7 @@ options below are for running it by hand.
 |---|---|
 | `--config PATH` | Read `settings.yaml` from `PATH` instead of its default location. |
 | `--print-sign-in-link` | Print a one-time sign-in link to Approvals and exit. See [How PrivacyFence works](how-it-works.md#opening-privacyfence-opens-approvals). Local mode only. |
-| `--print-mcp-token` | Print this OS account's MCP token (creating it the first time) and exit. See [How PrivacyFence works](how-it-works.md#claude-code-and-other-http-clients-connect-to-mcp-directly). Local mode only. |
+| `--print-mcp-token` | Print this OS account's MCP token (creating it the first time) and exit. See [Connect Claude Code](connect-claude-code.md#local-mode). Local mode only. |
 | `--gmail-oauth`, `--drive-oauth`, `--calendar-oauth`, `--contacts-oauth`, `--tasks-oauth`, `--apps-script-oauth` | Sign in to that Google service in the browser from the command line, save the token, and exit. |
 | `--slack-oauth`, `--salesforce-oauth`, `--atlassian-oauth` | The same for Slack, Salesforce, and Jira plus Confluence. |
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |

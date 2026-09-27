@@ -645,7 +645,7 @@ class TestWebPushFlag:
 
 
 class TestToolAnnotationsFlag:
-    """--tool-annotations (ADR 0085): written only when given, in either mode, in the spelling
+    """--tool-annotations (ADR 0086): written only when given, in either mode, in the spelling
     org_mode.resolve_tool_annotations reads."""
 
     def _out(self, tmp_path):

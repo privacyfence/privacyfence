@@ -222,7 +222,7 @@ def _request_header(ctx: ServerRequestContext, name: str) -> str | None:
 
 
 def _annotations_mode(ctx: ServerRequestContext, dispatcher: McpDispatcher) -> ToolAnnotationsMode:
-    """Which annotation mode this request's ``tools/list`` uses (ADR 0085): in local mode, the
+    """Which annotation mode this request's ``tools/list`` uses (ADR 0086): in local mode, the
     connection's own ``X-PrivacyFence-Tool-Annotations`` wins; otherwise the bundle's
     ``mcp.tool_annotations`` (``dispatcher.tool_annotations``, ``"truthful"`` when absent).
 
@@ -622,7 +622,7 @@ class _SessionIdOnlyOnSuccess:
 
 class _ToolAnnotationsHeaderCheck:
     """Answers 400 to a local-mode request whose ``X-PrivacyFence-Tool-Annotations`` names neither
-    ``truthful`` nor ``all-read-only`` (ADR 0085), before the session manager sees it -- so a typo
+    ``truthful`` nor ``all-read-only`` (ADR 0086), before the session manager sees it -- so a typo
     in a client's ``--header`` fails the connection loudly instead of quietly falling back to the
     bundle's mode. Org mode ignores the header (see ``_annotations_mode``), so it has nothing to
     reject there either, and this middleware passes every org-mode request through."""

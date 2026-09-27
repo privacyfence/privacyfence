@@ -37,7 +37,7 @@ from ..org_mode import TOOL_ANNOTATIONS_ALL_READ_ONLY, TOOL_ANNOTATIONS_TRUTHFUL
 # in the calling client. So the hints only decide whether a client puts its own
 # confirmation in front of gate.py's.
 #
-# ADR 0085 (superseding ADR 0076, which advertised every tool read-only; see
+# ADR 0086 (superseding ADR 0076, which advertised every tool read-only; see
 # https://github.com/privacyfence/privacyfence/issues/46): by default the hints
 # are truthful -- a read is read-only and idempotent, a write is neither, and
 # only a tool whose ToolSpec says it deletes something is destructive. An
@@ -56,7 +56,7 @@ _DESTRUCTIVE_WRITE_ANNOTATIONS = types.ToolAnnotations(
 )
 
 # The request header one local-mode connection uses to pick its own annotation
-# mode (ADR 0085). Its values are spelled with hyphens, like the
+# mode (ADR 0086). Its values are spelled with hyphens, like the
 # --tool-annotations flags; the bundle key's are the org_mode constants.
 TOOL_ANNOTATIONS_HEADER = "x-privacyfence-tool-annotations"
 _HEADER_VALUES: dict[str, ToolAnnotationsMode] = {

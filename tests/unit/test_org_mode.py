@@ -314,7 +314,7 @@ class TestConfigurationError:
 
 
 class TestResolveToolAnnotations:
-    """``mcp.tool_annotations`` (ADR 0085): absent means truthful, and a value naming neither mode
+    """``mcp.tool_annotations`` (ADR 0086): absent means truthful, and a value naming neither mode
     refuses to start rather than falling back to either."""
 
     def test_absent_is_truthful(self):

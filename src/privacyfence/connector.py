@@ -32,7 +32,7 @@ class ToolSpec:
     description: str
     params: list[ToolParam] = field(default_factory=list)
     read_only: bool = False
-    # Whether the tool deletes something (MCP's ``destructiveHint``, ADR 0085). Only a write can be
+    # Whether the tool deletes something (MCP's ``destructiveHint``, ADR 0086). Only a write can be
     # destructive; an overwrite is not a deletion and stays False. tests/unit/test_connector_tool_
     # annotations.py pins the full set, so a new deleting tool is classified on purpose.
     destructive: bool = False

@@ -2867,7 +2867,7 @@ class TestRunApp:
         assert self._web_server_calls[0]["tool_annotations"] == "all_read_only"
 
     def test_an_unknown_tool_annotations_value_refuses_to_start(self, monkeypatch):
-        # ADR 0085: the daemon never guesses which mode an administrator meant.
+        # ADR 0086: the daemon never guesses which mode an administrator meant.
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)

@@ -1,4 +1,4 @@
-"""Which connector tools are classified as destructive (``ToolSpec.destructive``, ADR 0085).
+"""Which connector tools are classified as destructive (``ToolSpec.destructive``, ADR 0086).
 
 ``destructiveHint`` is what a client reads to decide whether a tool deletes something. Only the
 tools that delete are marked: an overwrite is a write, not a deletion. The set is pinned here

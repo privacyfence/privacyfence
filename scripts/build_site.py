@@ -162,6 +162,7 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "release-testing.md",
         "packaging.md",
         "connector-qa.md",
+        "ai-client-qa.md",
         "downloads-and-release-kpi.md",
     }
 )
@@ -173,8 +174,9 @@ DOCS_LAYOUT_SAMPLE = ("/docs/getting-started/", "/docs/tools-reference/", "/docs
 # The file whose presence marks a tag as carrying the published doc set (the stale-tag guard).
 PUBLISHED_SET_MARKER = "docs/how-it-works.md"
 
-# GA4 content group per published doc (decision I1): platform install pages and connector setup
-# guides are counted apart from the rest of the docs. Everything else is "docs".
+# GA4 content group per published doc (decision I1): platform install pages, connector setup
+# guides and AI agent setup pages (connect-*) are counted apart from the rest of the docs.
+# Everything else is "docs".
 CONNECTOR_GUIDES = frozenset(
     {"google-cloud-setup", "slack-setup", "salesforce-setup", "atlassian-setup", "telegram-setup"}
 )
@@ -719,6 +721,8 @@ def doc_description(markdown: str, limit: int = 200) -> str:
 def content_group(stem: str) -> str:
     if stem.startswith("install-"):
         return "platform"
+    if stem.startswith("connect-"):
+        return "ai-agent"
     if stem in CONNECTOR_GUIDES:
         return "connector"
     return "docs"

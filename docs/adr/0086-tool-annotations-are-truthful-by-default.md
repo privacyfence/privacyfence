@@ -1,4 +1,4 @@
-# ADR 0085: Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only
+# ADR 0086: Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only
 
 ## Status
 

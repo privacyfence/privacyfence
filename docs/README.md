@@ -12,8 +12,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 - [`getting-started.md`](getting-started.md) — what you need, which install fits, your first
   approval, and troubleshooting shared by every platform.
 - [`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md),
-  [`install-linux.md`](install-linux.md) — install, connect Claude Desktop and Claude Code,
-  troubleshoot, uninstall. One page per platform.
+  [`install-linux.md`](install-linux.md) — install, first start, troubleshoot, uninstall. One page
+  per platform; connecting an AI client is under "AI agent setup" below.
 - [`platform-support.md`](platform-support.md) — supported OS versions and architectures, where
   PrivacyFence keeps its data, logs, and start/stop commands.
 - [`connecting-a-service.md`](connecting-a-service.md) — connecting Gmail, Slack and the other
@@ -48,6 +48,15 @@ bundle:
 - [`atlassian-setup.md`](atlassian-setup.md) — Jira and Confluence
 - [`telegram-setup.md`](telegram-setup.md)
 
+### AI agent setup
+
+Connecting each AI client, in local mode and in an organization deployment:
+
+- [`connect-claude-desktop.md`](connect-claude-desktop.md) — Claude Desktop, through the extension
+  or as a custom connector
+- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code
+- [`connect-claude-ai.md`](connect-claude-ai.md) — claude.ai, through an organization deployment
+
 ### Reference appendices
 
 - [`tools-reference.md`](tools-reference.md) — every connector tool and how it is gated
@@ -79,6 +88,8 @@ privacyfence.eu.
   built, signed and installed.
 - [`connector-qa.md`](connector-qa.md) — QA accounts and seed data, the self-hosted live-check
   runner, recorded fixtures, and exploratory connector QA.
+- [`ai-client-qa.md`](ai-client-qa.md) — the manual check of each real AI client: the test
+  organization deployment, the per-client script, the evidence to record, and the results table.
 - [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation

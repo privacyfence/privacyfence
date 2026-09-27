@@ -1,0 +1,103 @@
+name: AI-client canary
+
+# docs/testing-policy.md, "AI-client contract tests (T3)": the
+# same real-client contract tests tests.yml's `test` job runs on every PR
+# against the exact-pinned CLIs in tests/integration/ai_clients/package.json,
+# run here against each client's `@latest` instead. The pinned run proves
+# our change did not break a client; this one proves the client's own
+# latest release did not break us -- before a pin bump walks into it, and
+# before users who auto-update do.
+#
+# The binary comes from `npx --yes <package>@latest`, handed to the test
+# through its override variable (CLAUDE_CODE_BIN, ...). Setting that
+# variable is what makes the test mandatory rather than skippable; see
+# tests/integration/ai_client_harness.py's resolve_client_command. No
+# vendor credential exists in this workflow or is needed by it: the harness
+# strips every ANTHROPIC_*/CLAUDE* variable before starting the client.
+#
+# On failure it opens one issue per client, titled
+# "AI-client canary: <client> @latest broke /mcp", or comments on that
+# issue if it is still open, so a client that stays broken for weeks is one
+# thread, not one issue per week. Closing it is a human's call, once the
+# client (or our side) is fixed.
+#
+# A new client is one matrix entry: its npm package, the test file, and the
+# variable that test reads its binary from.
+on:
+  schedule:
+    - cron: '17 6 * * 2'   # weekly, Tuesday 06:17 UTC -- off the Monday
+                            # slots connector-live-check.yml and the
+                            # graphical-session workflows already use
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-client-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: canary (${{ matrix.client }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write   # open or update this client's canary issue on failure
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - client: claude-code
+            package: '@anthropic-ai/claude-code'
+            bin_var: CLAUDE_CODE_BIN
+            test: tests/integration/test_claude_code_contract.py
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: pip install -e ".[test]"
+
+      - name: Run the contract test against ${{ matrix.package }}@latest
+        env:
+          PACKAGE: ${{ matrix.package }}
+          BIN_VAR: ${{ matrix.bin_var }}
+          TEST_FILE: ${{ matrix.test }}
+        run: |
+          npx --yes "${PACKAGE}@latest" --version
+          export "${BIN_VAR}=npx --yes ${PACKAGE}@latest"
+          pytest -v -rs "${TEST_FILE}"
+
+      - name: Open or update the canary issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CLIENT: ${{ matrix.client }}
+          PACKAGE: ${{ matrix.package }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="AI-client canary: ${CLIENT} @latest broke /mcp"
+          version="$(npx --yes "${PACKAGE}@latest" --version 2>/dev/null || echo unknown)"
+          body="$(printf '%s\n\n%s\n\n%s\n' \
+            "The weekly AI-client canary failed for \`${PACKAGE}@latest\` (\`${version}\`): ${RUN_URL}" \
+            "The pinned version in \`tests/integration/ai_clients/package.json\` still runs on every PR; do not bump it past this release until the canary is green again." \
+            "See docs/testing-policy.md (T3) and tests/integration/ai_client_harness.py.")"
+          number="$(gh issue list --state open --search "in:title \"${title}\"" --json number,title \
+            --jq "map(select(.title == \"${title}\")) | .[0].number // empty")"
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi

@@ -8,7 +8,7 @@ workaround, not a settled posture. The open follow-up is
 [#46](https://github.com/privacyfence/privacyfence/issues/46), which tracks restoring truthful
 annotations once the client side allows it.
 
-**Superseded by [ADR 0085](0085-tool-annotations-are-truthful-by-default.md), 2026-09-27:** tool
+**Superseded by [ADR 0086](0086-tool-annotations-are-truthful-by-default.md), 2026-09-27:** tool
 annotations are truthful by default; this ADR's uniform triple is kept as an opt-in.
 
 ## Context

@@ -100,7 +100,7 @@ class McpDispatcher:
         # The bundle's mcp.tool_annotations (org_mode.resolve_tool_annotations),
         # read once at startup like unattended_sessions_enabled. routes_mcp.py
         # applies it to every tools/list -- except, in local mode only, one
-        # whose connection asked for its own mode (ADR 0085).
+        # whose connection asked for its own mode (ADR 0086).
         self._tool_annotations = tool_annotations
         # "local" or "org" -- privacyfence_status's own mode field, and what
         # decides which next_step an un-onboarded install reports (open the

@@ -121,7 +121,7 @@ class TestToMcpTool:
         assert tool.name == "gmail_send"
         assert tool.description == "Sends an email."
 
-    # ADR 0085: (readOnlyHint, destructiveHint, idempotentHint) per tool kind
+    # ADR 0086: (readOnlyHint, destructiveHint, idempotentHint) per tool kind
     # and mode. Truthful derives the triple from the spec -- a write is not
     # read-only and not idempotent, and only a deleting tool is destructive;
     # all_read_only is ADR 0076's uniform triple for every connector tool.

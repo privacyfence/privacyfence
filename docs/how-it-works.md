@@ -64,44 +64,32 @@ or no `mode`, it runs in local mode. See [Configuration reference](configuration
 
 ## How an AI system connects
 
-### Claude Desktop: the extension
+There are two ways in, and each AI client has its own setup page:
 
-Install `PrivacyFence.mcpb` into Claude Desktop (the macOS DMG and the Windows installer ship it).
-Claude Desktop starts the shim, and the shim:
+- **Local mode.** Claude Desktop uses PrivacyFence's extension, `PrivacyFence.mcpb`, which the
+  macOS DMG and the Windows installer ship. The extension (the *shim*) waits for the daemon, asks it
+  for your MCP token over the local control channel (the `MINT MCP` command), reads the `/mcp` URL
+  from the handoff directory's `mcp_url` file, relays MCP messages, and reads and writes local
+  files for the tools that need them (see [Files](#files)). Any other client that speaks MCP over
+  Streamable HTTP, Claude Code among them, connects to `/mcp` directly with a bearer token that
+  `--print-mcp-token` mints through the same `MINT MCP` request. There is **one token per OS
+  account**, with its own connectors, rules and approvals
+  ([ADR 0008](adr/0008-one-principal-per-os-user.md)), and the control channel answers only the
+  accounts the install serves.
+- **Organization mode.** There is no local token and no extension. The client discovers
+  PrivacyFence's authorization server from `/mcp`, registers itself as an OAuth client, you sign in
+  through the organization's identity provider in the browser, and the client receives its own
+  access token.
 
-1. waits until the daemon's `/mcp` endpoint answers;
-2. asks the daemon for your MCP token over its local control channel (the `MINT MCP` command);
-3. reads the `/mcp` URL from the file the daemon writes when it starts (`mcp_url` in the handoff
-   directory; see [Platform support](platform-support.md));
-4. relays MCP messages between Claude Desktop and `/mcp`, and handles local file reads and writes
-   (see [Files](#files)).
+| AI client | Local mode | Organization mode | Setup |
+|---|---|---|---|
+| Claude Desktop | the extension | custom connector | [Connect Claude Desktop](connect-claude-desktop.md) |
+| Claude Code | `/mcp` with a bearer token | OAuth sign-in | [Connect Claude Code](connect-claude-code.md) |
+| claude.ai | not reachable | custom connector | [Connect claude.ai](connect-claude-ai.md) |
 
-Nothing is edited in Claude Desktop's configuration, and no token is stored in a file you can read.
-
-### Claude Code and other HTTP clients: connect to `/mcp` directly
-
-A client that speaks MCP over Streamable HTTP connects to `/mcp` with a bearer token. Get your token
-with `privacyfence-app --print-mcp-token`. It runs the same `MINT MCP` request the shim does and
-prints the token on its own line, so you can use it in a command:
-
-```bash
-claude mcp add --transport http privacyfence "$(cat "<handoff directory>/mcp_url")" \
-  --header "Authorization: Bearer $(privacyfence-app --print-mcp-token)"
-```
-
-The handoff directory for each platform is listed in [Platform support](platform-support.md). The
-URL is normally `http://localhost:8765/mcp`.
-
-- **One token per OS account.** Each account the install serves gets its own token and its own
-  connectors, rules and approvals; the command returns the same token each time you run it. See
-  [ADR 0008](adr/0008-one-principal-per-os-user.md).
-- The control channel only answers accounts the install serves. If the command cannot reach the
-  daemon right after installing, log out and back in first.
-- On Windows the program has no console window, so redirect its output to a file to read it. See
-  [Installing on Windows](install-windows.md).
-
-In organization mode there is no local token: the AI system registers as an OAuth client, you sign
-in through your identity provider in the browser, and the AI system receives its own access token.
+Any other MCP client that supports Streamable HTTP connects the way Claude Code does: with the
+same URL and bearer token in local mode, or with OAuth 2.1 and dynamic client registration in
+organization mode.
 
 ### What the AI system is told
 
@@ -129,7 +117,7 @@ and idempotent instead:
   organization server ignores it, so there the bundle decides for everyone.
 
 Both are in the [Configuration reference](configuration-reference.md). The reasoning is in
-[ADR 0085](adr/0085-tool-annotations-are-truthful-by-default.md).
+[ADR 0086](adr/0086-tool-annotations-are-truthful-by-default.md).
 
 ## What happens on a tool call
 

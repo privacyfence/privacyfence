@@ -1823,7 +1823,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # function, its ConfigurationError still surfacing through the
     # same top-level "print and refuse to start" path in main().
     org_config = load_org_config()
-    # ADR 0085: a value naming neither mode raises ConfigurationError -- refuse to start, like a
+    # ADR 0086: a value naming neither mode raises ConfigurationError -- refuse to start, like a
     # broken bundle, rather than guess what the administrator meant.
     tool_annotations = org_mode.resolve_tool_annotations(org_config)
     # Same "org mode fails closed, local mode warns" posture as the
