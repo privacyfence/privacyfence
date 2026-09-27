@@ -19,7 +19,7 @@ below; a new test module carries the marker for its layer.
 | # | Layer | What it proves | Marker | Where it runs |
 |---|---|---|---|---|
 | 1 | Unit | Python logic in isolation, offline | `unit` | `tests.yml`, every PR |
-| 2 | Integration | Real internal stack (sockets, servers, the daemon process), no external network | `integration` | `tests.yml`, every PR |
+| 2 | Integration | Real internal stack (sockets, servers, the daemon process), no external network; real AI-client CLIs against it | `integration` | `tests.yml`, every PR; `ai-client-canary.yml`, weekly (each client's `@latest`) |
 | 3 | Cross-platform system | OS path/process/locking/daemon behavior; the full daemon → MCP → approval → audit scenario | `system`, `platform` | `tests.yml`, every PR, on Linux, Windows and macOS |
 | 4 | Browser system | JS, CSP and rendering in real Chromium | `browser` | `tests.yml`, every PR; `qa_web_smoke.py` by hand |
 | 5 | Live connector | Provider API drift | `live` | `connector-live-check.yml`, self-hosted runner, weekly |
@@ -51,7 +51,7 @@ and on dispatch. A 100% pass rate is required to merge.
 
 | Job | Runs |
 |---|---|
-| `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
+| `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; `npm ci --prefix tests/integration/ai_clients` (the pinned AI-client CLIs); the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
 | `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest` |
 | `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
@@ -82,6 +82,8 @@ Key modules in the suite:
   by the official `mcp` client over TCP.
 - `tests/integration/test_shim_mcp_contract.py` — the built `mcpb/shim/dist/shim.js` against that
   server, over MCP-over-stdio. Skips without Node.
+- `tests/integration/test_claude_code_contract.py` — the pinned Claude Code CLI against that
+  server; see "AI-client contract tests (T3)" below.
 - `tests/system/test_local_mode_system.py` — `python -m privacyfence.daemon_main` as a separate
   process: discovery, bootstrap into `/approvals` and `/settings`, a gated call allowed and denied
   through the HTTP decide route, the audit log read back, and "Quit PrivacyFence". Runs in every
@@ -105,6 +107,26 @@ approval audited under the right principal, state surviving a restart. Its `org_
 connectors, so it cannot see a principal's tool list or auto-accept rules; those are proven by
 `tests/unit/web/test_routes_mcp.py::TestListTools` and
 `tests/unit/test_daemon_main.py::TestLoadPrincipalSettings`.
+
+### AI-client contract tests (T3)
+
+A real, unmodified AI-client CLI is configured against a real local-mode `/mcp` endpoint the way
+the install guides tell a user to, and must report it connected. Today that is Claude Code
+(`test_claude_code_contract.py`: `claude mcp add --transport http --scope user …`, then
+`claude mcp list`). `tests/integration/ai_client_harness.py` starts the endpoint under a throwaway
+data directory and runs the client under a throwaway `HOME` with every `ANTHROPIC_*`/`CLAUDE*`
+variable removed: these tests need no vendor account or credential, and must keep needing none.
+
+- **Pinned, every PR.** The CLIs are pinned to exact versions in
+  `tests/integration/ai_clients/package.json` and its committed lockfile; the `test` job installs
+  them with `npm ci` and names the binary in `CLAUDE_CODE_BIN`, which makes the test fail rather
+  than skip if it cannot run. Elsewhere (the other full-suite jobs, a laptop without that install)
+  it skips. The harness's module docstring says how to bump a pin.
+- **`@latest`, weekly.** `ai-client-canary.yml` (Tuesday 06:17 UTC, and on dispatch) runs the same
+  tests with `npx --yes <package>@latest` as the binary, one matrix entry per client. On failure
+  it opens, or comments on, one issue per client titled "AI-client canary: <client> @latest broke
+  /mcp". It gates nothing; it is the warning before a pin bump or a user's auto-update hits the
+  break.
 
 ### Other workflows that gate a PR
 
