@@ -1,0 +1,164 @@
+# AI-client QA
+
+How to check, by hand, that a real AI client works with PrivacyFence: the test organization
+deployment the organization-mode runs need, the script each client is taken through, the evidence
+each run records, and the table that holds the results. It covers what no automated tier can decide:
+clients CI cannot run (claude.ai, the Claude Desktop UI), and the prompts a client shows before a
+write. What CI proves automatically is in [`testing-policy.md`](testing-policy.md); when this check
+is due before a release is in [`release-testing.md`](release-testing.md).
+
+Every run ends by saving a recorded-handshake fixture, so that what a human verified once is
+replayed on every pull request afterwards.
+
+## When to run it
+
+Run the script for each supported client family before a release that changed the client-facing
+surface:
+
+- `/mcp` itself (`web/routes_mcp.py`), the tool list it advertises (`web/mcp_tools.py`), or tool
+  annotations;
+- the organization-mode OAuth server (`web/oauth_provider.py`, `/register`, `/authorize`, `/token`,
+  the `.well-known` metadata);
+- agent attribution (`agent_identity.py`, the **AI systems** pins);
+- file delivery to clients without the extension (`privacyfence_create_upload_slot`, staged
+  download links, [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md));
+- the extension (`mcpb/`), for the Claude Desktop local row.
+
+Run it for a new client before it is listed as supported, and whenever a client's own release is
+suspected of changing its behavior toward PrivacyFence.
+
+## Test organization deployment
+
+The organization-mode rows need a PrivacyFence organization deployment reachable over public
+HTTPS: claude.ai connects from Anthropic's servers, not from your browser, so `localhost` or a
+private network does not work. Keep one deployment for QA only, separate from any production
+install. Setting it up takes one to three hours the first time.
+
+1. Get a small Linux VM, 2 vCPU and 2 GB RAM. Ubuntu 24.04 is the reference.
+2. DNS: create an **A** record `pf-test.<your-domain>` pointing at the VM's IP address.
+3. Follow [`org-mode-setup-guide.md`](org-mode-setup-guide.md) sections 2 to 9 in order. In
+   particular:
+   - **Section 4, identity provider.** For Google: **APIs & Services → Credentials → + Create
+     credentials → OAuth client ID → Web application**, with the three redirect URIs from section
+     4's table on your `pf-test` hostname.
+   - **Section 7, reverse proxy and TLS.** Caddy, which obtains a Let's Encrypt certificate itself.
+   - **Section 8, hardened systemd unit.** `privacyfence-org.service`.
+4. From your own machine, check the authorization server is reachable:
+
+   ```bash
+   curl -s https://pf-test.<your-domain>/.well-known/oauth-authorization-server | head
+   ```
+
+   The output must list `registration_endpoint`.
+5. Sign in at `/login`. On `/connect`, connect **Google Calendar** (for the read and the gated
+   write) and **Google Drive** (for the file steps). Enroll a passkey on `/security` if step-up is
+   on.
+6. Build a second bundle, identical except for `--tool-annotations all-read-only`, and keep both.
+   The runs under the all-read-only mode install that one
+   ([section 6, "Changing a bundle later"](org-mode-setup-guide.md#changing-a-bundle-later)) and
+   switch back afterwards.
+
+For the local-mode rows, use a packaged install of the build under test (the `build.yml`
+pre-flight's artifact, see [`release-testing.md`](release-testing.md#gates-in-order)), connected to
+the same Google Calendar and Drive accounts.
+
+## Annotation modes
+
+Each client is run twice, once per tool-annotation mode:
+
+| Mode | What the client receives | How to select it |
+|---|---|---|
+| **truthful** (default) | Read tools with `readOnlyHint=true`; write tools with `readOnlyHint=false`; the tools that delete with `destructiveHint=true`. | Organization mode: the default bundle. Local mode: nothing to set. |
+| **all-read-only** | Every tool with `readOnlyHint=true, destructiveHint=false, idempotentHint=true`. | Organization mode: the bundle built with `--tool-annotations all-read-only`. Local mode: the `X-PrivacyFence-Tool-Annotations: all-read-only` header on the connection (Claude Code: an extra `--header`). |
+
+The question each pair of runs answers is whether the client asks for its own confirmation before a
+write. PrivacyFence's approval card appears either way; a client prompt comes on top of it.
+
+## Per-client script
+
+Take each client through these steps, in order, once per annotation mode. Set the client up as its
+own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude Code" sections of
+[`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md) and
+[`install-linux.md`](install-linux.md); for organization mode,
+[`org-mode-setup-guide.md`, "Add PrivacyFence to an AI client"](org-mode-setup-guide.md#add-privacyfence-to-an-ai-client).
+
+1. **Tool list.** The client lists PrivacyFence's tools (`tools/list`): the connector tools of the
+   connected services and the `privacyfence_*` tools. Note any tool the client drops, renames or
+   refuses.
+2. **One read.** Ask for something ungated, for example today's events from `calendar_list_events`.
+   It returns without an approval card.
+3. **One gated write.** Ask for a write, for example a new event with `calendar_create_event`.
+   - Note whether the client showed **its own confirmation first**, before any call reached
+     PrivacyFence, and what it said.
+   - An approval card appears: in local mode through the companion's **Open Approvals**
+     ([ADR 0062](adr/0062-only-a-companion-attested-session-may-approve.md)), in organization mode
+     at `/approvals` after sign-in. Note its "AI system" line.
+   - Approve it. The client repeats the identical call and the write completes.
+4. **Files**, for a client without the extension (every client except Claude Desktop with
+   `PrivacyFence.mcpb`) ([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
+   - **Upload:** ask the client to upload a small local file to Drive. It calls
+     `privacyfence_create_upload_slot`, `PUT`s the file to the returned URL, and passes the
+     `upload_id` to `drive_upload_file`. Approve the card; the file appears in Drive.
+   - **Download:** ask it to download a Drive file larger than the inline limit (organization mode:
+     `--downloads-inline-max-bytes`, 8,000,000 bytes by default). The tool result carries a one-time
+     link, and the file reaches you through it.
+
+   For Claude Desktop with the extension, do the same upload and download through local paths
+   instead: the extension reads and writes the file as you.
+5. **Attribution.** Open the audit entry for the gated write and note `agent_id`, `agent_name`,
+   `agent_version` and `agent_source`
+   ([`how-it-works.md`, "Which AI system is asking"](how-it-works.md#which-ai-system-is-asking)).
+   The audit log is under the data directory: `authority/logs/audit/` for a local install's first
+   account, `users/<principal>/logs/audit/` in organization mode. An unrecognised client is
+   recorded as `agent_id="unknown:<name>"`, which gives the exact name it sent.
+6. **Pin (organization mode only).** On **Settings → AI systems**, find the client's registration,
+   note its registered name, and pin it to the right AI system
+   ([`org-mode-setup-guide.md` section 11](org-mode-setup-guide.md#11-ai-systems)). Make another
+   gated write: the card shows the client as verified, and the audit entry records
+   `agent_source=oauth_client`. Unpin afterwards if the next run should start unverified.
+7. **Save a fixture.** Record what the client sent, so the replay test can repeat it on every pull
+   request, in `tests/fixtures/ai_clients/<client>/`:
+   - organization mode: the client's entry in `org/oauth_clients.json` under the data directory
+     (`/var/lib/privacyfence-org/.privacyfence/` on the reference deployment), with
+     `client_secret` replaced by `REDACTED` — its `client_name`, `redirect_uris` and
+     `token_endpoint_auth_method` are what the client registered;
+   - the handshake's `clientInfo` name and version, from the audit entry in step 5;
+   - the order of the client's requests (`/.well-known/…`, `/register`, `/authorize`, `/token`,
+     `/mcp`), from the reverse proxy's access log for the run.
+
+   Open a pull request with the fixture; a run is not finished until it is saved.
+
+## Evidence to record
+
+Post one comment per client run on the issue or pull request the run belongs to, with:
+
+- **The client:** name and version, OS, date, the PrivacyFence version, and the annotation mode.
+- **The result:** pass or fail per step of the script, and screenshots of any failure.
+- **Client confirmation:** whether the client asked for its own confirmation before the write, and
+  its wording.
+- **Attribution:** the approval card's "AI system" line, and the audit entry's `agent_id`,
+  `agent_name`, `agent_version` and `agent_source`.
+- **Organization mode only:**
+  - the client's `org/oauth_clients.json` entry, with `client_secret` replaced by `REDACTED`;
+  - that after pinning it on **Settings → AI systems**, the next card said verified.
+
+## Recording results
+
+Add a row per run to the table below in the pull request that saves its fixture, replacing the row
+of the same client, mode and annotation mode. **Result** is `pass`, or `fail` with a link to the
+evidence. **Registered `client_name`** is organization mode only (`—` for local mode). **Client
+confirmation?** is `yes` (and what it asked) or `no`. **Fixture captured** links the fixture
+directory, or says `no` and why.
+
+| Client | Version | OS | Mode | Annotations | Date | Result | Registered `client_name` | `clientInfo` name | Client confirmation? | Fixture captured |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Claude Desktop (extension) | | | local | truthful | | not run | — | | | |
+| Claude Desktop (extension) | | | local | all-read-only | | not run | — | | | |
+| Claude Desktop (custom connector) | | | org | truthful | | not run | | | | |
+| Claude Desktop (custom connector) | | | org | all-read-only | | not run | | | | |
+| Claude Code | | | local | truthful | | not run | — | | | |
+| Claude Code | | | local | all-read-only | | not run | — | | | |
+| Claude Code | | | org | truthful | | not run | | | | |
+| Claude Code | | | org | all-read-only | | not run | | | | |
+| claude.ai | | web | org | truthful | | not run | | | | |
+| claude.ai | | web | org | all-read-only | | not run | | | | |
