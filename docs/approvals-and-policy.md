@@ -144,9 +144,31 @@ write changes and whether it can be undone ("The message is posted and cannot be
 The buttons are **Deny**, **Allow once**, and — when a rule could cover this request — one or more
 **Always allow** buttons (see [Always-allow and policy rules](#always-allow-and-policy-rules)).
 
+### Deny with a note
+
+Next to **Deny**, **Deny with a note…** opens a panel above the buttons for telling the AI system
+why you said no, or what to do instead. Both parts are optional:
+
+- **a reason**, one of *Stop — don't retry*, *Wrong target*, *Change the content* or *Try another
+  way*. Tap the chosen one again to clear it. The AI system receives it as an instruction, for
+  example "the user says the target is wrong (recipient, file, folder, record or account); correct
+  the target, then ask again";
+- **a note** of up to 500 characters, with a counter below it.
+
+**Deny and send** denies the request with both; **Cancel** closes the panel and keeps what you
+typed. The note starts empty every time: nothing from the request is ever put into it, so what the
+AI system receives is only what you wrote. It reaches only the AI system that made this request,
+whether it collects the answer straight away or later through `privacyfence_await_approval`, and it
+is not kept in the audit log, which records only the reason and the note's length (ADR 0082, ADR
+0083). A plain **Deny** still takes one tap and sends no note; the AI system is then told not to
+retry the same call and to ask you how to proceed.
+
 ### Keyboard
 
-- **Esc** denies the request, wherever the focus is.
+- **Esc** denies the request, wherever the focus is. With the note panel open, the first **Esc**
+  closes the panel and keeps its text, and the next one denies (without the note).
+- In the note, **Enter** and **Space** type; **Ctrl+Enter** (**Cmd+Enter** on a Mac) is **Deny and
+  send**.
 - **Enter** and **Space** never activate **Allow once**, so a stray keypress can't approve
   anything. They do activate a focused **Deny** or **Always allow** button; **Always allow** then
   opens a confirmation dialog, and in that dialog Enter can't confirm either (Esc cancels).

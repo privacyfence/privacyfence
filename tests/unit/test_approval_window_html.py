@@ -1055,3 +1055,123 @@ class TestPiiHighlighting:
     def test_no_table_cell_is_marked_without_a_highlighter(self):
         html = build_preview_body_html(tables=[{"rows": [["5550001"]]}])
         assert "pf-pii-hit" not in html
+
+
+# A card's own content, carrying a marker and markup that would break out of a textarea or an
+# attribute if anything ever copied it into the deny note panel.
+_NOTE_MARKER = "CARD-CONTENT-MARKER-7731"
+_NOTE_HOSTILE = f'{_NOTE_MARKER} </textarea><script>alert(1)</script> " value="{_NOTE_MARKER}" \''
+
+
+def _deny_note_section(html: str) -> str:
+    start = html.index('<section id="pf-deny-note"')
+    return html[start:html.index("</section>", start) + len("</section>")]
+
+
+class TestDenyNotePanel:
+    """The "Deny with a note…" control and its panel (deny_note_html.py, ADR 0082)."""
+
+    @pytest.mark.parametrize("layout", ["narrow", "wide"])
+    def test_card_content_never_reaches_the_panel(self, layout):
+        from privacyfence.card_builder import build_card_html
+
+        from .test_deny_note_html import _parse
+
+        html = build_card_html(
+            title=f"Send {_NOTE_HOSTILE}", preview={"To": _NOTE_HOSTILE, "Subject": _NOTE_HOSTILE},
+            details_text=_NOTE_HOSTILE, claude_reason=_NOTE_HOSTILE, is_read=layout == "wide", layout=layout,
+            accept_all_choices=[("rule", f"Always allow — {_NOTE_HOSTILE}")],
+        )
+        # The content is on the card (escaped), so the check below can tell the two apart.
+        assert html.count(_NOTE_MARKER) >= 4
+        section = _deny_note_section(html)
+        assert _NOTE_MARKER not in section
+        parsed = _parse(section)
+        assert parsed.textarea_text == [""]
+        assert all("checked" not in a for tag, a in parsed.tags if tag == "input")
+        assert "value" not in next(a for tag, a in parsed.tags if tag == "textarea")
+
+    def test_the_panel_sits_hidden_directly_above_the_button_rows(self):
+        for labels in ([], ["Always allow"], ["Always allow — a", "Always allow — b"]):
+            html = build_card_stack_html(**_minimal_kwargs(
+                accept_all_labels=labels, temp_accept_text="Approving this also allows more.",
+            ))
+            section = _deny_note_section(html)
+            assert '<section id="pf-deny-note" class="card stack pf-deny-note" aria-labelledby="pf-deny-note-title" hidden>' in section
+            after = html[html.index(section) + len(section):]
+            assert after.startswith('<div class="pf-btn-row-candidates">' if len(labels) > 1 else '<div class="pf-btn-row">')
+            assert html.index("Approving this also allows more.") < html.index(section)
+            assert ">Deny and send</button>" in section
+
+    def test_the_opener_is_a_quiet_link_right_after_deny_and_starts_disabled(self):
+        html = build_card_stack_html(**_minimal_kwargs(accept_all_labels=["Always allow"]))
+        assert (
+            'data-pf-action="deny">Deny</div>'
+            '<button type="button" class="pf-btn-link pf-btn-note-open" aria-disabled="true" tabindex="-1" '
+            'aria-expanded="false" aria-controls="pf-deny-note" data-pf-note-open>Deny with a note…</button>'
+        ) in html
+
+    def test_the_opener_and_the_panel_are_not_decisions(self):
+        html = build_card_stack_html(**_minimal_kwargs())
+        opener = html[html.index("<button type=\"button\" class=\"pf-btn-link pf-btn-note-open\""):]
+        opener = opener[:opener.index("</button>")]
+        assert "data-pf-action" not in opener
+        assert "data-pf-action" not in _deny_note_section(html)
+        # So the plain Deny is still the one and only deny control Escape and tests find.
+        assert html.count('data-pf-action="deny">') == 1
+
+    def test_the_script_wires_the_panel_and_enables_the_opener(self):
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert "window.pfDenyNotePanel = function (prefix, options)" in html
+        assert "window.pfDenyNotePanel('pf-deny-note'" in html
+        assert html.index("window.pfDenyNotePanel = function") < html.index("window.pfDenyNotePanel('pf-deny-note'")
+        assert "document.querySelectorAll('[data-pf-action], [data-pf-note-open]')" in html
+        assert "onSubmit: function (feedback) { post('deny', null, feedback); }" in html
+        assert "if (feedback && feedback.note) payload.note = feedback.note;" in html
+        assert "if (feedback && feedback.intent) payload.intent = feedback.intent;" in html
+
+    def test_escape_closes_an_open_panel_before_it_denies(self):
+        html = build_card_stack_html(**_minimal_kwargs())
+        escape = html[html.index("if (e.key === 'Escape') {"):]
+        assert escape.index("note.close();") < escape.index(
+            "resolveFrom(document.querySelector('[data-pf-action=\"deny\"]'));"
+        )
+
+    def test_the_opener_is_a_real_touch_target_under_deny_when_compact(self):
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-btn-row .pf-btn-note-open { grid-column: 1; }" in html
+        assert ".pf-btn-row .pf-btn-note-open ~ .pf-btn-link { grid-column: 2; }" in html
+        assert "[data-pf-note-open][aria-disabled=\"true\"] { pointer-events: none; cursor: default; }" in html
+
+
+class TestActionHierarchyUnchangedByTheNote:
+    """Shared rule 10 (ADR 0079): the note adds a quiet link and a hidden panel, and Deny, Allow
+    once and Always allow keep their classes and their order, with one candidate and with two."""
+
+    @staticmethod
+    def _classes_in_order(html: str) -> list[str]:
+        start = html.index('<div class="pf-btn-row')
+        return re.findall(r'<(?:div|button)[^>]*class="([^"]*(?:pf-btn|button)[^"]*)"', html[start:])
+
+    def test_one_candidate(self):
+        html = build_card_stack_html(**_minimal_kwargs(accept_all_labels=["Always allow"]))
+        assert self._classes_in_order(html) == [
+            "pf-btn-row", "pf-btn-row-left", "button danger pf-btn-deny", "pf-btn-link pf-btn-note-open",
+            "pf-btn-link", "button primary pf-btn-primary",
+        ]
+
+    def test_two_or_more_candidates(self):
+        html = build_card_stack_html(**_minimal_kwargs(accept_all_labels=["Always allow — a", "Always allow — b"]))
+        assert self._classes_in_order(html) == [
+            "pf-btn-row-candidates", "pf-btn-link", "pf-btn-link",
+            "pf-btn-row", "pf-btn-row-left", "button danger pf-btn-deny", "pf-btn-link pf-btn-note-open",
+            "button primary pf-btn-primary",
+        ]
+
+    @pytest.mark.parametrize("labels", [["Always allow"], ["Always allow — a", "Always allow — b"]])
+    def test_allow_once_stays_the_one_primary_and_last(self, labels):
+        html = build_card_stack_html(**_minimal_kwargs(accept_all_labels=labels))
+        assert html.count('class="button primary') == 1
+        assert html.count('data-pf-primary="1"') == 1
+        row = html[html.index('<div class="pf-btn-row">'):]
+        assert row.index("pf-btn-deny") < row.index("pf-btn-note-open") < row.index("pf-btn-primary")

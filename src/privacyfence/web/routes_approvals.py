@@ -156,6 +156,8 @@ _SW_JS = (Path(__file__).parent.parent / "resources" / "sw.js").read_text(encodi
 
 _DECIDED_MESSAGE = "Decision recorded."
 _DENIED_MESSAGE = "Denied."
+# After a deny that carried a note or an intent (the card's "Deny and send", ADR 0082).
+_DENIED_WITH_NOTE_MESSAGE = "Denied. Your note will go to the agent."
 _ALREADY_DECIDED_MESSAGE = "Already decided elsewhere."
 _FAILED_MESSAGE = "Could not record this decision — please reload and try again."
 
@@ -250,7 +252,10 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
     ``sessionStorage`` for the list page to show once. Only a genuine
     failure (network error, an unexpected status) leaves the card on screen
     with an inline message -- there is nothing to navigate back to for
-    those.
+    those. A deny whose payload carries a ``note`` or an ``intent`` (the
+    card's "Deny and send", ADR 0082) toasts ``_DENIED_WITH_NOTE_MESSAGE``
+    instead of ``_DENIED_MESSAGE``. Every key of the payload is forwarded
+    unchanged; the decide route validates them.
 
     A ``428`` means step-up is outstanding: when the body
     carries ``webauthn_options``, run the assertion ceremony
@@ -279,6 +284,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
         f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
         "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
+        "var withNote = payload.result === 'deny' && !!(payload.note || payload.intent);"
         "pfDecide(body).then(function(r){"
         "  if (r.status === 428) {"
         "    return r.json().then(function(data){"
@@ -299,7 +305,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
         "}).then(function(r){"
         "  if (r === null) { return; }"
         "  var msg = null;"
-        f"  if (r.ok) {{ msg = isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
+        f"  if (r.ok) {{ msg = withNote ? {_DENIED_WITH_NOTE_MESSAGE!r} : isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
         f"  else if (r.status === 409) {{ msg = {_ALREADY_DECIDED_MESSAGE!r}; }}"
         "  if (msg !== null) {"
         "    try { sessionStorage.setItem('pf_toast', JSON.stringify({msg: msg})); } catch (e) {}"
@@ -343,6 +349,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
         f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
         "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
+        "var withNote = payload.result === 'deny' && !!(payload.note || payload.intent);"
         "pfDecide(body).then(function(r){"
         "  if (r.status === 428) {"
         "    return r.json().then(function(data){"
@@ -384,7 +391,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         "}).then(function(r){"
         "  if (r === null) { return; }"
         "  var msg = null;"
-        f"  if (r.ok) {{ msg = isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
+        f"  if (r.ok) {{ msg = withNote ? {_DENIED_WITH_NOTE_MESSAGE!r} : isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
         f"  else if (r.status === 409) {{ msg = {_ALREADY_DECIDED_MESSAGE!r}; }}"
         "  if (msg !== null) {"
         "    try { sessionStorage.setItem('pf_toast', JSON.stringify({msg: msg})); } catch (e) {}"

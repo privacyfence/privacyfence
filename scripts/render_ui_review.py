@@ -5,13 +5,14 @@ Writes PNGs into DIR, plus an ``index.html`` that lays them out side by side:
 
 - ``style-guide-<width>-<theme>.png``: every shared component (resources/design/base.css: the
   layout primitives, buttons, labels, focus) and every app component (resources/design/app.css:
-  field, toggle, tabstrip, badge, card, panel, the status colours, and the shell's header) in each
+  field, toggle, chip, tabstrip, badge, card, panel, the status colours, and the shell's header) in each
   of its states -- default, hover, focus-visible, disabled, and the component's own (checked,
   selected, invalid). The style guide is ``style-guide.html``, a static page this script builds
   from the design files themselves; it is not a route the app serves. Hover and focus-visible are
   forced through the DevTools protocol on the elements that ask for them (``data-force``), so the
   screenshot shows the state rather than a description of it.
-- ``<page>-<width>-<theme>.png`` for /approvals, one approval card of each kind, the PII
+- ``<page>-<width>-<theme>.png`` for /approvals, one approval card of each kind (and the write
+  and read cards again with the deny note panel open, ``card-<kind>-note``), the PII
   confirmation and the choice dialog, every /settings section (an org admin's six, and local
   mode's Connectors), /connect (and its Telegram sign-in at each step), /security, and the
   fallback pages with no shell (no longer pending, preparing, not authorized, local mode's
@@ -69,6 +70,10 @@ def style_guide_html() -> str:
         return (f'<label class="toggle"><input type="checkbox" role="switch"{c}{extra}>'
                 f'<span class="toggle-track"></span><span>{label}</span></label>')
 
+    def chip(label: str, extra: str = "", label_extra: str = "") -> str:
+        return (f'<div class="cluster" role="radiogroup" aria-label="{label}"><label class="chip"{label_extra}>'
+                f'<input type="radio" name="sg-{label}" value="x"{extra}><span>{label}</span></label></div>')
+
     tabs = ('<div class="tabstrip" role="tablist">'
             '<button class="tab" role="tab" aria-selected="true">General</button>'
             '<button class="tab" role="tab" aria-selected="false" data-force="hover">Auto-accept (hover)</button>'
@@ -105,6 +110,13 @@ def style_guide_html() -> str:
             ("off", toggle(False)), ("on", toggle(True)), ("hover", toggle(False).replace('class="toggle"', 'class="toggle" data-force="hover"')),
             ("focus-visible", toggle(True, ' data-force="focus-visible"')),
             ("disabled, off", toggle(False, " disabled")), ("disabled, on", toggle(True, " disabled"))]),
+        _states("Chip (a radio group; the deny note's intents)", [
+            ("default", chip("Wrong target")), ("hover", chip("Wrong target", label_extra=' data-force="hover"')),
+            ("focus-visible", chip("Wrong target", ' data-force="focus-visible"')),
+            ("checked", chip("Wrong target", " checked")),
+            ("checked, focus-visible", chip("Wrong target", ' checked data-force="focus-visible"')),
+            ("disabled", chip("Wrong target", " disabled")),
+            ("disabled, checked", chip("Wrong target", " disabled checked"))]),
         _states("Tabstrip (selected, hover, focus-visible, disabled)", [("", tabs)]),
         _states("Badge", [
             ("neutral", '<span class="badge">Not configured</span>'),

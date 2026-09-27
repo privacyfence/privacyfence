@@ -13,7 +13,10 @@ OrgSessionStore: create a session directly and set the cookie.
 """
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 import threading
 import time
 from unittest.mock import patch
@@ -24,6 +27,7 @@ from starlette.testclient import TestClient
 from privacyfence import paths
 from privacyfence import webauthn_stepup as wa
 from privacyfence.step_up_config import StepUpConfig
+from privacyfence.web import routes_approvals
 from privacyfence.web.routes_approvals import _inject_shim, create_app
 from privacyfence.web.session_auth import (
     PROVENANCE_HUMAN,
@@ -1970,3 +1974,77 @@ class TestBatchDecideRefusesFeedback:
             "csrf": "wrong", "items": [{"id": approval.id, "result": "deny"}], "note": "x",
         })
         assert r.status_code == 401
+
+
+# Runs one bridge shim's own <script> (the second of the two it returns; the first is
+# PF_WEBAUTHN_JS) in node, with fetch, sessionStorage and location stubbed, posts one payload
+# through window.webkit.messageHandlers.pf, and prints what was sent and what the list would toast.
+_SHIM_HARNESS_JS = r"""
+const vm = require('vm');
+const [script, payloadJson, status] = [process.argv[1], process.argv[2], Number(process.argv[3])];
+const seen = {bodies: [], toast: null, navigated: null};
+const sandbox = {
+  document: {body: {innerHTML: ''}},
+  sessionStorage: {setItem: (key, value) => { if (key === 'pf_toast') seen.toast = JSON.parse(value).msg; }},
+  fetch: (url, init) => {
+    seen.bodies.push(JSON.parse(init.body));
+    return Promise.resolve({ok: status >= 200 && status < 300, status, json: () => Promise.resolve({})});
+  },
+};
+sandbox.window = sandbox;
+sandbox.window.location = {replace: (url) => { seen.navigated = url; }};
+vm.createContext(sandbox);
+vm.runInContext(script, sandbox);
+sandbox.window.webkit.messageHandlers.pf.postMessage(JSON.parse(payloadJson));
+setTimeout(() => process.stdout.write(JSON.stringify(seen)), 50);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+class TestBridgeShimsForwardDenyFeedback:
+    """Both shims send every key of the card's payload to the decide route unchanged, so the
+    card's note and intent reach it without either shim knowing about them (ADR 0082). A deny
+    that carried either toasts _DENIED_WITH_NOTE_MESSAGE; a plain one still toasts
+    _DENIED_MESSAGE."""
+
+    SHIMS = {"local": routes_approvals._bridge_shim, "org": routes_approvals._org_bridge_shim}
+
+    def _run(self, shim_name: str, payload: dict, *, status: int = 200) -> dict:
+        shim = self.SHIMS[shim_name](
+            decide_url="/api/approvals/a1/decide", csrf="csrf-1", stepup_options_url="/x", nonce="n",
+        )
+        scripts = re.findall(r'<script nonce="n">(.*?)</script>', shim, flags=re.S)
+        assert len(scripts) == 2
+        out = subprocess.run(
+            ["node", "-e", _SHIM_HARNESS_JS, scripts[1], json.dumps(payload), str(status)],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        return json.loads(out.stdout)
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    def test_note_and_intent_are_forwarded_unchanged(self, shim_name):
+        note = 'Only Anna "please" \\ not the team\nthanks'
+        seen = self._run(shim_name, {"action": "resolve", "result": "deny", "note": note, "intent": "wrong_target"})
+        assert seen["bodies"] == [{
+            "action": "resolve", "result": "deny", "note": note, "intent": "wrong_target", "csrf": "csrf-1",
+        }]
+        assert seen["toast"] == routes_approvals._DENIED_WITH_NOTE_MESSAGE
+        assert seen["navigated"] == "/approvals"
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    @pytest.mark.parametrize("extra", [{"intent": "stop"}, {"note": "x"}])
+    def test_either_part_alone_gets_the_noted_toast(self, shim_name, extra):
+        seen = self._run(shim_name, {"action": "resolve", "result": "deny", **extra})
+        assert seen["bodies"][0] == {"action": "resolve", "result": "deny", **extra, "csrf": "csrf-1"}
+        assert seen["toast"] == routes_approvals._DENIED_WITH_NOTE_MESSAGE
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    def test_a_plain_deny_is_unchanged(self, shim_name):
+        seen = self._run(shim_name, {"action": "resolve", "result": "deny"})
+        assert seen["bodies"] == [{"action": "resolve", "result": "deny", "csrf": "csrf-1"}]
+        assert seen["toast"] == routes_approvals._DENIED_MESSAGE
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    def test_an_allow_never_gets_the_noted_toast(self, shim_name):
+        seen = self._run(shim_name, {"action": "resolve", "result": "accept"})
+        assert seen["toast"] == routes_approvals._DECIDED_MESSAGE

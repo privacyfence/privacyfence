@@ -59,6 +59,13 @@ Organization deployments now work from a phone, and the app looks like the websi
   machine. See ADR 0081.
 - **The organization app can be installed to a phone's Home Screen** or as a desktop app, and
   opens straight to your approvals.
+- **Deny with a note.** Next to Deny on the approval card, **Deny with a note…** opens a small
+  panel where you can tell the AI system why, or what to do instead: pick one of four reasons
+  (Stop — don't retry, Wrong target, Change the content, Try another way), type up to 500
+  characters, or both, then **Deny and send**. Only the AI system that made the request receives
+  it, and it is not kept in the audit log. Deny itself is still one tap, and Esc still denies (with
+  the panel open, the first Esc closes it and keeps what you typed). Ctrl+Enter or Cmd+Enter in the
+  note sends it.
 
 ### Changed
 

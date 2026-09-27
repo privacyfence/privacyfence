@@ -230,6 +230,24 @@ def test_card(shot, kind):
     save(f"card-{kind}")
 
 
+# The cards shown again with "Deny with a note…" open: a chip chosen and a note typed, the way a
+# reviewer sees the panel in use. Clicked, not built open, so it is the card's own script that
+# opened it.
+_NOTE_KINDS = ("write", "read", "read-pdf")
+
+
+@pytest.mark.parametrize("kind", _NOTE_KINDS)
+def test_card_with_the_deny_note_open(shot, kind):
+    page, save = shot
+    page.set_content(build_card_html(**_card_kinds()[kind]))
+    page.wait_for_function("() => !document.querySelector('[data-pf-note-open][aria-disabled=\"true\"]')")
+    page.locator("[data-pf-note-open]").click()
+    page.locator("#pf-deny-note label.chip", has_text="Wrong target").click()
+    page.locator("#pf-deny-note-text").fill("Send it only to Anna, not the whole team.")
+    page.locator("#pf-deny-note-text").blur()
+    save(f"card-{kind}-note")
+
+
 _DIALOGS = {
     # web_approval_ui.py's show_pii_confirmation_popup, and a choice picker (show_rule_choice_popup).
     "pii": lambda: build_confirmation_html(
