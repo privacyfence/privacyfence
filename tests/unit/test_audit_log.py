@@ -950,8 +950,8 @@ class TestAgentFields:
 
     _AGENT_KEYS = ("agent_id", "agent_name", "agent_version", "agent_source")
 
-    def test_schema_version_is_five(self):
-        assert CURRENT_SCHEMA_VERSION == 5
+    def test_schema_version_is_at_least_five(self):
+        assert CURRENT_SCHEMA_VERSION >= 5
 
     def test_no_scope_records_unknown_with_empty_source(self, tmp_path):
         # Invariant 3, audit half: no usable signal is "", never a default.
@@ -1011,7 +1011,7 @@ class TestAgentFields:
         logger.record(make_entry())
 
         lines = [json.loads(x) for x in (tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert [x["schema_version"] for x in lines] == [4, 5, 5]
+        assert [x["schema_version"] for x in lines] == [4, CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]
         assert "agent_id" not in lines[0]
         assert lines[1]["agent_id"] == "chatgpt"
 
@@ -1045,11 +1045,83 @@ class TestAgentFields:
         headers = [c.value for c in ws[1]]
         # Existing column indices stay stable: the four are appended after Rule ID.
         assert headers.index("Rule ID") == 21
-        assert headers[22:] == [
+        assert headers[22:26] == [
             "AI System ID", "AI System", "AI System Version (claimed)",
             "AI System Source (only override/oauth_client are verified)",
         ]
-        row = [c.value for c in ws[2]][22:]
+        row = [c.value for c in ws[2]][22:26]
         # A claimed name is caller-supplied, so it goes through formula-injection neutralising.
         assert row == ["unknown:=cmd|x", "'=cmd|x", "1.0", "client_info"]
-        assert [c.value for c in ws[3]][22:] == [None, None, None, None]
+        assert [c.value for c in ws[3]][22:26] == [None, None, None, None]
+
+
+class TestDenyFeedbackFields:
+    """Schema 6 (ADR 0083): deny_intent/deny_note_chars record that a deny carried feedback,
+    never the note's text."""
+
+    _KEYS = ("deny_intent", "deny_note_chars")
+
+    def test_schema_version_is_six(self):
+        assert CURRENT_SCHEMA_VERSION == 6
+
+    def test_defaults_are_empty(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry())
+        line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
+        assert (line["deny_intent"], line["deny_note_chars"]) == ("", 0)
+        assert line["schema_version"] == 6
+
+    @freeze_time("2026-07-06")
+    def test_v5_entries_without_deny_fields_load_with_defaults(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        v5 = {k: v for k, v in make_entry(week=current_week(), schema_version=5).__dict__.items()
+              if k not in self._KEYS}
+        (tmp_path / f"{current_week()}.jsonl").write_text(json.dumps(v5) + "\n", encoding="utf-8")
+
+        [entry] = logger.recent_entries()
+        assert entry.schema_version == 5
+        assert (entry.deny_intent, entry.deny_note_chars) == ("", 0)
+
+    def test_verify_chain_accepts_mixed_v5_and_v6_log(self, tmp_path):
+        from dataclasses import asdict
+
+        logger = AuditLogger(str(tmp_path))
+        v5 = {k: v for k, v in asdict(make_entry()).items() if k not in self._KEYS}
+        v5.update(schema_version=5, event_id="legacy-v5", prev_hash=logger._last_hash)
+        v5["entry_hash"] = logger._hash_canonical(v5)
+        with open(tmp_path / "2026-W28.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(v5) + "\n")
+        logger._last_hash = v5["entry_hash"]
+
+        logger.record(make_entry(decision="rejected", deny_intent="wrong_target", deny_note_chars=12))
+
+        lines = [json.loads(x) for x in (tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [x["schema_version"] for x in lines] == [5, 6]
+        assert "deny_intent" not in lines[0]
+        assert (lines[1]["deny_intent"], lines[1]["deny_note_chars"]) == ("wrong_target", 12)
+        assert logger.verify_chain("2026-W28").ok is True
+
+    def test_verify_chain_detects_edited_deny_field(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="rejected", deny_intent="stop", deny_note_chars=5))
+        week_file = tmp_path / "2026-W28.jsonl"
+        line = json.loads(week_file.read_text(encoding="utf-8"))
+        line["deny_note_chars"] = 0
+        week_file.write_text(json.dumps(line) + "\n", encoding="utf-8")
+
+        assert logger.verify_chain("2026-W28").ok is False
+
+    def test_excel_export_appends_deny_columns(self, tmp_path):
+        openpyxl = pytest.importorskip("openpyxl")
+
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="rejected", deny_intent="rewrite", deny_note_chars=42))
+        logger.record(make_entry())
+
+        ws = openpyxl.load_workbook(logger.export_week_to_excel("2026-W28"))["Decisions"]
+        headers = [c.value for c in ws[1]]
+        # Appended after the agent columns, so every earlier index stays stable.
+        assert headers.index("AI System ID") == 22
+        assert headers[26:] == ["Deny Intent", "Deny Note Length (chars)"]
+        assert [c.value for c in ws[2]][26:] == ["rewrite", 42]
+        assert [c.value for c in ws[3]][26:] == [None, None]

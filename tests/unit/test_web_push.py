@@ -371,6 +371,41 @@ class TestSubscriptionsFollowTheSession:
 
 
 class TestPayloadIsMinimal:
+    def test_payload_builder_is_pinned_to_its_keys_and_a_count(self):
+        # Pinned so decision data (a deny note or intent -- ADR 0082/0083 --
+        # or anything else about an approval) can never be added to a push
+        # without this test failing first. Web push fires only on creation
+        # (ADR 0081) and carries a count; if this needs to change, it needs
+        # a new ADR, not an edit here.
+        import inspect
+
+        assert list(inspect.signature(minimal_payload).parameters) == ["count"]
+        for count in (0, 1, 2, 57):
+            payload = json.loads(minimal_payload(count))
+            assert sorted(payload) == ["body", "title"]
+            assert payload["title"] == "PrivacyFence"
+            assert payload["body"] in (f"{count} approval pending", f"{count} approvals pending")
+
+    def test_a_noted_deny_sends_nothing_and_the_next_push_carries_no_note(self, store, vapid_key):
+        from privacyfence.deny_feedback import DenialFeedback
+
+        registry = _registry()
+        browser = Browser()
+        store.add("alice", browser.subscription())
+        post = RecordingPost()
+        registry.add_created_listener(_notifier(store, vapid_key, registry, post).on_new_approval)
+        _register(registry, "alice", n=1)
+        [first] = registry.list_pending("alice")
+        sent_before = len(post.calls)
+        registry.answer(first.id, "deny", feedback=DenialFeedback("stop", "PUSH-NOTE-MARKER"))
+        registry.finalize(first.id, "deny")
+        assert len(post.calls) == sent_before  # a decision never triggers a push
+        _register(registry, "alice", n=2)
+        for call in post.calls:
+            plaintext = decrypt(call["data"], browser.private, browser.auth)
+            assert b"PUSH-NOTE-MARKER" not in plaintext
+            assert b"stop" not in plaintext
+
     def test_minimal_payload_is_a_title_and_a_count(self):
         assert json.loads(minimal_payload(1)) == {"title": "PrivacyFence", "body": "1 approval pending"}
         assert json.loads(minimal_payload(3)) == {"title": "PrivacyFence", "body": "3 approvals pending"}
