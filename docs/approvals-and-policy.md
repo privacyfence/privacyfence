@@ -194,16 +194,18 @@ depends on where it came from:
 | "Says it is …" with a **Not verified** badge | The name the AI system reported about itself, or a relabel set in `agent_overrides:`. PrivacyFence cannot confirm it |
 | "Unrecognised AI system", with the claimed name in quotes if one was sent | The name matches no known AI system, or none was sent |
 
-On a local install nothing is ever **Verified** — a local relabel changes the displayed name but
-never makes it verified. When the name is not verified, the card's wording says "the AI system"
-rather than borrowing the claimed name.
+On a local install every request shows **Undetected**, with no name and no badge. Every AI system
+on the computer shares one credential, so PrivacyFence has no way to tell them apart. The three rows
+above apply to organization deployments only. When the name is not verified, the card's wording
+says "the AI system" rather than borrowing the claimed name.
 
 The name is for your information only. It never changes what is allowed: the same request gets the
 same rule match and the same decision whoever claims to be asking. The audit log records the same
 identity and where it came from (`agent_source`). See
 [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md),
-[ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md) and
-[ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md).
+[ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md),
+[ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md) and
+[ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md).
 
 ### Gmail signature on drafts
 

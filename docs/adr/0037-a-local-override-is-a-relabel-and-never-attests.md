@@ -5,6 +5,7 @@
 Accepted — 2026-09-24, decided by the maintainer in review of #655.
 Amends [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) option D and the
 `override` row of its decision 2, for local mode.
+Amended by [ADR 0088](0088-local-mode-shows-every-requester-as-undetected.md): a local install shows every requester as "Undetected", so a relabel is no longer displayed.
 
 ## Context
 

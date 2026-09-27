@@ -110,11 +110,13 @@ from typing import Any
 
 from . import agent_label, approval_icons
 from .agent_identity import UNKNOWN_AGENT, UNRECOGNISED_LABEL
-from .agent_label import NOT_VERIFIED, TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN, UNKNOWN_AGENT_LABEL
+from .agent_label import (
+    NOT_VERIFIED, TIER_ATTESTED, TIER_CLAIMED, TIER_UNDETECTED, TIER_UNKNOWN, unknown_agent_label,
+)
 from .deny_note_html import PANEL_JS as _DENY_NOTE_JS
 from .deny_note_html import batch_panel_html as _deny_note_panel_html
 
-_AGENT_TIERS = (TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN)
+_AGENT_TIERS = (TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN, TIER_UNDETECTED)
 
 # The deny note panel's id (deny_note_html.batch_panel_html's prefix) on the list; _JS names it too.
 _DENY_NOTE_ID = "pf-deny-note"
@@ -416,8 +418,12 @@ _JS = """
   // attested row draws a mark, and only one this page baked a rule for.
   function agentHtml(agent) {
     agent = agent || {};
-    var tier = ['attested', 'claimed', 'unknown'].indexOf(agent.tier) !== -1 ? agent.tier : 'unknown';
+    var tier = ['attested', 'claimed', 'unknown', 'undetected'].indexOf(agent.tier) !== -1 ? agent.tier : 'unknown';
     var headline = agent.headline || pfUnrecognised;
+    if (tier === 'undetected') {
+      return '<span class="pf-approval-agent pf-approval-agent-undetected" data-agent-tier="undetected">' +
+        '<span class="pf-approval-agent-name">' + esc(headline) + '</span></span>';
+    }
     var mark = '';
     if (tier === 'attested') {
       if (pfIconAgents.indexOf(agent.icon_id) !== -1) {
@@ -1132,12 +1138,19 @@ def _agent_html(agent: dict[str, Any] | None) -> str:
     never "Claude". The mark is drawn from a per-agent CSS class, like the
     connector icon, and only for the attested tier: a claimed row's
     ``icon_id`` is "" already, and a tier other than attested is refused
-    here as well. The JS mirror is ``agentHtml``."""
-    agent = agent or UNKNOWN_AGENT_LABEL.to_dict()
+    here as well. An undetected row (every local-mode request, ADR 0088) is
+    the headline alone: no glyph, no claim, no "not verified". The JS
+    mirror is ``agentHtml``."""
+    agent = agent or unknown_agent_label().to_dict()
     tier = agent.get("tier") or TIER_UNKNOWN
     if tier not in _AGENT_TIERS:
         tier = TIER_UNKNOWN
     headline = agent.get("headline") or UNRECOGNISED_LABEL
+    if tier == TIER_UNDETECTED:
+        return (
+            f'<span class="pf-approval-agent pf-approval-agent-{tier}" data-agent-tier="{tier}">'
+            f'<span class="pf-approval-agent-name">{_html_escape(headline)}</span></span>'
+        )
     slug = _icon_slug(agent.get("icon_id") or "")
     if tier == TIER_ATTESTED and slug in _agent_icon_uris():
         mark = f'<span class="pf-approval-agent-mark pf-approval-agent-mark-{slug}" aria-hidden="true"></span>'

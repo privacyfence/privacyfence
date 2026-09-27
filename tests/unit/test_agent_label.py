@@ -11,17 +11,27 @@ from privacyfence.agent_identity import (
     AgentSource,
     identify,
 )
+from privacyfence import agent_label
 from privacyfence.agent_label import (
     NEUTRAL_SUBJECT,
+    NOT_VERIFIED,
     TIER_ATTESTED,
     TIER_CLAIMED,
+    TIER_UNDETECTED,
     TIER_UNKNOWN,
-    UNKNOWN_AGENT_LABEL,
+    UNDETECTED_LABEL,
     label_for,
+    unknown_agent_label,
 )
 
 ATTESTED_SOURCES = [s for s in AgentSource if s.is_attested()]
 CLAIMED_SOURCES = [s for s in AgentSource if s.value and not s.is_attested()]
+
+
+@pytest.fixture(autouse=True)
+def _org_mode(monkeypatch):
+    """The tiers below are org mode's; TestLocalMode sets local mode itself."""
+    monkeypatch.setattr(agent_label, "_local_mode", False)
 
 
 class TestTiers:
@@ -44,6 +54,7 @@ class TestTiers:
         assert label.icon_id == ""
 
     def test_no_signal_is_unknown(self):
+        UNKNOWN_AGENT_LABEL = unknown_agent_label()
         assert UNKNOWN_AGENT_LABEL == label_for(UNKNOWN_AGENT)
         assert UNKNOWN_AGENT_LABEL.tier == TIER_UNKNOWN
         assert UNKNOWN_AGENT_LABEL.headline == UNRECOGNISED_LABEL
@@ -76,3 +87,44 @@ class TestTiers:
         assert label_for(identify("claude-ai", "", AgentSource.OAUTH_CLIENT)).to_dict() == {
             "tier": "attested", "headline": "Claude", "claim": "", "icon_id": "claude",
         }
+
+
+class TestLocalMode:
+    """ADR 0088: a local install shows every requester as "Undetected" -- no name, no claim and no
+    "Not verified", whatever the identity claims or which source recorded it."""
+
+    @pytest.fixture(autouse=True)
+    def _local(self, monkeypatch):
+        monkeypatch.setattr(agent_label, "_local_mode", True)
+
+    @pytest.mark.parametrize("agent", [
+        UNKNOWN_AGENT,
+        identify("claude-code", "2.0", AgentSource.CLIENT_INFO),
+        identify("claude-code", "2.0", AgentSource.OVERRIDE),
+        identify("claude-exfil", "", AgentSource.CLIENT_INFO),
+    ])
+    def test_every_identity_is_undetected(self, agent):
+        label = label_for(agent)
+        assert label.tier == TIER_UNDETECTED
+        assert label.headline == UNDETECTED_LABEL
+        assert label.text == UNDETECTED_LABEL
+        assert label.claim == ""
+        assert label.icon_id == ""
+        assert label.subject == NEUTRAL_SUBJECT
+        assert label.to_dict() == {"tier": TIER_UNDETECTED, "headline": UNDETECTED_LABEL, "claim": "", "icon_id": ""}
+
+    def test_undetected_mentions_no_claim_or_verification(self):
+        text = label_for(identify("claude-exfil", "", AgentSource.CLIENT_INFO)).text
+        assert "claude-exfil" not in text
+        assert NOT_VERIFIED.lower() not in text.lower()
+        assert UNRECOGNISED_LABEL not in text
+
+    def test_unknown_agent_label_follows_the_mode(self):
+        assert unknown_agent_label().tier == TIER_UNDETECTED
+
+    def test_set_local_mode_switches(self):
+        agent_label.set_local_mode(False)
+        assert not agent_label.is_local_mode()
+        assert label_for(UNKNOWN_AGENT).tier == TIER_UNKNOWN
+        agent_label.set_local_mode(True)
+        assert label_for(UNKNOWN_AGENT).tier == TIER_UNDETECTED

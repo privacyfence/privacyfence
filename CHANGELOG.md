@@ -82,6 +82,11 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Changed
 
+- **Local installs show every requester as "Undetected".** Every AI system on your computer uses
+  the same credential, so PrivacyFence cannot tell them apart. Approval cards, the approvals list
+  and the Audit Log page now say **Undetected** instead of a name the AI system gave itself with a
+  **Not verified** badge, or "Unrecognised AI system". The audit log still records the name the AI
+  system sent. Organization mode is unchanged.
 - **Write tools are now advertised as writes.** AI clients used to be told that every PrivacyFence
   tool was read-only. Now reads are read-only, writes are writes, and the two tools that delete
   something (`calendar_delete_event` and `drive_sheets_delete_dimensions`) are marked destructive.

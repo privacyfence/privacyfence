@@ -5,7 +5,15 @@ import json
 import time
 from types import SimpleNamespace
 
-from privacyfence import approval_list_html
+import pytest
+
+from privacyfence import agent_label, approval_list_html
+
+
+@pytest.fixture(autouse=True)
+def _org_mode_labels(monkeypatch):
+    """The tiered labels here are org mode's; local mode's "Undetected" is ADR 0088."""
+    monkeypatch.setattr(agent_label, "_local_mode", False)
 
 
 def _card(**overrides):
@@ -616,6 +624,19 @@ class TestAgentOnTheRow:
         )
         assert "pf-approval-agent-mark" not in html
         assert "pf-approval-agent-glyph" not in html
+
+    def test_local_mode_row_says_undetected_and_nothing_else(self, monkeypatch):
+        # ADR 0088: no claim, no "?" glyph, no "not verified" on a local install.
+        from privacyfence.agent_identity import AgentSource, identify
+
+        monkeypatch.setattr(agent_label, "_local_mode", True)
+        for agent in (identify("claude-code", "", AgentSource.CLIENT_INFO), identify("claude-exfil", "", AgentSource.CLIENT_INFO)):
+            row_html = self._row_for(agent)
+            assert 'data-agent-tier="undetected"' in row_html
+            assert '<span class="pf-approval-agent-name">Undetected</span>' in row_html
+            assert "not verified" not in row_html
+            assert "pf-approval-agent-glyph" not in row_html
+            assert "Says it is" not in row_html and "claude-exfil" not in row_html
 
     def test_unmatched_claim_is_shown_escaped_with_bidi_stripped(self):
         from privacyfence.agent_identity import AgentSource, identify

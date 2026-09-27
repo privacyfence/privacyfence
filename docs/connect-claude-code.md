@@ -115,11 +115,14 @@ The organization bundle options are listed in
 
 ## How the client is identified
 
-Every approval card and audit entry names the AI system that asked. Claude Code sends its own name
-in the MCP handshake, and in organization mode when it registers. That name is a **claim**: the
-card says the caller *says* it is Claude Code and marks it **Not verified**, because any program
-can send the same name. In organization mode an administrator can **pin** Claude Code's
-registration on **Settings → AI systems**; the cards for that registration are then verified.
+In local mode every approval card and Audit Log row shows the requester as **Undetected**: every AI
+system on your computer uses the same credential, so PrivacyFence cannot tell them apart. The audit
+log still records the name Claude Code sent.
+
+In organization mode, Claude Code sends its own name when it registers and in the MCP handshake. That
+name is a **claim**: the card says the caller *says* it is Claude Code and marks it **Not verified**,
+because any program can send the same name. An administrator can **pin** Claude Code's registration on
+**Settings → AI systems**; the cards for that registration are then verified.
 See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking).
 
 ## Troubleshooting
