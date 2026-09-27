@@ -69,8 +69,8 @@ class WebApprovalUI(ApprovalUI):
         return self._registry.answer(card_id, result, choice, principal_id=principal_id, feedback=feedback)
 
     # ------------------------------------------------------------------ #
-    # ApprovalUI -- blocking calls from gate.py, same signatures as
-    # approval_popup.py's (see approval_ui.py's ABC docstring). Each takes
+    # ApprovalUI -- blocking calls from gate.py, signatures fixed by
+    # approval_ui.py's ApprovalUI ABC (see its docstring). Each takes
     # an optional ``approval`` kwarg: gate.py's deferred-protocol callers
     # (see gate.py's module docstring) pre-register the *main* card via
     # ``self._registry`` themselves (so they have a stable id/URL to report
