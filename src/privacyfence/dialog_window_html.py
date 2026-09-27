@@ -145,8 +145,8 @@ def _cancel_only_button_row_html(cancel_label: str) -> str:
 
 def _message_html(lines: list[str]) -> str:
     """Each non-empty line becomes its own paragraph. Empty lines (the old
-    AppleScript ``lines`` lists used them purely as inter-paragraph spacing,
-    see approval_popup.py's former ``_build_message``) are dropped rather
+    AppleScript dialogs' ``lines`` lists used them purely as inter-paragraph
+    spacing) are dropped rather
     than rendered as an empty ``<p>`` -- normal CSS paragraph margin already
     provides that spacing here."""
     return "".join(f"<p>{_html_escape(line)}</p>" for line in lines if line)

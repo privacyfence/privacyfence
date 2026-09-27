@@ -4,8 +4,9 @@ This is the extra confirmation gate: gate.py runs a read tool's (``gate=
 "review"``) ``details_text`` (the message body / document / spreadsheet
 content shown in the approval popup) through here before the popup is
 displayed. When a category matches, the popup is tinted and the user must
-clear a second "Are you sure?" confirmation (see show_pii_confirmation_popup
-in approval_popup.py) on top of the normal Allow once.
+clear a second "Are you sure?" confirmation (see
+web_approval_ui.WebApprovalUI.show_pii_confirmation_popup) on top of the
+normal Allow once.
 
 Write tools (``gate="popup"``) are never scanned: this gate exists to catch
 personal data flowing from an external source into Claude's context, not
