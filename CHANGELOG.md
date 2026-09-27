@@ -71,6 +71,9 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Changed
 
+- **The PrivacyFence meta-tools' descriptions are shorter.** The six longest `privacyfence_*`
+  tool descriptions were condensed to at most 1024 characters each, so AI clients that reject a
+  longer tool description accept them. What they tell the AI system to do is unchanged.
 - **A denied request tells the AI system what to do next.** A plain Deny now reaches it as
   "Request denied by user. Don't retry the same call; ask the user how to proceed." instead of a
   bare "Request denied by user", so it stops retrying the same call blindly. A deny can also carry
