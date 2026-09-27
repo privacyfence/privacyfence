@@ -468,6 +468,15 @@ class TestOAuthCallback:
 # ---------------------------------------------------------------------------- #
 
 class TestTelegramFlow:
+    @pytest.mark.parametrize("step", ["start", "code", "2fa", "cancel"])
+    def test_a_post_after_the_session_ended_lands_on_the_signed_out_page(self, step):
+        """Not /login?next=/connect: /login redirects on to the IdP, which the page's form-action
+        does not let a form submission reach (ADR 0082)."""
+        app, _sessions, _registry = _app()
+        r = _client(app).post(f"/connect/telegram/{step}", data={"csrf": "stale"})
+        assert r.status_code == 303
+        assert r.headers["location"] == "/signed-out"
+
     def test_start_without_csrf_is_rejected(self):
         app, sessions, _registry = _app()
         session_id, _principal = _signed_in(sessions)

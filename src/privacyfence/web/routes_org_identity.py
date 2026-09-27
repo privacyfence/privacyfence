@@ -26,18 +26,25 @@ import time
 from dataclasses import dataclass
 
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import org_identity
+from .. import org_identity, web_shell
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..web_push import PushSubscriptionStore, session_tag
 from . import org_session
+from .csp import nonce_for
 
 logger = logging.getLogger(__name__)
 
 LOGIN_CALLBACK_PATH = "/oauth/idp/login-callback"
+# Where a sign-out lands, and where a form post with no session left ends (web/routes_connect.py).
+# A page on this origin, not /login: /login redirects on to the IdP, and a browser checks the
+# page's form-action on every redirect a form submission follows, so that bounce would need the
+# IdP's origin in form-action (ADR 0082). It also means signing out stays signed out, rather than
+# the IdP's own session signing the person straight back in.
+SIGNED_OUT_PATH = "/signed-out"
 DEFAULT_NEXT_PATH = "/approvals"
 
 # A login attempt outlives one browser round trip to the IdP and back --
@@ -219,15 +226,27 @@ def build_routes(
         if session_id:
             sessions.destroy(session_id)
             end_browser_push(session_id)
-        response = RedirectResponse("/login", status_code=302, headers={"Cache-Control": "no-store"})
+        response = RedirectResponse(SIGNED_OUT_PATH, status_code=303, headers={"Cache-Control": "no-store"})
         org_session.clear_session_cookie(response)
         return response
+
+    async def signed_out(request: Request) -> Response:
+        body = (
+            "<h1>You're signed out</h1>"
+            "<p>Sign in again to approve requests or manage your connections.</p>"
+            '<div class="actions"><a class="button primary" href="/login">Sign in</a></div>'
+        )
+        return HTMLResponse(
+            web_shell.plain_page(body, title="PrivacyFence — Signed out", nonce=nonce_for(request)),
+            headers={"Cache-Control": "no-store"},
+        )
 
     return [
         Route("/login", login),
         Route(LOGIN_CALLBACK_PATH, login_callback),
         Route("/logout", logout, methods=["POST"]),
+        Route(SIGNED_OUT_PATH, signed_out),
     ]
 
 
-__all__ = ["DEFAULT_NEXT_PATH", "LOGIN_CALLBACK_PATH", "build_routes"]
+__all__ = ["DEFAULT_NEXT_PATH", "LOGIN_CALLBACK_PATH", "SIGNED_OUT_PATH", "build_routes"]

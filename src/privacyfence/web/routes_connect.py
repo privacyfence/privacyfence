@@ -83,6 +83,7 @@ from ..tasks_client import SCOPES as _TASKS_SCOPES
 from . import org_session
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
+from .routes_org_identity import SIGNED_OUT_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -411,6 +412,12 @@ def build_routes(
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
+    def _signed_out_redirect() -> Response:
+        # A Telegram step posted after the session ended. Not /login?next=/connect, as a page view
+        # gets: that redirects on to the IdP, which this page's form-action does not allow a form
+        # submission to reach (web/csp.py, ADR 0082). The signed-out page links to /login.
+        return RedirectResponse(SIGNED_OUT_PATH, status_code=303, headers={"Cache-Control": "no-store"})
+
     def _check_telegram_post(request: Request, form) -> Response | None:
         if not org_session.check_csrf(request, form.get("csrf")):
             return PlainTextResponse("Unauthorized.", status_code=401)
@@ -421,7 +428,7 @@ def build_routes(
     async def telegram_start(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
-            return RedirectResponse("/login?next=/connect", status_code=302, headers={"Cache-Control": "no-store"})
+            return _signed_out_redirect()
         form = await request.form()
         rejected = _check_telegram_post(request, form)
         if rejected is not None:
@@ -449,7 +456,7 @@ def build_routes(
     async def telegram_code(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
-            return RedirectResponse("/login?next=/connect", status_code=302, headers={"Cache-Control": "no-store"})
+            return _signed_out_redirect()
         form = await request.form()
         rejected = _check_telegram_post(request, form)
         if rejected is not None:
@@ -484,7 +491,7 @@ def build_routes(
     async def telegram_2fa(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
-            return RedirectResponse("/login?next=/connect", status_code=302, headers={"Cache-Control": "no-store"})
+            return _signed_out_redirect()
         form = await request.form()
         rejected = _check_telegram_post(request, form)
         if rejected is not None:
@@ -516,7 +523,7 @@ def build_routes(
     async def telegram_cancel(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
-            return RedirectResponse("/login?next=/connect", status_code=302, headers={"Cache-Control": "no-store"})
+            return _signed_out_redirect()
         form = await request.form()
         rejected = _check_telegram_post(request, form)
         if rejected is not None:

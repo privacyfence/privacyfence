@@ -110,6 +110,10 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Fixed
 
+- **Organization mode: signing out from the connections page and connecting Telegram work again
+  in a browser.** The page's security policy refused to send either form, so neither button did
+  anything. Signing out now lands on a "You're signed out" page with a **Sign in** link, rather
+  than going back through your identity provider's sign-in.
 - **A PDF in an approval can now be read on a phone.** Phone browsers do not show a PDF inside
   a page (Android shows nothing, iPhone one page that cannot scroll), so the approval card now
   shows the document's first five pages as pictures, with a note such as "Showing pages 1–5 of
