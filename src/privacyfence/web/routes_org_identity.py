@@ -32,6 +32,7 @@ from starlette.routing import Route
 from .. import org_identity
 from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
+from ..web_push import PushSubscriptionStore, session_tag
 from . import org_session
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,7 @@ def _safe_next_path(raw: str | None, *, default: str = DEFAULT_NEXT_PATH) -> str
 def build_routes(
     *, idp: IdpConfig, sessions: org_session.OrgSessionStore, base_url: str,
     default_next_path: str = DEFAULT_NEXT_PATH, policy: AuthzPolicyConfig | None = None,
+    push_store: PushSubscriptionStore | None = None,
 ) -> list[Route]:
     """``base_url`` is this daemon's own externally-reachable origin (org
     mode's configured issuer/server URL) -- the redirect_uri PrivacyFence
@@ -136,8 +138,29 @@ def build_routes(
     top of the IdP's own authentication -- absent (the default, an
     unconfigured/disabled ``AuthzPolicyConfig``), every IdP-authenticated
     principal is admitted.
+
+    ``push_store`` is org mode's web push subscriptions (ADR 0081), ``None`` when push is off. A
+    session that ends here, by ``/logout`` or by a new sign-in replacing it in the same browser,
+    takes the push subscriptions it posted with it, so a signed-out browser stops showing the
+    previous person's notices. This is server-side, so it holds when the page's own
+    ``unsubscribe()`` never ran. A session that only expires keeps them: a phone's session idles
+    out after 30 minutes, and reaching that phone anyway is what push is for.
     """
     policy = policy or AuthzPolicyConfig()
+
+    def end_browser_push(old_session_id: str, *, new_session_id: str = "", principal_id: str = "") -> None:
+        if push_store is None or not old_session_id:
+            return
+        try:
+            if new_session_id:
+                push_store.replace_session(session_tag(old_session_id), session_tag(new_session_id), principal_id)
+            else:
+                push_store.remove_session(session_tag(old_session_id))
+        except (OSError, ValueError) as exc:
+            # The sign-in or sign-out still completes; the subscription then lives on until it
+            # expires or another person subscribes this browser.
+            logger.warning("Could not update this browser's push subscriptions: %s", type(exc).__name__)
+
     attempts = _LoginAttemptStore()
     redirect_uri = f"{base_url.rstrip('/')}{LOGIN_CALLBACK_PATH}"
 
@@ -174,19 +197,28 @@ def build_routes(
             logger.warning("Org sign-in failed: %s", exc)
             return PlainTextResponse("Sign-in failed. Please try again.", status_code=400)
         session_id = sessions.create(principal)
+        # The session this browser held before, if any (typically one that expired without a
+        # sign-out): a different person signing in here does not inherit its push
+        # subscriptions, and the same person's move to the new session.
+        end_browser_push(
+            request.cookies.get(org_session.SESSION_COOKIE, ""),
+            new_session_id=session_id, principal_id=principal.id,
+        )
         response = RedirectResponse(attempt.next_path, status_code=302, headers={"Cache-Control": "no-store"})
         org_session.set_session_cookie(response, session_id)
         return response
 
     async def logout(request: Request) -> Response:
         # POST-only, no CSRF token required: the worst a forged cross-site
-        # POST here can do is log the victim out, not disclose or change
-        # anything -- a widely-accepted trade-off for a logout endpoint
-        # specifically (unlike every state-changing route routes_
-        # approvals.py/routes_settings.py protect with a real CSRF check).
+        # POST here can do is log the victim out (which also stops that
+        # browser's push notices), not disclose or change anything -- a
+        # widely-accepted trade-off for a logout endpoint specifically
+        # (unlike every state-changing route routes_approvals.py/
+        # routes_settings.py protect with a real CSRF check).
         session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
         if session_id:
             sessions.destroy(session_id)
+            end_browser_push(session_id)
         response = RedirectResponse("/login", status_code=302, headers={"Cache-Control": "no-store"})
         org_session.clear_session_cookie(response)
         return response

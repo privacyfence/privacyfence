@@ -1,30 +1,22 @@
-"""Pure (no AppKit/PyObjC) translation from gate.py's show_popup/
-show_read_popup argument shapes into approval_window_html.
-build_card_stack_html()'s own argument shape.
-
-This mirrors what approval_window.py's ApprovalWindowController does for
-the native host (reading-time estimate, the "Seen N times this week"
-caption, the disclosure card's rows, each accept_all candidate's "Always allow —
-{hint}" label, the pdf/image data-URI precedence for the WIDE preview pane)
--- ported here framework-free, with the native-only window-sizing math left
-out, so web_approval_ui.py can render an identical card without importing
-anything AppKit-only. See that controller's own docstring for the
-field-by-field reasoning this mirrors; keep the two in sync if either one's
-translation logic changes.
+"""Pure translation from gate.py's show_popup/show_read_popup argument
+shapes into approval_window_html.build_card_stack_html()'s own argument
+shape, for web_approval_ui.py: the reading-time estimate, the "Seen N times
+this week" caption, the disclosure card's rows, each accept_all candidate's
+"Always allow — {hint}" label, and the pdf/image data-URI precedence for the
+WIDE preview pane.
 """
 from __future__ import annotations
 
 import base64
 from collections.abc import Callable
 
-from . import agent_label, approval_icons, approval_window_html, pii_detector, write_effects
+from . import (
+    agent_label, approval_icons, approval_window_html, pdf_render, pii_detector, text_extraction, write_effects,
+)
 from .agent_identity import UNKNOWN_AGENT, AgentIdentity
 
 # Shown above the button row for operations
-# auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS lists -- same copy as
-# approval_window.py's own _TEMP_ACCEPT_DISCLOSURE_TEXT, deliberately kept
-# as a second literal rather than a shared import: it's UI copy, not logic,
-# and the two hosts are allowed to drift here without either being "wrong".
+# auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS lists.
 TEMP_ACCEPT_DISCLOSURE_TEXT = (
     "Approving this also allows further calls like this to the same file "
     "for a few minutes without asking again."
@@ -97,9 +89,9 @@ def _disclosure_rows(
     is_read: bool, new_info: dict[str, str] | None, visibility: dict[str, str] | None,
     agent_display_name: str = agent_label.NEUTRAL_SUBJECT,
 ) -> list[tuple[str, str]]:
-    """The disclosure card's rows -- see ApprovalWindowController._disclosure_rows's own
-    docstring for the same (new_info first, then visibility-derived policy
-    sentences) merge this mirrors.
+    """The disclosure card's rows, on a read gate only: the connector's own
+    ``new_info`` pairs first, then the sentences derived from its
+    ``visibility`` policy (approval_window_html.disclosure_rows_from_visibility).
 
     Connectors write ``new_info`` with approval_window_html.AGENT_PLACEHOLDER
     where they mean the caller ("Content returned to {agent}"), since they
@@ -145,14 +137,12 @@ def build_card_html(
     tool: str = "",
     agent: AgentIdentity = UNKNOWN_AGENT,
 ) -> str:
-    """Build the full card-stack HTML document for one approval -- the web
-    host's counterpart to ApprovalWindowController._build_content_view,
-    minus that method's native-only window-sizing math (nothing here needs
-    to guess a window height; the browser lays out a real page).
+    """Build the full card-stack HTML document for one approval. Nothing here
+    sizes a window: the browser lays out a real page.
 
     ``content_kind`` is accepted by show_read_popup's own signature but
-    (like the native host) has no effect on rendering -- see that
-    function's docstring -- so it's deliberately not a parameter here.
+    has no effect on rendering -- see that function's docstring -- so it's
+    deliberately not a parameter here.
 
     ``agent`` is the identity the request's ``PendingApproval`` captured
     (ADR 0006). It is shown in its tier's treatment in the header, and its
@@ -164,8 +154,21 @@ def build_card_html(
     label = agent_label.label_for(agent)
     agent_display_name = label.subject
     pdf_data_uri = ""
+    pdf_page_uris: list[str] = []
+    pdf_page_count = 0
+    pdf_fallback_text = ""
     if pdf_bytes:
         pdf_data_uri = f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode('ascii')}"
+        # The pages a phone shows instead of the <embed> (see build_preview_body_html). A PDF
+        # that will not render shows its extracted text there instead, never nothing.
+        rendered = pdf_render.render_first_pages(pdf_bytes)
+        if rendered is not None:
+            pdf_page_uris = [
+                f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}" for png in rendered.pages
+            ]
+            pdf_page_count = rendered.page_count
+        else:
+            pdf_fallback_text = text_extraction.extract_text(pdf_bytes, "application/pdf")
     image_data_uri = ""
     if not pdf_data_uri and preview_bytes and preview_mime_type.startswith("image/"):
         image_data_uri = (
@@ -174,11 +177,11 @@ def build_card_html(
 
     # table_only suppresses details_text only when there's a real table to
     # show instead -- and never when preview_blocks is set, which already
-    # controls exactly what renders on its own. Same rule as the native
-    # host's own _build_content_view.
+    # controls exactly what renders on its own.
     body_text = "" if table_only and preview_tables and not preview_blocks else details_text
     preview_body_html = approval_window_html.build_preview_body_html(
         body_text, image_data_uri=image_data_uri, pdf_data_uri=pdf_data_uri,
+        pdf_page_uris=pdf_page_uris, pdf_page_count=pdf_page_count, pdf_fallback_text=pdf_fallback_text,
         tables=preview_tables, blocks=preview_blocks,
         highlight=_pii_highlighter(pii_categories),
     )

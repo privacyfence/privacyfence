@@ -9,7 +9,8 @@ browser route does -- no new auth mechanism. The 401/redirect-to-/login
 branch mirrors routes_connect.py's own pattern for a browser-navigated GET
 (session cookie missing or expired sends the human to sign in, not a bare
 401 JSON body, since this route is always reached by a human clicking or
-pasting a link into their own browser tab, never by a JS fetch).
+pasting a link into their own browser tab, never by a JS fetch), with
+``next`` set to this same link so the sign-in returns to it.
 
 ``{token}`` in the URL is the raw 256-bit token, not the store's internal
 ``lookup_id`` -- see download_staging.py's own module docstring for why
@@ -21,6 +22,7 @@ from __future__ import annotations
 import base64
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote, urlencode
 
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
@@ -82,7 +84,21 @@ def build_routes(*, sessions: OrgSessionStore, store: DownloadStagingStore | Non
     async def claim(request: Request) -> Response:
         principal = org_session.authenticated(request, sessions)
         if principal is None:
-            return RedirectResponse("/login", status_code=302, headers={"Cache-Control": "no-store"})
+            # Back to this same link once signed in. On a phone that is the normal case, not the
+            # exception: a link tapped inside an AI client app opens an in-app browser with an
+            # empty cookie jar, and without `next` the user lands on /approvals with the link
+            # gone and its TTL running. /login still passes `next` through its own
+            # _safe_next_path allow-list, and a value built here always starts with
+            # /downloads/, so it cannot point anywhere else. It grants nothing either: the
+            # claim below still needs the principal the file was staged for. The token does
+            # sit in /login's in-memory attempt until the sign-in finishes or expires, which is
+            # no more than the browser's own history holds; no log records it (uvicorn's access
+            # log is off, web/server.py).
+            next_path = "/downloads/" + quote(request.path_params["token"], safe="=")
+            return RedirectResponse(
+                "/login?" + urlencode({"next": next_path}), status_code=302,
+                headers={"Cache-Control": "no-store"},
+            )
 
         # CSRF/cross-site GET note (module docstring): this is a
         # state-changing GET (it deletes the staged file on success), the
@@ -134,7 +150,6 @@ def build_routes(*, sessions: OrgSessionStore, store: DownloadStagingStore | Non
 
 
 def _rfc5987_quote(value: str) -> str:
-    from urllib.parse import quote
     return quote(value, safe="")
 
 

@@ -13,6 +13,7 @@ OrgSessionStore: create a session directly and set the cookie.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from unittest.mock import patch
@@ -279,12 +280,19 @@ class TestServiceWorker:
         assert "javascript" in r.headers.get("content-type", "")
         assert r.headers.get("service-worker-allowed") == "/"
 
-    def test_no_push_handler(self, client):
-        # Notifications are tier 0/1 only -- no `push` event handler (tier
-        # 2, web push with VAPID, is not implemented).
+    def test_push_handler_reads_only_a_title_and_a_body(self, client):
+        # Tier 2 (org-mode web push, ADR 0081) lives in the same worker. Only an org-mode page
+        # ever subscribes, so local mode never receives a push; whatever one carries, the
+        # handler shows two strings and nothing else a payload might hold.
         r = client.get("/sw.js")
-        assert "addEventListener(\"push\"" not in r.text
-        assert "addEventListener('push'" not in r.text
+        assert 'addEventListener("push"' in r.text
+        assert set(re.findall(r"\bpayload\.(\w+)", r.text)) == {"title", "body"}
+
+    def test_a_click_opens_or_focuses_the_approvals_list(self, client):
+        r = client.get("/sw.js")
+        assert 'addEventListener("notificationclick"' in r.text
+        assert 'openWindow("/approvals")' in r.text
+        assert 'navigate("/approvals")' in r.text
 
 
 class TestApprovalsStream:
@@ -355,6 +363,7 @@ class TestShowApproval:
         r = client.get("/approvals/does-not-exist")
         assert r.status_code == 200
         assert "no longer pending" in r.text
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in r.text
 
     def test_pending_card_renders_with_the_bridge_shim_injected(self, client, sessions, web_ui):
         _signed_in(client, sessions)
@@ -418,6 +427,9 @@ class TestShowApproval:
         assert r.status_code == 200
         assert "Preparing this request" in r.text
         assert 'href="/approvals"' in r.text
+        # web_shell.plain_page: laid out at a phone's width, and still reloading itself.
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in r.text
+        assert '<meta http-equiv="refresh" content="2">' in r.text.split("</head>", 1)[0]
 
 
 class TestDecide:
