@@ -7,7 +7,7 @@ Passing ``str(exc)`` straight into a client-visible response or a log line
 unsafe. Most of what flows through a
 ``raise SomeError(...)`` in this codebase is written by us and carries
 nothing sensitive (``f"Unknown tool: {tool!r}"``, ``"Request denied by
-user"``), but plenty of it isn't: every connector's own ``*ClientError``
+user."``), but plenty of it isn't: every connector's own ``*ClientError``
 (gmail_client.py and friends) routinely wraps a third-party HTTP client's
 own exception text via ``f"... failed: {exc}"``, and the OAuth modules
 (google_oauth.py, atlassian_oauth.py) have at least one call site that
@@ -23,8 +23,12 @@ docs/coding-and-testing-guidelines.md §2.7's own "new connector code
 catches it and re-raises as RuntimeError" rule. So a plain ``RuntimeError``
 is, by a repo-wide convention older than this fix, exactly the type that
 *does* carry arbitrary wrapped text -- while ``gate.py``'s own denial
-raises (``"Request denied by user"`` and friends) are composed only of
-static text. Were both plain ``RuntimeError``, the same builtin type would
+raises (``"Request denied by user."`` and friends) are composed only of
+static text, with one reviewed exception: ``GateDeniedError.by_user()`` may
+append the deciding human's own deny note, sanitized, capped at 500
+characters and JSON-quoted behind a static label (ADR 0083) -- the user's
+words to their own agent, never a third party's text, and still passed
+through ``redact_secrets()`` below like every other message. Were both plain ``RuntimeError``, the same builtin type would
 carry two very different trust levels, indistinguishable by ``isinstance``
 alone. This module resolves that by giving every self-authored "denied, not failed" raise site
 its own named ``RuntimeError`` subclass instead (``gate.GateDeniedError``;

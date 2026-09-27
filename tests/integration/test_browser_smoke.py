@@ -65,12 +65,17 @@ from privacyfence import approval_window_html  # noqa: E402
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.connector_registry import ConnectorRegistry  # noqa: E402
+from privacyfence.deny_feedback import DenialFeedback, denial_message  # noqa: E402
 from privacyfence.principal import Principal, principal_scope  # noqa: E402
 from privacyfence.settings_controller import SettingsController  # noqa: E402
 from privacyfence.web import org_session  # noqa: E402
 from privacyfence.web.oauth_provider import OrgOAuthProvider  # noqa: E402
 from privacyfence.web.org_session import OrgSessionStore  # noqa: E402
-from privacyfence.web.routes_approvals import _DECIDED_MESSAGE, _DENIED_MESSAGE  # noqa: E402
+from privacyfence.web.routes_approvals import (  # noqa: E402
+    _DECIDED_MESSAGE,
+    _DENIED_MESSAGE,
+    _DENIED_WITH_NOTE_MESSAGE,
+)
 from privacyfence.web.server import OrgAuth, WebServer  # noqa: E402
 from privacyfence.web.session_auth import PROVENANCE_HUMAN  # noqa: E402
 from privacyfence.web.session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE  # noqa: E402
@@ -2977,3 +2982,581 @@ class TestPhoneLayout:
             assert cells > 0, f"no table in the preview region {root!r}"
             broken = page.evaluate(_PHONE_BROKEN_WORDS_JS, root)
             assert not broken, f"words broken across lines: {broken}"
+
+
+
+# --------------------------------------------------------------------- #
+# "Deny with a note…" on the card (deny_note_html.py, ADR 0083): the panel
+# opens, takes a chip and a note, and Deny and send reaches the agent; the
+# keyboard rules; the note is never pre-filled from the card; and the panel
+# keeps the phone-layout rules, on a desktop, at 393px and at 320px, in both
+# modes. There is no card inline in an /approvals row (TestPhoneLayout's
+# docstring), so the list-row-sized case is a card in a 700px box.
+# --------------------------------------------------------------------- #
+
+# The card's own content, carrying a marker and markup that would break out of the textarea or an
+# attribute if anything ever copied it into the panel.
+_NOTE_MARKER = "CARD-CONTENT-MARKER-7731"
+_NOTE_HOSTILE = f'{_NOTE_MARKER} </textarea><script>alert(1)</script> " value="{_NOTE_MARKER}" \''
+
+_NOTE_CONTEXTS = {
+    "desktop": {"viewport": {"width": 1280, "height": 800}},
+    "393": _PHONE_WIDTHS["393"],
+    "320": _PHONE_WIDTHS["320"],
+}
+
+_NOTE_TYPED = "Send it only to Anna, not the whole team."
+
+
+@pytest.fixture(params=["local", "org"])
+def note_mode(request):
+    """(server, web_ui, principal or None, sign_in(context, page)) for local or org mode."""
+    if request.param == "local":
+        server, web_ui = request.getfixturevalue("local_server")
+        return server, web_ui, None, lambda context, page: _sign_in_local(page, server)
+    server, sessions, web_ui = request.getfixturevalue("org_server_and_ui")
+    return server, web_ui, _ADMIN, lambda context, page: _sign_in_org(context, server, sessions, principal=_ADMIN)
+
+
+def _note_page(browser, width: str):
+    context = browser.new_context(ignore_https_errors=True, **_NOTE_CONTEXTS[width])
+    return context, context.new_page()
+
+
+def _register_note_card(web_ui: WebApprovalUI, principal: Principal | None, *, layout: str = "narrow"):
+    """A gated write card (or WIDE read card) whose title, summary, preview, body and stated reason
+    all carry ``_NOTE_HOSTILE``, registered the way gate.py registers one, for ``principal`` in org
+    mode. Returns (thread, approval); the thread's result is on ``thread.result_box``."""
+    read = layout == "wide"
+
+    def register():
+        return web_ui.deferred_registry.register_or_coalesce(
+            dedupe_key=f"note-{uuid.uuid4().hex[:8]}", connector="gmail",
+            tool="gmail_get_message" if read else "gmail_send_email", gate_kind="review" if read else "popup",
+            request_id="req-note", summary=f"Summary {_NOTE_HOSTILE}", tool_name="Send email",
+            operation_key="gmail.gmail_send_email",
+        )[0]
+
+    if principal is None:
+        approval = register()
+    else:
+        with principal_scope(principal):
+            approval = register()
+    box: dict = {}
+    kwargs = {"claude_reason": f"Reason {_NOTE_HOSTILE}", "layout": layout, "approval": approval}
+
+    def run():
+        if read:
+            box["result"] = web_ui.show_read_popup(
+                f"Read {_NOTE_HOSTILE}", {"From": _NOTE_HOSTILE}, f"Body {_NOTE_HOSTILE}", None, **kwargs,
+            )
+        else:
+            box["result"] = web_ui.show_popup(
+                f"Send {_NOTE_HOSTILE}", {"To": _NOTE_HOSTILE}, f"Body {_NOTE_HOSTILE}", **kwargs,
+            )
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not approval.html:
+        time.sleep(0.01)
+    assert approval.html, "note card never parked on its approval"
+    t.result_box = box
+    return t, approval
+
+
+def _open_note_card(page, server, approval) -> None:
+    page.goto(f"{server.base_url}/approvals/{approval.id}")
+    page.wait_for_load_state("load")
+    page.wait_for_function("() => !document.querySelector('[data-pf-note-open][aria-disabled=\"true\"]')")
+
+
+def _open_the_panel(page) -> None:
+    page.locator("[data-pf-note-open]").click()
+    page.wait_for_selector("#pf-deny-note", state="visible")
+
+
+def _finish(web_ui, approval, thread) -> None:
+    if thread.is_alive():
+        web_ui.resolve(approval.id, "deny")
+        thread.join(timeout=5)
+
+
+def _the_agent_is_told(web_ui, approval, principal) -> str:
+    """The text the agent is told, read back through the registry the way
+    privacyfence_await_approval reads it. The card's answer only records the decision; gate.py's
+    interaction driver then finalizes it, which a card registered straight on the UI has no
+    driver for, so this does that one step itself."""
+    web_ui.deferred_registry.finalize(approval.id, approval.result)
+    feedback = web_ui.deferred_registry.denial_feedback(
+        approval.id, principal_id=principal.id if principal else None,
+    )
+    assert feedback is not None
+    return denial_message(feedback)
+
+
+class TestDenyNote:
+    @pytest.mark.parametrize("width", ["desktop", "393", "320"])
+    def test_open_choose_type_and_deny_and_send(self, browser, note_mode, width):
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, width)
+        thread, approval = _register_note_card(web_ui, principal)
+        try:
+            sign_in(context, page)
+            _open_note_card(page, server, approval)
+            opener = page.locator("[data-pf-note-open]")
+            assert page.locator("#pf-deny-note").is_hidden()
+            assert opener.get_attribute("aria-expanded") == "false"
+            _open_the_panel(page)
+            assert opener.get_attribute("aria-expanded") == "true"
+            assert page.evaluate("document.activeElement.id") == "pf-deny-note-text"
+            page.locator("#pf-deny-note label.chip", has_text="Wrong target").click()
+            assert page.locator('#pf-deny-note input[value="wrong_target"]').is_checked()
+            page.locator("#pf-deny-note-text").fill(_NOTE_TYPED)
+            assert page.locator("#pf-deny-note-count").text_content() == f"{len(_NOTE_TYPED)} / 500"
+            if width != "desktop":
+                _assert_phone_layout(page, width, main=".pf-card")
+            page.locator("[data-pf-note-submit]").click()
+            page.wait_for_url(f"{server.base_url}/approvals")
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            assert thread.result_box["result"][0] == "deny"
+            assert page.locator("#pf-shell-toast").text_content() == _DENIED_WITH_NOTE_MESSAGE
+            told = _the_agent_is_told(web_ui, approval, principal)
+            assert told == denial_message(DenialFeedback("wrong_target", _NOTE_TYPED))
+            assert json.dumps(_NOTE_TYPED) in told and 'The user chose "Wrong target"' in told
+        finally:
+            _finish(web_ui, approval, thread)
+            context.close()
+
+    def test_submitting_without_typing_sends_no_note(self, browser, note_mode):
+        """The card carries a marker and hostile markup in its title, summary, preview, body and
+        stated reason; the panel still opens empty, nothing is chosen, and an immediate Deny and
+        send posts a deny with no note and no intent."""
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, "desktop")
+        thread, approval = _register_note_card(web_ui, principal)
+        try:
+            sign_in(context, page)
+            _open_note_card(page, server, approval)
+            assert _NOTE_MARKER in page.content()  # the content is on the card
+            _open_the_panel(page)
+            panel = page.locator("#pf-deny-note")
+            assert _NOTE_MARKER not in panel.inner_html()
+            assert page.locator("#pf-deny-note-text").input_value() == ""
+            assert page.locator("#pf-deny-note input:checked").count() == 0
+            assert page.locator("#pf-deny-note-count").text_content() == "0 / 500"
+            with page.expect_request(lambda r: r.method == "POST" and r.url.endswith("/decide")) as posted:
+                page.locator("[data-pf-note-submit]").click()
+            body = posted.value.post_data_json
+            assert body["result"] == "deny"
+            assert "note" not in body and "intent" not in body, body
+            page.wait_for_url(f"{server.base_url}/approvals")
+            thread.join(timeout=5)
+            assert page.locator("#pf-shell-toast").text_content() == _DENIED_MESSAGE
+            assert _the_agent_is_told(web_ui, approval, principal) == denial_message(DenialFeedback())
+        finally:
+            _finish(web_ui, approval, thread)
+            context.close()
+
+    def test_escape_closes_the_panel_then_escape_denies(self, browser, note_mode):
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, "desktop")
+        thread, approval = _register_note_card(web_ui, principal)
+        try:
+            sign_in(context, page)
+            _open_note_card(page, server, approval)
+            _open_the_panel(page)
+            page.locator("#pf-deny-note-text").fill("half a thought")
+            page.keyboard.press("Escape")
+            assert page.locator("#pf-deny-note").is_hidden()
+            assert page.evaluate("document.activeElement.hasAttribute('data-pf-note-open')")
+            page.wait_for_timeout(300)
+            assert not approval.event.is_set()
+            # The text is kept for when the panel opens again.
+            _open_the_panel(page)
+            assert page.locator("#pf-deny-note-text").input_value() == "half a thought"
+            page.keyboard.press("Escape")
+            # The next Escape denies as it always has: plainly, with no note.
+            page.keyboard.press("Escape")
+            page.wait_for_url(f"{server.base_url}/approvals")
+            thread.join(timeout=5)
+            assert thread.result_box["result"][0] == "deny"
+            assert page.locator("#pf-shell-toast").text_content() == _DENIED_MESSAGE
+            assert _the_agent_is_told(web_ui, approval, principal) == denial_message(DenialFeedback())
+        finally:
+            _finish(web_ui, approval, thread)
+            context.close()
+
+    def test_enter_and_space_in_the_textarea_type_and_ctrl_enter_sends(self, browser, note_mode):
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, "desktop")
+        thread, approval = _register_note_card(web_ui, principal)
+        try:
+            sign_in(context, page)
+            _open_note_card(page, server, approval)
+            _open_the_panel(page)
+            text = page.locator("#pf-deny-note-text")
+            text.press_sequentially("Use")
+            page.keyboard.press("Space")
+            page.keyboard.press("Enter")
+            text.press_sequentially("Drive")
+            assert text.input_value() == "Use \nDrive"
+            page.wait_for_timeout(300)
+            assert not approval.event.is_set()
+            assert page.locator("#pf-deny-note").is_visible()
+            page.keyboard.press("Control+Enter")
+            page.wait_for_url(f"{server.base_url}/approvals")
+            thread.join(timeout=5)
+            assert _the_agent_is_told(web_ui, approval, principal) == denial_message(DenialFeedback(note="Use \nDrive"))
+        finally:
+            _finish(web_ui, approval, thread)
+            context.close()
+
+    def test_a_chip_clears_on_a_second_click_and_cancel_keeps_the_panels_state(self, browser, local_server):
+        server, web_ui = local_server
+        context, page = _note_page(browser, "desktop")
+        thread, approval = _register_note_card(web_ui, None)
+        try:
+            _sign_in_local(page, server)
+            _open_note_card(page, server, approval)
+            _open_the_panel(page)
+            stop = page.locator("#pf-deny-note label.chip", has_text="Stop")
+            stop.click()
+            assert page.locator('#pf-deny-note input[value="stop"]').is_checked()
+            stop.click()
+            assert page.locator("#pf-deny-note input:checked").count() == 0
+            page.locator("#pf-deny-note label.chip", has_text="Try another way").click()
+            page.locator("#pf-deny-note-text").fill("keep me")
+            page.locator("[data-pf-note-cancel]").click()
+            assert page.locator("#pf-deny-note").is_hidden()
+            assert not approval.event.is_set()
+            _open_the_panel(page)
+            assert page.locator("#pf-deny-note-text").input_value() == "keep me"
+            assert page.locator('#pf-deny-note input[value="different_approach"]').is_checked()
+            # The opener toggles the panel closed again, too.
+            page.locator("[data-pf-note-open]").click()
+            assert page.locator("#pf-deny-note").is_hidden()
+            assert not approval.event.is_set()
+        finally:
+            _finish(web_ui, approval, thread)
+            context.close()
+
+    @pytest.mark.parametrize("width", ["393", "320"])
+    def test_the_submit_can_be_scrolled_into_view_above_the_keyboard(self, browser, note_mode, width):
+        """The on-screen keyboard takes roughly the lower half of a phone's screen. With the textarea
+        focused and the viewport shrunk to what is left, Deny and send can still be reached."""
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, width)
+        thread, approval = _register_note_card(web_ui, principal)
+        try:
+            sign_in(context, page)
+            _open_note_card(page, server, approval)
+            _open_the_panel(page)
+            page.locator("#pf-deny-note-text").focus()
+            size = _NOTE_CONTEXTS[width]["viewport"]
+            page.set_viewport_size({"width": size["width"], "height": size["height"] // 2 - 40})
+            submit = page.locator("[data-pf-note-submit]")
+            submit.scroll_into_view_if_needed()
+            box = submit.bounding_box()
+            inner_height = page.evaluate("window.innerHeight")
+            assert box["y"] >= 0 and box["y"] + box["height"] <= inner_height, (box, inner_height)
+            _assert_no_horizontal_overflow(page)
+            submit.click()
+            page.wait_for_url(f"{server.base_url}/approvals")
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+        finally:
+            _finish(web_ui, approval, thread)
+            context.close()
+
+    @pytest.mark.parametrize(("layout", "width"), [(layout, width) for layout in ("narrow", "wide")
+                                                   for width in _PHONE_WIDTHS])
+    def test_the_open_panel_keeps_the_phone_layout_rules(self, browser, local_server, layout, width):
+        """(a)-(d) of the phone-layout harness on the WIDE and the NARROW card with the panel open, a
+        chip chosen and a note typed, at 320px, 393px and a 1024px tablet."""
+        server, web_ui = local_server
+        context = browser.new_context(ignore_https_errors=True, **_PHONE_WIDTHS[width])
+        page = context.new_page()
+        thread, approval = _register_note_card(web_ui, None, layout=layout)
+        try:
+            _sign_in_local(page, server)
+            _open_note_card(page, server, approval)
+            _open_the_panel(page)
+            page.locator("#pf-deny-note label.chip", has_text="Change the content").click()
+            page.locator("#pf-deny-note-text").fill(_NOTE_TYPED)
+            _phone_screenshot(page, f"card-{layout}-deny-note-{width}")
+            _assert_phone_layout(page, width, main=".pf-card")
+            panel = page.locator("#pf-deny-note").bounding_box()
+            assert panel["x"] >= 0 and panel["x"] + panel["width"] <= page.evaluate("window.innerWidth")
+        finally:
+            _finish(web_ui, approval, thread)
+            context.close()
+
+    @pytest.mark.parametrize("box", [380, 700])
+    def test_the_open_panel_fits_a_card_in_a_phone_or_list_row_sized_box(self, page, box):
+        """TestCardContainers' boxes: the card's markup in a box of a set width on a desktop page."""
+        from privacyfence.card_builder import build_card_html
+
+        css, markup = _card_markup(build_card_html(
+            title="Send email", preview={"To": "a@b.com"}, details_text="body", is_read=False, layout="narrow",
+            accept_all_choices=[("rule", "Always allow — this recipient")],
+        ))
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.set_content(
+            f'<style>{css}</style><div id="box" style="width:{box}px">{markup}</div>'
+            f"<script>{approval_window_html._DENY_NOTE_JS}{approval_window_html._JS}</script>"
+        )
+        page.locator("[data-pf-note-open]").click()
+        page.locator("#pf-deny-note-text").fill(_NOTE_TYPED)
+        sizes = page.evaluate("""() => {
+            const r = (sel) => document.querySelector(sel).getBoundingClientRect();
+            return {box: r('#box'), panel: r('#pf-deny-note'), submit: r('[data-pf-note-submit]'),
+                    overflow: document.documentElement.scrollWidth};
+        }""")
+        assert sizes["panel"]["right"] <= sizes["box"]["right"] + 0.5, sizes
+        assert sizes["submit"]["right"] <= sizes["box"]["right"] + 0.5, sizes
+        assert sizes["overflow"] == 1280, sizes
+
+
+_NOTE_ACTION_STYLES_JS = """() => {
+  document.querySelectorAll('[aria-disabled]').forEach((el) => el.setAttribute('aria-disabled', 'false'));
+  const read = (selector) => {
+    const el = document.querySelector(selector);
+    const s = getComputedStyle(el);
+    return {bg: s.backgroundColor, borderWidth: parseFloat(s.borderTopWidth), borderStyle: s.borderTopStyle,
+            fontSize: parseFloat(s.fontSize), underline: s.textDecorationLine.includes('underline'),
+            height: el.getBoundingClientRect().height};
+  };
+  return {allowOnce: read('.pf-btn-primary'), deny: read('.pf-btn-deny'),
+          always: read('[data-pf-action="accept_all"]'), note: read('[data-pf-note-open]')};
+}"""
+
+
+class TestActionHierarchyWithTheNote:
+    """TestActionHierarchy, for the two quiet controls by name: Always allow and "Deny with a
+    note…" are both links that never outrank Deny or Allow once, with one candidate and with two."""
+
+    @pytest.mark.parametrize("color_scheme", ["light", "dark"])
+    @pytest.mark.parametrize("width", [393, 1000])
+    @pytest.mark.parametrize("candidates", [1, 2])
+    def test_the_note_opener_and_always_allow_are_quiet_links(self, browser, color_scheme, width, candidates):
+        from privacyfence.card_builder import build_card_html
+
+        html = build_card_html(
+            title="Send email", preview={"To": "a@b.com"}, details_text="body", is_read=False, layout="narrow",
+            accept_all_choices=[(f"rule-{i}", f"Always allow — option {i}") for i in range(candidates)],
+        )
+        ctx = browser.new_context(viewport={"width": width, "height": 800}, color_scheme=color_scheme)
+        try:
+            page = ctx.new_page()
+            page.set_content(html)
+            styles = page.evaluate(_NOTE_ACTION_STYLES_JS)
+        finally:
+            ctx.close()
+        allow_once, deny = styles["allowOnce"], styles["deny"]
+        for quiet in (styles["always"], styles["note"]):
+            assert _css_rgba(quiet["bg"])[3] == 0, styles
+            assert quiet["borderWidth"] == 0 or quiet["borderStyle"] == "none", styles
+            assert quiet["underline"], styles
+            assert quiet["fontSize"] < deny["fontSize"] == allow_once["fontSize"], styles
+            assert quiet["height"] < deny["height"] == allow_once["height"], styles
+
+
+# --------------------------------------------------------------------- #
+# "Deny selected with a note…" on the approval list (ADR 0083): the list's toolbar opens the same
+# panel as the card (deny_note_html.batch_panel_html), and its submit denies every selected request
+# with the one note. The row's Deny and plain Deny selected stay one click with no note.
+# --------------------------------------------------------------------- #
+
+
+def _open_list_with(page, server, approvals) -> None:
+    page.goto(f"{server.base_url}/approvals")
+    page.wait_for_load_state("load")
+    for approval in approvals:
+        page.wait_for_selector(f'[data-select="{approval.id}"]')
+
+
+def _decide_posts(page) -> list[tuple[str, dict]]:
+    """Every decide POST the page makes from now on, as (approval id, JSON body)."""
+    posts: list[tuple[str, dict]] = []
+
+    def record(request):
+        if request.method == "POST" and request.url.endswith("/decide"):
+            posts.append((request.url.split("/api/approvals/")[1].split("/")[0], request.post_data_json))
+
+    page.on("request", record)
+    return posts
+
+
+class TestListDenyNote:
+    @pytest.mark.parametrize("width", ["desktop", "393", "320"])
+    def test_two_selected_requests_denied_with_one_note(self, browser, note_mode, width):
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, width)
+        thread_a, a = _register_note_card(web_ui, principal)
+        thread_b, b = _register_note_card(web_ui, principal)
+        try:
+            sign_in(context, page)
+            _open_list_with(page, server, (a, b))
+            opener = page.locator("#pf-deny-selected-note")
+            assert opener.is_disabled() and page.locator("#pf-deny-note").is_hidden()
+            page.locator(f'[data-select="{a.id}"]').check()
+            page.locator(f'[data-select="{b.id}"]').check()
+            assert opener.is_enabled()
+            opener.click()
+            page.wait_for_selector("#pf-deny-note", state="visible")
+            assert opener.get_attribute("aria-expanded") == "true"
+            assert page.evaluate("document.activeElement.id") == "pf-deny-note-text"
+            # The rows carry the marker; the panel opens empty all the same.
+            assert _NOTE_MARKER not in page.locator("#pf-deny-note").inner_html()
+            assert page.locator("#pf-deny-note-text").input_value() == ""
+            submit = page.locator("#pf-deny-note [data-pf-note-submit]")
+            assert submit.text_content() == "Deny 2 and send"
+            assert page.locator("#pf-deny-note-help-batch").text_content() == (
+                "The same note goes to every selected request."
+            )
+            page.locator("#pf-deny-note label.chip", has_text="Wrong target").click()
+            page.locator("#pf-deny-note-text").fill(_NOTE_TYPED)
+            assert page.locator("#pf-deny-note-count").text_content() == f"{len(_NOTE_TYPED)} / 500"
+            if width != "desktop":
+                _phone_screenshot(page, f"list-deny-note-{width}")
+                _assert_phone_layout(page, width, main=".pf-shell-main > *")
+            posts = _decide_posts(page)
+            submit.click()
+            for approval in (a, b):
+                page.wait_for_selector(f'[data-approval-id="{approval.id}"]', state="detached", timeout=5000)
+            thread_a.join(timeout=5)
+            thread_b.join(timeout=5)
+            assert not thread_a.is_alive() and not thread_b.is_alive()
+            assert sorted(approval_id for approval_id, _body in posts) == sorted([a.id, b.id])
+            for _approval_id, body in posts:
+                assert body["result"] == "deny"
+                assert body["note"] == _NOTE_TYPED and body["intent"] == "wrong_target", body
+            expected = denial_message(DenialFeedback("wrong_target", _NOTE_TYPED))
+            assert _the_agent_is_told(web_ui, a, principal) == expected
+            assert _the_agent_is_told(web_ui, b, principal) == expected
+            # The note is spent: the panel closed with the selection, and starts empty next time.
+            page.wait_for_selector("#pf-deny-note", state="hidden")
+            assert page.locator("#pf-deny-note-text").input_value() == ""
+            assert page.locator("#pf-deny-note input:checked").count() == 0
+            assert page.locator("#pf-deny-note-count").text_content() == "0 / 500"
+            assert opener.is_disabled()
+        finally:
+            _finish(web_ui, a, thread_a)
+            _finish(web_ui, b, thread_b)
+            context.close()
+
+    def test_a_409_for_one_id_counts_as_done_and_the_other_still_gets_the_note(self, browser, note_mode):
+        """A decided elsewhere between the click and its POST: its 409 removes its row like a
+        success, and B, still pending, is denied with the note. A keeps the answer it already had."""
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, "desktop")
+        thread_a, a = _register_note_card(web_ui, principal)
+        thread_b, b = _register_note_card(web_ui, principal)
+        principal_id = principal.id if principal else None
+        statuses: dict[str, int] = {}
+        try:
+            sign_in(context, page)
+            _open_list_with(page, server, (a, b))
+            page.locator(f'[data-select="{a.id}"]').check()
+            page.locator(f'[data-select="{b.id}"]').check()
+            page.locator("#pf-deny-selected-note").click()
+            page.locator("#pf-deny-note label.chip", has_text="Try another way").click()
+            page.locator("#pf-deny-note-text").fill(_NOTE_TYPED)
+
+            def decided_elsewhere_first(route):
+                assert web_ui.resolve(a.id, "deny", principal_id=principal_id)
+                route.continue_()
+
+            page.route(f"**/api/approvals/{a.id}/decide", decided_elsewhere_first)
+            page.on("response", lambda r: statuses.__setitem__(r.url, r.status) if r.url.endswith("/decide") else None)
+            posts = _decide_posts(page)
+            page.locator("#pf-deny-note [data-pf-note-submit]").click()
+            for approval in (a, b):
+                page.wait_for_selector(f'[data-approval-id="{approval.id}"]', state="detached", timeout=5000)
+            thread_a.join(timeout=5)
+            thread_b.join(timeout=5)
+            assert statuses[f"{server.base_url}/api/approvals/{a.id}/decide"] == 409, statuses
+            assert statuses[f"{server.base_url}/api/approvals/{b.id}/decide"] == 200, statuses
+            assert all(body["note"] == _NOTE_TYPED for _id, body in posts), posts
+            assert _the_agent_is_told(web_ui, a, principal) == denial_message(DenialFeedback())
+            assert _the_agent_is_told(web_ui, b, principal) == denial_message(
+                DenialFeedback("different_approach", _NOTE_TYPED)
+            )
+            page.wait_for_selector("#pf-deny-note", state="hidden")
+        finally:
+            _finish(web_ui, a, thread_a)
+            _finish(web_ui, b, thread_b)
+            context.close()
+
+    @pytest.mark.parametrize("width", ["desktop", "393"])
+    def test_the_row_deny_and_plain_deny_selected_still_send_no_note(self, browser, note_mode, width):
+        """With a note typed in the open panel, the row's Deny and plain Deny selected each still
+        post exactly {result, csrf}, and the agent gets the default text."""
+        server, web_ui, principal, sign_in = note_mode
+        context, page = _note_page(browser, width)
+        thread_a, a = _register_note_card(web_ui, principal)
+        thread_b, b = _register_note_card(web_ui, principal)
+        try:
+            sign_in(context, page)
+            _open_list_with(page, server, (a, b))
+            page.locator(f'[data-select="{b.id}"]').check()
+            page.locator("#pf-deny-selected-note").click()
+            page.locator("#pf-deny-note label.chip", has_text="Stop").click()
+            page.locator("#pf-deny-note-text").fill("not this one")
+            posts = _decide_posts(page)
+
+            page.locator(f'[data-approval-id="{a.id}"] [data-deny]').click()
+            page.wait_for_selector(f'[data-approval-id="{a.id}"]', state="detached", timeout=5000)
+            thread_a.join(timeout=5)
+            assert posts[0][0] == a.id and set(posts[0][1]) == {"result", "csrf"}, posts
+
+            page.locator("#pf-deny-selected").click()
+            page.wait_for_selector(f'[data-approval-id="{b.id}"]', state="detached", timeout=5000)
+            thread_b.join(timeout=5)
+            assert posts[1][0] == b.id and set(posts[1][1]) == {"result", "csrf"}, posts
+            assert _the_agent_is_told(web_ui, a, principal) == denial_message(DenialFeedback())
+            assert _the_agent_is_told(web_ui, b, principal) == denial_message(DenialFeedback())
+            # The panel closed with the selection and kept what was typed, as Cancel does.
+            page.wait_for_selector("#pf-deny-note", state="hidden")
+            assert page.locator("#pf-deny-note-text").input_value() == "not this one"
+        finally:
+            _finish(web_ui, a, thread_a)
+            _finish(web_ui, b, thread_b)
+            context.close()
+
+    def test_escape_closes_the_panel_and_the_label_follows_the_selection(self, browser, local_server):
+        server, web_ui = local_server
+        context, page = _note_page(browser, "desktop")
+        threads = [_register_note_card(web_ui, None) for _ in range(3)]
+        try:
+            _sign_in_local(page, server)
+            _open_list_with(page, server, [approval for _t, approval in threads])
+            for _t, approval in threads:
+                page.locator(f'[data-select="{approval.id}"]').check()
+            opener = page.locator("#pf-deny-selected-note")
+            opener.click()
+            submit = page.locator("#pf-deny-note [data-pf-note-submit]")
+            assert submit.text_content() == "Deny 3 and send"
+            page.locator(f'[data-select="{threads[0][1].id}"]').uncheck()
+            assert submit.text_content() == "Deny 2 and send"
+            page.locator("#pf-deny-note-text").fill("half a thought")
+            page.locator("#pf-deny-note-text").focus()
+            page.keyboard.press("Escape")
+            assert page.locator("#pf-deny-note").is_hidden()
+            assert opener.get_attribute("aria-expanded") == "false"
+            assert page.evaluate("document.activeElement.id") == "pf-deny-selected-note"
+            page.wait_for_timeout(300)
+            assert not any(approval.event.is_set() for _t, approval in threads)
+            opener.click()
+            assert page.locator("#pf-deny-note-text").input_value() == "half a thought"
+            # Emptying the selection closes the panel and disables the opener; nothing is decided.
+            page.locator("#pf-select-all-cb").check()
+            page.locator("#pf-select-all-cb").uncheck()
+            assert page.locator("#pf-deny-note").is_hidden() and opener.is_disabled()
+            assert not any(approval.event.is_set() for _t, approval in threads)
+        finally:
+            for thread, approval in threads:
+                _finish(web_ui, approval, thread)
+            context.close()

@@ -6,7 +6,9 @@ to prevent, so there is no "Allow" button here at all -- only "Review",
 which opens the real card (ADR 0065).
 
 Within the action cluster the order is Details, Review, Deny -- Deny last,
-not adjacent to Review. Row controls are a 44px target at phone widths but
+not adjacent to Review. The row's Deny carries no note and never will: a
+row is denied with one tap, and someone who wants to explain opens the card
+with Review, or selects the row and uses *Deny selected with a note…*. Row controls are a 44px target at phone widths but
 only ~30px above them, and Deny resolves an approval outright with no undo
 path anywhere in the flow; putting the destructive control at the far end
 of the cluster rather than one 8px gap from the safe one is the cheapest
@@ -45,6 +47,13 @@ approvals that covers. The binder has:
 - **Deny-selected**, client-side over the existing per-id decide endpoint --
   denying leaks nothing and needs no step-up, so it needs no batch
   endpoint;
+- **Deny selected with a note…**, a quiet link after Deny selected that
+  only opens the deny note panel (deny_note_html.batch_panel_html, the
+  card's panel plus "The same note goes to every selected request.")
+  between the toolbar and the list. Its submit, *Deny N and send*, runs the
+  same per-id fan-out with ``{note, intent}`` on every POST (ADR 0083). A
+  409 counts as done there as it does for Deny selected; the note only
+  reaches the ids that were still pending;
 - an inline "Details" disclosure sourced from ``GET /api/approvals/{id}/
   preview`` (the ``preview`` dict gate.py stamped at registration --
   metadata only, docs/coding-and-testing-guidelines.md §1.5), rendered with
@@ -70,6 +79,16 @@ button's own label names the selected set's composition -- "Approve 12 ·
 9 reads, 3 writes" -- so an
 unintended write can't hide inside a read-shaped batch.
 
+The toolbar's order is Select all, the count, Approve selected, Deny
+selected, then *Deny selected with a note…*: the plain deny stays one click
+with no note, exactly as on the card, and the note control is the last and
+quietest thing in the row (a link, like the card's *Deny with a note…*). It
+is disabled with the other two whenever nothing is selected, and an open
+panel closes, keeping its text, when the selection empties. Escape closes an
+open panel and decides nothing; this page has no Escape-to-deny. The panel's
+submit label follows the selection (*Deny 3 and send*), so the count the
+note goes to is on the button that sends it.
+
 Selection lives in a JS ``Set`` keyed by approval id (``pfSelected``,
 module-scoped closure state) and survives ``window.__pfRenderApprovals``'s
 own wholesale ``innerHTML`` replace on every SSE tick: ``render()`` below
@@ -92,8 +111,13 @@ from typing import Any
 from . import agent_label, approval_icons
 from .agent_identity import UNKNOWN_AGENT, UNRECOGNISED_LABEL
 from .agent_label import NOT_VERIFIED, TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN, UNKNOWN_AGENT_LABEL
+from .deny_note_html import PANEL_JS as _DENY_NOTE_JS
+from .deny_note_html import batch_panel_html as _deny_note_panel_html
 
 _AGENT_TIERS = (TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN)
+
+# The deny note panel's id (deny_note_html.batch_panel_html's prefix) on the list; _JS names it too.
+_DENY_NOTE_ID = "pf-deny-note"
 
 _EMPTY_STATE = (
     '<div class="pf-approvals-empty">'
@@ -168,6 +192,15 @@ _CSS = """
    not also be the loudest. The composition label on it ("Approve 12 · 9
    reads, 3 writes") stays -- that part is the guard, not the problem. */
 .pf-approvals-page .button { min-height: var(--tap); padding: 0 14px; font-size: var(--step-small); white-space: nowrap; }
+/* "Deny selected with a note…": a quiet link, like the card's "Deny with a note…" and never
+   louder than Deny selected beside it. It only opens the panel below the toolbar. */
+.pf-btn-deny-note {
+  min-height: var(--tap); padding: 0 4px; background: none; border: none; cursor: pointer;
+  font: inherit; font-size: var(--step-small); color: var(--ink-soft);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.pf-btn-deny-note:disabled { opacity: .45; cursor: default; }
+.pf-approvals-page .pf-deny-note { margin-bottom: 12px; }
 .pf-approval-group { margin-bottom: var(--space-s); }
 .pf-approval-group-header {
   display: flex; align-items: center; gap: 8px; padding: 0 4px; font-size: var(--step-small);
@@ -278,6 +311,8 @@ _CSS = """
   .pf-selected-count:empty { display: none; }
   .pf-btn-approve-selected { grid-column: 1; }
   .pf-btn-deny-selected { grid-column: 2; }
+  /* Under Deny selected, the decision it belongs to. */
+  .pf-btn-deny-note { grid-column: 2; }
 }
 """
 
@@ -521,6 +556,15 @@ _JS = """
     }
     var denyBtn = document.getElementById('pf-deny-selected');
     if (denyBtn) { denyBtn.disabled = selectedCount === 0; }
+    var noteBtn = document.getElementById('pf-deny-selected-note');
+    if (noteBtn) { noteBtn.disabled = selectedCount === 0; }
+    var noteSubmit = document.querySelector('#pf-deny-note [data-pf-note-submit]');
+    if (noteSubmit) {
+      noteSubmit.disabled = selectedCount === 0;
+      if (selectedCount) { noteSubmit.textContent = 'Deny ' + selectedCount + ' and send'; }
+    }
+    // Nothing left to send it to: close the panel, keeping what was typed.
+    if (pfNote && pfNote.isOpen() && selectedCount === 0) { pfNote.close(); }
     var selectAll = document.getElementById('pf-select-all-cb');
     if (selectAll) {
       selectAll.checked = ids.length > 0 && selectedCount === ids.length;
@@ -567,10 +611,16 @@ _JS = """
   }
   window.__pfRenderApprovals = render;
 
-  function denyOne(id) {
+  // `feedback` is the note panel's {note, intent}, each only when non-empty
+  // (pfDenyNotePanel's getFeedback); the row's Deny and plain Deny selected
+  // pass none, so their body is exactly {result, csrf}.
+  function denyOne(id, feedback) {
+    var body = {result: 'deny', csrf: %(csrf)s};
+    if (feedback && feedback.note) { body.note = feedback.note; }
+    if (feedback && feedback.intent) { body.intent = feedback.intent; }
     return fetch('/api/approvals/' + encodeURIComponent(id) + '/decide', {
       method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({result: 'deny', csrf: %(csrf)s}),
+      body: JSON.stringify(body),
     });
   }
 
@@ -591,24 +641,76 @@ _JS = """
     });
   }
 
-  function denySelected() {
+  // Deny selected (no feedback) and the note panel's Deny N and send (the
+  // panel's feedback, sent on every per-id POST). A 409 (already decided
+  // elsewhere) counts as done either way. pfDenying guards the panel's
+  // Ctrl/Cmd+Enter, which reaches onSubmit even while its button is disabled.
+  var pfDenying = false;
+
+  function denySelected(feedback) {
     var ids = Array.from(pfSelected);
-    if (!ids.length) return;
-    var denyBtn = document.getElementById('pf-deny-selected');
-    if (denyBtn) { denyBtn.disabled = true; }
+    if (!ids.length || pfDenying) return;
+    pfDenying = true;
+    ['pf-deny-selected', 'pf-deny-selected-note'].forEach(function (btnId) {
+      var btn = document.getElementById(btnId);
+      if (btn) { btn.disabled = true; }
+    });
+    var noteSubmit = document.querySelector('#pf-deny-note [data-pf-note-submit]');
+    if (noteSubmit) { noteSubmit.disabled = true; }
     Promise.all(ids.map(function (id) {
-      return denyOne(id).then(function (r) {
+      return denyOne(id, feedback).then(function (r) {
         if (r.ok || r.status === 409) {
           var row = document.querySelector('[data-approval-id="' + id + '"]');
           if (row) { row.remove(); }
           pfSelected.delete(id);
         }
         return r;
-      });
+      }, function () { return {ok: false, status: 0}; });
     })).then(function (results) {
+      pfDenying = false;
       updateToolbar(pfLastRows);
+      // Every id got its answer: the note is spent, so the next batch starts
+      // from an empty panel. If some failed they stay selected, and the
+      // panel keeps the note for trying again.
+      if (feedback && !pfSelected.size) { resetNote(); }
       if (results.some(function (r) { return r.ok; }) && window.__pfNotifPrompt) { window.__pfNotifPrompt(); }
     });
+  }
+
+  // The note panel (deny_note_html.batch_panel_html, whose PANEL_JS runs
+  // first in the same <script>). "Deny selected with a note…" only opens
+  // and closes it; its submit is what denies. Nothing but the person's
+  // typing fills it: the only write to the textarea is resetNote()'s ''.
+  var pfNoteOpener = document.getElementById('pf-deny-selected-note');
+  var pfNote = window.pfDenyNotePanel && window.pfDenyNotePanel('pf-deny-note', {
+    onSubmit: function (feedback) { denySelected(feedback); },
+    onClose: function () {
+      if (!pfNoteOpener) return;
+      pfNoteOpener.setAttribute('aria-expanded', 'false');
+      if (!pfNoteOpener.disabled) { pfNoteOpener.focus(); }
+    }
+  });
+
+  function toggleNote() {
+    if (!pfNote || !pfNoteOpener || pfNoteOpener.disabled) return;
+    if (pfNote.isOpen()) {
+      pfNote.close();
+    } else {
+      pfNoteOpener.setAttribute('aria-expanded', 'true');
+      pfNote.open();
+    }
+  }
+
+  function resetNote() {
+    var text = document.getElementById('pf-deny-note-text');
+    if (text) {
+      text.value = '';
+      text.dispatchEvent(new Event('input'));
+    }
+    // A second click on the chosen chip clears it (pfDenyNotePanel's own
+    // rule), which also keeps the panel's idea of the chosen chip in step.
+    var chosen = document.querySelector('#pf-deny-note input[type="radio"]:checked');
+    if (chosen) { chosen.click(); }
   }
 
   // The approval binder's own batch-approve path: a single POST to the
@@ -791,7 +893,17 @@ _JS = """
     var detailsBtn = e.target.closest('[data-details]');
     if (detailsBtn) { toggleDetails(detailsBtn.getAttribute('data-details')); return; }
     if (e.target.id === 'pf-deny-selected') { denySelected(); return; }
+    if (e.target.id === 'pf-deny-selected-note') { toggleNote(); return; }
     if (e.target.id === 'pf-approve-selected') { approveSelected(); return; }
+  });
+
+  // Escape closes an open note panel and decides nothing (the text is
+  // kept). Unlike the card, this page has no Escape-to-deny to fall through to.
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && pfNote && pfNote.isOpen()) {
+      e.preventDefault();
+      pfNote.close();
+    }
   });
 
   document.addEventListener('change', function (e) {
@@ -1202,6 +1314,9 @@ def _toolbar_html(*, any_batchable: bool, hidden: bool) -> str:
         "Approve selected</button>"
         '<button type="button" class="button danger pf-btn-deny-selected" id="pf-deny-selected" disabled>'
         "Deny selected</button>"
+        '<button type="button" class="pf-btn-deny-note" id="pf-deny-selected-note" '
+        f'aria-expanded="false" aria-controls="{_DENY_NOTE_ID}" disabled>'
+        "Deny selected with a note…</button>"
         "</div>"
     )
 
@@ -1259,7 +1374,10 @@ def build_list_html(
         # first paint had rows is an element the live re-render can't reach.
         f'<div class="pf-approvals-heading" id="pf-approvals-heading">{_heading_html(rows)}</div>'
         + toolbar
+        # Hidden until "Deny selected with a note…" opens it; see _JS.
+        + _deny_note_panel_html(_DENY_NOTE_ID, "Deny selected and send")
         + f'<div id="pf-approvals-list">{body}</div>'
         "</div>"
-        f'<script nonce="{nonce}">{js}</script>'
+        # PANEL_JS first, outside the %-formatted _JS: it defines window.pfDenyNotePanel.
+        f'<script nonce="{nonce}">{_DENY_NOTE_JS}{js}</script>'
     )

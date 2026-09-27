@@ -44,6 +44,7 @@ import yaml
 from privacyfence import approval_ui, auto_accept, gate
 from privacyfence.approvals import IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
+from privacyfence.deny_feedback import DenialFeedback, denial_message
 from privacyfence.pii_detector import init_pii_detection
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
@@ -1168,10 +1169,14 @@ class TestProposePolicyChange:
 
     async def test_declined_confirmation_raises_and_persists_nothing(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)
-        with pytest.raises(RuntimeError, match="denied by user"):
+        with pytest.raises(gate.GateDeniedError) as excinfo:
             await gate.propose_policy_change(
                 operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
             )
+        # The confirm's Cancel carries no feedback, but gets the clearer default (ADR 0083).
+        assert str(excinfo.value) == (
+            "Request denied by user. Don't retry the same call; ask the user how to proceed."
+        )
         assert auto_accept.get_policy_v2_rules() == []
 
     async def test_unattended_connection_denies_without_showing_a_popup(self, monkeypatch, audit_dir):
@@ -3716,3 +3721,155 @@ class TestAgentAttribution:
         assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
             "chatgpt", "ChatGPT", "1.0", "oauth_client",
         )
+
+
+class TestDenyFeedback:
+    """ADR 0083/0084: a human's deny feedback reaches the agent through
+    GateDeniedError.by_user on the synchronous path and on a re-issue inside
+    the ledger TTL; the audit log records only that it was given."""
+
+    NOTE = "Only send it to Anna -- MARKER-7f3e"
+    FB = DenialFeedback("wrong_target", NOTE)
+    DEFAULT = "Request denied by user. Don't retry the same call; ask the user how to proceed."
+
+    def _registry(self, monkeypatch, **overrides):
+        kwargs = dict(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        kwargs.update(overrides)
+        registry = PendingApprovalRegistry(**kwargs)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return registry
+
+    async def _deny_first_pending(self, registry, feedback):
+        assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+        [card] = registry.list_pending()
+        assert registry.answer(card.id, "deny", feedback=feedback)
+        return card.id
+
+    def _assert_note_absent(self, audit_dir, caplog):
+        raw = "".join(p.read_text(encoding="utf-8") for p in audit_dir.glob("*.jsonl"))
+        assert "MARKER-7f3e" not in raw
+        assert all("MARKER-7f3e" not in r.getMessage() for r in caplog.records)
+
+    def test_by_user_builds_the_message(self):
+        exc = gate.GateDeniedError.by_user(self.FB)
+        assert isinstance(exc, gate.GateDeniedError)
+        assert str(exc) == denial_message(self.FB)
+        assert str(gate.GateDeniedError.by_user(DenialFeedback())) == self.DEFAULT
+
+    @pytest.mark.parametrize("gate_kind,tool", [("review", "gmail_get_message"), ("popup", "gmail_create_draft")])
+    async def test_sync_path_raises_with_the_feedback_and_audits_only_its_shape(
+        self, monkeypatch, audit_dir, caplog, gate_kind, tool,
+    ):
+        caplog.set_level("DEBUG")
+        registry = self._registry(monkeypatch)
+        with pytest.raises(gate.GateDeniedError) as excinfo:
+            await asyncio.gather(
+                gate.gated_call(**base_kwargs(gate=gate_kind, tool=tool)),
+                self._deny_first_pending(registry, self.FB),
+            )
+        assert str(excinfo.value) == denial_message(self.FB)
+        assert str(excinfo.value).startswith("Request denied by user.")
+
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "rejected"
+        assert entry["deny_intent"] == "wrong_target"
+        assert entry["deny_note_chars"] == len(self.NOTE)
+        self._assert_note_absent(audit_dir, caplog)
+
+    @pytest.mark.parametrize("gate_kind,tool", [("review", "gmail_get_message"), ("popup", "gmail_create_draft")])
+    async def test_plain_deny_gets_the_default_text(self, monkeypatch, audit_dir, gate_kind, tool):
+        registry = self._registry(monkeypatch)
+        with pytest.raises(gate.GateDeniedError) as excinfo:
+            await asyncio.gather(
+                gate.gated_call(**base_kwargs(gate=gate_kind, tool=tool)),
+                self._deny_first_pending(registry, DenialFeedback()),
+            )
+        assert str(excinfo.value) == self.DEFAULT
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["deny_intent"], entry["deny_note_chars"]) == ("", 0)
+
+    @pytest.mark.parametrize("gate_kind,tool", [("review", "gmail_get_message"), ("popup", "gmail_create_draft")])
+    async def test_no_registry_path_gets_the_default_text(self, monkeypatch, audit_dir, gate_kind, tool):
+        # interact(None): the registry-less ApprovalUI has no approval a
+        # decide POST could attach feedback to.
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("deny", None))
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("deny", None))
+        with pytest.raises(gate.GateDeniedError) as excinfo:
+            await gate.gated_call(**base_kwargs(gate=gate_kind, tool=tool))
+        assert str(excinfo.value) == self.DEFAULT
+
+    @pytest.mark.parametrize("gate_kind,tool", [("review", "gmail_get_message"), ("popup", "gmail_create_draft")])
+    async def test_reissue_inside_the_ledger_ttl_raises_the_same_message(
+        self, monkeypatch, audit_dir, caplog, gate_kind, tool,
+    ):
+        caplog.set_level("DEBUG")
+        registry = self._registry(monkeypatch, hold_window=0.05)
+        kwargs = base_kwargs(gate=gate_kind, tool=tool)
+
+        first = await gate.gated_call(**kwargs)
+        assert first["status"] == "approval_pending"
+        approval = registry.get(first["approval_id"])
+        registry.answer(approval.id, "deny", feedback=self.FB)
+        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+
+        with pytest.raises(gate.GateDeniedError) as excinfo:
+            await gate.gated_call(**kwargs)
+        assert str(excinfo.value) == denial_message(self.FB)
+
+        entries = read_audit_entries(audit_dir)
+        assert [e["decision"] for e in entries] == ["approval_pending", "rejected"]
+        assert (entries[0]["deny_intent"], entries[0]["deny_note_chars"]) == ("", 0)
+        assert (entries[1]["deny_intent"], entries[1]["deny_note_chars"]) == ("wrong_target", len(self.NOTE))
+        self._assert_note_absent(audit_dir, caplog)
+
+    async def test_uncollected_deny_expires_with_the_feedback_shape(self, monkeypatch, audit_dir, caplog):
+        caplog.set_level("DEBUG")
+        registry = self._registry(monkeypatch, hold_window=0.05, ledger_ttl=0.05)
+        first = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        approval = registry.get(first["approval_id"])
+        registry.answer(approval.id, "deny", feedback=self.FB)
+        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+
+        await asyncio.sleep(0.1)  # past the ledger TTL, nobody collected it
+        gate._pop_registry_expirations(registry)
+
+        entries = read_audit_entries(audit_dir)
+        assert [e["decision"] for e in entries] == ["approval_pending", "expired"]
+        assert entries[1]["deny_intent"] == "wrong_target"
+        assert entries[1]["deny_note_chars"] == len(self.NOTE)
+        self._assert_note_absent(audit_dir, caplog)
+
+    async def test_uncollected_approval_expires_without_feedback_fields(self, monkeypatch, audit_dir):
+        registry = self._registry(monkeypatch, hold_window=0.05, ledger_ttl=0.05)
+        first = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        approval = registry.get(first["approval_id"])
+        registry.answer(approval.id, "accept")
+        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+        await asyncio.sleep(0.1)
+        gate._pop_registry_expirations(registry)
+        expired = read_audit_entries(audit_dir)[-1]
+        assert expired["decision"] == "expired"
+        assert (expired["deny_intent"], expired["deny_note_chars"]) == ("", 0)
+
+    async def test_crash_to_deny_carries_no_feedback(self, monkeypatch, audit_dir):
+        # The interaction itself failed after a noted deny was posted: the
+        # deny that results is not the human's, so the agent gets the default.
+        self._registry(monkeypatch)
+        seen = []
+
+        def crashing_popup(*args, approval=None, **kwargs):
+            seen.append(approval)
+            approval.answer("deny", feedback=self.FB)
+            raise RuntimeError("card renderer blew up")
+
+        monkeypatch.setattr(gate, "show_popup", crashing_popup)
+        with pytest.raises(gate.GateDeniedError) as excinfo:
+            await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        [approval] = seen
+        assert str(excinfo.value) == self.DEFAULT
+        assert approval.deny_feedback == DenialFeedback()
+        assert read_audit_entries(audit_dir)[-1]["deny_note_chars"] == 0

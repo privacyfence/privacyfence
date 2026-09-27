@@ -65,7 +65,8 @@ logger = logging.getLogger(__name__)
 #   4 -- rule attribution and staleness (ADR 0074): + rule_id
 #   5 -- agent attribution (ADR 0006, ADR 0035): + agent_id, agent_name,
 #        agent_version, agent_source
-CURRENT_SCHEMA_VERSION = 5
+#   6 -- deny feedback (ADR 0084): + deny_intent, deny_note_chars
+CURRENT_SCHEMA_VERSION = 6
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -367,6 +368,13 @@ class AuditEntry:
     agent_name: str = ""     # display name, or the sanitized claimed name for an unmatched client
     agent_version: str = ""  # sanitized claimed version; never verified
     agent_source: str = ""   # "override" | "oauth_client" | "client_info" | "endpoint" | ""
+    # ---- Deny feedback (schema 6, ADR 0084) ----
+    # That the human who denied this request told the agent why, never what they said. Set on a
+    # "rejected" entry, and on the "expired" entry for a deny no call ever collected; "" / 0 on
+    # every other entry, on a plain Deny, and on every entry recorded before these fields existed.
+    # The note's text is deliberately not recorded anywhere (see deny_feedback.py).
+    deny_intent: str = ""     # one of deny_feedback.INTENTS' keys, or ""
+    deny_note_chars: int = 0  # length of the sanitized note; 0 for none
 
     # ---- Hash-chain and provenance fields ----
     # All six below default to a value meaning "not yet stamped" and are
@@ -718,10 +726,13 @@ class AuditLogger:
             # "oauth_client" are attested.
             "AI System ID", "AI System", "AI System Version (claimed)",
             "AI System Source (only override/oauth_client are verified)",
+            # Deny feedback (schema 6): appended last, same reason again. The note's
+            # text is never recorded (ADR 0084), only its length.
+            "Deny Intent", "Deny Note Length (chars)",
         ]
         COL_WIDTHS = [
             22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30, 14,
-            24, 24, 16, 22,
+            24, 24, 16, 22, 18, 14,
         ]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
@@ -775,6 +786,7 @@ class AuditLogger:
                 entry.rule_id or "",
                 _excel_literal(entry.agent_id or ""), _excel_literal(entry.agent_name or ""),
                 _excel_literal(entry.agent_version or ""), entry.agent_source or "",
+                entry.deny_intent or "", entry.deny_note_chars or "",
             ])
             fill = decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):

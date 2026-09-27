@@ -1251,3 +1251,181 @@ class TestApprovalsStream:
         sessions.destroy(session_id)
         with pytest.raises(StopAsyncIteration):
             await it.__anext__()
+
+
+class TestDenyWithFeedback:
+    """ADR 0083 in org mode: the same decide route, scoped by principal. A
+    noted deny reaches the deciding principal's own agent, never steps up,
+    and never reaches anyone else's."""
+
+    NOTE = "Only Anna, not the team -- ORG-NOTE-MARKER"
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch, tmp_path):
+        from privacyfence import gate
+        from privacyfence.audit_log import init_audit_logger
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        init_audit_logger(str(tmp_path / "audit"))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", lambda *a, **k: (False, "", ""))
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return tmp_path
+
+    def _post(self, client, session_id, approval_id, **body):
+        return client.post(f"/api/approvals/{approval_id}/decide", json={"csrf": session_id, **body})
+
+    def test_passes_through_to_the_principals_agent(self, caplog):
+        import asyncio
+        import threading
+        import time
+
+        from privacyfence import approval_ui, gate
+        from privacyfence.deny_feedback import DenialFeedback, denial_message
+
+        caplog.set_level("DEBUG")
+        web_ui = WebApprovalUI(registry=PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0))
+        app, sessions, web_ui = _app(web_ui=web_ui)
+        approval_ui.init_approval_ui(web_ui)
+        box: dict = {}
+
+        def run():
+            with principal_scope(ALICE):
+                try:
+                    asyncio.run(gate.gated_call(
+                        connector="gmail", tool="gmail_send_email", tool_name="Send", summary="a message",
+                        sender="", raw_data=None, filtered_data={"ok": True}, gate="popup",
+                        preview={"To": "a@b.com"}, details_text="body", my_email="alice@example.com",
+                    ))
+                except Exception as exc:  # noqa: BLE001 -- inspected below
+                    box["exc"] = exc
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not web_ui.deferred_registry.list_pending(ALICE.id):
+            time.sleep(0.01)
+        [card] = web_ui.deferred_registry.list_pending(ALICE.id)
+
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = self._post(client, session_id, card.id, result="deny", note=self.NOTE, intent="wrong_target")
+        assert r.status_code == 200, r.text
+        t.join(timeout=3)
+        assert str(box["exc"]) == denial_message(DenialFeedback("wrong_target", self.NOTE))
+        assert all("ORG-NOTE-MARKER" not in rec.getMessage() for rec in caplog.records)
+
+    def test_foreign_principal_cannot_attach_feedback(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, BOB)
+        r = self._post(client, session_id, approval.id, result="deny", note="bob was here", intent="stop")
+        assert r.status_code == 409
+        assert not approval.event.is_set()
+        assert approval.deny_feedback.is_empty
+
+    def test_over_long_and_control_characters(self):
+        app, sessions, web_ui = _app()
+        too_long = _register(web_ui, ALICE, dedupe_key="a1")
+        cleaned = _register(web_ui, ALICE, dedupe_key="a2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        assert self._post(client, session_id, too_long.id, result="deny", note="x" * 501).status_code == 400
+        assert not too_long.event.is_set()
+        r = self._post(client, session_id, cleaned.id, result="deny", note="\u202eok\u200b\x07 ")
+        assert r.status_code == 200
+        assert cleaned.deny_feedback.note == "ok"
+
+    def test_feedback_on_accept_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = self._post(client, session_id, approval.id, result="accept", note="and also delete the rest")
+        assert r.status_code == 400
+        assert not approval.event.is_set()
+
+    def test_csrf_is_enforced_first(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE)
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.post(
+            f"/api/approvals/{approval.id}/decide",
+            json={"result": "accept", "note": "x" * 900, "csrf": "wrong"},
+        )
+        assert r.status_code == 401
+
+    def test_double_submit_keeps_the_first_feedback(self):
+        from privacyfence.deny_feedback import DenialFeedback
+
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE)
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        assert self._post(client, session_id, approval.id, result="deny", note="first").status_code == 200
+        assert self._post(client, session_id, approval.id, result="deny", note="second").status_code == 409
+        assert approval.deny_feedback == DenialFeedback(note="first")
+
+    def test_noted_deny_on_a_write_with_require_passkey_and_nothing_enrolled_never_steps_up(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = self._post(client, session_id, approval.id, result="deny", note="use the team drive", intent="rewrite")
+        assert r.status_code == 200
+        assert r.json() == {"status": "ok"}
+        assert approval.deny_feedback.intent == "rewrite"
+
+    def test_noted_deny_on_a_write_with_a_passkey_enrolled_never_steps_up(self):
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_reads"),
+        )
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = self._post(client, session_id, approval.id, result="deny", note="no", intent="stop")
+        assert r.status_code == 200
+        assert "webauthn_options" not in r.json()
+        assert "idp_stepup_url" not in r.json()
+
+    def test_batch_decide_refuses_feedback(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE)
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "deny"}], "note": "x", "intent": "stop",
+        })
+        assert r.status_code == 400
+        assert not approval.event.is_set()
+
+    async def test_the_approvals_stream_never_carries_the_note(self, monkeypatch):
+        import asyncio
+
+        monkeypatch.setattr(routes_approvals, "_STREAM_POLL_SECONDS", 0.01)
+        app, sessions, web_ui = _app()
+        denied = _register(web_ui, ALICE, dedupe_key="a1")
+        _register(web_ui, ALICE, dedupe_key="a2")
+        session_id = sessions.create(ALICE)
+        endpoint, request = TestApprovalsStream._stream(app, session_id)
+        response = await endpoint(request)
+        it = response.body_iterator
+        try:
+            first = await it.__anext__()
+            client = _client(app)
+            client.cookies.set(org_session.SESSION_COOKIE, session_id)
+            r = self._post(client, session_id, denied.id, result="deny", note=self.NOTE, intent="stop")
+            assert r.status_code == 200
+            second = await asyncio.wait_for(it.__anext__(), timeout=5)
+        finally:
+            await it.aclose()
+        for chunk in (first, second):
+            assert "ORG-NOTE-MARKER" not in chunk
+        rows = json.loads(second.split("data: ", 1)[1])
+        assert denied.id not in {row["id"] for row in rows}

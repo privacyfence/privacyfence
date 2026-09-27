@@ -21,6 +21,7 @@ bug.
 """
 from __future__ import annotations
 
+import json
 import socket
 import time
 import uuid
@@ -123,7 +124,6 @@ def running_deferred_server(tmp_path, monkeypatch):
     init_audit_logger(str(tmp_path / "audit"))
 
     connector = GatedTestConnector()
-    dispatcher = McpDispatcher(lambda: {"gated_test": connector})
     # A hold window short enough that the first call reliably goes pending
     # inside this test's own patience, with no artificial sleep needed to
     # force it: the interaction really is still running (nothing has
@@ -133,6 +133,9 @@ def running_deferred_server(tmp_path, monkeypatch):
     registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=30.0, ledger_ttl=30.0)
     web_ui = WebApprovalUI(registry=registry)
     approval_ui.init_approval_ui(web_ui)
+    # The registry is handed to the dispatcher too, as daemon_main.py does,
+    # so privacyfence_await_approval can see the approvals this test makes.
+    dispatcher = McpDispatcher(lambda: {"gated_test": connector}, registry=registry)
 
     port = _free_port()
     server = WebServer(web_ui, host="localhost", port=port, mcp_dispatcher=dispatcher)
@@ -155,7 +158,7 @@ async def _call_gated_tool(server: WebServer, message: str):
                 )
 
 
-async def _decide(server: WebServer, approval_id: str, result: str) -> httpx.Response:
+async def _decide(server: WebServer, approval_id: str, result: str, **extra: str) -> httpx.Response:
     """Exactly what a human's browser does when they click Allow/Deny on a
     card at /approvals/{id} -- the session cookie doubles as the CSRF token
     (session_auth.py's own check_csrf), same as
@@ -166,7 +169,7 @@ async def _decide(server: WebServer, approval_id: str, result: str) -> httpx.Res
     ) as http_client:
         return await http_client.post(
             f"/api/approvals/{approval_id}/decide",
-            json={"result": result, "csrf": session_id},
+            json={"result": result, "csrf": session_id, **extra},
         )
 
 
@@ -226,6 +229,52 @@ async def test_deferred_approval_round_trip_deny(running_deferred_server):
 
     second = await _call_gated_tool(server, "please deny me")
     assert second.is_error is True
+
+    assert len(connector.calls) == 2
+    assert not (await _wait_and_list_pending(server))
+
+
+async def _await_approval(server: WebServer, approval_id: str):
+    headers = {"Authorization": f"Bearer {server.mcp_token}"}
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return await session.call_tool(
+                    "privacyfence_await_approval", {"approval_ids": [approval_id], "timeout_seconds": 5},
+                )
+
+
+async def test_deferred_approval_round_trip_deny_with_note(running_deferred_server):
+    """A deny POSTed with an intent and a note reaches the agent on both
+    collection paths (ADR 0083): privacyfence_await_approval reports it
+    under the reserved denial_feedback key, and the re-issued call inside
+    the ledger TTL raises the same message the synchronous path would."""
+    connector, server = running_deferred_server
+    note = 'Don\'t email the whole team. Just send it to "Anna".'
+
+    first = await _call_gated_tool(server, "please deny me with a note")
+    assert first.structured_content["status"] == "approval_pending"
+    approval_id = first.structured_content["approval_id"]
+
+    response = await _decide(server, approval_id, "deny", note=note, intent="wrong_target")
+    assert response.status_code == 200, response.text
+
+    awaited = await _await_approval(server, approval_id)
+    assert awaited.is_error is not True
+    body = awaited.structured_content or json.loads(awaited.content[0].text)
+    assert body[approval_id] == "denied"
+    feedback = body["denial_feedback"][approval_id]
+    assert feedback["intent"] == "wrong_target"
+    assert feedback["note"] == note
+    assert feedback["guidance"].startswith("The user says the target is wrong")
+
+    second = await _call_gated_tool(server, "please deny me with a note")
+    assert second.is_error is True
+    text = second.content[0].text
+    assert text.startswith("Request denied by user.")
+    assert 'The user chose "Wrong target"' in text
+    assert json.dumps(note, ensure_ascii=False) in text
 
     assert len(connector.calls) == 2
     assert not (await _wait_and_list_pending(server))

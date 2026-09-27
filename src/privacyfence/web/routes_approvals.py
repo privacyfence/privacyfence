@@ -105,8 +105,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import BaseRoute, Route
 
-from .. import approval_list_html, approval_window_html, web_shell, webauthn_stepup
+from .. import approval_list_html, approval_window_html, deny_feedback, web_shell, webauthn_stepup
 from ..approvals import BATCH_RESULTS, CONFIRM_RESULTS
+from ..deny_feedback import DenialFeedback
 from ..principal import Principal
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
@@ -155,6 +156,8 @@ _SW_JS = (Path(__file__).parent.parent / "resources" / "sw.js").read_text(encodi
 
 _DECIDED_MESSAGE = "Decision recorded."
 _DENIED_MESSAGE = "Denied."
+# After a deny that carried a note or an intent (the card's "Deny and send", ADR 0083).
+_DENIED_WITH_NOTE_MESSAGE = "Denied. Your note will go to the agent."
 _ALREADY_DECIDED_MESSAGE = "Already decided elsewhere."
 _FAILED_MESSAGE = "Could not record this decision — please reload and try again."
 
@@ -249,7 +252,10 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
     ``sessionStorage`` for the list page to show once. Only a genuine
     failure (network error, an unexpected status) leaves the card on screen
     with an inline message -- there is nothing to navigate back to for
-    those.
+    those. A deny whose payload carries a ``note`` or an ``intent`` (the
+    card's "Deny and send", ADR 0083) toasts ``_DENIED_WITH_NOTE_MESSAGE``
+    instead of ``_DENIED_MESSAGE``. Every key of the payload is forwarded
+    unchanged; the decide route validates them.
 
     A ``428`` means step-up is outstanding: when the body
     carries ``webauthn_options``, run the assertion ceremony
@@ -278,6 +284,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
         f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
         "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
+        "var withNote = payload.result === 'deny' && !!(payload.note || payload.intent);"
         "pfDecide(body).then(function(r){"
         "  if (r.status === 428) {"
         "    return r.json().then(function(data){"
@@ -298,7 +305,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
         "}).then(function(r){"
         "  if (r === null) { return; }"
         "  var msg = null;"
-        f"  if (r.ok) {{ msg = isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
+        f"  if (r.ok) {{ msg = withNote ? {_DENIED_WITH_NOTE_MESSAGE!r} : isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
         f"  else if (r.status === 409) {{ msg = {_ALREADY_DECIDED_MESSAGE!r}; }}"
         "  if (msg !== null) {"
         "    try { sessionStorage.setItem('pf_toast', JSON.stringify({msg: msg})); } catch (e) {}"
@@ -342,6 +349,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
         f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
         "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
+        "var withNote = payload.result === 'deny' && !!(payload.note || payload.intent);"
         "pfDecide(body).then(function(r){"
         "  if (r.status === 428) {"
         "    return r.json().then(function(data){"
@@ -383,7 +391,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         "}).then(function(r){"
         "  if (r === null) { return; }"
         "  var msg = null;"
-        f"  if (r.ok) {{ msg = isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
+        f"  if (r.ok) {{ msg = withNote ? {_DENIED_WITH_NOTE_MESSAGE!r} : isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
         f"  else if (r.status === 409) {{ msg = {_ALREADY_DECIDED_MESSAGE!r}; }}"
         "  if (msg !== null) {"
         "    try { sessionStorage.setItem('pf_toast', JSON.stringify({msg: msg})); } catch (e) {}"
@@ -651,6 +659,22 @@ def _build_route_list(
         if not isinstance(result, str):
             result = str(int(result))
 
+        # A human's deny feedback (ADR 0083). Only a deny may carry it: a
+        # note riding along on an approval would reach the agent together
+        # with the data it was just given, so any other result with either
+        # key is refused outright rather than silently dropping it.
+        feedback = DenialFeedback()
+        if "note" in payload or "intent" in payload:
+            if result != "deny":
+                return JSONResponse(
+                    {"status": "error", "error": "a note or intent can only accompany a deny"}, status_code=400,
+                )
+            try:
+                feedback = deny_feedback.parse(payload)
+            except ValueError as exc:
+                # parse() raises only static messages -- never the note itself.
+                return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
+
         approval = registry.get(approval_id, principal_id=principal.id)
         # A confirm dialog that is the whole gate on a config change rather
         # than a second step inside a card -- see approvals.
@@ -680,7 +704,7 @@ def _build_route_list(
         if stepup_response is not None:
             return stepup_response
 
-        accepted = web_ui.resolve(approval_id, result, choice, principal_id=principal.id)
+        accepted = web_ui.resolve(approval_id, result, choice, principal_id=principal.id, feedback=feedback)
         if not accepted:
             # Idempotent by design: the first accepted decision for
             # an id wins, any later one -- including a genuine double-submit
@@ -707,6 +731,13 @@ def _build_route_list(
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not check_origin(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        # Deny feedback goes through the per-id decide route only (the list's
+        # "Deny selected" fans out to it); refused here so nobody builds on an
+        # accidental pass-through (ADR 0083).
+        if "note" in payload or "intent" in payload:
+            return JSONResponse(
+                {"status": "error", "error": "the batch endpoint does not take a note or intent"}, status_code=400,
+            )
         items = payload.get("items")
         if not isinstance(items, list) or not items:
             return JSONResponse({"error": "missing items"}, status_code=400)

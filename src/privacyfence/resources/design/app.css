@@ -15,8 +15,8 @@
       destructive, sensitive data), warning (a write), info, success, each with a -soft tint for
       a background, plus the focus ring and the boundary of a form control. Colour is never the
       only cue: every place one of these is used also carries text, an icon or a border style.
-   3. Application components: field (input, select, textarea), toggle, tabstrip, badge, card and
-      panel. Each has hover, focus-visible, disabled and dark states, and every interactive one
+   3. Application components: field (input, select, textarea), toggle, chip, tabstrip, badge, card
+      and panel. Each has hover, focus-visible, disabled and dark states, and every interactive one
       is at least --tap (44 px) in both directions.
 
    tests/unit/test_design_contrast.py checks every text/background and boundary pair below in both
@@ -134,6 +134,22 @@ select.field { appearance: none; padding-right: 36px; background-image: linear-g
 .toggle input:disabled + .toggle-track { opacity: .5; border-style: dashed; }
 .toggle:has(input:disabled) { cursor: not-allowed; color: var(--muted); }
 
+/* ---- Chip: one choice from a short set, as a pill ------------------------------------------
+   <div class="cluster" role="radiogroup" aria-labelledby="…"><label class="chip"><input
+   type="radio" name="…" value="…"><span>Label</span></label>…</div>. Like the toggle, the label is
+   the tap target and the input stays focusable and announced, only its circle is hidden, so arrow
+   keys move between chips. A checked chip differs by its fill, its border and a check mark, not by
+   colour alone. A radio cannot be unchecked by clicking it; a page whose choice is optional clears
+   it in script (deny_note_html.py's panel does). */
+
+.chip { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--tap); min-width: var(--tap); padding: 0 14px; font-size: var(--step-small); font-weight: 650; line-height: 1.25; color: var(--ink-soft); background: var(--surface); border: 1px solid var(--control-line); border-radius: var(--radius-pill); cursor: pointer; user-select: none; transition: background .15s ease, border-color .15s ease; }
+.chip input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+.chip:hover { color: var(--ink); border-color: var(--ink-soft); }
+.chip:has(input:focus-visible) { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.chip:has(input:checked) { color: var(--accent-dark); background: var(--accent-soft); border-color: var(--accent); }
+.chip:has(input:checked)::before { content: "✓"; font-weight: 750; }
+.chip:has(input:disabled) { color: var(--muted); background: var(--surface-soft); border-style: dashed; cursor: not-allowed; }
+
 /* ---- Tabstrip: a row of tabs that scrolls inside itself when it does not fit --------------- */
 
 .tabstrip { display: flex; gap: 4px; padding: 4px; overflow-x: auto; scrollbar-width: thin; background: var(--surface-soft); border: 1px solid var(--line); border-radius: calc(var(--radius-s) + 4px); }
@@ -173,5 +189,5 @@ a.card:hover, .card-interactive:hover { border-color: var(--control-line); }
 .card-success { background: var(--success-soft); border-color: var(--success); }
 
 @media (prefers-reduced-motion: reduce) {
-  .field, .toggle-track, .toggle-track::after, .button { transition: none; }
+  .field, .toggle-track, .toggle-track::after, .chip, .button { transition: none; }
 }
