@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from privacyfence import (
+    agent_label,
     approval_ui,
     auto_accept,
     audit_log,
@@ -84,6 +85,10 @@ def _reset() -> None:
     # configure_popup_executor() is a no-op once the size already matches,
     # so this costs nothing on every other test.
     gate.configure_popup_executor(gate.DEFAULT_MAX_PENDING)
+    # agent_label's install mode is set once by daemon_main at startup
+    # (ADR 0088); a test that starts the daemon in org mode must not leave
+    # every later test rendering org-mode labels.
+    agent_label.set_local_mode(True)
 
 
 @pytest.fixture(autouse=True)
