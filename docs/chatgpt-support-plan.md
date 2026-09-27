@@ -1,9 +1,11 @@
 # Plan 2 of 3: ChatGPT support
 
-> **Temporary plan document** (see [`adr/README.md`](adr/README.md)): delete it in the PR that
-> finishes its last wave. Before deleting it, move every decision marked **→ ADR** below into an ADR.
-> It is listed in `scripts/build_site.py`'s `CONTRIBUTOR_DOCS` and in the contributor half of
-> [`README.md`](README.md); the retiring PR removes both entries.
+> **Temporary plan document; it lives only on branch `claude/bold-fermat-xlsdy4` and is never merged to `main`.**
+> Work-package sessions start from `main` and read it with
+> `git fetch origin claude/bold-fermat-xlsdy4 && git show FETCH_HEAD:docs/<plan>.md`. Their PRs never add plan files or
+> plan entries to `main`. Before the plan is finished, every decision marked **→ ADR** below goes
+> into an ADR on `main` (see [`adr/README.md`](adr/README.md)). ADRs cite issues and PRs, never
+> this plan.
 
 Covers [issue 390](https://github.com/privacyfence/privacyfence/issues/390) (ChatGPT desktop,
 local mode) and [issue 391](https://github.com/privacyfence/privacyfence/issues/391) (ChatGPT, org
@@ -36,7 +38,8 @@ It works the same way as plan 1: 🤖 waves of parallel work packages, and 🧑 
 wave, paste into a new Claude Code on the web session:
 
 ```text
-Implement WAVE <n> of docs/chatgpt-support-plan.md. You are the coordinator: one child session per
+Implement WAVE <n> of docs/chatgpt-support-plan.md. The plan lives only on branch claude/bold-fermat-xlsdy4:
+read it with `git fetch origin claude/bold-fermat-xlsdy4 && git show FETCH_HEAD:docs/chatgpt-support-plan.md`. You are the coordinator: one child session per
 work package (create_session, the package's "Session prompt" word for word plus this plan's §1),
 tagged "chatgpt-support:wave-<n>"; track each until its PR is green (get_session, send_later about
 hourly); then post a checklist of WP, PR, CI state, and unblocked 🧑 tasks. Start a package only
@@ -115,7 +118,7 @@ when its "Depends on" items are done.
 #### WP 1.1: re-source the ChatGPT vendor facts · research, no PR
 
 ```text
-Read docs/chatgpt-support-plan.md. Research only — no commits. From OpenAI's OWN pages (not
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header). Research only — no commits. From OpenAI's OWN pages (not
 aggregators), record URL + date for:
 (a) ChatGPT desktop MCP support: exists? config path, stdio vs url, custom headers?
 (b) Developer Mode menu path and OAuth redirect URI; the client_name ChatGPT registers with at
@@ -130,7 +133,7 @@ Summarize in chat anything that changes this plan.
 #### WP 1.2: seeded ChatGPT fixture and draft `connect-chatgpt.md` · `tests:` + draft PR
 
 ```text
-Read docs/chatgpt-support-plan.md §1–§2 and ai-client-qa.md. Implement WP 1.2 as TWO PRs:
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1–§2 and ai-client-qa.md. Implement WP 1.2 as TWO PRs:
 PR A (merge it) "tests: seeded ChatGPT handshake fixture": tests/fixtures/ai_clients/chatgpt/
 (register.json with redirect_uri https://chatgpt.com/connector_platform_oauth_redirect,
 initialize.json, README.md "SEEDED FROM VENDOR DOCS, NOT YET CAPTURED", citing sources, expected
@@ -202,7 +205,7 @@ per-client script and evidence format. Run each check under both annotation mode
 Depends on: M1.3 passed.
 
 ```text
-Read docs/chatgpt-support-plan.md and the M1 evidence on issues 390/391. Implement WP 2.1, taking
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) and the M1 evidence on issues 390/391. Implement WP 2.1, taking
 over WP 1.2's draft PR B:
 1. Replace the SEEDED chatgpt fixture with the captured one (scrubbed); README "captured <date>,
    client version <v>".
@@ -225,7 +228,7 @@ Then **🧑 M2**: cut a stable release that carries WP 2.1.
 Depends on: the release is published, and its `/docs/` has `connect-chatgpt`.
 
 ```text
-Read docs/chatgpt-support-plan.md §1–§2. Implement WP 2.2:
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1–§2. Implement WP 2.2:
 1. website/_data/clients.json: "ChatGPT", deployments ["organization"], connects "straight to an
    organization deployment's /mcp over HTTPS, with OAuth sign-in (Developer Mode)", slug chatgpt.
 2. website/ai-agents/chatgpt/index.html in the /ai-agents/ page structure (organization only and
@@ -264,7 +267,7 @@ Depends on: GATE A. WP 3.1 also needs M1.4's result.
   and point the docs at org mode.
 
 ```text
-Read docs/chatgpt-support-plan.md and the M1.4 result on issue 390. Implement WP 3.1, only the
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) and the M1.4 result on issue 390. Implement WP 3.1, only the
 branch matching that result. For (b): dispatch build.yml against your branch and confirm build,
 build-windows and build-deb are green before review; write the ADR. No website change. Run /dod;
 one PR; drive to green.
@@ -273,7 +276,7 @@ one PR; drive to green.
 #### WP 3.2: ChatGPT workspace-admin publishing (I391 Route B) · `chore:`
 
 ```text
-Read docs/chatgpt-support-plan.md (D13) and WP 1.1's findings on issue 391. Add a "ChatGPT
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) (D13) and WP 1.1's findings on issue 391. Add a "ChatGPT
 Business/Enterprise/Edu: workspace-published connector" section to connect-chatgpt.md, linked
 from org guide §9: the admin flow (enable custom MCP connectors → create → Scan Tools → test as
 draft → publish); what Scan Tools shows under each annotation mode (D13); a callout that
@@ -317,7 +320,7 @@ Then cut a stable release that carries WP 3.1 and WP 3.2.
 #### WP 3.3: website for Gate B · `feature:`
 
 ```text
-Read docs/chatgpt-support-plan.md. The latest stable release's connect-chatgpt.md carries the
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header). The latest stable release's connect-chatgpt.md carries the
 workspace section (and the desktop section, if WP 3.1 took (a) or (b)). Extend
 /ai-agents/chatgpt/ with workspace publishing (and desktop); clients.json's ChatGPT entry gains
 "local" if desktop works (then drop the organization-only assertion for ChatGPT); remove the now
@@ -331,10 +334,9 @@ supported forms from guardrail 10's not-yet list. CHANGELOG. Run /dod; one PR; d
 ### 🤖 WAVE 4: retire this plan
 
 ```text
-Read docs/chatgpt-support-plan.md. Issues 390 and 391 are closed. For every "→ ADR" marker and
-D13, confirm an ADR exists (write any missing one); delete this file, remove it from
-build_site.CONTRIBUTOR_DOCS and docs/README.md, fix any link to it (test_docs_links.py lists
-them), and name the ADRs in the PR description.
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header). Issues 390 and 391 are closed. For every "→ ADR" marker and
+D13, confirm an ADR exists on main (write any missing one) in one PR to main, citing issues and
+PRs, never the plan; name the ADRs in the PR description. Do not add or delete plan files on main.
 ```
 
 ---

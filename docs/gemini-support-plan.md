@@ -1,9 +1,11 @@
 # Plan 3 of 3: Gemini support
 
-> **Temporary plan document** (see [`adr/README.md`](adr/README.md)): delete it in the PR that
-> finishes its last wave. Before deleting it, move every decision marked **→ ADR** below into an ADR.
-> It is listed in `scripts/build_site.py`'s `CONTRIBUTOR_DOCS` and in the contributor half of
-> [`README.md`](README.md); the retiring PR removes both entries.
+> **Temporary plan document; it lives only on branch `claude/bold-fermat-xlsdy4` and is never merged to `main`.**
+> Work-package sessions start from `main` and read it with
+> `git fetch origin claude/bold-fermat-xlsdy4 && git show FETCH_HEAD:docs/<plan>.md`. Their PRs never add plan files or
+> plan entries to `main`. Before the plan is finished, every decision marked **→ ADR** below goes
+> into an ADR on `main` (see [`adr/README.md`](adr/README.md)). ADRs cite issues and PRs, never
+> this plan.
 
 Covers:
 
@@ -46,7 +48,8 @@ Plan 2 (ChatGPT) runs independently of this one.
 It works the same way as plan 1. To run a wave, paste into a new Claude Code on the web session:
 
 ```text
-Implement WAVE <n> of docs/gemini-support-plan.md. You are the coordinator: one child session per
+Implement WAVE <n> of docs/gemini-support-plan.md. The plan lives only on branch claude/bold-fermat-xlsdy4:
+read it with `git fetch origin claude/bold-fermat-xlsdy4 && git show FETCH_HEAD:docs/gemini-support-plan.md`. You are the coordinator: one child session per
 work package (create_session, the package's "Session prompt" word for word plus this plan's §1),
 tagged "gemini-support:wave-<n>"; track each until its PR is green (get_session, send_later about
 hourly); then post a checklist of WP, PR, CI state, and unblocked 🧑 tasks. Start a package only
@@ -133,7 +136,7 @@ when its "Depends on" items are done.
 #### WP 1.1: Gemini CLI in the T3 harness and the canary · `tests:`
 
 ```text
-Read docs/gemini-support-plan.md §1. Implement WP 1.1 on plan 1's T3 harness:
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1. Implement WP 1.1 on plan 1's T3 harness:
 1. tests/integration/ai_clients/package.json: add @google/gemini-cli (exact version); refresh the
    lockfile with npm install; tests use npm ci.
 2. tests/integration/test_gemini_cli_contract.py using ai_client_harness.py: throwaway HOME with
@@ -148,7 +151,7 @@ Run /dod; one PR "tests: Gemini CLI contract test (T3)"; drive to green.
 #### WP 1.2: seeded Gemini CLI fixture and draft `connect-gemini-cli.md` · `tests:` + draft PR
 
 ```text
-Read docs/gemini-support-plan.md §1–§2 and ai-client-qa.md. Implement WP 1.2 as TWO PRs:
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1–§2 and ai-client-qa.md. Implement WP 1.2 as TWO PRs:
 PR A (merge) "tests: seeded Gemini CLI handshake fixture": tests/fixtures/ai_clients/gemini-cli/
 (register.json with redirect http://localhost:7777/oauth/callback, initialize.json with
 clientInfo gemini-cli-mcp-client, README "SEEDED FROM VENDOR DOCS, NOT YET CAPTURED", citing
@@ -166,7 +169,7 @@ with a second --header); files via capability URLs; pinning. Org guide §9 bulle
 #### WP 1.3: re-source Gemini Enterprise and Spark facts · research, no PR
 
 ```text
-Read docs/gemini-support-plan.md. Research only. From Google's OWN pages record URL + date for:
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header). Research only. From Google's OWN pages record URL + date for:
 (c) Gemini Enterprise custom MCP server connector: DCR or not, fixed redirect URI, required
     fields (authorization URL, token URL, scopes, client auth method), console menu path.
 (d) Gemini app "Spark" custom apps: DCR or pre-registration, TLS, transport, can it reach a
@@ -224,7 +227,7 @@ Follow `ai-client-qa.md`'s per-client script, under both annotation modes.
 Depends on: M1.1 passed.
 
 ```text
-Read docs/gemini-support-plan.md and the M1 evidence on issue 392. Take over WP 1.2's draft PR B:
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) and the M1 evidence on issue 392. Take over WP 1.2's draft PR B:
 1. Replace the SEEDED gemini-cli fixture with the captured one (scrubbed; README "captured <date>,
    client version <v>").
 2. REGISTRY gemini-cli: add the observed DCR client_name if it differs from clientInfo's; unit
@@ -243,7 +246,7 @@ Then **🧑 M2**: cut a stable release that carries WP 2.1.
 Depends on: that release's `/docs/` has `connect-gemini-cli`.
 
 ```text
-Read docs/gemini-support-plan.md §1. Implement WP 2.2:
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1. Implement WP 2.2:
 1. clients.json: "Gemini CLI", ["local","organization"], connects "straight to /mcp over HTTP",
    slug gemini-cli.
 2. website/ai-agents/gemini-cli/index.html (the /ai-agents/ structure); PAGES, llms.txt, the index.
@@ -264,7 +267,7 @@ Run /dod; one PR "feature: privacyfence.eu lists Gemini CLI"; drive to green.
 #### WP 3.1 · `tests:`
 
 ```text
-Read docs/gemini-support-plan.md §1. Extend tests.yml's org-mode-smoke job
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1. Extend tests.yml's org-mode-smoke job
 (test_org_ubuntu_release_smoke.py + mock_idp.py) with a Gemini CLI run against the org daemon:
 add actions/setup-node (pinned by SHA, Node 22) and `npm ci` of tests/integration/ai_clients;
 settings.json httpUrl without headers; drive the OAuth browser leg headlessly (first a BROWSER
@@ -295,7 +298,7 @@ ai-client-canary.yml. Run /dod; one PR; drive to green.
 #### WP 4.1: ADR, pre-registered OAuth clients, tests, docs · `feature:`
 
 ```text
-Read docs/gemini-support-plan.md (§1 items 2 and 4, D4) and the M3.1 findings on issue 393.
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) (§1 items 2 and 4, D4) and the M3.1 findings on issue 393.
 Implement WP 4.1:
 1. ADR (next free number at merge time): "Pre-registered OAuth clients for clients that cannot use
    DCR" — D4, the stale-prune exemption, secret storage matching the SDK, why the command refuses
@@ -370,7 +373,7 @@ and take it off guardrail 10's not-yet list. CHANGELOG. Run /dod; one PR; drive 
 ### 🤖 WAVE 5: Spark (I394, low priority)
 
 ```text
-Read docs/gemini-support-plan.md (D15) and issue 394 with WP 1.3's findings. Recommend on issue
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) (D15) and issue 394 with WP 1.3's findings. Recommend on issue
 394: (i) a smoke test (DCR path, or WP 4.1's pre-registered client) or (ii) close as not a target
 audience. No code.
 ```
@@ -382,9 +385,9 @@ audience. No code.
 ### 🤖 WAVE 6: retire this plan
 
 ```text
-Issues 392–394 are closed. For every "→ ADR" marker confirm an ADR exists (write any missing
-one); delete this file, remove it from build_site.CONTRIBUTOR_DOCS and docs/README.md, fix links
-to it, and name the ADRs in the PR description.
+Issues 392–394 are closed. For every "→ ADR" marker confirm an ADR exists on main (write any
+missing one) in one PR to main, citing issues and PRs, never the plan; name the ADRs in the PR
+description. Do not add or delete plan files on main.
 ```
 
 ---

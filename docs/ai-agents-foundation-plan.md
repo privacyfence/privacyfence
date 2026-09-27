@@ -1,10 +1,11 @@
 # Plan 1 of 3: AI agents foundation, applied to Claude
 
-> **Temporary plan document** (see [`adr/README.md`](adr/README.md)): delete it in the PR that
-> finishes its last wave (WP 4.1). Before deleting it, move every decision marked **→ ADR** below
-> into an ADR. It is listed in `scripts/build_site.py`'s `CONTRIBUTOR_DOCS` and in the contributor
-> half of [`README.md`](README.md) so the docs allowlist (guardrail 5) accepts it; the retiring PR
-> removes both entries.
+> **Temporary plan document; it lives only on branch `claude/bold-fermat-xlsdy4` and is never merged to `main`.**
+> Work-package sessions start from `main` and read it with
+> `git fetch origin claude/bold-fermat-xlsdy4 && git show FETCH_HEAD:docs/<plan>.md`. Their PRs never add plan files or
+> plan entries to `main`. Before the plan is finished, every decision marked **→ ADR** below goes
+> into an ADR on `main` (see [`adr/README.md`](adr/README.md)). ADRs cite issues and PRs, never
+> this plan.
 
 **The three plans:**
 
@@ -51,8 +52,9 @@ manual checks, so each package merges on its own (D10).
 Open a new Claude Code on the web session on `privacyfence/privacyfence` and paste:
 
 ```text
-Implement WAVE <n> of docs/ai-agents-foundation-plan.md (on main; if it isn't merged yet, read it
-from branch claude/bold-fermat-xlsdy4).
+Implement WAVE <n> of docs/ai-agents-foundation-plan.md. The plan lives only on branch
+claude/bold-fermat-xlsdy4: read it with
+`git fetch origin claude/bold-fermat-xlsdy4 && git show FETCH_HEAD:docs/ai-agents-foundation-plan.md`.
 
 You are the coordinator. Do not implement anything yourself. For each work package in that wave:
 1. Create one child session with create_session. Give it the package's "Session prompt" word for
@@ -195,7 +197,7 @@ The rule that ties them together: **each manual verification (T4) ends by saving
 | D9 | Website timing | A client's `/ai-agents/` page and `clients.json` changes land **after the stable release whose `/docs/` carries its `connect-<slug>.md`**. Otherwise the link check fails against the stable tag's docs. So the order is: docs PR → release → website PR. → **ADR** |
 | D10 | Execution model | One PR per package, the coordinator prompt in §0. No `/implement` manifest. |
 | D11 | Logos | No third-party logos on the website. Text only, like the connector pages. |
-| D12 | Land the plans on `main` first | Yes, as one docs-only PR carrying all three plans. |
+| D12 | Land the plans on `main`? | **No** (maintainer, 2026-09-27). The plans live only on branch `claude/bold-fermat-xlsdy4`; sessions read them from there, and nothing plan-related is merged to `main`. |
 
 Decisions D3 and D4 moved to plans 2 and 3.
 
@@ -240,7 +242,7 @@ Depends on: M0.1.
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md §1 (item 4) and §3 (D5, E1, E2). Implement WP 1.1:
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1 (item 4) and §3 (D5, E1, E2). Implement WP 1.1:
 1. ADR (next free number at merge time) "Tool annotations are truthful by default; an
    organization bundle or a local connection can ask for every tool read-only", superseding ADR
    0076 (add one Status line to 0076 pointing forward; never edit its body). Context: ADR 0076 and
@@ -282,7 +284,7 @@ green. Close https://github.com/privacyfence/privacyfence/issues/46 from the PR 
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md §1–§2. Implement WP 1.2, tests only (a real bug found →
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1–§2. Implement WP 1.2, tests only (a real bug found →
 stop and report it). Cite issues only as full URLs in test code (ADR 0056).
 1. T1 — tests/unit/web/test_tool_schema_portability.py over every tool McpDispatcher lists (build
    every connector the way test_mcp_tools.py does) plus the privacyfence_* meta-tools: schema root
@@ -312,7 +314,7 @@ green.
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md §1–§3 (D7). Implement WP 1.3:
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1–§3 (D7). Implement WP 1.3:
 1. tests/integration/ai_clients/package.json + package-lock.json pinning @anthropic-ai/claude-code
    (exact version); installed with `npm ci --prefix tests/integration/ai_clients`. Module
    docstrings say how to bump the pin. Plan 3 adds @google/gemini-cli to the same package.json.
@@ -339,7 +341,7 @@ green. After merge, dispatch the canary once (steward: only possible from main).
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md §1–§3 (D2). Implement WP 1.4:
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1–§3 (D2). Implement WP 1.4:
 1. New contributor doc ai-client-qa.md (the shape of connector-qa.md's "Recording results"):
    - "Test organization deployment": the recipe in this plan's §6 M0.2, moved here so it outlives
      the plan (plans 2 and 3 point at it).
@@ -364,7 +366,7 @@ Run /dod; one PR "chore: AI-client QA checklist"; drive to green.
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md §1 (items 1, 2, 11) and §3 (D1). Implement WP 1.5:
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1 (items 1, 2, 11) and §3 (D1). Implement WP 1.5:
 1. New published docs connect-claude-desktop.md, connect-claude-code.md,
    connect-claude-ai.md. Each has the same shape (the template plans 2 and 3 copy):
    title "Connect <client>"; which deployments it works with (claude.ai: organization only, and
@@ -419,7 +421,7 @@ Depends on: WAVE 1 merged, WP 1.1 included, and the test org deployment from M0.
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md and the M1 evidence comments on
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) and the M1 evidence comments on
 https://github.com/privacyfence/privacyfence/issues/46. Implement WP 2.1:
 1. Replace the SEEDED claude-ai and claude-code fixtures with the captured ones and add
    claude-desktop (org custom connector) — scrubbed (pf.example.com, dummy ids, no secrets);
@@ -441,7 +443,7 @@ Depends on: WP 1.1 merged. It runs in parallel with WP 2.1.
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md §3 (E1) and CLAUDE.md "macOS ships one file". Implement
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §3 (E1) and CLAUDE.md "macOS ships one file". Implement
 WP 2.2, the release-artifact change E1 decided:
 1. mcpb/shim: accept --tool-annotations=<truthful|all-read-only>; when given, send
    X-PrivacyFence-Tool-Annotations on every /mcp request (and nothing else changes — the shim
@@ -484,7 +486,7 @@ The design is in §5b below.
 **Session prompt:**
 
 ```text
-Read docs/ai-agents-foundation-plan.md §1 (item 11), §3 (D1, D8, D9, D11) and §5b. The latest
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1 (item 11), §3 (D1, D8, D9, D11) and §5b. The latest
 stable release's /docs/ carries connect-claude-desktop, connect-claude-code and connect-claude-ai.
 Implement WP 3.1. Do not name ChatGPT, Gemini, Copilot or Cursor anywhere on the website
 (guardrail 10).
@@ -547,16 +549,14 @@ not-yet-supported list. Guardrail 14 fails until all of them agree.
 #### WP 4.1
 
 ```text
-Read docs/ai-agents-foundation-plan.md. Every WP is merged and WP 3.1 is live. For every "→ ADR"
-marker (D1 with D8, D5 — already written by WP 1.1, D7, D9) confirm an ADR exists; write any
-missing one (next free number). Then delete this plan file, remove it from
-build_site.CONTRIBUTOR_DOCS and docs/README.md, and update chatgpt-support-plan.md and
-gemini-support-plan.md: every link to this plan (test_docs_links.py will list them) points at the
-ADR or at ai-client-qa.md that now holds the content. Say in the PR description which ADRs carry
-this plan's decisions (CLAUDE.md "Retiring a plan").
+Read docs/ai-agents-foundation-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) (branch claude/bold-fermat-xlsdy4; see the plan's header).
+Every WP is merged and WP 3.1 is live. For every "→ ADR" marker (D1 with D8, D5 — already written
+by WP 1.1, D7, D9) confirm an ADR exists on main; write any missing one (next free number) in one
+PR to main, citing issues and PRs, never the plan. List in the PR description which ADRs carry
+this plan's decisions (CLAUDE.md "Retiring a plan"). Do not add or delete plan files on main.
 ```
 
-After this merges, plans 2 and 3 can start.
+After this merges, plans 2 and 3 can start. Mark plan 1 as done in its header on the plan branch.
 
 ---
 
