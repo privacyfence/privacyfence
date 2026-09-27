@@ -1755,7 +1755,7 @@ def _gated_call_in_thread(*, gate_kind: str, tool: str):
                 filtered_data={"ok": True}, gate=gate_kind, preview={"To": "a@b.com"}, details_text="body",
                 my_email="me@example.com",
             ))
-        except BaseException as exc:  # noqa: BLE001 -- the test inspects whatever it raised
+        except Exception as exc:  # noqa: BLE001 -- the test inspects whatever it raised
             box["exc"] = exc
 
     t = threading.Thread(target=run, daemon=True)

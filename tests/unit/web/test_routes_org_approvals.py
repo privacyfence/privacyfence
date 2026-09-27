@@ -1296,7 +1296,7 @@ class TestDenyWithFeedback:
                         sender="", raw_data=None, filtered_data={"ok": True}, gate="popup",
                         preview={"To": "a@b.com"}, details_text="body", my_email="alice@example.com",
                     ))
-                except BaseException as exc:  # noqa: BLE001 -- inspected below
+                except Exception as exc:  # noqa: BLE001 -- inspected below
                     box["exc"] = exc
 
         t = threading.Thread(target=run, daemon=True)
