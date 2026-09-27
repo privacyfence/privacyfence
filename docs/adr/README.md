@@ -190,3 +190,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0082](0082-org-mode-form-action-allows-self-and-sign-out-stays-on-the-app.md) | Org mode's `form-action` is `'self'`, and a sign-out lands on the app's own page; local mode keeps `'none'` | Accepted |
 | [0083](0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) | A human's deny note reaches the agent as delimited, sanitized user text, on both delivery paths, unfiltered | Accepted |
 | [0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md) | The audit log records that a deny had feedback (intent, note length), never the feedback text | Accepted |
+| [0085](0085-ci-installs-ai-client-clis-from-a-committed-lockfile.md) | CI installs AI-client CLIs from a committed lockfile; only the weekly canary runs `@latest` | Accepted |

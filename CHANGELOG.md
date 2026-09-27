@@ -68,6 +68,11 @@ Organization deployments now work from a phone, and the app looks like the websi
   note sends it. On the approvals list, **Deny selected with a note…** does the same for every
   selected request at once, sending each the same note (**Deny 3 and send**); the row's **Deny**
   and **Deny selected** still send no note.
+- **A setup page per AI client.** The documentation has one page each for Claude Desktop, Claude
+  Code and claude.ai: how to connect it in local mode and to an organization deployment, how it
+  handles files, what it asks before PrivacyFence's own approval card, how it is identified, and
+  what to do when it does not connect. The install pages and the organization guide link there
+  instead of repeating the steps.
 
 ### Changed
 

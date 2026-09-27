@@ -1,12 +1,13 @@
 version: 2
 
-# Four ecosystems, matching the four places this repo declares a dependency version:
+# Five entries, matching the five places this repo declares a dependency version:
 # pyproject.toml (the daemon), mcpb/shim/package.json (the .mcpb shim),
 # cloudflare/downloads/package.json (the downloads.privacyfence.eu Worker,
-# docs/downloads-and-release-kpi.md), and the SHA-pinned `uses:`
+# docs/downloads-and-release-kpi.md), tests/integration/ai_clients/package.json
+# (the exact-pinned AI-client CLIs the T3 contract tests run), and the SHA-pinned `uses:`
 # lines in .github/workflows/*.yml themselves (see those files' own comments
 # on why they're pinned to a commit instead of a tag). A PR from any of
-# these four updates only the manifest/pin — it does not regenerate
+# these five updates only the manifest/pin — it does not regenerate
 # requirements/*.lock.txt, which is a derived file; the
 # `lockfile-freshness` job in dependency-audit.yml catches a merged bump
 # that leaves the lock file stale before it reaches main, and
@@ -55,4 +56,16 @@ updates:
       # step comment) -- batching keeps a Dependabot bump from reintroducing that mismatch across
       # two separate PRs.
       downloads-worker-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/tests/integration/ai_clients"
+    schedule:
+      interval: "weekly"
+    # Test-only: the AI-client CLIs tests.yml's T3 contract tests run
+    # (tests/integration/ai_client_harness.py). A bump here is the pinned
+    # half of what .github/workflows/ai-client-canary.yml already runs
+    # against @latest every week; the `test` job is what proves it.
+    groups:
+      ai-client-clis:
         patterns: ["*"]
