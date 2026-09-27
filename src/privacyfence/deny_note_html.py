@@ -3,9 +3,12 @@
 A denial may carry an ``intent`` from ``deny_feedback.INTENTS``, picked from chips, and a free-text
 ``note``. This module renders the panel that collects them (``panel_html``) and the script that
 runs it (``PANEL_JS``), once, so the approval card (approval_window_html.py) and the approval list
-use one implementation. Each document is self-contained and inlines both.
+use one implementation. Each document is self-contained and inlines both. The list's panel is
+``batch_panel_html``: the same panel with one more help line, since its note goes to every selected
+request.
 
-**Nothing but the person's typing ever fills the note.** ``panel_html`` takes no content argument:
+**Nothing but the person's typing ever fills the note.** ``panel_html`` and ``batch_panel_html``
+take no content argument:
 the textarea always renders empty, no chip is checked, and every string in the panel is a constant
 of this module or of ``deny_feedback``. ``PANEL_JS`` reads only the textarea and the chips inside
 its own panel, and nothing copies card content (the preview, the summary, the agent's stated
@@ -28,6 +31,9 @@ KICKER = "Tell the agent why, or what to do instead (optional)"
 PLACEHOLDER = "e.g. Send it only to Anna, not the whole team."
 HELP = "Only the agent that made this request receives this note. It is not kept in the audit log."
 CANCEL_LABEL = "Cancel"
+# The one line the approval list's panel adds (batch_panel_html): its note goes to every request
+# selected there.
+BATCH_HELP = "The same note goes to every selected request."
 
 
 def panel_html(prefix: str, submit_label: str) -> str:
@@ -36,11 +42,31 @@ def panel_html(prefix: str, submit_label: str) -> str:
     than one. ``submit_label`` is the text of the submit button (*Deny and send* on the card).
 
     There is deliberately no argument for anything the panel shows: see the module docstring."""
+    return _panel_html(prefix, submit_label, extra_help="")
+
+
+def batch_panel_html(prefix: str, submit_label: str) -> str:
+    """``panel_html``'s panel for denying several requests at once (the approval list's *Deny
+    selected with a note…*): the same panel with one more help line, ``BATCH_HELP``, which the
+    textarea's ``aria-describedby`` names too. The host keeps the submit button's label in step
+    with its selection; the button is ``[data-pf-note-submit]`` inside the panel.
+
+    A separate function rather than an argument to ``panel_html``, so that neither takes anything
+    but its prefix and submit label, and the extra line is a constant of this module like every
+    other string in the panel."""
+    return _panel_html(prefix, submit_label, extra_help=BATCH_HELP)
+
+
+def _panel_html(prefix: str, submit_label: str, *, extra_help: str) -> str:
     p = _html_escape(prefix)
     chips = "".join(
         f'<label class="chip"><input type="radio" name="{p}-intent" value="{_html_escape(value)}">'
         f"<span>{_html_escape(label)}</span></label>"
         for value, (label, _guidance) in INTENTS.items()
+    )
+    described_by = f"{p}-count {p}-help" + (f" {p}-help-batch" if extra_help else "")
+    extra_help_html = (
+        f'<div class="field-help" id="{p}-help-batch">{_html_escape(extra_help)}</div>' if extra_help else ""
     )
     return (
         f'<section id="{p}" class="card stack pf-deny-note" aria-labelledby="{p}-title" hidden>'
@@ -48,10 +74,11 @@ def panel_html(prefix: str, submit_label: str) -> str:
         f'<div class="cluster" role="radiogroup" aria-labelledby="{p}-title">{chips}</div>'
         '<div>'
         f'<textarea class="field" id="{p}-text" rows="3" maxlength="{MAX_NOTE_CHARS}" '
-        f'aria-label="Note to the agent" aria-describedby="{p}-count {p}-help" '
+        f'aria-label="Note to the agent" aria-describedby="{described_by}" '
         f'placeholder="{_html_escape(PLACEHOLDER)}"></textarea>'
         f'<div class="field-help" id="{p}-count" aria-live="polite">0 / {MAX_NOTE_CHARS}</div>'
         f'<div class="field-help" id="{p}-help">{_html_escape(HELP)}</div>'
+        f'{extra_help_html}'
         '</div>'
         '<div class="cluster">'
         f'<button type="button" class="button secondary" data-pf-note-cancel>{_html_escape(CANCEL_LABEL)}</button>'

@@ -65,7 +65,9 @@ Organization deployments now work from a phone, and the app looks like the websi
   characters, or both, then **Deny and send**. Only the AI system that made the request receives
   it, and it is not kept in the audit log. Deny itself is still one tap, and Esc still denies (with
   the panel open, the first Esc closes it and keeps what you typed). Ctrl+Enter or Cmd+Enter in the
-  note sends it.
+  note sends it. On the approvals list, **Deny selected with a note…** does the same for every
+  selected request at once, sending each the same note (**Deny 3 and send**); the row's **Deny**
+  and **Deny selected** still send no note.
 
 ### Changed
 

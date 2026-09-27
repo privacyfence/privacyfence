@@ -11,7 +11,8 @@ Writes PNGs into DIR, plus an ``index.html`` that lays them out side by side:
   from the design files themselves; it is not a route the app serves. Hover and focus-visible are
   forced through the DevTools protocol on the elements that ask for them (``data-force``), so the
   screenshot shows the state rather than a description of it.
-- ``<page>-<width>-<theme>.png`` for /approvals, one approval card of each kind (and the write
+- ``<page>-<width>-<theme>.png`` for /approvals (and again with two rows selected and "Deny
+  selected with a note…" open, ``approvals-note``), one approval card of each kind (and the write
   and read cards again with the deny note panel open, ``card-<kind>-note``), the PII
   confirmation and the choice dialog, every /settings section (an org admin's six, and local
   mode's Connectors), /connect (and its Telegram sign-in at each step), /security, and the

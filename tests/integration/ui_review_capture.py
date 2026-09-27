@@ -93,6 +93,37 @@ def test_shell_page(shot, org_server_and_ui, path):
             web_ui.resolve(approval.id, "deny")
 
 
+def test_approvals_with_the_deny_note_open(shot, org_server_and_ui):
+    """/approvals with both rows selected and "Deny selected with a note…" open: a chip chosen and a
+    note typed. Clicked, not built open, so it is the list's own script that opened it."""
+    page, save = shot
+    server, sessions, web_ui = org_server_and_ui
+    _sign_in_org(page.context, server, sessions, principal=_ADMIN)
+    pending = []
+    with principal_scope(_ADMIN):
+        for i, summary in enumerate(["Quarterly numbers to Alice", "Board deck v3 to the board"]):
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key=f"review-note-{i}", connector="gmail", tool="gmail_send_email", gate_kind="popup",
+                request_id=f"review-note-{i}", summary=summary, tool_name="Send email",
+                operation_key="gmail.gmail_send_email",
+            )
+            pending.append(approval)
+    try:
+        page.goto(f"{server.base_url}/approvals")
+        page.wait_for_load_state("load")
+        for approval in pending:
+            page.wait_for_selector(f'[data-select="{approval.id}"]')
+        page.locator("#pf-select-all-cb").check()
+        page.locator("#pf-deny-selected-note").click()
+        page.locator("#pf-deny-note label.chip", has_text="Wrong target").click()
+        page.locator("#pf-deny-note-text").fill("Send it only to Anna, not the whole team.")
+        page.locator("#pf-deny-note-text").blur()
+        save("approvals-note")
+    finally:
+        for approval in pending:
+            web_ui.resolve(approval.id, "deny")
+
+
 @pytest.mark.parametrize("step", ["phone", "code", "password"])
 def test_connect_telegram(shot, monkeypatch, step):
     """/connect's Telegram sign-in at each step, with an error showing. The org fixture's bundle
