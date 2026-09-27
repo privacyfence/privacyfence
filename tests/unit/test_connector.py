@@ -30,6 +30,7 @@ class TestToolSpecRoundTrip:
                 {"name": "max_results", "annotation": "int", "required": False, "default": 10, "description": "cap"},
             ],
             "read_only": True,
+            "destructive": False,
         }
 
     def test_from_dict_reconstructs_equivalent_spec(self):

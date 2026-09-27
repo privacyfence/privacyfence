@@ -68,9 +68,25 @@ Organization deployments now work from a phone, and the app looks like the websi
   note sends it. On the approvals list, **Deny selected with a note…** does the same for every
   selected request at once, sending each the same note (**Deny 3 and send**); the row's **Deny**
   and **Deny selected** still send no note.
+- **A setup page per AI client.** The documentation has one page each for Claude Desktop, Claude
+  Code and claude.ai: how to connect it in local mode and to an organization deployment, how it
+  handles files, what it asks before PrivacyFence's own approval card, how it is identified, and
+  what to do when it does not connect. The install pages and the organization guide link there
+  instead of repeating the steps.
 
 ### Changed
 
+- **Write tools are now advertised as writes.** AI clients used to be told that every PrivacyFence
+  tool was read-only. Now reads are read-only, writes are writes, and the two tools that delete
+  something (`calendar_delete_event` and `drive_sheets_delete_dimensions`) are marked destructive.
+  Your AI client may therefore ask for its own confirmation before a write, in front of
+  PrivacyFence's approval. Organizations can restore the previous behaviour with
+  `build_org_bundle.py --tool-annotations all-read-only`, and in local mode a client can ask for it
+  for its own connection with the header `X-PrivacyFence-Tool-Annotations: all-read-only`. See
+  ADR 0086.
+- **The PrivacyFence meta-tools' descriptions are shorter.** The six longest `privacyfence_*`
+  tool descriptions were condensed to at most 1024 characters each, so AI clients that reject a
+  longer tool description accept them. What they tell the AI system to do is unchanged.
 - **A denied request tells the AI system what to do next.** A plain Deny now reaches it as
   "Request denied by user. Don't retry the same call; ask the user how to proceed." instead of a
   bare "Request denied by user", so it stops retrying the same call blindly. A deny can also carry

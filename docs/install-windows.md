@@ -77,25 +77,18 @@ The checkbox on the installer's last page reads one of two things:
 
 To do this later, paste `%ProgramFiles%\PrivacyFence\` into File Explorer's address bar and use the
 `.mcpb` file there. The extension finds the running daemon by itself and never starts it: the daemon
-is a Windows service. If the service is stopped, the extension waits and logs that you should choose
-**Start PrivacyFence…** from the tray icon.
+is a Windows service.
+
+The rest, including organization mode, is in [Connect Claude Desktop](connect-claude-desktop.md).
 
 ## Connect Claude Code
 
-From PowerShell, signed in as yourself (not elevated):
-
-```powershell
-$url = Get-Content "$env:ProgramData\PrivacyFence\handoff\mcp_url"
-$token = & "$env:ProgramFiles\PrivacyFence\privacyfence-app.exe" --print-mcp-token
-claude mcp add --transport http --scope user privacyfence $url --header "Authorization: Bearer $token"
-```
-
-`mcp_url` holds `http://127.0.0.1:8765/mcp` unless you changed `web.port`. `--print-mcp-token`
-mints your account's token the first time and prints the same one afterwards. Capture its output as
-above: `privacyfence-app.exe` has no console window of its own, so run bare it prints nothing
-visible. Any other Streamable HTTP MCP client takes the same URL and header. Claude Code cannot read
-local files through PrivacyFence the way the Claude Desktop extension does; see
-[How it works](how-it-works.md) for how it uploads a file instead.
+Claude Code talks to the daemon's local `/mcp` endpoint with your own bearer token. On Windows the
+URL is in `%ProgramData%\PrivacyFence\handoff\mcp_url` and the token comes from
+`privacyfence-app.exe --print-mcp-token`, run from PowerShell as yourself (not elevated).
+`privacyfence-app.exe` has no console window of its own, so capture its output into a variable or a
+file: run bare, it prints nothing visible. The full command is in
+[Connect Claude Code](connect-claude-code.md#local-mode).
 
 ## Troubleshooting
 

@@ -23,6 +23,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
 from .. import local_files
 from ..connector import Connector
+from ..org_mode import TOOL_ANNOTATIONS_TRUTHFUL, ToolAnnotationsMode
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
 from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
@@ -93,8 +94,14 @@ class McpDispatcher:
         mode: str = "local",
         unattended_sessions_enabled: bool = False,
         registry: PendingApprovalRegistry | None = None,
+        tool_annotations: ToolAnnotationsMode = TOOL_ANNOTATIONS_TRUTHFUL,
     ) -> None:
         self._connectors_provider = connectors_provider
+        # The bundle's mcp.tool_annotations (org_mode.resolve_tool_annotations),
+        # read once at startup like unattended_sessions_enabled. routes_mcp.py
+        # applies it to every tools/list -- except, in local mode only, one
+        # whose connection asked for its own mode (ADR 0086).
+        self._tool_annotations = tool_annotations
         # "local" or "org" -- privacyfence_status's own mode field, and what
         # decides which next_step an un-onboarded install reports (open the
         # companion, or ask an administrator -- org mode has no local sign-in
@@ -140,6 +147,14 @@ class McpDispatcher:
     @property
     def connectors(self) -> dict[str, Connector]:
         return self._connectors_provider()
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def tool_annotations(self) -> ToolAnnotationsMode:
+        return self._tool_annotations
 
     def set_unattended_changed_listener(self, callback: Callable[[], None] | None) -> None:
         self._unattended_changed_listener = callback

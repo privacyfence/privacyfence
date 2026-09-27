@@ -512,16 +512,10 @@ the organization's sign-in page. After sign-in it holds its own tokens; there is
 paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
 which the person signs in again.
 
-- **claude.ai**: add a custom connector (in claude.ai's connector settings) with the URL
-  `https://pf.acme.example.com/mcp`, then click **Connect** on it and sign in. Leave the optional
-  OAuth client ID and secret empty; claude.ai registers itself. On Team and Enterprise plans an
-  owner adds the connector for the organization and each person connects it with their own
-  sign-in.
-- **Claude Desktop**: add the same URL as a custom connector.
-- **Claude Code**: run `claude mcp add --transport http privacyfence
-  https://pf.acme.example.com/mcp`, then `/mcp` inside Claude Code to sign in.
-- **Other MCP-compatible clients**: any client that supports the Streamable HTTP transport with
-  OAuth 2.1 and dynamic client registration.
+Each AI client has its own page with the exact steps, what it asks before PrivacyFence's card, and
+how it is identified: [claude.ai](connect-claude-ai.md), [Claude Desktop](connect-claude-desktop.md)
+(as a custom connector) and [Claude Code](connect-claude-code.md). Any other client that supports
+the Streamable HTTP transport with OAuth 2.1 and dynamic client registration works the same way.
 
 Each client registration shows up on the admin's **AI systems** page
 ([section 11](#11-ai-systems)).

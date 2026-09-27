@@ -18,25 +18,25 @@ see web/test_routes_mcp.py.)
 """
 from __future__ import annotations
 
-import contextlib
-import urllib.parse as up
-
 import httpx
-import httpx2
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
 
-from privacyfence import org_identity as oi
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.principal import current_principal
 from privacyfence.web import org_session
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.routes_mcp import mcp_lifespan, mount_mcp, mount_org_oauth
-
-ISSUER = "https://pf.example.com"
-CLAUDE_REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
+from tests.unit.web.conftest import (
+    CLAUDE_REDIRECT_URI,
+    ISSUER,
+    authorize_and_get_code,
+    exchange_for_tokens,
+    isolate_org_oauth_stores,
+    mcp_session,
+    org_idp,
+    register_client,
+)
 
 
 class WhoAmIConnector(Connector):
@@ -52,19 +52,9 @@ class WhoAmIConnector(Connector):
         return {"id": p.id, "email": p.email, "display_name": p.display_name, "is_admin": p.is_admin}
 
 
-def _idp() -> oi.IdpConfig:
-    return oi.IdpConfig(
-        issuer="https://idp.example.com", client_id="privacyfence", client_secret="s3cr3t",
-        authorization_endpoint="https://idp.example.com/authorize",
-        token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
-        admin_group_claim="groups", admin_group_values=("admins",),
-    )
-
-
 def _build_app(tmp_path, monkeypatch):
-    monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
-    monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
-    provider = OrgOAuthProvider(_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
+    isolate_org_oauth_stores(tmp_path, monkeypatch)
+    provider = OrgOAuthProvider(org_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
     dispatcher = McpDispatcher(lambda: {"whoami": WhoAmIConnector()})
     mcp_route, session_manager = mount_mcp(dispatcher, verifier=provider)
     oauth_routes = mount_org_oauth(provider, issuer_url=ISSUER)
@@ -72,85 +62,20 @@ def _build_app(tmp_path, monkeypatch):
     return app, provider, session_manager
 
 
-async def _register_client(client: httpx.AsyncClient) -> dict:
-    r = await client.post("/register", json={
-        "redirect_uris": [CLAUDE_REDIRECT_URI], "token_endpoint_auth_method": "none",
-        "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
-    })
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-async def _authorize_and_get_code(
-    client: httpx.AsyncClient, *, client_id: str, monkeypatch, claims: dict,
-) -> tuple[str, str]:
-    """Drives /authorize -> (faked IdP) -> /oauth/idp/callback and returns
-    ``(code, code_verifier)`` -- the code Claude's own client would receive
-    at its redirect_uri, and the PKCE verifier it needs to redeem it."""
-    verifier, challenge = oi.generate_pkce_pair()
-    r = await client.get("/authorize", params={
-        "response_type": "code", "client_id": client_id, "redirect_uri": CLAUDE_REDIRECT_URI,
-        "code_challenge": challenge, "code_challenge_method": "S256", "state": "claudes-own-state",
-    })
-    assert r.status_code == 302, r.text
-    own_state = dict(up.parse_qsl(up.urlparse(r.headers["location"]).query))["state"]
-
-    monkeypatch.setattr("privacyfence.org_identity.exchange_code_for_tokens", lambda *a, **kw: {"id_token": "opaque"})
-    monkeypatch.setattr(
-        "privacyfence.org_identity.verify_id_token", lambda idp, token, *, nonce: {**claims, "nonce": nonce},
-    )
-    cb = await client.get("/oauth/idp/callback", params={"code": "idp-code", "state": own_state})
-    assert cb.status_code == 302, cb.text
-    parsed = up.urlparse(cb.headers["location"])
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == CLAUDE_REDIRECT_URI
-    qs = dict(up.parse_qsl(parsed.query))
-    assert qs["state"] == "claudes-own-state"
-    return qs["code"], verifier
-
-
-async def _exchange_for_tokens(client: httpx.AsyncClient, *, client_id: str, code: str, code_verifier: str) -> dict:
-    r = await client.post("/token", data={
-        "grant_type": "authorization_code", "code": code, "redirect_uri": CLAUDE_REDIRECT_URI,
-        "client_id": client_id, "code_verifier": code_verifier,
-    })
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-@contextlib.asynccontextmanager
-async def _mcp_session(app, session_manager, *, access_token: str):
-    """One MCP ClientSession, connected with ``access_token`` as its
-    bearer token. Does *not* itself enter ``mcp_lifespan`` --
-    ``StreamableHTTPSessionManager.run()`` may only be entered once per
-    instance (it raises on a second ``async with``), so a test that opens
-    more than one MCP session against the same app must wrap all of them
-    in one shared ``async with mcp_lifespan(session_manager):`` itself
-    (see ``_two_mcp_sessions`` below) rather than each grabbing its own.
-    """
-    transport = httpx2.ASGITransport(app=app)
-    async with httpx2.AsyncClient(
-        transport=transport, base_url=ISSUER, headers={"Authorization": f"Bearer {access_token}"},
-    ) as http_client:
-        async with streamable_http_client(f"{ISSUER}/mcp", http_client=http_client) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                yield session
-
-
 async def test_dcr_authorize_token_and_a_real_tool_call_resolve_to_the_signed_in_principal(tmp_path, monkeypatch):
     app, _provider, session_manager = _build_app(tmp_path, monkeypatch)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
-        registration = await _register_client(client)
-        code, verifier = await _authorize_and_get_code(
+        registration = await register_client(client)
+        code, verifier = await authorize_and_get_code(
             client, client_id=registration["client_id"], monkeypatch=monkeypatch,
             claims={"sub": "alice", "email": "alice@example.com", "name": "Alice A.", "groups": ["admins"]},
         )
-        tokens = await _exchange_for_tokens(
+        tokens = await exchange_for_tokens(
             client, client_id=registration["client_id"], code=code, code_verifier=verifier,
         )
 
     async with mcp_lifespan(session_manager):
-        async with _mcp_session(app, session_manager, access_token=tokens["access_token"]) as session:
+        async with mcp_session(app, access_token=tokens["access_token"]) as session:
             result = await session.call_tool("whoami", {"reason": "test"})
             assert result.structured_content == {
                 "id": "alice", "email": "alice@example.com", "display_name": "Alice A.", "is_admin": True,
@@ -160,28 +85,28 @@ async def test_dcr_authorize_token_and_a_real_tool_call_resolve_to_the_signed_in
 async def test_two_different_humans_authorizing_the_same_claude_client_get_isolated_principals(tmp_path, monkeypatch):
     app, _provider, session_manager = _build_app(tmp_path, monkeypatch)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
-        registration = await _register_client(client)
+        registration = await register_client(client)
 
-        code_a, verifier_a = await _authorize_and_get_code(
+        code_a, verifier_a = await authorize_and_get_code(
             client, client_id=registration["client_id"], monkeypatch=monkeypatch, claims={"sub": "alice"},
         )
-        tokens_a = await _exchange_for_tokens(
+        tokens_a = await exchange_for_tokens(
             client, client_id=registration["client_id"], code=code_a, code_verifier=verifier_a,
         )
 
-        code_b, verifier_b = await _authorize_and_get_code(
+        code_b, verifier_b = await authorize_and_get_code(
             client, client_id=registration["client_id"], monkeypatch=monkeypatch, claims={"sub": "bob"},
         )
-        tokens_b = await _exchange_for_tokens(
+        tokens_b = await exchange_for_tokens(
             client, client_id=registration["client_id"], code=code_b, code_verifier=verifier_b,
         )
 
     async with mcp_lifespan(session_manager):
-        async with _mcp_session(app, session_manager, access_token=tokens_a["access_token"]) as session:
+        async with mcp_session(app, access_token=tokens_a["access_token"]) as session:
             result = await session.call_tool("whoami", {"reason": "test"})
             assert result.structured_content["id"] == "alice"
 
-        async with _mcp_session(app, session_manager, access_token=tokens_b["access_token"]) as session:
+        async with mcp_session(app, access_token=tokens_b["access_token"]) as session:
             result = await session.call_tool("whoami", {"reason": "test"})
             assert result.structured_content["id"] == "bob"
 
@@ -191,11 +116,11 @@ async def test_mcp_access_token_is_rejected_as_an_org_session_cookie(tmp_path, m
     never double as a browser session."""
     app, _provider, _session_manager = _build_app(tmp_path, monkeypatch)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER) as client:
-        registration = await _register_client(client)
-        code, verifier = await _authorize_and_get_code(
+        registration = await register_client(client)
+        code, verifier = await authorize_and_get_code(
             client, client_id=registration["client_id"], monkeypatch=monkeypatch, claims={"sub": "alice"},
         )
-        tokens = await _exchange_for_tokens(
+        tokens = await exchange_for_tokens(
             client, client_id=registration["client_id"], code=code, code_verifier=verifier,
         )
 
@@ -228,9 +153,8 @@ async def test_dcr_registration_is_visible_to_a_fresh_provider_instance(tmp_path
     OrgOAuthProvider pointed at the same clients file sees clients an
     earlier one registered, so Claude never has to re-run DCR after a
     restart."""
-    monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
-    monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
-    first = OrgOAuthProvider(_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
+    isolate_org_oauth_stores(tmp_path, monkeypatch)
+    first = OrgOAuthProvider(org_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
     from mcp.shared.auth import OAuthClientInformationFull
     from pydantic import AnyUrl
 
@@ -238,7 +162,7 @@ async def test_dcr_registration_is_visible_to_a_fresh_provider_instance(tmp_path
         client_id="claude-1", redirect_uris=[AnyUrl(CLAUDE_REDIRECT_URI)], token_endpoint_auth_method="none",
     ))
 
-    second = OrgOAuthProvider(_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
+    second = OrgOAuthProvider(org_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
     assert await second.get_client("claude-1") is not None
 
 

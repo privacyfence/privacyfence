@@ -106,30 +106,55 @@ class TestToolInputSchema:
         assert schema == {"type": "object", "properties": {}}
 
 
+_TRUTHFUL = "truthful"
+_ALL_READ_ONLY = "all_read_only"
+
+_READ = ToolSpec(name="r", description="d", read_only=True)
+_WRITE = ToolSpec(name="w", description="d", read_only=False)
+_DELETE = ToolSpec(name="x", description="d", read_only=False, destructive=True)
+
+
 class TestToMcpTool:
     def test_carries_name_and_description_through_unchanged(self):
         spec = ToolSpec(name="gmail_send", description="Sends an email.")
-        tool = mcp_tools.to_mcp_tool(spec)
+        tool = mcp_tools.to_mcp_tool(spec, annotations_mode=_TRUTHFUL)
         assert tool.name == "gmail_send"
         assert tool.description == "Sends an email."
 
-    def test_every_tool_is_advertised_read_only_regardless_of_the_specs_own_flag(self):
-        # MCP tool annotations are a UI hint, not the real security
-        # boundary -- gate.py enforces that server-side. A write tool
-        # (read_only=False) must still be advertised uniformly read-only so
-        # a client doesn't throw its own redundant confirmation in front of
-        # gate.py's real one (ADR 0076).
-        read_tool = mcp_tools.to_mcp_tool(ToolSpec(name="r", description="d", read_only=True))
-        write_tool = mcp_tools.to_mcp_tool(ToolSpec(name="w", description="d", read_only=False))
-        for tool in (read_tool, write_tool):
-            assert tool.annotations.read_only_hint is True
-            assert tool.annotations.destructive_hint is False
-            assert tool.annotations.idempotent_hint is True
+    # ADR 0086: (readOnlyHint, destructiveHint, idempotentHint) per tool kind
+    # and mode. Truthful derives the triple from the spec -- a write is not
+    # read-only and not idempotent, and only a deleting tool is destructive;
+    # all_read_only is ADR 0076's uniform triple for every connector tool.
+    @pytest.mark.parametrize(("mode", "spec", "expected"), [
+        (_TRUTHFUL, _READ, (True, False, True)),
+        (_TRUTHFUL, _WRITE, (False, False, False)),
+        (_TRUTHFUL, _DELETE, (False, True, False)),
+        (_ALL_READ_ONLY, _READ, (True, False, True)),
+        (_ALL_READ_ONLY, _WRITE, (True, False, True)),
+        (_ALL_READ_ONLY, _DELETE, (True, False, True)),
+    ], ids=lambda v: v.name if isinstance(v, ToolSpec) else None)
+    def test_annotations_per_mode(self, mode, spec, expected):
+        annotations = mcp_tools.to_mcp_tool(spec, annotations_mode=mode).annotations
+        assert (annotations.read_only_hint, annotations.destructive_hint, annotations.idempotent_hint) == expected
 
     def test_input_schema_matches_tool_input_schema_directly(self):
         spec = ToolSpec(name="t", description="d", params=[ToolParam("x", "int", required=True)])
-        tool = mcp_tools.to_mcp_tool(spec)
+        tool = mcp_tools.to_mcp_tool(spec, annotations_mode=_TRUTHFUL)
         assert tool.input_schema == mcp_tools.tool_input_schema(spec)
+
+
+class TestAnnotationsModeFromHeader:
+    @pytest.mark.parametrize(("value", "expected"), [
+        ("truthful", _TRUTHFUL),
+        ("all-read-only", _ALL_READ_ONLY),
+        (" All-Read-Only ", _ALL_READ_ONLY),
+        # The bundle's own spelling is not a header value: one spelling per surface.
+        ("all_read_only", None),
+        ("read-only", None),
+        ("", None),
+    ])
+    def test_maps_only_the_two_documented_values(self, value, expected):
+        assert mcp_tools.annotations_mode_from_header(value) == expected
 
 
 class TestCallToolResult:
