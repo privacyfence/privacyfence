@@ -1173,7 +1173,7 @@ class TestProposePolicyChange:
             await gate.propose_policy_change(
                 operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
             )
-        # The confirm's Cancel carries no feedback, but gets the clearer default (ADR 0082).
+        # The confirm's Cancel carries no feedback, but gets the clearer default (ADR 0083).
         assert str(excinfo.value) == (
             "Request denied by user. Don't retry the same call; ask the user how to proceed."
         )
@@ -3724,7 +3724,7 @@ class TestAgentAttribution:
 
 
 class TestDenyFeedback:
-    """ADR 0082/0083: a human's deny feedback reaches the agent through
+    """ADR 0083/0084: a human's deny feedback reaches the agent through
     GateDeniedError.by_user on the synchronous path and on a re-issue inside
     the ledger TTL; the audit log records only that it was given."""
 

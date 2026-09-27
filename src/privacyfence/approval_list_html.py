@@ -51,7 +51,7 @@ approvals that covers. The binder has:
   only opens the deny note panel (deny_note_html.batch_panel_html, the
   card's panel plus "The same note goes to every selected request.")
   between the toolbar and the list. Its submit, *Deny N and send*, runs the
-  same per-id fan-out with ``{note, intent}`` on every POST (ADR 0082). A
+  same per-id fan-out with ``{note, intent}`` on every POST (ADR 0083). A
   409 counts as done there as it does for Deny selected; the note only
   reaches the ids that were still pending;
 - an inline "Details" disclosure sourced from ``GET /api/approvals/{id}/

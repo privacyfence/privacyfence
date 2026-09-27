@@ -2832,7 +2832,7 @@ class TestPhoneLayout:
 
 
 # --------------------------------------------------------------------- #
-# "Deny with a note…" on the card (deny_note_html.py, ADR 0082): the panel
+# "Deny with a note…" on the card (deny_note_html.py, ADR 0083): the panel
 # opens, takes a chip and a note, and Deny and send reaches the agent; the
 # keyboard rules; the note is never pre-filled from the card; and the panel
 # keeps the phone-layout rules, on a desktop, at 393px and at 320px, in both
@@ -3210,7 +3210,7 @@ class TestActionHierarchyWithTheNote:
 
 
 # --------------------------------------------------------------------- #
-# "Deny selected with a note…" on the approval list (ADR 0082): the list's toolbar opens the same
+# "Deny selected with a note…" on the approval list (ADR 0083): the list's toolbar opens the same
 # panel as the card (deny_note_html.batch_panel_html), and its submit denies every selected request
 # with the one note. The row's Deny and plain Deny selected stay one click with no note.
 # --------------------------------------------------------------------- #

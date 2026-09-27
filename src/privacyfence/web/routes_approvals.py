@@ -156,7 +156,7 @@ _SW_JS = (Path(__file__).parent.parent / "resources" / "sw.js").read_text(encodi
 
 _DECIDED_MESSAGE = "Decision recorded."
 _DENIED_MESSAGE = "Denied."
-# After a deny that carried a note or an intent (the card's "Deny and send", ADR 0082).
+# After a deny that carried a note or an intent (the card's "Deny and send", ADR 0083).
 _DENIED_WITH_NOTE_MESSAGE = "Denied. Your note will go to the agent."
 _ALREADY_DECIDED_MESSAGE = "Already decided elsewhere."
 _FAILED_MESSAGE = "Could not record this decision — please reload and try again."
@@ -253,7 +253,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
     failure (network error, an unexpected status) leaves the card on screen
     with an inline message -- there is nothing to navigate back to for
     those. A deny whose payload carries a ``note`` or an ``intent`` (the
-    card's "Deny and send", ADR 0082) toasts ``_DENIED_WITH_NOTE_MESSAGE``
+    card's "Deny and send", ADR 0083) toasts ``_DENIED_WITH_NOTE_MESSAGE``
     instead of ``_DENIED_MESSAGE``. Every key of the payload is forwarded
     unchanged; the decide route validates them.
 
@@ -659,7 +659,7 @@ def _build_route_list(
         if not isinstance(result, str):
             result = str(int(result))
 
-        # A human's deny feedback (ADR 0082). Only a deny may carry it: a
+        # A human's deny feedback (ADR 0083). Only a deny may carry it: a
         # note riding along on an approval would reach the agent together
         # with the data it was just given, so any other result with either
         # key is refused outright rather than silently dropping it.
@@ -733,7 +733,7 @@ def _build_route_list(
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         # Deny feedback goes through the per-id decide route only (the list's
         # "Deny selected" fans out to it); refused here so nobody builds on an
-        # accidental pass-through (ADR 0082).
+        # accidental pass-through (ADR 0083).
         if "note" in payload or "intent" in payload:
             return JSONResponse(
                 {"status": "error", "error": "the batch endpoint does not take a note or intent"}, status_code=400,

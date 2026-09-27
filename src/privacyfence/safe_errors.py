@@ -26,7 +26,7 @@ is, by a repo-wide convention older than this fix, exactly the type that
 raises (``"Request denied by user."`` and friends) are composed only of
 static text, with one reviewed exception: ``GateDeniedError.by_user()`` may
 append the deciding human's own deny note, sanitized, capped at 500
-characters and JSON-quoted behind a static label (ADR 0082) -- the user's
+characters and JSON-quoted behind a static label (ADR 0083) -- the user's
 words to their own agent, never a third party's text, and still passed
 through ``redact_secrets()`` below like every other message. Were both plain ``RuntimeError``, the same builtin type would
 carry two very different trust levels, indistinguishable by ``isinstance``

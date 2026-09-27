@@ -1768,7 +1768,7 @@ def _gated_call_in_thread(*, gate_kind: str, tool: str):
 
 
 class TestDenyWithFeedback:
-    """ADR 0082: decide takes an optional note/intent with a deny, validates
+    """ADR 0083: decide takes an optional note/intent with a deny, validates
     it, and hands it to the agent; any other result carrying one is a 400."""
 
     NOTE = "Send it only to Anna -- NOTE-MARKER-91"
@@ -2003,7 +2003,7 @@ setTimeout(() => process.stdout.write(JSON.stringify(seen)), 50);
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
 class TestBridgeShimsForwardDenyFeedback:
     """Both shims send every key of the card's payload to the decide route unchanged, so the
-    card's note and intent reach it without either shim knowing about them (ADR 0082). A deny
+    card's note and intent reach it without either shim knowing about them (ADR 0083). A deny
     that carried either toasts _DENIED_WITH_NOTE_MESSAGE; a plain one still toasts
     _DENIED_MESSAGE."""
 

@@ -1056,7 +1056,7 @@ class TestAgentFields:
 
 
 class TestDenyFeedbackFields:
-    """Schema 6 (ADR 0083): deny_intent/deny_note_chars record that a deny carried feedback,
+    """Schema 6 (ADR 0084): deny_intent/deny_note_chars record that a deny carried feedback,
     never the note's text."""
 
     _KEYS = ("deny_intent", "deny_note_chars")

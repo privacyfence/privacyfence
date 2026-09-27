@@ -755,7 +755,7 @@ class TestAwaitApproval:
 
 
 class TestAwaitApprovalDenialFeedback:
-    """ADR 0082: every approval_id value stays a bare status string; a denied
+    """ADR 0083: every approval_id value stays a bare status string; a denied
     id with feedback also appears under the one reserved denial_feedback key."""
 
     FB = DenialFeedback("rewrite", "Make it shorter.")

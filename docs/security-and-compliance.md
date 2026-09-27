@@ -363,10 +363,10 @@ with control and invisible characters stripped, secrets redacted and the text qu
 label so it cannot pass for PrivacyFence's own words. It is not screened for content: any
 "injection" in it is the user instructing their own agent, and a note approves nothing, so the
 agent's next call still goes through the gate
-([ADR 0082](adr/0082-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md)).
+([ADR 0083](adr/0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md)).
 It is not stored: the audit log records only the chosen intent and the note's length, and the text
 never reaches a log line, the approvals stream or a push notification
-([ADR 0083](adr/0083-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md)).
+([ADR 0084](adr/0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md)).
 
 See [Approvals and policy](approvals-and-policy.md) for the approval list, cards and PII handling.
 

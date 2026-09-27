@@ -1,4 +1,4 @@
-"""The "Deny with a note…" panel: markup and script, shared by every page that offers it (ADR 0082).
+"""The "Deny with a note…" panel: markup and script, shared by every page that offers it (ADR 0083).
 
 A denial may carry an ``intent`` from ``deny_feedback.INTENTS``, picked from chips, and a free-text
 ``note``. This module renders the panel that collects them (``panel_html``) and the script that

@@ -169,8 +169,8 @@ why you said no, or what to do instead. Both parts are optional:
 typed. The note starts empty every time: nothing from the request is ever put into it, so what the
 AI system receives is only what you wrote. It reaches only the AI system that made this request,
 whether it collects the answer straight away or later through `privacyfence_await_approval`, and it
-is not kept in the audit log, which records only the reason and the note's length (ADR 0082, ADR
-0083). A plain **Deny** still takes one tap and sends no note; the AI system is then told not to
+is not kept in the audit log, which records only the reason and the note's length (ADR 0083, ADR
+0084). A plain **Deny** still takes one tap and sends no note; the AI system is then told not to
 retry the same call and to ask you how to proceed.
 
 ### Keyboard

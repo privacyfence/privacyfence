@@ -70,8 +70,8 @@ instead still sees `"denied"` as that approval's status, and the feedback under 
 and `guidance` are `null` when absent. Re-issuing the denied call within the approval's ledger
 lifetime fails with the same text. The note is never written to the audit log, which records only
 the intent and the note's length. See
-[ADR 0082](adr/0082-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) and
-[ADR 0083](adr/0083-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md).
+[ADR 0083](adr/0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) and
+[ADR 0084](adr/0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md).
 
 ## Summary
 

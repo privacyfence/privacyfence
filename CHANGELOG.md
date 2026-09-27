@@ -78,7 +78,7 @@ Organization deployments now work from a phone, and the app looks like the websi
   short note of up to 500 characters; the AI system receives both, whether the deny reaches it
   directly or through `privacyfence_await_approval` (under a new `denial_feedback` key). The note
   goes only to the AI system that made the request: the audit log records the reason and the
-  note's length, never its text. See ADR 0082 and ADR 0083.
+  note's length, never its text. See ADR 0083 and ADR 0084.
 - **The app now looks like the website.** The app and the website share one set of design files
   (colours, spacing, layout building blocks and the rules they follow; ADR 0078), so approvals,
   settings, connections and passkeys use the website's colours, rounded cards, buttons and header

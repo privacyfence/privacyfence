@@ -312,12 +312,12 @@ class PendingApproval:
     # actually releases the call -- see gate.py's own module docstring.
     decided_via: str = ""
     batch_id: str = ""
-    # What the human told the agent with a Deny (ADR 0082) -- empty for every
+    # What the human told the agent with a Deny (ADR 0083) -- empty for every
     # other answer, and for a plain Deny. Set by answer() under the same
     # first-answer-wins check as ``result`` and before ``event`` is set, so a
     # worker woken by the event always sees it. Carried into LedgerHit by
     # consume_ledger(). Never audited, logged or serialized to a page: only
-    # its intent and note length reach the audit log (ADR 0083).
+    # its intent and note length reach the audit log (ADR 0084).
     deny_feedback: DenialFeedback = field(default_factory=DenialFeedback)
 
     def answer(
@@ -328,7 +328,7 @@ class PendingApproval:
         concurrent answers to the same card can't both take effect.
 
         Raises ValueError for non-empty ``feedback`` with any result but
-        "deny": a note must never ride along on an approval (ADR 0082).
+        "deny": a note must never ride along on an approval (ADR 0083).
         Checked before the first-answer-wins test, so a bad call fails the
         same way whether or not the card is still open."""
         feedback = feedback if feedback is not None else DenialFeedback()
@@ -441,7 +441,7 @@ class LedgerHit:
     decided_at: float
     decided_via: str = ""
     batch_id: str = ""
-    # The human's deny feedback (ADR 0082), so a call re-issued after a
+    # The human's deny feedback (ADR 0083), so a call re-issued after a
     # denial raises the same message the synchronous path would have.
     feedback: DenialFeedback = field(default_factory=DenialFeedback)
 
@@ -667,7 +667,7 @@ class PendingApprovalRegistry:
         ``decided_via``/``batch_id`` are "" for every ordinary single-decide
         caller -- only answer_batch() below passes real values.
 
-        ``feedback`` is the human's deny feedback (ADR 0082); ValueError
+        ``feedback`` is the human's deny feedback (ADR 0083); ValueError
         when it is non-empty and ``result`` is not "deny" -- see
         PendingApproval.answer."""
         with self._lock:
@@ -913,7 +913,7 @@ class PendingApprovalRegistry:
     def denial_feedback(self, approval_id: str, *, principal_id: str | None = None) -> DenialFeedback | None:
         """The human's deny feedback for a denied approval -- what
         privacyfence_await_approval reports under its reserved
-        ``denial_feedback`` key (ADR 0082). None unless the approval exists,
+        ``denial_feedback`` key (ADR 0083). None unless the approval exists,
         belongs to ``principal_id`` (the same cross-principal check as
         await_status: a foreign id reads as nothing) and was finalized as
         "deny"; an empty DenialFeedback for a plain Deny."""

@@ -63,7 +63,7 @@ class WebApprovalUI(ApprovalUI):
         rejected"). ``principal_id``
         is web/routes_approvals.py's own authorization check --
         see approvals.PendingApprovalRegistry.answer's own docstring.
-        ``feedback`` is the human's deny feedback (ADR 0082), already parsed
+        ``feedback`` is the human's deny feedback (ADR 0083), already parsed
         and sanitized by the decide route; ValueError with a non-deny
         result."""
         return self._registry.answer(card_id, result, choice, principal_id=principal_id, feedback=feedback)

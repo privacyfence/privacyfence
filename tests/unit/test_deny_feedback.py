@@ -1,4 +1,4 @@
-"""deny_feedback.py: the sanitizer, the parser and the two texts the agent receives (ADR 0082)."""
+"""deny_feedback.py: the sanitizer, the parser and the two texts the agent receives (ADR 0083)."""
 from __future__ import annotations
 
 import json

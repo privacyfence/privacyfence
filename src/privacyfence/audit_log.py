@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 #   4 -- rule attribution and staleness (ADR 0074): + rule_id
 #   5 -- agent attribution (ADR 0006, ADR 0035): + agent_id, agent_name,
 #        agent_version, agent_source
-#   6 -- deny feedback (ADR 0083): + deny_intent, deny_note_chars
+#   6 -- deny feedback (ADR 0084): + deny_intent, deny_note_chars
 CURRENT_SCHEMA_VERSION = 6
 
 # The hash chain's own root -- what the very first entry this install ever
@@ -368,7 +368,7 @@ class AuditEntry:
     agent_name: str = ""     # display name, or the sanitized claimed name for an unmatched client
     agent_version: str = ""  # sanitized claimed version; never verified
     agent_source: str = ""   # "override" | "oauth_client" | "client_info" | "endpoint" | ""
-    # ---- Deny feedback (schema 6, ADR 0083) ----
+    # ---- Deny feedback (schema 6, ADR 0084) ----
     # That the human who denied this request told the agent why, never what they said. Set on a
     # "rejected" entry, and on the "expired" entry for a deny no call ever collected; "" / 0 on
     # every other entry, on a plain Deny, and on every entry recorded before these fields existed.
@@ -727,7 +727,7 @@ class AuditLogger:
             "AI System ID", "AI System", "AI System Version (claimed)",
             "AI System Source (only override/oauth_client are verified)",
             # Deny feedback (schema 6): appended last, same reason again. The note's
-            # text is never recorded (ADR 0083), only its length.
+            # text is never recorded (ADR 0084), only its length.
             "Deny Intent", "Deny Note Length (chars)",
         ]
         COL_WIDTHS = [

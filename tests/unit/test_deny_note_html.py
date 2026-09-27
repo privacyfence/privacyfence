@@ -1,4 +1,4 @@
-"""Tests for deny_note_html.py -- the "Deny with a note…" panel's markup and script (ADR 0082).
+"""Tests for deny_note_html.py -- the "Deny with a note…" panel's markup and script (ADR 0083).
 
 The panel's behaviour in a real page (the chips clearing, the counter, Cancel, Ctrl+Enter) is
 tests/integration/test_browser_smoke.py's ``TestDenyNote``; this is the markup, and the promise

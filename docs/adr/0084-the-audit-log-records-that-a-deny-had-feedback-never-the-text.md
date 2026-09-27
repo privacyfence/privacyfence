@@ -1,13 +1,13 @@
-# ADR 0083: The audit log records that a deny had feedback, never the feedback text
+# ADR 0084: The audit log records that a deny had feedback, never the feedback text
 
 ## Status
 
 Accepted — 2026-09-27. Adds audit schema version 6. Companion to
-[ADR 0082](0082-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md).
+[ADR 0083](0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md).
 
 ## Context
 
-ADR 0082 lets the person who denies an approval send the agent an intent and a free-text note. The
+ADR 0083 lets the person who denies an approval send the agent an intent and a free-text note. The
 audit log is where every decision is recorded, so the question is what it keeps of that feedback.
 
 The audit log is kept for years, is HMAC-chained so an entry cannot be edited later, and can be
@@ -62,7 +62,7 @@ audit log a transcript.
 
 ## Related
 
-- [ADR 0082](0082-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md).
+- [ADR 0083](0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md).
 - [ADR 0071](0071-audit-log-integrity-is-a-keyed-hash-chain-plus-off-host-forwarding.md): the chain
   and forwarding.
 - [ADR 0081](0081-org-mode-sends-a-count-only-web-push.md): why a push never sees a decision.

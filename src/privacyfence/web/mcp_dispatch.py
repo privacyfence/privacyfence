@@ -543,7 +543,7 @@ class McpDispatcher:
 
         Every ``approval_id`` value stays a bare status string. A denied id
         whose human left feedback also appears under the one reserved
-        top-level key ``DENIAL_FEEDBACK_KEY`` (ADR 0082), which no approval
+        top-level key ``DENIAL_FEEDBACK_KEY`` (ADR 0083), which no approval
         id can equal (they are ``uuid4().hex``); the key is absent unless at
         least one denied id in this call has non-empty feedback."""
         ids = [str(i) for i in (approval_ids or [])]

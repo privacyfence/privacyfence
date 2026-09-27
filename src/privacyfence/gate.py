@@ -191,7 +191,7 @@ class GateDeniedError(RuntimeError):
     each raise site below), with one exception: ``by_user()``, the human
     denial, may carry the deciding human's own deny note -- sanitized,
     capped and JSON-quoted behind a static label by
-    deny_feedback.denial_message (ADR 0082). That text is the user's own
+    deny_feedback.denial_message (ADR 0083). That text is the user's own
     words to their own agent, never connector or request data. Unlike the
     bare ``RuntimeError(str(exc))`` every
     connector's own ``_fetch``-style helper raises to wrap a ``*ClientError``
@@ -209,7 +209,7 @@ class GateDeniedError(RuntimeError):
 
     @classmethod
     def by_user(cls, feedback: DenialFeedback) -> GateDeniedError:
-        """A human's Deny, with whatever feedback they gave (ADR 0082). The
+        """A human's Deny, with whatever feedback they gave (ADR 0083). The
         message always starts "Request denied by user." -- see
         deny_feedback.denial_message. The only constructor that may carry
         user text; unattended and policy denials keep their static text."""
@@ -446,7 +446,7 @@ async def _resolve_decision(
     split to time, so there is nothing new to report for it.
     ``decided_via``/``batch_id`` are "" unless the human decided this through the binder's batch decide
     endpoint -- see approvals.PendingApproval's own fields. ``feedback`` is
-    the human's deny feedback (ADR 0082): empty unless ``decision`` is
+    the human's deny feedback (ADR 0083): empty unless ``decision`` is
     "deny" and the human gave some, and always empty on the no-registry
     path, which has no approval for a decide POST to attach it to.
 
@@ -606,7 +606,7 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
                 # A deny nobody collected -- the normal case when the agent
                 # learned of it through privacyfence_await_approval and never
                 # re-issued. Records that feedback was given, never its text
-                # (ADR 0083).
+                # (ADR 0084).
                 deny_feedback=approval.deny_feedback if approval.final_decision == "deny" else None,
             )
 
@@ -1386,7 +1386,7 @@ async def propose_policy_change(
             auto_accept_rule="", pii_detected=False, claude_reason=reason,
         )
         # A confirm dialog's Cancel carries no feedback (out of scope for
-        # ADR 0082), but still gets the clearer default text.
+        # ADR 0083), but still gets the clearer default text.
         raise GateDeniedError.by_user(DenialFeedback())
 
     if operation == "remove":
@@ -1529,7 +1529,7 @@ def _audit(
             # "auto_accepted" audit() calls above that resolved a canonical id; every other
             # decision keeps the default.
             rule_id=rule_id,
-            # ADR 0083: that a deny carried feedback, never the note's text.
+            # ADR 0084: that a deny carried feedback, never the note's text.
             deny_intent=feedback.intent,
             deny_note_chars=len(feedback.note),
         ))

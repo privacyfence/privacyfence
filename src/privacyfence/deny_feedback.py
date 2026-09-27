@@ -1,4 +1,4 @@
-"""What a human may tell the agent when they deny an approval (ADR 0082).
+"""What a human may tell the agent when they deny an approval (ADR 0083).
 
 A denial can carry two optional parts, both authored only by the person deciding the card: an
 ``intent`` from the fixed vocabulary in ``INTENTS`` (picked from chips, so the agent gets a
@@ -9,7 +9,7 @@ what the agent receives, on the synchronous path (``denial_message``, the text o
 (``await_entry``, one value under that tool's reserved ``denial_feedback`` key).
 
 The note is the deciding human's own words and nothing else. It is never content-filtered, and
-never written to the audit log, a log line, the approvals SSE stream or a web push (ADR 0083): only
+never written to the audit log, a log line, the approvals SSE stream or a web push (ADR 0084): only
 its length and the intent are audited. What keeps it from posing as PrivacyFence's own text is
 structure, not screening -- a fixed label in front of it, and JSON quoting, so it can never close
 its own string.

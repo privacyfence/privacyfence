@@ -663,7 +663,7 @@ class TestAgentOnTheRow:
 
 
 class TestDenySelectedWithANote:
-    """"Deny selected with a note…" (ADR 0082): a quiet link after Deny selected that opens the deny
+    """"Deny selected with a note…" (ADR 0083): a quiet link after Deny selected that opens the deny
     note panel (deny_note_html.batch_panel_html); the panel's submit denies every selected request
     with the same note. The row's Deny and plain Deny selected are unchanged: one click, no note.
     Behaviour in a real browser is test_browser_smoke.py's TestListDenyNote."""

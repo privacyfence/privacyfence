@@ -372,7 +372,7 @@ class TestSubscriptionsFollowTheSession:
 
 class TestPayloadIsMinimal:
     def test_payload_builder_is_pinned_to_its_keys_and_a_count(self):
-        # Pinned so decision data (a deny note or intent -- ADR 0082/0083 --
+        # Pinned so decision data (a deny note or intent -- ADR 0083/0084 --
         # or anything else about an approval) can never be added to a push
         # without this test failing first. Web push fires only on creation
         # (ADR 0081) and carries a count; if this needs to change, it needs

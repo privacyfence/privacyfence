@@ -247,7 +247,7 @@ async def _await_approval(server: WebServer, approval_id: str):
 
 async def test_deferred_approval_round_trip_deny_with_note(running_deferred_server):
     """A deny POSTed with an intent and a note reaches the agent on both
-    collection paths (ADR 0082): privacyfence_await_approval reports it
+    collection paths (ADR 0083): privacyfence_await_approval reports it
     under the reserved denial_feedback key, and the re-issued call inside
     the ledger TTL raises the same message the synchronous path would."""
     connector, server = running_deferred_server

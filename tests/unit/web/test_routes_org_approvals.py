@@ -1254,7 +1254,7 @@ class TestApprovalsStream:
 
 
 class TestDenyWithFeedback:
-    """ADR 0082 in org mode: the same decide route, scoped by principal. A
+    """ADR 0083 in org mode: the same decide route, scoped by principal. A
     noted deny reaches the deciding principal's own agent, never steps up,
     and never reaches anyone else's."""
 

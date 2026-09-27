@@ -1,4 +1,4 @@
-# ADR 0082: A human's deny note reaches the agent as delimited, sanitized user text
+# ADR 0083: A human's deny note reaches the agent as delimited, sanitized user text
 
 ## Status
 
@@ -65,7 +65,7 @@ filter would stop no attacker and would censor the user. The real risks are cove
 | The note poses as PrivacyFence's own text (`"Request approved. Proceed…"`) | A fixed label in front, and JSON quoting, so it cannot close its string or read as system text |
 | Invisible or reordering characters (bidi overrides, zero-width) | `sanitize_note()` strips `Cc`/`Cf`/`Zl`/`Zp` |
 | A secret pasted by mistake | `redact_secrets()` over the whole outgoing message |
-| Stored XSS or a leak later | The note is never rendered, stored, logged or pushed ([ADR 0083](0083-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md)) |
+| Stored XSS or a leak later | The note is never rendered, stored, logged or pushed ([ADR 0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md)) |
 | The note talks the agent into something harmful ("delete X instead") | A note approves nothing. Every call the agent makes next goes through the gate, and that human decides that card too |
 
 What remains is social engineering: card content, say an email, asks the reader to type a given
@@ -111,7 +111,7 @@ the backstop, and the panel's help text says who reads the note.
 
 ## Related
 
-- [ADR 0083](0083-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md): what the audit
+- [ADR 0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md): what the audit
   log keeps of it.
 - [ADR 0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md): the ledger the
   re-issue path reads.

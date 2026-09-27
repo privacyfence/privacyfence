@@ -1069,7 +1069,7 @@ def _deny_note_section(html: str) -> str:
 
 
 class TestDenyNotePanel:
-    """The "Deny with a note…" control and its panel (deny_note_html.py, ADR 0082)."""
+    """The "Deny with a note…" control and its panel (deny_note_html.py, ADR 0083)."""
 
     @pytest.mark.parametrize("layout", ["narrow", "wide"])
     def test_card_content_never_reaches_the_panel(self, layout):

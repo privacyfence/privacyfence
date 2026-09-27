@@ -1025,7 +1025,7 @@ class TestIsBatchableAndBlockedReason:
 
 
 class TestDenyFeedback:
-    """ADR 0082: a human's deny feedback rides on the approval, first answer wins, and only a
+    """ADR 0083: a human's deny feedback rides on the approval, first answer wins, and only a
     deny may carry it."""
 
     _FB = DenialFeedback("wrong_target", "only Anna")

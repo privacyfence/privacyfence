@@ -88,7 +88,7 @@ class TestRealNamedRuntimeErrorSubclasses:
         assert public_message(GateDeniedError("Request denied by user")) == "Request denied by user"
 
     def test_gate_denied_error_by_user_passes_the_note_through(self):
-        # ADR 0082: the one GateDeniedError that carries user text still
+        # ADR 0083: the one GateDeniedError that carries user text still
         # reaches the client verbatim (JSON-quoted behind its label).
         from privacyfence.deny_feedback import DenialFeedback
         from privacyfence.gate import GateDeniedError
