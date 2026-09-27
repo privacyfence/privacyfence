@@ -15,7 +15,7 @@ finished. Plan 1 builds everything this plan uses:
 
 | From plan 1 | What it is |
 |---|---|
-| Truthful tool annotations, plus the bundle switch `--tool-annotations all-read-only` | the successor ADR to ADR 0076 |
+| Truthful tool annotations (writes not destructive, except the two deleting tools), plus the bundle switch `--tool-annotations all-read-only` | the successor ADR to ADR 0076 |
 | Schema-portability test (T1) | runs on every PR |
 | Recorded-handshake replay (T2) | parametrized over `tests/fixtures/ai_clients/<client>/`, so adding a directory adds a client |
 | Test org deployment, evidence format and per-client script | `ai-client-qa.md` |
@@ -60,7 +60,9 @@ when its "Depends on" items are done.
    captured. `chatgpt.png` already exists in `resources/agent_icons/`.
 4. **Annotations.** With plan 1's truthful default, ChatGPT sees write tools as writes. It will
    probably ask for its own confirmation before PrivacyFence's card, and "Scan Tools" will label
-   the writes honestly. An organization can switch to `all-read-only` to drop ChatGPT's prompt.
+   the writes honestly. Only `calendar_delete_event` and `drive_sheets_delete_dimensions` are
+   marked destructive. ChatGPT desktop in local mode (WP 3.1) could also send the per-connection
+   header `X-PrivacyFence-Tool-Annotations`, if it lets a user set headers. An organization can switch to `all-read-only` to drop ChatGPT's prompt.
    The ChatGPT docs have to say what that switch implies (D13).
 5. **Files without the shim** use
    [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)'s capability URLs.
@@ -133,7 +135,7 @@ PR A (merge it) "tests: seeded ChatGPT handshake fixture": tests/fixtures/ai_cli
 (register.json with redirect_uri https://chatgpt.com/connector_platform_oauth_redirect,
 initialize.json, README.md "SEEDED FROM VENDOR DOCS, NOT YET CAPTURED", citing sources, expected
 agent_id chatgpt). The replay test picks it up by itself; make it pass.
-PR B (DRAFT, do not merge; WP 2.1 finishes it) "feature: Connect ChatGPT": docs/connect-chatgpt.md
+PR B (DRAFT, do not merge; WP 2.1 finishes it) "feature: Connect ChatGPT": connect-chatgpt.md
 in the connect-claude-*.md template, listed under docs/README.md "AI agent setup": organization
 deployment only (and why); Developer Mode steps (Settings → Apps → Advanced settings → Developer
 mode; Create; /mcp URL; OAuth); re-enable per chat; "Confirmations" per D13; files via capability

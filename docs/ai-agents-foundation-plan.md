@@ -199,28 +199,28 @@ The rule that ties them together: **each manual verification (T4) ends by saving
 
 Decisions D3 and D4 moved to plans 2 and 3.
 
-### Still open
+### Decided on 2026-09-27
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
-| E1 | Should a local install **without** a bundle also be able to pick `all-read-only` (a `settings.yaml` key)? | **No.** It stays an organization choice, made once and signed in the bundle. A single user on Claude Desktop can use Claude's own "Always allow" for a tool. Add the key later if users ask. |
-| E2 | How truthful should writes be, given `ToolSpec` has only `read_only`? | Write tools get `readOnlyHint=false`, `destructiveHint=true` and `idempotentHint=false`, which are MCP's own defaults for a non-read-only tool. Don't add per-tool `destructive` flags now. The gate tables already say what each write does, and finer hints can come later without another decision. |
+| E1 | How does a local install choose `all-read-only`? | **Two `.mcpb` extensions.** `PrivacyFence.mcpb` gets truthful annotations, and a second extension gets every tool read-only. The second is named "PrivacyFence (no Claude prompts)" in Claude Desktop, with manifest `name` `privacyfence-read-only`, and ships as `PrivacyFence-no-prompts.mcpb`. They differ only in their manifest: the read-only one starts `shim.js` with `--tool-annotations=all-read-only`. The shim then sends one extra header on every `/mcp` request, `X-PrivacyFence-Tool-Annotations: all-read-only`. The shim stays free of tool-schema knowledge, because the daemon applies the choice to that session's `tools/list`. **Precedence:** in local mode a connection's header wins, then the bundle's `mcp.tool_annotations`, then `truthful`. So a Claude Code user can pass the same header with `--header`. In org mode the header is **ignored**: the admin's bundle decides. Install **one** of the two; with both installed, Claude Desktop lists every tool twice. The DMG and the Windows installer carry both; the `.deb` carries none, because Linux has no Claude Desktop. → **ADR** (the release artifact set changes; with D5's ADR, or its own) |
+| E2 | How truthful are write tools? | **Writes are advertised as writes, but not destructive**: `readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`. The maintainer's reason: nothing in PrivacyFence deletes. **Correction, confirm before WP 1.1:** two tools do delete. `calendar_delete_event` deletes an event, and `drive_sheets_delete_dimensions` deletes spreadsheet rows or columns. The plan marks just those two `destructiveHint=true` through a new `ToolSpec.destructive` flag (default `False`). A test pins the destructive set to exactly that list, so a new deleting tool has to be classified on purpose. Overwrites (`drive_write_file_content`, `drive_sheets_write_range`, …) stay non-destructive, as decided. Reads: `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`. |
 
 ---
 
 ## 4. Roadmap at a glance
 
 ```text
-🧑 M0  decisions (done except E1/E2) + a test org deployment on public HTTPS
+🧑 M0  decisions (done; confirm the E2 correction) + a test org deployment on public HTTPS
 │
 🤖 WAVE 1   WP1.1 annotation setting + ADR │ WP1.2 T1+T2 harness (Claude seeds) │ WP1.3 T3 Claude Code + canary
 │           WP1.4 ai-client-qa.md │ WP1.5 connect-claude-*.md docs + ai-agent content group
 │
 🧑 M1  Claude Code local/org, claude.ai org, Claude Desktop local/org: capture + annotation behaviour
 │
-🤖 WAVE 2   WP2.1 captured fixtures, Claude registry names, ADR amending 0035
+🤖 WAVE 2   WP2.1 captured fixtures, Claude registry names, ADR amending 0035 │ WP2.2 the second .mcpb
 │
-🧑 M2  cut a stable release (carries WP1.1, WP1.5, WP2.1)
+🧑 M2  cut a stable release (carries WP1.1, WP1.5, WP2.1, WP2.2)
 │
 🤖 WAVE 3   WP3.1 website: AI agents menu + 3 pages + guardrail 14
 │
@@ -233,39 +233,48 @@ Decisions D3 and D4 moved to plans 2 and 3.
 
 ### 🤖 WAVE 1 (5 parallel sessions)
 
-Depends on: M0.1. E1 and E2 are answered before WP 1.1 starts.
+Depends on: M0.1, including the E2 correction confirmed.
 
-#### WP 1.1: truthful tool annotations, org-bundle switch, ADR · `feature:`
+#### WP 1.1: truthful tool annotations, bundle switch, per-connection choice, ADR · `feature:`
 
 **Session prompt:**
 
 ```text
 Read docs/ai-agents-foundation-plan.md §1 (item 4) and §3 (D5, E1, E2). Implement WP 1.1:
 1. ADR (next free number at merge time, ≥ 0081) "Tool annotations are truthful by default; an
-   organization bundle can advertise every tool read-only", superseding ADR 0076 (add one Status
-   line to 0076 pointing forward; never edit its body). Context: ADR 0076 and
-   https://github.com/privacyfence/privacyfence/issues/46. Decision: D5 and E2. Alternatives:
-   keep uniform (0076); per-client annotations keyed on agent identity (rejected: the identity is
-   a claim, and one daemon serves several clients); a settings.yaml key (E1).
-2. web/mcp_tools.py: to_mcp_tool(spec, *, annotations_mode) — "truthful": readOnlyHint =
-   spec.read_only; for writes destructiveHint=True, idempotentHint=False; for reads
-   destructiveHint=False, idempotentHint=True. "all_read_only": today's uniform triple. Thread the
-   mode from the bundle (key mcp.tool_annotations, values "truthful" | "all_read_only", absent =
-   truthful; any other value → the daemon refuses to start, like other malformed bundle keys)
-   through daemon_main to every tools/list. Meta-tools keep their own annotations in both modes.
-   Update the module comment (it cites ADR 0076 and issue 46).
-3. scripts/build_org_bundle.py: --tool-annotations {truthful,all-read-only}; not written unless
-   given; applies in both modes (like --enable-unattended-sessions). configuration-reference.md
-   build-options row; connect-*.md pages don't exist yet — how-it-works.md "What the AI system is
-   told" paragraph rewritten for the new default and the switch.
-4. Tests: replace the two uniform-read-only tests (test_mcp_tools.py, test_routes_mcp.py) with
-   parametrized ones for both modes, including a live /mcp list_tools; bundle parse/refuse tests;
-   build_org_bundle tests.
-5. CHANGELOG [Unreleased] "Changed": write tools are now advertised as writes; clients may ask
-   for their own confirmation before PrivacyFence's; organizations can restore the previous
-   behaviour with --tool-annotations all-read-only.
-Run /dod; one PR "feature: truthful tool annotations with an org-bundle switch"; drive to green.
-Close https://github.com/privacyfence/privacyfence/issues/46 from the PR description.
+   organization bundle or a local connection can ask for every tool read-only", superseding ADR
+   0076 (add one Status line to 0076 pointing forward; never edit its body). Context: ADR 0076 and
+   https://github.com/privacyfence/privacyfence/issues/46. Decision: D5, E1 (the precedence rule
+   and why org mode ignores the connection's choice) and E2 (writes non-destructive; the two
+   deleting tools destructive; the maintainer's reasoning). Alternatives: keep uniform (0076);
+   per-client annotations keyed on agent identity (rejected: the identity is a claim); a
+   settings.yaml key (rejected in favour of the per-connection choice, E1); destructiveHint=true
+   for every write (MCP's default; rejected, E2).
+2. connector.py ToolSpec: `destructive: bool = False`; set it on calendar_delete_event and
+   drive_sheets_delete_dimensions only. A test pins the set of destructive tools to exactly those
+   two, and one asserts every destructive tool is also not read_only.
+3. web/mcp_tools.py: to_mcp_tool(spec, *, annotations_mode). "truthful": reads → (readOnly=True,
+   destructive=False, idempotent=True); writes → (readOnly=False, destructive=spec.destructive,
+   idempotent=False). "all_read_only": today's uniform triple. Meta-tools keep their own
+   annotations in both modes. Update the module comment (it cites ADR 0076 and issue 46).
+4. The mode per MCP session: in local mode, the request header X-PrivacyFence-Tool-Annotations
+   ("truthful" | "all-read-only"; anything else → 400 with a clear message) wins; otherwise the
+   bundle's mcp.tool_annotations; otherwise "truthful". In org mode the header is ignored and the
+   bundle decides. Bundle key values "truthful" | "all_read_only", absent = truthful; any other
+   value → the daemon refuses to start. Thread it through daemon_main / routes_mcp to tools/list.
+5. scripts/build_org_bundle.py: --tool-annotations {truthful,all-read-only}; not written unless
+   given; applies in both modes. configuration-reference.md: the bundle option row and the header
+   (in "Web server and MCP"). how-it-works.md "What the AI system is told": the new default, the
+   two tools marked destructive, the bundle switch, the header.
+6. Tests: replace the two uniform-read-only tests (test_mcp_tools.py, test_routes_mcp.py) with
+   parametrized ones for every mode, including a live /mcp list_tools; header precedence in local
+   mode; header ignored in org mode; bad header → 400; bundle parse/refuse; build_org_bundle.
+7. CHANGELOG [Unreleased] "Changed": write tools are now advertised as writes (two deleting tools
+   as destructive); clients may ask for their own confirmation before PrivacyFence's;
+   organizations can restore the previous behaviour with --tool-annotations all-read-only, and in
+   local mode a client can ask for it per connection.
+No .mcpb change here (WP 2.2). Run /dod; one PR "feature: truthful tool annotations"; drive to
+green. Close https://github.com/privacyfence/privacyfence/issues/46 from the PR description.
 ```
 
 #### WP 1.2: T1 portability lint and T2 replay harness, seeded with Claude · `tests:`
@@ -331,7 +340,7 @@ green. After merge, dispatch the canary once (steward: only possible from main).
 
 ```text
 Read docs/ai-agents-foundation-plan.md §1–§3 (D2). Implement WP 1.4:
-1. New contributor doc docs/ai-client-qa.md (the shape of connector-qa.md's "Recording results"):
+1. New contributor doc ai-client-qa.md (the shape of connector-qa.md's "Recording results"):
    - "Test organization deployment": the recipe in this plan's §6 M0.2, moved here so it outlives
      the plan (plans 2 and 3 point at it).
    - "Evidence to record": the list in this plan's §6, moved here.
@@ -356,8 +365,8 @@ Run /dod; one PR "chore: AI-client QA checklist"; drive to green.
 
 ```text
 Read docs/ai-agents-foundation-plan.md §1 (items 1, 2, 11) and §3 (D1). Implement WP 1.5:
-1. New published docs docs/connect-claude-desktop.md, docs/connect-claude-code.md,
-   docs/connect-claude-ai.md. Each has the same shape (the template plans 2 and 3 copy):
+1. New published docs connect-claude-desktop.md, connect-claude-code.md,
+   connect-claude-ai.md. Each has the same shape (the template plans 2 and 3 copy):
    title "Connect <client>"; which deployments it works with (claude.ai: organization only, and
    why); "Local mode" with a per-platform table for the token command; "Organization mode"; "Files"
    (Claude Desktop via the extension; the others via capability URLs, ADR 0028); "Confirmations"
@@ -391,14 +400,14 @@ Depends on: WAVE 1 merged, WP 1.1 included, and the test org deployment from M0.
 
 - with the default bundle (**truthful**): note whether the client asks for its own confirmation
   before a write;
-- with a bundle built with `--tool-annotations all-read-only`: the client should not ask.
+- with `all-read-only` (a bundle built with `--tool-annotations all-read-only` in org mode; in local mode, the `X-PrivacyFence-Tool-Annotations: all-read-only` header): the client should not ask.
 
 | Step | Client | Mode | Notes |
 |---|---|---|---|
 | M1.1 | Claude Code | local | Use the command from `connect-claude-code.md`. |
 | M1.2 | Claude Code | org | `claude mcp add --transport http privacyfence https://pf-test.<your-domain>/mcp`, then `/mcp` to sign in. Pin the registration. Save the `oauth_clients.json` entry with the secret redacted. |
 | M1.3 | claude.ai | org | Add a custom connector with the `/mcp` URL and **Connect**. On a Team plan, check the write prompt under both annotation modes: this is the exact case ADR 0076 was written for. Pin the registration and save the entry. |
-| M1.4 | Claude Desktop | local | The `.mcpb` extension. Note Claude Desktop's own tool prompt under both modes. |
+| M1.4 | Claude Desktop | local | The `.mcpb` extension. Note Claude Desktop's own tool prompt. For the read-only mode, send the header from a Claude Code run now; the second `.mcpb` is checked in M2 after WP 2.2. |
 | M1.5 | Claude Desktop | org | A custom connector with the `/mcp` URL. Pin the registration and save the entry. |
 
 ---
@@ -425,7 +434,41 @@ Run /dod; one PR "fix: Claude clients' observed names, captured handshake fixtur
 green.
 ```
 
-Then **🧑 M2**: cut a stable release (`/cut-release`). It must carry WP 1.1, WP 1.5 and WP 2.1, so
+#### WP 2.2: the second Claude Desktop extension · `feature:`
+
+Depends on: WP 1.1 merged. It runs in parallel with WP 2.1.
+
+**Session prompt:**
+
+```text
+Read docs/ai-agents-foundation-plan.md §3 (E1) and CLAUDE.md "macOS ships one file". Implement
+WP 2.2, the release-artifact change E1 decided:
+1. mcpb/shim: accept --tool-annotations=<truthful|all-read-only>; when given, send
+   X-PrivacyFence-Tool-Annotations on every /mcp request (and nothing else changes — the shim
+   stays free of tool-schema knowledge). Unit tests in the shim's own test suite.
+2. scripts/build_mcpb.sh builds both: PrivacyFence-<version>.mcpb (unchanged) and
+   PrivacyFence-no-prompts-<version>.mcpb from the same template with name
+   "privacyfence-read-only", display_name "PrivacyFence (no Claude prompts)", a description that
+   says Claude Desktop will not ask before PrivacyFence's own approval and that only one of the
+   two should be installed, and args ["${__dirname}/server/shim.js",
+   "--tool-annotations=all-read-only"].
+3. scripts/build_dmg.sh: the DMG carries the .pkg and both extensions (stable names
+   PrivacyFence.mcpb and PrivacyFence-no-prompts.mcpb); build_pkg.sh's conclusion screen names
+   both and says to open one. installer/privacyfence.iss ships both into {app} and its "open the
+   .mcpb" step offers the default one, mentioning the other. The .deb is unchanged.
+4. Packaged smoke tests (macOS DMG, Windows installer): assert both files exist, and that the
+   no-prompts one's tools/list comes back all read-only through the real daemon. Dispatch
+   build.yml against the branch (steward) and confirm build, build-windows and build-deb are green
+   before review.
+5. Docs: CLAUDE.md "macOS ships one file" (the DMG now carries the .pkg and two .mcpb), docs/
+   packaging.md, connect-claude-desktop.md "Confirmations" (which extension to pick), the
+   install-macos/windows "Connect Claude Desktop" sections. The ADR for E1 if WP 1.1's ADR
+   didn't cover the artifact set. CHANGELOG [Unreleased] "Added".
+Run /dod; one PR "feature: a second Claude Desktop extension without Claude's own prompts"; drive
+to green.
+```
+
+Then **🧑 M2**: cut a stable release (`/cut-release`). It must carry WP 1.1, WP 1.5, WP 2.1 and WP 2.2, so
 that the new `connect-claude-*` pages are on `privacyfence.eu/docs/`.
 
 ---
@@ -483,7 +526,7 @@ guardrail 14.
 | Intro | kicker "AI agent · \<name\>", one-sentence summary, which deployments it works with |
 | How it connects | extension (`.mcpb`), or direct HTTP with a bearer token, or OAuth with dynamic registration; why web clients need an organization deployment |
 | Set it up | "Local mode" and "Organization mode" step lists (3–4 steps each), with a **Set it up** button to `/docs/connect-<slug>/` |
-| Confirmations | whether the client asks before PrivacyFence's card, and the organization's `--tool-annotations` switch (D5) |
+| Confirmations | whether the client asks before PrivacyFence's card; the organization's `--tool-annotations` switch (D5); for Claude Desktop, which of the two extensions to install (E1) |
 | Files | through the extension (Claude Desktop), or through capability URLs (ADR 0028) |
 | How it's identified | the card says the client *says* it is \<name\> (**Not verified**), and an organization admin can pin it on **Settings → AI systems** to make it verified |
 | Client settings worth knowing | for example: Claude Desktop's own tool prompt; claude.ai Team/Enterprise owners add the connector for everyone |
@@ -521,7 +564,7 @@ After this merges, plans 2 and 3 can start.
 
 ### M0: before Wave 1
 
-**M0.1 Decisions.** D1–D12 are done. Answer E1 and E2 (§3).
+**M0.1 Decisions.** D1–D12, E1 and E2 are done. Confirm E2's correction about the two deleting tools.
 
 **M0.2 A test organization deployment on public HTTPS** (1–3 h if you don't have one; M1.2–M1.5
 need it, and so do plans 2 and 3). WP 1.4 moves this recipe into `ai-client-qa.md`.
@@ -557,7 +600,13 @@ WP 1.4 moves this list into `ai-client-qa.md`.
 
 ### M2: release after Wave 2
 
-Cut a stable release with `/cut-release`. Then run WAVE 3.
+1. Cut a pre-release (`/cut-release` with an `aN` tag) and install it from
+   <https://privacyfence.eu/download/> → "Want to test the next version?".
+2. In Claude Desktop, install `PrivacyFence.mcpb` and make one gated write. Then remove it,
+   install `PrivacyFence-no-prompts.mcpb`, and make the same write. **Expected:** Claude asks first
+   only with the first extension. Post both results on issue 46 (the M1.4 row of the evidence
+   table).
+3. Cut the stable release. Then run WAVE 3.
 
 ### M3: after Wave 3
 

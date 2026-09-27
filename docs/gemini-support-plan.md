@@ -153,12 +153,13 @@ PR A (merge) "tests: seeded Gemini CLI handshake fixture": tests/fixtures/ai_cli
 (register.json with redirect http://localhost:7777/oauth/callback, initialize.json with
 clientInfo gemini-cli-mcp-client, README "SEEDED FROM VENDOR DOCS, NOT YET CAPTURED", citing
 sources, expected agent_id gemini-cli). The replay test picks it up.
-PR B (DRAFT; WP 2.1 finishes it) "feature: Connect Gemini CLI": docs/connect-gemini-cli.md in the
+PR B (DRAFT; WP 2.1 finishes it) "feature: Connect Gemini CLI": connect-gemini-cli.md in the
 connect-claude-*.md template, under docs/README.md "AI agent setup": local mode (settings.json
 httpUrl + headers, and `gemini mcp add --transport http privacyfence <mcp_url> --header
 "Authorization: Bearer $(<platform binary> --print-mcp-token)"`, per platform); organization mode
-(httpUrl without headers, `/mcp auth`); no shim; Confirmations (Gemini CLI's own tool prompt, and
-the --tool-annotations switch); files via capability URLs; pinning. Org guide §9 bullet. A
+(httpUrl without headers, `/mcp auth`); no shim; Confirmations (Gemini CLI's own tool prompt; the
+--tool-annotations bundle switch; in local mode the X-PrivacyFence-Tool-Annotations header, added
+with a second --header); files via capability URLs; pinning. Org guide §9 bullet. A
 "Verification pending" note linking https://github.com/privacyfence/privacyfence/issues/392.
 ```
 
@@ -315,7 +316,7 @@ Implement WP 4.1:
    tests/fixtures/ai_clients/gemini-enterprise/ driving /authorize → /token with client_secret
    auth (extend the replay test if pre-registration needs a different first step).
 5. REGISTRY "gemini-enterprise" keyed on the name the command sets, with icon and license row.
-6. docs/connect-gemini-enterprise.md (the connect template, "AI agent setup"), and an org guide
+6. connect-gemini-enterprise.md (the connect template, "AI agent setup"), and an org guide
    §9 subsection "Clients that can't register themselves" linking it; authorization URL
    https://<host>/authorize, token URL https://<host>/token, redirect URI from M3.1;
    "Verification pending" linking the full issue 393 URL. configuration-reference.md: the new
