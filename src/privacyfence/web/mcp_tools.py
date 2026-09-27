@@ -215,17 +215,18 @@ BEGIN_UNATTENDED_SESSION_TOOL = types.Tool(
 AWAIT_APPROVAL_TOOL = types.Tool(
     name="privacyfence_await_approval",
     description=(
-        "Long-poll pending approvals from gated calls' {status: 'approval_pending', approval_id, "
-        "pending_count, binder_url, url} results; status only, never content. Before the first call "
-        "for an approval, relay that result's message and url (binder_url if several) to the user -- "
-        "never wait silently. If pending_count > 1, first issue your other ready gated calls, then "
-        "pass all approval_ids in one call (one human pass). Keep timeout_seconds under your client's "
-        "tool-call timeout. Returns {approval_id: status}: 'pending' (schedule a follow-up if you "
-        "can, else call again), 'approved' (re-issue the ORIGINAL call with identical arguments -- "
-        "the only way to get the data), 'denied' (a human said no -- re-issuing will not change that; "
+        "Long-poll pending approvals from gated calls' {status: 'approval_pending', approval_id, ...} "
+        "results; status only, never content. Before the first call for an approval, relay that "
+        "result's message and url (binder_url if several) to the user -- never wait silently. If "
+        "pending_count > 1, first issue your other ready gated calls, then pass all approval_ids in "
+        "one call (one human pass). Keep timeout_seconds under your client's tool-call timeout. "
+        "Returns {approval_id: status}: 'pending' (schedule a follow-up if you can, else call again), "
+        "'approved' (re-issue the ORIGINAL call with identical arguments -- the only way to get the data), "
+        "'denied' (a human said no -- re-issuing will not change that; "
         "don't retry, ask the user how to proceed unless denial_feedback says otherwise), 'expired' "
         "(re-issuing starts a fresh approval) or 'unknown' (no such id here). denial_feedback holds "
-        "the user's instruction for a denial: follow it. Returns on any change or at the timeout."
+        "the user's instruction for a denial: follow it. Returns on any change or at the timeout. "
+        "Prefer this over re-issuing the original call to poll."
     ),
     input_schema={
         "type": "object",
@@ -243,16 +244,16 @@ PRIVACYFENCE_STATUS_TOOL = types.Tool(
     description=(
         "Check whether THIS PrivacyFence install is set up: call it before the first "
         "PrivacyFence-governed action in a conversation, or when asked why a connector (gmail_*, "
-        "drive_*, ...) is missing. An empty or partial tool list means connectors aren't "
-        "authenticated yet, NOT that PrivacyFence is irrelevant. Returns {mode ('local'/'org'), "
-        "setup_complete (any connector authenticated), connectors [{name, enabled, authenticated, "
-        "blocked_by: null, 'no_org_config', 'not_authenticated' or a reason}], next_step, message, "
-        "sign_in_url (always null: no tool mints sign-in links)}. If setup isn't complete, relay "
-        "message to the human as-is. next_step 'open_privacyfence_companion' (local): the human opens "
-        "PrivacyFence's companion app (menu-bar/tray icon; Linux: applications menu) and chooses Open "
-        "Settings; you can't, and have no link. 'contact_your_administrator' (org): sign-in is via "
-        "the org's IdP. No side effects but an audit entry. reason: one sentence on why you're "
-        "checking now (logged)."
+        "...) is missing. An empty or partial tool list means connectors aren't authenticated yet, "
+        "NOT that PrivacyFence is irrelevant -- this is the one tool guaranteed to exist even when "
+        "every other tool is missing. Returns {mode ('local'/'org'), setup_complete (any connector "
+        "authenticated), connectors [{name, enabled, authenticated, blocked_by: null, "
+        "'no_org_config', 'not_authenticated' or a reason}], next_step, message, sign_in_url "
+        "(always null)}. If setup isn't complete, relay message to the human as-is. next_step "
+        "'open_privacyfence_companion' (local): the human opens PrivacyFence's companion app "
+        "(menu-bar/tray icon; Linux: applications menu) and chooses Open Settings; you can't, and "
+        "have no link. 'contact_your_administrator' (org): sign-in is via the org's IdP. Only side "
+        "effect: an audit entry. reason: one sentence on why you're checking now (logged)."
     ),
     input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
     annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
