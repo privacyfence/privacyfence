@@ -254,6 +254,40 @@ A chip component, if one is needed, goes into `app.css` with every state, and in
     shortcut is acceptable there (it never can be for Allow once).
 - The note is never rendered back into any page. The server never echoes it into HTML or SSE, so
   there is no XSS surface to guard.
+- **Nothing but the person's typing ever fills the note.** `panel_html()` takes no content
+  argument, so the textarea always renders empty, with no `value`, text node or `placeholder`
+  built from request data. `PANEL_JS` reads only the textarea and chips inside its own panel. No
+  code path copies card content (preview, summary, the agent's reason) into them. This is what
+  makes the note the deciding human's words and nothing else. Why the text is then passed on
+  unfiltered is covered in "The note is not content-filtered" below.
+
+### The note is not content-filtered
+
+The note is not screened for "prompt injection" or other harmful text. That is a deliberate
+choice, and ADR 0082 records it. Only one party can write the note: the signed-in human deciding
+this card. Their session, the CSRF token and the origin check are the same guards as a plain Deny
+today, and org mode lets each person decide only their own approvals. The agent has no route that
+decides an approval, and connector data never reaches the field (above). An "injection" in the note
+is therefore the user instructing their own agent, which they can already do in the chat, word for
+word. A filter would stop no attacker and would censor the user.
+
+The real risks are covered structurally, not by filtering:
+
+| Risk | Covered by |
+|---|---|
+| The note poses as PrivacyFence's own text (`"Request approved. Proceed…"`) | A fixed label in front, and JSON quoting, so it cannot close its string or read as system text |
+| Invisible or reordering characters (bidi overrides, zero-width) | `sanitize_note()` strips `Cc`/`Cf`/`Zl`/`Zp` |
+| A secret pasted by mistake | `redact_secrets()` over the whole outgoing message |
+| Stored XSS or a leak later | The note is never rendered, stored, logged or pushed |
+| The note talks the agent into something harmful ("delete X instead") | A note approves nothing. Every call the agent makes next goes through the gate, and that human decides that card too |
+
+What remains is social engineering: card content, say an email, asks the reader to type a given
+sentence into the note. Filtering would not catch a rephrasing. The gate on the agent's next call
+is the backstop, and the panel's help text says who reads the note.
+
+Content classifiers were rejected because they are unreliable. An ordinary note such as "ignore
+the previous draft, rewrite it shorter" looks like an injection. A falsely blocked note would also
+leave the person with a plain deny, which is worse than today.
 
 **Approval list** (`approval_list_html.py`):
 
@@ -310,7 +344,12 @@ merge of `main`.
     - turning the status value into an object;
     - a separate MCP tool to fetch feedback (an extra round trip the agent would forget);
     - server-side enforcement of `stop`;
-    - letting a note ride on an approve.
+    - letting a note ride on an approve;
+    - screening the note for prompt injection or harmful content. Only the deciding human can
+      write it, so any "injection" is the user instructing their own agent. Classifiers flag
+      ordinary notes. Structural guards cover the real risks, and the gate on the agent's next
+      call is the backstop against social engineering (the plan's "The note is not
+      content-filtered" section; copy its table into the ADR).
 - **ADR 0083: The audit log records that a deny had feedback, never the feedback text.**
   - Decided: schema v6 with `deny_intent` and `deny_note_chars`.
   - Rejected:
@@ -429,6 +468,15 @@ phases:
          no colour literals; use app.css's field/button classes. If chips need a component, add
          it to resources/design/app.css with hover, focus-visible, checked, disabled and dark
          states and 44px targets, and add it to render_ui_review.py's style guide.
+         panel_html takes no content argument (see "Nothing but the person's typing ever fills
+         the note" in the plan).
+         Unit tests (test_deny_note_html.py, and test_approval_window_html.py for the whole card):
+         build a card whose preview, summary and claude_reason each carry a marker string and
+         some hostile markup (`</textarea><script>`, a closing quote, `value="…"`). Assert that the
+         panel's textarea is empty, that no chip is pre-selected, and that the marker occurs
+         nowhere inside the #pf-deny-note section.
+         Browser test (step 4): with that card loaded, open the panel, submit without typing, and
+         assert the POST body carries no note.
       2. approval_window_html.py: the "Deny with a note…" control next to Deny
          (.pf-btn-link, data-pf-note-open, starts aria-disabled like the other controls and is
          enabled by enableButtons), the panel above the button row, and _JS changes: post()
@@ -453,12 +501,13 @@ phases:
          reviews.
     acceptance:
       - plain Deny and Escape unchanged (existing tests untouched and green)
+      - the note field is never pre-filled from card content (unit and browser tests named)
       - action hierarchy assertions pass for 1 and 2+ candidates
       - phone-harness cases pass at 393 and 320 with no xfail
       - screenshots in the report
 
   - id: p3-list
-    title: "Deny selected with a note…" on the approval list
+    title: '"Deny selected with a note…" on the approval list'
     depends_on: [p2-card]
     brief: |
       Read "UI" → "Approval list" in the plan. Reuse deny_note_html from p2 unchanged; if it needs
