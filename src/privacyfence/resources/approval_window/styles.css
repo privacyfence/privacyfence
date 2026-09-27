@@ -364,13 +364,19 @@ img { display: block; max-width: 100%; }
 /* The divider belongs above whichever row comes first. */
 .pf-btn-row-candidates + .pf-btn-row { border-top: none; padding-top: 0; }
 /* Not yet enabled: a plain <div role="button"> has no disabled state of its own. */
-[data-pf-action][aria-disabled="true"] { pointer-events: none; cursor: default; }
+[data-pf-action][aria-disabled="true"], [data-pf-note-open][aria-disabled="true"] { pointer-events: none; cursor: default; }
 .pf-btn-link[aria-disabled="true"] { opacity: .45; }
 .pf-btn-link {
   cursor: pointer; user-select: none; background: none; border: none; padding: 0;
   font: 400 11px var(--font-sans); color: var(--ink-soft);
   text-decoration: underline; text-underline-offset: 2px;
 }
+
+/* The deny note panel (deny_note_html.py): an app.css .card directly above the button rows,
+   hidden until "Deny with a note…" opens it. flex:none like the rows: in a frame, the scroll
+   region above gives up the height the open panel needs, and the panel never shrinks. */
+.pf-deny-note { flex: none; margin-top: 15px; }
+.pf-deny-note textarea.field { min-height: 88px; }
 
 /* — compact — the card has under 600px: a phone, or a narrow row. Last in the file because
    several of these override the rules above at equal specificity. */
@@ -411,6 +417,10 @@ img { display: block; max-width: 100%; }
   .pf-btn-row .pf-btn-deny { grid-row: 1; grid-column: 1; }
   .pf-btn-row .pf-btn-primary { grid-row: 1; grid-column: 2; }
   .pf-btn-row .pf-btn-link { grid-row: 2; grid-column: 1 / -1; }
+  /* "Deny with a note…" goes under Deny, the decision it belongs to. Always allow, when it is
+     inline too, moves under Allow once beside it rather than onto a row of its own. */
+  .pf-btn-row .pf-btn-note-open { grid-column: 1; }
+  .pf-btn-row .pf-btn-note-open ~ .pf-btn-link { grid-column: 2; }
   /* A dialog with Cancel alone: one full-width target. */
   .pf-btn-row-left:only-child .pf-btn-deny { grid-column: 1 / -1; }
   .pf-btn-row .button { min-width: 0; }

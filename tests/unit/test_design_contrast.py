@@ -49,6 +49,7 @@ PAIRS: list[tuple[str, str, float, str]] = [
       for bg in _BACKGROUNDS],
     ("ink", "bg", BOUNDARY, "the primary button's fill against the page"),
     ("accent", "surface-soft", BOUNDARY, "a toggle that is on, against one that is off"),
+    ("accent", "accent-soft", BOUNDARY, "the edge of a checked chip"),
 ]
 
 _DECLARATION = re.compile(r"--([\w-]+)\s*:\s*([^;]+);")
