@@ -183,10 +183,20 @@ def check_origin(request: Request) -> bool:
     """Defense in depth on top of the double-submit token above -- see
     web/session_auth.py's identical function for the full rationale.
     ``None`` (no Origin header at all) is accepted; only a *mismatched*
-    Origin is rejected."""
+    Origin is rejected.
+
+    ``Origin: null`` is what a browser sends for a native form post from a
+    page whose ``Referrer-Policy`` is ``no-referrer``, as every page here is
+    (web/server.py), so /connect's own Telegram forms arrive with it. It is
+    accepted only when the browser's own ``Sec-Fetch-Site`` says the post
+    came from this origin -- a header no page can set, so a cross-site
+    sandboxed frame, which also sends ``null``, is still rejected (ADR 0082).
+    ``fetch()`` posts keep their real Origin, so only native forms need this."""
     origin = request.headers.get("origin")
     if origin is None:
         return True
+    if origin == "null":
+        return request.headers.get("sec-fetch-site") == "same-origin"
     return origin == f"{request.url.scheme}://{request.url.netloc}"
 
 

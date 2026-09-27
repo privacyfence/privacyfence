@@ -656,7 +656,7 @@ class TestRunningOrgModeService:
 
         # Logging alice out must not touch bob's still-live session.
         logout = self.client.post("/logout", headers={"Cookie": f"pf_org_session={cookie_a}"})
-        assert logout.status_code == 302
+        assert logout.status_code == 303
 
         assert self.client.get("/approvals", headers={"Cookie": f"pf_org_session={cookie_a}"}).status_code == 302
         assert self.client.get("/approvals", headers={"Cookie": f"pf_org_session={cookie_b}"}).status_code == 200

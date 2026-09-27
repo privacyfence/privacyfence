@@ -187,3 +187,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0079](0079-the-apps-visual-language-is-the-websites.md) | The app's visual language is the website's, with a dark mode derived from it | Accepted |
 | [0080](0080-pdf-previews-are-rasterised-on-the-server.md) | PDF previews are rasterised on the server for narrow screens, instead of pdf.js or a new route | Accepted |
 | [0081](0081-org-mode-sends-a-count-only-web-push.md) | Org mode sends a count-only, padded web push through the browser's push service, with an org-wide off switch; local mode sends none | Accepted |
+| [0082](0082-org-mode-form-action-allows-self-and-sign-out-stays-on-the-app.md) | Org mode's `form-action` is `'self'`, and a sign-out lands on the app's own page; local mode keeps `'none'` | Accepted |

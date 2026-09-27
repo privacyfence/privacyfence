@@ -116,7 +116,15 @@ def build_csp(nonce: str, *, app_origin: str = "") -> str:
     widens ``img-src`` by exactly the manifest's icon folder, ``<origin>/icons/``, for a browser
     that fetches manifest icons under the page's policy. Local mode links no manifest, so its
     policy stays as it was.
+
+    ``form-action`` follows the same split (ADR 0082). Org mode's ``/connect`` posts native forms
+    back to this app (sign-out, and each Telegram step), so its policy allows ``'self'``, and
+    nothing wider: every one of those submissions, redirects included, ends on this origin (a
+    sign-out lands on ``/signed-out``, not on ``/login``'s bounce to the IdP), and browsers check
+    ``form-action`` on each redirect a submission follows. Local mode renders no native form at
+    all, so it keeps ``'none'``.
     """
+    form_action = "'self'" if app_origin else "'none'"
     img_src = f"data: {app_origin.rstrip('/')}/icons/" if app_origin else "data:"
     manifest_src = "manifest-src 'self'; " if app_origin else ""
     return (
@@ -127,7 +135,7 @@ def build_csp(nonce: str, *, app_origin: str = "") -> str:
         f"img-src {img_src}; font-src data:; object-src data:; frame-src data:; "
         "connect-src 'self'; worker-src 'self'; "
         f"{manifest_src}"
-        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        f"base-uri 'none'; form-action {form_action}; frame-ancestors 'none'"
     )
 
 

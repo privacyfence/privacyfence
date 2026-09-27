@@ -90,7 +90,7 @@ Key modules in the suite:
 - `tests/platform/` — atomic-write concurrency, cross-process single-instance locking, the browser
   launch default, a spawned-daemon lifecycle, and real `icacls` behavior on Windows.
 - `tests/integration/test_browser_smoke.py` — real headless Chromium: login, decisions (including
-  "Always allow", live SSE refresh, idempotency), PDF preview, CSP, org-mode WebAuthn, PII banners,
+  "Always allow", live SSE refresh, idempotency), PDF preview, CSP (including every native form post), org-mode WebAuthn, PII banners,
   three viewports, light/dark structure. `test_download_page.py` covers `website/download/` and
   `test_releases_page.py` covers `website/releases/`, both with the Worker's API stubbed.
 - Each connector's `TestLiveFixtureParsing` replays a committed fixture from

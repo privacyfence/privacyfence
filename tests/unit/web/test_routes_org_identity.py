@@ -239,7 +239,7 @@ class TestLogout:
 
         r = client.post("/logout")
 
-        assert r.status_code == 302
+        assert r.status_code == 303
         assert sessions.get(alice_session) is None
 
     def test_get_is_not_allowed(self):
@@ -247,10 +247,10 @@ class TestLogout:
         r = _client(app).get("/logout")
         assert r.status_code == 405
 
-    def test_without_a_session_cookie_still_redirects_to_login(self):
+    def test_without_a_session_cookie_still_lands_on_the_signed_out_page(self):
         app, _sessions = _app()
         r = _client(app).post("/logout")
-        assert r.status_code == 302 and r.headers["location"] == "/login"
+        assert r.status_code == 303 and r.headers["location"] == "/signed-out"
 
     def test_a_push_store_that_cannot_be_written_does_not_stop_sign_out(self, caplog):
         """ADR 0081: sign-out removes the browser's push subscriptions, but a disk error doing so
@@ -269,9 +269,28 @@ class TestLogout:
 
         r = client.post("/logout")
 
-        assert r.status_code == 302 and r.headers["location"] == "/login"
+        assert r.status_code == 303 and r.headers["location"] == "/signed-out"
         assert sessions.get(alice_session) is None
         assert "Could not update this browser's push subscriptions: OSError" in caplog.text
+
+
+class TestSignedOutPage:
+    """Where /logout lands (ADR 0082): a page on this origin, not /login's bounce to the IdP."""
+
+    def test_served_without_a_session_and_links_to_sign_in(self):
+        app, _sessions = _app()
+        r = _client(app).get("/signed-out")
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-store"
+        assert "You're signed out" in r.text
+        assert 'href="/login"' in r.text
+
+    def test_sign_out_lands_on_it(self):
+        app, sessions = _app()
+        client = TestClient(app, base_url=BASE_URL)
+        client.cookies.set(org_session.SESSION_COOKIE, sessions.create(Principal(id="alice")))
+        r = client.post("/logout")
+        assert r.status_code == 200 and r.url.path == "/signed-out"
 
 
 class TestSafeNextPath:
