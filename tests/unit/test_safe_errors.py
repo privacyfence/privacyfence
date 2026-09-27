@@ -87,6 +87,25 @@ class TestRealNamedRuntimeErrorSubclasses:
 
         assert public_message(GateDeniedError("Request denied by user")) == "Request denied by user"
 
+    def test_gate_denied_error_by_user_passes_the_note_through(self):
+        # ADR 0083: the one GateDeniedError that carries user text still
+        # reaches the client verbatim (JSON-quoted behind its label).
+        from privacyfence.deny_feedback import DenialFeedback
+        from privacyfence.gate import GateDeniedError
+
+        exc = GateDeniedError.by_user(DenialFeedback("rewrite", 'say "less"'))
+        assert public_message(exc) == str(exc)
+        assert public_message(exc).endswith('JSON string): "say \\"less\\""')
+
+    def test_gate_denied_error_by_user_note_is_still_redacted(self):
+        from privacyfence.deny_feedback import DenialFeedback
+        from privacyfence.gate import GateDeniedError
+
+        token = "ghp_fakegithubtokenshape1234567890abcd"
+        message = public_message(GateDeniedError.by_user(DenialFeedback(note=f"use {token} instead")))
+        assert message.startswith("Request denied by user.")
+        assert token not in message
+
     def test_too_many_pending_approvals_error_passes_through(self):
         from privacyfence.approvals import TooManyPendingApprovalsError
 

@@ -70,6 +70,8 @@ from html import escape as _html_escape
 from pathlib import Path
 
 from .agent_label import NEUTRAL_SUBJECT, NOT_VERIFIED, TIER_ATTESTED, UNKNOWN_AGENT_LABEL, AgentLabel
+from .deny_note_html import PANEL_JS as _DENY_NOTE_JS
+from .deny_note_html import panel_html as _deny_note_panel_html
 from .design_css import DOCUMENT_CSS
 from .markdown_to_html import markdown_to_html
 
@@ -645,6 +647,10 @@ def _risk_section_html(
     return _card(kicker, body, variant=f"card-{status}")
 
 
+# The deny note panel's id (deny_note_html.panel_html's prefix) on the card; _JS names it too.
+_DENY_NOTE_ID = "pf-deny-note"
+
+
 def _button_row_html(accept_all_labels: list[str]) -> str:
     """Deny/Allow once/Always allow, as part of this document's own content
     (see module docstring). ``accept_all_labels`` is the already-formatted
@@ -681,10 +687,19 @@ def _button_row_html(accept_all_labels: list[str]) -> str:
     request nobody has actually reviewed yet. Escape still resolves Deny
     regardless of focus (``_JS``'s own document-level handler) -- declining
     via a reflexive keypress stays the safe direction.
+
+    *Deny with a note…* sits right after Deny in ``.pf-btn-row-left``, in
+    the same quiet ``.pf-btn-link`` treatment as Always allow, so it never
+    outranks Deny or Allow once. It is not a decision: it carries
+    ``data-pf-note-open``, not ``data-pf-action``, and opens the panel
+    ``_JS`` wires (deny_note_html.py). It starts disabled like the rest and
+    ``enableButtons()`` enables it with them.
     """
     deny_html = (
         '<div class="button danger pf-btn-deny" role="button" aria-disabled="true" '
         'aria-label="Deny" data-pf-action="deny">Deny</div>'
+        '<button type="button" class="pf-btn-link pf-btn-note-open" aria-disabled="true" tabindex="-1" '
+        f'aria-expanded="false" aria-controls="{_DENY_NOTE_ID}" data-pf-note-open>Deny with a note…</button>'
     )
     allow_once_html = (
         '<div class="button primary pf-btn-primary" role="button" aria-disabled="true" '
@@ -729,12 +744,23 @@ def _button_row_html(accept_all_labels: list[str]) -> str:
 # window.__pfEnableButtons exposes the same function to a host that needs to
 # force the buttons on; nothing in the web UI calls it. Safe to call more
 # than once (removeAttribute/setAttribute are idempotent).
+#
+# The deny note panel (deny_note_html.py, whose PANEL_JS runs first in the
+# same <script>): "Deny with a note…" ([data-pf-note-open]) opens and closes
+# it, and its "Deny and send" posts a deny with the panel's {note, intent}
+# added to the payload, only the non-empty ones. Escape while the panel is
+# open closes it and decides nothing, and the text is kept; the next Escape
+# denies as it always has, with no note. Enter and Space in the textarea
+# type; Ctrl/Cmd+Enter there sends (PANEL_JS), which is acceptable only
+# because deny is the safe direction.
 _JS = """
 (function () {
-  function post(result, choice) {
+  function post(result, choice, feedback) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pf) {
       var payload = { action: 'resolve', result: result };
       if (choice !== null && choice !== undefined) payload.choice = choice;
+      if (feedback && feedback.note) payload.note = feedback.note;
+      if (feedback && feedback.intent) payload.intent = feedback.intent;
       window.webkit.messageHandlers.pf.postMessage(payload);
     }
   }
@@ -756,7 +782,8 @@ _JS = """
     // .pf-btn-row-candidates row above it (see _button_row_html), which
     // needs the same enable treatment. data-pf-action is never used
     // outside these two button rows, so this selector is unambiguous.
-    var buttons = document.querySelectorAll('[data-pf-action]');
+    // "Deny with a note…" is gated with them, and so is the panel it opens.
+    var buttons = document.querySelectorAll('[data-pf-action], [data-pf-note-open]');
     for (var i = 0; i < buttons.length; i++) {
       buttons[i].removeAttribute('aria-disabled');
       buttons[i].setAttribute('tabindex', '0');
@@ -796,14 +823,39 @@ _JS = """
     markClamped();
     window.addEventListener('resize', markClamped);
 
+    var noteOpener = document.querySelector('[data-pf-note-open]');
+    var note = window.pfDenyNotePanel && window.pfDenyNotePanel('pf-deny-note', {
+      onSubmit: function (feedback) { post('deny', null, feedback); },
+      onClose: function () {
+        noteOpener.setAttribute('aria-expanded', 'false');
+        noteOpener.focus();
+      }
+    });
+
+    function toggleNote() {
+      if (!note || noteOpener.getAttribute('aria-disabled') === 'true') return;
+      if (note.isOpen()) {
+        note.close();
+      } else {
+        noteOpener.setAttribute('aria-expanded', 'true');
+        note.open();
+      }
+    }
+
     document.body.addEventListener('click', function (e) {
       var clamped = e.target.closest('[data-pf-clamped]');
       if (clamped) { toggleClamped(clamped); return; }
+      if (e.target.closest('[data-pf-note-open]')) { toggleNote(); return; }
       resolveFrom(e.target.closest('[data-pf-action]'));
     });
 
     document.body.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
+        if (note && note.isOpen()) {
+          e.preventDefault();
+          note.close();
+          return;
+        }
         resolveFrom(document.querySelector('[data-pf-action="deny"]'));
         return;
       }
@@ -1011,6 +1063,10 @@ def build_card_stack_html(
         # the button row (.pf-btn-row, appended next, also flex:none).
         body_html += f'<div class="pf-temp-accept">{_html_escape(temp_accept_text)}</div>'
 
+    # The deny note panel, hidden until "Deny with a note…" opens it, directly
+    # above the button rows (flex:none in styles.css, like them).
+    body_html += _deny_note_panel_html(_DENY_NOTE_ID, "Deny and send")
+
     # Always present (unlike temp_accept_text above) -- every dialog has a
     # Deny/Allow once button row, see _button_row_html.
     body_html += _button_row_html(accept_all_labels)
@@ -1046,7 +1102,7 @@ html, body {{ overflow-y: auto; }}
 .pf-card {{ border-left: 6px solid {rail_color}; }}
 </style>
 </head>
-<body><div class="pf-card-root"><div class="pf-card pf-card-{layout}">{body_html}</div></div><script nonce="{nonce}">{_JS}</script></body>
+<body><div class="pf-card-root"><div class="pf-card pf-card-{layout}">{body_html}</div></div><script nonce="{nonce}">{_DENY_NOTE_JS}{_JS}</script></body>
 </html>
 """
 

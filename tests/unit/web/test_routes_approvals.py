@@ -13,7 +13,10 @@ OrgSessionStore: create a session directly and set the cookie.
 """
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 import threading
 import time
 from unittest.mock import patch
@@ -24,6 +27,7 @@ from starlette.testclient import TestClient
 from privacyfence import paths
 from privacyfence import webauthn_stepup as wa
 from privacyfence.step_up_config import StepUpConfig
+from privacyfence.web import routes_approvals
 from privacyfence.web.routes_approvals import _inject_shim, create_app
 from privacyfence.web.session_auth import (
     PROVENANCE_HUMAN,
@@ -1725,3 +1729,322 @@ class TestPerPrincipalIsolation:
 
         assert r.status_code == 200
         assert owners_card.event.is_set()
+
+
+def _gated_call_in_thread(*, gate_kind: str, tool: str):
+    """Runs a real gate.gated_call() on a background thread against a fresh
+    app whose registry has a hold window long enough that a decide POST
+    lands inside it -- so the test sees exactly what the agent would get on
+    the synchronous path. Returns (client, sessions, thread, box, card);
+    box["exc"] is what the call raised, box["result"] what it returned."""
+    import asyncio
+
+    from privacyfence import approval_ui, gate
+    from privacyfence.approvals import PendingApprovalRegistry
+
+    web_ui = WebApprovalUI(registry=PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0))
+    sessions = LocalSessionStore()
+    client = TestClient(create_app(web_ui, sessions=sessions), base_url="http://localhost")
+    approval_ui.init_approval_ui(web_ui)
+    box: dict = {}
+
+    def run():
+        try:
+            box["result"] = asyncio.run(gate.gated_call(
+                connector="gmail", tool=tool, tool_name="Send", summary="a message", sender="", raw_data=None,
+                filtered_data={"ok": True}, gate=gate_kind, preview={"To": "a@b.com"}, details_text="body",
+                my_email="me@example.com",
+            ))
+        except Exception as exc:  # noqa: BLE001 -- the test inspects whatever it raised
+            box["exc"] = exc
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not web_ui.deferred_registry.list_pending():
+        time.sleep(0.01)
+    [card] = web_ui.deferred_registry.list_pending()
+    return client, sessions, t, box, card
+
+
+class TestDenyWithFeedback:
+    """ADR 0083: decide takes an optional note/intent with a deny, validates
+    it, and hands it to the agent; any other result carrying one is a 400."""
+
+    NOTE = "Send it only to Anna -- NOTE-MARKER-91"
+
+    @pytest.fixture(autouse=True)
+    def _no_rules(self, monkeypatch, tmp_path):
+        from privacyfence import gate
+        from privacyfence.audit_log import init_audit_logger
+
+        init_audit_logger(str(tmp_path / "audit"))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", lambda *a, **k: (False, "", ""))
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return tmp_path
+
+    def _post(self, client, session_id, approval_id, **body):
+        return client.post(f"/api/approvals/{approval_id}/decide", json={"csrf": session_id, **body})
+
+    @pytest.mark.parametrize("gate_kind,tool", [("review", "gmail_get_message"), ("popup", "gmail_send_email")])
+    def test_passes_through_to_the_agent(self, caplog, gate_kind, tool):
+        from privacyfence.deny_feedback import DenialFeedback, denial_message
+
+        caplog.set_level("DEBUG")
+        client, sessions, t, box, card = _gated_call_in_thread(gate_kind=gate_kind, tool=tool)
+        session_id = _signed_in(client, sessions)
+
+        r = self._post(client, session_id, card.id, result="deny", note=f"  {self.NOTE}\u202e ", intent="wrong_target")
+
+        assert r.status_code == 200, r.text
+        assert r.json() == {"status": "ok"}
+        t.join(timeout=3)
+        expected = denial_message(DenialFeedback("wrong_target", self.NOTE))
+        assert str(box["exc"]) == expected
+        assert all("NOTE-MARKER-91" not in rec.getMessage() for rec in caplog.records)
+
+    def test_plain_deny_reaches_the_agent_with_the_default_text(self):
+        client, sessions, t, box, card = _gated_call_in_thread(gate_kind="popup", tool="gmail_send_email")
+        session_id = _signed_in(client, sessions)
+        r = self._post(client, session_id, card.id, result="deny")
+        assert r.status_code == 200
+        t.join(timeout=3)
+        assert str(box["exc"]) == "Request denied by user. Don't retry the same call; ask the user how to proceed."
+
+    def test_null_note_and_intent_are_a_plain_deny(self, client, sessions, web_ui):
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        r = self._post(client, session_id, approval.id, result="deny", note=None, intent=None)
+        assert r.status_code == 200
+        assert approval.deny_feedback.is_empty
+
+    def test_over_long_note_is_rejected_and_nothing_is_decided(self, client, sessions, web_ui):
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        r = self._post(client, session_id, approval.id, result="deny", note="x" * 501)
+        assert r.status_code == 400
+        assert r.json() == {"status": "error", "error": "note is longer than 500 characters"}
+        assert not approval.event.is_set()
+
+    def test_exactly_500_after_sanitization_is_accepted(self, client, sessions, web_ui):
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        r = self._post(client, session_id, approval.id, result="deny", note="\u200b" * 20 + "x" * 500)
+        assert r.status_code == 200
+        assert approval.deny_feedback.note == "x" * 500
+
+    def test_control_characters_are_stripped(self, client, sessions, web_ui):
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        r = self._post(
+            client, session_id, approval.id, result="deny", note="a\x00b\u202ec\u200bd\r\ne\n\n\n\nf",
+        )
+        assert r.status_code == 200
+        assert approval.deny_feedback.note == "abcd\ne\n\nf"
+
+    @pytest.mark.parametrize("body", [
+        {"intent": "bogus"}, {"intent": 3}, {"note": 42}, {"note": ["a"]}, {"note": {"a": 1}},
+    ])
+    def test_invalid_feedback_is_rejected(self, client, sessions, web_ui, body):
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        r = self._post(client, session_id, approval.id, result="deny", **body)
+        assert r.status_code == 400
+        assert r.json()["status"] == "error"
+        assert not approval.event.is_set()
+
+    @pytest.mark.parametrize("result", ["accept", "accept_all"])
+    @pytest.mark.parametrize("body", [{"note": "hi"}, {"intent": "stop"}, {"note": ""}, {"intent": None}])
+    def test_feedback_on_a_non_deny_is_rejected(self, client, sessions, web_ui, result, body):
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        r = self._post(client, session_id, approval.id, result=result, **body)
+        assert r.status_code == 400
+        assert r.json() == {"status": "error", "error": "a note or intent can only accompany a deny"}
+        assert not approval.event.is_set()
+
+    def test_csrf_is_enforced_before_feedback_is_parsed(self, client, sessions, web_ui):
+        approval = _register(web_ui)
+        _signed_in(client, sessions)
+        r = client.post(
+            f"/api/approvals/{approval.id}/decide",
+            json={"result": "deny", "note": "x" * 900, "intent": "bogus", "csrf": "wrong"},
+        )
+        assert r.status_code == 401
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "note": "x"})
+        assert r.status_code == 401
+        assert not approval.event.is_set()
+
+    def test_origin_is_enforced_before_feedback_is_parsed(self, client, sessions, web_ui):
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        r = client.post(
+            f"/api/approvals/{approval.id}/decide",
+            json={"result": "accept", "note": "x", "csrf": session_id},
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert r.status_code == 403
+
+    def test_double_submit_keeps_the_first_feedback(self, client, sessions, web_ui):
+        from privacyfence.deny_feedback import DenialFeedback
+
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        first = self._post(client, session_id, approval.id, result="deny", note="first", intent="stop")
+        second = self._post(client, session_id, approval.id, result="deny", note="second", intent="rewrite")
+        assert first.status_code == 200
+        assert second.status_code == 409
+        assert approval.deny_feedback == DenialFeedback("stop", "first")
+
+    def test_the_summary_the_sse_stream_serializes_never_carries_the_note(self, client, sessions, web_ui):
+        import json as _json
+
+        approval = _register(web_ui)
+        session_id = _signed_in(client, sessions)
+        assert self._post(client, session_id, approval.id, result="deny", note=self.NOTE, intent="stop").status_code == 200
+        # The stream emits json.dumps([card.to_summary_dict() ...]) for pending
+        # cards; even the decided card's own summary never names the note.
+        assert "NOTE-MARKER-91" not in _json.dumps(approval.to_summary_dict())
+        assert "stop" not in _json.dumps(approval.to_summary_dict())
+        assert approval not in web_ui.deferred_registry.list_pending()
+
+    def test_list_page_never_renders_the_note(self, client, sessions, web_ui):
+        decided = _register(web_ui, dedupe_key="k1")
+        _register(web_ui, dedupe_key="k2")
+        session_id = _signed_in(client, sessions)
+        assert self._post(client, session_id, decided.id, result="deny", note=self.NOTE).status_code == 200
+        r = client.get("/approvals")
+        assert r.status_code == 200
+        assert "NOTE-MARKER-91" not in r.text
+
+
+class TestDenyWithFeedbackNeverStepsUp:
+    """A noted deny is still a deny: _STEP_UP_RESULTS is untouched, so it
+    never meets a passkey ceremony, even where an approve would hard-fail."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _deny(self, step_up):
+        app, sessions, web_ui = _app(step_up=step_up)
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={
+            "result": "deny", "note": "use the shared folder", "intent": "different_approach", "csrf": session_id,
+        })
+        return r, approval
+
+    def test_noted_deny_on_a_write_with_a_passkey_enrolled(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        r, approval = self._deny(StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_reads"))
+        assert r.status_code == 200
+        assert "webauthn_options" not in r.json()
+        assert approval.deny_feedback.intent == "different_approach"
+
+    def test_noted_deny_with_require_passkey_and_nothing_enrolled(self):
+        r, approval = self._deny(StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True))
+        assert r.status_code == 200
+        assert approval.result == "deny"
+        assert approval.deny_feedback.note == "use the shared folder"
+
+
+class TestBatchDecideRefusesFeedback:
+    @pytest.mark.parametrize("extra", [{"note": "x"}, {"intent": "stop"}, {"note": None}])
+    def test_note_or_intent_is_a_400(self, client, sessions, web_ui, extra):
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "deny"}], **extra,
+        })
+        assert r.status_code == 400
+        assert r.json()["status"] == "error"
+        assert not approval.event.is_set()
+
+    def test_csrf_is_still_checked_first(self, client, sessions, web_ui):
+        _signed_in(client, sessions)
+        approval = _register(web_ui)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": "wrong", "items": [{"id": approval.id, "result": "deny"}], "note": "x",
+        })
+        assert r.status_code == 401
+
+
+# Runs one bridge shim's own <script> (the second of the two it returns; the first is
+# PF_WEBAUTHN_JS) in node, with fetch, sessionStorage and location stubbed, posts one payload
+# through window.webkit.messageHandlers.pf, and prints what was sent and what the list would toast.
+_SHIM_HARNESS_JS = r"""
+const vm = require('vm');
+const [script, payloadJson, status] = [process.argv[1], process.argv[2], Number(process.argv[3])];
+const seen = {bodies: [], toast: null, navigated: null};
+const sandbox = {
+  document: {body: {innerHTML: ''}},
+  sessionStorage: {setItem: (key, value) => { if (key === 'pf_toast') seen.toast = JSON.parse(value).msg; }},
+  fetch: (url, init) => {
+    seen.bodies.push(JSON.parse(init.body));
+    return Promise.resolve({ok: status >= 200 && status < 300, status, json: () => Promise.resolve({})});
+  },
+};
+sandbox.window = sandbox;
+sandbox.window.location = {replace: (url) => { seen.navigated = url; }};
+vm.createContext(sandbox);
+vm.runInContext(script, sandbox);
+sandbox.window.webkit.messageHandlers.pf.postMessage(JSON.parse(payloadJson));
+setTimeout(() => process.stdout.write(JSON.stringify(seen)), 50);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+class TestBridgeShimsForwardDenyFeedback:
+    """Both shims send every key of the card's payload to the decide route unchanged, so the
+    card's note and intent reach it without either shim knowing about them (ADR 0083). A deny
+    that carried either toasts _DENIED_WITH_NOTE_MESSAGE; a plain one still toasts
+    _DENIED_MESSAGE."""
+
+    SHIMS = {"local": routes_approvals._bridge_shim, "org": routes_approvals._org_bridge_shim}
+
+    def _run(self, shim_name: str, payload: dict, *, status: int = 200) -> dict:
+        shim = self.SHIMS[shim_name](
+            decide_url="/api/approvals/a1/decide", csrf="csrf-1", stepup_options_url="/x", nonce="n",
+        )
+        scripts = re.findall(r'<script nonce="n">(.*?)</script>', shim, flags=re.S)
+        assert len(scripts) == 2
+        out = subprocess.run(
+            ["node", "-e", _SHIM_HARNESS_JS, scripts[1], json.dumps(payload), str(status)],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        return json.loads(out.stdout)
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    def test_note_and_intent_are_forwarded_unchanged(self, shim_name):
+        note = 'Only Anna "please" \\ not the team\nthanks'
+        seen = self._run(shim_name, {"action": "resolve", "result": "deny", "note": note, "intent": "wrong_target"})
+        assert seen["bodies"] == [{
+            "action": "resolve", "result": "deny", "note": note, "intent": "wrong_target", "csrf": "csrf-1",
+        }]
+        assert seen["toast"] == routes_approvals._DENIED_WITH_NOTE_MESSAGE
+        assert seen["navigated"] == "/approvals"
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    @pytest.mark.parametrize("extra", [{"intent": "stop"}, {"note": "x"}])
+    def test_either_part_alone_gets_the_noted_toast(self, shim_name, extra):
+        seen = self._run(shim_name, {"action": "resolve", "result": "deny", **extra})
+        assert seen["bodies"][0] == {"action": "resolve", "result": "deny", **extra, "csrf": "csrf-1"}
+        assert seen["toast"] == routes_approvals._DENIED_WITH_NOTE_MESSAGE
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    def test_a_plain_deny_is_unchanged(self, shim_name):
+        seen = self._run(shim_name, {"action": "resolve", "result": "deny"})
+        assert seen["bodies"] == [{"action": "resolve", "result": "deny", "csrf": "csrf-1"}]
+        assert seen["toast"] == routes_approvals._DENIED_MESSAGE
+
+    @pytest.mark.parametrize("shim_name", ["local", "org"])
+    def test_an_allow_never_gets_the_noted_toast(self, shim_name):
+        seen = self._run(shim_name, {"action": "resolve", "result": "accept"})
+        assert seen["toast"] == routes_approvals._DECIDED_MESSAGE

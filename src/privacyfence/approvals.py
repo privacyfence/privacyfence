@@ -92,6 +92,7 @@ from typing import Any, Callable
 
 from .agent_identity import UNKNOWN_AGENT, AgentIdentity, current_agent
 from .agent_label import label_for
+from .deny_feedback import DenialFeedback
 from .principal import current_principal
 
 logger = logging.getLogger(__name__)
@@ -311,18 +312,35 @@ class PendingApproval:
     # actually releases the call -- see gate.py's own module docstring.
     decided_via: str = ""
     batch_id: str = ""
+    # What the human told the agent with a Deny (ADR 0083) -- empty for every
+    # other answer, and for a plain Deny. Set by answer() under the same
+    # first-answer-wins check as ``result`` and before ``event`` is set, so a
+    # worker woken by the event always sees it. Carried into LedgerHit by
+    # consume_ledger(). Never audited, logged or serialized to a page: only
+    # its intent and note length reach the audit log (ADR 0084).
+    deny_feedback: DenialFeedback = field(default_factory=DenialFeedback)
 
     def answer(
         self, result: str, chosen_index: int | None = None, *, decided_via: str = "", batch_id: str = "",
+        feedback: DenialFeedback | None = None,
     ) -> bool:
         """Resolve this UI step. Idempotent: the first answer wins, so two
-        concurrent answers to the same card can't both take effect."""
+        concurrent answers to the same card can't both take effect.
+
+        Raises ValueError for non-empty ``feedback`` with any result but
+        "deny": a note must never ride along on an approval (ADR 0083).
+        Checked before the first-answer-wins test, so a bad call fails the
+        same way whether or not the card is still open."""
+        feedback = feedback if feedback is not None else DenialFeedback()
+        if not feedback.is_empty and result != "deny":
+            raise ValueError("deny feedback given with a non-deny result")
         if self.event.is_set():
             return False
         self.result = result
         self.chosen_index_result = chosen_index
         self.decided_via = decided_via
         self.batch_id = batch_id
+        self.deny_feedback = feedback
         self.event.set()
         return True
 
@@ -423,6 +441,9 @@ class LedgerHit:
     decided_at: float
     decided_via: str = ""
     batch_id: str = ""
+    # The human's deny feedback (ADR 0083), so a call re-issued after a
+    # denial raises the same message the synchronous path would have.
+    feedback: DenialFeedback = field(default_factory=DenialFeedback)
 
 
 class PendingApprovalRegistry:
@@ -630,6 +651,7 @@ class PendingApprovalRegistry:
     def answer(
         self, approval_id: str, result: str, chosen_index: int | None = None, *,
         principal_id: str | None = None, decided_via: str = "", batch_id: str = "",
+        feedback: DenialFeedback | None = None,
     ) -> bool:
         """Resolve one UI step -- called by web/routes_approvals.py's
         decide endpoint when a human clicks a button. See
@@ -643,14 +665,18 @@ class PendingApprovalRegistry:
         approval id's own 128 bits of entropy.
 
         ``decided_via``/``batch_id`` are "" for every ordinary single-decide
-        caller -- only answer_batch() below passes real values."""
+        caller -- only answer_batch() below passes real values.
+
+        ``feedback`` is the human's deny feedback (ADR 0083); ValueError
+        when it is non-empty and ``result`` is not "deny" -- see
+        PendingApproval.answer."""
         with self._lock:
             approval = self._pending.get(approval_id)
         if approval is None:
             return False
         if principal_id is not None and approval.principal_id != principal_id:
             return False
-        return approval.answer(result, chosen_index, decided_via=decided_via, batch_id=batch_id)
+        return approval.answer(result, chosen_index, decided_via=decided_via, batch_id=batch_id, feedback=feedback)
 
     def answer_batch(
         self, items: list[tuple[str, str]], *, principal_id: str | None = None,
@@ -773,6 +799,7 @@ class PendingApprovalRegistry:
             return LedgerHit(
                 decision=approval.final_decision, rule_name=approval.final_rule_name,
                 decided_at=approval.decided_at, decided_via=approval.decided_via, batch_id=approval.batch_id,
+                feedback=approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback(),
             )
 
     # ------------------------------------------------------------------ #
@@ -882,6 +909,18 @@ class PendingApprovalRegistry:
         if approval.final_decision == "deny":
             return "denied"
         return "approved"  # accept | accept_all | auto_accepted
+
+    def denial_feedback(self, approval_id: str, *, principal_id: str | None = None) -> DenialFeedback | None:
+        """The human's deny feedback for a denied approval -- what
+        privacyfence_await_approval reports under its reserved
+        ``denial_feedback`` key (ADR 0083). None unless the approval exists,
+        belongs to ``principal_id`` (the same cross-principal check as
+        await_status: a foreign id reads as nothing) and was finalized as
+        "deny"; an empty DenialFeedback for a plain Deny."""
+        approval = self.get(approval_id, principal_id=principal_id)
+        if approval is None or not approval.is_finalized() or approval.final_decision != "deny":
+            return None
+        return approval.deny_feedback
 
     # ------------------------------------------------------------------ #
     # Rules-changed re-evaluation broadcast
