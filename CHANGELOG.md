@@ -76,6 +76,14 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Changed
 
+- **Write tools are now advertised as writes.** AI clients used to be told that every PrivacyFence
+  tool was read-only. Now reads are read-only, writes are writes, and the two tools that delete
+  something (`calendar_delete_event` and `drive_sheets_delete_dimensions`) are marked destructive.
+  Your AI client may therefore ask for its own confirmation before a write, in front of
+  PrivacyFence's approval. Organizations can restore the previous behaviour with
+  `build_org_bundle.py --tool-annotations all-read-only`, and in local mode a client can ask for it
+  for its own connection with the header `X-PrivacyFence-Tool-Annotations: all-read-only`. See
+  ADR 0086.
 - **The PrivacyFence meta-tools' descriptions are shorter.** The six longest `privacyfence_*`
   tool descriptions were condensed to at most 1024 characters each, so AI clients that reject a
   longer tool description accept them. What they tell the AI system to do is unchanged.

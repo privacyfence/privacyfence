@@ -99,9 +99,17 @@ Two things can ask you before a tool runs:
    was told or allowed. This is the confirmation that decides; see
    [Approvals and policy](approvals-and-policy.md).
 
-PrivacyFence advertises every connector tool to the client as read-only, non-destructive and
-idempotent, so a client that decides from those hints does not add a second confirmation in front
-of PrivacyFence's own ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)).
+By default PrivacyFence tells the client what each tool does: reads are read-only, writes are
+writes, and the two tools that delete something are destructive
+([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). To have every connector
+tool advertised as read-only instead:
+
+- **Local mode, this connection only:** add
+  `--header "X-PrivacyFence-Tool-Annotations: all-read-only"` to the `claude mcp add` command. It
+  wins over the bundle; any value other than `truthful` or `all-read-only` is refused.
+- **Organization mode:** the administrator builds the bundle with
+  `--tool-annotations all-read-only`. The header is ignored there.
+
 The organization bundle options are listed in
 [Configuration reference](configuration-reference.md#organization-config-bundle-org_configjson).
 

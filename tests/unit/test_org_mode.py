@@ -311,3 +311,25 @@ class TestConfigurationError:
         # narrowing of the exception type raised, not a new one call sites
         # must learn to catch.
         assert issubclass(org_mode.ConfigurationError, ValueError)
+
+
+class TestResolveToolAnnotations:
+    """``mcp.tool_annotations`` (ADR 0086): absent means truthful, and a value naming neither mode
+    refuses to start rather than falling back to either."""
+
+    def test_absent_is_truthful(self):
+        assert org_mode.resolve_tool_annotations({}) == "truthful"
+        assert org_mode.resolve_tool_annotations({"mcp": {}}) == "truthful"
+
+    @pytest.mark.parametrize("value", ["truthful", "all_read_only"])
+    def test_each_documented_value_is_accepted(self, value):
+        assert org_mode.resolve_tool_annotations({"mcp": {"tool_annotations": value}}) == value
+
+    @pytest.mark.parametrize("value", ["all-read-only", "read_only", "", None, True])
+    def test_any_other_value_is_a_configuration_error(self, value):
+        with pytest.raises(org_mode.ConfigurationError, match="tool_annotations"):
+            org_mode.resolve_tool_annotations({"mcp": {"tool_annotations": value}})
+
+    def test_a_non_object_mcp_section_is_a_configuration_error(self):
+        with pytest.raises(org_mode.ConfigurationError, match="mcp"):
+            org_mode.resolve_tool_annotations({"mcp": "all_read_only"})

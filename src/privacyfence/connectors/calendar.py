@@ -350,6 +350,7 @@ class CalendarConnector(Connector):
                                           "own default."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
+                destructive=True,
             ),
             ToolSpec(
                 name="calendar_set_event_color",

@@ -78,11 +78,12 @@ Two things can ask you before a tool runs:
    Desktop was told or allowed. This is the confirmation that decides; see
    [Approvals and policy](approvals-and-policy.md).
 
-PrivacyFence advertises every connector tool to the client as read-only, non-destructive and
-idempotent, so Claude Desktop does not treat PrivacyFence's writes as needing a second confirmation
-in front of PrivacyFence's own
-([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). The organization bundle
-options are listed in
+By default PrivacyFence tells the client what each tool does: reads are read-only, writes are
+writes, and the two tools that delete something are destructive
+([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So Claude Desktop may
+ask before a write, in front of PrivacyFence's own card. To have every connector tool advertised as
+read-only instead, build the organization bundle with `--tool-annotations all-read-only`; it
+applies in both modes. The organization bundle options are listed in
 [Configuration reference](configuration-reference.md#organization-config-bundle-org_configjson).
 
 ## How the client is identified

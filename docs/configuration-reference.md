@@ -161,6 +161,17 @@ or empty `auto_accept` section means nothing auto-accepts.
 | `web.approvals.max_pending_per_principal` | int | `20` | not set | Most approvals pending at once for one person. Local and organization mode. |
 | `web.approvals.adaptive_hold` | bool | `true` | not set | Once one of your approvals is pending, return `approval_pending` for later gated calls straight away instead of waiting `hold_window_seconds` each. Local and organization mode. |
 
+**Tool annotations for one connection.** In local mode, an AI client can choose how `/mcp`
+annotates connector tools for its own connection by sending the request header
+`X-PrivacyFence-Tool-Annotations` on every request: `truthful` (reads read-only, writes as writes,
+the two deleting tools as destructive) or `all-read-only` (every connector tool read-only, so the
+client does not ask for its own confirmation before PrivacyFence's approval). The header wins over
+the bundle's `--tool-annotations`; without it, the bundle decides, and without that, `truthful`.
+Any other value is refused with `400 Bad Request`. An organization server ignores the header: there
+the bundle decides for everyone. For example, with Claude Code:
+`claude mcp add … --header "X-PrivacyFence-Tool-Annotations: all-read-only"`. See
+[How PrivacyFence works](how-it-works.md#what-the-ai-system-is-told).
+
 ### Local file transfers
 
 | Key | Type | Code default | Seeded | What it does |
@@ -237,6 +248,7 @@ How the daemon treats the file:
 | `--salesforce-login-url URL` | `https://login.salesforce.com` | `salesforce.login_url` | `https://test.salesforce.com` for a sandbox. |
 | `--atlassian-client-id`, `--atlassian-client-secret` | none | `atlassian.client_id`, `atlassian.client_secret` | Jira and Confluence. Give both or neither. |
 | `--enable-unattended-sessions` / `--disable-unattended-sessions` | not written (off) | `unattended_sessions.enabled` | Allow `privacyfence_begin_unattended_session`. See [How PrivacyFence works](how-it-works.md#unattended-sessions). Applies in both modes. |
+| `--tool-annotations {truthful,all-read-only}` | not written (`truthful`) | `mcp.tool_annotations` (`truthful` or `all_read_only`) | How `/mcp` annotates connector tools. `truthful`: reads are read-only, writes are writes, and `calendar_delete_event` and `drive_sheets_delete_dimensions` are destructive. `all-read-only`: every connector tool is advertised read-only, so a client that prompts before every write (for example claude.ai on a Team plan) does not ask before PrivacyFence's own approval. In local mode a connection's `X-PrivacyFence-Tool-Annotations` header wins over it (see [Web server and MCP](#web-server-and-mcp-local-mode-only-unless-noted)). Any other value in the bundle stops the daemon from starting. See [How PrivacyFence works](how-it-works.md#what-the-ai-system-is-told). Applies in both modes. |
 | `--mode {local,org}` | not written (local) | `mode` | `org` needs `--server-issuer-url`, `--idp-issuer`, `--idp-client-id`, `--idp-client-secret` and `--sign-key`. `local` removes every organization-only section from a merged bundle. |
 | `--server-issuer-url URL` | none | `server.issuer_url` | The server's public origin, e.g. `https://pf.example.com`. Must be an absolute `http(s)` URL with a host name. Register `<issuer-url>/oauth/idp/callback` and `<issuer-url>/oauth/idp/login-callback` with your identity provider. |
 | `--server-bind-host HOST` | `127.0.0.1` | `server.bind_host` | Loopback only, for a reverse proxy on the same host. Change it only when the proxy runs elsewhere. |
