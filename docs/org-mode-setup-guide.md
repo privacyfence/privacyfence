@@ -43,6 +43,7 @@ What people see, all at `https://<your-hostname>`:
 | Page | Purpose |
 |---|---|
 | `/login` | Sign in through the identity provider. |
+| `/signed-out` | Where **Sign out** lands, with a link to sign in again. |
 | `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence and Telegram. |
 | `/approvals` | Pending AI requests to approve or deny. |
 | `/security` | Enroll and remove passkeys. |
@@ -533,6 +534,8 @@ Run these through the public hostname, not through `127.0.0.1`:
   whose `issuer` is your public URL.
 - [ ] Opening `/approvals` in a private window redirects to `/login`.
 - [ ] Signing in shows your email address at the top right of the page.
+- [ ] **Sign out** on `/connect` lands on the signed-out page, and `/approvals` then redirects to
+  `/login` again.
 - [ ] Someone outside `--authz-*` (if set) is refused at sign-in.
 - [ ] An AI client connects and lists PrivacyFence's tools.
 - [ ] A write request from the client appears in your `/approvals`, and not in a second test user's.

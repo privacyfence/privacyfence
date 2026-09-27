@@ -29,7 +29,9 @@ preview actually renders (the card's ``<embed>`` is blocked by the
 implicit ``default-src 'none'`` fallback unless the policy names
 ``object-src``/``frame-src`` exceptions). Both assert real pass/fail
 outcomes -- see ``TestSecurityHeadersCsp``/``TestPdfPreview`` below, and
-web/csp.py's ``build_csp()`` for the policy they check (ADR 0063).
+web/csp.py's ``build_csp()`` for the policy they check (ADR 0063). A third,
+``TestNativeFormsSubmitUnderCsp``, submits every native form the app renders
+under the real ``form-action`` (ADR 0082).
 """
 from __future__ import annotations
 
@@ -2066,6 +2068,153 @@ class TestSecurityHeadersCsp:
         )
         page.wait_for_timeout(200)
         assert page.evaluate("window.__pfNoncedRan") is True
+
+
+# --------------------------------------------------------------------- #
+# Org mode: every native form post, under the real form-action (ADR 0082)
+# --------------------------------------------------------------------- #
+
+
+def _watch_csp_violations(context, page) -> list[str]:
+    """Every ``securitypolicyviolation`` on any document this context loads, and every console
+    line naming the Content Security Policy. A blocked form submission raises both; an exposed
+    function (not a page global) collects them, so they outlive the navigations a form causes."""
+    violations: list[str] = []
+    context.expose_function("__pfCspViolation", lambda text: violations.append(text))
+    context.add_init_script("""
+      document.addEventListener('securitypolicyviolation', function (e) {
+        window.__pfCspViolation(e.violatedDirective + ' blocked ' + e.blockedURI);
+      });
+    """)
+    page.on("console", lambda msg: "Content Security Policy" in msg.text and violations.append(msg.text))
+    return violations
+
+
+def _submit_and_wait(page, button, violations: list[str], until) -> None:
+    """Click a form's submit button and wait for ``until`` (a Playwright wait taking ``timeout``).
+    A submission the policy blocks never arrives, or is aborted at a blocked redirect, so rather
+    than a bare timeout this fails naming the violation the browser reported."""
+    button.click(no_wait_after=True)
+    try:
+        until(timeout=10_000)
+    except PlaywrightError as exc:  # a timeout, or a navigation the browser aborted
+        page.wait_for_timeout(500)  # an aborted redirect's violation report can trail the abort
+        raise AssertionError(
+            f"the form submission did not complete ({type(exc).__name__}); CSP violations: {violations}",
+        ) from None
+
+
+class TestNativeFormsSubmitUnderCsp:
+    """Org /connect's native ``<form method="post">``s -- Sign out and each Telegram step -- are
+    the app's only native forms (local mode has none). TestClient posts to their routes without
+    enforcing CSP, which is how ``form-action 'none'`` once blocked every one of them in a real
+    browser unnoticed. Each test here clicks the real button under the real policy and checks
+    that the POST reached the server and the flow finished on the page it should, with no
+    violation reported. A browser checks form-action on every redirect a submission follows too,
+    so the landing page is part of what is asserted, not only the first POST."""
+
+    _ALICE = Principal(id="alice", email="alice@example.com")
+
+    def test_sign_out_ends_the_session_and_lands_on_the_signed_out_page(self, page, context, org_server):
+        server, sessions = org_server
+        violations = _watch_csp_violations(context, page)
+        _sign_in_org(context, server, sessions, principal=self._ALICE)
+        session_id = next(c["value"] for c in context.cookies() if c["name"] == org_session.SESSION_COOKIE)
+        page.goto(f"{server.base_url}/connect")
+
+        _submit_and_wait(page, page.locator('form[action="/logout"] button'), violations,
+                         lambda **kw: page.wait_for_url(f"{server.base_url}/signed-out", **kw))
+
+        assert page.locator("h1").inner_text() == "You're signed out"
+        assert sessions.get(session_id) is None
+        assert org_session.SESSION_COOKIE not in {c["name"] for c in context.cookies()}
+        # Signed out stays signed out: the page now asks for a sign-in rather than render.
+        again = context.request.get(f"{server.base_url}/connect", max_redirects=0)
+        assert again.status == 302 and again.headers["location"].startswith("/login")
+        assert violations == []
+
+    @pytest.fixture
+    def telegram_calls(self, monkeypatch):
+        """Telegram's sign-in, faked at telegram_auth: the phone step asks for a code, the code
+        asks for two-step verification, and the password completes it. Nothing reaches Telegram."""
+        from privacyfence import telegram_auth
+        from privacyfence.web import routes_connect
+
+        calls: list[tuple[str, str]] = []
+
+        async def send_code(phone, *_args):
+            calls.append(("send_code", phone))
+            return "phone-code-hash"
+
+        async def sign_in(phone, code, phone_code_hash, *_args):
+            calls.append(("sign_in", code))
+            return telegram_auth.NEEDS_2FA
+
+        async def sign_in_2fa(password, *_args):
+            calls.append(("sign_in_2fa", password))
+
+        monkeypatch.setattr(routes_connect, "telegram_app_credentials", lambda: (123, "apihash"))
+        monkeypatch.setattr(routes_connect.telegram_auth, "send_code", send_code)
+        monkeypatch.setattr(routes_connect.telegram_auth, "sign_in", sign_in)
+        monkeypatch.setattr(routes_connect.telegram_auth, "sign_in_2fa", sign_in_2fa)
+        return calls
+
+    def test_every_telegram_step_reaches_its_route(self, page, context, org_server, telegram_calls):
+        server, sessions = org_server
+        violations = _watch_csp_violations(context, page)
+        _sign_in_org(context, server, sessions, principal=self._ALICE)
+        connect = f"{server.base_url}/connect"
+        page.goto(connect)
+
+        page.locator('input[name="phone"]').fill("+15550100")
+        _submit_and_wait(page, page.get_by_role("button", name="Connect Telegram"), violations,
+                         page.locator('input[name="code"]').wait_for)
+        assert page.url == connect
+
+        page.locator('input[name="code"]').fill("12345")
+        _submit_and_wait(page, page.get_by_role("button", name="Confirm code"), violations,
+                         page.locator('input[name="password"]').wait_for)
+
+        page.locator('input[name="password"]').fill("hunter2")
+        _submit_and_wait(page, page.get_by_role("button", name="Confirm", exact=True), violations,
+                         page.locator('input[name="phone"]').wait_for)
+
+        assert telegram_calls == [("send_code", "+15550100"), ("sign_in", "12345"), ("sign_in_2fa", "hunter2")]
+        assert violations == []
+
+    def test_telegram_cancel_reaches_its_route(self, page, context, org_server, telegram_calls):
+        server, sessions = org_server
+        violations = _watch_csp_violations(context, page)
+        _sign_in_org(context, server, sessions, principal=self._ALICE)
+        page.goto(f"{server.base_url}/connect")
+        page.locator('input[name="phone"]').fill("+15550100")
+        _submit_and_wait(page, page.get_by_role("button", name="Connect Telegram"), violations,
+                         page.locator('input[name="code"]').wait_for)
+
+        _submit_and_wait(page, page.get_by_role("button", name="Cancel"), violations,
+                         page.locator('input[name="phone"]').wait_for)
+
+        assert page.locator('input[name="code"]').count() == 0
+        assert telegram_calls == [("send_code", "+15550100")]
+        assert violations == []
+
+    def test_a_telegram_step_after_the_session_ended_lands_on_the_signed_out_page(
+        self, page, context, org_server, telegram_calls,
+    ):
+        """A session idles out while the form is open. The POST's redirect must stay on this
+        origin: /login?next=/connect would bounce it on to the IdP, which form-action blocks."""
+        server, sessions = org_server
+        violations = _watch_csp_violations(context, page)
+        _sign_in_org(context, server, sessions, principal=self._ALICE)
+        page.goto(f"{server.base_url}/connect")
+        sessions.destroy(next(c["value"] for c in context.cookies() if c["name"] == org_session.SESSION_COOKIE))
+
+        page.locator('input[name="phone"]').fill("+15550100")
+        _submit_and_wait(page, page.get_by_role("button", name="Connect Telegram"), violations,
+                         lambda **kw: page.wait_for_url(f"{server.base_url}/signed-out", **kw))
+
+        assert telegram_calls == []
+        assert violations == []
 
 
 # --------------------------------------------------------------------- #
