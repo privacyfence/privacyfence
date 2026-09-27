@@ -204,14 +204,14 @@ Decisions D3 and D4 moved to plans 2 and 3.
 | # | Question | Decision |
 |---|---|---|
 | E1 | How does a local install choose `all-read-only`? | **Two `.mcpb` extensions.** `PrivacyFence.mcpb` gets truthful annotations, and a second extension gets every tool read-only. The second is named "PrivacyFence (no Claude prompts)" in Claude Desktop, with manifest `name` `privacyfence-read-only`, and ships as `PrivacyFence-no-prompts.mcpb`. They differ only in their manifest: the read-only one starts `shim.js` with `--tool-annotations=all-read-only`. The shim then sends one extra header on every `/mcp` request, `X-PrivacyFence-Tool-Annotations: all-read-only`. The shim stays free of tool-schema knowledge, because the daemon applies the choice to that session's `tools/list`. **Precedence:** in local mode a connection's header wins, then the bundle's `mcp.tool_annotations`, then `truthful`. So a Claude Code user can pass the same header with `--header`. In org mode the header is **ignored**: the admin's bundle decides. Install **one** of the two; with both installed, Claude Desktop lists every tool twice. The DMG and the Windows installer carry both; the `.deb` carries none, because Linux has no Claude Desktop. → **ADR** (the release artifact set changes; with D5's ADR, or its own) |
-| E2 | How truthful are write tools? | **Writes are advertised as writes, but not destructive**: `readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`. The maintainer's reason: nothing in PrivacyFence deletes. **Correction, confirm before WP 1.1:** two tools do delete. `calendar_delete_event` deletes an event, and `drive_sheets_delete_dimensions` deletes spreadsheet rows or columns. The plan marks just those two `destructiveHint=true` through a new `ToolSpec.destructive` flag (default `False`). A test pins the destructive set to exactly that list, so a new deleting tool has to be classified on purpose. Overwrites (`drive_write_file_content`, `drive_sheets_write_range`, …) stay non-destructive, as decided. Reads: `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`. |
+| E2 | How truthful are write tools? | **Writes are advertised as writes, but not destructive**: `readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`. **The exception:** the only two tools that delete, `calendar_delete_event` (an event) and `drive_sheets_delete_dimensions` (spreadsheet rows or columns), are marked `destructiveHint=true` through a new `ToolSpec.destructive` flag (default `False`). A test pins the destructive set to exactly that list, so a new deleting tool has to be classified on purpose. Overwrites (`drive_write_file_content`, `drive_sheets_write_range`, …) stay non-destructive, as decided. Reads: `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`. |
 
 ---
 
 ## 4. Roadmap at a glance
 
 ```text
-🧑 M0  decisions (done; confirm the E2 correction) + a test org deployment on public HTTPS
+🧑 M0  decisions (all done) + a test org deployment on public HTTPS
 │
 🤖 WAVE 1   WP1.1 annotation setting + ADR │ WP1.2 T1+T2 harness (Claude seeds) │ WP1.3 T3 Claude Code + canary
 │           WP1.4 ai-client-qa.md │ WP1.5 connect-claude-*.md docs + ai-agent content group
@@ -233,7 +233,7 @@ Decisions D3 and D4 moved to plans 2 and 3.
 
 ### 🤖 WAVE 1 (5 parallel sessions)
 
-Depends on: M0.1, including the E2 correction confirmed.
+Depends on: M0.1.
 
 #### WP 1.1: truthful tool annotations, bundle switch, per-connection choice, ADR · `feature:`
 
@@ -564,7 +564,7 @@ After this merges, plans 2 and 3 can start.
 
 ### M0: before Wave 1
 
-**M0.1 Decisions.** D1–D12, E1 and E2 are done. Confirm E2's correction about the two deleting tools.
+**M0.1 Decisions.** Done: D1–D12, E1 and E2 were confirmed on 2026-09-27.
 
 **M0.2 A test organization deployment on public HTTPS** (1–3 h if you don't have one; M1.2–M1.5
 need it, and so do plans 2 and 3). WP 1.4 moves this recipe into `ai-client-qa.md`.
