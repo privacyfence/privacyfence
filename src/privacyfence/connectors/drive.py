@@ -589,6 +589,7 @@ class DriveConnector(Connector):
                     ToolParam("count", "int", required=False, default=1),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
+                destructive=True,
             ),
         ]
 

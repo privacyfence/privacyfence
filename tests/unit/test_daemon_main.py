@@ -1467,6 +1467,17 @@ class TestMaybeStartWebServer:
         registry = get_web_approval_ui().deferred_registry
         assert registry.approval_url("abc") == f"{result.base_url}/approvals/abc"
 
+    def test_mcp_dispatcher_carries_the_bundles_tool_annotations(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, tool_annotations="all_read_only",
+        )
+
+        assert result.mcp_dispatcher.mode == "local"
+        assert result.mcp_dispatcher.tool_annotations == "all_read_only"
+
     def test_mcp_dispatcher_shares_the_same_registry_as_the_approval_ui(self, monkeypatch, tmp_path):
         from privacyfence.web_approval_ui import get_web_approval_ui
         self._no_bind(monkeypatch, tmp_path)
@@ -2013,6 +2024,15 @@ class TestOrgModeConnectorRegistry:
         )
         from privacyfence.connector_registry import ConnectorRegistry
         assert isinstance(result.org.connector_registry, ConnectorRegistry)
+
+    def test_org_dispatcher_carries_the_bundles_tool_annotations(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, tool_annotations="all_read_only", org_config=self._org_config(),
+        )
+        assert result.mcp_dispatcher.mode == "org"
+        assert result.mcp_dispatcher.tool_annotations == "all_read_only"
 
     def test_org_auth_carries_the_org_config_bundle(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
@@ -2826,6 +2846,37 @@ class TestRunApp:
         daemon_main.run_app({}, "config.yaml")
 
         assert self._web_server_calls[0]["unattended_sessions_enabled"] is True
+
+    def test_tool_annotations_default_to_truthful(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert self._web_server_calls[0]["tool_annotations"] == "truthful"
+
+    def test_tool_annotations_passed_through_from_org_config(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mcp": {"tool_annotations": "all_read_only"}})
+
+        daemon_main.run_app({}, "config.yaml")
+
+        assert self._web_server_calls[0]["tool_annotations"] == "all_read_only"
+
+    def test_an_unknown_tool_annotations_value_refuses_to_start(self, monkeypatch):
+        # ADR 0085: the daemon never guesses which mode an administrator meant.
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"mcp": {"tool_annotations": "read-only"}})
+
+        with pytest.raises(org_mode.ConfigurationError, match="tool_annotations"):
+            daemon_main.run_app({}, "config.yaml")
+
+        assert self._web_server_calls == []
 
     def test_unattended_sessions_enabled_in_settings_yaml_is_ignored(self, monkeypatch):
         """unattended_sessions.enabled lives in org_config.json, not settings.yaml -- a

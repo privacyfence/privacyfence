@@ -181,7 +181,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md) | An approved write is single-use; an approved read replays within the ledger TTL | Accepted (retroactive) |
 | [0074](0074-auto-accept-rules-are-identified-by-a-content-derived-id.md) | Auto-accept rules are identified by a content-derived id, and decisions are attributed by it | Accepted (retroactive) |
 | [0075](0075-apps-script-gets-no-run-tool.md) | The Apps Script connector has no tool that runs a script | Accepted (retroactive) |
-| [0076](0076-every-connector-tool-is-advertised-read-only.md) | Every connector tool is advertised to MCP clients as read-only | Accepted (retroactive) |
+| [0076](0076-every-connector-tool-is-advertised-read-only.md) | Every connector tool is advertised to MCP clients as read-only | Superseded by 0085 |
 | [0077](0077-the-approval-popup-never-proposes-a-rule-for-the-extra-scope-operations.md) | The approval popup never proposes a rule for the extra-scope operations (Apps Script, Gmail filters, Slack group chats) | Accepted (retroactive) |
 | [0078](0078-the-app-shares-the-websites-design-system.md) | The app shares the website's design system, instead of adopting a CSS framework | Accepted |
 | [0079](0079-the-apps-visual-language-is-the-websites.md) | The app's visual language is the website's, with a dark mode derived from it | Accepted |
@@ -190,3 +190,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0082](0082-org-mode-form-action-allows-self-and-sign-out-stays-on-the-app.md) | Org mode's `form-action` is `'self'`, and a sign-out lands on the app's own page; local mode keeps `'none'` | Accepted |
 | [0083](0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) | A human's deny note reaches the agent as delimited, sanitized user text, on both delivery paths, unfiltered | Accepted |
 | [0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md) | The audit log records that a deny had feedback (intent, note length), never the feedback text | Accepted |
+| [0085](0085-tool-annotations-are-truthful-by-default.md) | Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only | Accepted |

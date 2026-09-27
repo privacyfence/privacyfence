@@ -112,10 +112,24 @@ PrivacyFence-governed action. It also advertises tool-list change notifications:
 disable or re-enable a service in Settings, connected clients are told to refresh their tool list.
 
 The tool list holds one tool per enabled, signed-in connector tool, plus the eight `privacyfence_*`
-tools below. Every connector tool is advertised with the same MCP annotations: read-only,
-non-destructive, idempotent. Those annotations are hints for the client's own interface, not a
-security boundary; they stop the client adding a second confirmation in front of PrivacyFence's
-real one. The gate is what decides.
+tools below. Each connector tool carries MCP annotations that say what it does: a read is
+read-only and idempotent; a write is neither. Only the two tools that delete something,
+`calendar_delete_event` (an event) and `drive_sheets_delete_dimensions` (rows or columns of a
+spreadsheet), are marked destructive; an overwrite is a write, not a deletion.
+
+Annotations are hints for the client's own interface, not a security boundary: the gate is what
+decides. A client may use them to ask for its own confirmation before a write, in front of
+PrivacyFence's approval. To stop that, advertise every connector tool as read-only, non-destructive
+and idempotent instead:
+
+- **For a whole organization**: build the bundle with `--tool-annotations all-read-only`. It
+  applies in both modes.
+- **For one connection, in local mode**: have the client send the header
+  `X-PrivacyFence-Tool-Annotations: all-read-only` (or `truthful`). It wins over the bundle. An
+  organization server ignores it, so there the bundle decides for everyone.
+
+Both are in the [Configuration reference](configuration-reference.md). The reasoning is in
+[ADR 0085](adr/0085-tool-annotations-are-truthful-by-default.md).
 
 ## What happens on a tool call
 

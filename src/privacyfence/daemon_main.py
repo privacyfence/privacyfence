@@ -656,6 +656,7 @@ def _maybe_start_web_server(
     connector_host: ConnectorHost,
     *,
     unattended_sessions_enabled: bool,
+    tool_annotations: org_mode.ToolAnnotationsMode = org_mode.TOOL_ANNOTATIONS_TRUTHFUL,
     controller: Any = None,
     org_config: dict[str, Any] | None = None,
     config_path: str = "",
@@ -728,7 +729,7 @@ def _maybe_start_web_server(
             return None
         return _start_org_web_server(
             web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
-            install_wide_config=config, install_wide_config_path=config_path,
+            tool_annotations=tool_annotations, install_wide_config=config, install_wide_config_path=config_path,
         )
 
     use_web_settings = bool(settings_config.get("enabled", False)) and controller is not None
@@ -806,7 +807,7 @@ def _maybe_start_web_server(
 
         mcp_dispatcher = McpDispatcher(
             _connectors, unattended_sessions_enabled=unattended_sessions_enabled,
-            registry=registry,
+            registry=registry, tool_annotations=tool_annotations,
         )
         if controller is not None:
             # The direct successor of ipc_server.py's own constructor-time
@@ -1019,6 +1020,7 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
 def _start_org_web_server(
     web_config: dict[str, Any], org_config: dict[str, Any], connector_host: ConnectorHost,
     *, unattended_sessions_enabled: bool, install_wide_config: dict[str, Any],
+    tool_annotations: org_mode.ToolAnnotationsMode = org_mode.TOOL_ANNOTATIONS_TRUTHFUL,
     install_wide_config_path: str = "",
 ) -> Any:
     """org mode's own boot path -- a real OAuth 2.1 authorization server on ``/mcp``
@@ -1134,6 +1136,7 @@ def _start_org_web_server(
         mode="org",
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
+        tool_annotations=tool_annotations,
     )
 
     push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)
@@ -1820,6 +1823,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # function, its ConfigurationError still surfacing through the
     # same top-level "print and refuse to start" path in main().
     org_config = load_org_config()
+    # ADR 0085: a value naming neither mode raises ConfigurationError -- refuse to start, like a
+    # broken bundle, rather than guess what the administrator meant.
+    tool_annotations = org_mode.resolve_tool_annotations(org_config)
     # Same "org mode fails closed, local mode warns" posture as the
     # rest of this function's fail-safe defaults now that mode is known.
     check_storage_permissions(org_mode.resolve_mode(org_config) == "org")
@@ -1883,7 +1889,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # can poll connector_host.connectors for the live connector set -- see
     # _maybe_start_web_server's own docstring.
     server = _maybe_start_web_server(
-        config, connector_host, unattended_sessions_enabled=unattended_enabled, controller=settings_controller,
+        config, connector_host, unattended_sessions_enabled=unattended_enabled, tool_annotations=tool_annotations,
+        controller=settings_controller,
         org_config=org_config,
         # Resolved, not the raw --config argument -- org mode's
         # admin privacy page writes this file back, and it must land on the

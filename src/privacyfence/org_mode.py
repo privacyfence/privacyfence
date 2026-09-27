@@ -45,6 +45,33 @@ def resolve_mode(org_config: dict[str, Any]) -> Mode:
     return mode
 
 
+# How /mcp's tools/list annotates connector tools (ADR 0085): "truthful" derives each tool's hints
+# from its ToolSpec; "all_read_only" advertises every connector tool read-only, non-destructive and
+# idempotent (ADR 0076's uniform triple), so a client does not put its own confirmation in front of
+# PrivacyFence's approval. The bundle's ``mcp.tool_annotations`` sets it for both modes; absent means
+# truthful.
+ToolAnnotationsMode = Literal["truthful", "all_read_only"]
+TOOL_ANNOTATIONS_TRUTHFUL: ToolAnnotationsMode = "truthful"
+TOOL_ANNOTATIONS_ALL_READ_ONLY: ToolAnnotationsMode = "all_read_only"
+TOOL_ANNOTATIONS_MODES: tuple[ToolAnnotationsMode, ...] = (TOOL_ANNOTATIONS_TRUTHFUL, TOOL_ANNOTATIONS_ALL_READ_ONLY)
+
+
+def resolve_tool_annotations(org_config: dict[str, Any]) -> ToolAnnotationsMode:
+    """The bundle's ``mcp.tool_annotations``, or ``"truthful"`` when it is absent. Any other value
+    raises ``ConfigurationError``, so the daemon refuses to start rather than guess which of the two
+    an administrator meant."""
+    section = org_config.get("mcp", {})
+    if not isinstance(section, dict):
+        raise ConfigurationError(f"org_config.json's \"mcp\" must be an object, got {section!r}")
+    value = section.get("tool_annotations", TOOL_ANNOTATIONS_TRUTHFUL)
+    if value not in TOOL_ANNOTATIONS_MODES:
+        raise ConfigurationError(
+            "org_config.json's \"mcp.tool_annotations\" must be \"truthful\" or \"all_read_only\", "
+            f"got {value!r}"
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     """Org mode's listener and transport settings, made concrete per install
