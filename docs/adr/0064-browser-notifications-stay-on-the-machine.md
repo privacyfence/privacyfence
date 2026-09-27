@@ -8,6 +8,7 @@ Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-02 in
 text is at `git show a59ae8db^:docs/approval-list-ui-ux.md`). Tiers 0–1 landed in `ad9a9b0f`, merged
 as [#189](https://github.com/privacyfence/privacyfence/pull/189); the detail levels in `a59ae8db`,
 merged as [#202](https://github.com/privacyfence/privacyfence/pull/202). Implemented.
+Amended for org mode by [ADR 0081](0081-org-mode-sends-a-count-only-web-push.md) (a count-only web push); local mode unchanged.
 
 ## Context
 

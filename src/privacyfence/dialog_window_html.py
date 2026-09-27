@@ -1,10 +1,10 @@
 """Small-dialog HTML template for the confirmation/list-picker dialogs
 web_approval_ui.py and settings_controller.py serve (through
 web_prompt.py), using the same in-page button row and bridge script as the
-approval window. Reuses approval_window_html.py's
-vendored ``styles.css`` (design tokens, embedded fonts, the
-``.pf-btn``/``.pf-btn-primary``/``.pf-btn-deny`` button styles, ``.pf-scroll``'s
-scrollbar styling) rather than a second copy of the same visual language --
+approval window. Reuses the card's stylesheets (the shared design files and
+approval_window_html.py's ``styles.css``: tokens, the ``.button`` styles, the
+decision row and its compact layout, the ``pf-card`` size container) rather
+than a second copy of the same visual language --
 these are just much smaller, fixed-shape documents than
 ``build_card_stack_html``'s full card stack, with no header icon/pill, no
 preview pane, no PII/disclosure cards.
@@ -18,15 +18,12 @@ Two shapes:
     ``approval_window_html.py``'s own Allow once button uses), which
     ``_JS``'s keydown handler deliberately excludes from the Enter/Space-
     activates-a-focused-control path -- hitting Enter can never silently
-    accept. Escape resolves Cancel from anywhere in the document, matching
-    ``_display_dialog``'s old default-button-is-Cancel contract exactly.
+    accept. Escape resolves Cancel from anywhere in the document.
   - ``build_choice_html()``: a vertical list of clickable option rows plus a
     Cancel button -- the shape both ``show_rule_choice_popup`` and
-    ``settings_controller._osascript_pick``'s Atlassian multi-resource
-    picker render. Escape or Cancel resolve to no selection, matching
-    ``_run``'s old "non-zero osascript exit returns None" contract (see
-    ``dialog_window.py``'s ``show_choice_dialog`` for where that None
-    actually gets produced from the bridge's own result).
+    ``settings_controller._pick_resource_index``'s Atlassian multi-resource
+    picker render. Escape or Cancel resolve to no selection: the caller gets
+    ``None`` rather than an index (web_prompt.py).
 
 Bridge protocol (JS -> Python only, same shape as approval_window_html.py's
 own): the page posts
@@ -38,26 +35,19 @@ number) / ``'cancel'`` for the choice shape.
 Every value interpolated into these documents -- button labels, dialog copy,
 and (for the choice shape) each option's own display text -- is run through
 ``_html_escape()`` before interpolation, the same defensive posture
-``build_card_stack_html`` takes with ``details_text``. This is a real fix,
-not just a precaution: ``_osascript_pick``'s options previously went
-unescaped into AppleScript source text (a real OAuth ``accessible-resources``
-URL containing a literal quote could break out of the string literal); a
-webview bridge call takes the string as a real DOM text value, never source
-text to be interpreted, so that injection class doesn't exist here at all --
-escaping is still applied to keep the HTML itself well-formed, not to guard
-against script execution.
+``build_card_stack_html`` takes with ``details_text``. An option's text can
+come from outside (an OAuth ``accessible-resources`` site name or URL), so it
+must stay text and never become markup.
 """
 from __future__ import annotations
 
 from html import escape as _html_escape
 
 from .approval_window_html import _STYLES_CSS, _new_nonce
+from .design_css import DOCUMENT_CSS
 
-# Public (no leading underscore): dialog_window.py's own window-width
-# constants derive from these directly rather than duplicating them, so the
-# native window frame and the HTML body rendered inside it can never drift
-# out of sync -- same discipline approval_window.py's _WINDOW_WIDTH takes
-# with approval_window_html.CONTENT_WIDTH.
+# The widest each dialog's card gets; a narrower screen gets all of its
+# width (``_document``'s ``min(..., 100%)``).
 CONFIRM_WIDTH = 440
 PICKER_WIDTH = 480
 
@@ -65,9 +55,8 @@ PICKER_WIDTH = 480
 # same DOMContentLoaded-is-the-right-signal reasoning as approval_window_
 # html.py's own _JS (nothing here ever fetches anything either: fonts/colors
 # come from the same already-inlined styles.css, and there are no images at
-# all in these two shapes). window.__pfEnableButtons is exposed for the same
-# reason too: dialog_window.py's WKNavigationDelegate fail-safes can force
-# button click-ability if DOMContentLoaded itself never fires.
+# all in these two shapes). window.__pfEnableButtons is exposed the same way
+# too, and likewise nothing in the web UI calls it.
 _JS = """
 (function () {
   function post(result) {
@@ -135,11 +124,11 @@ def _confirm_button_row_html(cancel_label: str, confirm_label: str) -> str:
     grouping as approval_window_html.py's own _button_row_html (Deny left,
     Allow once right)."""
     cancel_html = (
-        '<div class="pf-btn pf-btn-deny" role="button" aria-disabled="true" '
+        '<div class="button danger pf-btn-deny" role="button" aria-disabled="true" '
         f'aria-label="{_html_escape(cancel_label)}" data-pf-action="cancel">{_html_escape(cancel_label)}</div>'
     )
     confirm_html = (
-        '<div class="pf-btn pf-btn-primary" role="button" aria-disabled="true" '
+        '<div class="button primary pf-btn-primary" role="button" aria-disabled="true" '
         f'data-pf-primary="1" aria-label="{_html_escape(confirm_label)}" data-pf-action="confirm">'
         f'{_html_escape(confirm_label)}</div>'
     )
@@ -148,7 +137,7 @@ def _confirm_button_row_html(cancel_label: str, confirm_label: str) -> str:
 
 def _cancel_only_button_row_html(cancel_label: str) -> str:
     cancel_html = (
-        '<div class="pf-btn pf-btn-deny" role="button" aria-disabled="true" '
+        '<div class="button danger pf-btn-deny" role="button" aria-disabled="true" '
         f'aria-label="{_html_escape(cancel_label)}" data-pf-action="cancel">{_html_escape(cancel_label)}</div>'
     )
     return f'<div class="pf-btn-row"><div class="pf-btn-row-left">{cancel_html}</div></div>'
@@ -182,54 +171,40 @@ def _document(*, width: int, body_html: str) -> str:
 <head>
 <meta charset="utf-8">
 <!-- See approval_window_html.build_card_stack_html's own head: without
-     this a phone renders the document in a ~980px viewport at ~40% scale
-     and every phone-width @media rule below silently never matches. -->
+     this a phone renders the document in a ~980px viewport at ~40% scale. -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
+{DOCUMENT_CSS}
 {_STYLES_CSS}
 html {{ height: 100%; }}
 html, body {{ overflow-y: auto; }}
-body {{
-  /* min(...,100%) + margin:0 auto -- same fix approval_window_html.py's
-     own build_card_stack_html applies to its <body>, for the same reason
-     (see that function's docstring): this document also renders inside an
-     ordinary browser tab, at a phone viewport, not only inside a native
-     host's window frame sized to exactly {width}px. A bare `width:
-     {width}px` (this document's own shape before that reasoning was
-     applied here too) overflows any viewport narrower than {width}px --
-     found by an actual headless-browser layout check
-     (tests/integration/test_browser_smoke.py's TestResponsiveLayout), the
-     same way TestPdfPreview/TestSecurityHeadersCsp's own real-browser
-     checks caught their bugs. */
-  box-sizing: border-box; width: min({width}px, 100%); height: 100vh;
-  margin: 0 auto;
-  padding: 24px 28px;
-  display: flex; flex-direction: column;
-}}
-/* Same breakpoint/reasoning as approval_window_html.py's own: below this
-   width the document is assumed to be embedded somewhere that isn't a
-   fixed-height native window frame, so it scrolls like an ordinary page
-   instead of clipping to a viewport-height frame. */
-@media (max-width: 700px) {{
-  body {{ height: auto; min-height: 100vh; }}
-}}
-h2 {{ font-size: 19px; margin-bottom: 12px; }}
-.pf-choice-list {{
-  display: flex; flex-direction: column; gap: 6px;
-  flex: 1; min-height: 0; overflow-y: auto;
-  margin: 4px 0 var(--space-3);
-}}
+/* The card root (styles.css's .pf-card-root, the pf-card size container):
+   at most {width}px, centred in a wider tab, all of a narrower one. Every
+   dialog is under styles.css's 600px, so it is always a compact card: a page
+   that grows with its content, with Cancel and the accepting button as two
+   equal full-height touch targets. */
+.pf-card-root {{ width: min({width}px, 100%); }}
+.pf-dialog {{ padding: 24px 20px; }}
+h2 {{ font-size: 19px; margin-bottom: 12px; overflow-wrap: anywhere; }}
+.pf-choice-list {{ display: flex; flex-direction: column; gap: 6px; margin: 4px 0 15px; }}
+/* An option is visibly a control at rest -- a bordered row the height of a
+   tap target -- and the highlight a mouse gets on hover, a keyboard gets on
+   focus and a finger on press, so no state is reachable by hover alone. */
 .pf-choice-row {{
-  padding: 10px 12px; border-radius: var(--radius-md);
-  background: var(--color-surface); font-size: 13px;
+  display: flex; align-items: center; min-height: var(--tap);
+  padding: 10px 14px; border-radius: var(--radius-s);
+  background: var(--surface); color: var(--ink); font-size: 14px;
+  border: 1px solid var(--control-line); overflow-wrap: anywhere;
   cursor: pointer; user-select: none;
 }}
-.pf-choice-row:hover {{ background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface)); }}
-.pf-choice-row[aria-disabled="true"] {{ opacity: .45; pointer-events: none; cursor: default; }}
+.pf-choice-row:hover, .pf-choice-row:focus-visible, .pf-choice-row:active {{
+  background: var(--accent-soft); border-color: var(--accent);
+}}
+.pf-choice-row[aria-disabled="true"] {{ opacity: .45; }}
 </style>
 </head>
-<body>{body_html}<script nonce="{nonce}">{_JS}</script></body>
+<body><div class="pf-card-root"><div class="pf-card pf-dialog">{body_html}</div></div><script nonce="{nonce}">{_JS}</script></body>
 </html>
 """
 
@@ -238,12 +213,11 @@ def build_confirmation_html(
     *, title: str, message_lines: list[str], cancel_label: str, confirm_label: str,
 ) -> str:
     """Two-button Cancel/<confirm_label> dialog. See module docstring for
-    the Cancel-is-default security behavior this preserves from
-    ``_display_dialog``."""
+    why Cancel is the default."""
     body_html = (
         '<div class="pf-kicker"><span>PrivacyFence</span></div>'
         f'<h2>{_html_escape(title)}</h2>'
-        f'<div style="flex:1;min-height:0;overflow-y:auto">{_message_html(message_lines)}</div>'
+        f'<div class="pf-dialog-message">{_message_html(message_lines)}</div>'
         f'{_confirm_button_row_html(cancel_label, confirm_label)}'
     )
     return _document(width=CONFIRM_WIDTH, body_html=body_html)
@@ -253,8 +227,7 @@ def build_choice_html(
     *, title: str, prompt: str, options: list[str], cancel_label: str = "Cancel",
 ) -> str:
     """A vertical list of clickable option rows plus Cancel. See module
-    docstring for the escape/cancel-returns-no-selection contract this
-    preserves from ``_run``'s old "non-zero osascript exit" behavior."""
+    docstring for why Escape and Cancel return no selection."""
     rows = "".join(
         '<div class="pf-choice-row" role="button" aria-disabled="true" '
         f'aria-label="{_html_escape(opt)}" data-pf-action="choice" data-pf-index="{i}">'

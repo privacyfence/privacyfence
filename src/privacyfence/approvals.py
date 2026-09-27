@@ -454,6 +454,23 @@ class PendingApprovalRegistry:
         # own note on why principal_id is folded into this key, not just
         # dedupe_key alone.
         self._by_key: dict[tuple[str, str], str] = {}
+        self._created_listeners: list[Callable[[PendingApproval], None]] = []
+
+    def add_created_listener(self, listener: Callable[[PendingApproval], None]) -> None:
+        """Call ``listener(approval)`` each time ``register_or_coalesce`` creates a new card (never
+        for a coalescing hit, and never for a confirm dialog, which follows a card someone is
+        already looking at). Called on the registering thread, after the lock is released, so a
+        listener must return quickly and hand any slow work to a thread of its own. An exception
+        from a listener is logged and never reaches the gated call. Org mode's web push
+        (web_push.PushNotifier.on_new_approval) is the one listener."""
+        self._created_listeners.append(listener)
+
+    def _notify_created(self, approval: PendingApproval) -> None:
+        for listener in list(self._created_listeners):
+            try:
+                listener(approval)
+            except Exception:
+                logger.exception("A new-approval listener failed; the approval itself is unaffected")
 
     def set_base_url(self, base_url: str | None) -> None:
         self.base_url = base_url
@@ -572,7 +589,8 @@ class PendingApprovalRegistry:
             )
             self._pending[approval.id] = approval
             self._by_key[key] = approval.id
-            return approval, True
+        self._notify_created(approval)
+        return approval, True
 
     def register_confirm(self, *, sensitive: bool = False) -> PendingApproval:
         """A PII/"Always allow" confirmation dialog -- never coalesced

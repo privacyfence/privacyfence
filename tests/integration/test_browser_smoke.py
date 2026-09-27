@@ -33,7 +33,10 @@ web/csp.py's ``build_csp()`` for the policy they check (ADR 0063).
 """
 from __future__ import annotations
 
+import base64
+import dataclasses
 import http.server
+import json
 import logging
 import re
 import socket
@@ -50,10 +53,14 @@ pytest.importorskip(
 )
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from pypdf import PdfWriter  # noqa: E402
 
+from privacyfence import approval_window_html  # noqa: E402
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
+from privacyfence.connector_registry import ConnectorRegistry  # noqa: E402
 from privacyfence.principal import Principal, principal_scope  # noqa: E402
 from privacyfence.settings_controller import SettingsController  # noqa: E402
 from privacyfence.web import org_session  # noqa: E402
@@ -63,11 +70,17 @@ from privacyfence.web.routes_approvals import _DECIDED_MESSAGE, _DENIED_MESSAGE 
 from privacyfence.web.server import OrgAuth, WebServer  # noqa: E402
 from privacyfence.web.session_auth import PROVENANCE_HUMAN  # noqa: E402
 from privacyfence.web.session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE  # noqa: E402
+from privacyfence.web.state_stream import call_soon_threadsafe  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
+from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode  # noqa: E402
 
 pytestmark = pytest.mark.timeout(60)
 
 ISSUER = "https://idp.example.com"
+
+# A syntactically complete Slack section for the org bundle -- routes_connect._is_configured only
+# asks for a client_id; nothing ever contacts Slack.
+_SLACK_ORG_CONFIG = {"client_id": "slack-client-id", "client_secret": "slack-client-secret"}
 
 
 def _free_port() -> int:
@@ -250,6 +263,12 @@ def org_server(org_server_and_ui):
 def org_server_and_ui(pf_home, tmp_path, monkeypatch):
     """``org_server`` plus the ``WebApprovalUI`` it serves, for the tests
     that need to register an approval against a running org-mode server."""
+    yield from _running_org_server(tmp_path, monkeypatch)
+
+
+def _running_org_server(tmp_path, monkeypatch, *, push: bool = False):
+    """A running org-mode ``WebServer``. ``push=True`` also turns web push on (ADR 0081) with a
+    notifier whose sends go nowhere, and yields its subscription store as a fourth item."""
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "oauth_clients.json"),
     )
@@ -267,14 +286,26 @@ def org_server_and_ui(pf_home, tmp_path, monkeypatch):
         # step_up.enabled doesn't need to be True for this suite -- only
         # /security (webauthn_stepup.py's enrollment ceremony) is under
         # test here, not the write-approval step-up gate itself.
-        org_config={"step_up": {"enabled": True}},
+        org_config={"step_up": {"enabled": True}, "slack": dict(_SLACK_ORG_CONFIG)},
+        # A registry mounts /connect (web/routes_connect.py), and the Slack section above
+        # gives it one configured service to offer, so the phone-layout tests measure a real
+        # connections page rather than a 404. No test here connects anything.
+        connector_registry=ConnectorRegistry(factory=lambda principal: []),
     )
     web_ui = WebApprovalUI()
+    store = None
+    if push:
+        store = PushSubscriptionStore(lambda: tmp_path / "users")
+        notifier = PushNotifier(
+            store=store, vapid_key=ec.generate_private_key(ec.SECP256R1()), subject=issuer_url,
+            registry=web_ui.deferred_registry, post=lambda *args, **kwargs: None,
+        )
+        org = dataclasses.replace(org, push_notifier=notifier, push_store=store)
     server = WebServer(web_ui, host="localhost", port=port, org=org)
     server.start()
     try:
         _wait_until_connectable("localhost", port)
-        yield server, sessions, web_ui
+        yield (server, sessions, web_ui, store) if push else (server, sessions, web_ui)
     finally:
         server.stop()
 
@@ -1529,6 +1560,26 @@ class TestResponsiveLayout:
 # --------------------------------------------------------------------- #
 
 
+# The page's own background and text colour, and what --bg and --ink are and resolve to, read off
+# the live document.
+_THEME_PROBE_JS = """() => {
+  const root = getComputedStyle(document.documentElement);
+  const resolve = (token) => {
+    const probe = document.createElement('div');
+    probe.style.color = `var(${token})`;
+    document.body.appendChild(probe);
+    const value = getComputedStyle(probe).color;
+    probe.remove();
+    return value;
+  };
+  return {
+    bgToken: root.getPropertyValue('--bg').trim(), inkToken: root.getPropertyValue('--ink').trim(),
+    bgResolved: resolve('--bg'), inkResolved: resolve('--ink'),
+    body: getComputedStyle(document.body).backgroundColor, text: getComputedStyle(document.body).color,
+  };
+}"""
+
+
 class TestColorScheme:
     @pytest.mark.parametrize("color_scheme", ["light", "dark"])
     def test_approval_list_renders_in_both_color_schemes(self, page, local_server, color_scheme):
@@ -1569,17 +1620,137 @@ class TestColorScheme:
         browser context."""
         server, _web_ui = local_server
         _sign_in_local(page, server)
-        page.emulate_media(color_scheme="light")
-        page.goto(f"{server.base_url}/approvals")
-        page.wait_for_load_state("load")
-        light_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        seen = {}
+        for scheme in ("light", "dark"):
+            page.emulate_media(color_scheme=scheme)
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_load_state("load")
+            seen[scheme] = page.evaluate(_THEME_PROBE_JS)
 
-        page.emulate_media(color_scheme="dark")
-        page.reload()
-        page.wait_for_load_state("load")
-        dark_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        # The page is painted from the shared token names (resources/design/), and app.css's dark
+        # block redefines those same names: --bg and --ink, not a parallel set.
+        assert seen["light"]["bgToken"] == "#f6f8fb" and seen["dark"]["bgToken"] == "#0e1f1f"
+        assert seen["light"]["inkToken"] == "#14212b" and seen["dark"]["inkToken"] == "#eaf4f3"
+        for scheme in ("light", "dark"):
+            assert seen[scheme]["body"] == seen[scheme]["bgResolved"], scheme
+            assert seen[scheme]["text"] == seen[scheme]["inkResolved"], scheme
+        assert seen["light"]["body"] != seen["dark"]["body"]
 
-        assert light_bg != dark_bg
+    @pytest.mark.parametrize("color_scheme", ["light", "dark"])
+    def test_the_list_rows_review_link_is_readable_on_its_fill(self, page, local_server, color_scheme):
+        """The Review control is an <a>; a page-wide link colour must not repaint its text in the
+        colour of its own fill (which it did: teal on teal)."""
+        server, web_ui = local_server
+        page.emulate_media(color_scheme=color_scheme)
+        _sign_in_local(page, server)
+        approval, _ = web_ui.deferred_registry.register_or_coalesce(
+            dedupe_key="contrast", connector="gmail", tool="gmail_get_message", gate_kind="review",
+            request_id="contrast", summary="Quarterly numbers", tool_name="Get message",
+        )
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(".pf-btn-review")
+            fg, bg = page.evaluate(
+                "() => { const s = getComputedStyle(document.querySelector('.pf-btn-review'));"
+                " return [s.color, s.backgroundColor]; }"
+            )
+            assert _contrast(fg, bg) >= 4.5, (fg, bg)
+        finally:
+            web_ui.resolve(approval.id, "deny")
+
+    def test_the_card_takes_the_dark_tokens_too(self, page, local_server):
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread, card = _register_card(web_ui, read=False, layout="narrow")
+        try:
+            seen = {}
+            for scheme in ("light", "dark"):
+                page.emulate_media(color_scheme=scheme)
+                page.goto(f"{server.base_url}/approvals/{card.id}")
+                page.wait_for_load_state("load")
+                seen[scheme] = page.evaluate(_THEME_PROBE_JS)
+            for scheme in ("light", "dark"):
+                assert seen[scheme]["body"] == seen[scheme]["bgResolved"], scheme
+                assert seen[scheme]["text"] == seen[scheme]["inkResolved"], scheme
+            assert seen["light"]["body"] != seen["dark"]["body"]
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
+# --------------------------------------------------------------------- #
+# The approval card's action hierarchy (shared rule 10, ADR 0079): a
+# restyle changes the three decisions' colour and shape, never which one is
+# filled, outlined or strongest. Measured on the rendered buttons, in both
+# themes, at a phone and a desktop width.
+# --------------------------------------------------------------------- #
+
+_ACTION_STYLES_JS = """() => {
+  document.querySelectorAll('[aria-disabled]').forEach((el) => el.setAttribute('aria-disabled', 'false'));
+  const read = (selector) => {
+    const el = document.querySelector(selector);
+    const s = getComputedStyle(el);
+    return {bg: s.backgroundColor, borderWidth: parseFloat(s.borderTopWidth), borderStyle: s.borderTopStyle,
+            fontSize: parseFloat(s.fontSize), underline: s.textDecorationLine.includes('underline'),
+            height: el.getBoundingClientRect().height};
+  };
+  return {page: getComputedStyle(document.body).backgroundColor,
+          allowOnce: read('.pf-btn-primary'), deny: read('.pf-btn-deny'), always: read('.pf-btn-link')};
+}"""
+
+
+def _css_rgba(value: str) -> tuple[float, float, float, float]:
+    numbers = [float(n) for n in re.findall(r"[\d.]+", value)]
+    r, g, b = (numbers + [0.0, 0.0, 0.0])[:3]
+    return r, g, b, numbers[3] if len(numbers) > 3 else 1.0
+
+
+def _contrast(fg: str, bg: str) -> float:
+    """WCAG contrast of two computed ``rgb()`` colours (tests/unit/test_design_contrast.py does the
+    same over the token files)."""
+    def luminance(value: str) -> float:
+        def channel(c: float) -> float:
+            c /= 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b, _a = _css_rgba(value)
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+    lighter, darker = sorted((luminance(fg), luminance(bg)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+class TestActionHierarchy:
+    @pytest.mark.parametrize("color_scheme", ["light", "dark"])
+    @pytest.mark.parametrize("width", [393, 1000])
+    @pytest.mark.parametrize("candidates", [1, 2])
+    def test_allow_once_is_the_one_filled_action_deny_is_outlined_always_allow_is_a_link(
+        self, browser, color_scheme, width, candidates,
+    ):
+        from privacyfence.card_builder import build_card_html
+
+        html = build_card_html(
+            title="Send email", preview={"To": "a@b.com"}, details_text="body", is_read=False, layout="narrow",
+            accept_all_choices=[(f"rule-{i}", f"Always allow — option {i}") for i in range(candidates)],
+        )
+        ctx = browser.new_context(viewport={"width": width, "height": 800}, color_scheme=color_scheme)
+        try:
+            page = ctx.new_page()
+            page.set_content(html)
+            styles = page.evaluate(_ACTION_STYLES_JS)
+        finally:
+            ctx.close()
+        allow_once, deny, always = styles["allowOnce"], styles["deny"], styles["always"]
+        # Filled: only Allow once has an opaque fill, and it differs from the page.
+        assert _css_rgba(allow_once["bg"])[3] == 1 and allow_once["bg"] != styles["page"], styles
+        assert _css_rgba(deny["bg"])[3] == 0 and _css_rgba(always["bg"])[3] == 0, styles
+        # Outlined: Deny has a visible solid border; the Always-allow link has none.
+        assert deny["borderWidth"] >= 1 and deny["borderStyle"] == "solid", styles
+        assert always["borderWidth"] == 0 or always["borderStyle"] == "none", styles
+        # Strongest to quietest: the two buttons match in size; the link is underlined, in
+        # smaller type and shorter than either.
+        assert always["underline"] and not deny["underline"] and not allow_once["underline"], styles
+        assert always["fontSize"] < deny["fontSize"] == allow_once["fontSize"], styles
+        assert always["height"] < deny["height"] == allow_once["height"], styles
 
 
 # --------------------------------------------------------------------- #
@@ -1614,6 +1785,147 @@ class TestPdfPreview:
         finally:
             web_ui.resolve(card.id, "deny")
             thread.join(timeout=5)
+
+
+    @pytest.mark.parametrize(("pane", "embeds", "pages"), [(700, 1, 0), (599, 0, 1)])
+    def test_the_preview_width_picks_the_embed_or_the_page_images(self, page, pane, embeds, pages):
+        """ADR 0080: the <embed> where the preview is at least 600px wide, the server-rendered
+        page images below that. A container query, so it is the preview's own width that
+        decides, wherever the card sits. Measured on the fragment in a box of a set width; the
+        whole card at a desktop width is the test below."""
+        fragment = approval_window_html.build_preview_body_html(
+            pdf_data_uri="data:application/pdf;base64," + base64.b64encode(_pdf_bytes()).decode("ascii"),
+            pdf_page_uris=["data:image/png;base64," + base64.b64encode(
+                (Path(paths_module.__file__).parent / "resources" / "icon_512.png").read_bytes(),
+            ).decode("ascii")],
+            pdf_page_count=3,
+        )
+        page.set_content(
+            f"<style>{approval_window_html.DOCUMENT_CSS}{approval_window_html._STYLES_CSS}</style>"
+            f'<div style="width:{pane}px;height:600px">{fragment}</div>'
+        )
+        shown = page.evaluate("""() => {
+            const shown = (sel) => [...document.querySelectorAll(sel)]
+                .filter((el) => el.getBoundingClientRect().width > 0).length;
+            return {embeds: shown('embed.pf-pdf-embed'), pages: shown('img.pf-pdf-page')};
+        }""")
+        assert shown == {"embeds": embeds, "pages": pages}
+        if pages:
+            assert page.inner_text(".pf-pdf-note") == "Showing page 1 of 3"
+
+
+    def test_a_wide_pdf_card_on_a_desktop_shows_the_browsers_viewer(self, page, local_server):
+        """A WIDE card in a 1280px tab has room for the embed: its preview panel passes 600px, so
+        a desktop reviewer can read past the pages the server rendered. (A 980px card left the
+        panel at about 448px, and a desktop showed page images only.)"""
+        server, web_ui = local_server
+        page.set_viewport_size({"width": 1280, "height": 800})
+        _sign_in_local(page, server)
+        thread, card = _register_card(web_ui, read=True, pdf_bytes=_pdf_bytes(), layout="wide")
+        try:
+            page.goto(f"{server.base_url}/approvals/{card.id}")
+            page.wait_for_load_state("load")
+            shown = page.evaluate("""() => {
+                const width = (sel) => [...document.querySelectorAll(sel)]
+                    .map((el) => el.getBoundingClientRect().width).filter((w) => w > 0);
+                return {embeds: width('embed.pf-pdf-embed').length, pages: width('img.pf-pdf-page').length,
+                        preview: document.querySelector('.pf-pdf').getBoundingClientRect().width};
+            }""")
+            assert shown["embeds"] == 1 and shown["pages"] == 0, shown
+            assert shown["preview"] >= 600, shown
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
+def _card_markup(html: str) -> tuple[str, str]:
+    """A card document's stylesheet and its card root, for putting the card in a container of
+    a set width the way a host page would."""
+    css = re.search(r'<style nonce="[^"]+">(.*?)</style>', html, flags=re.S).group(1)
+    markup = html[html.index("<body>") + len("<body>"):html.index("<script nonce=")]
+    return css, markup
+
+
+class TestCardContainers:
+    """The card sizes itself by the room its container gives it, never by the viewport: the same
+    markup is a phone screen, a desktop tab or a row of the approvals list. These put it in a box
+    of a set width on a desktop-sized page, where a viewport query would see 1280px."""
+
+    @staticmethod
+    def _card_in_a_box(page, box: int, **card) -> None:
+        from privacyfence.card_builder import build_card_html
+
+        css, markup = _card_markup(build_card_html(**card))
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.set_content(f'<style>{css}</style><div style="width:{box}px">{markup}</div>')
+
+    _WIDE = {"title": "Get file content", "preview": {"File": "Quarterly report"}, "details_text": "Body.",
+             "is_read": True, "layout": "wide"}
+
+    def test_a_wide_card_stacks_in_a_list_row_sized_box_on_a_desktop(self, page):
+        self._card_in_a_box(page, 700, **self._WIDE)
+        layout = page.evaluate("""() => ({
+            row: getComputedStyle(document.querySelector('.pf-wide-row')).flexDirection,
+            heading: getComputedStyle(document.querySelector('.pf-head h2')).whiteSpace,
+            overflow: document.documentElement.scrollWidth,
+        })""")
+        # Stacked (under 860px of card) but not compact (600px or more): the desktop heading.
+        assert layout == {"row": "column", "heading": "nowrap", "overflow": 1280}, layout
+
+    def test_the_same_card_keeps_its_columns_in_a_wide_box(self, page):
+        self._card_in_a_box(page, 1000, **self._WIDE)
+        assert page.evaluate("getComputedStyle(document.querySelector('.pf-wide-row')).flexDirection") == "row"
+
+    def test_a_card_is_compact_in_a_phone_sized_box_on_a_desktop(self, page):
+        self._card_in_a_box(page, 380, title="Send email", preview={"To": "a@b.com"}, details_text="body",
+                            is_read=False, layout="narrow")
+        assert page.evaluate("getComputedStyle(document.querySelector('.pf-head h2')).whiteSpace") == "normal"
+        deny = page.locator('[data-pf-action="deny"]').bounding_box()
+        accept = page.locator('[data-pf-action="accept"]').bounding_box()
+        assert deny["height"] >= 44 and accept["height"] >= 44
+        assert abs(deny["y"] - accept["y"]) < 1
+
+    def test_a_cut_off_value_opens_on_a_tap_and_one_that_fits_is_plain_text(self, page):
+        from privacyfence.card_builder import build_card_html
+
+        names = ", ".join(f"Attendee number {i}" for i in range(40))
+        html = build_card_html(title="Read event", preview={"Title": "Standup", "Attendees": names},
+                               details_text="", is_read=True, layout="narrow")
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.set_content(html)
+        cut = page.locator('.pf-kv .pf-clamp[data-pf-clamped]')
+        assert cut.count() == 1 and page.locator(".pf-clamp").count() == 2
+        assert cut.get_attribute("role") == "button" and cut.get_attribute("aria-expanded") == "false"
+        before = cut.bounding_box()["height"]
+        cut.click()
+        assert cut.get_attribute("aria-expanded") == "true"
+        assert cut.bounding_box()["height"] > before
+        # The decision was not touched by opening it.
+        assert page.evaluate("document.querySelector('[data-pf-action=\"accept\"]').getAttribute('aria-disabled')") is None
+
+
+    @pytest.mark.parametrize("shape", ["confirm", "choice"])
+    @pytest.mark.parametrize("width", [320, 393])
+    def test_the_dialogs_are_touch_sized_on_a_phone(self, browser, shape, width):
+        from privacyfence.dialog_window_html import build_choice_html, build_confirmation_html
+
+        html = (
+            build_confirmation_html(title="PrivacyFence — Possible PII Detected", message_lines=["An email address."],
+                                    cancel_label="Cancel", confirm_label="Allow")
+            if shape == "confirm" else
+            build_choice_html(title="PrivacyFence — Choose Auto-Accept Rule", prompt="Pick one",
+                              options=["i_am_owner", "approved_folder: Finance"])
+        )
+        ctx = browser.new_context(**{**_MOBILE_EMULATION, "viewport": {"width": width, "height": 800}})
+        try:
+            page = ctx.new_page()
+            page.set_content(html)
+            page.wait_for_function("() => !document.querySelector('[aria-disabled=\"true\"]')")
+            assert page.evaluate("document.documentElement.scrollWidth") <= width
+            small = page.evaluate(_PHONE_SMALL_TARGETS_JS, _PHONE_MIN_TAP)
+            assert not small, small
+        finally:
+            ctx.close()
 
 
 class TestPreviewTableLayout:
@@ -1656,6 +1968,25 @@ class TestPreviewTableLayout:
         finally:
             web_ui.resolve(card.id, "deny")
             thread.join(timeout=5)
+
+
+    @pytest.mark.parametrize(("columns", "stacked"), [(10, True), (3, False)])
+    def test_a_wide_table_stacks_by_its_column_count_in_a_desktop_sized_preview(self, page, columns, stacked):
+        """A preview about 650px wide, what a WIDE card's preview gets on a desktop: ten columns
+        at 65px each break words mid-word ("Negotiati/on"), so that table stacks; three columns
+        have room and stay a table. The stacking width grows with the column count."""
+        table = {"headers": _TEN_COLUMN_TABLE["headers"][:columns],
+                 "rows": [row[:columns] for row in _TEN_COLUMN_TABLE["rows"]]}
+        fragment = approval_window_html.build_preview_body_html(tables=[table])
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.set_content(
+            f"<style>{approval_window_html.DOCUMENT_CSS}{approval_window_html._STYLES_CSS}</style>"
+            f'<div style="width:650px">{fragment}</div>'
+        )
+        display = page.evaluate("getComputedStyle(document.querySelector('.pf-table tr')).display")
+        assert display == ("block" if stacked else "table-row"), display
+        assert page.evaluate(_PHONE_BROKEN_WORDS_JS, "") == []
+        assert page.evaluate("document.documentElement.scrollWidth") <= 1280
 
 
 # --------------------------------------------------------------------- #
@@ -1735,6 +2066,160 @@ class TestSecurityHeadersCsp:
         )
         page.wait_for_timeout(200)
         assert page.evaluate("window.__pfNoncedRan") is True
+
+
+# --------------------------------------------------------------------- #
+# Org mode: the installable app and web push (ADR 0081)
+# --------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def org_push_server(pf_home, tmp_path, monkeypatch):
+    yield from _running_org_server(tmp_path, monkeypatch, push=True)
+
+
+_IPHONE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+)
+
+
+def _fake_push_subscription_script(endpoint: str) -> str:
+    """Headless Chromium has no push service to subscribe to, and reports
+    ``Notification.permission`` as "denied" whatever the context grants. So
+    the permission starts at "default" and ``requestPermission`` grants it, as
+    a person tapping Allow would, and the page's ``pushManager`` hands back a
+    subscription shaped exactly like a real browser's ``toJSON()``, with a
+    real P-256 key. Everything else -- the pre-prompt, the page's own
+    subscribe logic, CSRF, the route, the store -- is real."""
+    point = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
+    )
+    sub = {"endpoint": endpoint, "keys": {"p256dh": b64url_encode(point), "auth": b64url_encode(b"k" * 16)}}
+    return f"""
+      (function () {{
+        var json = {json.dumps(sub)};
+        var fake = null;
+        var permission = "default";
+        Object.defineProperty(Notification, "permission", {{ get: function () {{ return permission; }} }});
+        Notification.requestPermission = function () {{ permission = "granted"; return Promise.resolve(permission); }};
+        PushManager.prototype.getSubscription = function () {{ return Promise.resolve(fake); }};
+        PushManager.prototype.subscribe = function (options) {{
+          window.__pfSubscribeOptions = options;
+          fake = {{ endpoint: json.endpoint, options: options, toJSON: function () {{ return json; }},
+                   unsubscribe: function () {{ fake = null; return Promise.resolve(true); }} }};
+          return Promise.resolve(fake);
+        }};
+      }})();
+    """
+
+
+class TestInstallableOrgApp:
+    def test_manifest_is_linked_served_and_parsed_by_the_browser(self, page, context, org_server):
+        server, sessions = org_server
+        _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+        violations: list[str] = []
+        page.on("console", lambda msg: violations.append(msg.text) if "Content Security Policy" in msg.text else None)
+        page.goto(f"{server.base_url}/approvals")
+        href = page.get_attribute('link[rel="manifest"]', "href")
+        assert href == "/manifest.webmanifest"
+        response = page.request.get(f"{server.base_url}{href}")
+        assert response.status == 200
+        assert response.json()["start_url"] == "/approvals"
+        # The browser's own view: Chromium fetched the manifest under the page's CSP (manifest-src)
+        # and parsed it without errors.
+        manifest = context.new_cdp_session(page).send("Page.getAppManifest")
+        assert manifest["url"].endswith("/manifest.webmanifest")
+        assert manifest["errors"] == []
+        assert json.loads(manifest["data"])["display"] == "standalone"
+        assert not [v for v in violations if "manifest" in v or "/icons/" in v], violations
+
+    def test_local_mode_links_no_manifest(self, page, local_server):
+        server, _web_ui = local_server
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/approvals")
+        assert page.locator('link[rel="manifest"]').count() == 0
+        assert page.request.get(f"{server.base_url}/manifest.webmanifest").status == 404
+
+
+class TestWebPushSubscription:
+    def test_the_pre_prompt_subscribes_and_the_server_stores_it(self, browser, org_push_server):
+        server, sessions, _web_ui, store = org_push_server
+        endpoint = "https://fcm.googleapis.com/fcm/send/browser-smoke"
+        context = browser.new_context()
+        try:
+            context.add_init_script(_fake_push_subscription_script(endpoint))
+            _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+            page = context.new_page()
+            page.goto(f"{server.base_url}/approvals")
+            # No permission yet, so loading the page subscribed nothing and asked nothing.
+            page.wait_for_timeout(300)
+            assert store.list("alice") == []
+            # approval_list_html.py calls this after a decision; the person taps Enable.
+            page.evaluate("window.__pfNotifPrompt()")
+            page.locator(".pf-shell-notif-enable").click()
+            deadline = time.monotonic() + 10
+            while not store.list("alice") and time.monotonic() < deadline:
+                page.wait_for_timeout(100)
+            assert [s.endpoint for s in store.list("alice")] == [endpoint]
+            assert page.evaluate("window.__pfSubscribeOptions.userVisibleOnly") is True
+        finally:
+            context.close()
+
+    def test_signing_out_unsubscribes_the_browser(self, browser, org_push_server):
+        """ADR 0081: the browser's half of sign-out stopping pushes. The browser already holds a
+        subscription with permission granted, as it would on a return visit. The server's half
+        (/logout removing what that session posted) is test_routes_push.py's
+        TestSignOutStopsPushToThatBrowser."""
+        server, sessions, _web_ui, store = org_push_server
+        sub = json.loads(_fake_push_subscription_script("https://fcm.googleapis.com/fcm/send/signout")
+                         .split("var json = ", 1)[1].split(";\n", 1)[0])
+        unsubscribed: list[bool] = []
+        context = browser.new_context()
+        try:
+            context.expose_function("__pfUnsubscribed", lambda: unsubscribed.append(True))
+            context.add_init_script(f"""
+              (function () {{
+                var json = {json.dumps(sub)};
+                Object.defineProperty(Notification, "permission", {{ get: function () {{ return "granted"; }} }});
+                var fake = {{ endpoint: json.endpoint, toJSON: function () {{ return json; }},
+                             unsubscribe: function () {{ return window.__pfUnsubscribed().then(function () {{ return true; }}); }} }};
+                PushManager.prototype.getSubscription = function () {{ return Promise.resolve(fake); }};
+              }})();
+            """)
+            _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+            page = context.new_page()
+            # A page load with permission granted posts the browser's subscription.
+            page.goto(f"{server.base_url}/approvals")
+            deadline = time.monotonic() + 10
+            while not store.list("alice") and time.monotonic() < deadline:
+                page.wait_for_timeout(100)
+            assert [s.endpoint for s in store.list("alice")] == [sub["endpoint"]]
+
+            page.goto(f"{server.base_url}/connect")
+            page.locator('form[action="/logout"] button').click(no_wait_after=True)
+            deadline = time.monotonic() + 10
+            while not unsubscribed and time.monotonic() < deadline:
+                page.wait_for_timeout(100)  # not time.sleep: the exposed function needs the event loop
+            assert unsubscribed == [True]
+        finally:
+            context.close()
+
+    def test_ios_before_installation_shows_the_home_screen_hint(self, browser, org_push_server):
+        server, sessions, _web_ui, store = org_push_server
+        context = browser.new_context(user_agent=_IPHONE_UA, viewport={"width": 393, "height": 852}, is_mobile=True, has_touch=True)
+        try:
+            _sign_in_org(context, server, sessions, principal=Principal(id="alice", email="alice@example.com"))
+            page = context.new_page()
+            page.goto(f"{server.base_url}/approvals")
+            page.evaluate("window.__pfNotifPrompt()")
+            hint = page.locator("#pf-shell-ios-push-hint")
+            assert hint.is_visible()
+            assert "Add PrivacyFence to your Home Screen" in hint.inner_text()
+            _assert_no_horizontal_overflow(page)
+            assert store.list("alice") == []
+        finally:
+            context.close()
 
 
 # --------------------------------------------------------------------- #
@@ -1899,6 +2384,24 @@ class TestSettingsPageRendering:
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "local-settings")
 
+    def test_connector_icons_survive_a_live_update(self, page, local_server_with_settings):
+        """The first render and every /api/state/stream event carry the same settings state, so
+        the Connectors page's icons are still there after the page re-renders from a pushed
+        change (routes_settings.settings_page_state)."""
+        server, _web_ui = local_server_with_settings
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/settings/connectors")
+        page.wait_for_selector(".pf-connector-icon img")
+        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
+        icons = page.locator(".pf-connector-icon img").count()
+        page.evaluate(
+            "() => { var render = window.__pfRender; window.__pfRenders = 0;"
+            " window.__pfRender = function (s) { window.__pfRenders++; return render(s); }; }"
+        )
+        call_soon_threadsafe(server.controller._push_snapshot)
+        page.wait_for_function("() => window.__pfRenders > 0")
+        assert page.locator(".pf-connector-icon img").count() == icons
+
     def test_org_settings_page_renders_for_non_admin(self, page, context, org_server):
         server, sessions = org_server
         principal = Principal(id="bob", email="bob@example.com", display_name="Bob")
@@ -1947,3 +2450,376 @@ class TestSettingsPageRendering:
         page.wait_for_selector(".pf-navitem")
         assert page.get_by_text("Privacy Filter").is_visible()
         self._screenshot(page, "org-settings-admin-privacy")
+
+
+# --------------------------------------------------------------------- #
+# Phone layout: the shared rules (resources/design/base.css's header
+# comment, ADR 0078) on every app surface, the way
+# tests/integration/test_website_layout.py checks them on the website.
+# --------------------------------------------------------------------- #
+
+# The real phone above, a 320px phone, and a 1024px touch tablet in landscape. All three are
+# is_mobile contexts, so a document without a working viewport meta is laid out in the ~980px
+# fallback viewport and caught by (d) at every width, 1024 included.
+_PHONE_WIDTHS = {
+    "320": {
+        **_MOBILE_EMULATION,
+        "viewport": {"width": 320, "height": 640}, "screen": {"width": 320, "height": 640},
+    },
+    "393": _MOBILE_EMULATION,
+    "1024": {
+        **_MOBILE_EMULATION,
+        "viewport": {"width": 1024, "height": 768}, "screen": {"width": 1024, "height": 768},
+        "device_scale_factor": 2,
+    },
+}
+# Rule 4: tap targets at least 44 x 44 below 1024px. Rule (b), the main content region taking
+# the width, applies below it too: at 1024 a page may deliberately keep a readable measure or a
+# side navigation.
+_PHONE_BELOW = 1024
+_PHONE_MIN_TAP = 44
+_PHONE_MAIN_SHARE = 0.9
+_PHONE_SCREENSHOTS = Path(__file__).resolve().parents[2] / "test-results" / "phone-layout"
+
+# Every visible interactive element narrower or shorter than the minimum. A checkbox or radio is
+# measured by its <label> when it has one (the label is the tap target), and a link that sits
+# inside a line of running text is exempt, as WCAG 2.5.8 exempts it: it cannot be 44px tall
+# without breaking the paragraph it is part of.
+_PHONE_SMALL_TARGETS_JS = """
+(min) => {
+  const selector = 'a[href], button, input:not([type=hidden]), select, textarea, summary, '
+    + '[role=button], [role=tab], [role=switch], [role=checkbox], [role=link], '
+    + '[tabindex]:not([tabindex="-1"])';
+  const box = (el) => el.getBoundingClientRect();
+  const inRunningText = (el) => {
+    if (el.tagName !== 'A' || getComputedStyle(el).display !== 'inline') return false;
+    let block = el.parentElement;
+    while (block && getComputedStyle(block).display === 'inline') block = block.parentElement;
+    return !!block && block.textContent.trim().length > el.textContent.trim().length;
+  };
+  const small = [];
+  for (const el of document.querySelectorAll(selector)) {
+    let rect = box(el);
+    if (rect.width === 0 || rect.height === 0) continue;
+    if (getComputedStyle(el).visibility === 'hidden') continue;
+    if (el.closest('details:not([open]) > :not(summary)')) continue;
+    if (inRunningText(el)) continue;
+    if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+      const label = el.closest('label') || (el.labels && el.labels[0]);
+      if (label) {
+        const l = box(label);
+        rect = {width: Math.max(rect.width, l.width), height: Math.max(rect.height, l.height)};
+      }
+    }
+    if (rect.width < min - 0.5 || rect.height < min - 0.5) {
+      const name = el.tagName.toLowerCase() + (el.className && typeof el.className === 'string'
+        ? '.' + el.className.trim().split(/\\s+/).join('.') : '');
+      small.push(`${name} "${(el.textContent || el.value || '').trim().slice(0, 24)}" `
+        + `${Math.round(rect.width)}x${Math.round(rect.height)}`);
+    }
+  }
+  return small;
+}
+"""
+
+# The widest visible element matching the selector, as a share of the viewport.
+_PHONE_MAIN_SHARE_JS = """
+(selector) => {
+  const widths = [...document.querySelectorAll(selector)]
+    .map((el) => el.getBoundingClientRect())
+    .filter((r) => r.width > 0 && r.height > 0)
+    .map((r) => r.width);
+  return widths.length ? Math.max(...widths) / window.innerWidth : null;
+}
+"""
+
+# Every word in a table cell whose own text runs onto more than one line.
+_PHONE_BROKEN_WORDS_JS = """
+(root) => {
+  const scope = root ? document.querySelector(root) : document;
+  const broken = [];
+  for (const cell of scope.querySelectorAll('td, th')) {
+    if (cell.getBoundingClientRect().width === 0) continue;
+    const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const words = /\\S+/g;
+      let match;
+      while ((match = words.exec(node.data))) {
+        const range = document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, match.index + match[0].length);
+        const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0)
+          .map((r) => Math.round(r.top)));
+        if (tops.size > 1) broken.push(match[0]);
+      }
+    }
+  }
+  return broken;
+}
+"""
+
+# The PDF preview is a rendered page: a visible <img> at least half the preview's width, and no
+# visible <embed>.
+_PHONE_PDF_PREVIEW_JS = """
+(root) => {
+  const scope = document.querySelector(root);
+  if (!scope) return {found: false};
+  const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const width = scope.getBoundingClientRect().width;
+  return {
+    found: true,
+    embeds: [...scope.querySelectorAll('embed, object, iframe')].filter(visible).length,
+    pages: [...scope.querySelectorAll('img')].filter((i) => visible(i)
+      && i.getBoundingClientRect().width >= width / 2).length,
+  };
+}
+"""
+
+
+def _assert_phone_layout(page, width_name: str, *, main: str) -> None:
+    """Assertions (a)-(d) of the phone-layout harness on the page as it stands."""
+    width = _PHONE_WIDTHS[width_name]["viewport"]["width"]
+    # (d) The viewport meta is present and in effect: the layout viewport is the device's.
+    has_meta = page.evaluate("() => !!document.querySelector('meta[name=viewport]')")
+    inner_width = page.evaluate("() => window.innerWidth")
+    # A page with the meta but content wider than the device also gets a wider layout viewport,
+    # which is how a phone shows a page that overflows: it zooms out.
+    assert has_meta and inner_width == width, (
+        f"viewport meta not in effect: meta={has_meta}, layout viewport {inner_width}px on a {width}px device"
+    )
+    # (a) No horizontal document overflow.
+    scroll_width = page.evaluate("() => document.documentElement.scrollWidth")
+    assert scroll_width <= inner_width, f"page scrolls sideways ({scroll_width} > {inner_width})"
+    if width < _PHONE_BELOW:
+        # (b) The main content region takes the width.
+        share = page.evaluate(_PHONE_MAIN_SHARE_JS, main)
+        assert share is not None, f"no visible main content region {main!r}"
+        assert share >= _PHONE_MAIN_SHARE, f"main content region {main!r} is {share:.0%} of the viewport"
+        # (c) Tap targets.
+        small = page.evaluate(_PHONE_SMALL_TARGETS_JS, _PHONE_MIN_TAP)
+        assert not small, f"interactive elements under {_PHONE_MIN_TAP}px: {small}"
+
+
+def _phone_screenshot(page, name: str) -> None:
+    # A review artifact, never an assertion (same posture as test_website_layout.py's).
+    _PHONE_SCREENSHOTS.mkdir(parents=True, exist_ok=True)
+    try:
+        page.screenshot(path=str(_PHONE_SCREENSHOTS / f"{name}.png"), full_page=True)
+    except PlaywrightError:  # pragma: no cover -- best-effort review artifact
+        pass
+
+
+@pytest.fixture
+def phone_page(browser, request):
+    """A page in the phone context named by the test's ``width`` parameter."""
+    ctx = browser.new_context(ignore_https_errors=True, **_PHONE_WIDTHS[request.getfixturevalue("width")])
+    pg = ctx.new_page()
+    yield pg
+    ctx.close()
+
+
+_ADMIN_SECTIONS = ("general", "auto_accept", "privacy", "audit", "agents", "about")
+_MEMBER_SECTIONS = ("auto_accept", "audit", "about")
+_READ_KINDS = ("pdf", "image", "markdown", "table")
+
+def _phone_cases(case_ids):
+    return [pytest.param(case, width, id=f"{case}-{width}") for case in case_ids for width in _PHONE_WIDTHS]
+
+
+_ADMIN = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
+_MEMBER = Principal(id="bob", email="bob@example.com", display_name="Bob")
+
+
+# A 10-column record list, the shape Salesforce search results and similar tools send.
+_TEN_COLUMN_TABLE = {
+    "headers": ["Name", "Title", "Email", "Phone", "Account", "Owner", "Stage", "Amount", "Close date", "Region"],
+    "rows": [
+        ["Alice Anderson", "VP Sales", "alice@example.com", "+1 555 0100", "Acme Corp", "Carol Chen",
+         "Negotiation", "120000", "2026-11-30", "EMEA"],
+        ["Bob Brown", "Buyer", "bob@example.com", "+1 555 0101", "Globex", "Dan Diaz",
+         "Prospecting", "45000", "2026-12-15", "AMER"],
+    ],
+}
+
+_MARKDOWN_PREVIEW = (
+    "# Quarterly review\n\nThe **summary** of the quarter, with a short list:\n\n"
+    "- Revenue up 12%\n- Two new regions\n- One open risk\n\n"
+    "| Region | Revenue | Change |\n|---|---|---|\n| EMEA | 1.2M | +8% |\n| AMER | 2.4M | +15% |\n"
+)
+
+
+def _read_card_kwargs(kind: str) -> dict:
+    if kind == "pdf":
+        return {"pdf_bytes": _pdf_bytes()}
+    if kind == "image":
+        png = (Path(paths_module.__file__).parent / "resources" / "icon_512.png").read_bytes()
+        return {"preview_bytes": png, "preview_mime_type": "image/png"}
+    if kind == "markdown":
+        return {"preview_blocks": [{"type": "markdown", "text": _MARKDOWN_PREVIEW}]}
+    if kind == "table":
+        return {"preview_tables": [_TEN_COLUMN_TABLE], "table_only": True}
+    raise ValueError(kind)
+
+
+def _register_wide_read_card(web_ui: WebApprovalUI, kind: str) -> tuple[threading.Thread, object]:
+    """A WIDE read card of the given preview kind, registered the way gate.py registers one."""
+    approval, _created = web_ui.deferred_registry.register_or_coalesce(
+        dedupe_key=f"phone-{kind}-{uuid.uuid4().hex[:8]}", connector="drive", tool="drive_get_file_content",
+        gate_kind="review", request_id=f"req-{kind}", summary="Quarterly report", tool_name="Get file content",
+        operation_key="drive.drive_get_file_content",
+        preview={"File": "Quarterly report", "Owner": "alice@example.com"},
+    )
+
+    def run():
+        web_ui.show_read_popup(
+            "Get file content", {"File": "Quarterly report"}, "", None,
+            layout="wide", approval=approval, **_read_card_kwargs(kind),
+        )
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not approval.html:
+        time.sleep(0.01)
+    assert approval.html, "card never parked on its approval"
+    return t, approval
+
+
+
+
+class TestPhoneLayout:
+    """The measurable shared rules on every app surface, at 320px, a real 393px phone and a 1024px
+    tablet.
+
+    There is no case for a card inline in an expanded /approvals row: the row's Details
+    disclosure shows only request metadata and Review opens the full card page, so that context
+    does not exist (ADR 0078). TestCardContainers proves the card in narrow and wide containers."""
+
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["approvals", "connect", "security"]))
+    def test_shell_page(self, phone_page, org_server_and_ui, case, width):
+        server, sessions, web_ui = org_server_and_ui
+        _sign_in_org(phone_page.context, server, sessions, principal=_ADMIN)
+        pending = None
+        if case == "approvals":
+            with principal_scope(_ADMIN):
+                pending, _ = web_ui.deferred_registry.register_or_coalesce(
+                    dedupe_key="phone-list", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                    request_id="phone-list", summary="Quarterly numbers from Alice", tool_name="Get message",
+                )
+        try:
+            response = phone_page.goto(f"{server.base_url}/{case}")
+            assert response.status == 200, f"/{case} answered {response.status}"
+            phone_page.wait_for_load_state("load")
+            if pending is not None:
+                phone_page.wait_for_selector(f'[data-approval-id="{pending.id}"]')
+            _phone_screenshot(phone_page, f"{case}-{width}")
+            _assert_phone_layout(phone_page, width, main=".pf-shell-main > *")
+        finally:
+            if pending is not None:
+                web_ui.resolve(pending.id, "deny")
+
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"settings-admin-{s}" for s in _ADMIN_SECTIONS]
+                     + [f"settings-member-{s}" for s in _MEMBER_SECTIONS]
+                     + ["settings-privacy-route"]),
+    )
+    def test_settings(self, phone_page, org_server, case, width):
+        server, sessions = org_server
+        role, section = case.removeprefix("settings-").split("-", 1)
+        principal = _MEMBER if role == "member" else _ADMIN
+        _sign_in_org(phone_page.context, server, sessions, principal=principal)
+        phone_page.goto(f"{server.base_url}/settings{'/privacy' if case == 'settings-privacy-route' else ''}")
+        phone_page.wait_for_selector(".pf-navitem")
+        if case != "settings-privacy-route":
+            # A script click: the point is the section's own layout; the tab strip's own tap
+            # targets are checked with the rest of the page by (c).
+            phone_page.locator(f'.pf-navitem[data-nav="{section}"]').evaluate("(el) => el.click()")
+        # A section renders into .pf-page (About into .pf-about-page); Privacy Filter's editor,
+        # beside its group list, into .pf-detail-page.
+        region = ".pf-page, .pf-detail-page, .pf-about-page"
+        phone_page.wait_for_selector(region)
+        _phone_screenshot(phone_page, f"{case}-{width}")
+        _assert_phone_layout(phone_page, width, main=region)
+
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["telegram-phone", "telegram-code", "telegram-password"]))
+    def test_telegram_form(self, phone_page, monkeypatch, case, width):
+        """/connect's Telegram sign-in at each of its steps, with an error showing. The org
+        fixture's bundle has no Telegram app credentials, so the page is rendered directly."""
+        from privacyfence.web import routes_connect
+
+        monkeypatch.setattr(routes_connect, "telegram_app_credentials", lambda: (123, "apihash"))
+        step = case.removeprefix("telegram-")
+        html = routes_connect._render_connect_page(
+            principal=_ADMIN, org_config={}, flash_connected="", flash_error="", csrf="c", nonce="n",
+            telegram_state=routes_connect._TelegramState(
+                step=None if step == "phone" else step, error="That did not work. Try again.",
+            ),
+        )
+        phone_page.set_content(html)
+        _phone_screenshot(phone_page, f"connect-{case}-{width}")
+        _assert_phone_layout(phone_page, width, main=".pf-shell-main > *")
+
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["no-longer-pending", "preparing", "not-authorized"]))
+    def test_fallback_page(self, phone_page, local_server, case, width):
+        """The three bare documents: routes_approvals.py's "no longer pending" and "preparing"
+        pages, and session_auth.py's unauthenticated page."""
+        server, web_ui = local_server
+        approval = None
+        if case == "not-authorized":
+            phone_page.goto(f"{server.base_url}/approvals")
+        else:
+            _sign_in_local(phone_page, server)
+            if case == "preparing":
+                # Registered but never rendered: card.html stays empty.
+                approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                    dedupe_key="phone-preparing", connector="gmail", tool="gmail_get_message",
+                    gate_kind="review", request_id="phone-preparing",
+                )
+                phone_page.goto(f"{server.base_url}/approvals/{approval.id}")
+            else:
+                phone_page.goto(f"{server.base_url}/approvals/no-such-approval")
+        try:
+            phone_page.wait_for_load_state("load")
+            _phone_screenshot(phone_page, f"fallback-{case}-{width}")
+            _assert_phone_layout(phone_page, width, main="body")
+        finally:
+            if approval is not None:
+                web_ui.resolve(approval.id, "deny")
+
+    # The card's layout (a)-(d) and its preview content (e)/(f) are separate cases, so a failure
+    # names which of the two broke.
+    @pytest.mark.parametrize(
+        ("case", "width"),
+        _phone_cases([f"card-{k}" for k in _READ_KINDS] + ["card-pdf-preview", "card-table-preview"]),
+    )
+    def test_read_card_full_page(self, phone_page, local_server, case, width):
+        server, web_ui = local_server
+        kind = case.removeprefix("card-").removesuffix("-preview")
+        _sign_in_local(phone_page, server)
+        thread, card = _register_wide_read_card(web_ui, kind)
+        try:
+            phone_page.goto(f"{server.base_url}/approvals/{card.id}")
+            phone_page.wait_for_load_state("load")
+            _phone_screenshot(phone_page, f"{case}-{width}")
+            if case.endswith("-preview"):
+                self._assert_preview(phone_page, kind, root=".pf-wide-right")
+            else:
+                _assert_phone_layout(phone_page, width, main=".pf-wide-right")
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    @staticmethod
+    def _assert_preview(page, kind: str, *, root: str) -> None:
+        if kind == "pdf":
+            # (e) A rendered page image, not the browser's PDF plugin.
+            preview = page.evaluate(_PHONE_PDF_PREVIEW_JS, root)
+            assert preview["found"], f"no preview region {root!r}"
+            assert preview["pages"] >= 1 and preview["embeds"] == 0, f"PDF preview is not a page image: {preview}"
+        if kind == "table":
+            # (f) The record table is shown, and no word in it is broken across lines.
+            cells = page.evaluate("(root) => document.querySelectorAll(root + ' td').length", root)
+            assert cells > 0, f"no table in the preview region {root!r}"
+            broken = page.evaluate(_PHONE_BROKEN_WORDS_JS, root)
+            assert not broken, f"words broken across lines: {broken}"

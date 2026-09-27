@@ -336,7 +336,7 @@ class TestDownloadsSurfaceOrgMode:
         # 404) without needing a real staged token.
         r = client.get("/downloads/abc")
         assert r.status_code == 302
-        assert r.headers["location"] == "/login"
+        assert r.headers["location"] == "/login?next=%2Fdownloads%2Fabc"
 
     def test_downloads_route_is_absent_in_local_mode(self, tmp_path):
         app = build_app(WebApprovalUI(), allowed_hosts=frozenset({"testserver"}))

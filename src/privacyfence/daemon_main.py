@@ -80,7 +80,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import portalocker
 import yaml
@@ -95,6 +95,9 @@ from . import (
     step_up_config,
 )
 from .policy import store as policy_store
+
+if TYPE_CHECKING:
+    from .approvals import PendingApprovalRegistry
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, current_principal
@@ -1133,6 +1136,8 @@ def _start_org_web_server(
         registry=approval_registry,
     )
 
+    push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)
+
     server = WebServer(
         web_ui,
         host=server_config.bind_host, port=server_config.port,
@@ -1142,6 +1147,7 @@ def _start_org_web_server(
             connector_registry=connector_registry, org_config=org_config,
             install_wide_settings=install_wide_config,
             install_wide_settings_path=install_wide_config_path,
+            push_notifier=push_notifier, push_store=push_store,
         ),
         ssl_certfile=server_config.cert_file or None,
         ssl_keyfile=server_config.key_file or None,
@@ -1164,6 +1170,30 @@ def _start_org_web_server(
         ", ".join(sorted(server.allowed_hosts)),
     )
     return server
+
+
+def _start_web_push(
+    org_config: dict[str, Any], registry: PendingApprovalRegistry, *, issuer_url: str,
+) -> tuple[Any, Any]:
+    """Org mode's web push (ADR 0081): unless the bundle turns it off (``web_push.enabled:
+    false``), load or generate the VAPID key in ``org_dir()`` beside the server's other secrets,
+    and register a notifier that pushes a bare count to a principal's subscribed browsers when an
+    approval is created for them. Returns ``(notifier, store)``, or ``(None, None)`` when push is
+    off, which also leaves the subscription routes unmounted."""
+    from . import web_push
+
+    if not org_mode.WebPushConfig.from_org_config(org_config).enabled:
+        logger.info("Web push is off for this organization (org_config.json web_push.enabled: false)")
+        return None, None
+    store = web_push.PushSubscriptionStore()
+    notifier = web_push.PushNotifier(
+        store=store,
+        vapid_key=web_push.load_or_create_vapid_key(org_dir() / web_push.VAPID_KEY_FILE_NAME),
+        subject=issuer_url, registry=registry,
+        ttl_seconds=int(registry.pending_ttl),
+    )
+    registry.add_created_listener(notifier.on_new_approval)
+    return notifier, store
 
 
 def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:

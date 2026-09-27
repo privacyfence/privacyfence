@@ -506,7 +506,23 @@ you set how much a notification says:
 level is `minimal`. `web.notifications.enabled: false` turns off the title count, the announcements
 and the notifications together.
 
-Organization deployments have no live updates, so they have no notifications.
+### Organization deployments: push notifications
+
+An organization deployment has no title count or tab notifications. It has **web push** instead,
+which reaches a phone or a browser whose PrivacyFence tab is closed:
+
+- right after you decide a request, the Approvals page offers to turn notifications on; on an
+  iPhone or iPad, add PrivacyFence to your Home Screen first (the page says so);
+- a notification arrives when a new request is waiting for you, at most one every 5 seconds, and
+  tapping it opens the Approvals page;
+- it always says only "1 approval pending" (or "N approvals pending"), the `minimal` level above,
+  whatever else you could see on the page;
+- it travels through your browser's push service (Apple's, Google's, Mozilla's or Microsoft's),
+  encrypted so that service cannot read it. Your organization can turn push off for everyone.
+
+Details for administrators are in the
+[organization deployment guide](org-mode-setup-guide.md#notifications-on-a-phone), and the reasoning
+in [ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md).
 
 ---
 

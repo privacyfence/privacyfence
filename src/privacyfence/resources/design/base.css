@@ -1,0 +1,82 @@
+/* PrivacyFence shared base: the layout primitives, buttons, the focus style and the small
+   uppercase labels, on top of tokens.css.
+
+   One physical source for the website and the app (ADR 0078, which extends ADR 0049 to the app).
+   scripts/build_site.py publishes it at /base.css, loaded after tokens.css and before chrome.css
+   on every hand-written page and in the /docs/ theme; the app inlines it after tokens.css into
+   every document it renders. Every rule here is scoped to a class, never to a bare element (the
+   focus style aside), because the /docs/ theme and the app's pages load it next to stylesheets of
+   their own. No colour literal and no viewport @media: colours are tokens, and the one
+   responsive primitive (.split) collapses by its container.
+
+   The shared rules. What "responsive" and "consistent" mean for the website and the app alike;
+   tests/integration/test_website_layout.py checks the measurable ones on every website page, and
+   tests/integration/test_browser_smoke.py's phone-layout tests check them on every app page:
+
+   1. Viewports tested: 320, 360, 390 (phones), 768 (tablet portrait), 1024 (tablet landscape /
+      small laptop), 1440 (desktop). The app is also tested in a real phone emulation (393 px,
+      touch, mobile layout viewport).
+   2. No page-level horizontal scroll at any tested width. Wide content (code, tables, diagrams)
+      scrolls inside its own container.
+   3. Every header destination is reachable at every width: inline links on desktop, the
+      <details> menu below the nav breakpoint (works without JavaScript, keyboard-operable).
+   4. Tap targets >= 44 x 44 px for nav links, buttons and the menu toggle below 1024 px (the app:
+      every visible interactive element).
+   5. One set of layout primitives (.shell, .stack, .cluster, .grid-auto, .split), not per-page
+      media queries. Sections and components are expressed on them.
+   6. Tokens on :root (tokens.css) for colour, type scale, spacing, radius; no colour literal
+      outside tokens.css. The website's two breakpoints are 900 px (nav collapse) and 560 px
+      (compact spacing); custom properties cannot be used inside @media, so they are written out
+      where used and named here. The app has no viewport breakpoints: it uses container queries.
+   7. Images and diagrams scale: max-width 100% with explicit width/height attributes.
+   8. Body copy measure <= ~75 characters on desktop; body text >= 16 px on a 320 px phone.
+   9. prefers-reduced-motion is honoured. Dark mode is out of scope for the website; the app has
+      one, which overrides these same token names and nothing else.
+   10. The approval card's action hierarchy never changes with styling: which decision is
+      filled, which is outlined and which is visually strongest stays as it is, whatever the
+      colours and shapes around it become. */
+
+/* ---- Layout primitives ----------------------------------------------------------------- */
+
+/* Centred, max-width container. Also a size container, so a .split inside it collapses by the
+   space it actually has rather than by the viewport. */
+.shell { width: min(1160px, 100% - 2 * var(--gutter)); margin-inline: auto; container-type: inline-size; }
+
+/* Vertical rhythm: every direct child after the first gets the same gap. */
+.stack > * { margin-block: 0; }
+.stack > * + * { margin-block-start: var(--stack-gap, var(--space-s)); }
+
+/* Wrapping inline group. */
+.cluster { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cluster-gap, var(--space-xs)); }
+
+/* As many equal columns as fit at --min each; one column on a phone. */
+.grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(var(--min, 260px), 100%), 1fr)); gap: var(--grid-gap, 18px); }
+
+/* Two columns (--split-cols) that stack when the enclosing container is narrower than 860 px. */
+.split { display: grid; grid-template-columns: var(--split-cols, 1fr 1fr); gap: var(--split-gap, var(--space-xl)); align-items: center; }
+.split > .split-end { order: 2; }
+@container (max-width: 860px) {
+  .split { grid-template-columns: 1fr; --split-gap: 45px; }
+  .split > .split-end { order: initial; }
+}
+
+/* ---- Buttons ------------------------------------------------------------------------------ */
+
+/* The website stacks .actions below 560 px (website/chrome.css's breakpoints). */
+.actions { --cluster-gap: 12px; margin-top: 34px; }
+.button { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 19px; border-radius: 12px; border: 0; font: inherit; font-weight: 700; font-size: 15px; cursor: pointer; transition: transform .15s ease, box-shadow .15s ease, background .15s ease; }
+.button:hover { transform: translateY(-1px); }
+.primary { background: var(--ink); color: var(--on-ink); box-shadow: var(--shadow-button); }
+.primary:hover { background: var(--ink-hover); }
+.secondary { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+
+/* ---- Focus ------------------------------------------------------------------------------- */
+
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+
+/* ---- Labels ------------------------------------------------------------------------------ */
+
+/* Small uppercase, letter-spaced labels: .kicker above a heading, .eyebrow as a pill. */
+.eyebrow, .kicker { color: var(--accent-dark); font-size: 13px; font-weight: 750; text-transform: uppercase; letter-spacing: .11em; }
+.eyebrow { display: inline-flex; align-items: center; gap: 9px; padding: 7px 11px; border: 1px solid var(--accent-line); background: var(--accent-wash); border-radius: 999px; }
+.kicker { margin-bottom: 13px; }

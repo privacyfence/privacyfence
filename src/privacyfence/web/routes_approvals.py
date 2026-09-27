@@ -1,6 +1,6 @@
 """The web approval surface: WebApprovalUI (web_approval_ui.py) registers a
 pending card or confirmation, and these routes are what let a human actually
-see and decide it from a browser instead of a native dialog. One module now
+see and decide it in a browser (ADR 0001). One module
 builds the route list for *both* local mode's single-secret session and org
 mode's principal-aware one, with an auth adapter per mode (ADR 0033).
 
@@ -82,12 +82,12 @@ unchanged for the same kind of reason in reverse: org mode's equivalent of
 "was this session attributed to a person" is IdP re-auth, not a session
 provenance flag.
 
-The one JS change to approval_window_html.py's/dialog_window_html.py's
-otherwise-untouched documents: a small shim script, injected here rather
-than editing either module, defines ``window.webkit.messageHandlers.pf.
-postMessage`` as a ``fetch()`` POST to this module's own decide endpoint --
-the two shipped documents never need to know whether they're running in a
-WKWebView or a browser tab.
+approval_window_html.py's/dialog_window_html.py's documents post their
+decision through ``window.webkit.messageHandlers.pf.postMessage``; a small
+shim script injected here defines that as a ``fetch()`` POST to this
+module's own decide endpoint, carrying the session's CSRF token, so the
+documents themselves know nothing about the route, the session or the
+mode.
 """
 from __future__ import annotations
 
@@ -140,6 +140,11 @@ _BATCH_STEP_UP_RESULTS = ("accept",)
 _STREAM_POLL_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
+
+# The way back from a fallback page (web_shell.plain_page), as a button-sized target.
+_BACK_TO_APPROVALS = (
+    '<div class="actions cluster"><a class="button secondary" href="/approvals">Back to approvals</a></div>'
+)
 
 # resources/sw.js -- tier 0/1 notifications. Served at the origin root, not under /api, so its default scope
 # covers the whole app (a service worker's scope can never be wider than the
@@ -418,7 +423,9 @@ def _inject_shim(html: str, shim: str) -> str:
     return html[:body_start] + shim + html[body_start:]
 
 
-def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Principal) -> str:
+def _render_org_list_page(
+    rows: list, *, csrf: str, nonce: str, principal: Principal, push_public_key: str = "",
+) -> str:
     """Org mode's ``/approvals`` page, in the same shell local mode uses.
 
     Live updates come from ``GET /api/approvals/stream`` (``stream_url``),
@@ -431,7 +438,10 @@ def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Princ
     without a manual reload, and the live indicator reflects a real
     connection. Tier-0/1 notifications stay off: they are local mode's
     settings.yaml-configured feature, and org mode has no per-principal
-    setting for them yet.
+    setting for them yet. Org mode's notifications are web push instead
+    (ADR 0081): ``push_public_key`` is the server's VAPID public key when the
+    org has push on, and the shell's permission pre-prompt then subscribes
+    this browser (web_shell.wrap's own docstring). Empty means push is off.
 
     ``principal_label``: every read and write on this page is authorized
     against this principal, and the page never said whose queue it was --
@@ -452,6 +462,8 @@ def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Princ
         principal_label=principal.email or principal.display_name or principal.id,
         stream_url="/api/approvals/stream",
         notifications_enabled=False,
+        push_public_key=push_public_key,
+        csrf=csrf,
     )
 
 
@@ -510,10 +522,12 @@ def _build_route_list(
             # principal's id is indistinguishable from either, same as every
             # other lookup here (module docstring).
             return HTMLResponse(
-                "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px\">"
-                "This approval is no longer pending — it may already have been decided, "
-                "or the link has expired. <a href=\"/approvals\">Back to approvals</a>"
-                "</body></html>",
+                web_shell.plain_page(
+                    "<h1>No longer pending</h1>"
+                    "<p>This approval is no longer pending — it may already have been decided, "
+                    "or the link has expired.</p>" + _BACK_TO_APPROVALS,
+                    title="PrivacyFence — No longer pending", nonce=_csp_nonce_for(request),
+                ),
                 status_code=200,
                 headers={"Cache-Control": "no-store"},
             )
@@ -525,11 +539,12 @@ def _build_route_list(
             # _inject_shim below assumes a real document, so serve a
             # placeholder instead of letting that raise into a 500.
             return HTMLResponse(
-                "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"2\">"
-                "</head><body style=\"font:15px sans-serif;padding:40px\">"
-                "Preparing this request — it will be ready in a moment. "
-                "<a href=\"/approvals\">Back to approvals</a>"
-                "</body></html>",
+                web_shell.plain_page(
+                    "<h1>Preparing this request</h1>"
+                    "<p>Preparing this request — it will be ready in a moment.</p>" + _BACK_TO_APPROVALS,
+                    title="PrivacyFence — Preparing", nonce=_csp_nonce_for(request),
+                    head_html='<meta http-equiv="refresh" content="2">',
+                ),
                 status_code=200,
                 headers={"Cache-Control": "no-store"},
             )
@@ -905,6 +920,7 @@ def create_app(
 
 def build_routes(
     *, web_ui: WebApprovalUI, sessions: org_session.OrgSessionStore, step_up: StepUpConfig, issuer_url: str,
+    push_public_key: str = "",
 ) -> list[Route]:
     """Build org mode's own ``/approvals`` route list -- extended into
     ``_build_org_app``'s larger app the same way web/routes_security.py's
@@ -922,10 +938,16 @@ def build_routes(
     ``/oauth/stepup/callback``) are *not* included here -- see module
     docstring: they live in web/routes_org_stepup.py, mounted separately by
     ``_build_org_app`` alongside this function's own return value, since
-    they have no local-mode analogue to share code with at all."""
+    they have no local-mode analogue to share code with at all.
+
+    ``push_public_key`` is the server's VAPID public key when the org has web
+    push on (ADR 0081), else empty; see ``_render_org_list_page``."""
 
     def _resolve_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
+
+    def _render_list_page(rows: list, *, csrf: str, nonce: str, principal: Principal) -> str:
+        return _render_org_list_page(rows, csrf=csrf, nonce=nonce, principal=principal, push_public_key=push_public_key)
 
     def _unauthenticated_page(request: Request, next_path: str) -> Response:
         return RedirectResponse(
@@ -948,7 +970,7 @@ def build_routes(
         step_up_origin=issuer_url,
         step_up_response=_org_step_up_response,
         bridge_shim=_org_bridge_shim,
-        render_list_page=_render_org_list_page,
+        render_list_page=_render_list_page,
         per_item_message=(
             "This organization requires a separate passkey check per decision -- "
             "decide these individually instead of as a batch."
