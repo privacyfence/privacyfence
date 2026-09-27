@@ -353,6 +353,21 @@ to build the card, detect personal data or check a rule. That data stays inside 
   was sent, and the bundle can turn them off
   ([ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md)).
 
+**A deny note** is the one thing a person can add to what the AI sees. Whoever denies a request can
+pick an intent (for example "Wrong target") and type up to 500 characters of their own on why, or
+what to do instead. Only the signed-in person deciding that approval can write it, behind the same
+session, CSRF and origin checks as a plain Deny; the AI client has no way to decide an approval,
+and nothing from the request or the connector data is ever put into the field. The note goes only
+to the AI client that made the request, in its denial message and in `privacyfence_await_approval`,
+with control and invisible characters stripped, secrets redacted and the text quoted after a fixed
+label so it cannot pass for PrivacyFence's own words. It is not screened for content: any
+"injection" in it is the user instructing their own agent, and a note approves nothing, so the
+agent's next call still goes through the gate
+([ADR 0083](adr/0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md)).
+It is not stored: the audit log records only the chosen intent and the note's length, and the text
+never reaches a log line, the approvals stream or a push notification
+([ADR 0084](adr/0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md)).
+
 See [Approvals and policy](approvals-and-policy.md) for the approval list, cards and PII handling.
 
 ## Other controls

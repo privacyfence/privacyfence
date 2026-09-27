@@ -59,9 +59,26 @@ Organization deployments now work from a phone, and the app looks like the websi
   machine. See ADR 0081.
 - **The organization app can be installed to a phone's Home Screen** or as a desktop app, and
   opens straight to your approvals.
+- **Deny with a note.** Next to Deny on the approval card, **Deny with a note…** opens a small
+  panel where you can tell the AI system why, or what to do instead: pick one of four reasons
+  (Stop — don't retry, Wrong target, Change the content, Try another way), type up to 500
+  characters, or both, then **Deny and send**. Only the AI system that made the request receives
+  it, and it is not kept in the audit log. Deny itself is still one tap, and Esc still denies (with
+  the panel open, the first Esc closes it and keeps what you typed). Ctrl+Enter or Cmd+Enter in the
+  note sends it. On the approvals list, **Deny selected with a note…** does the same for every
+  selected request at once, sending each the same note (**Deny 3 and send**); the row's **Deny**
+  and **Deny selected** still send no note.
 
 ### Changed
 
+- **A denied request tells the AI system what to do next.** A plain Deny now reaches it as
+  "Request denied by user. Don't retry the same call; ask the user how to proceed." instead of a
+  bare "Request denied by user", so it stops retrying the same call blindly. A deny can also carry
+  a reason chosen from a short list (stop, wrong target, change the content, try another way) and a
+  short note of up to 500 characters; the AI system receives both, whether the deny reaches it
+  directly or through `privacyfence_await_approval` (under a new `denial_feedback` key). The note
+  goes only to the AI system that made the request: the audit log records the reason and the
+  note's length, never its text. See ADR 0083 and ADR 0084.
 - **The app now looks like the website.** The app and the website share one set of design files
   (colours, spacing, layout building blocks and the rules they follow; ADR 0078), so approvals,
   settings, connections and passkeys use the website's colours, rounded cards, buttons and header

@@ -188,3 +188,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0080](0080-pdf-previews-are-rasterised-on-the-server.md) | PDF previews are rasterised on the server for narrow screens, instead of pdf.js or a new route | Accepted |
 | [0081](0081-org-mode-sends-a-count-only-web-push.md) | Org mode sends a count-only, padded web push through the browser's push service, with an org-wide off switch; local mode sends none | Accepted |
 | [0082](0082-org-mode-form-action-allows-self-and-sign-out-stays-on-the-app.md) | Org mode's `form-action` is `'self'`, and a sign-out lands on the app's own page; local mode keeps `'none'` | Accepted |
+| [0083](0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) | A human's deny note reaches the agent as delimited, sanitized user text, on both delivery paths, unfiltered | Accepted |
+| [0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md) | The audit log records that a deny had feedback (intent, note length), never the feedback text | Accepted |

@@ -660,3 +660,128 @@ class TestAgentOnTheRow:
             'x"}body{color:red': "data:image/png;base64,AAAA", "claude": "data:image/png;base64,BBBB",
         })
         assert approval_list_html._agent_icon_uris() == {"claude": "data:image/png;base64,BBBB"}
+
+
+class TestDenySelectedWithANote:
+    """"Deny selected with a note…" (ADR 0083): a quiet link after Deny selected that opens the deny
+    note panel (deny_note_html.batch_panel_html); the panel's submit denies every selected request
+    with the same note. The row's Deny and plain Deny selected are unchanged: one click, no note.
+    Behaviour in a real browser is test_browser_smoke.py's TestListDenyNote."""
+
+    # The card's content, carrying a marker and markup that would break out of the textarea.
+    MARKER = "LIST-ROW-MARKER-5521"
+    HOSTILE = f'{MARKER} </textarea><script>alert(1)</script> " value="{MARKER}"'
+
+    def _html(self, **overrides):
+        rows = [approval_list_html.row_from_approval(_real_card(**overrides))]
+        return approval_list_html.build_list_html(rows, csrf="t")
+
+    @staticmethod
+    def _panel(html: str) -> str:
+        start = html.index('<section id="pf-deny-note"')
+        return html[start:html.index("</section>", start) + len("</section>")]
+
+    def test_the_opener_follows_deny_selected_and_starts_disabled(self):
+        html = self._html()
+        opener = (
+            '<button type="button" class="pf-btn-deny-note" id="pf-deny-selected-note" '
+            'aria-expanded="false" aria-controls="pf-deny-note" disabled>Deny selected with a note…</button>'
+        )
+        assert opener in html
+        toolbar = approval_list_html._toolbar_html(any_batchable=True, hidden=False)
+        assert toolbar.index('id="pf-approve-selected"') < toolbar.index('id="pf-deny-selected"') \
+            < toolbar.index('id="pf-deny-selected-note"')
+        assert toolbar.endswith("Deny selected with a note…</button></div>")
+
+    def test_the_opener_is_not_a_decision_control(self):
+        toolbar = approval_list_html._toolbar_html(any_batchable=True, hidden=False)
+        opener = toolbar[toolbar.index('id="pf-deny-selected-note"'):]
+        assert "data-deny" not in opener and "data-pf-action" not in opener
+        assert "button danger" not in opener and "button secondary" not in opener
+
+    def test_the_opener_is_a_quiet_link_with_a_real_target(self):
+        css = approval_list_html._CSS
+        rule = css[css.index(".pf-btn-deny-note {"):css.index("}", css.index(".pf-btn-deny-note {"))]
+        assert "min-height: var(--tap)" in rule
+        assert "background: none" in rule and "border: none" in rule and "text-decoration: underline" in rule
+        assert ".pf-btn-deny-note:disabled" in css
+        # Under Deny selected on a narrow list, not a third column.
+        assert ".pf-btn-deny-note { grid-column: 2; }" in css
+
+    def test_the_panel_sits_between_the_toolbar_and_the_list_hidden_and_empty(self):
+        html = self._html()
+        assert html.index('id="pf-approvals-toolbar"') < html.index('<section id="pf-deny-note"') \
+            < html.index('id="pf-approvals-list"')
+        panel = self._panel(html)
+        assert panel == approval_list_html._deny_note_panel_html("pf-deny-note", "Deny selected and send")
+        assert " hidden>" in panel.split(">", 1)[0] + ">"
+        assert "The same note goes to every selected request." in panel
+        assert '<textarea class="field" id="pf-deny-note-text"' in panel and "></textarea>" in panel
+        assert "checked" not in panel
+
+    def test_the_panel_is_there_on_the_empty_state_too(self):
+        # render() keeps the toolbar in sync after the first paint; the panel must exist for the
+        # live re-render to open it once rows arrive.
+        assert '<section id="pf-deny-note"' in approval_list_html.build_list_html([], csrf="t")
+
+    def test_no_row_content_reaches_the_panel(self):
+        html = self._html(summary=f"Summary {self.HOSTILE}", tool_name=f"Tool {self.HOSTILE}")
+        assert self.MARKER in html  # the row carries it
+        assert self.MARKER not in self._panel(html)
+
+    def test_the_panel_script_runs_first_in_the_same_nonced_script(self):
+        html = approval_list_html.build_list_html([], csrf="t", nonce="n0nce")
+        script = html[html.index('<script nonce="n0nce">'):]
+        assert script.index("window.pfDenyNotePanel = function") < script.index("window.pfDenyNotePanel('pf-deny-note'")
+
+    def test_deny_one_adds_only_the_non_empty_feedback(self):
+        js = approval_list_html._JS
+        body = js[js.index("function denyOne(id, feedback)"):js.index("function denyRow(")]
+        assert "var body = {result: 'deny', csrf: %(csrf)s};" in body
+        assert "if (feedback && feedback.note) { body.note = feedback.note; }" in body
+        assert "if (feedback && feedback.intent) { body.intent = feedback.intent; }" in body
+
+    def test_the_row_deny_and_plain_deny_selected_send_no_feedback(self):
+        js = approval_list_html._JS
+        deny_row = js[js.index("function denyRow(id)"):js.index("function denySelected(")]
+        assert "denyOne(id)" in deny_row and "feedback" not in deny_row.split("denyOne(id)")[1].split(")")[0]
+        assert "if (e.target.id === 'pf-deny-selected') { denySelected(); return; }" in js
+
+    def test_the_panels_submit_sends_its_feedback_on_every_per_id_post(self):
+        js = approval_list_html._JS
+        assert "onSubmit: function (feedback) { denySelected(feedback); }" in js
+        deny_selected = js[js.index("function denySelected(feedback)"):js.index("function toggleNote(")]
+        assert "return denyOne(id, feedback).then(" in deny_selected
+        # A 409 (decided elsewhere) counts as done, with or without a note.
+        assert "if (r.ok || r.status === 409) {" in deny_selected
+
+    def test_the_opener_only_opens_the_panel(self):
+        js = approval_list_html._JS
+        assert "if (e.target.id === 'pf-deny-selected-note') { toggleNote(); return; }" in js
+        toggle = js[js.index("function toggleNote()"):js.index("function resetNote()")]
+        assert "denySelected" not in toggle and "denyOne" not in toggle
+
+    def test_the_opener_and_submit_follow_the_selection_count(self):
+        js = approval_list_html._JS
+        update = js[js.index("function updateToolbar(rows)"):js.index("function applySelectionToCheckboxes(")]
+        assert "if (noteBtn) { noteBtn.disabled = selectedCount === 0; }" in update
+        assert "noteSubmit.disabled = selectedCount === 0;" in update
+        assert "noteSubmit.textContent = 'Deny ' + selectedCount + ' and send';" in update
+        assert "if (pfNote && pfNote.isOpen() && selectedCount === 0) { pfNote.close(); }" in update
+
+    def test_nothing_but_typing_fills_the_note(self):
+        # The list's only write to the textarea is clearing it after a batch that went through.
+        js = approval_list_html._JS
+        assert js.count(".value =") == 1 and "text.value = '';" in js
+        assert "pf-deny-note-text').value" not in js
+
+    def test_escape_closes_the_panel_and_decides_nothing(self):
+        js = approval_list_html._JS
+        handler = js[js.index("document.addEventListener('keydown'"):js.index("document.addEventListener('change'")]
+        assert "if (e.key === 'Escape' && pfNote && pfNote.isOpen()) {" in handler
+        assert "deny" not in handler.lower().replace("pfnote", "")
+
+    def test_the_module_docstring_names_the_new_control_and_the_order(self):
+        doc = approval_list_html.__doc__
+        assert "Deny selected with a note…" in doc
+        assert "Select all, the count, Approve selected, Deny\nselected, then *Deny selected with a note…*" in doc

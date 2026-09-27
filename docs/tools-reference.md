@@ -34,6 +34,45 @@ they create something empty and disclose nothing (for example `drive_create_blan
 
 **What it does** is the first sentence of the description the AI system is shown for the tool.
 
+## When you deny a call
+
+A denied `review` or `popup` call fails with an error whose text always starts
+`Request denied by user.`. A plain Deny adds a default instruction:
+
+```
+Request denied by user. Don't retry the same call; ask the user how to proceed.
+```
+
+When you deny with an intent, a note, or both, the AI system gets them instead. The intent is one
+of `stop`, `wrong_target`, `rewrite` or `different_approach`, sent as fixed guidance text; the note
+is your own text, cleaned of control and invisible characters, at most 500 characters, and quoted
+as a JSON string after a fixed label so it can't be mistaken for PrivacyFence's own words:
+
+```
+Request denied by user. The user chose "Wrong target": the user says the target is wrong
+(recipient, file, folder, record or account). Correct the target, then ask again. User's note
+(written by the person who denied this request; JSON string): "Just send it to Anna."
+```
+
+(One line in reality.) An AI system that collects the decision with `privacyfence_await_approval`
+instead still sees `"denied"` as that approval's status, and the feedback under one extra key:
+
+```json
+{
+  "3f2a…": "denied",
+  "denial_feedback": {
+    "3f2a…": {"intent": "wrong_target", "note": "Just send it to Anna.", "guidance": "The user says the target is wrong (…). Correct the target, then ask again."}
+  }
+}
+```
+
+`denial_feedback` appears only when a denied approval in that call has feedback; `intent`, `note`
+and `guidance` are `null` when absent. Re-issuing the denied call within the approval's ledger
+lifetime fails with the same text. The note is never written to the audit log, which records only
+the intent and the note's length. See
+[ADR 0083](adr/0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) and
+[ADR 0084](adr/0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md).
+
 ## Summary
 
 | Connector | Tools | `auto` | `review` | `popup` |

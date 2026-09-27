@@ -20,6 +20,7 @@ from .agent_identity import AgentIdentity, current_agent
 from .approval_ui import ApprovalUI
 from .approvals import PendingApproval, PendingApprovalRegistry
 from .card_builder import build_card_html
+from .deny_feedback import DenialFeedback
 
 
 class WebApprovalUI(ApprovalUI):
@@ -52,6 +53,7 @@ class WebApprovalUI(ApprovalUI):
 
     def resolve(
         self, card_id: str, result: str, choice: int | None = None, *, principal_id: str | None = None,
+        feedback: DenialFeedback | None = None,
     ) -> bool:
         """Resolve one UI-step card/confirmation, if ``card_id`` matches a
         currently-unanswered one. Returns whether the resolution was
@@ -60,8 +62,11 @@ class WebApprovalUI(ApprovalUI):
         accepted decision for an id wins; any later one is
         rejected"). ``principal_id``
         is web/routes_approvals.py's own authorization check --
-        see approvals.PendingApprovalRegistry.answer's own docstring."""
-        return self._registry.answer(card_id, result, choice, principal_id=principal_id)
+        see approvals.PendingApprovalRegistry.answer's own docstring.
+        ``feedback`` is the human's deny feedback (ADR 0083), already parsed
+        and sanitized by the decide route; ValueError with a non-deny
+        result."""
+        return self._registry.answer(card_id, result, choice, principal_id=principal_id, feedback=feedback)
 
     # ------------------------------------------------------------------ #
     # ApprovalUI -- blocking calls from gate.py, signatures fixed by
