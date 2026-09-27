@@ -15,9 +15,14 @@ into Approvals and Settings without needing a sign-in link from an AI client.</p
 <p>If this is the first time PrivacyFence has been installed on this account, log out
 and back in once: macOS only checks group membership at login, and the companion app
 and your MCP client can't reach the daemon until that happens.</p>
-<p>One step left: open <code>__MCPB_NAME__</code> — it is on the PrivacyFence disk
-image you opened this installer from, right next to the installer itself — to add
-PrivacyFence to Claude Desktop.</p>
+<p>One step left: open one of the two Claude Desktop extensions on the PrivacyFence disk
+image you opened this installer from, right next to the installer itself, to add
+PrivacyFence to Claude Desktop:</p>
+<p><code>__MCPB_NAME__</code> — the default. Claude Desktop may ask you before a write,
+and then PrivacyFence asks too.<br>
+<code>__MCPB_NO_PROMPTS_NAME__</code> — shows as “PrivacyFence (no Claude prompts)”.
+Claude Desktop does not ask; PrivacyFence's own approval still does.</p>
+<p>Open only one of them: with both, Claude lists every tool twice.</p>
 <p>Status any time from Terminal: <code>sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh status</code></p>
 </body>
 </html>

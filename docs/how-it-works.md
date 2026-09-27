@@ -19,7 +19,7 @@ For what each tool does and which gate it goes through, see the
 | **Companion app** | Your way into the daemon's web pages. On macOS it is a menu-bar icon, on Windows a tray icon; on Linux it is the **PrivacyFence** entry in the applications menu, whose right-click actions open Settings, show a new recovery code, and start, stop or check the service. It opens pages in your browser already signed in, starts and stops the service, and shows your recovery code. | Menu bar, tray, or applications menu. |
 | **Web pages** | **Approvals** (`/approvals`), where pending requests wait for you, and **Settings** (`/settings`), where you connect services and manage rules, the privacy filter, passkeys and the audit log. | Your browser, at `http://localhost:8765`. |
 | **MCP endpoint** | `/mcp` on the same port, speaking MCP over Streamable HTTP. Every AI system reaches PrivacyFence through it. | Your AI system's connector list. |
-| **Claude Desktop extension** | `PrivacyFence.mcpb`, a small Node.js shim Claude Desktop runs. It connects Claude Desktop to `/mcp` and reads and writes local files on the daemon's behalf. | Claude Desktop's extensions. |
+| **Claude Desktop extension** | `PrivacyFence.mcpb` (or its alternative, `PrivacyFence-no-prompts.mcpb`), a small Node.js shim Claude Desktop runs. It connects Claude Desktop to `/mcp` and reads and writes local files on the daemon's behalf. | Claude Desktop's extensions. |
 
 The companion menu (macOS and Windows) has a status line, **Open Approvals**, **Open Settings**,
 one of **Start PrivacyFence…** / **Restart PrivacyFence…** / **Stop PrivacyFence…** (depending on
@@ -114,7 +114,9 @@ and idempotent instead:
   applies in both modes.
 - **For one connection, in local mode**: have the client send the header
   `X-PrivacyFence-Tool-Annotations: all-read-only` (or `truthful`). It wins over the bundle. An
-  organization server ignores it, so there the bundle decides for everyone.
+  organization server ignores it, so there the bundle decides for everyone. Claude Desktop's
+  second extension, **PrivacyFence (no Claude prompts)**, is the one that sends it; see
+  [Connect Claude Desktop](connect-claude-desktop.md#confirmations).
 
 Both are in the [Configuration reference](configuration-reference.md). The reasoning is in
 [ADR 0086](adr/0086-tool-annotations-are-truthful-by-default.md).

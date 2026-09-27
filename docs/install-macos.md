@@ -25,7 +25,8 @@ Pre-release builds may not be.
 
 ## Install
 
-1. Double-click the DMG. It holds two files: **PrivacyFence.pkg** and **PrivacyFence.mcpb**.
+1. Double-click the DMG. It holds three files: **PrivacyFence.pkg** and the two Claude Desktop
+   extensions, **PrivacyFence.mcpb** and **PrivacyFence-no-prompts.mcpb**.
 2. Double-click **PrivacyFence.pkg** and follow the installer. It asks for your administrator
    password as part of the install and uses it to set everything up at once: it installs
    `/Applications/PrivacyFenceApp.app`, creates the `_privacyfence` service account, moves the
@@ -57,10 +58,19 @@ menu-bar icon is not running, that starts it; if it is, you are asked to confirm
 
 ## Connect Claude Desktop
 
-Double-click **PrivacyFence.mcpb** on the DMG. Claude Desktop opens and offers to install the
-extension; accept. There is nothing to configure: the extension finds the running daemon by
-itself, and never starts it on a separated install (the daemon belongs to launchd and its own
-account).
+Double-click **one** of the two extensions on the DMG:
+
+- **PrivacyFence.mcpb**, the default. Claude Desktop may ask you before a write, and then
+  PrivacyFence's approval asks too.
+- **PrivacyFence-no-prompts.mcpb**, shown in Claude Desktop as *PrivacyFence (no Claude prompts)*.
+  Claude Desktop does not ask; PrivacyFence's own approval still does.
+
+Install only one: with both, Claude lists every tool twice. Which to pick is explained in
+[Confirmations](connect-claude-desktop.md#confirmations).
+
+Claude Desktop opens and offers to install the extension; accept. There is nothing to configure:
+the extension finds the running daemon by itself, and never starts it on a separated install (the
+daemon belongs to launchd and its own account).
 
 The first time a tool reads or saves a file outside Claude's own folders, macOS may ask
 "Claude would like to access files in your Downloads folder". The extension runs inside Claude, so

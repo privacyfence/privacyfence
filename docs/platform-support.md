@@ -9,7 +9,7 @@ guide: [macOS](install-macos.md), [Windows](install-windows.md), [Linux](install
 
 | Platform | Minimum OS | Download | Daemon runs as | Guide |
 |---|---|---|---|---|
-| macOS | macOS 13, Apple silicon | `PrivacyFence-<version>.dmg` (holds `PrivacyFence.pkg` and `PrivacyFence.mcpb`) | a LaunchDaemon, as the `_privacyfence` account | [Install on macOS](install-macos.md) |
+| macOS | macOS 13, Apple silicon | `PrivacyFence-<version>.dmg` (holds `PrivacyFence.pkg`, `PrivacyFence.mcpb` and `PrivacyFence-no-prompts.mcpb`) | a LaunchDaemon, as the `_privacyfence` account | [Install on macOS](install-macos.md) |
 | Windows | Windows 10 / Windows Server 2016 (x64) | `PrivacyFence-<version>-setup.exe` | the `PrivacyFence` Windows service, as `NT SERVICE\PrivacyFence` | [Install on Windows](install-windows.md) |
 | Debian/Ubuntu local mode | glibc 2.38 and systemd 242 (Ubuntu 24.04, Debian 13 or newer, amd64) | `privacyfence_<version>_amd64.deb` | the `privacyfence-daemon` system service, as the `privacyfence` account | [Install on Linux](install-linux.md) |
 | Linux Python install | Python 3.11 | `pip install privacyfence` / `pipx install privacyfence` | your own account (not separated) | [Install on Linux](install-linux.md#other-linux-systems-and-arm64) |

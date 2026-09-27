@@ -112,6 +112,7 @@ from privacyfence.privilege_separation import (  # noqa: E402
     WINDOWS_SERVICE_NAME,
     WINDOWS_SYSTEM_ROOT,
 )
+from tests import packaged_extensions  # noqa: E402
 from tests.packaged_policy_probe import PROBE_TOOL  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -374,6 +375,63 @@ async def _assert_separated_service_serves_mcp(base_url: str, mcp_token: str) ->
                 names = {tool.name for tool in tools.tools}
     assert "privacyfence_check_policy" in names, names
     assert PROBE_TOOL in names, names
+
+
+def _installed_extensions(install_dir: Path, setup_exe: Path) -> tuple[Path, Path]:
+    """The two ``.mcpb`` files the installer put into ``install_dir`` (ADR 0087), at the versioned
+    names ``installer/privacyfence.iss`` keeps: ``PrivacyFence-<version>.mcpb`` and
+    ``PrivacyFence-no-prompts-<version>.mcpb``."""
+    version_match = re.match(r"^PrivacyFence-(.+)-setup\.exe$", setup_exe.name)
+    assert version_match, f"unexpected installer filename shape: {setup_exe.name}"
+    version = version_match.group(1)
+    default = install_dir / f"PrivacyFence-{version}.mcpb"
+    no_prompts = install_dir / f"PrivacyFence-no-prompts-{version}.mcpb"
+    installed = sorted(p.name for p in install_dir.glob("*.mcpb"))
+    assert default.is_file(), f"{default.name} missing after install; installed: {installed}"
+    assert no_prompts.is_file(), f"{no_prompts.name} missing after install; installed: {installed}"
+    return default, no_prompts
+
+
+async def _list_tools(base_url: str, headers: dict[str, str]) -> list:
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(f"{base_url}/mcp", http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return (await session.list_tools()).tools
+
+
+async def _assert_no_prompts_extension_is_honoured(
+    base_url: str, mcp_token: str, default_mcpb: Path, no_prompts_mcpb: Path,
+) -> None:
+    """The second extension against the real service. The shim itself cannot run here -- it mints
+    its token over the same control-channel pipe ``_assert_separated_service_serves_mcp``'s
+    docstring explains this job cannot open -- so this sends exactly the header the installed
+    manifest makes the shim send (``mcpb/shim``'s own tests and
+    ``tests/integration/test_shim_mcp_contract.py`` prove the shim sends it) straight to ``/mcp``.
+    ``tests/packaged_extensions.py`` says what each assertion proves."""
+    default_manifest = packaged_extensions.read_manifest(default_mcpb)
+    no_prompts_manifest = packaged_extensions.read_manifest(no_prompts_mcpb)
+    packaged_extensions.assert_manifests(default_manifest, no_prompts_manifest)
+
+    auth = {"Authorization": f"Bearer {mcp_token}"}
+    default_tools = await _list_tools(base_url, auth)
+    header_value = packaged_extensions.tool_annotations_header_value(no_prompts_manifest)
+    no_prompts_tools = await _list_tools(
+        base_url, {**auth, packaged_extensions.TOOL_ANNOTATIONS_HEADER: header_value},
+    )
+    packaged_extensions.assert_all_read_only(no_prompts_tools, default_tools)
+
+    async with httpx2.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{base_url}/mcp",
+            json=packaged_extensions.initialize_request(),
+            headers={
+                **auth,
+                "Accept": "application/json, text/event-stream",
+                packaged_extensions.TOOL_ANNOTATIONS_HEADER: "not-a-mode",
+            },
+        )
+    packaged_extensions.assert_unknown_header_value_is_refused(response.status_code, response.text)
 
 
 def _service_config(name: str = WINDOWS_SERVICE_NAME) -> str | None:
@@ -1040,7 +1098,7 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     alias_exe = install_dir / ALIAS_EXE_NAME
     assert main_exe.is_file(), f"{main_exe} missing after silent install"
     assert alias_exe.is_file(), f"{alias_exe} missing after silent install"
-    assert list(install_dir.glob("*.mcpb")), f"no .mcpb found in {install_dir} after install"
+    default_mcpb, no_prompts_mcpb = _installed_extensions(install_dir, setup_exe)
 
     # ── The installer registers nothing it later disables: the daemon is a
     # service, and the companion's is the only sign-in task ──────────────
@@ -1055,6 +1113,7 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     # ── The service the install created is actually serving ──────────────
     base_url, mcp_token = _wait_for_separated_service()
     await _assert_separated_service_serves_mcp(base_url, mcp_token)
+    await _assert_no_prompts_extension_is_honoured(base_url, mcp_token, default_mcpb, no_prompts_mcpb)
     # Written by the daemon itself under the separated root, not by this test.
     assert SEPARATED_SETTINGS_PATH.is_file(), (
         f"{SEPARATED_SETTINGS_PATH} missing -- the service never wrote its own authority config"
@@ -1111,9 +1170,18 @@ def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tupl
 
     dist_onedir = REPO_ROOT / "dist" / "PrivacyFenceApp"
     assert dist_onedir.is_dir(), f"{dist_onedir} missing -- was scripts/build_installer.ps1 actually run?"
-    mcpb_candidates = sorted(DIST_DIR.glob("PrivacyFence-*.mcpb"))
+    # The no-prompts extension's name matches PrivacyFence-*.mcpb too, so it is taken out of the
+    # first glob rather than left to sort after (or before) the default one.
+    mcpb_candidates = sorted(
+        p for p in DIST_DIR.glob("PrivacyFence-*.mcpb") if not p.name.startswith("PrivacyFence-no-prompts-")
+    )
     assert mcpb_candidates, f"no PrivacyFence-*.mcpb found in {DIST_DIR} -- was scripts/build_installer.ps1 actually run?"
     mcpb_path = mcpb_candidates[-1]
+    no_prompts_candidates = sorted(DIST_DIR.glob("PrivacyFence-no-prompts-*.mcpb"))
+    assert no_prompts_candidates, (
+        f"no PrivacyFence-no-prompts-*.mcpb found in {DIST_DIR} -- was scripts/build_installer.ps1 actually run?"
+    )
+    no_prompts_mcpb_path = no_prompts_candidates[-1]
     icon_path = REPO_ROOT / "build" / "privacyfence.ico"
     assert icon_path.is_file(), f"{icon_path} missing -- was scripts/build_installer.ps1 actually run?"
 
@@ -1129,6 +1197,7 @@ def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tupl
             f"/DAppVersion={new_version}",
             f"/DDistDir={dist_onedir}",
             f"/DMcpbPath={mcpb_path}",
+            f"/DMcpbNoPromptsPath={no_prompts_mcpb_path}",
             f"/DIconPath={icon_path}",
             f"/DOutputDir={output_dir}",
             f"/DSetupBaseName={setup_base_name}",
