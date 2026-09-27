@@ -192,3 +192,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md) | The audit log records that a deny had feedback (intent, note length), never the feedback text | Accepted |
 | [0085](0085-ci-installs-ai-client-clis-from-a-committed-lockfile.md) | CI installs AI-client CLIs from a committed lockfile; only the weekly canary runs `@latest` | Accepted |
 | [0086](0086-tool-annotations-are-truthful-by-default.md) | Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only | Accepted |
+| [0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md) | Two Claude Desktop extensions ship in the DMG and the Windows installer | Accepted |

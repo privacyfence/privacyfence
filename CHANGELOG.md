@@ -73,6 +73,12 @@ Organization deployments now work from a phone, and the app looks like the websi
   handles files, what it asks before PrivacyFence's own approval card, how it is identified, and
   what to do when it does not connect. The install pages and the organization guide link there
   instead of repeating the steps.
+- **A second Claude Desktop extension, "PrivacyFence (no Claude prompts)".** The macOS disk image
+  and the Windows installer now carry two extensions: `PrivacyFence.mcpb` as before, and
+  `PrivacyFence-no-prompts.mcpb`, which tells Claude Desktop that every tool is read-only, so Claude
+  Desktop does not ask for its own confirmation before PrivacyFence's approval card. Every call
+  still goes through PrivacyFence's approval and audit log. Install only one of the two; with both,
+  Claude lists every tool twice. The installer's last page names both. See ADR 0087.
 
 ### Changed
 

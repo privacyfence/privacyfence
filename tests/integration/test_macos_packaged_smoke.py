@@ -11,12 +11,13 @@ before (a hidden import, a missing data file) in a way no source-tree test
 can catch, since a source-tree test never leaves the interpreter that
 already knows how to import everything.
 
-The DMG carries ``PrivacyFence.pkg`` and ``PrivacyFence.mcpb`` and nothing
-else -- no ``PrivacyFenceApp.app`` to drag, no ``/Applications`` symlink (see
-``scripts/build_dmg.sh``'s own header for why the .pkg moved inside the image
-instead of shipping beside it). So the app bundle this module exercises comes
-out of the .pkg's payload, which is the only place it exists in a shipped
-artifact at all; ``test_dmg_carries_only_the_installer_and_the_extension``
+The DMG carries ``PrivacyFence.pkg`` and the two Claude Desktop extensions,
+``PrivacyFence.mcpb`` and ``PrivacyFence-no-prompts.mcpb`` (ADR 0087), and
+nothing else -- no ``PrivacyFenceApp.app`` to drag, no ``/Applications``
+symlink (see ``scripts/build_dmg.sh``'s own header for why the .pkg moved
+inside the image instead of shipping beside it). So the app bundle this module
+exercises comes out of the .pkg's payload, which is the only place it exists
+in a shipped artifact at all; ``test_dmg_carries_only_the_installer_and_the_extensions``
 below asserts that layout directly, so a regression there fails as itself
 rather than as an unexplained "app missing from the DMG".
 
@@ -78,7 +79,11 @@ the packaged app:
    the confirmed result once that happens. The call itself, and the
    settings.yaml row to read back on the far side of it, come from
    ``tests/packaged_policy_probe.py``, which all four packaged-artifact
-   smoke tests share.
+   smoke tests share. Then the second extension: the shim.js inside the
+   DMG's own ``PrivacyFence-no-prompts.mcpb``, started with exactly its
+   manifest's arguments, lists tools through the same daemon, checked by
+   ``tests/packaged_extensions.py`` (see that module for what "all
+   read-only" can mean against a daemon with no connector credentials).
 6. **State lives outside the package, twice over**: delete the *original*
    scratch copy handed to ``enable --app`` (``installed_app``) and confirm
    the rule change from step 5 is still reachable -- proving the daemon
@@ -175,6 +180,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 # importing it does not make this module test anything but the frozen binary
 # from outside.
 from tests.control_channel_client import attested_mint_script, companion_stand_in_script  # noqa: E402
+from tests import packaged_extensions  # noqa: E402
 from tests.packaged_policy_probe import (  # noqa: E402
     PROBE_TOOL,
     assert_probe_rule_on_disk,
@@ -358,12 +364,23 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
     return app_dst
 
 
-def test_dmg_carries_only_the_installer_and_the_extension():
-    """The shipped macOS artifact is a carrier for two files: the installer
+def _extensions_from_dmg(dst_dir: Path) -> dict[str, Path]:
+    """Copies both ``.mcpb`` files off the shipped DMG into ``dst_dir``, keyed by their in-DMG
+    names. The caller owns ``dst_dir``."""
+    copies: dict[str, Path] = {}
+    with _mounted_dmg() as mount_point:
+        for name in (packaged_extensions.DEFAULT_EXTENSION, packaged_extensions.NO_PROMPTS_EXTENSION):
+            copies[name] = dst_dir / name
+            shutil.copy2(mount_point / name, copies[name])
+    return copies
+
+
+def test_dmg_carries_only_the_installer_and_the_extensions():
+    """The shipped macOS artifact is a carrier for three files: the installer
     that provisions privilege separation at install time (ADR 0003) and the
-    Claude Desktop extension the .pkg's own conclusion screen tells the user
-    to open "next to this installer" -- a sentence that is only true because
-    both are on this image.
+    two Claude Desktop extensions (ADR 0087) the .pkg's own conclusion screen
+    tells the user to open one of, "next to this installer" -- a sentence that
+    is only true because all three are on this image.
 
     The drag-install layout this replaced (``PrivacyFenceApp.app`` plus an
     ``/Applications`` symlink) is asserted *absent*, not merely "not
@@ -376,9 +393,14 @@ def test_dmg_carries_only_the_installer_and_the_extension():
         # file can't fail a release build over a layout that is in fact correct.
         entries = sorted(p.name for p in mount_point.iterdir() if not p.name.startswith("."))
         assert "PrivacyFence.pkg" in entries, f"no installer on the shipped DMG: {entries}"
-        assert "PrivacyFence.mcpb" in entries, (
-            f"no Claude Desktop extension on the shipped DMG: {entries} -- the installer's own "
-            f"conclusion screen tells the user to open it right there"
+        for extension in (packaged_extensions.DEFAULT_EXTENSION, packaged_extensions.NO_PROMPTS_EXTENSION):
+            assert extension in entries, (
+                f"no {extension} on the shipped DMG: {entries} -- the installer's own "
+                f"conclusion screen tells the user to open one of the two extensions right there"
+            )
+        packaged_extensions.assert_manifests(
+            packaged_extensions.read_manifest(mount_point / packaged_extensions.DEFAULT_EXTENSION),
+            packaged_extensions.read_manifest(mount_point / packaged_extensions.NO_PROMPTS_EXTENSION),
         )
         assert "PrivacyFenceApp.app" not in entries, (
             f"the app bundle is back on the DMG: {entries} -- dragging it out is a second install "
@@ -991,6 +1013,49 @@ def _confirm_pending_rule_change(bootstrap_url: str) -> None:
             browser.close()
 
 
+async def _assert_no_prompts_extension_lists_read_only_tools(
+    daemon: RunningDaemon, default_tools: list,
+) -> None:
+    """The second extension, as shipped (module docstring, point 5): the shim.js
+    inside the DMG's own ``PrivacyFence-no-prompts.mcpb``, started with exactly
+    the arguments its manifest gives Claude Desktop, under the same
+    ``sudo -u <this account> -g ${SERVICE_GROUP}`` substitution as the default
+    one. ``tests/packaged_extensions.py`` says what each assertion proves."""
+    workdir = Path(tempfile.mkdtemp(prefix="pf-dmg-mcpb-"))
+    try:
+        mcpb = _extensions_from_dmg(workdir)[packaged_extensions.NO_PROMPTS_EXTENSION]
+        manifest = packaged_extensions.read_manifest(mcpb)
+        dirname = packaged_extensions.extract(mcpb, workdir / "no-prompts")
+        user = getpass.getuser()
+        params = StdioServerParameters(
+            command="sudo",
+            args=[
+                "-n", "-u", user, "-g", SERVICE_GROUP,
+                manifest["server"]["mcp_config"]["command"],
+                *packaged_extensions.server_args(manifest, dirname),
+            ],
+        )
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                no_prompts_tools = (await session.list_tools()).tools
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    packaged_extensions.assert_all_read_only(no_prompts_tools, default_tools)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            daemon.mcp_url,
+            json=packaged_extensions.initialize_request(),
+            headers={
+                "Authorization": f"Bearer {daemon.mcp_token}",
+                "Accept": "application/json, text/event-stream",
+                packaged_extensions.TOOL_ANNOTATIONS_HEADER: "not-a-mode",
+            },
+        )
+    packaged_extensions.assert_unknown_header_value_is_refused(response.status_code, response.text)
+
+
 async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_trip(
     running_packaged_daemon, built_shim_entry, installed_app,
 ):
@@ -1022,6 +1087,7 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
             await session.initialize()
 
             tools = await session.list_tools()
+            default_tools = tools.tools
             names = {t.name for t in tools.tools}
             assert PROBE_TOOL in names
             assert "privacyfence_check_policy" in names
@@ -1057,6 +1123,8 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
     assert settings_text, settings_text
     assert_probe_rule_on_disk(settings_text, value=["example.com"])
+
+    await _assert_no_prompts_extension_lists_read_only_tools(running_packaged_daemon, default_tools)
 
     # ── State lives outside the package, twice over (module docstring, point 6) ───
     # First: delete the *original* scratch copy `enable --app` was pointed

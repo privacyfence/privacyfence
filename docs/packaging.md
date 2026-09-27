@@ -10,8 +10,8 @@ privilege separation protects, see
 
 | Platform | Built by | Artifact | Contents |
 |---|---|---|---|
-| macOS (arm64) | `scripts/build_dmg.sh` | `dist/PrivacyFence-<version>.dmg` | `PrivacyFence.pkg` and `PrivacyFence.mcpb`, nothing else |
-| Windows (x64) | `scripts/build_installer.ps1` → `installer/privacyfence.iss` | `dist/PrivacyFence-<version>-setup.exe` | PyInstaller onedir, the `.mcpb`, the separation script and its task template |
+| macOS (arm64) | `scripts/build_dmg.sh` | `dist/PrivacyFence-<version>.dmg` | `PrivacyFence.pkg`, `PrivacyFence.mcpb` and `PrivacyFence-no-prompts.mcpb`, nothing else |
+| Windows (x64) | `scripts/build_installer.ps1` → `installer/privacyfence.iss` | `dist/PrivacyFence-<version>-setup.exe` | PyInstaller onedir, both `.mcpb` files, the separation script and its task template |
 | Debian/Ubuntu (amd64) | `scripts/build_deb.sh` | `dist/privacyfence_<debversion>_amd64.deb` | PyInstaller onedir under `/opt/privacyfence`, wrappers, separation tool and templates |
 | Any (Python) | `publish-pypi.yml` | sdist + wheel | the `privacyfence` package |
 
@@ -29,10 +29,22 @@ Shared build inputs:
   `scripts/telegram_credentials.py write` from the `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` secrets
   before PyInstaller runs; a local build without them ships without Telegram
   ([ADR 0040](adr/0040-telegram-app-credentials-ship-in-every-distribution.md)).
-- **The `.mcpb`** is built by `scripts/build_mcpb.sh`: esbuild bundles `mcpb/shim/` into one
-  dependency-free `server/shim.js`, and the manifest template's `__VERSION__` is stamped with the
-  resolved version. `mcpb/shim/package.json` stays at `0.0.0-dev`
-  ([ADR 0012](adr/0012-mcpb-shim-connects-claude-desktop-to-local-mode.md)).
+- **The two `.mcpb` files** are built by `scripts/build_mcpb.sh`: esbuild bundles `mcpb/shim/` into
+  one dependency-free `server/shim.js`, and `scripts/mcpb_manifest.py` renders two manifests from
+  `mcpb/manifest.json.tmpl`, each stamped with the resolved version. `mcpb/shim/package.json` stays
+  at `0.0.0-dev` ([ADR 0012](adr/0012-mcpb-shim-connects-claude-desktop-to-local-mode.md)). The two
+  extensions carry the same `shim.js` and differ only in their manifest
+  ([ADR 0087](adr/0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md)):
+
+  | File | Manifest `name` | Shown in Claude Desktop as | Shim arguments |
+  |---|---|---|---|
+  | `PrivacyFence-<version>.mcpb` | `privacyfence` | PrivacyFence | `shim.js` |
+  | `PrivacyFence-no-prompts-<version>.mcpb` | `privacyfence-read-only` | PrivacyFence (no Claude prompts) | `shim.js --tool-annotations=all-read-only` |
+
+  With `--tool-annotations`, the shim sends `X-PrivacyFence-Tool-Annotations` on every `/mcp`
+  request, and the daemon advertises every connector tool read-only to that connection
+  ([ADR 0086](adr/0086-tool-annotations-are-truthful-by-default.md)). A user installs one of the
+  two; the `.deb` carries neither, because Claude Desktop does not run on Linux.
 
 ## Minimum OS and CPU enforcement
 
@@ -68,16 +80,19 @@ its lifecycle test, `debian/control` and the matrix, together
 3. Copies `scripts/macos_privilege_separation.sh` and the two launchd templates into
    `Contents/Resources/scripts/` and `Contents/Resources/installer/macos/`, the same relative
    layout as the checkout, so the script needs no packaged-vs-checkout branch.
-4. Signs the `.app` (below), builds the `.mcpb`, then calls `scripts/build_pkg.sh`.
-5. Stages the `.pkg` and `.mcpb` (renamed to the unversioned `PrivacyFence.pkg`/`PrivacyFence.mcpb`)
-   into `build/dmg-root/` and runs `create-dmg` over it; notarizes and staples the DMG.
+4. Signs the `.app` (below), builds both `.mcpb` files, then calls `scripts/build_pkg.sh`, passing
+   the extensions' in-DMG names for the conclusion screen, which names both and says to open one.
+5. Stages the `.pkg` and both `.mcpb` files (renamed to the unversioned `PrivacyFence.pkg`,
+   `PrivacyFence.mcpb` and `PrivacyFence-no-prompts.mcpb`) into `build/dmg-root/` and runs
+   `create-dmg` over it; notarizes and staples the DMG.
 
 `scripts/build_pkg.sh` never runs PyInstaller; it packages the existing `.app`. It marks the bundle
 non-relocatable (`BundleIsRelocatable false` in the component plist) so Installer.app always
 installs to `/Applications` rather than over a copy it finds elsewhere, wraps the component package
 with `productbuild` to add `installer/macos/pkg/resources/welcome.html`/`conclusion.html.tmpl`, and
 restricts the install to the system domain (`enable_localSystem` only, `rootVolumeOnly`,
-`require-scripts`). The `.pkg` is never released on its own; releasing the DMG releases all three.
+`require-scripts`). The `.pkg` is never released on its own; releasing the DMG releases the `.pkg`
+and both extensions.
 
 ### Signing and notarization
 
@@ -144,7 +159,7 @@ the next login.
 1. Converts the icon to `.ico` with Pillow; writes the Telegram credentials.
 2. Runs PyInstaller on `PrivacyFenceApp.win.spec` (onedir), and copies `PrivacyFenceApp.exe` to
    `privacyfence-app.exe` (a real copy; Windows has no bundle symlink).
-3. Builds the `.mcpb` by running `scripts/build_mcpb.sh` under Git for Windows' `bash.exe`.
+3. Builds both `.mcpb` files by running `scripts/build_mcpb.sh` under Git for Windows' `bash.exe`.
 4. Signs `PrivacyFenceApp.exe`, `privacyfence-app.exe` and `PrivacyFenceCompanion.exe`, runs
    `iscc.exe` on `installer/privacyfence.iss`, then signs the setup `.exe`.
 
@@ -169,7 +184,7 @@ diagnosis only.
 ### Install (`installer/privacyfence.iss`)
 
 - `PrivilegesRequired=admin`; installs to `%ProgramFiles%\PrivacyFence` with the onedir output, the
-  versioned `.mcpb`, `privilege-separation.ps1` (renamed from
+  two versioned `.mcpb` files, `privilege-separation.ps1` (renamed from
   `scripts/windows_privilege_separation.ps1`) and `privacyfence-companion-task.xml.tmpl` beside it.
 - Start Menu: **PrivacyFence** (`PrivacyFenceCompanion.exe --launch`, ADR 0031),
   **PrivacyFence Companion**, and the uninstaller.
@@ -310,8 +325,8 @@ before any upload.
 
 | Job | Runner | Builds | Packaged tests (inline) |
 |---|---|---|---|
-| `build` | `macos-latest` (arm64) | DMG (`.app`, `.pkg`, `.mcpb`) | `test_macos_packaged_smoke.py` (mount, daemon→MCP→approval round trip, `codesign --verify`/`spctl`, upgrade), `test_macos_pkg_smoke.py` (structural, `pkgutil --expand-full`, no install) |
-| `build-windows` | `windows-latest` | setup `.exe` | `test_windows_packaged_smoke.py` (silent install with separation, round trip, uninstall keep/purge, upgrade) |
+| `build` | `macos-latest` (arm64) | DMG (`.app`, `.pkg`, both `.mcpb`) | `test_macos_packaged_smoke.py` (mount, both extensions present, daemon→MCP→approval round trip, the no-prompts extension's read-only `tools/list`, `codesign --verify`/`spctl`, upgrade), `test_macos_pkg_smoke.py` (structural, `pkgutil --expand-full`, no install) |
+| `build-windows` | `windows-latest` | setup `.exe` | `test_windows_packaged_smoke.py` (silent install with separation, both extensions installed, the no-prompts header's read-only `tools/list`, round trip, uninstall keep/purge, upgrade) |
 | `build-deb` | `ubuntu-latest` (amd64) | `.deb` | `test_org_ubuntu_release_smoke.py`, then `test_deb_packaged_lifecycle.py` (`dpkg -i`, `desktop-file-validate`, round trip, `dpkg -r`/`-P`, upgrade) |
 | `sbom` | `ubuntu-latest` | CycloneDX SBOMs for the Python lock file and the shim | — |
 | `finalize-release` | `ubuntu-latest` | needs all four; attaches files, renders `CHANGELOG.md` notes, promotes R2 | runs `scripts/check_graphical_session_coverage.py` |
