@@ -76,8 +76,8 @@ Every child session follows these rules. They already reach it through `CLAUDE.m
   heading.
 - Anything that needs a Mac, Windows or real credentials is **dispatched** as a workflow (see the
   `steward` skill). It's never skipped. A workflow can be dispatched only once it's on `main`.
-- **ADR numbers:** take the next free number *at merge time*. `main` is at
-  0081, so the first ADR from this plan is most likely 0082. Renumber on conflict.
+- **ADR numbers:** take the next free number *at merge time*. Other branches
+  take numbers too, so check `docs/adr/` on `main` just before merging and renumber on conflict.
 - Issues are cited by full URL in docs and test code, never as `#NNN` (item 9 in §1).
 
 ---
@@ -241,7 +241,7 @@ Depends on: M0.1.
 
 ```text
 Read docs/ai-agents-foundation-plan.md §1 (item 4) and §3 (D5, E1, E2). Implement WP 1.1:
-1. ADR (next free number at merge time, ≥ 0082) "Tool annotations are truthful by default; an
+1. ADR (next free number at merge time) "Tool annotations are truthful by default; an
    organization bundle or a local connection can ask for every tool read-only", superseding ADR
    0076 (add one Status line to 0076 pointing forward; never edit its body). Context: ADR 0076 and
    https://github.com/privacyfence/privacyfence/issues/46. Decision: D5, E1 (the precedence rule
