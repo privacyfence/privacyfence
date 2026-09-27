@@ -856,7 +856,4 @@ class TestAwaitApprovalDenialFeedback:
             "'denied' (a human said no -- re-issuing will not change that; don't retry, ask the user "
             "how to proceed unless denial_feedback says otherwise)"
         ) in description
-        assert (
-            "A 'denied' approval may also have an entry under denial_feedback: that is the user's own "
-            "instruction for what to do instead, so follow it rather than retrying."
-        ) in description
+        assert "denial_feedback holds the user's instruction for a denial: follow it." in description

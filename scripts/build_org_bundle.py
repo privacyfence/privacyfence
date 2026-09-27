@@ -26,6 +26,11 @@ full PrivacyFence install.
 for every install of this bundle — a deliberate per-organization choice, see
 docs/how-it-works.md's "Unattended sessions" section.
 
+--tool-annotations all-read-only advertises every connector tool to AI clients
+as read-only, so a client does not ask for its own confirmation before
+PrivacyFence's approval; the default, truthful, marks writes as writes. See
+docs/how-it-works.md's "What the AI system is told".
+
 Example:
     python3 scripts/build_org_bundle.py \\
         --org-name "Acme Corp" \\
@@ -347,6 +352,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly turn unattended sessions back off (useful with --merge).",
     )
 
+    annotations = parser.add_argument_group("What AI clients are told about each tool")
+    annotations.add_argument(
+        "--tool-annotations", choices=("truthful", "all-read-only"), default=None,
+        help="How /mcp annotates connector tools, in both modes. truthful (the default when "
+             "not written): reads read-only, writes as writes, the two deleting tools as "
+             "destructive. all-read-only: every tool read-only, so a client that prompts on "
+             "writes (claude.ai Team) does not ask before PrivacyFence's own approval. Not "
+             "written unless given.",
+    )
+
     downloads = parser.add_argument_group(
         "Download delivery (org mode)",
     )
@@ -510,6 +525,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.disable_unattended_sessions:
         bundle["unattended_sessions"] = {"enabled": False}
 
+    if args.tool_annotations is not None:
+        # The flag is spelled with a hyphen, the bundle value with an underscore
+        # (org_mode.TOOL_ANNOTATIONS_MODES). --merge keeps the rest of "mcp".
+        mcp_section = bundle.get("mcp") if isinstance(bundle.get("mcp"), dict) else {}
+        bundle["mcp"] = {**mcp_section, "tool_annotations": args.tool_annotations.replace("-", "_")}
+
     if args.mode == "org":
         if not args.server_issuer_url:
             raise SystemExit("--mode org requires --server-issuer-url.")
@@ -670,9 +691,10 @@ def main(argv: list[str] | None = None) -> int:
         bundle["audit_forwarding"] = forwarding_section
 
     services = [k for k in ("google", "slack", "salesforce", "atlassian") if k in bundle]
-    if not services and "unattended_sessions" not in bundle and "mode" not in bundle:
+    if not services and not {"unattended_sessions", "mode", "mcp"} & bundle.keys():
         raise SystemExit(
-            "No service, --mode, or --enable/disable-unattended-sessions flags given — nothing to write."
+            "No service, --mode, --enable/disable-unattended-sessions or --tool-annotations flags "
+            "given — nothing to write."
         )
 
     if bundle.get("mode") == "org" and not args.sign_key:
@@ -692,6 +714,8 @@ def main(argv: list[str] | None = None) -> int:
     summary = ", ".join(services) or "none"
     if "unattended_sessions" in bundle:
         summary += f", unattended_sessions.enabled={bundle['unattended_sessions']['enabled']}"
+    if "tool_annotations" in bundle.get("mcp", {}):
+        summary += f", mcp.tool_annotations={bundle['mcp']['tool_annotations']}"
     if "mode" in bundle:
         summary += f", mode={bundle['mode']}"
     if "step_up" in bundle:
