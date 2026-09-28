@@ -1969,6 +1969,38 @@ class TestWriteToolsWithUploadRefAttachments:
             "alice@example.com", "Hi", "body", [ref], "", "", "", "org",
         )
 
+    async def test_upload_ref_survives_a_pending_approval(self, monkeypatch):
+        """ADR 0102: the attachment's slot is consumed only once the gate passes."""
+        from privacyfence import local_files
+        from privacyfence.approvals import ApprovalPending
+
+        decisions = iter(["pending", "approved"])
+
+        async def fake_gated_call(**kwargs):
+            if next(decisions) == "pending":
+                raise ApprovalPending({"status": "approval_pending", "approval_id": "a1"})
+            return kwargs["filtered_data"]
+
+        monkeypatch.setattr(gmail_module, "gated_call", fake_gated_call)
+        connector, client = make_connector()
+        connector.download_mode = "org"
+        client.create_draft_with_attachments.return_value = {"draft_id": "d1"}
+        ref = self._staged_upload_ref(b"z" * 7)
+        args = {"to": "alice@example.com", "subject": "Hi", "body": "body", "attachments": json.dumps([ref])}
+
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+            await connector.call("gmail_create_draft_with_attachments", args)
+        client.create_draft_with_attachments.assert_not_called()
+
+        with local_files.call_context(bridge_available=False, uploads={}):
+            await connector.call("gmail_create_draft_with_attachments", args)
+        client.create_draft_with_attachments.assert_called_once()
+
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+            local_files.LocalFileAccessError,
+        ):
+            await connector.call("gmail_create_draft_with_attachments", args)
+
     async def test_wrong_principal_upload_ref_is_denied_before_the_gate(self, gated_call_spy):
         from privacyfence import local_files
         from privacyfence.principal import Principal

@@ -58,6 +58,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An approved upload no longer fails after its approval waited.** In organization mode, and for
+  any AI system without the PrivacyFence extension, a file upload (`drive_upload_file` with an
+  `upload_id`, or an `upload:` Gmail attachment) whose approval card was still waiting when the
+  AI system asked failed after you approved it, with "the upload expired or was already used". The
+  uploaded file is now kept until the approved upload runs, for up to 20 minutes
+  ([#793](https://github.com/privacyfence/privacyfence/issues/793),
+  [ADR 0102](docs/adr/0102-an-upload-slot-is-consumed-after-the-gate-not-before.md)).
 - **Signature images show up in drafts.** A Gmail signature that embeds its images (a logo, social
   icons) instead of linking to them lost every image when a draft was created with
   `include_signature`. PrivacyFence now attaches them the way Gmail's own compose window does,
