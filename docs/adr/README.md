@@ -197,3 +197,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0089](0089-tool-annotations-are-always-truthful.md) | Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed | Accepted |
 | [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |
 | [0091](0091-the-configured-step-up-scope-is-a-minimum-each-person-can-widen.md) | The configured step-up scope is a minimum each person can widen | Accepted |
+| [0092](0092-claude-clients-are-matched-by-their-observed-names.md) | Claude clients are matched by the names they were seen sending, and an unrecognised DCR name yields to a recognised handshake name | Accepted |

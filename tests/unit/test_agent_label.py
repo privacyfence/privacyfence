@@ -5,6 +5,7 @@ import pytest
 
 from privacyfence.agent_identity import (
     REGISTRY,
+    SERVER_PLACEHOLDER,
     UNKNOWN_AGENT,
     UNRECOGNISED_LABEL,
     AgentIdentity,
@@ -79,12 +80,12 @@ class TestTiers:
 
     def test_every_registry_entry_resolves_in_both_tiers(self):
         for entry in REGISTRY:
-            name = entry.client_names[0]
+            name = entry.client_names[0] if entry.client_names else entry.name_templates[0].replace(SERVER_PLACEHOLDER, "pf")
             assert label_for(identify(name, "", AgentSource.OVERRIDE)).icon_id == entry.agent_id
             assert label_for(identify(name, "", AgentSource.CLIENT_INFO)).icon_id == ""
 
     def test_to_dict_is_the_list_payload(self):
-        assert label_for(identify("claude-ai", "", AgentSource.OAUTH_CLIENT)).to_dict() == {
+        assert label_for(identify("Claude", "", AgentSource.OAUTH_CLIENT)).to_dict() == {
             "tier": "attested", "headline": "Claude", "claim": "", "icon_id": "claude",
         }
 

@@ -91,8 +91,8 @@ checkout or `pip` install that runs as you reads and writes paths directly.
 
 Two things can ask you before a tool runs:
 
-1. **Claude Code's own permission prompt.** Claude Code asks before it calls a tool from an MCP
-   server unless you have allowed it. To stop it asking for PrivacyFence's tools, allow
+1. **Claude Code's own permission prompt.** Whether Claude Code asks before it calls a tool from
+   an MCP server depends on its permission mode and rules, not on the tool's annotations. To stop it asking for PrivacyFence's tools, allow
    `mcp__privacyfence` under `/permissions`, or add it to `permissions.allow` in Claude Code's
    settings.
 2. **PrivacyFence's approval card.** A gated call waits for you in Approvals, whatever Claude Code
@@ -107,14 +107,20 @@ always-allow PrivacyFence's tools in Claude Code: choose the option not to ask a
 time it asks about a PrivacyFence tool, or allow `mcp__privacyfence` as above for all of them at
 once. Every call still goes through PrivacyFence's gate.
 
+**What we observed** (Claude Code 2.1.283, PrivacyFence 5.0.0a2, 2026-09-28, local mode,
+[evidence](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865032001)): with no permission rules configured, Claude Code did not ask before
+`calendar_create_event` or any other PrivacyFence tool in the run; PrivacyFence's approval card was the only
+confirmation. If your permission mode or rules make it ask, always-allow as above.
+
 ## How the client is identified
 
 In local mode every approval card and Audit Log row shows the requester as **Undetected**: every AI
 system on your computer uses the same credential, so PrivacyFence cannot tell them apart. The audit
 log still records the name Claude Code sent.
 
-In organization mode, Claude Code sends its own name when it registers and in the MCP handshake. That
-name is a **claim**: the card says the caller *says* it is Claude Code and marks it **Not verified**,
+In organization mode, Claude Code sends its own name when it registers and in the MCP handshake. It
+registers as `Claude Code (<name>)`, where `<name>` is the server name you gave `claude mcp add`,
+and PrivacyFence recognises that as Claude Code whatever the name is. That name is a **claim**: the card says the caller *says* it is Claude Code and marks it **Not verified**,
 because any program can send the same name. An administrator can **pin** Claude Code's registration on
 **Settings → AI systems**; the cards for that registration are then verified.
 See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking).

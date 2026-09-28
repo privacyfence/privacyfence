@@ -1,6 +1,7 @@
 {
-  "client_name": "claude-code",
-  "redirect_uris": ["http://localhost:53682/callback"],
+  "application_type": "native",
+  "client_name": "Claude Code (privacyfence)",
+  "redirect_uris": ["http://localhost:50520/callback"],
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
   "token_endpoint_auth_method": "none"

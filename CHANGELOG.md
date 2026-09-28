@@ -151,6 +151,13 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Fixed
 
+- **Claude clients are named correctly on approval cards and in the audit log.** In organization
+  mode, claude.ai showed as Unrecognised AI system "Claude", and Claude Code as Unrecognised AI
+  system "Claude Code (privacyfence)", until an administrator pinned them. They now show as
+  "Says it is Claude" and "Says it is Claude Code" (whatever server name you gave
+  `claude mcp add`); a pin is still what makes them verified. A registered name PrivacyFence
+  doesn't recognise no longer hides a handshake name it does. Claude Desktop's extension is now
+  recorded as Claude Desktop in the audit log.
 - **`build_org_bundle.py` no longer ignores admin changes made without `--mode org`.** A command
   such as `--merge --idp-admin-group-value new@example.com` finished without an error but left the
   admin list as it was. It now stops and explains that changing the admin list means passing

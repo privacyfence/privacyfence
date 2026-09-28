@@ -86,14 +86,22 @@ advertises writes as read-only. If you would rather confirm only once, on Privac
 choose to always allow the tool the first time Claude Desktop asks about it; it does not ask about
 that tool again. Every call still goes through PrivacyFence's gate.
 
+**What we observed** (Claude Desktop 2.9939.2 with the extension, PrivacyFence 5.0.0a2,
+2026-09-28, [evidence](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865556451)): with default tool permissions Claude Desktop asked before
+`calendar_create_event`. Choosing to always allow the tool stopped it asking, and PrivacyFence's
+approval card was still shown for the call. The custom connector (organization mode) has not been
+checked yet.
+
 ## How the client is identified
 
 In local mode every approval card and Audit Log row shows the requester as **Undetected**: every AI
 system on your computer uses the same credential, so PrivacyFence cannot tell them apart. The audit
-log still records the name Claude Desktop sent.
+log still records the name Claude Desktop sent: through the extension that is
+`local-agent-mode-<server>`, which the audit log records as Claude Desktop.
 
-In organization mode, Claude Desktop sends its own name when it registers and in the MCP handshake. That
-name is a **claim**: the card says the caller *says* it is Claude Desktop and marks it **Not verified**,
+In organization mode, Claude Desktop sends its own name when it registers and in the MCP handshake.
+Its custom connector most likely registers through your claude.ai account exactly as claude.ai does,
+as `Claude`, but that has not been verified. That name is a **claim**: the card says the caller *says* it is Claude Desktop and marks it **Not verified**,
 because any program can send the same name. An administrator can **pin** Claude Desktop's registration on
 **Settings → AI systems**; the cards for that registration are then verified.
 See [Which AI system is asking](how-it-works.md#which-ai-system-is-asking).

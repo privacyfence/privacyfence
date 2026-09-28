@@ -68,11 +68,16 @@ read-only ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)). Where 
 to always allow a tool, allowing PrivacyFence's tools leaves PrivacyFence's card as the only
 confirmation; every call still goes through PrivacyFence's gate.
 
+**What we observed** (claude.ai web, PrivacyFence 5.0.0a2, 2026-09-28,
+[evidence](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865753049)): claude.ai asked before `calendar_create_event`. Choosing to always
+allow the tool stopped it asking, and PrivacyFence's approval card was still shown for the call.
+
 ## How the client is identified
 
 Every approval card and audit entry names the AI system that asked. claude.ai gives a name when it
-registers with PrivacyFence and again in the MCP handshake; the registered name is the one used.
-That name is a **claim**: the card says the caller *says* it is that system and marks it
+registers with PrivacyFence and again in the MCP handshake; the registered name is the one used
+when PrivacyFence recognises it. claude.ai registers as `Claude`, so the card says the caller
+*says* it is **Claude**. That name is a **claim**: the card says the caller *says* it is that system and marks it
 **Not verified**, because any program that can reach the deployment can register under the same
 name. An administrator can **pin** claude.ai's registration on **Settings → AI systems**, for
 example by matching its last-used time to their own sign-in from claude.ai; the cards for that

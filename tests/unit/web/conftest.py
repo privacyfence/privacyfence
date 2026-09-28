@@ -84,12 +84,17 @@ async def authorize_and_get_code(
 
 async def exchange_for_tokens(
     client: httpx.AsyncClient, *, client_id: str, code: str, code_verifier: str,
-    redirect_uri: str = CLAUDE_REDIRECT_URI,
+    redirect_uri: str = CLAUDE_REDIRECT_URI, client_secret: str | None = None,
 ) -> dict:
-    r = await client.post("/token", data={
+    """Redeems ``code`` at /token. ``client_secret`` is sent in the body (``client_secret_post``)
+    when given, as a confidential client such as claude.ai does."""
+    data = {
         "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
         "client_id": client_id, "code_verifier": code_verifier,
-    })
+    }
+    if client_secret is not None:
+        data["client_secret"] = client_secret
+    r = await client.post("/token", data=data)
     assert r.status_code == 200, r.text
     return r.json()
 

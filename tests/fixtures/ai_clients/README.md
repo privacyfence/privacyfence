@@ -22,12 +22,13 @@ Each `README.md` carries two lines the replay test reads:
 ```
 
 *Unpinned* is what the call is attributed to from the client's own claims: in organization mode,
-the DCR `client_name` wins over `clientInfo.name`, and an unmatched name is recorded as
+a DCR `client_name` the registry matches wins over `clientInfo.name`; one it doesn't match yields
+to a `clientInfo.name` it does (ADR 0092); and when neither matches, the DCR name is recorded as
 `unknown:<name>`. *Pinned* is the registry entry an admin pins the registration to on
 **Settings → AI systems**.
 
-The first line of a fixture's `README.md` says whether it was captured (with the date and the
-client version) or seeded from vendor docs.
+The first line of a fixture's `README.md` says when it was captured and from which client version.
+A field that could not be observed is named as such there, never filled with a guess.
 
 ## Capturing a fixture
 
