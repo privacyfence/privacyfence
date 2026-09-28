@@ -23,7 +23,7 @@ Each `README.md` carries two lines the replay test reads:
 
 *Unpinned* is what the call is attributed to from the client's own claims: in organization mode,
 a DCR `client_name` the registry matches wins over `clientInfo.name`; one it doesn't match yields
-to a `clientInfo.name` it does (ADR 0092); and when neither matches, the DCR name is recorded as
+to a `clientInfo.name` it does (ADR 0094); and when neither matches, the DCR name is recorded as
 `unknown:<name>`. *Pinned* is the registry entry an admin pins the registration to on
 **Settings → AI systems**.
 

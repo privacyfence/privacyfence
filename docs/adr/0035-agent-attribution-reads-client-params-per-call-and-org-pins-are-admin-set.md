@@ -7,7 +7,7 @@ Accepted — 2026-09-24. Implemented by #650, #651, #654 and #655. This answers 
 PR", so that PR has nothing left to decide.
 Amends [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md).
 Amended by [ADR 0088](0088-local-mode-shows-every-requester-as-undetected.md): a local install shows every requester as "Undetected".
-Amended by [ADR 0092](0092-claude-clients-are-matched-by-their-observed-names.md): the registry holds the Claude names seen in real handshakes, a name may be a template around the user's server name, and an unrecognised DCR name yields to a recognised handshake name.
+Amended by [ADR 0094](0094-claude-clients-are-matched-by-their-observed-names.md): the registry holds the Claude names seen in real handshakes, a name may be a template around the user's server name, and an unrecognised DCR name yields to a recognised handshake name.
 
 ## Context
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -24,7 +23,7 @@ from ..gmail_client import (
     signature_plain_text,
 )
 from ..html_to_text import html_to_text
-from ..org_mode import DownloadDeliveryConfig
+from ..org_mode import DownloadDeliveryConfig, base64_length
 from ..principal import current_principal
 from ..privacy_filter import apply_list, apply_text, category_policy
 from ..text_extraction import extract_text, is_prefetch_worthy, preview_blocks_for
@@ -856,7 +855,7 @@ class GmailConnector(Connector):
         # actual delivery can only disagree if the prefetch itself failed.
         delivery = (
             ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"
-            else "inline_base64" if cfg.fits_inline(attachment.size)
+            else "inline_base64" if cfg.fits_inline(attachment.size, attachment.name, attachment.mime_type)
             else "staged_link"
         )
         # Every one of these is already known for free by the time this
@@ -875,11 +874,12 @@ class GmailConnector(Connector):
             "Size": f"{attachment.size:,} bytes",
         }
         if self.download_mode == "org":
-            if cfg.fits_inline(attachment.size):
+            if cfg.fits_inline(attachment.size, attachment.name, attachment.mime_type):
                 new_info = {
                     "Content returned to {agent}": (
                         f"Yes — file bytes are included in the tool result (attachment is "
-                        f"{attachment.size:,} bytes, under this org's {cfg.inline_max_bytes:,}-byte "
+                        f"{attachment.size:,} bytes, {base64_length(attachment.size):,} once "
+                        f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
                         "inline-delivery limit)"
                     ),
                 }
@@ -996,37 +996,25 @@ class GmailConnector(Connector):
         approval prefetch (attachment.mime_type prefetch-worthy and under
         _ATTACHMENT_PREFETCH_MAX_BYTES) when it already happened, instead
         of fetching the same attachment from Gmail a second time -- but
-        that prefetch cap (5MB) is smaller than a typical inline_max_bytes
-        (default 8MB), so a fresh fetch is still sometimes needed here."""
-        if not cfg.allow_disk_staging and not cfg.fits_inline(attachment.size):
-            raise RuntimeError(
-                f"This attachment is {attachment.size:,} bytes, over this organization's "
-                f"{cfg.inline_max_bytes:,}-byte inline-delivery limit, and disk staging is disabled "
-                "for this organization -- there is no way to deliver it through this tool. Ask the "
-                "user for a narrower export or a different way to share it."
-            )
+        that prefetch cap (5MB) can be larger than inline_max_bytes, so
+        a fresh fetch is sometimes needed here, and a prefetched attachment
+        can still go out as a link."""
+        if not cfg.allow_disk_staging and not cfg.fits_inline(
+            attachment.size, attachment.name, attachment.mime_type,
+        ):
+            raise RuntimeError(cfg.over_inline_limit_message("This attachment", attachment.size))
 
         data = fetched_bytes if fetched_bytes is not None else await self._fetch(
             self._gmail.fetch_attachment_bytes, message_id, attachment.attachment_id,
         )
         size_bytes = len(data)
 
-        if cfg.fits_inline(size_bytes):
-            return {
-                "delivery": "inline",
-                "name": attachment.name,
-                "mime_type": attachment.mime_type,
-                "size_bytes": size_bytes,
-                "content_base64": base64.b64encode(data).decode("ascii"),
-            }
+        inline = cfg.inline_result(attachment.name, attachment.mime_type, data)
+        if inline is not None:
+            return inline
 
         if not cfg.allow_disk_staging:
-            raise RuntimeError(
-                f"\"{attachment.name}\" is {size_bytes:,} bytes, over this organization's "
-                f"{cfg.inline_max_bytes:,}-byte inline-delivery limit, and disk staging is disabled "
-                "for this organization -- there is no way to deliver it through this tool. Ask the "
-                "user for a narrower export or a different way to share it."
-            )
+            raise RuntimeError(cfg.over_inline_limit_message(f"\"{attachment.name}\"", size_bytes))
 
         token = await asyncio.to_thread(
             get_download_staging_store().stage, current_principal(), data, attachment.name, attachment.mime_type,

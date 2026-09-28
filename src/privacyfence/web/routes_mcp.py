@@ -167,7 +167,7 @@ def _resolve_agent(
     3. org mode's DCR ``client_name``, then the handshake ``clientInfo`` -- both strings the
        client chose, so both ``client_info`` (ADR 0035 / gate G1: an unpinned DCR name is
        claimed). A DCR name the registry does not match yields to a handshake name it does
-       (ADR 0092); when neither matches, the DCR name is recorded, since that is the one an admin
+       (ADR 0094); when neither matches, the DCR name is recorded, since that is the one an admin
        sees and pins.
 
     Nothing a caller supplies can reach an attested source here: a pin is keyed by the access
@@ -188,7 +188,7 @@ def _resolve_agent(
         dcr_agent = identify(client_names(access_token.client_id), "", AgentSource.CLIENT_INFO)
         if not _is_unrecognised(dcr_agent):
             return dcr_agent
-        # An unrecognised DCR name gives way to a handshake name the registry does know (ADR 0092).
+        # An unrecognised DCR name gives way to a handshake name the registry does know (ADR 0094).
         if dcr_agent is not UNKNOWN_AGENT and _is_unrecognised(handshake_agent):
             return dcr_agent
     return handshake_agent

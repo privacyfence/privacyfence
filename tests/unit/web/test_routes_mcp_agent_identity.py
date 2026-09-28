@@ -256,7 +256,7 @@ class TestOrgModeCapture:
         assert agent == ["claude", "Claude", "", "client_info"]
 
     async def test_an_unrecognised_dcr_name_yields_to_a_recognised_handshake_name(self, tmp_path, monkeypatch):
-        # ADR 0092: Claude Code 2.1.283 registered as "Claude Code (privacyfence)" before the
+        # ADR 0094: Claude Code 2.1.283 registered as "Claude Code (privacyfence)" before the
         # registry knew that name, and its registry-known handshake name was never tried.
         provider = _provider(tmp_path, monkeypatch)
         await provider.register_client(_dcr_client("dcr-1", "Some Client (privacyfence)"))

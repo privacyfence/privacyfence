@@ -14,7 +14,7 @@ https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865527889.
   Claude Code is a public client (`token_endpoint_auth_method` `none`).
   - `client_name` is `Claude Code (<server>)`, where `<server>` is the name the user gave
     `claude mcp add` (`privacyfence` here). The registry matches it as a name template, not a
-    fixed string (ADR 0092).
+    fixed string (ADR 0094).
   - `redirect_uris`: a loopback `http://localhost:<port>/callback` with a random port.
 - `initialize.json`: `clientInfo` `claude-code` 2.1.283, observed in the audit log of the same
   client in local mode (M1.1) and as the pinned version here. `protocolVersion` and

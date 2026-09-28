@@ -100,19 +100,19 @@ class RegistryEntry:
     display_name: str
     client_names: tuple[str, ...]
     # Names that embed the user's server name, as a fixed prefix and suffix around one
-    # ``{server}`` (ADR 0092). Never an arbitrary pattern: the fixed parts are the vendor's.
+    # ``{server}`` (ADR 0094). Never an arbitrary pattern: the fixed parts are the vendor's.
     name_templates: tuple[str, ...] = ()
 
 
-# ADR 0035 decision 2's registry, corrected from real handshakes by ADR 0092. Matching is exact,
+# ADR 0035 decision 2's registry, corrected from real handshakes by ADR 0094. Matching is exact,
 # case-insensitive equality on the sanitized name -- never prefix, substring or regex, so a name
 # that merely contains "claude" is not Claude -- except for a name template, which matches a whole
 # name made of its fixed prefix, a non-empty server name, and its fixed suffix. An unrecognised
 # name is never promoted to an entry by default.
 REGISTRY: tuple[RegistryEntry, ...] = (
-    # DCR client_name "Claude Code (<server>)"; handshake clientInfo "claude-code" (ADR 0092).
+    # DCR client_name "Claude Code (<server>)"; handshake clientInfo "claude-code" (ADR 0094).
     RegistryEntry("claude-code", "Claude Code", ("claude-code",), ("Claude Code ({server})",)),
-    # claude.ai's DCR client_name. Its handshake clientInfo name has not been observed (ADR 0092).
+    # claude.ai's DCR client_name. Its handshake clientInfo name has not been observed (ADR 0094).
     RegistryEntry("claude", "Claude", ("Claude",)),
     # Claude Desktop's handshake through the .mcpb extension, "local-agent-mode-<server>".
     RegistryEntry("claude-desktop", "Claude Desktop", (), ("local-agent-mode-{server}",)),

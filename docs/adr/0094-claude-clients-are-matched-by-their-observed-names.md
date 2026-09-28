@@ -1,4 +1,4 @@
-# ADR 0092: Claude clients are matched by the names they were seen sending, and an unrecognised DCR name yields to a recognised handshake name
+# ADR 0094: Claude clients are matched by the names they were seen sending, and an unrecognised DCR name yields to a recognised handshake name
 
 ## Status
 

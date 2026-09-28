@@ -95,8 +95,8 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
      `privacyfence_create_upload_slot`, `PUT`s the file to the returned URL, and passes the
      `upload_id` to `drive_upload_file`. Approve the card; the file appears in Drive.
    - **Download:** ask it to download a Drive file larger than the inline limit (organization mode:
-     `--downloads-inline-max-bytes`, 8,000,000 bytes by default). The tool result carries a one-time
-     link, and the file reaches you through it.
+     `--downloads-inline-max-bytes`, a 100,000-byte tool result by default, so any file over about
+     75 KB). The tool result carries a one-time link, and the file reaches you through it.
 
    For Claude Desktop with the extension, do the same upload and download through local paths
    instead: the extension reads and writes the file as you.
@@ -151,4 +151,4 @@ confirmation?** is `yes` (what it asked, and whether always-allowing the tool st
 | Claude Desktop (custom connector) | | | org | | not run: no account available allowed custom connectors | | | | no: most likely registers like claude.ai, unverified |
 | Claude Code | 2.1.283 | macOS 27.0 | local | 2026-09-28 | [pass](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865032001) | — | `claude-code` 2.1.283 | no: Claude Code does not gate MCP tools by their annotations | no: local mode has no registration |
 | Claude Code | 2.1.283 | macOS 27.0 | org | 2026-09-28 | [pass](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865527889) | `Claude Code (privacyfence)` (the part in parentheses is the `claude mcp add` server name) | `claude-code` 2.1.283 | not recorded | [`claude-code/`](../tests/fixtures/ai_clients/claude-code/) |
-| claude.ai | web | web | org | 2026-09-28 | [fail at step 3](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865753049): a 1.7 MB inline download was truncated by claude.ai, so step 4 did not run; steps 1–2 passed | `Claude` | not observable (the registered name decides first); version 1.0.0 | yes, before the write; always-allow stopped it, PrivacyFence's card still shown | [`claude-ai/`](../tests/fixtures/ai_clients/claude-ai/) |
+| claude.ai | web | web | org | 2026-09-28 | [fail at step 3](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865753049): a 1.7 MB inline download was truncated by claude.ai, so step 4 did not run; steps 1–2 passed. The default inline limit has since been lowered ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)) | `Claude` | not observable (the registered name decides first); version 1.0.0 | yes, before the write; always-allow stopped it, PrivacyFence's card still shown | [`claude-ai/`](../tests/fixtures/ai_clients/claude-ai/) |

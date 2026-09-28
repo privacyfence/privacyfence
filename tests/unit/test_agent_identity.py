@@ -99,10 +99,10 @@ class TestRegistry:
     @pytest.mark.parametrize(
         ("client_name", "agent_id", "display"),
         [
-            # DCR client_name, captured from Claude Code 2.1.283 (ADR 0092).
+            # DCR client_name, captured from Claude Code 2.1.283 (ADR 0094).
             ("Claude Code (privacyfence)", "claude-code", "Claude Code"),
             ("Claude Code (my-pf)", "claude-code", "Claude Code"),
-            # Claude Desktop 2.9939.2's handshake through the .mcpb extension (ADR 0092).
+            # Claude Desktop 2.9939.2's handshake through the .mcpb extension (ADR 0094).
             ("local-agent-mode-privacyfence", "claude-desktop", "Claude Desktop"),
             ("local-agent-mode-other", "claude-desktop", "Claude Desktop"),
         ],
@@ -123,7 +123,7 @@ class TestRegistry:
         assert lookup(near_miss) is None
 
     def test_the_unobserved_claude_ai_guess_is_gone(self):
-        # ADR 0035 guessed "claude-ai"; no Claude client was seen sending it (ADR 0092).
+        # ADR 0035 guessed "claude-ai"; no Claude client was seen sending it (ADR 0094).
         assert lookup("claude-ai") is None
 
     def test_every_template_carries_exactly_one_server_placeholder(self):

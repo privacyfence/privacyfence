@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import time
@@ -21,7 +20,7 @@ from ..drive_client import (
     resolve_download_destination,
 )
 from ..gate import current_reason, gated_call
-from ..org_mode import DownloadDeliveryConfig
+from ..org_mode import DownloadDeliveryConfig, base64_length
 from ..principal import current_principal
 from ..privacy_filter import apply_list, apply_text, category_policy
 from ..text_extraction import extract_text, guess_mime_type, is_prefetch_worthy, preview_blocks_for
@@ -912,7 +911,7 @@ class DriveConnector(Connector):
         # guarantee about what happens after it.
         delivery = (
             ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"
-            else "inline_base64" if cfg.fits_inline(drive_file.size)
+            else "inline_base64" if cfg.fits_inline(drive_file.size, name, drive_file.mime_type)
             else "staged_link"
         )
 
@@ -934,11 +933,12 @@ class DriveConnector(Connector):
             "Modified": str(modified) if modified else "(unknown)",
         }
         if self.download_mode == "org":
-            if cfg.fits_inline(drive_file.size):
+            if cfg.fits_inline(drive_file.size, name, drive_file.mime_type):
                 new_info = {
                     "Content returned to {agent}": (
                         f"Yes — file bytes are included in the tool result (file is "
-                        f"{drive_file.size:,} bytes, under this org's {cfg.inline_max_bytes:,}-byte "
+                        f"{drive_file.size:,} bytes, {base64_length(drive_file.size):,} once "
+                        f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
                         "inline-delivery limit)"
                     ),
                 }
@@ -1069,21 +1069,16 @@ class DriveConnector(Connector):
     async def _deliver_org_download(self, file_id: str, metadata_size: int, cfg: DownloadDeliveryConfig) -> Any:
         """org mode's own delivery, once approval is granted -- inline
         (base64, in the tool result) for anything under ``cfg.
-        inline_max_bytes``, else a one-time staged link, else (staging
-        disabled for this org) a clear refusal. Never writes to this
-        daemon's own disk except via download_staging.py's own encrypted-
-        at-rest store."""
+        inline_max_bytes`` (the whole tool result, base64 included -- ADR
+        0092), else a one-time staged link, else (staging disabled for this
+        org) a clear refusal. Never writes to this daemon's own disk except
+        via download_staging.py's own encrypted-at-rest store."""
         if not cfg.allow_disk_staging and not cfg.fits_inline(metadata_size):
             # Bail before ever fetching bytes -- metadata_size (already
             # known, no extra round trip) already rules out inline, and
             # staging is off for this org, so there's nothing productive a
             # full fetch would accomplish.
-            raise RuntimeError(
-                f"This file is {metadata_size:,} bytes, over this organization's "
-                f"{cfg.inline_max_bytes:,}-byte inline-delivery limit, and disk staging is disabled "
-                "for this organization -- there is no way to deliver it through this tool. Ask the "
-                "user for a narrower export or a different way to share it."
-            )
+            raise RuntimeError(cfg.over_inline_limit_message("This file", metadata_size))
 
         result = await self._fetch(self._drive.download_file_bytes, file_id)
         data: bytes = result["data"]
@@ -1091,22 +1086,12 @@ class DriveConnector(Connector):
         mime_type: str = result["mime_type"]
         size_bytes: int = result["size_bytes"]
 
-        if cfg.fits_inline(size_bytes):
-            return {
-                "delivery": "inline",
-                "name": name,
-                "mime_type": mime_type,
-                "size_bytes": size_bytes,
-                "content_base64": base64.b64encode(data).decode("ascii"),
-            }
+        inline = cfg.inline_result(name, mime_type, data)
+        if inline is not None:
+            return inline
 
         if not cfg.allow_disk_staging:
-            raise RuntimeError(
-                f"\"{name}\" is {size_bytes:,} bytes, over this organization's "
-                f"{cfg.inline_max_bytes:,}-byte inline-delivery limit, and disk staging is disabled "
-                "for this organization -- there is no way to deliver it through this tool. Ask the "
-                "user for a narrower export or a different way to share it."
-            )
+            raise RuntimeError(cfg.over_inline_limit_message(f"\"{name}\"", size_bytes))
 
         token = await asyncio.to_thread(
             get_download_staging_store().stage, current_principal(), data, name, mime_type,

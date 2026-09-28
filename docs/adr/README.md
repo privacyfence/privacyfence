@@ -122,7 +122,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0014](0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md) | Every bespoke settings POST route is classified sensitive/exempt, or the app refuses to start | Accepted (retroactive) |
 | [0015](0015-unattended-session-flag-is-advisory-only.md) | The self-declared unattended-session flag is advisory and never authorizes | Accepted (retroactive) |
 | [0016](0016-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive) |
-| [0017](0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive) |
+| [0017](0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive); amended by 0092 |
 | [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive); amended by 0039, 0044 |
 | [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive) |
 | [0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md) | PyPI/TestPyPI publishing uses OIDC Trusted Publisher only | Accepted (retroactive) |
@@ -197,4 +197,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0089](0089-tool-annotations-are-always-truthful.md) | Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed | Accepted |
 | [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |
 | [0091](0091-the-configured-step-up-scope-is-a-minimum-each-person-can-widen.md) | The configured step-up scope is a minimum each person can widen | Accepted |
-| [0092](0092-claude-clients-are-matched-by-their-observed-names.md) | Claude clients are matched by the names they were seen sending, and an unrecognised DCR name yields to a recognised handshake name | Accepted |
+| [0092](0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md) | The inline download limit caps the tool result, at 100,000 bytes by default | Accepted |
+| [0094](0094-claude-clients-are-matched-by-their-observed-names.md) | Claude clients are matched by the names they were seen sending, and an unrecognised DCR name yields to a recognised handshake name | Accepted |

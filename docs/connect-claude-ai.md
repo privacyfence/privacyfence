@@ -42,8 +42,11 @@ extension. Files travel through one-time links instead
 - **Upload** (for example `drive_upload_file`, or an email attachment): claude.ai calls
   `privacyfence_create_upload_slot`, sends the file to the returned URL with an HTTP `PUT`, and
   passes the returned `upload_id` to the tool.
-- **Download** (for example `drive_download_file`): a small file comes back in the tool result; a
-  larger one becomes a short-lived, one-time link.
+- **Download** (for example `drive_download_file`): a file of up to about 75 KB comes back in the
+  tool result; a larger one becomes a short-lived, one-time link that claude.ai fetches itself.
+  claude.ai truncates a tool result over about 150,000 characters, which is why the default inline
+  limit is well below that
+  ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)).
 
 Sizes, lifetimes and the organization settings are in [Files](how-it-works.md#files) and
 [File delivery](org-mode-setup-guide.md#13-file-delivery).
