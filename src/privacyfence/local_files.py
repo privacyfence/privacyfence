@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 from . import privilege_separation
 from .download_staging import DEFAULT_TTL_SECONDS as _DOWNLOAD_TTL_SECONDS
 from .download_staging import get_download_staging_store
+from .approvals import DEFAULT_LEDGER_TTL_SECONDS, DEFAULT_PENDING_TTL_SECONDS
 from .principal import current_principal
 from .upload_staging import DEFAULT_TTL_SECONDS as _UPLOAD_TTL_SECONDS
 from .upload_staging import get_upload_staging_store
@@ -146,6 +147,8 @@ class _CallState:
     resolved: dict[str, bytes] = field(default_factory=dict)
     pending_deliveries: list[dict[str, Any]] = field(default_factory=list)
     staged_download: bool = False
+    # Upload slots read (not yet consumed) this call; commit_uploads() consumes them once the gate passes.
+    held_uploads: list[bytes] = field(default_factory=list)
 
 
 _state_ctx: ContextVar["_CallState | None"] = ContextVar("privacyfence_file_bridge_call", default=None)
@@ -233,17 +236,51 @@ def _decode_token(raw: str) -> bytes | None:
     return token if len(token) == 32 else None
 
 
+# How long a slot read by a call outlives that call (ADR 0102): the longest a
+# pending approval waits for a human, plus how long its decision waits in the
+# ledger for the re-issued call. Without it a slot minted with the default
+# 10-minute TTL could expire between the decision and the re-issue.
+UPLOAD_HOLD_SECONDS = DEFAULT_PENDING_TTL_SECONDS + DEFAULT_LEDGER_TTL_SECONDS
+
+
 def _claim_upload(state: "_CallState", path: str, slot_b64: str) -> None:
+    """Reads the slot's bytes for this call without consuming it (ADR 0102): the call
+    may still stop at a pending approval, and the identical call re-issued once the
+    human decides must find the same bytes. ``commit_uploads()`` consumes the slot
+    after the gate has passed."""
     token = _decode_token(slot_b64)
     if token is None:
         raise LocalFileAccessError(f"Could not read {path!r} for upload: invalid upload reference")
-    data = get_upload_staging_store().claim(token, current_principal().id)
+    data = get_upload_staging_store().peek(
+        token, current_principal().id, hold_until=time.time() + UPLOAD_HOLD_SECONDS,
+    )
     if data is None:
         raise LocalFileAccessError(
             f"Could not read {path!r} for upload: the upload expired or was already used. "
             "Call the tool again."
         )
     state.resolved[path] = data
+    state.held_uploads.append(token)
+
+
+def commit_uploads() -> None:
+    """Consumes every upload slot this call read, once its gate has passed and before
+    the write that uses them (ADR 0102). A connector that reads an upload calls this
+    right after ``gated_call`` returns, so a slot still backs exactly one approved
+    write: of two calls that read the same slot, only the first to get here proceeds,
+    and the other fails before it writes anything."""
+    state = _current_state()
+    if state is None or not state.held_uploads:
+        return
+    store = get_upload_staging_store()
+    principal_id = current_principal().id
+    held, state.held_uploads = state.held_uploads, []
+    for token in held:
+        if store.claim(token, principal_id) is None:
+            raise LocalFileAccessError(
+                "The uploaded file expired or was already used by another call. "
+                "Upload it again with privacyfence_create_upload_slot."
+            )
 
 
 def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode: str) -> None:
@@ -252,9 +289,11 @@ def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode
     reported, or a bridge handshake started, before the human is ever asked
     to approve anything.
 
-    For each path: already claimed from an upload this call -> nothing
-    more to do. A capability-slot ``upload:<id>`` reference -> claim it from
-    ``UploadStagingStore`` for the current principal now, unconditionally
+    For each path: already read from an upload this call -> nothing
+    more to do. A capability-slot ``upload:<id>`` reference -> read it from
+    ``UploadStagingStore`` for the current principal now (without consuming
+    it -- the connector's ``commit_uploads()`` does that after its gate,
+    ADR 0102), unconditionally
     -- this bypasses the direct-read/bridge decision entirely (a capability
     slot works in org mode and in every no-bridge case, precisely because
     it needs neither), and a wrong principal gets the exact same
@@ -515,6 +554,7 @@ __all__ = [
     "configure_file_bridge",
     "deliver_file",
     "force_bridge_for_tests",
+    "commit_uploads",
     "local_file_size",
     "read_local_file",
     "require_local_files",

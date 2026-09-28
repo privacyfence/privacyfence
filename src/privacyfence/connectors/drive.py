@@ -1450,6 +1450,8 @@ class DriveConnector(Connector):
                 "content_base64": content_base64,
             },
         )
+        # ADR 0102: the upload slot is consumed only now, once the gate has passed.
+        local_files.commit_uploads()
         if effective_local_path:
             # ADR 0007: MediaFileUpload can't read a path this process
             # doesn't have access to under privilege separation -- upload

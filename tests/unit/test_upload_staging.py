@@ -71,6 +71,56 @@ class TestCreateFillClaim:
         assert store.claim(token, ALICE.id) is None
 
 
+class TestPeek:
+    """ADR 0102: a tool call reads its upload before its gate without consuming it, so the
+    identical call re-issued after a pending approval still finds the bytes."""
+
+    def test_peek_returns_the_bytes_and_leaves_the_slot_claimable(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000)
+        store.fill(token, ALICE.id, _chunks(b"data"))
+        assert store.peek(token, ALICE.id) == b"data"
+        assert store.peek(token, ALICE.id) == b"data"
+        assert store.claim(token, ALICE.id) == b"data"
+        assert store.peek(token, ALICE.id) is None
+
+    def test_peek_is_principal_bound_and_needs_a_filled_slot(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000)
+        assert store.peek(token, ALICE.id) is None
+        store.fill(token, ALICE.id, _chunks(b"data"))
+        assert store.peek(token, BOB.id) is None
+        assert store.peek(b"\x00" * 32, ALICE.id) is None
+
+    def test_hold_until_keeps_the_slot_past_its_own_ttl(self, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr(upload_staging.time, "time", lambda: now[0])
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000, ttl_seconds=10)
+        store.fill(token, ALICE.id, _chunks(b"data"))
+        assert store.peek(token, ALICE.id, hold_until=now[0] + 600) == b"data"
+        now[0] += 300
+        assert store.claim(token, ALICE.id) == b"data"
+
+    def test_hold_until_never_shortens_the_expiry(self, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr(upload_staging.time, "time", lambda: now[0])
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000, ttl_seconds=600)
+        store.fill(token, ALICE.id, _chunks(b"data"))
+        assert store.peek(token, ALICE.id, hold_until=now[0] + 1) == b"data"
+        now[0] += 300
+        assert store.claim(token, ALICE.id) == b"data"
+
+    def test_a_missing_ciphertext_file_peeks_as_none(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000)
+        store.fill(token, ALICE.id, _chunks(b"data"))
+        for entry in paths.uploads_dir(ALICE).iterdir():
+            entry.unlink()
+        assert store.peek(token, ALICE.id) is None
+
+
 class TestFillFailureCases:
     def test_fill_of_unknown_token_raises_lookup_error(self):
         store = UploadStagingStore()

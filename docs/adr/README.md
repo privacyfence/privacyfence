@@ -207,3 +207,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md) | An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc | Accepted (retroactive) |
 | [0100](0100-unverified-client-setup-instructions-never-merge-to-main.md) | Unverified AI-client setup instructions never merge to `main` | Accepted (retroactive) |
 | [0101](0101-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |
+| [0102](0102-an-upload-slot-is-consumed-after-the-gate-not-before.md) | An upload slot is consumed after the gate, not before it | Accepted |
