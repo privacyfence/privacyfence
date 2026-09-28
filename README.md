@@ -54,8 +54,9 @@ write through, card by card.
 | Linux (`.deb`) | Ubuntu 24.04, Debian 13 or newer, amd64 |
 | Organization deployment | A Linux server with Python 3.11 or newer and systemd (`pip install privacyfence`) |
 
-Tested with Claude Desktop and Claude Code on every install, and with claude.ai and ChatGPT
-(Developer Mode) through an organization deployment; any MCP-compatible client can connect. See
+Tested with Claude Desktop and Claude Code on every install, with ChatGPT desktop on macOS, and
+with claude.ai and ChatGPT (Developer Mode) through an organization deployment; any
+MCP-compatible client can connect. See
 [Platform support](https://privacyfence.eu/docs/platform-support/).
 
 ## Connectors
