@@ -3711,7 +3711,7 @@ class TestAgentAttribution:
         from privacyfence.agent_identity import AgentSource, agent_scope, current_agent, identify
 
         x = identify("claude-code", "", AgentSource.CLIENT_INFO)
-        y = identify("openai-mcp", "1.0", AgentSource.OAUTH_CLIENT)
+        y = identify("ChatGPT", "1.0", AgentSource.OAUTH_CLIENT)
         registry = PendingApprovalRegistry(hold_window=0.0, pending_ttl=300.0, ledger_ttl=300.0)
         with agent_scope(y):
             approval, created = registry.register_or_coalesce(

@@ -1561,7 +1561,7 @@ class TestRecoveryCodeDelivery:
 
 
 class TestAiClientTokenDelivery:
-    """The Settings page's Copy token / Rotate token (ADR 0103): the owner's
+    """The Settings page's Copy token / Rotate token (ADR 0104): the owner's
     token goes to the owner's companion and never comes back to the route."""
 
     TOKEN = "cd" * 32

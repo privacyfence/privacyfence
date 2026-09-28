@@ -245,7 +245,7 @@ def present_recovery_code(code: str) -> tuple[bool, str]:
 
 def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -> tuple[bool, str]:
     """The Settings page's Copy token and Rotate token buttons, from the
-    daemon's side (ADR 0103): mint (or rotate) the owner's MCP token and
+    daemon's side (ADR 0104): mint (or rotate) the owner's MCP token and
     hand it to the owner's companion, which puts it on the clipboard. The
     token never comes back to the caller, so the HTTP route that calls this
     has nothing secret to put in its response.
@@ -888,7 +888,7 @@ def build_app(
     usually) that omits it simply does not get that surface.
 
     ``mint_mcp_token``/``mcp_url`` (local mode, both or neither) add the
-    settings page's "Connect an AI client" section (ADR 0103) --
+    settings page's "Connect an AI client" section (ADR 0104) --
     ``mint_mcp_token`` is ``WebServer._mint_mcp_token``, the callback its
     control channel's ``MINT MCP`` already uses.
 

@@ -573,7 +573,7 @@ class TestRecoveryCodeAction:
 
 
 class TestCopyMcpTokenAction:
-    """The "Copy AI Client Token" item (ADR 0103): the companion asks the
+    """The "Copy AI Client Token" item (ADR 0104): the companion asks the
     daemon for this user's token over MINT MCP and puts it on the clipboard
     itself. The token is never logged, whatever happens."""
 

@@ -814,7 +814,7 @@ class TestShowRecoveryCommand:
 
 
 class TestCopyMcpCommand:
-    """``COPY MCP <token>`` (ADR 0103): the Settings page's Copy token button,
+    """``COPY MCP <token>`` (ADR 0104): the Settings page's Copy token button,
     relayed by the daemon. The token goes to the clipboard and nowhere else --
     not into the notice, not into a log line, not back in the reply."""
 

@@ -276,7 +276,7 @@ class TestCardNamesTheCapturedAgent:
         from privacyfence.agent_identity import AgentSource, agent_scope, identify
 
         captured = identify("claude-code", "", AgentSource.CLIENT_INFO)
-        other = identify("openai-mcp", "", AgentSource.CLIENT_INFO)
+        other = identify("ChatGPT", "", AgentSource.CLIENT_INFO)
         with agent_scope(other):
             assert web_approval_ui._agent_of(SimpleNamespace(agent=captured)) == captured
 

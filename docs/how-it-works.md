@@ -75,7 +75,7 @@ There are two ways in, and each AI client has its own setup page:
   `--print-mcp-token` mints through the same `MINT MCP` request. The companion's **Copy AI Client
   Token** menu item, and **Copy token** on the Settings page's **AI clients** section, put the same
   token on your clipboard instead; the Settings page asks the companion to do it, so the token is
-  never in a web response ([ADR 0103](adr/0103-the-companion-copies-the-ai-client-token.md)).
+  never in a web response ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md)).
   There is **one token per OS
   account**, with its own connectors, rules and approvals
   ([ADR 0008](adr/0008-one-principal-per-os-user.md)), and the control channel answers only the

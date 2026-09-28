@@ -271,7 +271,7 @@ What this takes away from a process running as you:
   **Copy AI Client Token** copies it to the clipboard. Settings' **Copy token** asks the daemon to
   have the companion copy it, so no web response carries it; rotating it from Settings takes a
   passkey when passkeys are required
-  ([ADR 0103](adr/0103-the-companion-copies-the-ai-client-token.md));
+  ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md));
 - reading connector credentials;
 - asking the companion to open an arbitrary URL. The companion accepts that only from the daemon's
   service account. From your own account it accepts only "show Approvals/Settings", which asks you

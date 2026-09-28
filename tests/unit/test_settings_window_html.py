@@ -501,7 +501,7 @@ class TestStepUpCard:
 
 
 class TestAiClientSection:
-    """The "Connect an AI client" section (ADR 0103): drawn in local mode
+    """The "Connect an AI client" section (ADR 0104): drawn in local mode
     when the caller has an /mcp URL to show, never in org mode, and never
     carrying a token -- the page only ever asks the companion to copy one."""
 

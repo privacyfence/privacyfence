@@ -45,6 +45,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ChatGPT (Developer Mode, with an organization deployment).** ChatGPT on the web connects to an
+  organization deployment's `/mcp` as a Developer Mode app, signing in with OAuth, and has been
+  checked end to end with a personal ChatGPT plan: reads, gated writes on PrivacyFence's approval card, and files through
+  one-time links, which ChatGPT's code sandbox uses with no allowlist to set up.
+  [Connect ChatGPT](docs/connect-chatgpt.md) has the steps, what ChatGPT asks before PrivacyFence's
+  card, and how uploads and downloads work. ChatGPT is now recognised by the name it registers
+  with, `ChatGPT`, so its cards name it without a pin; the unobserved `openai-mcp` guess is gone
+  ([ADR 0103](docs/adr/0103-chatgpt-is-matched-by-its-registered-name.md)).
 - **`gmail_get_message` can return the HTML version of a message.** Pass `include_html: true` to
   get `body_html` alongside `body_text`. The approval card says the HTML is included, and your
   body privacy setting applies to it too
@@ -62,7 +70,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `claude mcp add` command, a **Copy token** button that asks the companion to copy it (the token
   never passes through the web page), and **Rotate token**, which asks for your passkey when
   passkeys are required ([#795](https://github.com/privacyfence/privacyfence/issues/795),
-  [ADR 0103](docs/adr/0103-the-companion-copies-the-ai-client-token.md)).
+  [ADR 0104](docs/adr/0104-the-companion-copies-the-ai-client-token.md)).
 
 ### Fixed
 

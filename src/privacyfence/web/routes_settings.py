@@ -302,7 +302,7 @@ _ORG_ONLY_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
     "/api/settings/org_config/upload",
     # Rotating cuts off every connected AI client at once -- the one token
-    # action that earns the passkey step-up (ADR 0103).
+    # action that earns the passkey step-up (ADR 0104).
     "/api/settings/mcp_token/rotate",
 })
 
@@ -315,7 +315,7 @@ _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
     "/api/settings/mcp_token/copy": (
         "puts the owner's own MCP token on the clipboard through the companion -- a token "
         "anything running as this user can already get over MINT MCP, and one that cannot "
-        "change what gets gated (ADR 0103, ADR 0061)"
+        "change what gets gated (ADR 0104, ADR 0061)"
     ),
     "/settings": "a GET -- renders the page",
     "/settings/connectors": "a GET -- renders the page",
@@ -325,7 +325,7 @@ _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
 @dataclasses.dataclass(frozen=True)
 class AiClientConnect:
     """What the "Connect an AI client" section needs from web/server.py
-    (ADR 0103): the URL to show, and the two token actions, each reporting
+    (ADR 0104): the URL to show, and the two token actions, each reporting
     ``(ok, reason)``. Neither callback returns the token: both hand it to
     the companion (``control_channel.send_mcp_token``), which puts it on
     the clipboard, so no response from this module ever carries it."""
@@ -504,7 +504,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  if (action === 'install_org_config') { fileInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
         "  var url = '/api/settings/' + encodeURIComponent(action);"
-        # The two AI client token actions (ADR 0103) have routes of their
+        # The two AI client token actions (ADR 0104) have routes of their
         # own; rotating asks first, the same way quit_app does.
         "  var tokenAction = (action === 'copy_mcp_token' || action === 'rotate_mcp_token');"
         "  if (action === 'copy_mcp_token') { url = '/api/settings/mcp_token/copy'; }"
@@ -746,7 +746,7 @@ def build_routes(
     on for privilege-separated installs only.
 
     ``ai_client`` adds the "Connect an AI client" section and its two token
-    routes (ADR 0103) -- local mode with an ``/mcp`` endpoint only; ``None``
+    routes (ADR 0104) -- local mode with an ``/mcp`` endpoint only; ``None``
     leaves both out. Copying is gated like any other settings mutation
     (session, CSRF, origin) and no further: the token is one anything
     running as this user can already get. Rotating cuts every connected
@@ -913,7 +913,7 @@ def build_routes(
 
     def _step_up_in_force() -> bool:
         # Unlike _needs_step_up(action) above, the two bespoke sensitive
-        # routes (org_config_upload, and mcp_token_rotate -- ADR 0103) have
+        # routes (org_config_upload, and mcp_token_rotate -- ADR 0104) have
         # no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check: both
         # are listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and both are
         # unconditionally sensitive whenever step-up is actually in force

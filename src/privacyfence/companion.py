@@ -21,7 +21,7 @@ Platform behavior:
   - **macOS/Windows**: with no ``--action``, runs a persistent process with
     a tray/menu-bar icon (``pystray``) offering Open Approvals, Open
     Settings, Copy AI Client Token, New Recovery Code and Quit -- the
-    product surface decision 2 describes, plus ADR 0103's token item.
+    product surface decision 2 describes, plus ADR 0104's token item.
     While running, it also runs a ``CompanionChannelServer`` so the
     daemon's own connector OAuth flows (``oauth_loopback.py``) can hand it
     a URL to open instead of calling ``webbrowser.open()`` themselves
@@ -137,7 +137,7 @@ ACTION_RECOVERY_CODE = "recovery-code"
 # Puts this user's AI client (MCP) token on the clipboard -- the menu's
 # answer to ``privacyfence-app --print-mcp-token`` for somebody who does not
 # use a terminal. No confirmation: anything running as this user can already
-# get the same token over MINT MCP (ADR 0103).
+# get the same token over MINT MCP (ADR 0104).
 ACTION_COPY_MCP_TOKEN = "copy-mcp-token"  # nosec B105  # an action name, not a credential
 # The daemon-management surface (companion-as-daemon-manager, ADR 0026)
 # that ADR 0002's Amendment adds to the companion's

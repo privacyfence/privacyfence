@@ -158,7 +158,7 @@ class TestModernProtocolCapture:
                 "name": "echo_say", "arguments": {"message": "hi"},
                 "_meta": {
                     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                    "io.modelcontextprotocol/clientInfo": {"name": "openai-mcp", "version": "1.0"},
+                    "io.modelcontextprotocol/clientInfo": {"name": "ChatGPT", "version": "1.0"},
                     "io.modelcontextprotocol/clientCapabilities": {},
                 },
             },
@@ -197,7 +197,7 @@ class TestClientInfoIconsAreNeverRead:
     the rendered card."""
 
     class _ClientInfo:
-        name = "openai-mcp"
+        name = "ChatGPT"
         version = "1.0"
 
         @property

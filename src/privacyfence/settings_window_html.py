@@ -98,7 +98,7 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-detail-subtitle { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.55; }
 .pf-group-title { font-size: 13px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: var(--space-2xs); }
 .pf-hint { font-size: var(--step-small); color: var(--muted); line-height: 1.5; }
-/* The Connect an AI client page's command sample (ADR 0103): scrolls inside itself, never the page. */
+/* The Connect an AI client page's command sample (ADR 0104): scrolls inside itself, never the page. */
 .pf-ai-command { margin: var(--space-s) 0; padding: var(--space-s); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface-soft); overflow-x: auto; font-size: var(--step-small); }
 .pf-ai-url { user-select: all; }
 .pf-empty { font-size: var(--step-small); color: var(--muted); }
@@ -1069,7 +1069,7 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
-  // Connect an AI client (ADR 0103)
+  // Connect an AI client (ADR 0104)
   // -------------------------------------------------------------------- //
 
   // Static for the life of the page (the MCP URL only changes with a
@@ -1609,7 +1609,7 @@ def build_html(
     renders the full local page.
 
     ``ai_client`` (``{"mcp_url": ...}``) turns on the "Connect an AI client"
-    section (ADR 0103); without it -- org mode, or a local install with no
+    section (ADR 0104); without it -- org mode, or a local install with no
     ``/mcp`` endpoint -- the section is not drawn. Like ``mode``, it never
     touches ``state``.
     """

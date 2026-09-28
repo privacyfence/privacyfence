@@ -1006,7 +1006,7 @@ class TestAgentFields:
             fh.write(json.dumps(v4) + "\n")
         logger._last_hash = v4["entry_hash"]
 
-        with agent_scope(identify("openai-mcp", "", AgentSource.CLIENT_INFO)):
+        with agent_scope(identify("ChatGPT", "", AgentSource.CLIENT_INFO)):
             logger.record(make_entry())
         logger.record(make_entry())
 
@@ -1023,7 +1023,7 @@ class TestAgentFields:
         from privacyfence.agent_identity import AgentSource, agent_scope, identify
 
         logger = AuditLogger(str(tmp_path))
-        with agent_scope(identify("openai-mcp", "", AgentSource.CLIENT_INFO)):
+        with agent_scope(identify("ChatGPT", "", AgentSource.CLIENT_INFO)):
             logger.record(make_entry())
         week_file = tmp_path / "2026-W28.jsonl"
         line = json.loads(week_file.read_text(encoding="utf-8"))

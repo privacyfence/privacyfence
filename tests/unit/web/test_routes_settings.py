@@ -1179,7 +1179,7 @@ def _ai_client(copied: list, rotated: list, *, ok: bool = True, reason: str = ""
 
 
 class TestAiClientTokenRoutes:
-    """The "Connect an AI client" section's two routes (ADR 0103). Neither
+    """The "Connect an AI client" section's two routes (ADR 0104). Neither
     response ever carries a token -- the callbacks hand it to the companion
     -- so what is tested here is the gating: copying needs only an ordinary
     settings mutation's checks; rotating needs a confirmation, a human
@@ -1224,7 +1224,7 @@ class TestAiClientTokenRoutes:
     @pytest.mark.usefixtures("_data_dir")
     def test_copy_is_open_to_an_unattested_session_and_needs_no_passkey(self, controller, sessions):
         # Anything running as this user can already get the token over
-        # MINT MCP, so neither gate would protect anything (ADR 0103).
+        # MINT MCP, so neither gate would protect anything (ADR 0104).
         self._enroll_passkey()
         client, copied, _rotated = self._client(
             controller, sessions, require_human_session=True,

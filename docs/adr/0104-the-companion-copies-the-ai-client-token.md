@@ -1,4 +1,4 @@
-# ADR 0103: The companion copies the AI client token to the clipboard, with no passkey; Settings reaches it only through the companion
+# ADR 0104: The companion copies the AI client token to the clipboard, with no passkey; Settings reaches it only through the companion
 
 ## Status
 
