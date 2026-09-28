@@ -168,7 +168,7 @@ from .auto_accept import (
     remove_policy_v2_rule,
     temp_accept_key,
 )
-from .deny_feedback import DenialFeedback, denial_message
+from .deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
@@ -208,12 +208,14 @@ class GateDeniedError(RuntimeError):
     """
 
     @classmethod
-    def by_user(cls, feedback: DenialFeedback) -> GateDeniedError:
-        """A human's Deny, with whatever feedback they gave (ADR 0083). The
+    def by_user(cls, feedback: DenialFeedback, earlier: EarlierDecision | None = None) -> GateDeniedError:
+        """A human's Deny, with whatever feedback they gave (ADR 0083), and
+        -- when the call collected it from the decision ledger -- a static
+        sentence saying it is that earlier decision reused (ADR 0089). The
         message always starts "Request denied by user." -- see
         deny_feedback.denial_message. The only constructor that may carry
         user text; unattended and policy denials keep their static text."""
-        return cls(denial_message(feedback))
+        return cls(denial_message(feedback, earlier))
 
 
 # Thin delegations to the pluggable ApprovalUI seam (approval_ui.py), kept as
@@ -428,14 +430,14 @@ async def _resolve_decision(
     pii_categories: list[str],
     claude_reason: str,
     interact: Any,
-) -> tuple[Any, Any, float | None, str, str, DenialFeedback]:
+) -> tuple[Any, Any, float | None, str, str, DenialFeedback, EarlierDecision | None]:
     """Shared plumbing for the review/popup gate branches: get a decision
     for this call, either by running ``interact`` (see each branch's own
     definition of it) directly, or -- when ``registry`` is not None --
     checking the decision ledger first, then registering (or coalescing
     onto) a pending approval and waiting up to ``registry.hold_window``.
 
-    Returns ``(decision, rule_name, decided_at, decided_via, batch_id, feedback)``.
+    Returns ``(decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier)``.
     ``decision`` is one of "accept"/"deny"/"accept_all"/"auto_accepted", or
     the module-level ``_PENDING`` sentinel -- in which case ``rule_name``
     is instead the ``PendingApproval`` the caller should build a pending
@@ -449,6 +451,10 @@ async def _resolve_decision(
     the human's deny feedback (ADR 0083): empty unless ``decision`` is
     "deny" and the human gave some, and always empty on the no-registry
     path, which has no approval for a decide POST to attach it to.
+    ``earlier`` is set only for a "deny" taken from the decision ledger --
+    a decision made before this call, possibly for another session's
+    identical call (ADR 0073) -- so the denial can say it was reused rather
+    than decided now (ADR 0089).
 
     Raises approvals.IdenticalWriteAwaitingApprovalError, releasing nothing,
     for a write whose identical twin is still waiting on its own approval
@@ -457,13 +463,21 @@ async def _resolve_decision(
     """
     if registry is None:
         decision, rule_name = await interact(None)
-        return decision, rule_name, None, "", "", DenialFeedback()
+        return decision, rule_name, None, "", "", DenialFeedback(), None
 
     ledger_hit = registry.consume_ledger(dedupe_key)
     if ledger_hit is not None:
+        earlier = None
+        if ledger_hit.decision == "deny":
+            earlier = EarlierDecision(
+                age_seconds=time.time() - ledger_hit.decided_at,
+                reuse_window_seconds=(
+                    ledger_hit.expires_at - ledger_hit.decided_at if ledger_hit.expires_at is not None else None
+                ),
+            )
         return (
             ledger_hit.decision, ledger_hit.rule_name, ledger_hit.decided_at, ledger_hit.decided_via,
-            ledger_hit.batch_id, ledger_hit.feedback,
+            ledger_hit.batch_id, ledger_hit.feedback, earlier,
         )
 
     approval, created = registry.register_or_coalesce(
@@ -489,7 +503,7 @@ async def _resolve_decision(
 
         decided = await registry.wait_async(approval, hold_window)
         if not decided:
-            return _PENDING, approval, None, "", "", DenialFeedback()
+            return _PENDING, approval, None, "", "", DenialFeedback(), None
         # Decided within the hold window: this call collects the outcome
         # directly, so a write is consumed exactly as a ledger hit would be,
         # and an identical write afterwards goes back through the gate
@@ -501,7 +515,7 @@ async def _resolve_decision(
     feedback = approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback()
     return (
         approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via,
-        approval.batch_id, feedback,
+        approval.batch_id, feedback, None,
     )
 
 
@@ -1094,7 +1108,7 @@ async def gated_call(
                     d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at, decided_via, batch_id, feedback = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="review",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
@@ -1122,7 +1136,7 @@ async def gated_call(
                     decision="rejected", auto_accept_rule="", pii_detected=bool(pii_categories),
                     decided_at=decided_at, decided_via=decided_via, batch_id=batch_id, deny_feedback=feedback,
                 )
-                raise GateDeniedError.by_user(feedback)
+                raise GateDeniedError.by_user(feedback, earlier)
 
             if decision == "accept_all":
                 audit(
@@ -1213,7 +1227,7 @@ async def gated_call(
                         d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at, decided_via, batch_id, feedback = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="popup",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
@@ -1269,7 +1283,7 @@ async def gated_call(
                 decision="rejected", auto_accept_rule="", pii_detected=bool(upload_pii_categories),
                 decided_at=decided_at, decided_via=decided_via, batch_id=batch_id, deny_feedback=feedback,
             )
-            raise GateDeniedError.by_user(feedback)
+            raise GateDeniedError.by_user(feedback, earlier)
     except asyncio.CancelledError:
         # The MCP client gave up on this request -- its request task gets
         # cancelled when the Streamable HTTP connection drops, most often

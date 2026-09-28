@@ -194,3 +194,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0086](0086-tool-annotations-are-truthful-by-default.md) | Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only | Accepted |
 | [0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md) | Two Claude Desktop extensions ship in the DMG and the Windows installer | Accepted |
 | [0088](0088-local-mode-shows-every-requester-as-undetected.md) | Local mode shows every requester as "Undetected" | Accepted |
+| [0089](0089-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |

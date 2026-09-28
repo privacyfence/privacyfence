@@ -106,6 +106,11 @@ Organization deployments now work from a phone, and the app looks like the websi
   directly or through `privacyfence_await_approval` (under a new `denial_feedback` key). The note
   goes only to the AI system that made the request: the audit log records the reason and the
   note's length, never its text. See ADR 0083 and ADR 0084.
+- **A remembered denial says it is one.** When you deny a read (a Drive download, say), an
+  identical request in the next few minutes, even from a new conversation, is denied without asking
+  you again. The AI system is now told that: the message says the user was not asked again, how long
+  ago you denied the identical request, and how long PrivacyFence remembers it, so it no longer looks
+  like a failure. See ADR 0089.
 - **The app now looks like the website.** The app and the website share one set of design files
   (colours, spacing, layout building blocks and the rules they follow; ADR 0078), so approvals,
   settings, connections and passkeys use the website's colours, rounded cards, buttons and header

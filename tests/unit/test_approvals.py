@@ -169,7 +169,10 @@ class TestAnswerVsFinalize:
         assert registry.finalize(approval.id, "accept", "some_rule") is True
         assert approval.is_finalized()
         hit = registry.consume_ledger("k1")
-        assert hit == LedgerHit(decision="accept", rule_name="some_rule", decided_at=approval.decided_at)
+        assert hit == LedgerHit(
+            decision="accept", rule_name="some_rule", decided_at=approval.decided_at,
+            expires_at=approval.ledger_expires_at,
+        )
 
     def test_answer_is_idempotent_first_wins(self):
         registry = make_registry()
@@ -804,7 +807,9 @@ class TestPrincipalDimension:
                 dedupe_key="same-key", connector="c", tool="t", gate_kind="popup", request_id="r1",
             )
             registry.finalize(approval.id, "accept")
-            assert registry.consume_ledger("same-key") == LedgerHit(decision="accept", rule_name="", decided_at=approval.decided_at)
+            assert registry.consume_ledger("same-key") == LedgerHit(
+                decision="accept", rule_name="", decided_at=approval.decided_at, expires_at=approval.ledger_expires_at,
+            )
         with principal_scope(Principal(id="bob")):
             # Bob issuing the identical call must not see Alice's decision.
             assert registry.consume_ledger("same-key") is None
@@ -1089,7 +1094,10 @@ class TestDenyFeedback:
         registry.answer(approval.id, "deny", feedback=self._FB)
         registry.finalize(approval.id, "deny")
         hit = registry.consume_ledger("k1")
-        assert hit == LedgerHit(decision="deny", rule_name="", decided_at=hit.decided_at, feedback=self._FB)
+        assert hit == LedgerHit(
+            decision="deny", rule_name="", decided_at=hit.decided_at, feedback=self._FB,
+            expires_at=hit.decided_at + registry.ledger_ttl,
+        )
 
     def test_ledger_hit_default_is_empty(self):
         registry = make_registry()
