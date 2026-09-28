@@ -1,0 +1,8 @@
+{
+  "client_name": "Gemini CLI MCP Client",
+  "redirect_uris": ["http://localhost:7777/oauth/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "scope": ""
+}
