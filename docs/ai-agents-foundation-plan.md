@@ -1,5 +1,12 @@
 # Plan 1 of 3: AI agents foundation, applied to Claude
 
+> **Status: done (2026-09-28).** Every work package is merged, v5.0.0 shipped it, and the
+> AI agents section is live on privacyfence.eu. Its decisions are in ADRs 0086 (truthful tool
+> annotations, superseding 0076), 0087 (the second extension), 0088 (local mode shows "Undetected"), 0089 (annotations are always truthful: the `all-read-only`
+> switch and the second extension below were removed), 0094 and 0098–0101. Plans 2 and 3 can
+> start. Read the rest of this document as history: where it describes `all-read-only`,
+> `--tool-annotations` or `PrivacyFence-no-prompts.mcpb`, ADR 0089 overrides it.
+
 > **Temporary plan document; it lives only on branch `claude/bold-fermat-xlsdy4` and is never merged to `main`.**
 > Work-package sessions start from `main` and read it with
 > `git fetch origin claude/bold-fermat-xlsdy4 && git show FETCH_HEAD:docs/<plan>.md`. Their PRs never add plan files or
