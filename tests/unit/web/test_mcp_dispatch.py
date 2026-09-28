@@ -20,8 +20,8 @@ import json
 import pytest
 
 from privacyfence import local_files
-from privacyfence.approvals import PendingApprovalRegistry
-from privacyfence.audit_log import current_week, init_audit_logger
+from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
+from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedback
 from privacyfence.gate import is_unattended
@@ -184,8 +184,9 @@ class TestCall:
         assert len(connector.calls) == 1
 
     async def test_a_pending_approval_result_is_never_cached_for_reuse(self):
-        # A gated call that returned {"status": "approval_pending", ...}
-        # must be
+        # A gated call that went pending (gate.gated_call raises
+        # ApprovalPending, ADR 0093) comes back as its
+        # {"status": "approval_pending", ...} result and must be
         # re-runnable immediately -- Claude re-issuing the identical call
         # is exactly how it collects the real decision from gate.py's
         # ledger, and that re-issue has to actually reach the connector
@@ -198,7 +199,7 @@ class TestCall:
             async def call(self, tool, args):
                 self.calls.append((tool, args))
                 if len(self.calls) == 1:
-                    return {"status": "approval_pending", "approval_id": "a1"}
+                    raise ApprovalPending({"status": "approval_pending", "approval_id": "a1"})
                 return "the real data"
 
         connector = OnceThenRealDataConnector()
@@ -210,6 +211,24 @@ class TestCall:
         assert first == {"status": "approval_pending", "approval_id": "a1"}
         assert second == "the real data"
         assert len(connector.calls) == 2  # the re-issue actually ran the connector again
+
+    async def test_a_released_request_does_not_outlive_its_call(self):
+        # What one call's gate released (the request_id a staged download
+        # is attributed to) is scoped to that call -- ADR 0093.
+        seen = []
+
+        class ReleasingConnector(FakeConnector):
+            async def call(self, tool, args):
+                seen.append(current_released_request_id())
+                set_released_request_id("req-1")
+                return "r"
+
+        dispatcher = _dispatcher({"gmail": ReleasingConnector("gmail")})
+        await dispatcher.call("s1", "gmail", "gmail_create_label", {"name": "x"})
+        await dispatcher.call("s1", "gmail", "gmail_create_label", {"name": "x"})
+
+        assert seen == ["", ""]
+        assert current_released_request_id() == ""
 
     async def test_an_exempt_write_tool_always_reruns_after_completion(self):
         connector = FakeConnector("gmail", result="r")

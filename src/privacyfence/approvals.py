@@ -204,18 +204,25 @@ def canonical_key(connector: str, tool: str, args: dict[str, Any] | None) -> str
     return f"{connector}:{tool}:{json.dumps(args or {}, sort_keys=True, default=str)}"
 
 
-def is_pending_result(result: Any) -> bool:
-    """True for exactly the shape gate.py's ``_pending_result()`` returns
-    (``{"status": "approval_pending", ...}``) -- the one gated_call() result
-    shape that is not a real answer yet. mcp_dispatch.py's own retry-dedupe
-    cache ("reuse the answer to an identical in-flight or just-finished
-    call") checks this before caching a completed result: caching a
-    *pending* result would mean the identical re-call Claude is supposed to
-    make to actually collect the decision just gets handed the same
-    stale "still pending" blob back for up to that cache's own TTL, instead
-    of ever reaching gate.gated_call() again to check the decision ledger.
-    """
-    return isinstance(result, dict) and result.get("status") == "approval_pending"
+class ApprovalPending(Exception):
+    """Raised by gate.gated_call() when a human has not decided within the
+    hold window -- never returned. ``result`` is the structured
+    ``{"status": "approval_pending", ...}`` blob the agent receives instead;
+    web/mcp_dispatch.py's McpDispatcher.call() is the one place that turns
+    this back into a tool result.
+
+    Raised rather than returned so that no gated call can take effect while
+    its approval is still pending (ADR 0093): most connector methods run
+    ``await gated_call(...)`` for the gate alone and then act, so a returned
+    pending result was silently discarded and the download or write went
+    ahead with no decision. An exception stops every such caller by
+    construction. Deliberately a plain ``Exception``, not a ``RuntimeError``,
+    so no ``except RuntimeError`` wrapped around a connector's own client
+    calls can swallow it."""
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        super().__init__("approval pending")
+        self.result = result
 
 
 def _iso(ts: float | None) -> str:
@@ -447,6 +454,10 @@ class LedgerHit:
     # When this entry stops being handed out (decided_at + ledger_ttl), so a
     # reused denial can tell the agent how long the decision is kept (ADR 0090).
     expires_at: float | None = None
+    # The request_id of the call that created the approval this decision
+    # was made on, so the release it authorizes is audited under the same
+    # request_id as that call's "approval_pending" row (ADR 0093).
+    request_id: str = ""
 
 
 class PendingApprovalRegistry:
@@ -803,7 +814,7 @@ class PendingApprovalRegistry:
                 decision=approval.final_decision, rule_name=approval.final_rule_name,
                 decided_at=approval.decided_at, decided_via=approval.decided_via, batch_id=approval.batch_id,
                 feedback=approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback(),
-                expires_at=approval.ledger_expires_at,
+                expires_at=approval.ledger_expires_at, request_id=approval.request_id,
             )
 
     # ------------------------------------------------------------------ #

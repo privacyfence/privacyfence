@@ -28,7 +28,8 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
 from ..audit_log import AuditEntry, current_week, get_audit_logger
-from ..download_staging import DownloadStagingStore, get_download_staging_store
+from ..agent_identity import agent_scope
+from ..download_staging import ClaimedDownload, DownloadStagingStore, get_download_staging_store
 from . import org_session
 from .org_session import OrgSessionStore
 
@@ -48,7 +49,7 @@ def _decode_token(raw: str) -> bytes | None:
     return token if len(token) == 32 else None
 
 
-def _audit_staged_download_served(principal_id: str, name: str, size_bytes: int) -> None:
+def _audit_staged_download_served(principal_id: str, claimed: ClaimedDownload) -> None:
     """This is the moment file content actually left the server for a
     staged-link download -- unlike inline delivery (already covered by the
     gated_call that generated the link), nothing else records that this
@@ -58,22 +59,25 @@ def _audit_staged_download_served(principal_id: str, name: str, size_bytes: int)
     itself -- see download_staging.py's own module docstring on why that
     value must never be persisted anywhere. Wrapped in try/except and
     never allowed to block the response, same posture as gate.py's own
-    _audit and daemon_main.log_org_config_bundle_hash."""
+    _audit and daemon_main.log_org_config_bundle_hash. Recorded under the
+    request_id of the gated decision that released the file and the agent
+    whose call staged it (ADR 0093)."""
     try:
-        get_audit_logger().record(AuditEntry(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            week=current_week(),
-            request_id="",
-            connector="",
-            tool="",
-            tool_name="",
-            summary=f"Staged download claimed: {name!r} ({size_bytes} bytes)",
-            sender=principal_id,
-            decision="staged_download_served",
-            auto_accept_rule="",
-            latency_seconds=0.0,
-            pii_detected=False,
-        ))
+        with agent_scope(claimed.agent):
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id=claimed.request_id,
+                connector="",
+                tool="",
+                tool_name="",
+                summary=f"Staged download claimed: {claimed.name!r} ({len(claimed.data)} bytes)",
+                sender=principal_id,
+                decision="staged_download_served",
+                auto_accept_rule="",
+                latency_seconds=0.0,
+                pii_detected=False,
+            ))
     except Exception as exc:  # noqa: BLE001 -- audit logging must never break the download
         logger.warning("Audit log write failed for staged download claim: %s", exc)
 
@@ -116,8 +120,8 @@ def build_routes(*, sessions: OrgSessionStore, store: DownloadStagingStore | Non
             return PlainTextResponse("Not found.", status_code=404, headers={"Cache-Control": "no-store"})
 
         registry = store or get_download_staging_store()
-        result = registry.claim(token, principal.id)
-        if result is None:
+        claimed = registry.claim_staged(token, principal.id)
+        if claimed is None:
             # Missing, expired, wrong-principal, or already-claimed --
             # deliberately indistinguishable (download_staging.claim's own
             # docstring), so this endpoint never discloses which case
@@ -127,8 +131,8 @@ def build_routes(*, sessions: OrgSessionStore, store: DownloadStagingStore | Non
             # cache has no business retaining a response for either way.
             return PlainTextResponse("Not found.", status_code=404, headers={"Cache-Control": "no-store"})
 
-        data, name, mime_type = result
-        _audit_staged_download_served(principal.id, name, len(data))
+        data, name, mime_type = claimed.data, claimed.name, claimed.mime_type
+        _audit_staged_download_served(principal.id, claimed)
         # ASCII-only fallback filename plus a UTF-8 filename* per RFC 6266
         # -- the same reasoning gmail_client.py's/drive_client.py's own
         # attachment-name handling already applies to filesystem paths,

@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from privacyfence import download_staging, paths
+from privacyfence.agent_identity import UNKNOWN_AGENT, AgentIdentity, AgentSource, agent_scope
+from privacyfence.audit_log import released_request_scope, set_released_request_id
 from privacyfence.download_staging import DownloadStagingStore
 from privacyfence.principal import Principal
 
@@ -259,3 +261,38 @@ class TestClaimCapability:
         token = store.stage(ALICE, b"data", "f.txt", "text/plain")
         assert store.claim(token, ALICE.id) is not None
         assert store.claim_capability(token) is None
+
+
+class TestReleaseAttribution:
+    """ADR 0093: a staged file remembers the gated decision that released it
+    and the agent whose call staged it, so the row written when it is
+    fetched -- by a capability link that carries neither -- can name them."""
+
+    _AGENT = AgentIdentity(id="claude-code", name="Claude Code", version="2.1", source=AgentSource.CLIENT_INFO)
+
+    def test_claim_staged_returns_the_releasing_request_and_agent(self):
+        store = DownloadStagingStore()
+        with released_request_scope(), agent_scope(self._AGENT):
+            set_released_request_id("req-1")
+            token = store.stage(ALICE, b"data", "f.txt", "text/plain")
+
+        claimed = store.claim_staged(token, None)
+
+        assert (claimed.data, claimed.name, claimed.mime_type) == (b"data", "f.txt", "text/plain")
+        assert claimed.request_id == "req-1"
+        assert claimed.agent == self._AGENT
+
+    def test_outside_any_release_both_are_empty(self):
+        store = DownloadStagingStore()
+        token = store.stage(ALICE, b"data", "f.txt", "text/plain")
+
+        claimed = store.claim_staged(token, ALICE.id)
+
+        assert claimed.request_id == ""
+        assert claimed.agent == UNKNOWN_AGENT
+
+    def test_claim_staged_keeps_the_principal_check(self):
+        store = DownloadStagingStore()
+        token = store.stage(ALICE, b"data", "f.txt", "text/plain")
+        assert store.claim_staged(token, BOB.id) is None
+        assert store.claim_staged(token, ALICE.id) is not None
