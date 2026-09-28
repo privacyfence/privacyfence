@@ -1558,3 +1558,79 @@ class TestRecoveryCodeDelivery:
         )
 
         assert passed["deliver_recovery_code"] is None
+
+
+class TestAiClientTokenDelivery:
+    """The Settings page's Copy token / Rotate token (ADR 0104): the owner's
+    token goes to the owner's companion and never comes back to the route."""
+
+    TOKEN = "cd" * 32
+
+    def test_copy_mints_under_the_owner_and_hands_the_token_to_the_companion(self, monkeypatch):
+        from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
+        from privacyfence.web import server as srv
+
+        minted, sent = [], []
+
+        def _mint(rotate):
+            minted.append((rotate, current_principal().id))
+            return self.TOKEN
+
+        monkeypatch.setattr(
+            srv, "send_mcp_token", lambda token: sent.append((token, current_principal().id)) or (True, ""),
+        )
+        result = srv.copy_local_mcp_token(_mint)
+        assert result == (True, "")
+        assert minted == [(False, LOCAL_PRINCIPAL.id)]
+        assert sent == [(self.TOKEN, LOCAL_PRINCIPAL.id)]
+
+    def test_rotate_rotates(self, monkeypatch):
+        from privacyfence.web import server as srv
+
+        minted = []
+        monkeypatch.setattr(srv, "send_mcp_token", lambda token: (True, ""))
+        result = srv.copy_local_mcp_token(lambda rotate: minted.append(rotate) or self.TOKEN, rotate=True)
+        assert result == (True, "")
+        assert minted == [True]
+
+    def test_a_rotation_nobody_received_says_it_still_happened(self, monkeypatch):
+        from privacyfence.web import server as srv
+
+        monkeypatch.setattr(srv, "send_mcp_token", lambda token: (False, "PrivacyFence could not reach its companion app."))
+        ok, reason = srv.copy_local_mcp_token(lambda rotate: self.TOKEN, rotate=True)
+        assert ok is False
+        assert "was rotated" in reason
+        assert "Copy AI Client Token" in reason
+        assert self.TOKEN not in reason
+
+    def test_build_app_shows_the_section_only_with_an_mcp_endpoint(self, tmp_path, monkeypatch):
+        controller = _controller(tmp_path, monkeypatch)
+        sessions = LocalSessionStore()
+        without = TestClient(build_app(WebApprovalUI(), sessions=sessions, controller=controller), base_url="http://localhost")
+        _signed_in(without, sessions)
+        assert 'window.__pfAiClient = ' not in without.get("/settings").text
+
+        with_mcp = TestClient(build_app(
+            WebApprovalUI(), sessions=sessions, controller=controller,
+            mint_mcp_token=lambda rotate: self.TOKEN, mcp_url="http://127.0.0.1:8765/mcp",
+        ), base_url="http://localhost")
+        _signed_in(with_mcp, sessions)
+        page = with_mcp.get("/settings").text
+        assert 'window.__pfAiClient = {"mcp_url": "http://127.0.0.1:8765/mcp"};' in page
+        assert self.TOKEN not in page
+
+    def test_the_web_server_passes_its_own_mint_and_url(self, monkeypatch):
+        from privacyfence.web import server as srv
+        from privacyfence.web.mcp_dispatch import McpDispatcher
+
+        passed = {}
+        real_build_app = srv.build_app
+
+        def _spy(*args, **kwargs):
+            passed.update(kwargs)
+            return real_build_app(*args, **kwargs)
+
+        monkeypatch.setattr(srv, "build_app", _spy)
+        server = WebServer(WebApprovalUI(), host="127.0.0.1", port=8765, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t" * 64)
+        assert passed["mcp_url"] == "http://127.0.0.1:8765/mcp" == server.mcp_url
+        assert passed["mint_mcp_token"] == server._mint_mcp_token

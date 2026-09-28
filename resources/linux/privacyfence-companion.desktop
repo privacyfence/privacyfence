@@ -6,7 +6,7 @@ Exec=/usr/bin/privacyfence-companion --action=open-approvals
 Icon=privacyfence
 Terminal=false
 Categories=Utility;
-Actions=Settings;RecoveryCode;ServiceStatus;StartService;RestartService;StopService;Quit;
+Actions=Settings;CopyMcpToken;RecoveryCode;ServiceStatus;StartService;RestartService;StopService;Quit;
 # ADR 0002 decision 2: Linux's own "same menu items as the
 # macOS/Windows tray" -- this entry (installed to /usr/share/applications/)
 # is a real, clickable Applications-menu item.
@@ -28,6 +28,10 @@ Actions=Settings;RecoveryCode;ServiceStatus;StartService;RestartService;StopServ
 [Desktop Action Settings]
 Name=Settings
 Exec=/usr/bin/privacyfence-companion --action=open-settings
+
+[Desktop Action CopyMcpToken]
+Name=Copy AI client token
+Exec=/usr/bin/privacyfence-companion --action=copy-mcp-token
 
 [Desktop Action RecoveryCode]
 Name=New PrivacyFence recovery code

@@ -113,7 +113,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0005](0005-moving-the-approval-decision-off-the-device.md) | Moving the approval decision off the device | Proposed |
 | [0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) | Attribute a request to the AI system from the connection, with ranked provenance | Accepted; implemented; amended by 0035, 0037 |
 | [0007](0007-local-file-bridge.md) | Local file access crosses the privilege-separation boundary through the `.mcpb` shim | Accepted; extended by 0028 |
-| [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Accepted; implemented in part; amended by 0043 |
+| [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Accepted; implemented in part; amended by 0043, 0104 |
 | [0009](0009-use-the-official-mcp-sdk.md) | Use the official `mcp` SDK for Streamable HTTP, not a hand-rolled transport | Accepted (retroactive) |
 | [0010](0010-local-mode-serves-plain-http-on-localhost.md) | Local mode serves plain HTTP on `localhost`, not HTTPS with a self-signed certificate | Accepted (retroactive) |
 | [0011](0011-org-mode-runs-its-own-oauth-authorization-server.md) | Org mode runs its own OAuth authorization server | Accepted (retroactive) |
@@ -209,3 +209,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0101](0101-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |
 | [0102](0102-an-upload-slot-is-consumed-after-the-gate-not-before.md) | An upload slot is consumed after the gate, not before it | Accepted |
 | [0103](0103-chatgpt-is-matched-by-its-registered-name.md) | ChatGPT is matched by the name it registers with, and the `openai-mcp` guess is removed | Accepted |
+| [0104](0104-the-companion-copies-the-ai-client-token.md) | The companion copies the AI client token to the clipboard, with no passkey; Settings reaches it only through the companion | Accepted |

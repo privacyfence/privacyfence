@@ -98,6 +98,9 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-detail-subtitle { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.55; }
 .pf-group-title { font-size: 13px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: var(--space-2xs); }
 .pf-hint { font-size: var(--step-small); color: var(--muted); line-height: 1.5; }
+/* The Connect an AI client page's command sample (ADR 0104): scrolls inside itself, never the page. */
+.pf-ai-command { margin: var(--space-s) 0; padding: var(--space-s); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface-soft); overflow-x: auto; font-size: var(--step-small); }
+.pf-ai-url { user-select: all; }
 .pf-empty { font-size: var(--step-small); color: var(--muted); }
 
 /* ---- Banners (error, update, welcome): status cards ---- */
@@ -418,7 +421,7 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   var NAV_ITEMS = [
-    ['general', 'General'], ['connectors', 'Connectors'], ['auto_accept', 'Auto-accept'],
+    ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['auto_accept', 'Auto-accept'],
     ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
   ];
 
@@ -1066,6 +1069,56 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
+  // Connect an AI client (ADR 0104)
+  // -------------------------------------------------------------------- //
+
+  // Static for the life of the page (the MCP URL only changes with a
+  // restart), so it is its own global rather than part of `state`. The
+  // token is never on this page: Copy token asks the companion to put it on
+  // the clipboard (web/routes_settings.py's /api/settings/mcp_token/copy).
+  var AI_CLIENT = window.__pfAiClient || { mcp_url: '' };
+  var DOCS_URL = 'https://privacyfence.eu/docs/';
+
+  function docLink(path, label) {
+    return '<a class="pf-link" href="' + esc(DOCS_URL + path) + '" target="_blank" rel="noopener">' + esc(label) + ' ↗</a>';
+  }
+
+  function renderAiClient() {
+    var url = AI_CLIENT.mcp_url;
+    var html = '<div class="pf-page">';
+    html += '<h1 class="pf-page-title">Connect an AI client</h1>';
+    html += '<div class="pf-page-subtitle">An AI client on this computer connects to PrivacyFence with two things: the MCP URL, and your token in an <code>Authorization</code> header.</div>';
+
+    html += '<div class="card pf-card">';
+    html += rowHtml('MCP URL', 'Streamable HTTP. It changes only if <code>web.port</code> does.', '<code class="pf-ai-url">' + esc(url) + '</code>');
+    html += rowHtml('Header', 'Sent with every request.', '<code>Authorization: Bearer &lt;token&gt;</code>', 'pf-row-sub');
+    html += rowHtml('Token',
+      'PrivacyFence\'s companion puts your token on the clipboard and says so on your desktop. The token never passes through this page. Treat it like a password.',
+      '<div class="button primary" role="button" tabindex="0" aria-label="Copy token" ' + dataAttr('copy_mcp_token', {}) + '>Copy token</div>',
+      'pf-row-sub');
+    html += '</div>';
+
+    html += '<h2 class="pf-group-title">Claude Code</h2>';
+    html += '<div class="card pf-card"><div class="pf-hint">Copy the token, then run this in a terminal, pasting the token in place of <code>&lt;token&gt;</code>:</div>';
+    html += '<pre class="pf-ai-command"><code>claude mcp add --transport http --scope user privacyfence ' + esc(url) +
+      ' \\\n  --header "Authorization: Bearer &lt;token&gt;"</code></pre>';
+    html += '<div>' + docLink('connect-claude-code/', 'Claude Code setup') + '</div></div>';
+
+    html += '<h2 class="pf-group-title">Other MCP clients</h2>';
+    html += '<div class="card pf-card"><div class="pf-hint">Any client that speaks MCP over Streamable HTTP and can send a custom header: add a server with the MCP URL above and the <code>Authorization</code> header, with the token you copied. Clients PrivacyFence has not been tested with may still work, but are not supported.</div>';
+    html += '<div>' + docLink('how-it-works/#how-an-ai-system-connects', 'How an AI system connects') + '</div></div>';
+
+    html += '<h2 class="pf-group-title">Rotate the token</h2>';
+    html += '<div class="card pf-card">' + rowHtml('Rotate token',
+      'Replaces your token with a new one, which the companion copies to the clipboard. Every AI client using the old token stops working until you give it the new one.',
+      '<div class="button danger" role="button" tabindex="0" aria-label="Rotate token" ' + dataAttr('rotate_mcp_token', {}) + '>Rotate token…</div>') + '</div>';
+
+    html += '<div class="pf-hint">No terminal? The companion\'s menu has <strong>Copy AI Client Token</strong> too.</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // -------------------------------------------------------------------- //
   // About
   // -------------------------------------------------------------------- //
 
@@ -1114,6 +1167,7 @@ _JS = r"""
     }
     switch (section) {
       case 'connectors': return renderConnectors(state);
+      case 'ai_client': return renderAiClient();
       case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
@@ -1434,7 +1488,7 @@ _JS = r"""
 """
 
 
-_ALL_SECTIONS = ("general", "connectors", "auto_accept", "privacy", "audit", "agents", "about")
+_ALL_SECTIONS = ("general", "connectors", "ai_client", "auto_accept", "privacy", "audit", "agents", "about")
 
 # The four actions web/routes_settings.py's own bridge shim intercepts
 # client-side rather than forwarding to the generic dispatcher (that
@@ -1498,7 +1552,9 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin,
         "sections": {
-            "general": True, "connectors": False, "auto_accept": True,
+            # Org mode's clients connect with OAuth 2.1, not a local token
+            # (ADR 0011), so the local "Connect an AI client" page is never shown.
+            "general": True, "connectors": False, "ai_client": False, "auto_accept": True,
             "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
@@ -1507,7 +1563,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 
 def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
-    mode: str = LOCAL_MODE, is_admin: bool = False,
+    mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
@@ -1551,10 +1607,20 @@ def build_html(
     values, so a call site that passes neither (every one except
     web/routes_settings.py's org routes, which pass ``mode="org"``)
     renders the full local page.
+
+    ``ai_client`` (``{"mcp_url": ...}``) turns on the "Connect an AI client"
+    section (ADR 0104); without it -- org mode, or a local install with no
+    ``/mcp`` endpoint -- the section is not drawn. Like ``mode``, it never
+    touches ``state``.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json.dumps(state)
-    caps_json = json.dumps(_capabilities_for(mode, is_admin=is_admin))
+    capabilities = _capabilities_for(mode, is_admin=is_admin)
+    capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
+    caps_json = json.dumps(capabilities)
+    ai_client_script = ""
+    if capabilities["sections"]["ai_client"]:
+        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json.dumps(ai_client)};</script>'
     section_script = ""
     if initial_section is not None:
         section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
@@ -1565,5 +1631,6 @@ def build_html(
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'
         f'<script nonce="{nonce}">window.__pfCapabilities = {caps_json};</script>'
         f"{section_script}"
+        f"{ai_client_script}"
         f'<script nonce="{nonce}">{_JS}</script>'
     )

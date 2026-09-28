@@ -23,8 +23,8 @@ For what each tool does and which gate it goes through, see the
 
 The companion menu (macOS and Windows) has a status line, **Open Approvals**, **Open Settings**,
 one of **Start PrivacyFence…** / **Restart PrivacyFence…** / **Stop PrivacyFence…** (depending on
-whether the service is running), **Service Details…**, **New Recovery Code…** and
-**Quit Companion**. Quitting the companion leaves the daemon running.
+whether the service is running), **Service Details…**, **Copy AI Client Token**,
+**New Recovery Code…** and **Quit Companion**. Quitting the companion leaves the daemon running.
 
 On a packaged install the daemon runs under its own service account, so the AI system (which runs
 as you) cannot read PrivacyFence's credentials, rules or audit log, or approve its own requests. The
@@ -72,7 +72,11 @@ There are two ways in, and each AI client has its own setup page:
   from the handoff directory's `mcp_url` file, relays MCP messages, and reads and writes local
   files for the tools that need them (see [Files](#files)). Any other client that speaks MCP over
   Streamable HTTP, Claude Code among them, connects to `/mcp` directly with a bearer token that
-  `--print-mcp-token` mints through the same `MINT MCP` request. There is **one token per OS
+  `--print-mcp-token` mints through the same `MINT MCP` request. The companion's **Copy AI Client
+  Token** menu item, and **Copy token** on the Settings page's **AI clients** section, put the same
+  token on your clipboard instead; the Settings page asks the companion to do it, so the token is
+  never in a web response ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md)).
+  There is **one token per OS
   account**, with its own connectors, rules and approvals
   ([ADR 0008](adr/0008-one-principal-per-os-user.md)), and the control channel answers only the
   accounts the install serves.

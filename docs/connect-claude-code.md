@@ -13,7 +13,16 @@ Which one you have is explained in
 ## Local mode
 
 Run this from your own account (not elevated, not as the service account), after logging out and
-back in once following the install. It needs two things, both specific to your platform:
+back in once following the install.
+
+**Without a terminal command for the token:** open **Settings → AI clients**. It shows the `/mcp`
+URL and the exact `claude mcp add` command; **Copy token** there, or **Copy AI Client Token** in
+the companion's menu (the macOS menu bar, the Windows tray, or on Linux the **Copy AI client token**
+action of the PrivacyFence Applications-menu entry), puts your token on the clipboard. Paste it in
+place of `<token>`. Treat it like a password.
+
+The commands below get both from the command line instead, and need two things, both specific to
+your platform:
 
 | Platform | `/mcp` URL file | Token command |
 |---|---|---|
@@ -47,7 +56,9 @@ claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mc
 
 - `mcp_url` holds `http://127.0.0.1:8765/mcp` unless you changed `web.port`
   ([Configuration reference](configuration-reference.md)).
-- `--print-mcp-token` mints your account's token the first time and prints the same one afterwards.
+- `--print-mcp-token` mints your account's token the first time and prints the same one afterwards,
+  the same token **Copy AI Client Token** copies. **Rotate token** in **Settings → AI clients**
+  replaces it; every client using the old one must then be given the new one.
   Each OS account gets its own token, and its own connectors, rules and approvals
   ([ADR 0008](adr/0008-one-principal-per-os-user.md)).
 - `--scope user` makes PrivacyFence available in every project. Leave it out to add it to the

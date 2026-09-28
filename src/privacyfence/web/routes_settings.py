@@ -121,6 +121,7 @@ restart.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import inspect
 import json
@@ -131,10 +132,11 @@ import uuid
 from datetime import datetime, timezone
 from html import escape as _html_escape
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import (
     FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
@@ -299,6 +301,9 @@ _ORG_ONLY_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 
 _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
     "/api/settings/org_config/upload",
+    # Rotating cuts off every connected AI client at once -- the one token
+    # action that earns the passkey step-up (ADR 0104).
+    "/api/settings/mcp_token/rotate",
 })
 
 # Every other bespoke (non-generic-dispatch) route, and why it doesn't need
@@ -307,9 +312,27 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
 _BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
     "/api/settings/quit_app": "its own confirmed=true gate -- doesn't change what gets gated",
     "/api/settings/audit_log/download": "a GET -- read-only export, no mutation",
+    "/api/settings/mcp_token/copy": (
+        "puts the owner's own MCP token on the clipboard through the companion -- a token "
+        "anything running as this user can already get over MINT MCP, and one that cannot "
+        "change what gets gated (ADR 0104, ADR 0061)"
+    ),
     "/settings": "a GET -- renders the page",
     "/settings/connectors": "a GET -- renders the page",
 }
+
+
+@dataclasses.dataclass(frozen=True)
+class AiClientConnect:
+    """What the "Connect an AI client" section needs from web/server.py
+    (ADR 0104): the URL to show, and the two token actions, each reporting
+    ``(ok, reason)``. Neither callback returns the token: both hand it to
+    the companion (``control_channel.send_mcp_token``), which puts it on
+    the clipboard, so no response from this module ever carries it."""
+
+    mcp_url: str
+    copy_token: Callable[[], tuple[bool, str]]
+    rotate_token: Callable[[], tuple[bool, str]]
 
 
 class _BadAction(Exception):
@@ -481,6 +504,14 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  if (action === 'install_org_config') { fileInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
         "  var url = '/api/settings/' + encodeURIComponent(action);"
+        # The two AI client token actions (ADR 0104) have routes of their
+        # own; rotating asks first, the same way quit_app does.
+        "  var tokenAction = (action === 'copy_mcp_token' || action === 'rotate_mcp_token');"
+        "  if (action === 'copy_mcp_token') { url = '/api/settings/mcp_token/copy'; }"
+        "  if (action === 'rotate_mcp_token') {"
+        "    if (!window.confirm('Rotate the AI client token? Every AI client using the current token stops working until you give it the new one.')) { return; }"
+        "    url = '/api/settings/mcp_token/rotate'; rest.confirmed = true;"
+        "  }"
         "  if (action === 'quit_app') {"
         "    if (!window.confirm('Quit PrivacyFence? This stops the daemon, including every open approval and settings page.')) { return; }"
         "    rest.confirmed = true;"
@@ -517,6 +548,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  }).then(function(res){"
         "    if (!res) { return; }"
         "    if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
+        "else if (!res.ok && tokenAction && res.state && res.state.error) { window.alert(res.state.error); } "
         "else if (!res.ok) { console.error('PrivacyFence action failed:', action, res.state); } });"
         "}};"
         "})();</script>"
@@ -676,6 +708,7 @@ def build_routes(
     step_up: StepUpConfig | None = None,
     step_up_origin: str = "",
     require_human_session: bool = False,
+    ai_client: AiClientConnect | None = None,
 ) -> list[BaseRoute]:
     """The Route objects themselves, for server.py to fold into the one
     combined app (extra_routes, same pattern web/routes_mcp.py's
@@ -711,6 +744,15 @@ def build_routes(
     not be able to rewrite on its own say-so (ADR 0062). See web/routes_approvals.py's
     own ``require_human_session`` paragraph for why web/server.py turns this
     on for privilege-separated installs only.
+
+    ``ai_client`` adds the "Connect an AI client" section and its two token
+    routes (ADR 0104) -- local mode with an ``/mcp`` endpoint only; ``None``
+    leaves both out. Copying is gated like any other settings mutation
+    (session, CSRF, origin) and no further: the token is one anything
+    running as this user can already get. Rotating cuts every connected
+    client off, so it takes an explicit confirmation, a human session where
+    ``require_human_session`` asks for one, and the passkey step-up whenever
+    ``step_up.require_passkey`` is on.
     """
     challenges = StepUpChallengeStore()
 
@@ -743,7 +785,10 @@ def build_routes(
         # to actually allow any of them.
         nonce = _csp_nonce_for(request)
         state = _snapshot(controller)
-        body = settings_window_html.build_html(state, nonce=nonce, initial_section=initial_section)
+        body = settings_window_html.build_html(
+            state, nonce=nonce, initial_section=initial_section,
+            ai_client={"mcp_url": ai_client.mcp_url} if ai_client is not None else None,
+        )
         csrf = request.cookies.get(_SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS: the same ceremony helpers web/
         # routes_approvals.py's card page carries, needed here whenever a
@@ -866,12 +911,13 @@ def build_routes(
         # quit step did, intermittently, in CI.
         return JSONResponse({"status": "quitting"}, background=BackgroundTask(controller.quit_app))
 
-    def _org_config_step_up_active() -> bool:
-        # Unlike _needs_step_up(action) above, org_config_upload has no
-        # _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check -- it's
-        # the one path listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and it's
+    def _step_up_in_force() -> bool:
+        # Unlike _needs_step_up(action) above, the two bespoke sensitive
+        # routes (org_config_upload, and mcp_token_rotate -- ADR 0104) have
+        # no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check: both
+        # are listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and both are
         # unconditionally sensitive whenever step-up is actually in force
-        # -- there's no non-sensitive shape this upload could take.
+        # -- neither has a non-sensitive shape.
         return step_up is not None and step_up.enabled and step_up.require_passkey
 
     async def org_config_upload(request: Request) -> Response:
@@ -916,8 +962,8 @@ def build_routes(
                 },
                 status_code=409,
             )
-        if _org_config_step_up_active():
-            assert step_up is not None  # nosec B101  # _org_config_step_up_active() already proved this
+        if _step_up_in_force():
+            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
             # See _apply_step_up_gate's own comment on why the lambda below
             # needs this fresh, non-Optional-typed name rather than closing
             # over `step_up` directly.
@@ -944,6 +990,82 @@ def build_routes(
         controller.install_org_config_bytes(raw)
         return JSONResponse(_snapshot(controller))
 
+    async def mcp_token_copy(request: Request) -> Response:
+        # Only mounted when ai_client is given -- see the routes list below.
+        assert ai_client is not None  # nosec B101  # invariant narrowing, not input validation
+        if not _authenticated(request):
+            return _unauthorized_response(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        rejected = _check_mutation(request, payload)
+        if rejected is not None:
+            return rejected
+        # Off the event loop: the companion's notice is a dialog, and this
+        # waits for the companion's reply.
+        copied, reason = await run_in_threadpool(ai_client.copy_token)
+        with principal_scope(LOCAL_PRINCIPAL):
+            _record_settings_audit(
+                LOCAL_PRINCIPAL,
+                "Copied the AI client token to the clipboard through the companion"
+                if copied else f"Could not copy the AI client token: {reason}",
+            )
+        if not copied:
+            return JSONResponse({"error": reason or "the token could not be copied"}, status_code=503)
+        return JSONResponse(_snapshot(controller))
+
+    async def mcp_token_rotate(request: Request) -> Response:
+        assert ai_client is not None  # nosec B101  # invariant narrowing, not input validation
+        if not _authenticated(request):
+            return _unauthorized_response(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        rejected = _check_mutation(request, payload)
+        if rejected is not None:
+            return rejected
+        if payload.get("confirmed") is not True:
+            # The page's own confirm() sets this; anything else is not consent
+            # to cutting every connected client off (quit_app's own rule).
+            return JSONResponse({"error": "confirmation required"}, status_code=400)
+        if require_human_session and not _is_human_session(request, sessions):
+            body, status = _human_session_required_json("rotate the AI client token")
+            return JSONResponse(body, status_code=status)
+        if _step_up_in_force():
+            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
+            confirmed_step_up: StepUpConfig = step_up
+            # Nothing to bind the ceremony to beyond the action itself: a
+            # rotation takes no arguments.
+            fingerprint_body: dict[str, Any] = {}
+            response = _verify_or_challenge(
+                LOCAL_PRINCIPAL, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+                subject_key="rotate_mcp_token",
+                fingerprint=_action_fingerprint("rotate_mcp_token", fingerprint_body),
+                assertion=payload.get("webauthn_assertion"), challenges=challenges,
+                step_up_response=lambda: _settings_step_up_response(
+                    LOCAL_PRINCIPAL, "rotate_mcp_token", fingerprint_body,
+                    step_up=confirmed_step_up, challenges=challenges,
+                ),
+            )
+            if response is not None:
+                with principal_scope(LOCAL_PRINCIPAL):
+                    _record_settings_audit(
+                        LOCAL_PRINCIPAL, "Step-up required for 'rotate_mcp_token', refused "
+                        f"(principal={LOCAL_PRINCIPAL.id})",
+                    )
+                return response
+        rotated, reason = await run_in_threadpool(ai_client.rotate_token)
+        with principal_scope(LOCAL_PRINCIPAL):
+            _record_settings_audit(
+                LOCAL_PRINCIPAL,
+                "Rotated the AI client token" if rotated else f"AI client token rotation: {reason}",
+            )
+        if not rotated:
+            return JSONResponse({"error": reason or "the token could not be rotated"}, status_code=503)
+        return JSONResponse(_snapshot(controller))
+
     async def audit_log_download(request: Request) -> Response:
         if not _authenticated(request):
             return _unauthorized_response(request)
@@ -963,8 +1085,13 @@ def build_routes(
         Route("/api/settings/quit_app", quit_action, methods=["POST"]),
         Route("/api/settings/org_config/upload", org_config_upload, methods=["POST"]),
         Route("/api/settings/audit_log/download", audit_log_download),
-        Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]
+    if ai_client is not None:
+        routes += [
+            Route("/api/settings/mcp_token/copy", mcp_token_copy, methods=["POST"]),
+            Route("/api/settings/mcp_token/rotate", mcp_token_rotate, methods=["POST"]),
+        ]
+    routes.append(Route("/api/settings/{action}", settings_action, methods=["POST"]))
     for route in routes:
         # isinstance, not getattr: every entry above is a plain Route (never
         # a Mount/WebSocketRoute), and narrowing this way -- rather than
@@ -994,7 +1121,7 @@ def create_app(
     controller: SettingsController, *, sessions: LocalSessionStore, allow_quit: bool = True,
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
     step_up: StepUpConfig | None = None, step_up_origin: str = "",
-    require_human_session: bool = False,
+    require_human_session: bool = False, ai_client: AiClientConnect | None = None,
 ) -> Starlette:
     """Standalone Starlette app wrapping build_routes() -- what this
     module's own tests construct against, the same "no filesystem/global-
@@ -1003,7 +1130,7 @@ def create_app(
     return Starlette(routes=build_routes(
         controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
         notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_origin,
-        require_human_session=require_human_session,
+        require_human_session=require_human_session, ai_client=ai_client,
     ))
 
 

@@ -267,7 +267,11 @@ What this takes away from a process running as you:
 - writing `webauthn_credentials.json` or the recovery-code file;
 - reading the MCP token file or the audit log's key. An MCP client gets its token from the control
   channel, which identifies the calling OS account from the kernel; the `.mcpb` shim does this
-  itself, and other clients use `privacyfence-app --print-mcp-token`;
+  itself, and for other clients `privacyfence-app --print-mcp-token` prints it and the companion's
+  **Copy AI Client Token** copies it to the clipboard. Settings' **Copy token** asks the daemon to
+  have the companion copy it, so no web response carries it; rotating it from Settings takes a
+  passkey when passkeys are required
+  ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md));
 - reading connector credentials;
 - asking the companion to open an arbitrary URL. The companion accepts that only from the daemon's
   service account. From your own account it accepts only "show Approvals/Settings", which asks you

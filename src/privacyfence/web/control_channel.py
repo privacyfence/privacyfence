@@ -114,6 +114,13 @@ embedded in a fixed sentence; a line that does not match that pattern is
 refused rather than displayed, so the "no arbitrary words in a PrivacyFence-
 branded dialog" rule the ``OPEN`` and ``CONFIRM`` commands state above still
 holds here.
+
+``COPY MCP <token>`` (daemon -> companion) is the Settings page's Copy token
+button (ADR 0104): the daemon hands the owner's MCP token to the companion,
+which puts it on the native clipboard and says so, so the token is never in
+an HTTP response. It is the same token ``MINT MCP`` already gives anything
+running as this user, so the command adds no reach; its value is held to
+``_MCP_TOKEN_PATTERN`` and goes only to the clipboard, never into a dialog.
 """
 from __future__ import annotations
 
@@ -882,6 +889,22 @@ _SHOW_RECOVERY_SUFFIX = (
 )
 _ACKNOWLEDGE_LABEL = "OK"
 
+# ``COPY MCP <token>`` is the second value taken off the wire, and unlike the
+# recovery code it never reaches a dialog at all -- only the clipboard. It is
+# still held to one shape, for the same reason: this command must not become
+# a way to put arbitrary text on somebody's clipboard under PrivacyFence's
+# name. ``mcp_auth.py`` mints ``secrets.token_hex(32)``; the pattern also
+# admits the URL-safe alphabet and a range of lengths so a token minted by an
+# earlier release still copies, and nothing wider than that.
+_MCP_TOKEN_PATTERN = re.compile(r"\A[A-Za-z0-9_-]{32,128}\Z")
+# What the companion says once the token is on the clipboard (ADR 0104).
+# Deliberately does not contain the token.
+_MCP_TOKEN_COPIED_MESSAGE = (  # nosec B105  # user-facing notice text, not a credential
+    "AI client token copied to the clipboard.\n\n"
+    "Treat it like a password: paste it only into your AI client's own "
+    "configuration, as “Authorization: Bearer <token>”."
+)
+
 # How long the dialog is left up. Deliberately shorter than the ~5 minutes a
 # WebAuthn registration challenge lives (webauthn_stepup.py's own
 # _REGISTRATION_CHALLENGE_TTL_SECONDS): a human who is at the keyboard answers
@@ -922,6 +945,19 @@ _LINUX_MESSAGE_COMMANDS = (
         "/usr/bin/kdialog", f"--title={_CONFIRM_TITLE}", "--msgbox", message,
     ]),
 )
+# The clipboard writers, same absolute-path rule: this process runs as the
+# user the agent runs as, so a PATH lookup would let it ship its own "xclip"
+# that keeps a copy. The text goes on stdin, never argv, so it does not show
+# up in a process listing. wl-copy first, since an X11 tool on a Wayland
+# session only reaches XWayland's clipboard; each is used only when its own
+# display variable says that server is there.
+_MACOS_CLIPBOARD_COMMAND = ("/usr/bin/pbcopy",)
+_LINUX_CLIPBOARD_COMMANDS = (
+    ("WAYLAND_DISPLAY", ("/usr/bin/wl-copy",)),
+    ("DISPLAY", ("/usr/bin/xclip", "-selection", "clipboard")),
+    ("DISPLAY", ("/usr/bin/xsel", "--clipboard", "--input")),
+)
+_CLIPBOARD_TIMEOUT_SECONDS = 5.0
 
 
 def _applescript_quoted(text: str) -> str:
@@ -1105,6 +1141,96 @@ def _show_recovery_code(code: str) -> str:
     )
 
 
+class _NoClipboardAvailable(Exception):
+    """Raised by ``_copy_to_clipboard`` on a Linux desktop with none of
+    wl-copy, xclip or xsel -- like ``_NoDialogAvailable``, a distinct
+    outcome that names the fix rather than a silent failure."""
+
+
+def _copy_to_clipboard_windows(text: str) -> None:
+    """pywin32's ``win32clipboard`` -- already a runtime dependency on
+    Windows (``send_line_windows``), so no new one. ``CF_UNICODETEXT``, not
+    ``CF_TEXT``: the latter goes through the ANSI code page."""
+    import win32clipboard
+
+    win32clipboard.OpenClipboard()
+    try:
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
+    finally:
+        win32clipboard.CloseClipboard()
+
+
+def _run_clipboard_command(argv: tuple[str, ...], text: str) -> None:
+    """Hand ``text`` to a clipboard tool on stdin. stdout/stderr go to
+    ``DEVNULL`` rather than a pipe: xclip, xsel and wl-copy each fork a
+    child that stays behind to own the selection, and a captured pipe would
+    keep this call waiting on that child instead of returning when the
+    parent exits."""
+    result = subprocess.run(  # nosec B603  # fixed absolute argv, no shell; the text goes on stdin
+        list(argv), input=text.encode(_ENCODING), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=_CLIPBOARD_TIMEOUT_SECONDS, check=False,
+    )
+    if result.returncode != 0:
+        raise OSError(f"{argv[0]} exited with status {result.returncode}")
+
+
+def _copy_to_clipboard(text: str) -> None:
+    """Put ``text`` on this login session's clipboard, or raise. The native
+    clipboard of each platform, reached with nothing PrivacyFence does not
+    already depend on (ADR 0002 decision 4's budget): pbcopy on macOS,
+    ``win32clipboard`` on Windows, and on Linux whichever of wl-copy, xclip
+    and xsel this desktop has."""
+    platform = privilege_separation.current_platform()
+    if platform == "darwin":
+        _run_clipboard_command(_MACOS_CLIPBOARD_COMMAND, text)
+        return
+    if platform == "win32":
+        _copy_to_clipboard_windows(text)
+        return
+    for display_variable, argv in _LINUX_CLIPBOARD_COMMANDS:
+        if not os.environ.get(display_variable) or not Path(argv[0]).exists():
+            continue
+        _run_clipboard_command(argv, text)
+        return
+    raise _NoClipboardAvailable(
+        "no clipboard program found -- install wl-clipboard (Wayland) or xclip (X11) so "
+        "PrivacyFence can copy the token"
+    )
+
+
+def copy_mcp_token_to_clipboard(token: str) -> str:
+    """Put an MCP token on the clipboard and tell the human it is there --
+    the companion's whole side of ADR 0104, used by both of its callers:
+    ``COPY MCP`` below (the Settings page's Copy token button, relayed by
+    the daemon) and the companion's own "Copy AI Client Token" menu item
+    (``companion.py``, which mints the token itself over ``MINT MCP``).
+
+    Returns the ``OK``/``ERROR`` line the daemon reads back. The token never
+    appears in that line, in a log line, or in the notice: the one place it
+    goes is the clipboard. A notice that could not be shown (a Linux desktop
+    without zenity or kdialog) does not undo a copy that worked, so it is
+    logged and the answer is still ``OK``.
+    """
+    if not _MCP_TOKEN_PATTERN.match(token):
+        return "ERROR malformed token\n"
+    try:
+        _copy_to_clipboard(token)
+    except _NoClipboardAvailable as exc:
+        logger.warning("Companion could not copy the AI client token: %s", exc)
+        return f"ERROR {exc}\n"
+    except Exception:
+        # A missing pbcopy, a clipboard another program holds open on
+        # Windows, a tool that timed out -- all "could not copy".
+        logger.exception("Companion could not copy the AI client token")
+        return "ERROR could not copy to the clipboard on this desktop\n"
+    try:
+        _dialog_for("message")(_MCP_TOKEN_COPIED_MESSAGE, timeout=CONFIRM_DIALOG_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 -- the copy already happened; see docstring
+        logger.warning("Copied the AI client token, but could not say so on this desktop: %s", exc)
+    return "OK\n"
+
+
 def _confirm_first_enrollment() -> str:
     """``CONFIRM ENROLL``'s actual work: put this module's own fixed prompt
     in front of whoever is at this login session, and answer with the line
@@ -1250,6 +1376,16 @@ def _handle_companion_request(line: str) -> str:
         if subject == "SIGNIN":
             return _confirm_console_sign_in()
         return "ERROR unknown command\n"
+    if command == "COPY":
+        # ``COPY MCP <token>``: the Settings page's Copy token button, relayed
+        # by the daemon (ADR 0104). Daemon-only on a separated install,
+        # like every command but a page SHOW (_verify_companion_peer). The
+        # shape check is in copy_mcp_token_to_clipboard itself, which the
+        # companion's own menu item calls too.
+        subject, _, value = argument.partition(" ")
+        if subject.upper() != "MCP":
+            return "ERROR unknown command\n"
+        return copy_mcp_token_to_clipboard(value.strip())
     if command == "SHOW":
         subject, _, value = argument.partition(" ")
         if subject.upper() == "RECOVERY":
@@ -2219,7 +2355,9 @@ def _ask_companion(line: str, *, timeout: float, unreachable: str) -> tuple[bool
         else:
             reply = send_line_posix(companion_socket_path(current_principal().id), line, timeout=timeout)
     except (OSError, ControlChannelError) as exc:
-        logger.warning("Could not reach the companion (%s): %s", line.strip(), exc)
+        # The command words only: ``SHOW RECOVERY``/``COPY MCP`` carry a
+        # secret as their last word, and a log file is not where it goes.
+        logger.warning("Could not reach the companion (%s): %s", " ".join(line.split()[:2]), exc)
         return False, unreachable
     if reply.startswith("OK"):
         return True, ""
@@ -2250,6 +2388,18 @@ def send_recovery_code(code: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SEC
     2026-09-19 Out-of-scope amendment."""
     return _ask_companion(
         f"SHOW RECOVERY {code}\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
+    )
+
+
+def send_mcp_token(token: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) -> tuple[bool, str]:
+    """Hand an MCP token to a running companion to put on the clipboard --
+    the daemon's side of the Settings page's Copy token button (ADR 0104).
+    Returns ``(copied, reason)``. The token goes through the companion
+    rather than back in the HTTP response for the same reason the recovery
+    code does (ADR 0003's 2026-09-19 Out-of-scope amendment): no secret in
+    a response a ``pf_session`` holder can read. See ADR 0104."""
+    return _ask_companion(
+        f"COPY MCP {token}\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
     )
 
 

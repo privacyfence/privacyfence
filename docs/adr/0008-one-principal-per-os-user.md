@@ -10,6 +10,8 @@ and the shell scripts' `--allow-additional-user` flag) — that guard closed one
 redesign; this ADR is the redesign. The route-layer merge this ADR's own Related section pointed
 [Issue #579](https://github.com/privacyfence/privacyfence/issues/579) at is now
 [ADR 0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md), implemented.
+D3's delivery paths for the MCP token are amended by
+[ADR 0104](0104-the-companion-copies-the-ai-client-token.md) (the companion copies it).
 
 **This phase ships a narrower slice than the plan document describes**, and that narrowing is
 recorded here rather than left implicit. See "What this phase deliberately does not do" below for

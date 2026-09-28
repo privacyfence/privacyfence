@@ -813,6 +813,195 @@ class TestShowRecoveryCommand:
         assert "companion" in reason
 
 
+class TestCopyMcpCommand:
+    """``COPY MCP <token>`` (ADR 0104): the Settings page's Copy token button,
+    relayed by the daemon. The token goes to the clipboard and nowhere else --
+    not into the notice, not into a log line, not back in the reply."""
+
+    TOKEN = "0123456789abcdef" * 4
+
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        server = cc.CompanionChannelServer()
+        server.start()
+        return server
+
+    def _fake_clipboard(self, monkeypatch):
+        copied, shown = [], []
+        monkeypatch.setattr(cc, "_copy_to_clipboard", copied.append)
+        monkeypatch.setattr(cc, "_message_linux", lambda message, *, timeout: shown.append(message) or True)
+        return copied, shown
+
+    def test_the_pattern_matches_what_mcp_auth_actually_mints(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web import mcp_auth
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        for _ in range(5):
+            assert cc._MCP_TOKEN_PATTERN.match(mcp_auth.rotate_mcp_token(LOCAL_PRINCIPAL))
+
+    def test_a_well_formed_token_is_copied_and_announced_without_itself(self, tmp_path, monkeypatch, caplog):
+        copied, shown = self._fake_clipboard(monkeypatch)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            with caplog.at_level("DEBUG"):
+                reply = _mint(server.address, message=f"COPY MCP {self.TOKEN}\n")
+        finally:
+            server.stop()
+        assert reply == "OK\n"
+        assert copied == [self.TOKEN]
+        assert shown == [cc._MCP_TOKEN_COPIED_MESSAGE]
+        assert "password" in shown[0]
+        assert self.TOKEN not in caplog.text
+
+    @pytest.mark.parametrize("value", [
+        "",
+        "short",
+        "0123456789abcdef" * 9,  # longer than any token
+        "0123456789abcdef0123456789abcdef and some words of my own",
+        "0123456789abcdef0123456789abcdef\u00e9",
+    ])
+    def test_anything_else_is_refused_without_touching_the_clipboard(self, tmp_path, monkeypatch, value):
+        def _never(text):
+            raise AssertionError(f"copied an unchecked string: {text!r}")
+
+        monkeypatch.setattr(cc, "_copy_to_clipboard", _never)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message=f"COPY MCP {value}\n")
+        finally:
+            server.stop()
+        assert reply.startswith("ERROR")
+
+    def test_copy_of_anything_but_mcp_is_unknown(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "_copy_to_clipboard", lambda text: pytest.fail("copied"))
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message=f"COPY RECOVERY {self.TOKEN}\n") == "ERROR unknown command\n"
+        finally:
+            server.stop()
+
+    def test_a_missing_notice_does_not_undo_a_copy_that_worked(self, monkeypatch):
+        copied = []
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_copy_to_clipboard", copied.append)
+        monkeypatch.setattr(cc, "_LINUX_MESSAGE_COMMANDS", ())
+        assert cc.copy_mcp_token_to_clipboard(self.TOKEN) == "OK\n"
+        assert copied == [self.TOKEN]
+
+    def test_a_desktop_with_no_clipboard_program_says_what_to_install(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_LINUX_CLIPBOARD_COMMANDS", ())
+        reply = cc.copy_mcp_token_to_clipboard(self.TOKEN)
+        assert reply.startswith("ERROR")
+        assert "xclip" in reply and "wl-clipboard" in reply
+        assert self.TOKEN not in reply
+
+    def test_a_failing_clipboard_tool_is_an_error_not_a_crash(self, monkeypatch):
+        def _boom(text):
+            raise OSError("xclip exited with status 1")
+
+        monkeypatch.setattr(cc, "_copy_to_clipboard", _boom)
+        assert cc.copy_mcp_token_to_clipboard(self.TOKEN).startswith("ERROR could not copy")
+
+    def test_the_daemon_side_client_reports_the_outcome(self, tmp_path, monkeypatch):
+        copied, _shown = self._fake_clipboard(monkeypatch)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert cc.send_mcp_token(self.TOKEN, timeout=5.0) == (True, "")
+        finally:
+            server.stop()
+        assert copied == [self.TOKEN]
+
+    def test_a_missing_companion_is_reported_and_the_token_is_not_logged(self, tmp_path, monkeypatch, caplog):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        with caplog.at_level("DEBUG"):
+            copied, reason = cc.send_mcp_token(self.TOKEN, timeout=0.5)
+        assert copied is False
+        assert "companion" in reason
+        assert "COPY MCP" in caplog.text
+        assert self.TOKEN not in caplog.text
+
+
+class TestClipboardWriters:
+    """Which native clipboard each platform reaches, and how. Same
+    absolute-path rule as the dialogs: PATH is writable by the adversary."""
+
+    def test_macos_uses_pbcopy_with_the_text_on_stdin(self, monkeypatch):
+        calls = []
+
+        class _Result:
+            returncode = 0
+
+        def _run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return _Result()
+
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.setattr(cc.subprocess, "run", _run)
+        cc._copy_to_clipboard("secret-value")
+        argv, kwargs = calls[0]
+        assert argv == ["/usr/bin/pbcopy"]
+        assert kwargs["input"] == b"secret-value"
+        # Not in argv, so not in a process listing.
+        assert "secret-value" not in " ".join(argv)
+
+    def test_windows_uses_win32clipboard(self, monkeypatch):
+        import types
+
+        calls = []
+        fake = types.SimpleNamespace(
+            CF_UNICODETEXT=13,
+            OpenClipboard=lambda: calls.append("open"),
+            EmptyClipboard=lambda: calls.append("empty"),
+            SetClipboardData=lambda fmt, text: calls.append(("set", fmt, text)),
+            CloseClipboard=lambda: calls.append("close"),
+        )
+        monkeypatch.setitem(sys.modules, "win32clipboard", fake)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "win32")
+        cc._copy_to_clipboard("secret-value")
+        assert calls == ["open", "empty", ("set", 13, "secret-value"), "close"]
+
+    @pytest.mark.parametrize(("env", "expected"), [
+        ({"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"}, "/usr/bin/wl-copy"),
+        ({"DISPLAY": ":0"}, "/usr/bin/xclip"),
+    ])
+    def test_linux_picks_the_tool_for_the_running_display_server(self, monkeypatch, env, expected):
+        calls = []
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.delenv("DISPLAY", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(cc.Path, "exists", lambda self: True)
+        monkeypatch.setattr(cc, "_run_clipboard_command", lambda argv, text: calls.append(argv[0]))
+        cc._copy_to_clipboard("secret-value")
+        assert calls == [expected]
+
+    def test_linux_with_no_display_has_no_clipboard(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.delenv("DISPLAY", raising=False)
+        with pytest.raises(cc._NoClipboardAvailable):
+            cc._copy_to_clipboard("secret-value")
+
+    def test_a_nonzero_exit_is_raised(self, monkeypatch):
+        class _Result:
+            returncode = 1
+
+        monkeypatch.setattr(cc.subprocess, "run", lambda argv, **kwargs: _Result())
+        with pytest.raises(OSError, match="status 1"):
+            cc._run_clipboard_command(("/usr/bin/xclip",), "secret-value")
+
+
 class TestConfirmRecoveryCommand:
     """Issuing a replacement code invalidates whatever the human wrote down,
     so it is asked about first -- which is what keeps a local process that
@@ -1151,6 +1340,7 @@ class TestCompanionChannelPeerVerification:
         "OPEN https://example.com/callback\n",
         "CONFIRM ENROLL\n",
         "CONFIRM MINT some-nonce\n",
+        f"COPY MCP {'ab' * 32}\n",
     ])
     def test_nothing_else_is_open_to_the_companions_own_user(self, tmp_path, monkeypatch, message):
         """The exception is exactly the two page ``SHOW``s. ``SHOW RECOVERY``
