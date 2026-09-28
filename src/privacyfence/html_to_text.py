@@ -47,6 +47,10 @@ class _HTMLToTextParser(HTMLParser):
             href = dict(attrs).get("href")
             if href and not href.startswith("#"):
                 self._link_href = href
+        elif tag == "img":
+            alt = _WHITESPACE_RUN.sub(" ", dict(attrs).get("alt") or "").strip()
+            if alt:
+                self._chunks.append(f"[image: {alt}]")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _SKIP_CONTENT_TAGS:
@@ -74,7 +78,8 @@ class _HTMLToTextParser(HTMLParser):
 def html_to_text(html: str) -> str:
     """Strip tags and render HTML as plain text: block elements and list
     items become line breaks, link targets are kept inline as "text (url)",
-    script/style content is dropped, and whitespace is collapsed. Not a full
+    an image with alt text becomes "[image: alt]" (Gmail's own plain-text
+    rendering of one), script/style content is dropped, and whitespace is collapsed. Not a full
     HTML renderer -- just enough to make an HTML-only body legible in a
     plain-text popup."""
     if not html or not html.strip():

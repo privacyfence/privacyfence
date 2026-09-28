@@ -32,6 +32,7 @@ from privacyfence.gmail_client import (
     GmailClientError,
     GmailMessage,
     GmailThread,
+    InlineImage,
     SendAsAlias,
     signature_plain_text,
 )
@@ -335,6 +336,63 @@ class TestGetThread:
         assert "<p>" not in details
         assert "<b>" not in details
         assert "Plain please." in details
+
+
+class TestGetMessageIncludeHtml:
+    _HTML = '<div>Hi<img src="cid:logo" alt="Logo"></div>'
+
+    def _connector(self, body_html=_HTML):
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(
+            id="m1", thread_id="t1", subject="s", sender="a@b.com", body_text="Hi", body_html=body_html,
+        )
+        return connector, client
+
+    def test_param_is_optional_and_off_by_default(self):
+        connector, _ = make_connector()
+        spec = next(s for s in connector.tool_specs() if s.name == "gmail_get_message")
+        param = next(p for p in spec.params if p.name == "include_html")
+        assert (param.annotation, param.required, param.default) == ("bool", False, False)
+
+    async def test_omitted_returns_no_html(self, gated_call_spy):
+        connector, _ = self._connector()
+
+        await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        kwargs = gated_call_spy[0]
+        assert "body_html" not in kwargs["filtered_data"]
+        assert "HTML body" not in kwargs["new_info"]
+        assert kwargs["pii_scan_text"] == "Hi"
+
+    async def test_included_html_is_returned_disclosed_and_scanned(self, gated_call_spy):
+        connector, _ = self._connector()
+
+        result = await connector.call("gmail_get_message", {"message_id": "m1", "include_html": True})
+
+        kwargs = gated_call_spy[0]
+        assert result["body_html"] == self._HTML
+        assert result["body_text"] == "Hi"
+        assert kwargs["new_info"]["HTML body"] == "Included"
+        assert kwargs["pii_scan_text"] == f"Hi\n\n{self._HTML}"
+        assert kwargs["args"] == {"message_id": "m1"}
+
+    async def test_plain_text_message_says_there_is_none(self, gated_call_spy):
+        connector, _ = self._connector(body_html="")
+
+        result = await connector.call("gmail_get_message", {"message_id": "m1", "include_html": True})
+
+        assert result["body_html"] == ""
+        assert gated_call_spy[0]["new_info"]["HTML body"] == "None (plain-text message)"
+        assert gated_call_spy[0]["pii_scan_text"] == "Hi"
+
+    async def test_body_privacy_policy_applies_to_the_html_too(self, gated_call_spy):
+        init_privacy_filter({"privacy": {"categories": {"body": "block"}}})
+        connector, _ = self._connector()
+
+        result = await connector.call("gmail_get_message", {"message_id": "m1", "include_html": True})
+
+        assert result["body_html"] == "[BLOCKED BY PRIVACY FILTER]"
+        assert "Logo" not in gated_call_spy[0]["pii_scan_text"]
 
 
 class TestGmailPrivacyFilter:
@@ -1749,6 +1807,103 @@ class TestDraftSignatureAndSendAs:
         )
 
         assert gated_call_spy[0]["details_text"] == "**Hi**" + signature_plain_text(_SIGNATURE_HTML)
+
+
+_CID_SIGNATURE = (
+    '<b>Jane Doe</b><br><a href="https://example.com/"><img src="cid:logo" alt="ExampleCo"></a>'
+    '<a href="https://linkedin.com/x"><img src="cid:linkedin" alt="LinkedIn"></a>'
+)
+_LOGO = InlineImage("logo", "image/png", b"L")
+_LINKEDIN = InlineImage("linkedin", "image/png", b"I")
+
+
+class TestDraftSignatureCidImages:
+    @pytest.mark.parametrize("tool,method,is_reply,has_attachments", _DRAFT_TOOLS)
+    async def test_rich_draft_gets_the_images_found_in_sent_mail(
+        self, gated_call_spy, tmp_path, tool, method, is_reply, has_attachments,
+    ):
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=_CID_SIGNATURE))
+        client.find_signature_images.return_value = {"linkedin": _LINKEDIN, "logo": _LOGO}
+        args = _draft_args(is_reply, has_attachments, tmp_path, include_signature=True, body_markdown="Hi")
+
+        await connector.call(tool, args)
+
+        client.find_signature_images.assert_called_once_with(["logo", "linkedin"])
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Signature"] == "Appended (me@example.com; 2 image(s) copied from your sent mail)"
+        assert "[image: ExampleCo] (https://example.com/)" in kwargs["details_text"]
+        assert getattr(client, method).call_args.kwargs == {
+            "signature_html": _CID_SIGNATURE, "signature_images": (_LOGO, _LINKEDIN),
+        }
+
+    async def test_images_not_found_fall_back_to_alt_text_and_are_disclosed(self, gated_call_spy):
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=_CID_SIGNATURE))
+        client.find_signature_images.return_value = {"logo": _LOGO}
+
+        await connector.call(
+            "gmail_create_draft",
+            {"to": "a@x.com", "subject": "s", "body_markdown": "Hi", "include_signature": True},
+        )
+
+        assert gated_call_spy[0]["preview"]["Signature"] == (
+            "Appended (me@example.com; 1 of 2 image(s) not found in your recent sent mail, shown as their alt text)"
+        )
+        saved = client.create_draft.call_args.kwargs
+        assert saved["signature_images"] == (_LOGO,)
+        assert 'cid:linkedin' not in saved["signature_html"]
+        assert '<a href="https://linkedin.com/x">LinkedIn</a>' in saved["signature_html"]
+        assert 'src="cid:logo"' in saved["signature_html"]
+
+    async def test_image_only_signature_with_nothing_found_is_not_appended(self, gated_call_spy):
+        logo_only = '<img src="cid:logo"><img src="cid:linkedin">'
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=logo_only))
+        client.find_signature_images.return_value = {}
+
+        await connector.call(
+            "gmail_create_draft",
+            {"to": "a@x.com", "subject": "s", "body_markdown": "Hi", "include_signature": True},
+        )
+
+        assert gated_call_spy[0]["preview"]["Signature"] == (
+            "Not appended (me@example.com; its 2 image(s) weren't found in your recent sent mail)"
+        )
+        assert client.create_draft.call_args.kwargs == {}
+
+    async def test_image_only_signature_found_says_so(self, gated_call_spy):
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html='<img src="cid:logo">'))
+        client.find_signature_images.return_value = {"logo": _LOGO}
+
+        await connector.call(
+            "gmail_create_draft",
+            {"to": "a@x.com", "subject": "s", "body_markdown": "Hi", "include_signature": True},
+        )
+
+        assert gated_call_spy[0]["preview"]["Signature"] == (
+            "Appended (me@example.com; image only, rich-text drafts only; 1 image(s) copied from your sent mail)"
+        )
+
+    async def test_plain_text_draft_never_looks(self, gated_call_spy):
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=_CID_SIGNATURE))
+
+        await connector.call(
+            "gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "Hi", "include_signature": True},
+        )
+
+        client.find_signature_images.assert_not_called()
+        assert gated_call_spy[0]["preview"]["Signature"] == "Appended (me@example.com)"
+        assert client.create_draft.call_args.kwargs == {"signature_html": _CID_SIGNATURE}
+
+    async def test_url_images_need_no_lookup(self, gated_call_spy):
+        html = '<b>Jane</b><img src="https://example.com/logo.png" alt="Logo">'
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=html))
+
+        await connector.call(
+            "gmail_create_draft",
+            {"to": "a@x.com", "subject": "s", "body_markdown": "Hi", "include_signature": True},
+        )
+
+        client.find_signature_images.assert_not_called()
+        assert client.create_draft.call_args.kwargs == {"signature_html": html}
 
 
 class TestWriteToolsWithUploadRefAttachments:

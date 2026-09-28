@@ -84,6 +84,15 @@ class TestLinks:
         assert result == "bare"
 
 
+class TestImages:
+    def test_alt_text_is_rendered_the_way_gmail_renders_it(self):
+        html = '<a href="https://example.com/"><img src="cid:logo" alt="  Example\n Co "></a>'
+        assert html_to_text(html) == "[image: Example Co] (https://example.com/)"
+
+    def test_image_without_alt_text_renders_nothing(self):
+        assert html_to_text('<p>Hi<img src="https://example.com/x.png"></p>') == "Hi"
+
+
 class TestLists:
     def test_list_items_prefixed_with_dash(self):
         result = html_to_text("<ul><li>Item one</li><li>Item two</li></ul>")

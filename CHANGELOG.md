@@ -45,12 +45,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gmail_get_message` can return the HTML version of a message.** Pass `include_html: true` to
+  get `body_html` alongside `body_text`. The approval card says the HTML is included, and your
+  body privacy setting applies to it too
+  ([#783](https://github.com/privacyfence/privacyfence/issues/783)).
 - **An AI agents section on privacyfence.eu.** A new **AI agents** menu leads to
   [privacyfence.eu/ai-agents/](https://privacyfence.eu/ai-agents/), with one page each for Claude
   Desktop, Claude Code and claude.ai: how the client connects in local mode and in an organization
   deployment, what it asks you before PrivacyFence's own approval card, how files reach it, and how
   it is named on the card. Each page's **Set it up** button opens the client's setup doc, and the
   "Works with" list on the homepage, Enterprise and FAQ links each client to its page.
+
+### Fixed
+
+- **Signature images show up in drafts.** A Gmail signature that embeds its images (a logo, social
+  icons) instead of linking to them lost every image when a draft was created with
+  `include_signature`. PrivacyFence now attaches them the way Gmail's own compose window does,
+  copying them from your most recent sent mail. If one can't be found there, its description is used instead, and the
+  approval card says so ([#783](https://github.com/privacyfence/privacyfence/issues/783)).
+- Images in an HTML-only email or signature now appear in its plain-text version as
+  `[image: description]`, the way Gmail shows them, instead of disappearing.
 
 ## [5.0.0] — 2026-09-28
 

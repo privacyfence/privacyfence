@@ -220,6 +220,13 @@ appended (or that none is set). The informational PII note on write cards scans 
 AI system wrote, not your signature, which would otherwise flag nearly every draft because of your
 own phone number. See [ADR 0038](adr/0038-gmail-draft-signature-is-shown-but-not-write-scanned.md).
 
+Some signatures embed their images (a logo, social icons) in the message instead of linking to
+them, and Gmail doesn't make those images available with the signature. For a draft with
+formatting (`body_markdown`), PrivacyFence copies them from your ten most recent sent messages,
+where Gmail attached them when you sent them. An image it can't find there is replaced by its
+description. The **Signature** row says how many images were copied or not found. See
+[ADR 0095](adr/0095-gmail-signature-cid-images-are-copied-from-sent-mail.md).
+
 ---
 
 ## The PII check
