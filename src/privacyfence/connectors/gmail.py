@@ -1267,6 +1267,8 @@ class GmailConnector(Connector):
             my_email=self.my_email,
             args={"to": to, "subject": subject},
         )
+        # ADR 0102: an ``upload:`` attachment's slot is consumed only now, once the gate has passed.
+        local_files.commit_uploads()
         return await self._fetch(
             self._gmail.create_draft_with_attachments,
             to, subject, body, paths, cc, bcc, body_markdown, self.download_mode,
@@ -1310,6 +1312,8 @@ class GmailConnector(Connector):
             my_email=self.my_email,
             args={"message_id": message_id, "to": to_arg},
         )
+        # ADR 0102: an ``upload:`` attachment's slot is consumed only now, once the gate has passed.
+        local_files.commit_uploads()
         return await self._fetch(
             self._gmail.create_reply_draft_with_attachments,
             message_id, body, paths, False, self.my_email, cc, bcc, body_markdown, self.download_mode,
@@ -1353,6 +1357,8 @@ class GmailConnector(Connector):
             my_email=self.my_email,
             args={"message_id": message_id, "to": to_arg},
         )
+        # ADR 0102: an ``upload:`` attachment's slot is consumed only now, once the gate has passed.
+        local_files.commit_uploads()
         return await self._fetch(
             self._gmail.create_reply_draft_with_attachments,
             message_id, body, paths, True, self.my_email, cc, bcc, body_markdown, self.download_mode,

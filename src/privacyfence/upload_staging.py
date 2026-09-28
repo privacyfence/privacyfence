@@ -5,8 +5,9 @@ disk and hands to the daemon, because the daemon itself cannot (see ADR
 same TTL-sweep pattern, same startup-orphan sweep, same "no oracle" claim
 semantics, same "plaintext never touches this server's disk unencrypted"
 property -- but runs in the opposite direction: the shim *fills* a slot the
-daemon created, and the daemon (not a browser) *claims* it exactly once, for
-the same tool call that asked for it.
+daemon created, and the daemon (not a browser) *claims* it exactly once, after
+the gate of the tool call that uses it (ADR 0102; the call reads it with
+``peek`` before its gate).
 
 Differences from ``DownloadStagingStore`` worth being explicit about:
 
@@ -46,12 +47,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 10 minutes: long enough to cover a slow upload over a loopback connection
-# plus whatever gate/approval delay follows before the tool call that
-# requested it resumes and claims the bytes (see local_files.py -- a slot
-# is claimed once, synchronously, inside the same tools/call round trip
-# that created it, so this is a ceiling on "handshake took too long", not a
-# UX-facing wait).
+# 10 minutes: long enough to cover a slow upload before the tool call that
+# uses it first reads it. That read (``peek``) extends the slot to outlive
+# the call's approval (local_files.UPLOAD_HOLD_SECONDS, ADR 0102), so this is
+# a ceiling on "the upload took too long", not on the human's decision.
 DEFAULT_TTL_SECONDS = 600.0
 
 _NONCE_LEN = 12
@@ -298,6 +297,32 @@ class UploadStagingStore:
     # Claim -- the daemon's own read, once, per call
     # ------------------------------------------------------------------ #
 
+    def peek(self, token: bytes, principal_id: str, *, hold_until: float | None = None) -> bytes | None:
+        """Returns the plaintext without claiming the slot, or ``None`` on
+        exactly the cases ``claim()`` returns ``None`` for (same "no oracle"
+        posture). A tool call reads its upload with this before its gate, so
+        a call that stops at a pending approval leaves the slot for the
+        identical call re-issued once the human decides (ADR 0102);
+        ``claim()`` consumes it only after the gate has passed.
+
+        ``hold_until`` extends the slot's expiry to at least that time, so a
+        slot outlives the approval it is waiting on rather than expiring
+        between the human's decision and the re-issued call."""
+        lookup_id = _lookup_id(token)
+        with self._lock:
+            self._sweep_expired_locked()
+            slot = self._pending.get(lookup_id)
+            if slot is None or slot.principal_id != principal_id or not slot.filled:
+                return None
+            if hold_until is not None and hold_until > slot.expires_at:
+                slot.expires_at = hold_until
+        try:
+            raw = slot.disk_path.read_bytes()
+        except OSError as exc:
+            logger.warning("upload_staging: ciphertext missing for a live slot (%s): %s", lookup_id, exc)
+            return None
+        return self._decrypt(token, lookup_id, raw)
+
     def claim(self, token: bytes, principal_id: str) -> bytes | None:
         """Returns the plaintext on a successful, single-use claim, or
         ``None`` for a missing, expired, wrong-principal, unfilled, or
@@ -328,15 +353,17 @@ class UploadStagingStore:
                 slot.disk_path.unlink(missing_ok=True)
             except OSError as exc:
                 logger.warning("upload_staging: could not remove claimed ciphertext %s: %s", slot.disk_path, exc)
+        return self._decrypt(token, lookup_id, raw)
 
+    @staticmethod
+    def _decrypt(token: bytes, lookup_id: str, raw: bytes) -> bytes | None:
         nonce, ciphertext = raw[:_NONCE_LEN], raw[_NONCE_LEN:]
         key = _derive_key(token)
         try:
-            plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
+            return AESGCM(key).decrypt(nonce, ciphertext, None)
         except Exception:
             logger.warning("upload_staging: AES-GCM decrypt failed for %s", lookup_id)
             return None
-        return plaintext
 
     # ------------------------------------------------------------------ #
     # Expiry

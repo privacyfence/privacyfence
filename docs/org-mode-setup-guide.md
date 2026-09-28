@@ -767,7 +767,8 @@ and [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md).
 with an HTTP `PUT`, and passes the returned `upload_id` to the tool that needs the file (for
 example `drive_upload_file`'s `upload_id`, or `upload:<upload_id>` in a Gmail attachment list). A
 slot takes up to 50,000,000 bytes, is valid for 10 minutes and can be used once, and only by the
-person who created it. `drive_upload_file` also accepts the file inline as `content_base64`. Gmail
+person who created it. Once a tool call has read it, the slot is kept until the approved write uses
+it, for up to 20 minutes, so an approval that waits for you does not lose the file. `drive_upload_file` also accepts the file inline as `content_base64`. Gmail
 attachments are limited to 18,000,000 bytes in total per message.
 
 ## 14. Operations
@@ -871,7 +872,7 @@ are removed and the file is rewritten.
 | Pending approvals | 50 across the install, 20 per person; a pending approval expires after 15 minutes | `web.approvals` in the install-wide `settings.yaml` ([configuration reference](configuration-reference.md)) |
 | Inline download | 100,000-byte tool result, base64 included | `--downloads-inline-max-bytes` |
 | Download link lifetime | 300 seconds | `--downloads-link-ttl-seconds` |
-| Upload slot | 50,000,000 bytes, 10 minutes | No |
+| Upload slot | 50,000,000 bytes, 10 minutes; 20 minutes once a tool call has read it | No |
 | Gmail attachments per message | 18,000,000 bytes in total | No |
 | AI client access token | 1 hour | No |
 | AI client refresh chain | 30 days | No |

@@ -1358,6 +1358,86 @@ class TestUploadFile:
 
         assert result == {"id": "uploaded-via-slot-org"}
 
+    async def test_upload_id_survives_a_pending_approval(self, monkeypatch):
+        """ADR 0102: the call that stops at a pending approval must not use the slot up,
+        or the identical call re-issued after the human approves finds nothing."""
+        from privacyfence import local_files
+        from privacyfence.approvals import ApprovalPending
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        decisions = iter(["pending", "approved"])
+
+        async def fake_gated_call(**kwargs):
+            if next(decisions) == "pending":
+                raise ApprovalPending({"status": "approval_pending", "approval_id": "a1"})
+            return kwargs["filtered_data"]
+
+        monkeypatch.setattr(drive_module, "gated_call", fake_gated_call)
+        connector, client = make_connector()
+        connector.download_mode = "org"
+        client.upload_file_bytes.return_value = {"id": "uploaded-after-approval"}
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [b"pdf bytes"])
+        args = {"upload_id": local_files._encode_token(token), "name": "report.pdf"}
+
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+            await connector.call("drive_upload_file", args)
+        client.upload_file_bytes.assert_not_called()
+
+        with local_files.call_context(bridge_available=False, uploads={}):
+            result = await connector.call("drive_upload_file", args)
+
+        assert result == {"id": "uploaded-after-approval"}
+        client.upload_file_bytes.assert_called_once_with(b"pdf bytes", "report.pdf", "")
+        assert store.peek(token, LOCAL_PRINCIPAL.id) is None, "the approved upload consumes the slot"
+
+    async def test_one_upload_id_backs_one_approved_write(self, gated_call_spy):
+        """Two calls that both read a slot before either passed its gate: the first to pass
+        consumes it, and the second fails before writing anything."""
+        from privacyfence import local_files
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        connector, client = make_connector()
+        client.upload_file_bytes.return_value = {"id": "first"}
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [b"pdf bytes"])
+        args = {"upload_id": local_files._encode_token(token), "name": "report.pdf"}
+
+        with local_files.call_context(bridge_available=False, uploads={}):
+            await connector.call("drive_upload_file", args)
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+            LocalFileAccessError, match="expired or was already used",
+        ):
+            await connector.call("drive_upload_file", args)
+        client.upload_file_bytes.assert_called_once()
+
+    async def test_a_slot_used_up_between_read_and_gate_stops_the_write(self, monkeypatch):
+        from privacyfence import local_files
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [b"pdf bytes"])
+
+        async def gate_while_another_call_consumes_the_slot(**kwargs):
+            assert store.claim(token, LOCAL_PRINCIPAL.id) == b"pdf bytes"
+            return kwargs["filtered_data"]
+
+        monkeypatch.setattr(drive_module, "gated_call", gate_while_another_call_consumes_the_slot)
+        connector, client = make_connector()
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+            LocalFileAccessError, match="already used by another call",
+        ):
+            await connector.call(
+                "drive_upload_file", {"upload_id": local_files._encode_token(token), "name": "report.pdf"},
+            )
+        client.upload_file_bytes.assert_not_called()
+
     async def test_wrong_principal_upload_id_raises(self):
         from privacyfence import local_files
         from privacyfence.principal import Principal
