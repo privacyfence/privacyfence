@@ -12,21 +12,29 @@ local mode) and [issue 391](https://github.com/privacyfence/privacyfence/issues/
 mode). Written `I390` and `I391` below. Docs and test code must never use the `#NNN` form
 ([ADR 0056](adr/0056-code-carries-no-project-history.md)).
 
-**Starts after plan 1**, [`ai-agents-foundation-plan.md`](ai-agents-foundation-plan.md), is
-finished. Plan 1 builds everything this plan uses:
+**Plan 1**, [`ai-agents-foundation-plan.md`](ai-agents-foundation-plan.md), **is finished**
+(2026-09-28; shipped in v5.0.0), so this plan can start. Everything it uses is on `main`:
 
-| From plan 1 | What it is |
+| From plan 1 | Where it is on `main` |
 |---|---|
-| Truthful tool annotations (writes not destructive, except the two deleting tools), plus the bundle switch `--tool-annotations all-read-only` | the successor ADR to ADR 0076 |
-| Schema-portability test (T1) | runs on every PR |
-| Recorded-handshake replay (T2) | parametrized over `tests/fixtures/ai_clients/<client>/`, so adding a directory adds a client |
-| Test org deployment, evidence format and per-client script | `ai-client-qa.md` |
-| One docs page per agent, `connect-<slug>.md` | GA4 content group `ai-agent` |
-| The website's **AI agents** menu (`/ai-agents/<slug>/`) | held to `clients.json` by guardrail 14 |
+| Truthful tool annotations, the **only** mode: reads read-only, writes not read-only, `destructiveHint` only on `calendar_delete_event` and `drive_sheets_delete_dimensions`. There is no `all-read-only` switch, no bundle key and no `X-PrivacyFence-Tool-Annotations` header any more | ADR 0086 (decisions 1–2), [ADR 0089](adr/0089-tool-annotations-are-always-truthful.md) |
+| Schema-portability test (T1) | `tests/unit/web/test_tool_schema_portability.py`, every PR |
+| Recorded-handshake replay (T2) | `tests/unit/web/test_ai_client_replay.py`, parametrized over `tests/fixtures/ai_clients/<client>/` (read that directory's `README.md`: layout, the two "Expected agent_id" lines, scrubbing). Adding a directory adds a client |
+| Registry name templates (`"… ({server})"`) and the rule that an unrecognised DCR `client_name` yields to a recognised `clientInfo.name` | `agent_identity.py`, [ADR 0094](adr/0094-claude-clients-are-matched-by-their-observed-names.md) (amends ADR 0035) |
+| Local mode shows every requester as **"Undetected"** on cards and the Audit Log; the audit entry still records `agent_id` | [ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md) |
+| A download or upload link works only for a client that can reach the server's host; `drive_get_file_content` returns a document's text | [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md) |
+| Test org deployment, "What the client receives", per-client script, evidence format | `docs/ai-client-qa.md` |
+| One docs page per agent, `connect-<slug>.md`, listed under `docs/README.md` "AI agent setup" and in org guide §9 "Add PrivacyFence to an AI client"; GA4 content group `ai-agent` | [ADR 0098](adr/0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md); template: `connect-claude-ai.md` |
+| The website's **AI agents** menu (`/ai-agents/<slug>/`) | held to `website/_data/clients.json` by guardrail 14 (`tests/unit/test_website_agent_pages.py`) |
 
-Plan 1's rules apply here unchanged: one PR per package; no unverified instructions on `main`; a
-client's website page lands only after the release that carries its docs page; no logos; ADR
-numbers are the next free number at merge time. Plan 3 (Gemini) runs independently of this one.
+Plan 1's rules apply here unchanged, and are now ADRs: one PR per package; no unverified setup
+instructions on `main` — a new client's doc waits in a draft PR until its manual check passes
+([ADR 0100](adr/0100-unverified-client-setup-instructions-never-merge-to-main.md)); a client's
+website page lands only after the stable release that carries its docs page
+([ADR 0099](adr/0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md));
+no logos ([ADR 0101](adr/0101-the-website-shows-no-third-party-logos.md)); ADR numbers are the
+next free number at merge time (0101 was the last one when plan 1 finished). Plan 3 (Gemini) runs
+independently of this one.
 
 **The goal:** say "works with ChatGPT" publicly at **Gate A**. That needs no server code.
 
@@ -48,7 +56,7 @@ when its "Depends on" items are done.
 
 ---
 
-## 1. ChatGPT-specific facts (checked 2026-09-26)
+## 1. ChatGPT-specific facts (checked 2026-09-26; re-checked against `main` 2026-09-28)
 
 1. **ChatGPT on the web can't reach a local-mode daemon.** Developer Mode connectors are called
    from OpenAI's cloud, and local mode listens on `127.0.0.1`. The first ChatGPT claim therefore
@@ -57,21 +65,38 @@ when its "Depends on" items are done.
 2. **The shim ships only inside `PrivacyFence.mcpb`.** No installer puts `shim.js` at a stable path.
    ChatGPT desktop would run `node` from a macOS GUI app's minimal `PATH`, where Homebrew's Node
    isn't found. So I390 may need installer work (WP 3.1b).
-3. **Attribution.** `agent_identity.py`'s `REGISTRY` maps `chatgpt` ← `openai-mcp`, which
+3. **Attribution.** `agent_identity.py`'s `REGISTRY` still maps `chatgpt` ← `openai-mcp`, which
    [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)
-   marks as a guess. In org mode the DCR `client_name` wins over `clientInfo.name`, so both are
-   captured. `chatgpt.png` already exists in `resources/agent_icons/`.
-4. **Annotations.** With plan 1's truthful default, ChatGPT sees write tools as writes. It will
-   probably ask for its own confirmation before PrivacyFence's card, and "Scan Tools" will label
-   the writes honestly. Only `calendar_delete_event` and `drive_sheets_delete_dimensions` are
-   marked destructive. ChatGPT desktop in local mode (WP 3.1) could also send the per-connection
-   header `X-PrivacyFence-Tool-Annotations`, if it lets a user set headers. An organization can switch to `all-read-only` to drop ChatGPT's prompt.
-   The ChatGPT docs have to say what that switch implies (D13).
+   marks as a guess. Plan 1's QA found every Claude guess wrong
+   ([ADR 0094](adr/0094-claude-clients-are-matched-by-their-observed-names.md): nobody sent
+   `claude-ai`; claude.ai registers as `Claude`), so expect this one to be wrong too. In org mode a
+   DCR `client_name` the registry matches wins over `clientInfo.name`, and an unrecognised one
+   yields to a recognised `clientInfo.name` (ADR 0094), so capture both. If either embeds a name the
+   user chose (as Claude Code's `Claude Code (<server>)` does), use a `{server}` name template, not
+   an exact name. `chatgpt.png` already exists in `src/privacyfence/resources/agent_icons/`, and
+   `test_approval_icons.py` requires one per registry entry. In local mode (ChatGPT desktop) the
+   card and Audit Log show **"Undetected"** whatever ChatGPT sends
+   ([ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md)); only the audit
+   entry's `agent_id` shows the name.
+4. **Annotations are always truthful**
+   ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)). ChatGPT sees write tools as
+   writes, and only `calendar_delete_event` and `drive_sheets_delete_dimensions` as destructive.
+   It will probably ask for its own confirmation before PrivacyFence's card, and "Scan Tools" will
+   label the writes honestly. There is no switch to stop that on PrivacyFence's side: the only
+   answer is ChatGPT's own "always allow" for a tool, if it has one. Without one, ChatGPT users
+   confirm a write twice, a cost ADR 0089 accepts (as it does for claude.ai's Team plan). The
+   ChatGPT docs say which it is (D13).
 5. **Files without the shim** use
-   [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)'s capability URLs.
-   Verification covers one upload and one download.
-6. **Guardrail 10** (`tests/unit/test_website_clients.py`) hard-codes `NAMES` and bans "ChatGPT" on
-   every hand-written page. Gate A's website PR edits that test.
+   [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)'s capability URLs, which
+   work only if the client can reach the deployment's host
+   ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)). claude.ai
+   could not until the host went on its Domain allowlist. Where ChatGPT fetches a link from
+   (OpenAI's cloud, a code sandbox, or not at all) is unknown: verification checks the access log
+   for the `/mcp-files/fetch/` and upload `PUT` requests, not just the chat reply. For documents,
+   `drive_get_file_content` returns the extracted text, which needs no link at all.
+6. **Guardrail 10** (`tests/unit/test_website_clients.py`) hard-codes `NAMES ==
+   ["Claude Desktop", "Claude Code", "claude.ai"]` and bans `NOT_YET_SUPPORTED = ("ChatGPT",
+   "Gemini", "Copilot", "Cursor")` on every hand-written page. Gate A's website PR edits that test.
 
 ---
 
@@ -80,7 +105,7 @@ when its "Depends on" items are done.
 | # | Decision | Recommendation |
 |---|---|---|
 | D3 | Public claim wording | At Gate A: "ChatGPT (Developer Mode, with an organization deployment)". The workspace connector and ChatGPT desktop are added only after Gate B. The site shows no dates or versions; `ai-client-qa.md` holds them. |
-| D13 | ChatGPT and the `all-read-only` switch | Document it on `connect-chatgpt.md`. Truthful (the default) means ChatGPT confirms, then PrivacyFence approves. `all-read-only` means only PrivacyFence approves, but then ChatGPT and its workspace admin see every write labelled read-only. **Tell admins not to use `all-read-only` if any ChatGPT workspace policy they rely on distinguishes read-only from write actions.** If WP 1.1 finds such a policy, say so on the page as a warning, not a footnote. |
+| D13 | ChatGPT's own confirmation | *Revised 2026-09-28: the `all-read-only` switch this decision was about was removed by ADR 0089, which already decides the principle, so D13 needs no ADR of its own.* `connect-chatgpt.md`'s "Confirmations" section says what M1.3 observed: whether ChatGPT asks before a write, and whether the user (or, for a published connector, the workspace admin) can always-allow a tool so that only PrivacyFence's card remains. If ChatGPT cannot, say plainly that a write is confirmed twice, once in ChatGPT and once on PrivacyFence's card, and that PrivacyFence's card is the one that decides. Never suggest a workaround that misreports a tool. |
 | D14 | ChatGPT desktop outcome | Decided by M1.4: (a) docs only, (b) ship `shim.js` at a stable path (→ **ADR**), or (c) close I390 as "not planned". |
 
 ---
@@ -88,7 +113,7 @@ when its "Depends on" items are done.
 ## 3. Roadmap
 
 ```text
-🧑 M0  plan 1 finished; ChatGPT accounts; test org deployment (ai-client-qa.md)
+🧑 M0  ✅ plan 1 finished (v5.0.0); ChatGPT accounts; test org deployment (ai-client-qa.md) up to date
 │
 🤖 WAVE 1   WP1.1 re-source ChatGPT vendor facts │ WP1.2 seeded T2 fixture + draft connect-chatgpt.md (draft PR)
 │
@@ -123,7 +148,10 @@ aggregators), record URL + date for:
 (a) ChatGPT desktop MCP support: exists? config path, stdio vs url, custom headers?
 (b) Developer Mode menu path and OAuth redirect URI; the client_name ChatGPT registers with at
     /register; the clientInfo name; how ChatGPT treats readOnlyHint / destructiveHint (when it
-    asks for confirmation); any workspace admin setting that permits only read-only actions (D13);
+    asks for confirmation) and whether a user or admin can always-allow a tool (D13); any
+    workspace admin setting that treats read-only and write actions differently; where ChatGPT
+    fetches a URL a tool result returns (OpenAI's servers, a code sandbox, not at all) and any
+    allowlist it needs (ADR 0097);
     the workspace-admin publish flow and the "frozen snapshot / re-publish" behaviour
     (help.openai.com 12584461 and 11509118).
 Comment findings on issues 390 and 391, separating "confirmed on <url>" from "could not reach".
@@ -137,14 +165,18 @@ Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the pla
 PR A (merge it) "tests: seeded ChatGPT handshake fixture": tests/fixtures/ai_clients/chatgpt/
 (register.json with redirect_uri https://chatgpt.com/connector_platform_oauth_redirect,
 initialize.json, README.md "SEEDED FROM VENDOR DOCS, NOT YET CAPTURED", citing sources, expected
-agent_id chatgpt). The replay test picks it up by itself; make it pass.
-PR B (DRAFT, do not merge; WP 2.1 finishes it) "feature: Connect ChatGPT": connect-chatgpt.md
-in the connect-claude-*.md template, listed under docs/README.md "AI agent setup": organization
-deployment only (and why); Developer Mode steps (Settings → Apps → Advanced settings → Developer
-mode; Create; /mcp URL; OAuth); re-enable per chat; "Confirmations" per D13; files via capability
-URLs; pin on Settings → AI systems; ChatGPT desktop "pending". Org guide §9: one bullet linking
-it. A "Verification pending" note linking https://github.com/privacyfence/privacyfence/issues/391.
-No CHANGELOG line, no website change.
+agent_id chatgpt — the fixtures README's two "Expected agent_id" lines). The replay test
+(tests/unit/web/test_ai_client_replay.py) picks it up by itself; make it pass.
+PR B (DRAFT, do not merge — ADR 0100; WP 2.1 finishes it) "feature: Connect ChatGPT":
+connect-chatgpt.md with connect-claude-ai.md's sections (ADR 0098), listed under docs/README.md
+"AI agent setup": organization deployment only (and why); Developer Mode steps (Settings → Apps →
+Advanced settings → Developer mode; Create; /mcp URL; OAuth); re-enable per chat; "Confirmations"
+per D13 (annotations are always truthful, ADR 0089 — no mode, no switch); files via capability
+URLs, with whatever ChatGPT needs to reach the host (ADR 0097), and drive_get_file_content for a
+document's text; how it is identified and pinning on Settings → AI systems; ChatGPT desktop
+"pending". Org guide §9 "Add PrivacyFence to an AI client": add ChatGPT to its "Each AI client has
+its own page" list. A "Verification pending" note linking
+https://github.com/privacyfence/privacyfence/issues/391. No CHANGELOG line, no website change.
 ```
 
 ---
@@ -152,7 +184,9 @@ No CHANGELOG line, no website change.
 ### 🧑 M1: ChatGPT checks (about 1 h)
 
 Depends on: WAVE 1, the test org deployment, and the accounts in §6. Follow `ai-client-qa.md`'s
-per-client script and evidence format. Run each check under both annotation modes.
+per-client script and evidence format. Upgrade the test org deployment to the latest stable
+release first (at least 5.0.0: truthful annotations only, ADR 0094's registry, ADR 0097's
+`drive_get_file_content`). There is one annotation mode, so each check runs once.
 
 **M1.3 ChatGPT Developer Mode, org mode** (I391 Route A, 30 min)
 
@@ -165,17 +199,21 @@ per-client script and evidence format. Run each check under both annotation mode
    - Authentication: **OAuth**
    - tick **I understand and want to continue**, then **Create**
 3. **Expected:** PrivacyFence `/login` → Google → back to ChatGPT, connected, with the tool list.
-   - Note how ChatGPT labels the tools under each annotation mode.
+   - Note how ChatGPT labels the read tools, the write tools and the two destructive ones.
    - If OAuth finishes but the app doesn't appear, retry once. This is a known ChatGPT flakiness.
 4. New chat → **+** → **More** → **Developer mode** → enable **PrivacyFence**. You have to do this
    in every chat.
 5. Prompt: `List my calendar events for tomorrow.` **Expected:** it succeeds.
-6. Prompt: `Create a calendar event "PF test" tomorrow 10:00–10:15.` **Expected:**
-   - Truthful mode: ChatGPT's **Confirm** first, then the PrivacyFence card at `/approvals`.
-   - `all-read-only` mode: only the PrivacyFence card.
-
-   Screenshot both.
-7. Upload and download one file through capability URLs.
+6. Prompt: `Create a calendar event "PF test" tomorrow 10:00–10:15.` **Expected:** probably
+   ChatGPT's own **Confirm** first, then the PrivacyFence card at `/approvals`.
+   - Screenshot ChatGPT's prompt, if any, and the card.
+   - If ChatGPT offers to always allow the tool, do so and repeat: ChatGPT no longer asks,
+     PrivacyFence's card still does. If it offers nothing, record that (D13: confirmed twice).
+7. Upload and download one file through capability URLs (the per-client script's step 4, a
+   download over about 75 KB). Check the reverse proxy's access log for the upload `PUT` and the
+   `/mcp-files/fetch/` request, and note the source IP (OpenAI or elsewhere). If ChatGPT cannot
+   reach the link, record the error and whether it needs an allowlist (ADR 0097). Also ask for a
+   PDF's text: `drive_get_file_content` should return it without a link.
 8. Pin the registration on **Settings → AI systems**, then repeat step 5. The card now says
    verified.
 9. Post the evidence on **I391**, titled "M1.3 result (Route A)".
@@ -192,7 +230,8 @@ per-client script and evidence format. Run each check under both annotation mode
    Also check `ls ~/Library/Application\ Support/ChatGPT/`.
 3. If (a): add your `mcp_url` value with the header `Authorization: Bearer <output of
    PrivacyFenceApp --print-mcp-token>` (see `connect-claude-code.md`'s macOS row). Then run steps
-   5–6 of M1.3. Approve through the companion's **Open Approvals**.
+   5–6 of M1.3. Approve through the companion's **Open Approvals**. The card says **"Undetected"**
+   (ADR 0088); record the audit entry's `agent_id` for the `clientInfo` name.
 4. If (b): don't point it at Claude's extension folder. Just post the result.
 5. Post the evidence on **I390**, titled "M1.4 result: (a)/(b)/(c)", with screenshots.
 
@@ -209,11 +248,13 @@ Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the pla
 over WP 1.2's draft PR B:
 1. Replace the SEEDED chatgpt fixture with the captured one (scrubbed); README "captured <date>,
    client version <v>".
-2. agent_identity.py REGISTRY chatgpt: every observed name (DCR client_name and clientInfo name);
-   drop "openai-mcp" unless observed. Unit tests. A new ADR amending ADR 0035 records it (never
-   edit 0035's body).
+2. agent_identity.py REGISTRY chatgpt: every observed name (DCR client_name and clientInfo name),
+   as a `{server}` name template where the name embeds a user-chosen part (ADR 0094); drop
+   "openai-mcp" unless observed. Unit tests. A new ADR amending ADR 0035 and ADR 0094 records it,
+   as ADR 0094 did for the Claude clients (never edit an accepted ADR's body).
 3. connect-chatgpt.md: remove "Verification pending" for what passed; "Confirmations" states what
-   M1.3 observed under each mode (D13). Fill ai-client-qa.md's ChatGPT rows.
+   M1.3 observed (D13); "Files" states what M1.3 step 7 observed, including any allowlist (ADR
+   0097). Add ChatGPT rows to ai-client-qa.md's "Recording results" table.
 4. CHANGELOG [Unreleased] "Added": ChatGPT (Developer Mode, organization deployments), per D3.
    README.md client mentions (not the canonical description — WP 2.2 does that with the site).
 5. Tick I391's Route A checkboxes.
@@ -262,6 +303,9 @@ Depends on: GATE A. WP 3.1 also needs M1.4's result.
 
   Extend each packaged smoke test to assert that the file exists and answers `initialize` over
   stdio. Document an absolute `node` path. Verify by dispatching `build.yml` against the branch.
+  The file lives inside the app bundle / install folder, so the DMG still carries only the `.pkg`
+  and the one `.mcpb` (CLAUDE.md "macOS ships one file", ADR 0089 decision 4); the macOS and
+  Windows smoke tests that assert exactly one `.mcpb` must stay green.
   → **ADR** ("the shim is also shipped outside the `.mcpb`").
 - **(c) no usable MCP support:** post findings on I390, close it as "not planned — revisit when…",
   and point the docs at org mode.
@@ -279,7 +323,8 @@ one PR; drive to green.
 Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) (D13) and WP 1.1's findings on issue 391. Add a "ChatGPT
 Business/Enterprise/Edu: workspace-published connector" section to connect-chatgpt.md, linked
 from org guide §9: the admin flow (enable custom MCP connectors → create → Scan Tools → test as
-draft → publish); what Scan Tools shows under each annotation mode (D13); a callout that
+draft → publish); what Scan Tools shows for the read, write and destructive tools, and whether
+the admin can always-allow a write tool for members (D13); a callout that
 connecting or disconnecting a PrivacyFence service requires the ChatGPT admin to RE-PUBLISH the
 connector (PrivacyFence's tool list is dynamic, ChatGPT's published copy is frozen); pinning the
 registration on Settings → AI systems. "Verification pending" linking the full issue 391 URL.
@@ -294,9 +339,10 @@ Business or Enterprise workspace)
 1. Open **Workspace settings** (<https://chatgpt.com/admin>) → **Permissions & roles**, and turn
    on **Developer mode / Create custom MCP connectors** for admins.
 2. Under the **Apps / Connectors** permission, allow members to use custom apps (or allow one test
-   group). **Screenshot any setting that distinguishes read-only from write actions (D13).**
+   group). **Screenshot any setting that treats read-only and write actions differently, or
+   that lets the admin pre-approve a write tool for members (D13).**
 3. **Apps** → **Create** → the `/mcp` URL, **OAuth** → **Scan tools**. Screenshot what the scan
-   shows under each annotation mode.
+   shows for a read tool, a write tool and `calendar_delete_event`.
 4. Choose **Test as draft**, then run steps 5–6 of M1.3.
 5. **Publish** the connector. Then, as a non-admin member with Developer Mode off, confirm that
    PrivacyFence is available.
@@ -334,8 +380,8 @@ supported forms from guardrail 10's not-yet list. CHANGELOG. Run /dod; one PR; d
 ### 🤖 WAVE 4: retire this plan
 
 ```text
-Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header). Issues 390 and 391 are closed. For every "→ ADR" marker and
-D13, confirm an ADR exists on main (write any missing one) in one PR to main, citing issues and
+Read docs/chatgpt-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header). Issues 390 and 391 are closed. For every "→ ADR" marker, confirm an ADR
+exists on main (D13 is covered by ADR 0089 and needs none) (write any missing one) in one PR to main, citing issues and
 PRs, never the plan; name the ADRs in the PR description. Do not add or delete plan files on main.
 ```
 

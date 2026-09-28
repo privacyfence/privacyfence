@@ -18,26 +18,31 @@ Covers:
 They're written `I392`–`I394` below. Docs and test code must never use the `#NNN` form
 ([ADR 0056](adr/0056-code-carries-no-project-history.md)).
 
-**This plan starts after plan 1** ([`ai-agents-foundation-plan.md`](ai-agents-foundation-plan.md))
-is finished. Plan 1 builds everything this plan uses:
+**Plan 1** ([`ai-agents-foundation-plan.md`](ai-agents-foundation-plan.md)) **is finished**
+(2026-09-28; shipped in v5.0.0), so this plan can start. Everything it uses is on `main`:
 
-| From plan 1 | What it is |
+| From plan 1 | Where it is on `main` |
 |---|---|
-| Truthful tool annotations, plus the bundle switch `--tool-annotations all-read-only` | the ADR that superseded 0076 |
-| T1 portability test | runs on every PR |
-| T2 replay test | parametrized over `tests/fixtures/ai_clients/<client>/` |
-| T3 harness | `tests/integration/ai_client_harness.py`, the lockfile in `tests/integration/ai_clients/` and the weekly `ai-client-canary.yml` matrix |
-| Test org deployment, evidence format, per-client script | `ai-client-qa.md` |
-| `connect-<slug>.md` docs pages | GA4 content group `ai-agent` |
-| The website's **AI agents** menu | guardrail 14 |
+| Truthful tool annotations, the **only** mode: reads read-only, writes not read-only, `destructiveHint` only on `calendar_delete_event` and `drive_sheets_delete_dimensions`. There is no `all-read-only` switch, no bundle key and no `X-PrivacyFence-Tool-Annotations` header any more | ADR 0086 (decisions 1–2), [ADR 0089](adr/0089-tool-annotations-are-always-truthful.md) |
+| T1 portability test | `tests/unit/web/test_tool_schema_portability.py`, every PR |
+| T2 replay test | `tests/unit/web/test_ai_client_replay.py`, parametrized over `tests/fixtures/ai_clients/<client>/` (read that directory's `README.md`: layout, the two "Expected agent_id" lines, scrubbing) |
+| T3 harness | `tests/integration/ai_client_harness.py`; the pinned CLIs in `tests/integration/ai_clients/package.json` + committed `package-lock.json`, installed with `npm ci` ([ADR 0085](adr/0085-ci-installs-ai-client-clis-from-a-committed-lockfile.md)); `test_claude_code_contract.py` as the model (binary override `CLAUDE_CODE_BIN`, set by `tests.yml`'s `test` job so the test fails rather than skips); the weekly `ai-client-canary.yml` matrix, one `include:` entry per client |
+| Registry name templates (`"… ({server})"`) and the rule that an unrecognised DCR `client_name` yields to a recognised `clientInfo.name` | `agent_identity.py`, [ADR 0094](adr/0094-claude-clients-are-matched-by-their-observed-names.md) (amends ADR 0035) |
+| Local mode shows every requester as **"Undetected"** on cards and the Audit Log; the audit entry still records `agent_id` | [ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md) |
+| A download or upload link works only for a client that can reach the server's host; `drive_get_file_content` returns a document's text | [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md) |
+| Test org deployment, "What the client receives", per-client script, evidence format, "Recording results" table | `docs/ai-client-qa.md` |
+| One docs page per agent, `connect-<slug>.md`, listed under `docs/README.md` "AI agent setup" and in org guide §9 "Add PrivacyFence to an AI client"; GA4 content group `ai-agent` | [ADR 0098](adr/0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md); template: `connect-claude-code.md` (the closest client: direct HTTP, both modes, per-platform token table) |
+| The website's **AI agents** menu | held to `website/_data/clients.json` by guardrail 14 (`tests/unit/test_website_agent_pages.py`) |
 
-Plan 1's rules apply unchanged:
+Plan 1's rules apply unchanged, and are now ADRs:
 
 - one PR per package;
-- no unverified instructions on `main`;
-- a client's website page lands only after the release that carries its docs page;
-- no logos;
-- ADR numbers are the next free one at merge time.
+- no unverified setup instructions on `main`: a new client's doc waits in a draft PR until its
+  manual check passes ([ADR 0100](adr/0100-unverified-client-setup-instructions-never-merge-to-main.md));
+- a client's website page lands only after the stable release that carries its docs page
+  ([ADR 0099](adr/0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md));
+- no logos ([ADR 0101](adr/0101-the-website-shows-no-third-party-logos.md));
+- ADR numbers are the next free one at merge time (0101 was the last one when plan 1 finished).
 
 Plan 2 (ChatGPT) runs independently of this one.
 
@@ -58,19 +63,34 @@ when its "Depends on" items are done.
 
 ---
 
-## 1. Gemini-specific facts (checked 2026-09-26)
+## 1. Gemini-specific facts (checked 2026-09-26; re-checked against `main` 2026-09-28)
 
 1. **Gemini CLI connects straight to `/mcp`**, with `httpUrl`. In local mode it adds a bearer
    header; in org mode it uses OAuth with dynamic client registration (DCR). It doesn't use the
    `.mcpb` shim, and none should be packaged for it.
 2. **Attribution.** `REGISTRY` maps `gemini-cli` ← `gemini-cli-mcp-client`, which
    [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)
-   verified from Gemini CLI's source. In org mode the DCR `client_name` wins over
-   `clientInfo.name`, so we capture the name it registers with. `gemini-cli.png` exists. A new
-   `gemini-enterprise` entry needs an icon and a license row (`test_agent_label.py`).
-3. **Guardrail 10** bans `\bGemini\b` on every hand-written page. Listing Gemini CLI while Gemini
-   Enterprise isn't supported yet needs a finer not-yet list (WP 2.2).
-4. **Traps for I393 in `web/oauth_provider.py`:**
+   verified from Gemini CLI's source, not from a handshake; plan 1 found every unobserved Claude
+   name wrong, so capture it. In org mode a DCR `client_name` the registry matches wins over
+   `clientInfo.name`, and an unrecognised one yields to a recognised `clientInfo.name`
+   ([ADR 0094](adr/0094-claude-clients-are-matched-by-their-observed-names.md)), so an
+   unrecognised DCR name no longer hides `gemini-cli-mcp-client`. Still add the DCR name, as a
+   `{server}` template if it embeds the name given to `gemini mcp add`. In local mode the card and
+   Audit Log show **"Undetected"** whatever Gemini CLI sends
+   ([ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md)); only the audit
+   entry's `agent_id` shows the name. `gemini-cli.png` exists in
+   `src/privacyfence/resources/agent_icons/`. A new `gemini-enterprise` entry needs a PNG there, a
+   row in that directory's `README.md`, and passes `test_approval_icons.py`'s
+   one-icon-per-registry-entry test.
+3. **Guardrail 10** (`tests/unit/test_website_clients.py`) has `NOT_YET_SUPPORTED = ("ChatGPT",
+   "Gemini", "Copilot", "Cursor")`, banned on every hand-written page. Listing Gemini CLI while
+   Gemini Enterprise isn't supported yet needs a finer not-yet list (WP 2.2).
+4. **Annotations are always truthful**
+   ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)). Whether Gemini CLI asks
+   before a write, and whether it can always-allow a tool (or `trust` a server in
+   `settings.json`), is what the docs' "Confirmations" section records. PrivacyFence offers no
+   switch; its approval card decides either way.
+5. **Traps for I393 in `web/oauth_provider.py`:**
    - The running daemon keeps `oauth_clients.json` in memory and rewrites the whole file on
      every `get_client`. A script that edits the file while the daemon runs gets overwritten.
    - The daemon holds a `portalocker` single-instance lock (`daemon_main._acquire_instance_lock`).
@@ -80,10 +100,10 @@ when its "Depends on" items are done.
    - The secret is stored in plaintext inside the SDK's `OAuthClientInformationFull`.
    - Records are `{"client", "last_used_at"}`. There's no older format to migrate
      ([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)).
-5. **Org deployment names.** The service account is `privacyfence-org`, the unit is
+6. **Org deployment names.** The service account is `privacyfence-org`, the unit is
    `privacyfence-org.service`, the venv is `/opt/privacyfence/venv`, and the data directory is
    `/var/lib/privacyfence-org/.privacyfence/`.
-6. **CI.** `org-mode-smoke` has no Node step, and its harness is
+7. **CI.** `org-mode-smoke` has no Node step, and its harness is
    `tests/integration/test_org_ubuntu_release_smoke.py` + `mock_idp.py`. The `test` job has Node
    and Playwright.
 
@@ -102,7 +122,7 @@ when its "Depends on" items are done.
 ## 3. Roadmap
 
 ```text
-🧑 M0  plan 1 finished; Gemini CLI installed; test org deployment (ai-client-qa.md)
+🧑 M0  ✅ plan 1 finished (v5.0.0); Gemini CLI installed; test org deployment (ai-client-qa.md) up to date
 │
 🤖 WAVE 1   WP1.1 Gemini CLI in T3 + canary │ WP1.2 seeded T2 fixture + draft connect-gemini-cli.md (draft PR)
 │           WP1.3 re-source Gemini Enterprise / Spark vendor facts
@@ -138,13 +158,15 @@ when its "Depends on" items are done.
 ```text
 Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) §1. Implement WP 1.1 on plan 1's T3 harness:
 1. tests/integration/ai_clients/package.json: add @google/gemini-cli (exact version); refresh the
-   lockfile with npm install; tests use npm ci.
-2. tests/integration/test_gemini_cli_contract.py using ai_client_harness.py: throwaway HOME with
+   lockfile with npm install; tests use npm ci (ADR 0085). tests.yml's `test` job sets
+   GEMINI_CLI_BIN to the installed binary, as it does CLAUDE_CODE_BIN.
+2. tests/integration/test_gemini_cli_contract.py using ai_client_harness.py, modelled on
+   test_claude_code_contract.py: throwaway HOME with
    .gemini/settings.json {"mcpServers":{"privacyfence":{"httpUrl":"<url>","headers":
    {"Authorization":"Bearer <token>"}}}}; `gemini mcp list` shows privacyfence connected with a
    non-zero tool count. No Google credential — if the pinned version needs one even for
    `mcp list`, stop and report. GEMINI_CLI_BIN overrides the binary.
-3. ai-client-canary.yml: add gemini-cli to the matrix.
+3. ai-client-canary.yml: add gemini-cli as one `include:` entry (package, test file, variable).
 Run /dod; one PR "tests: Gemini CLI contract test (T3)"; drive to green.
 ```
 
@@ -155,15 +177,20 @@ Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan
 PR A (merge) "tests: seeded Gemini CLI handshake fixture": tests/fixtures/ai_clients/gemini-cli/
 (register.json with redirect http://localhost:7777/oauth/callback, initialize.json with
 clientInfo gemini-cli-mcp-client, README "SEEDED FROM VENDOR DOCS, NOT YET CAPTURED", citing
-sources, expected agent_id gemini-cli). The replay test picks it up.
-PR B (DRAFT; WP 2.1 finishes it) "feature: Connect Gemini CLI": connect-gemini-cli.md in the
-connect-claude-*.md template, under docs/README.md "AI agent setup": local mode (settings.json
-httpUrl + headers, and `gemini mcp add --transport http privacyfence <mcp_url> --header
-"Authorization: Bearer $(<platform binary> --print-mcp-token)"`, per platform); organization mode
-(httpUrl without headers, `/mcp auth`); no shim; Confirmations (Gemini CLI's own tool prompt; the
---tool-annotations bundle switch; in local mode the X-PrivacyFence-Tool-Annotations header, added
-with a second --header); files via capability URLs; pinning. Org guide §9 bullet. A
-"Verification pending" note linking https://github.com/privacyfence/privacyfence/issues/392.
+sources, with the fixtures README's two "Expected agent_id" lines: gemini-cli). The replay test
+(tests/unit/web/test_ai_client_replay.py) picks it up.
+PR B (DRAFT, do not merge — ADR 0100; WP 2.1 finishes it) "feature: Connect Gemini CLI":
+connect-gemini-cli.md with connect-claude-code.md's sections (ADR 0098), under docs/README.md
+"AI agent setup": local mode (settings.json httpUrl + headers, and `gemini mcp add --transport
+http privacyfence <mcp_url> --header "Authorization: Bearer $(<platform binary>
+--print-mcp-token)"`, with connect-claude-code.md's per-platform mcp_url/token table); organization
+mode (httpUrl without headers, `/mcp auth`); no shim; Confirmations (Gemini CLI's own tool
+prompt and its always-allow / trust setting; annotations are always truthful, ADR 0089 — no
+mode, no switch, no header); files via capability URLs and drive_get_file_content for a
+document's text; how it is identified ("Undetected" on a local install, ADR 0088) and pinning.
+Org guide §9 "Add PrivacyFence to an AI client": add Gemini CLI to its "Each AI client has its
+own page" list. A "Verification pending" note linking
+https://github.com/privacyfence/privacyfence/issues/392.
 ```
 
 #### WP 1.3: re-source Gemini Enterprise and Spark facts · research, no PR
@@ -182,7 +209,9 @@ pages become part of M3.1.
 
 ### 🧑 M1: Gemini CLI checks (about 30 min)
 
-Follow `ai-client-qa.md`'s per-client script, under both annotation modes.
+Follow `ai-client-qa.md`'s per-client script. Use the latest stable release (at least 5.0.0) for
+both the local install and the test org deployment. There is one annotation mode, so each check
+runs once.
 
 **M1.1 Gemini CLI, local mode** (I392)
 
@@ -200,12 +229,16 @@ Follow `ai-client-qa.md`'s per-client script, under both annotation modes.
    listed.
 4. Prompt: `Use privacyfence to list my calendar events for tomorrow.` **Expected:** it succeeds.
 5. Prompt: `Use privacyfence to create a calendar event "PF test" tomorrow 10:00–10:15.`
-   - Note whether Gemini CLI asks first, under each annotation mode.
-   - Approve through the companion's **Open Approvals**.
+   - Note whether Gemini CLI asks first, and whether "always allow" (or trusting the server)
+     stops it asking while PrivacyFence's card still appears.
+   - Approve through the companion's **Open Approvals**. The card says **"Undetected"**
+     (ADR 0088); that is expected in local mode.
    - Check that the event exists.
 6. Upload and download one Drive file. **Expected:** it uses `privacyfence_create_upload_slot`
    plus a `PUT`, and a `/mcp-files/fetch/…` URL.
-7. Post the evidence on **I392**, titled "M1.1 result".
+7. Note the audit entry's `agent_id` (the `clientInfo` name Gemini CLI sent), per the script's
+   step 5.
+8. Post the evidence on **I392**, titled "M1.1 result".
 
 **M1.2 Gemini CLI, org mode** (I392)
 
@@ -230,10 +263,12 @@ Depends on: M1.1 passed.
 Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) and the M1 evidence on issue 392. Take over WP 1.2's draft PR B:
 1. Replace the SEEDED gemini-cli fixture with the captured one (scrubbed; README "captured <date>,
    client version <v>").
-2. REGISTRY gemini-cli: add the observed DCR client_name if it differs from clientInfo's; unit
-   tests; if anything changes, a new ADR amending ADR 0035.
+2. REGISTRY gemini-cli: add the observed DCR client_name if it differs from clientInfo's, as a
+   `{server}` name template if it embeds the `gemini mcp add` server name (ADR 0094); fix the
+   clientInfo name if M1 saw a different one; unit tests; if anything changes, a new ADR amending
+   ADR 0035 and ADR 0094 (never edit an accepted ADR's body).
 3. connect-gemini-cli.md: remove "Verification pending" for what passed; Confirmations as observed.
-   ai-client-qa.md rows.
+   Gemini CLI rows (local and org) in ai-client-qa.md's "Recording results" table.
 4. CHANGELOG [Unreleased] "Added": Gemini CLI (local and organization), per D3. README client
    mentions (not the canonical description).
 Run /dod; "feature: verified Gemini CLI support"; drive to green.
@@ -298,7 +333,7 @@ ai-client-canary.yml. Run /dod; one PR; drive to green.
 #### WP 4.1: ADR, pre-registered OAuth clients, tests, docs · `feature:`
 
 ```text
-Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) (§1 items 2 and 4, D4) and the M3.1 findings on issue 393.
+Read docs/gemini-support-plan.md (branch claude/bold-fermat-xlsdy4; see the plan's header) (§1 items 2 and 5, D4) and the M3.1 findings on issue 393.
 Implement WP 4.1:
 1. ADR (next free number at merge time): "Pre-registered OAuth clients for clients that cannot use
    DCR" — D4, the stale-prune exemption, secret storage matching the SDK, why the command refuses
