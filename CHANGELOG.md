@@ -137,6 +137,11 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Fixed
 
+- **`build_org_bundle.py` no longer ignores admin changes made without `--mode org`.** A command
+  such as `--merge --idp-admin-group-value new@example.com` finished without an error but left the
+  admin list as it was. It now stops and explains that changing the admin list means passing
+  `--mode org` with every `--server-*` and `--idp-*` flag and the full list of admins. The
+  organization setup guide now shows how to add or remove an admin.
 - **The Claude Desktop extension no longer exits silently when started through a symlinked
   path.** If the folder the extension was installed in was reached through a symbolic link, the
   extension quit at once without connecting or logging anything, and Claude Desktop reported no

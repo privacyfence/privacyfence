@@ -158,8 +158,9 @@ exact address:
 Do not use `hd` (the Workspace domain): every account in the domain has the same value, so every
 account would be an admin.
 
-Admin status is decided at sign-in and kept for the browser session. After you change the admin
-list and restart the daemon, admins sign out and back in to pick it up.
+Admin status is decided at sign-in and kept for the browser session. To add or remove an admin
+later, see [Changing a bundle later](#changing-a-bundle-later). After you change the admin list and
+restart the daemon, admins sign out and back in to pick it up.
 
 ### Who may sign in
 
@@ -312,6 +313,30 @@ example the admin list, or a rotated client secret), pass `--mode org`, `--serve
 `--server-*` flag you use (a missing `--server-bind-host` goes back to `127.0.0.1`) and every
 `--idp-*` flag again. Connector, step-up, download, authorization and forwarding flags merge into
 their existing sections.
+
+**Adding or removing an admin.** The admin list is part of `idp`, so it is replaced, not merged:
+pass every admin who should remain, not just the change. To add Carol to Alice and Bob:
+
+```bash
+python3 build_org_bundle.py --merge -o org_config.json \
+  --mode org \
+  --server-issuer-url https://pf.acme.example.com \
+  --server-trusted-proxy 127.0.0.1 \
+  --idp-issuer https://idp.acme.example.com \
+  --idp-client-id <client id> \
+  --idp-client-secret <client secret> \
+  --idp-admin-group-claim email \
+  --idp-admin-group-value alice@acme.example.com \
+  --idp-admin-group-value bob@acme.example.com \
+  --idp-admin-group-value carol@acme.example.com \
+  --sign-key ~/secure/org-signing-key.pem
+```
+
+To remove someone, run the same command without their `--idp-admin-group-value`. Leaving out
+`--idp-admin-group-claim` altogether leaves nobody an admin. The script refuses
+`--idp-admin-group-*` (and every other `--server-*` or `--idp-*` flag) without `--mode org`, rather
+than writing a bundle with the admin list unchanged. Then install the bundle, restart, and have
+admins sign out and back in ([section 4](#who-is-an-admin)).
 
 ### Install the bundle
 
