@@ -1447,8 +1447,8 @@ class TestDraftSignature:
         assert 'class="gmail_signature"' in parts["text/html"]
 
 
-# A redacted copy of the signature from issue #783: every image is a cid:
-# reference to a part Gmail's compose window attaches itself.
+# A real-world signature shape, redacted: every image is a cid: reference to
+# a part Gmail's compose window attaches itself.
 _CID_SIGNATURE_HTML = (
     '<table><tr><td><strong>Jane Doe</strong><br>Job Title</td></tr>'
     '<tr><td><a href="https://www.example.com/"><img src="cid:companyLogo" width="126" height="25" '
