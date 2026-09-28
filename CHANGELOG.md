@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.1.0] — 2026-09-28
+
 ### Added
 
 - **ChatGPT desktop, with a local install.** The ChatGPT app for macOS connects to PrivacyFence on
@@ -3106,7 +3108,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.1.0...HEAD
+[5.1.0]: https://github.com/privacyfence/privacyfence/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/privacyfence/privacyfence/compare/v4.7.0...v5.0.0
 [4.7.0]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...v4.7.0
 [4.6.1]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...v4.6.1
