@@ -43,7 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Organization deployments now work from a phone, and the app looks like the website.
+## [5.0.0] — 2026-09-28
+
+PrivacyFence now tells AI clients the truth about every tool: reads are read-only, writes are writes.
+Each Claude client has its own setup page, a request still waiting for your approval no longer goes
+ahead before you decide, organization deployments work from a phone, and the app looks like the
+website.
 
 ### Added
 
@@ -79,6 +84,7 @@ Organization deployments now work from a phone, and the app looks like the websi
   handles files, what it asks before PrivacyFence's own approval card, how it is identified, and
   what to do when it does not connect. The install pages and the organization guide link there
   instead of repeating the steps.
+
 ### Changed
 
 - **Organization mode sends downloads over about 75 KB as a link, not inside the tool result.**
@@ -3042,7 +3048,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.7.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/privacyfence/privacyfence/compare/v4.7.0...v5.0.0
 [4.7.0]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...v4.7.0
 [4.6.1]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...v4.6.1
 [4.6.0]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...v4.6.0
