@@ -200,7 +200,7 @@ is not shown on an organization server.
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `agent_overrides.<client name>` | string | none | not set (commented out) | Label an MCP client whose handshake name PrivacyFence does not recognise as a known AI system. The value is an AI system id such as `claude-code` or `claude` (the ids the **Audit Log** shows); an unknown id is ignored with a warning. It relabels only: the entry is still recorded as claimed (`client_info`, *Not verified*). Local mode only; needs a restart. See [How PrivacyFence works](how-it-works.md#which-ai-system-is-asking). |
+| `agent_overrides.<client name>` | string | none | not set (commented out) | Label an MCP client whose handshake name PrivacyFence does not recognise as a known AI system. The value is an AI system id such as `claude-code` or `claude` (the ids the **Audit Log** shows); an unknown id is ignored with a warning. It relabels the recorded name only: the entry is still recorded as claimed (`client_info`), and the card still shows *Undetected*, as every local-mode card does. Local mode only; needs a restart. See [How PrivacyFence works](how-it-works.md#which-ai-system-is-asking). |
 
 ## Organization config bundle (org_config.json)
 
@@ -288,7 +288,7 @@ A bundle that still carries `mcp.tool_annotations` (only 5.0.0a1's `build_org_bu
 stops the daemon from starting, with a message naming the key: PrivacyFence always tells AI clients
 truthfully which tools read and which write, and the option to say otherwise was removed. Rebuild
 the bundle; `--merge` drops the key. See
-[ADR 0088](adr/0088-tool-annotations-are-always-truthful.md).
+[ADR 0089](adr/0089-tool-annotations-are-always-truthful.md).
 
 The Google, Slack, Salesforce and Atlassian redirect URIs to register for an organization
 deployment are listed in [Organization deployment](org-mode-setup-guide.md).

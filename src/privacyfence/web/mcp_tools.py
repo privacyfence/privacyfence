@@ -36,7 +36,7 @@ from ..connector import ToolSpec
 # in the calling client. The hints are still something PrivacyFence *tells* a
 # client, so they are always true: a read is read-only and idempotent, a write
 # is neither, and only a tool whose ToolSpec says it deletes something is
-# destructive. There is no mode that says otherwise (ADR 0088, removing the
+# destructive. There is no mode that says otherwise (ADR 0089, removing the
 # all-read-only option ADR 0086 kept and ADR 0087 shipped; ADR 0076 was the
 # original uniform-read-only workaround). A user who does not want the client's
 # own confirmation in front of gate.py's always-allows PrivacyFence's tools in

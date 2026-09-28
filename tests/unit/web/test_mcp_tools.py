@@ -118,7 +118,7 @@ class TestToMcpTool:
         assert tool.name == "gmail_send"
         assert tool.description == "Sends an email."
 
-    # ADR 0088: (readOnlyHint, destructiveHint, idempotentHint) per tool kind,
+    # ADR 0089: (readOnlyHint, destructiveHint, idempotentHint) per tool kind,
     # always derived from the spec -- a write is not read-only and not
     # idempotent, and only a deleting tool is destructive. There is no mode
     # that advertises a write as read-only.

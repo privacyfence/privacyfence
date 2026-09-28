@@ -2829,7 +2829,7 @@ class TestRunApp:
 
     @pytest.mark.parametrize("value", ["truthful", "all_read_only"])
     def test_a_bundle_carrying_the_removed_tool_annotations_key_refuses_to_start(self, monkeypatch, value):
-        # ADR 0088: only a 5.0.0a1 bundle can carry mcp.tool_annotations. The daemon refuses to
+        # ADR 0089: only a 5.0.0a1 bundle can carry mcp.tool_annotations. The daemon refuses to
         # start rather than quietly advertise something other than what the administrator asked for.
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)

@@ -86,7 +86,7 @@ img { display: block; max-width: 100%; }
   font: 600 12px ui-monospace, Menlo, monospace;
 }
 .pf-agent-name { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
-.pf-agent-claimed .pf-agent-name, .pf-agent-unknown .pf-agent-name { font-weight: 500; }
+.pf-agent-claimed .pf-agent-name, .pf-agent-unknown .pf-agent-name, .pf-agent-undetected .pf-agent-name { font-weight: 500; }
 .pf-agent-claim { font-style: italic; overflow-wrap: anywhere; }
 .pf-agent .badge { font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; }
 .pf-agent-note { flex-basis: 100%; font-size: 12px; line-height: 1.45; }

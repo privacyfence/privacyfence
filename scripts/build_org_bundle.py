@@ -475,14 +475,14 @@ def main(argv: list[str] | None = None) -> int:
     bundle.pop("signature", None)
     bundle.pop("signing_public_key", None)
     # A 5.0.0a1 bundle may carry mcp.tool_annotations, which the daemon now
-    # refuses to start with (ADR 0088). --merge is the way to rebuild one, so
+    # refuses to start with (ADR 0089). --merge is the way to rebuild one, so
     # drop the key here rather than carry forward a bundle that cannot load.
     mcp_section = bundle.get("mcp")
     if isinstance(mcp_section, dict) and "tool_annotations" in mcp_section:
         del mcp_section["tool_annotations"]
         if not mcp_section:
             del bundle["mcp"]
-        print("Dropped the removed mcp.tool_annotations key from the merged bundle (ADR 0088).")
+        print("Dropped the removed mcp.tool_annotations key from the merged bundle (ADR 0089).")
 
     bundle["version"] = 1
     if args.org_name:

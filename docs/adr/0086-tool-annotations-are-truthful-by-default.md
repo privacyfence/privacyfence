@@ -6,7 +6,7 @@ Accepted — 2026-09-27. Implemented. Supersedes
 [ADR 0076](0076-every-connector-tool-is-advertised-read-only.md). Resolves
 [issue 46](https://github.com/privacyfence/privacyfence/issues/46).
 
-**Superseded in part by [ADR 0088](0088-tool-annotations-are-always-truthful.md), 2026-09-28:**
+**Superseded in part by [ADR 0089](0089-tool-annotations-are-always-truthful.md), 2026-09-28:**
 decisions 3, 4 and 5 (the bundle's `mcp.tool_annotations` and the per-connection header) are
 removed; annotations are always truthful.
 

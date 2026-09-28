@@ -1,5 +1,5 @@
 """Which connector tools are classified as destructive (``ToolSpec.destructive``, ADR 0086), and
-that every connector tool is advertised truthfully (ADR 0088).
+that every connector tool is advertised truthfully (ADR 0089).
 
 ``destructiveHint`` is what a client reads to decide whether a tool deletes something. Only the
 tools that delete are marked: an overwrite is a write, not a deletion. The set is pinned here
@@ -50,7 +50,7 @@ def test_every_destructive_tool_is_a_write():
 
 @pytest.mark.parametrize("name", sorted(ALL_SPECS))
 def test_every_connector_tool_is_advertised_truthfully(name):
-    """ADR 0088: what ``/mcp`` tells a client about each real connector tool is what the tool does
+    """ADR 0089: what ``/mcp`` tells a client about each real connector tool is what the tool does
     -- a read is read-only and idempotent, a write is neither, and only the pinned deleting tools
     are destructive. There is no mode that advertises a write as read-only."""
     from privacyfence.web import mcp_tools

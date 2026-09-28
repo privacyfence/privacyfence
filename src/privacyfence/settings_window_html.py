@@ -953,6 +953,11 @@ _JS = r"""
 
   function auditAgentHtml(agent) {
     agent = agent || {};
+    // Every local-mode row (ADR 0088): "Undetected" alone, no tier badge.
+    if (agent.tier === 'undetected') {
+      return '<div class="pf-audit-agent pf-audit-agent-undetected" data-agent-tier="undetected">' +
+        '<span class="pf-audit-agent-name">' + esc(agent.headline || 'Undetected') + '</span></div>';
+    }
     var tier = TIER_MARKERS.hasOwnProperty(agent.tier) ? agent.tier : 'unknown';
     var headline = agent.headline || 'Unrecognised AI system';
     var text = agent.claim ? headline + ' \u201c' + agent.claim + '\u201d' : headline;

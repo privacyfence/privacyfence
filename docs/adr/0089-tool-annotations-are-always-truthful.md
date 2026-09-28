@@ -1,4 +1,4 @@
-# ADR 0088: Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed
+# ADR 0089: Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed
 
 ## Status
 
@@ -46,7 +46,7 @@ The opt-in only ever shipped in the 5.0.0a1 pre-release; no stable release carri
 2. **A bundle still carrying `mcp.tool_annotations` stops the daemon from starting.** Only a
    bundle built by 5.0.0a1's `build_org_bundle.py --tool-annotations` can carry it.
    `org_mode.reject_removed_tool_annotations` raises `ConfigurationError` for the key whatever its
-   value, with a message naming the key, ADR 0088 and the fix (rebuild without the flag), and
+   value, with a message naming the key, ADR 0089 and the fix (rebuild without the flag), and
    `daemon_main.run_app` calls it where the bundle is loaded, so the daemon takes the same "print
    and refuse to start" path as any other broken bundle. The reason for refusing rather than
    ignoring: an administrator who configured `all_read_only` would otherwise silently get

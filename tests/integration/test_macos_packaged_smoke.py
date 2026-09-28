@@ -380,7 +380,7 @@ def test_dmg_carries_only_the_installer_and_the_extension():
             f"no Claude Desktop extension on the shipped DMG: {entries} -- the installer's own "
             f"conclusion screen tells the user to open it right there"
         )
-        # Exactly one extension (ADR 0088 removed the second one ADR 0087 added): the
+        # Exactly one extension (ADR 0089 removed the second one ADR 0087 added): the
         # conclusion screen names one file, and two would list every tool twice.
         assert [e for e in entries if e.endswith(".mcpb")] == ["PrivacyFence.mcpb"], entries
         assert "PrivacyFenceApp.app" not in entries, (

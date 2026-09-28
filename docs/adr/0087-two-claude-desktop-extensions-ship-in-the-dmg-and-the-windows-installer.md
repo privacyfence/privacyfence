@@ -7,7 +7,7 @@ Accepted — 2026-09-27. Implemented. Builds on
 `X-PrivacyFence-Tool-Annotations` header) this puts in front of Claude Desktop users. Part of
 [issue 46](https://github.com/privacyfence/privacyfence/issues/46).
 
-**Superseded by [ADR 0088](0088-tool-annotations-are-always-truthful.md), 2026-09-28:** the
+**Superseded by [ADR 0089](0089-tool-annotations-are-always-truthful.md), 2026-09-28:** the
 no-prompts extension is removed; the DMG and the Windows installer carry one `.mcpb` again.
 
 ## Context

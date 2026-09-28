@@ -50,7 +50,7 @@ def reject_removed_tool_annotations(org_config: dict[str, Any]) -> None:
 
     Only a bundle built by 5.0.0a1's ``build_org_bundle.py --tool-annotations`` can carry it. The
     key chose between truthful tool annotations and advertising every connector tool read-only;
-    the second was removed and truthful annotations are the only behaviour (ADR 0088). A bundle
+    the second was removed and truthful annotations are the only behaviour (ADR 0089). A bundle
     naming the key -- whichever value -- is refused with ``ConfigurationError`` rather than read
     and ignored, so an administrator who asked for all-read-only never silently gets something
     else: the daemon does not start until the bundle is rebuilt without the flag."""
@@ -58,7 +58,7 @@ def reject_removed_tool_annotations(org_config: dict[str, Any]) -> None:
     if isinstance(section, dict) and "tool_annotations" in section:
         raise ConfigurationError(
             "org_config.json's \"mcp.tool_annotations\" has been removed: PrivacyFence always tells "
-            "AI clients which tools are read-only and which write (ADR 0088). Rebuild the bundle "
+            "AI clients which tools are read-only and which write (ADR 0089). Rebuild the bundle "
             "without --tool-annotations."
         )
 

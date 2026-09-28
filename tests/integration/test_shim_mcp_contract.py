@@ -11,7 +11,7 @@ that drives the shim's stdio transport with the mcp client against a real
 with the bearer header attached and the mcp_url file honoured. That is a
 passthrough test, not a schema test: the shim knows no schemas, so there is
 nothing else to assert -- except that the passthrough leaves the daemon's
-truthful tool annotations (ADR 0088) exactly as the daemon sent them, which
+truthful tool annotations (ADR 0089) exactly as the daemon sent them, which
 ``test_the_shim_passes_the_daemons_truthful_annotations_through`` checks.
 
 Requires Node on PATH; skipped automatically otherwise -- same posture as
@@ -148,7 +148,7 @@ class FileBridgeTestConnector(Connector):
 
 
 class ReadWriteDeleteConnector(Connector):
-    """One tool of each kind truthful annotations tell apart (ADR 0088)."""
+    """One tool of each kind truthful annotations tell apart (ADR 0089)."""
 
     @property
     def name(self) -> str:
@@ -342,7 +342,7 @@ async def test_shim_proxies_a_real_initialize_and_tool_call_over_mcp(
 async def test_the_shim_passes_the_daemons_truthful_annotations_through(
     running_annotations_server, built_shim_entry, shim_home,
 ):
-    """ADR 0088: the one extension there is starts the real shim with no
+    """ADR 0089: the one extension there is starts the real shim with no
     arguments, and what reaches Claude Desktop is what the daemon says --
     the read read-only and idempotent, the write neither, only the delete
     destructive -- with PrivacyFence's own meta-tools unchanged too."""

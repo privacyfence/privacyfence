@@ -61,7 +61,7 @@ the same Google Calendar and Drive accounts.
 ## What the client receives
 
 PrivacyFence advertises every tool truthfully, and there is only one annotation mode
-([ADR 0088](adr/0088-tool-annotations-are-always-truthful.md)): read tools with
+([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)): read tools with
 `readOnlyHint=true`; write tools with `readOnlyHint=false`; the tools that delete with
 `destructiveHint=true`. The question each run answers is whether the client asks for its own
 confirmation before a write, and whether it lets the user always allow the tool so that it stops

@@ -645,7 +645,7 @@ class TestWebPushFlag:
 
 
 class TestRemovedToolAnnotations:
-    """ADR 0088: --tool-annotations is gone, and --merge drops the mcp.tool_annotations key a
+    """ADR 0089: --tool-annotations is gone, and --merge drops the mcp.tool_annotations key a
     5.0.0a1 bundle may still carry -- the daemon refuses to start with it."""
 
     def _out(self, tmp_path):

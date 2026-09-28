@@ -15,6 +15,14 @@ Three tiers, and they never look the same:
 - **unknown** -- no usable signal, or a name no registry entry matches exactly.
   ``UNRECOGNISED_LABEL``, with the sanitized raw claim alongside when one was sent. Never blank
   and never "Claude".
+- **undetected** -- every request on a local install (ADR 0088). Local mode has one shared MCP
+  token (ADR 0006), so nothing it receives can tell one AI system from another, and no label there
+  can be more than a claim. Rather than show that claim, the card, the approval list and the audit
+  history all say ``UNDETECTED_LABEL`` -- no name, no claim, no "Not verified" badge. The audit log
+  still records the claim (``agent_id``/``agent_source``); only what a human is shown changes.
+
+Which of the two sets applies is install-wide: ``daemon_main`` calls ``set_local_mode()`` once at
+startup from ``org_mode.resolve_mode``. The default is local, like ``org_mode.DEFAULT_MODE``.
 
 Everything here returns raw text. Every renderer escapes it, the same contract
 ``approval_window_html.fill_agent_placeholder`` documents -- escaping here too would show a name
@@ -30,6 +38,10 @@ from .agent_identity import REGISTRY, UNKNOWN_AGENT, UNKNOWN_ID_PREFIX, UNRECOGN
 TIER_ATTESTED = "attested"
 TIER_CLAIMED = "claimed"
 TIER_UNKNOWN = "unknown"
+TIER_UNDETECTED = "undetected"
+
+# The whole label for every request on a local install -- see the module docstring.
+UNDETECTED_LABEL = "Undetected"
 
 # What the card's copy calls a caller whose name is not attested: "What will be provided to the AI
 # system", not "... to ChatGPT". A claimed brand is shown once, as a claim, and never borrowed as
@@ -40,6 +52,18 @@ NEUTRAL_SUBJECT = "the AI system"
 NOT_VERIFIED = "Not verified"
 
 _REGISTRY_IDS = frozenset(entry.agent_id for entry in REGISTRY)
+
+_local_mode = True
+
+
+def set_local_mode(local: bool) -> None:
+    """Whether this install is in local mode -- called once by ``daemon_main`` at startup."""
+    global _local_mode
+    _local_mode = local
+
+
+def is_local_mode() -> bool:
+    return _local_mode
 
 
 @dataclass(frozen=True)
@@ -55,7 +79,9 @@ class AgentLabel:
 
     @property
     def headline(self) -> str:
-        """The one-line label: the name, the claim, or ``UNRECOGNISED_LABEL``."""
+        """The one-line label: the name, the claim, ``UNRECOGNISED_LABEL`` or ``UNDETECTED_LABEL``."""
+        if self.tier == TIER_UNDETECTED:
+            return UNDETECTED_LABEL
         if self.tier == TIER_ATTESTED:
             return self.name
         if self.tier == TIER_CLAIMED:
@@ -80,7 +106,10 @@ class AgentLabel:
 def label_for(agent: AgentIdentity) -> AgentLabel:
     """The tiered label for ``agent``. A registry match is required for the attested and claimed
     tiers: an attested signal naming something the registry does not know still renders as
-    unknown, because there is no display name or mark to give it."""
+    unknown, because there is no display name or mark to give it. On a local install every
+    identity is undetected, whatever it claims."""
+    if _local_mode:
+        return AgentLabel(tier=TIER_UNDETECTED, name="", subject=NEUTRAL_SUBJECT, icon_id="")
     if agent.id in _REGISTRY_IDS and agent.source.value:
         if agent.is_attested():
             return AgentLabel(tier=TIER_ATTESTED, name=agent.name, subject=agent.name, icon_id=agent.id)
@@ -89,5 +118,6 @@ def label_for(agent: AgentIdentity) -> AgentLabel:
     return AgentLabel(tier=TIER_UNKNOWN, name=claim, subject=NEUTRAL_SUBJECT, icon_id="")
 
 
-# What a surface renders when it was handed no identity at all.
-UNKNOWN_AGENT_LABEL = label_for(UNKNOWN_AGENT)
+def unknown_agent_label() -> AgentLabel:
+    """What a surface renders when it was handed no identity at all, in this install's mode."""
+    return label_for(UNKNOWN_AGENT)

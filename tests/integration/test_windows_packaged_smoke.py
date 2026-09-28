@@ -1040,7 +1040,7 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     alias_exe = install_dir / ALIAS_EXE_NAME
     assert main_exe.is_file(), f"{main_exe} missing after silent install"
     assert alias_exe.is_file(), f"{alias_exe} missing after silent install"
-    # Exactly one Claude Desktop extension (ADR 0088 removed the second one ADR 0087 added).
+    # Exactly one Claude Desktop extension (ADR 0089 removed the second one ADR 0087 added).
     installed_mcpb = sorted(p.name for p in install_dir.glob("*.mcpb"))
     assert len(installed_mcpb) == 1, f"expected one .mcpb in {install_dir} after install, got {installed_mcpb}"
 

@@ -75,6 +75,11 @@ Organization deployments now work from a phone, and the app looks like the websi
   instead of repeating the steps.
 ### Changed
 
+- **Local installs show every requester as "Undetected".** Every AI system on your computer uses
+  the same credential, so PrivacyFence cannot tell them apart. Approval cards, the approvals list
+  and the Audit Log page now say **Undetected** instead of a name the AI system gave itself with a
+  **Not verified** badge, or "Unrecognised AI system". The audit log still records the name the AI
+  system sent. Organization mode is unchanged.
 - **Write tools are now advertised as writes.** AI clients used to be told that every PrivacyFence
   tool was read-only. Now reads are read-only, writes are writes, and the two tools that delete
   something (`calendar_delete_event` and `drive_sheets_delete_dimensions`) are marked destructive.
@@ -82,7 +87,7 @@ Organization deployments now work from a phone, and the app looks like the websi
   makes it. Your AI client may therefore ask for its own confirmation before a write, in front of
   PrivacyFence's approval. Claude Desktop and Claude Code both let you always allow a tool, so you
   can turn their prompt off for PrivacyFence's tools; PrivacyFence's approval card still decides.
-  See ADR 0086 and ADR 0088.
+  See ADR 0086 and ADR 0089.
 - **The PrivacyFence meta-tools' descriptions are shorter.** The six longest `privacyfence_*`
   tool descriptions were condensed to at most 1024 characters each, so AI clients that reject a
   longer tool description accept them. What they tell the AI system to do is unchanged.
@@ -131,7 +136,7 @@ Organization deployments now work from a phone, and the app looks like the websi
   built with `--tool-annotations` now stops the daemon from starting, with a message naming the
   key, instead of quietly behaving differently than it says; rebuild it without the flag
   (`--merge` drops the key). If you installed "PrivacyFence (no Claude prompts)", remove it under
-  Claude Desktop's **Settings → Extensions** and install `PrivacyFence.mcpb` instead. See ADR 0088.
+  Claude Desktop's **Settings → Extensions** and install `PrivacyFence.mcpb` instead. See ADR 0089.
 
 ### Fixed
 

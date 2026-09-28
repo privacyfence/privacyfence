@@ -118,7 +118,7 @@ do: every call still goes through PrivacyFence's gate, and PrivacyFence's approv
 confirmation that decides.
 
 The reasoning is in [ADR 0086](adr/0086-tool-annotations-are-truthful-by-default.md) and
-[ADR 0088](adr/0088-tool-annotations-are-always-truthful.md).
+[ADR 0089](adr/0089-tool-annotations-are-always-truthful.md).
 
 ## What happens on a tool call
 
@@ -212,12 +212,16 @@ The audit log records four fields: `agent_id`, `agent_name`, `agent_version` and
 
 Two further values, `endpoint` and `override`, are reserved and never recorded.
 
-- A card calls a claimed name exactly that: the header says the caller *says* it is that system and
-  marks it **Not verified**, and the rest of the card says "the AI system"
+- On a local install every card, approvals-list row and Audit Log row shows the caller as
+  **Undetected**, with no name and no badge, because nothing there can tell AI systems apart
+  ([ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md)). The fields above are
+  still recorded.
+- In organization mode a card calls a claimed name exactly that: the header says the caller *says*
+  it is that system and marks it **Not verified**, and the rest of the card says "the AI system"
   ([ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md)).
 - `agent_overrides` in `settings.yaml` maps a client name PrivacyFence does not recognise to a
-  known AI system. It changes the label only and is always recorded as `client_info`, because any
-  program on your computer can send that name
+  known AI system. It changes only the recorded name, not what the card shows, and is always
+  recorded as `client_info`, because any program on your computer can send that name
   ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)).
 - Attribution is reporting only. The same call gets the same decision, the same rule match and the
   same data whatever name the client gives.

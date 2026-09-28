@@ -860,12 +860,12 @@ class TestRehomingAStaleSessionId:
         assert again.headers.get("mcp-session-id", session_id) == session_id
 
 
-# (readOnlyHint, destructiveHint, idempotentHint) per tool (ADR 0088).
+# (readOnlyHint, destructiveHint, idempotentHint) per tool (ADR 0089).
 _EXPECTED = {
     "rwd_read": (True, False, True), "rwd_write": (False, False, False), "rwd_delete": (False, True, False),
 }
 # The header 5.0.0a1's second Claude Desktop extension sent to ask for every tool read-only. Removed
-# by ADR 0088: a client still sending it is neither refused nor obeyed.
+# by ADR 0089: a client still sending it is neither refused nor obeyed.
 _REMOVED_HEADER = "X-PrivacyFence-Tool-Annotations"
 
 
@@ -877,7 +877,7 @@ def _triples(tools) -> dict[str, tuple]:
 
 
 class TestToolAnnotationsOverTheWire:
-    """ADR 0088, checked on a live ``/mcp`` ``list_tools``: every connector tool is annotated
+    """ADR 0089, checked on a live ``/mcp`` ``list_tools``: every connector tool is annotated
     truthfully in both modes, whatever the client sends, and the meta-tools keep their own."""
 
     @pytest.mark.parametrize("dispatcher_mode", ["local", "org"])

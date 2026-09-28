@@ -83,7 +83,7 @@ retagging. A version that has already published artifacts stays published; cut t
 [ADR 0022](docs/adr/0022-one-release-tag-per-commit.md).
 
 **macOS ships one file.** The DMG carries the `.pkg` and the one Claude Desktop extension,
-`PrivacyFence.mcpb` ([ADR 0088](docs/adr/0088-tool-annotations-are-always-truthful.md) removed the
+`PrivacyFence.mcpb` ([ADR 0089](docs/adr/0089-tool-annotations-are-always-truthful.md) removed the
 second one ADR 0087 added), and nothing else; the `.pkg` and the `.mcpb` are never uploaded or
 attached on their own, so releasing the DMG releases all three. How each artifact
 is built and signed is [`docs/packaging.md`](docs/packaging.md).

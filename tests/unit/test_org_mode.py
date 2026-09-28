@@ -314,7 +314,7 @@ class TestConfigurationError:
 
 
 class TestRejectRemovedToolAnnotations:
-    """``mcp.tool_annotations`` was removed (ADR 0088): a bundle still carrying it -- whichever
+    """``mcp.tool_annotations`` was removed (ADR 0089): a bundle still carrying it -- whichever
     value -- refuses to start, so an administrator who asked for all-read-only never silently gets
     truthful annotations instead."""
 

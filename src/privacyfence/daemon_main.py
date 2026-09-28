@@ -87,6 +87,7 @@ import yaml
 
 from . import (
     __version__,
+    agent_label,
     agent_overrides,
     audit_forwarding,
     org_bundle_signing,
@@ -1820,7 +1821,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # function, its ConfigurationError still surfacing through the
     # same top-level "print and refuse to start" path in main().
     org_config = load_org_config()
-    # ADR 0088: a 5.0.0a1 bundle that still names the removed mcp.tool_annotations raises
+    # ADR 0089: a 5.0.0a1 bundle that still names the removed mcp.tool_annotations raises
     # ConfigurationError -- refuse to start rather than quietly advertise something other than
     # what the administrator configured.
     org_mode.reject_removed_tool_annotations(org_config)
@@ -1828,6 +1829,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # rest of this function's fail-safe defaults now that mode is known.
     check_storage_permissions(org_mode.resolve_mode(org_config) == "org")
     init_privacy_filter(config, org_managed=org_mode.resolve_mode(org_config) == "org")
+    # ADR 0088: a local install shows every requester as "Undetected".
+    agent_label.set_local_mode(org_mode.resolve_mode(org_config) == "local")
     for warning in check_consistency_warnings():
         logger.warning(warning)
 

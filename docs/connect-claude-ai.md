@@ -64,7 +64,7 @@ PrivacyFence always tells the client what each tool does: reads are read-only, w
 and the two tools that delete something are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So claude.ai may ask
 before a write, in front of PrivacyFence's own card. There is no switch that advertises writes as
-read-only ([ADR 0088](adr/0088-tool-annotations-are-always-truthful.md)). Where claude.ai offers
+read-only ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)). Where claude.ai offers
 to always allow a tool, allowing PrivacyFence's tools leaves PrivacyFence's card as the only
 confirmation; every call still goes through PrivacyFence's gate.
 
