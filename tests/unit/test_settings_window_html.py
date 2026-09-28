@@ -483,6 +483,23 @@ class TestStepUpCard:
         assert embedded["general"]["step_up_has_passkey"] is True
 
 
+    def test_scope_control_is_wired_to_set_step_up_scope(self):
+        html = build_html(_make_state())
+        assert "renderStepUpScopeRow(g)" in self._general_fn(html)
+        start = html.index("function renderStepUpScopeRow")
+        fn = html[start:html.index("function renderGeneral")]
+        assert "dataAttr('set_step_up_scope'" in fn
+        # A rung below the configured minimum carries no data-action at all.
+        assert "locked ? ' aria-disabled=\"true\"'" in fn
+        for field in ("g.step_up_scope_floor", "g.step_up_scope"):
+            assert field in fn
+
+    def test_pii_card_is_admin_only_in_org_mode(self):
+        fn = self._general_fn(build_html(_make_state()))
+        guard = fn.index("CAPS.mode !== 'org' || CAPS.is_admin")
+        assert guard < fn.index("'PII Detection Gate'")
+
+
 class TestOrgCapabilities:
     """window.__pfCapabilities is a separate embedded global from
     window.__pfInitialState -- state itself must stay exactly what the
@@ -521,9 +538,11 @@ class TestOrgCapabilities:
         assert caps["sections"]["auto_accept"] is True
         assert caps["sections"]["about"] is True
 
-    def test_org_non_admin_does_not_see_general_or_privacy(self):
+    def test_org_non_admin_sees_general_but_not_privacy(self):
+        # General carries every principal's own passkey scope (ADR 0091);
+        # its install-wide PII card is drawn for an admin only (renderGeneral).
         caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))
-        assert caps["sections"]["general"] is False
+        assert caps["sections"]["general"] is True
         assert caps["sections"]["privacy"] is False
         # Per-principal, not admin-gated -- every org principal keeps this.
         assert caps["sections"]["auto_accept"] is True

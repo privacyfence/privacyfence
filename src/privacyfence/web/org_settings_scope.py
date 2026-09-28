@@ -71,6 +71,11 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     # ---------------------------------------------------------------- #
     "add_policy_rule": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE})),
     "remove_policy_rule": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE})),
+    # A principal's own step-up scope, widened past the configured minimum
+    # (step_up_config.effective_scope, ADR 0091) -- stored per principal and
+    # applied only to that principal's own approvals, so any principal may
+    # set their own, admin or not.
+    "set_step_up_scope": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE})),
 
     # ---------------------------------------------------------------- #
     # Admin-only, routed in both modes: the install-wide PII/privacy

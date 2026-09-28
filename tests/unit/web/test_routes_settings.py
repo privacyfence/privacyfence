@@ -27,7 +27,7 @@ from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separ
 from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
 from privacyfence.principal import LOCAL_PRINCIPAL
-from privacyfence.step_up_config import StepUpConfig
+from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
 from privacyfence.web import routes_settings as rs
 from privacyfence.web.routes_settings import (
     _ALLOWED_ACTIONS,
@@ -383,6 +383,47 @@ class TestSensitiveActionsCoverAllAllowedActions:
 def _step_up_client(controller, sessions, *, step_up: StepUpConfig) -> TestClient:
     app = create_app(controller, sessions=sessions, step_up=step_up, step_up_origin=ORIGIN)
     return TestClient(app, base_url=ORIGIN)
+
+
+class TestSetStepUpScope:
+    """ADR 0091: the Settings page widens local mode's ``step_up.scope``
+    for this install's own principal and can never go below it."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _client(self, controller, sessions, scope="writes_and_pii_reads"):
+        live = LiveStepUpConfig(StepUpConfig(enabled=True, rp_id="localhost", scope=scope))
+        controller.wire_step_up(live)
+        return _step_up_client(controller, sessions, step_up=live)
+
+    def test_widening_is_applied_and_reported(self, controller, sessions):
+        client = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/set_step_up_scope", json={"scope": "writes_and_reads", "csrf": csrf})
+        assert r.status_code == 200
+        general = r.json()["general"]
+        assert general["step_up_scope_floor"] == "writes_and_pii_reads"
+        assert general["step_up_scope"] == "writes_and_reads"
+
+    def test_narrowing_below_the_configured_scope_has_no_effect(self, controller, sessions):
+        client = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/set_step_up_scope", json={"scope": "writes", "csrf": csrf})
+        assert r.status_code == 200
+        assert r.json()["general"]["step_up_scope"] == "writes_and_pii_reads"
+
+    def test_an_unknown_scope_sets_an_error_and_changes_nothing(self, controller, sessions):
+        client = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/set_step_up_scope", json={"scope": "everything", "csrf": csrf})
+        assert r.json()["error"]
+        assert r.json()["general"]["step_up_scope"] == "writes_and_pii_reads"
+
+    def test_it_is_a_sensitive_action(self):
+        assert "set_step_up_scope" in _SENSITIVE_ACTIONS
 
 
 class TestSensitiveActionStepUp:

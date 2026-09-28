@@ -259,7 +259,9 @@ class TestPrincipalScopedRules:
         assert r.status_code == 200
         assert policy_describe.rule_sentence(rules[0]) in r.text
 
-    def test_admin_sees_privacy_and_general_capabilities_non_admin_does_not(self, tmp_path, monkeypatch):
+    def test_admin_sees_privacy_capabilities_non_admin_does_not(self, tmp_path, monkeypatch):
+        """General is every principal's (their own passkey scope lives there, ADR 0091); Privacy
+        Filter stays admin-only."""
         _seed(tmp_path, monkeypatch, "alice")
         _seed(tmp_path, monkeypatch, "carol")
         app, sessions = _app()
@@ -270,7 +272,7 @@ class TestPrincipalScopedRules:
         assert caps["mode"] == "org"
         assert caps["is_admin"] is False
         assert caps["sections"]["privacy"] is False
-        assert caps["sections"]["general"] is False
+        assert caps["sections"]["general"] is True
         assert caps["sections"]["auto_accept"] is True
 
         client2 = _client(app)
@@ -279,6 +281,55 @@ class TestPrincipalScopedRules:
         assert caps2["is_admin"] is True
         assert caps2["sections"]["privacy"] is True
         assert caps2["sections"]["general"] is True
+
+
+class TestOrgStepUpScope:
+    """ADR 0091: any org principal, admin or not, can widen the org's
+    ``step_up.scope`` for their own approvals, and never narrow it."""
+
+    ORG_STEP_UP = StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_pii_reads")
+
+    def test_a_non_admin_widens_their_own_scope_only(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        _seed(tmp_path, monkeypatch, "bob")
+        app, sessions = _app(step_up=self.ORG_STEP_UP)
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        r = _post_action(client, "set_step_up_scope", {"scope": "writes_and_reads"}, csrf)
+        assert r.status_code == 200
+        assert r.json()["general"]["step_up_scope_floor"] == "writes_and_pii_reads"
+        assert r.json()["general"]["step_up_scope"] == "writes_and_reads"
+
+        client2 = _client(app)
+        csrf2 = _signed_in(client2, sessions, BOB)
+        r2 = _post_action(client2, "set_step_up_scope", {"scope": "writes_and_pii_reads"}, csrf2)
+        assert r2.json()["general"]["step_up_scope"] == "writes_and_pii_reads"
+
+    def test_the_org_scope_is_the_minimum(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app(step_up=self.ORG_STEP_UP)
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        r = _post_action(client, "set_step_up_scope", {"scope": "writes"}, csrf)
+        assert r.status_code == 200
+        assert r.json()["general"]["step_up_scope"] == "writes_and_pii_reads"
+
+    def test_an_unknown_scope_is_a_400(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app(step_up=self.ORG_STEP_UP)
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        assert _post_action(client, "set_step_up_scope", {"scope": "everything"}, csrf).status_code == 400
+
+    def test_it_needs_a_passkey_when_the_org_requires_one(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app(step_up=StepUpConfig(
+            enabled=True, rp_id="pf.example.com", scope="writes", require_passkey=True,
+        ))
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        r = _post_action(client, "set_step_up_scope", {"scope": "writes_and_reads"}, csrf)
+        assert r.status_code in (403, 428)
 
 
 class _FakeDriveClient:

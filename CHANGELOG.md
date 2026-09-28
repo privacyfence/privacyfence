@@ -47,6 +47,12 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Added
 
+- **Ask for your passkey on more of your own approvals.** **Settings > General > Security >
+  Passkey required for** lets anyone widen which approvals need their passkey, for example to
+  every read, not just writes and reads with personal data. The organization's configuration (or
+  `step_up.scope` in `config/settings.yaml` on a desktop install) stays the minimum: rungs below it
+  are shown locked, and nothing on the page can go under it. In an organization every member gets
+  this control, not only administrators. See ADR 0091.
 - **Organization deployments can notify your phone when an approval is waiting.** Allow
   notifications when the Approvals page offers them, and a push notification arrives even with the
   page closed; tapping it opens your approvals. It only ever says "1 approval pending" (or "N

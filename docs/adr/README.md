@@ -196,4 +196,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0088](0088-local-mode-shows-every-requester-as-undetected.md) | Local mode shows every requester as "Undetected" | Accepted |
 | [0089](0089-tool-annotations-are-always-truthful.md) | Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed | Accepted |
 | [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |
+| [0091](0091-the-configured-step-up-scope-is-a-minimum-each-person-can-widen.md) | The configured step-up scope is a minimum each person can widen | Accepted |
 | [0092](0092-a-pending-approval-releases-nothing.md) | A pending approval releases nothing, and one request_id ties its audit trail together | Accepted |

@@ -2569,11 +2569,14 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        # Connectors is never applicable in org mode; General/Privacy
-        # Filter/AI systems are admin-only -- a non-admin gets Auto-accept,
-        # their own Audit Log and About.
-        assert nav_labels == ["Auto-accept", "Audit Log", "About"]
+        # Connectors is never applicable in org mode; Privacy Filter/AI
+        # systems are admin-only. General is every principal's (their own
+        # passkey scope lives there, ADR 0091) but its PII card is not.
+        assert nav_labels == ["General", "Auto-accept", "Audit Log", "About"]
         assert page.get_by_text("Auto-accept").first.is_visible()
+        page.locator('.pf-navitem[data-nav="general"]').click()
+        assert page.get_by_text("Manage passkeys").first.is_visible()
+        assert page.get_by_text("PII Detection Gate").count() == 0
         self._screenshot(page, "org-settings-non-admin")
 
         # The audit log is read-only in org mode -- the local-only export and
