@@ -83,7 +83,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 ```
 
 (One line in reality.) See
-[ADR 0089](adr/0089-a-reused-denial-says-it-is-an-earlier-decision.md).
+[ADR 0090](adr/0090-a-reused-denial-says-it-is-an-earlier-decision.md).
 
 ## Summary
 

@@ -181,8 +181,8 @@ jobs:
       - name: Unlock keychain before build
         run: security unlock-keychain -p "" build.keychain
 
-      # Builds the .app, both .mcpb files, *and* the .pkg (scripts/build_dmg.sh calls
-      # scripts/build_pkg.sh itself now), then packs the .pkg and the .mcpb files into the DMG --
+      # Builds the .app, the .mcpb, *and* the .pkg (scripts/build_dmg.sh calls
+      # scripts/build_pkg.sh itself now), then packs the .pkg and the .mcpb into the DMG --
       # which is the only macOS artifact that ships. The .pkg used to be built by a step of
       # its own here and uploaded/released beside the DMG; it can't be, now that the DMG has
       # to contain it. SIGN_IDENTITY_INSTALLER isn't set here because it's a job-level env
@@ -200,8 +200,7 @@ jobs:
       # install -- gets exercised at all. Mounts the DMG just built above, unpacks the app
       # bundle out of the .pkg it carries (the only form the app ships in now -- see
       # scripts/build_dmg.sh), runs that real frozen daemon binary, connects the real .mcpb
-      # shim (and the no-prompts extension's own, for a read-only tools/list -- ADR 0087),
-      # and drives one real Allow/Deny round trip through a real
+      # shim, and drives one real Allow/Deny round trip through a real
       # headless browser against the real served approval UI. A failure here
       # fails this job before the DMG reaches R2/GitHub Releases below.
       - name: Run packaged smoke test
@@ -237,7 +236,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # The DMG is the macOS release artifact -- the .pkg and both .mcpb files ride inside it and are
+      # The DMG is the macOS release artifact -- the .pkg and the .mcpb ride inside it and are
       # never uploaded on their own (see scripts/build_dmg.sh's own header for why). Uploaded
       # after *both* smoke tests above, so a broken .pkg stops this job before its carrier
       # reaches `finalize-release`.
@@ -510,7 +509,7 @@ jobs:
   # SmartScreen gate the DMG/Windows installer), so it runs in parallel
   # rather than blocking on (or being blocked by) the DMG build. Together with the `build` and
   # `build-windows` jobs, a tag push ends up with one GitHub Release carrying the DMG (which
-  # itself carries the macOS `.pkg` and both `.mcpb` files), the Windows installer, and the `.deb` --
+  # itself carries the macOS `.pkg` and the `.mcpb`), the Windows installer, and the `.deb` --
   # all attached together by `finalize-release`.
   build-deb:
     runs-on: ubuntu-latest   # amd64 -- the only architecture debian/control declares (ADR 0044).

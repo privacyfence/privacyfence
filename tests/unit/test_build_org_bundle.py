@@ -469,6 +469,53 @@ class TestServerBindHost:
         assert build_org_bundle.build_parser().get_default("server_bind_host") == org_mode.DEFAULT_BIND_HOST
 
 
+class TestAdminGroupFlags:
+    """The admin list lives in idp, which only a --mode org run writes -- as a
+    whole. Admin flags on a run without --mode org used to be dropped silently."""
+
+    def _org_args(self, out_path, key_path, *admins):
+        argv = [
+            "-o", str(out_path), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path), "--idp-admin-group-claim", "email",
+        ]
+        for admin in admins:
+            argv += ["--idp-admin-group-value", admin]
+        return argv
+
+    def _setup(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        assert build_org_bundle.main(self._org_args(out_path, key_path, "alice@example.com")) == 0
+        return out_path, key_path
+
+    @pytest.mark.parametrize("admin_flags", [
+        ["--idp-admin-group-value", "bob@example.com"],
+        ["--idp-admin-group-claim", "email"],
+        ["--idp-admin-group-claim", "email", "--idp-admin-group-value", "bob@example.com"],
+    ])
+    def test_merge_without_org_mode_is_refused_and_leaves_the_bundle_alone(self, tmp_path, admin_flags):
+        out_path, key_path = self._setup(tmp_path)
+        before = out_path.read_bytes()
+        with pytest.raises(SystemExit, match="require --mode org"):
+            build_org_bundle.main(["-o", str(out_path), "--merge", "--sign-key", str(key_path), *admin_flags])
+        assert out_path.read_bytes() == before
+
+    def test_merge_with_org_mode_replaces_the_admin_list(self, tmp_path):
+        out_path, key_path = self._setup(tmp_path)
+        # Adding bob means passing alice again; leaving someone out removes them.
+        argv = self._org_args(out_path, key_path, "alice@example.com", "bob@example.com")
+        assert build_org_bundle.main([*argv, "--merge"]) == 0
+        assert json.loads(out_path.read_text())["idp"]["admin_group_values"] == [
+            "alice@example.com", "bob@example.com",
+        ]
+        assert build_org_bundle.main([*self._org_args(out_path, key_path, "bob@example.com"), "--merge"]) == 0
+        assert json.loads(out_path.read_text())["idp"]["admin_group_values"] == ["bob@example.com"]
+
+
 class TestAgentLinksFlag:
     def _build(self, tmp_path, *extra, merge=False):
         key_path = tmp_path / "key.pem"
@@ -644,61 +691,46 @@ class TestWebPushFlag:
             build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), "--no-web-push"])
 
 
-class TestToolAnnotationsFlag:
-    """--tool-annotations (ADR 0086): written only when given, in either mode, in the spelling
-    org_mode.resolve_tool_annotations reads."""
+class TestRemovedToolAnnotations:
+    """ADR 0089: --tool-annotations is gone, and --merge drops the mcp.tool_annotations key a
+    5.0.0a1 bundle may still carry -- the daemon refuses to start with it."""
 
     def _out(self, tmp_path):
         return tmp_path / "org_config.json"
 
-    def _build(self, tmp_path, *extra):
-        argv = ["-o", str(self._out(tmp_path)), "--slack-client-id", "id", "--slack-client-secret", "secret"]
-        assert build_org_bundle.main([*argv, *extra]) == 0
-        return json.loads(self._out(tmp_path).read_text())
+    def test_the_flag_is_no_longer_accepted(self, tmp_path):
+        with pytest.raises(SystemExit):
+            build_org_bundle.main(["-o", str(self._out(tmp_path)), "--tool-annotations", "truthful"])
 
-    def test_absent_leaves_the_key_out_so_the_daemon_default_applies(self, tmp_path):
+    def test_a_fresh_bundle_carries_no_mcp_section(self, tmp_path):
         from privacyfence import org_mode
 
-        bundle = self._build(tmp_path)
-        assert "mcp" not in bundle
-        assert org_mode.resolve_tool_annotations(bundle) == "truthful"
-
-    @pytest.mark.parametrize(("flag", "written"), [("truthful", "truthful"), ("all-read-only", "all_read_only")])
-    def test_written_value_is_what_the_daemon_reads(self, tmp_path, flag, written):
-        from privacyfence import org_mode
-
-        bundle = self._build(tmp_path, "--tool-annotations", flag)
-        assert bundle["mcp"] == {"tool_annotations": written}
-        assert org_mode.resolve_tool_annotations(bundle) == written
-
-    def test_applies_in_org_mode_too(self, tmp_path):
-        key_path = tmp_path / "key.pem"
-        build_org_bundle._generate_signing_key(str(key_path))
         assert build_org_bundle.main([
-            "-o", str(self._out(tmp_path)), "--sign-key", str(key_path),
-            "--mode", "org", "--server-issuer-url", "https://pf.example.com",
-            "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid", "--idp-client-secret", "csecret",
-            "--tool-annotations", "all-read-only",
-        ]) == 0
-        assert json.loads(self._out(tmp_path).read_text())["mcp"] == {"tool_annotations": "all_read_only"}
-
-    def test_is_enough_on_its_own_to_write_a_bundle(self, tmp_path):
-        assert build_org_bundle.main(["-o", str(self._out(tmp_path)), "--tool-annotations", "all-read-only"]) == 0
-        assert json.loads(self._out(tmp_path).read_text())["mcp"] == {"tool_annotations": "all_read_only"}
-
-    def test_merge_switches_it_back_and_keeps_the_rest(self, tmp_path):
-        self._build(tmp_path, "--tool-annotations", "all-read-only")
-        assert build_org_bundle.main([
-            "-o", str(self._out(tmp_path)), "--merge", "--tool-annotations", "truthful",
+            "-o", str(self._out(tmp_path)), "--slack-client-id", "id", "--slack-client-secret", "secret",
         ]) == 0
         bundle = json.loads(self._out(tmp_path).read_text())
-        assert bundle["mcp"] == {"tool_annotations": "truthful"}
-        assert "slack" in bundle
+        assert "mcp" not in bundle
+        org_mode.reject_removed_tool_annotations(bundle)
 
-    def test_an_unknown_value_is_rejected_by_the_parser(self, tmp_path):
-        with pytest.raises(SystemExit):
-            build_org_bundle.main(["-o", str(self._out(tmp_path)), "--tool-annotations", "all_read_only"])
+    @pytest.mark.parametrize("value", ["truthful", "all_read_only"])
+    def test_merge_drops_the_removed_key_and_keeps_the_rest(self, tmp_path, capsys, value):
+        from privacyfence import org_mode
 
-    def test_summary_line_reports_it(self, tmp_path, capsys):
-        self._build(tmp_path, "--tool-annotations", "all-read-only")
-        assert "mcp.tool_annotations=all_read_only" in capsys.readouterr().out
+        self._out(tmp_path).write_text(json.dumps({
+            "version": 1, "slack": {"client_id": "id", "client_secret": "secret"},
+            "mcp": {"tool_annotations": value},
+        }))
+        assert build_org_bundle.main(["-o", str(self._out(tmp_path)), "--merge"]) == 0
+        bundle = json.loads(self._out(tmp_path).read_text())
+        assert "mcp" not in bundle
+        assert bundle["slack"] == {"client_id": "id", "client_secret": "secret"}
+        assert "mcp.tool_annotations" in capsys.readouterr().out
+        org_mode.reject_removed_tool_annotations(bundle)
+
+    def test_merge_keeps_any_other_mcp_key(self, tmp_path):
+        self._out(tmp_path).write_text(json.dumps({
+            "version": 1, "slack": {"client_id": "id", "client_secret": "secret"},
+            "mcp": {"tool_annotations": "all_read_only", "other": 1},
+        }))
+        assert build_org_bundle.main(["-o", str(self._out(tmp_path)), "--merge"]) == 0
+        assert json.loads(self._out(tmp_path).read_text())["mcp"] == {"other": 1}

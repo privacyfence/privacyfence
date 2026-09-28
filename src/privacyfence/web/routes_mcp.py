@@ -48,7 +48,6 @@ from .. import local_files
 from ..agent_identity import UNKNOWN_AGENT, AgentIdentity, AgentSource, agent_scope, identify, identify_registry_id
 from ..agent_overrides import AgentOverrides
 from ..connector import Connector
-from ..org_mode import ToolAnnotationsMode
 from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
@@ -221,22 +220,6 @@ def _request_header(ctx: ServerRequestContext, name: str) -> str | None:
     return request.headers.get(name) if request is not None else None
 
 
-def _annotations_mode(ctx: ServerRequestContext, dispatcher: McpDispatcher) -> ToolAnnotationsMode:
-    """Which annotation mode this request's ``tools/list`` uses (ADR 0086): in local mode, the
-    connection's own ``X-PrivacyFence-Tool-Annotations`` wins; otherwise the bundle's
-    ``mcp.tool_annotations`` (``dispatcher.tool_annotations``, ``"truthful"`` when absent).
-
-    Org mode ignores the header on purpose: there the administrator's bundle decides what every
-    member's client is told, and a connection is only a client's claim. A value naming neither mode
-    never reaches this function -- ``_ToolAnnotationsHeaderCheck`` has already answered it 400."""
-    if dispatcher.mode == "local":
-        header = _request_header(ctx, mcp_tools.TOOL_ANNOTATIONS_HEADER)
-        requested = mcp_tools.annotations_mode_from_header(header) if header is not None else None
-        if requested is not None:
-            return requested
-    return dispatcher.tool_annotations
-
-
 def _file_bridge_uploads(params: types.CallToolRequestParams) -> dict[str, str]:
     """The ``{declared_path: slot}`` map a bridge-capable shim resends on
     the second round of the upload handshake (ADR 0007 SS1.1 step 4) --
@@ -394,10 +377,9 @@ def build_mcp_server(
         # the tools existed to call them.
         _track_session(ctx, _session_key(ctx))
         principal = principal_from_access_token(get_access_token())
-        annotations_mode = _annotations_mode(ctx, dispatcher)
         with principal_scope(principal):
             tools = [
-                mcp_tools.to_mcp_tool(spec, annotations_mode=annotations_mode)
+                mcp_tools.to_mcp_tool(spec)
                 for connector in dispatcher.connectors.values()
                 for spec in connector.tool_specs()
             ]
@@ -620,31 +602,6 @@ class _SessionIdOnlyOnSuccess:
         await self._app(scope, receive, send_without_dead_session_id)
 
 
-class _ToolAnnotationsHeaderCheck:
-    """Answers 400 to a local-mode request whose ``X-PrivacyFence-Tool-Annotations`` names neither
-    ``truthful`` nor ``all-read-only`` (ADR 0086), before the session manager sees it -- so a typo
-    in a client's ``--header`` fails the connection loudly instead of quietly falling back to the
-    bundle's mode. Org mode ignores the header (see ``_annotations_mode``), so it has nothing to
-    reject there either, and this middleware passes every org-mode request through."""
-
-    def __init__(self, app: ASGIApp, dispatcher: McpDispatcher) -> None:
-        self._app = app
-        self._dispatcher = dispatcher
-
-    async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] == "http" and self._dispatcher.mode == "local":
-            value = _header_value(scope, mcp_tools.TOOL_ANNOTATIONS_HEADER.encode("latin-1"))
-            if value is not None and mcp_tools.annotations_mode_from_header(value) is None:
-                response = PlainTextResponse(
-                    f"Invalid X-PrivacyFence-Tool-Annotations header {value[:64]!r}: "
-                    "expected \"truthful\" or \"all-read-only\".",
-                    status_code=400,
-                )
-                await response(scope, receive, send)
-                return
-        await self._app(scope, receive, send)
-
-
 # One JSON-RPC ``initialize`` frame is a few hundred bytes; this leaves room
 # for a client that sends generous capability metadata while bounding what a
 # stale-session POST can make this middleware hold in memory before it
@@ -831,9 +788,9 @@ def build_mcp_asgi_app(
             raise ValueError("build_mcp_asgi_app needs either token or verifier")
         verifier = single_token_verifier(token)
     protected = RequireAuthMiddleware(
-        _ToolAnnotationsHeaderCheck(_SessionIdOnlyOnSuccess(
+        _SessionIdOnlyOnSuccess(
             _RehomeStaleInitialize(_StreamableHTTPASGIApp(session_manager), session_manager),
-        ), dispatcher),
+        ),
         required_scopes=[], resource_metadata_url=resource_metadata_url,
     )
     authenticated = AuthContextMiddleware(protected)

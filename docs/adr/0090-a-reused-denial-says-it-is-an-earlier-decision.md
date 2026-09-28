@@ -1,4 +1,4 @@
-# ADR 0089: a reused denial says it is an earlier decision
+# ADR 0090: a reused denial says it is an earlier decision
 
 ## Status
 

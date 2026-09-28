@@ -211,7 +211,7 @@ class GateDeniedError(RuntimeError):
     def by_user(cls, feedback: DenialFeedback, earlier: EarlierDecision | None = None) -> GateDeniedError:
         """A human's Deny, with whatever feedback they gave (ADR 0083), and
         -- when the call collected it from the decision ledger -- a static
-        sentence saying it is that earlier decision reused (ADR 0089). The
+        sentence saying it is that earlier decision reused (ADR 0090). The
         message always starts "Request denied by user." -- see
         deny_feedback.denial_message. The only constructor that may carry
         user text; unattended and policy denials keep their static text."""
@@ -454,7 +454,7 @@ async def _resolve_decision(
     ``earlier`` is set only for a "deny" taken from the decision ledger --
     a decision made before this call, possibly for another session's
     identical call (ADR 0073) -- so the denial can say it was reused rather
-    than decided now (ADR 0089).
+    than decided now (ADR 0090).
 
     Raises approvals.IdenticalWriteAwaitingApprovalError, releasing nothing,
     for a write whose identical twin is still waiting on its own approval

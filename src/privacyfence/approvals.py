@@ -445,7 +445,7 @@ class LedgerHit:
     # denial raises the same message the synchronous path would have.
     feedback: DenialFeedback = field(default_factory=DenialFeedback)
     # When this entry stops being handed out (decided_at + ledger_ttl), so a
-    # reused denial can tell the agent how long the decision is kept (ADR 0089).
+    # reused denial can tell the agent how long the decision is kept (ADR 0090).
     expires_at: float | None = None
 
 

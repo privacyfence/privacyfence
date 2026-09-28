@@ -11,7 +11,7 @@ what the agent receives, on the synchronous path (``denial_message``, the text o
 A denial the call collected from the decision ledger (``EarlierDecision``) rather than from a card
 decided while it waited says so: an identical read re-issued within the ledger TTL, even from a new
 session, is denied without the user seeing a card (ADR 0073), and without that sentence the agent
-cannot tell a remembered decision from a failure (ADR 0089).
+cannot tell a remembered decision from a failure (ADR 0090).
 
 The note is the deciding human's own words and nothing else. It is never content-filtered, and
 never written to the audit log, a log line, the approvals SSE stream or a web push (ADR 0084): only

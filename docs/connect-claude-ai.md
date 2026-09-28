@@ -60,13 +60,13 @@ Two things can ask you before a tool runs:
    was told or allowed. This is the confirmation that decides; see
    [Approvals and policy](approvals-and-policy.md).
 
-By default PrivacyFence tells the client what each tool does: reads are read-only, writes are
-writes, and the two tools that delete something are destructive
+PrivacyFence always tells the client what each tool does: reads are read-only, writes are writes,
+and the two tools that delete something are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). So claude.ai may ask
-before a write, in front of PrivacyFence's own card. An administrator who wants only PrivacyFence's
-card builds the organization bundle with `--tool-annotations all-read-only`, which advertises every
-connector tool as read-only. The organization bundle options are listed in
-[Configuration reference](configuration-reference.md#organization-config-bundle-org_configjson).
+before a write, in front of PrivacyFence's own card. There is no switch that advertises writes as
+read-only ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)). Where claude.ai offers
+to always allow a tool, allowing PrivacyFence's tools leaves PrivacyFence's card as the only
+confirmation; every call still goes through PrivacyFence's gate.
 
 ## How the client is identified
 

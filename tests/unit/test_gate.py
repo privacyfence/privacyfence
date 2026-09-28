@@ -3828,7 +3828,7 @@ class TestDenyFeedback:
         with pytest.raises(gate.GateDeniedError) as excinfo:
             await gate.gated_call(**kwargs)
         # Taken from the ledger: the human's feedback, plus the sentence
-        # saying it is an earlier decision reused (ADR 0089).
+        # saying it is an earlier decision reused (ADR 0090).
         assert str(excinfo.value) == denial_message(self.FB, EarlierDecision(120.0, 300.0))
 
         entries = read_audit_entries(audit_dir)
@@ -3838,7 +3838,7 @@ class TestDenyFeedback:
         self._assert_note_absent(audit_dir, caplog)
 
     async def test_identical_read_after_a_decided_deny_says_the_denial_was_reused(self, monkeypatch, audit_dir):
-        # ADR 0089: the first call is denied while it waits (no reuse
+        # ADR 0090: the first call is denied while it waits (no reuse
         # sentence); an identical read afterwards -- e.g. from a new session --
         # replays that denial from the ledger without a card, and says so.
         registry = self._registry(monkeypatch, ledger_ttl=300.0)

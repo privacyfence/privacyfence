@@ -19,7 +19,7 @@ For what each tool does and which gate it goes through, see the
 | **Companion app** | Your way into the daemon's web pages. On macOS it is a menu-bar icon, on Windows a tray icon; on Linux it is the **PrivacyFence** entry in the applications menu, whose right-click actions open Settings, show a new recovery code, and start, stop or check the service. It opens pages in your browser already signed in, starts and stops the service, and shows your recovery code. | Menu bar, tray, or applications menu. |
 | **Web pages** | **Approvals** (`/approvals`), where pending requests wait for you, and **Settings** (`/settings`), where you connect services and manage rules, the privacy filter, passkeys and the audit log. | Your browser, at `http://localhost:8765`. |
 | **MCP endpoint** | `/mcp` on the same port, speaking MCP over Streamable HTTP. Every AI system reaches PrivacyFence through it. | Your AI system's connector list. |
-| **Claude Desktop extension** | `PrivacyFence.mcpb` (or its alternative, `PrivacyFence-no-prompts.mcpb`), a small Node.js shim Claude Desktop runs. It connects Claude Desktop to `/mcp` and reads and writes local files on the daemon's behalf. | Claude Desktop's extensions. |
+| **Claude Desktop extension** | `PrivacyFence.mcpb`, a small Node.js shim Claude Desktop runs. It connects Claude Desktop to `/mcp` and reads and writes local files on the daemon's behalf. | Claude Desktop's extensions. |
 
 The companion menu (macOS and Windows) has a status line, **Open Approvals**, **Open Settings**,
 one of **Start PrivacyFence…** / **Restart PrivacyFence…** / **Stop PrivacyFence…** (depending on
@@ -105,21 +105,20 @@ read-only and idempotent; a write is neither. Only the two tools that delete som
 `calendar_delete_event` (an event) and `drive_sheets_delete_dimensions` (rows or columns of a
 spreadsheet), are marked destructive; an overwrite is a write, not a deletion.
 
+These annotations are always true. PrivacyFence is a privacy tool and does not tell an AI system
+anything false, so there is no setting, header or extension that advertises a write as read-only.
+
 Annotations are hints for the client's own interface, not a security boundary: the gate is what
 decides. A client may use them to ask for its own confirmation before a write, in front of
-PrivacyFence's approval. To stop that, advertise every connector tool as read-only, non-destructive
-and idempotent instead:
+PrivacyFence's approval. If you do not want that second question, tell the client to always allow
+PrivacyFence's tools; Claude Desktop and Claude Code both offer it (see
+[Connect Claude Desktop](connect-claude-desktop.md#confirmations) and
+[Connect Claude Code](connect-claude-code.md#confirmations)). Nothing is less protected when you
+do: every call still goes through PrivacyFence's gate, and PrivacyFence's approval card is the
+confirmation that decides.
 
-- **For a whole organization**: build the bundle with `--tool-annotations all-read-only`. It
-  applies in both modes.
-- **For one connection, in local mode**: have the client send the header
-  `X-PrivacyFence-Tool-Annotations: all-read-only` (or `truthful`). It wins over the bundle. An
-  organization server ignores it, so there the bundle decides for everyone. Claude Desktop's
-  second extension, **PrivacyFence (no Claude prompts)**, is the one that sends it; see
-  [Connect Claude Desktop](connect-claude-desktop.md#confirmations).
-
-Both are in the [Configuration reference](configuration-reference.md). The reasoning is in
-[ADR 0086](adr/0086-tool-annotations-are-truthful-by-default.md).
+The reasoning is in [ADR 0086](adr/0086-tool-annotations-are-truthful-by-default.md) and
+[ADR 0089](adr/0089-tool-annotations-are-always-truthful.md).
 
 ## What happens on a tool call
 

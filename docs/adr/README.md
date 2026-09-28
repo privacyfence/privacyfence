@@ -191,7 +191,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0083](0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) | A human's deny note reaches the agent as delimited, sanitized user text, on both delivery paths, unfiltered | Accepted |
 | [0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md) | The audit log records that a deny had feedback (intent, note length), never the feedback text | Accepted |
 | [0085](0085-ci-installs-ai-client-clis-from-a-committed-lockfile.md) | CI installs AI-client CLIs from a committed lockfile; only the weekly canary runs `@latest` | Accepted |
-| [0086](0086-tool-annotations-are-truthful-by-default.md) | Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only | Accepted |
-| [0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md) | Two Claude Desktop extensions ship in the DMG and the Windows installer | Accepted |
+| [0086](0086-tool-annotations-are-truthful-by-default.md) | Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only | Accepted; superseded in part by 0089 |
+| [0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md) | Two Claude Desktop extensions ship in the DMG and the Windows installer | Superseded by 0089 |
 | [0088](0088-local-mode-shows-every-requester-as-undetected.md) | Local mode shows every requester as "Undetected" | Accepted |
-| [0089](0089-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |
+| [0089](0089-tool-annotations-are-always-truthful.md) | Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed | Accepted |
+| [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |

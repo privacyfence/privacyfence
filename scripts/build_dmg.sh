@@ -3,19 +3,18 @@
 # that ships.
 #
 # It is a carrier, not a drag-install image: it holds PrivacyFence.pkg (built
-# here by scripts/build_pkg.sh, see step 7) and the two Claude Desktop
-# extensions, PrivacyFence.mcpb and PrivacyFence-no-prompts.mcpb (ADR 0087),
-# and nothing else — no PrivacyFenceApp.app, no /Applications drop link. The
-# user flow is "mount the DMG, double-click PrivacyFence.pkg, then double-click
-# one of the two .mcpb files", both steps in the same window.
+# here by scripts/build_pkg.sh, see step 7) and PrivacyFence.mcpb, and nothing
+# else — no PrivacyFenceApp.app, no /Applications drop link. The user flow is
+# "mount the DMG, double-click PrivacyFence.pkg, then double-click
+# PrivacyFence.mcpb", both steps in the same window.
 #
 # The DMG carries no draggable .app, and the .pkg ships nowhere else, for two
 # reasons. A dragged .app would have to ask for an administrator password
 # later, at some unrelated moment, to provision privilege separation (the
 # daemon's runtime prompt), where the .pkg does it during the install the user
 # is already answering a password for (ADR 0003). And the .pkg's own
-# conclusion screen tells the user to open one of the .mcpb files "next to
-# this installer", which is only true when they sit in the same disk image. One
+# conclusion screen tells the user to open the .mcpb "next to this
+# installer", which is only true when both sit in the same disk image. One
 # download, one install path.
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
@@ -38,10 +37,9 @@
 # .pkg inside an otherwise signed DMG, same as it always did when the .pkg was
 # built as its own CI step.
 #
-# Output: dist/PrivacyFence-<version>.dmg (carrying dist/PrivacyFence-<version>.pkg,
-# dist/PrivacyFence-<version>.mcpb and dist/PrivacyFence-no-prompts-<version>.mcpb,
-# all of which stay in dist/ too -- they are inputs to this image, not
-# separately released artifacts)
+# Output: dist/PrivacyFence-<version>.dmg (carrying dist/PrivacyFence-<version>.pkg
+# and dist/PrivacyFence-<version>.mcpb, both of which stay in dist/ too -- they
+# are inputs to this image, not separately released artifacts)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -165,17 +163,14 @@ if [ -n "$SIGN_IDENTITY" ]; then
       "$BUNDLE"
 fi
 
-# ── 6. Build the Claude Desktop extensions (.mcpb) ────────────────────────────
-# Two extensions, the same /mcp shim with two manifests (scripts/build_mcpb.sh,
-# ADR 0087): PrivacyFence.mcpb (truthful tool annotations) and
-# PrivacyFence-no-prompts.mcpb (every tool advertised read-only). The user
-# installs one.
-echo "→ Building PrivacyFence's Claude Desktop extensions…"
+# ── 6. Build the Claude Desktop extension (.mcpb) ─────────────────────────────
+# One extension: the /mcp shim (PrivacyFence.mcpb). The daemon's /mcp
+# endpoint is the only transport there is, so there is no second extension
+# to build alongside it.
+echo "→ Building PrivacyFence's Claude Desktop extension…"
 bash scripts/build_mcpb.sh
 MCPB_SHIM_PATH="dist/${PRODUCT_NAME}-${VERSION}.mcpb"
-MCPB_NO_PROMPTS_PATH="dist/${PRODUCT_NAME}-no-prompts-${VERSION}.mcpb"
-MCPB_DMG_NAME="${PRODUCT_NAME}.mcpb"   # stable names inside the DMG (no version)
-MCPB_NO_PROMPTS_DMG_NAME="${PRODUCT_NAME}-no-prompts.mcpb"
+MCPB_DMG_NAME="${PRODUCT_NAME}.mcpb"   # stable name inside the DMG (no version)
 
 # ── 7. Build the installer package (.pkg) ─────────────────────────────────────
 # The DMG's payload, not a sibling artifact -- see this script's own header.
@@ -183,20 +178,17 @@ MCPB_NO_PROMPTS_DMG_NAME="${PRODUCT_NAME}-no-prompts.mcpb"
 # itself), and signs/notarizes with SIGN_IDENTITY_INSTALLER if it's set, which
 # it reads from the environment rather than from a --sign argument here: this
 # script's own SIGN_IDENTITY is the wrong certificate type for productsign and
-# must not leak into it. MCPB_DMG_NAME and MCPB_NO_PROMPTS_DMG_NAME tell its
-# conclusion screen what the extensions are actually called on the image it
-# will be opened from.
+# must not leak into it. MCPB_DMG_NAME tells its conclusion screen what the
+# extension is actually called on the image it will be opened from.
 echo "→ Building the installer package…"
-MCPB_DMG_NAME="$MCPB_DMG_NAME" MCPB_NO_PROMPTS_DMG_NAME="$MCPB_NO_PROMPTS_DMG_NAME" \
-  bash scripts/build_pkg.sh
+MCPB_DMG_NAME="$MCPB_DMG_NAME" bash scripts/build_pkg.sh
 PKG_PATH="dist/${PRODUCT_NAME}-${VERSION}.pkg"
 PKG_DMG_NAME="${PRODUCT_NAME}.pkg"     # stable name inside the DMG (no version)
 
 # ── 8. Package into DMG ───────────────────────────────────────────────────────
-# All three files are staged into a source folder rather than passed as
-# --add-file: create-dmg sizes the image from its source folder, so an *empty*
-# source folder plus --add-file arguments produces an image with no room to
-# copy them into.
+# Both files are staged into a source folder rather than passed as --add-file:
+# create-dmg sizes the image from its source folder, so an *empty* source folder
+# plus two --add-file arguments produces an image with no room to copy them into.
 echo "→ Building DMG…"
 rm -f "$DMG_PATH"
 DMG_ROOT="build/dmg-root"
@@ -204,17 +196,15 @@ rm -rf "$DMG_ROOT"
 mkdir -p "$DMG_ROOT"
 cp -p "$PKG_PATH" "${DMG_ROOT}/${PKG_DMG_NAME}"
 cp -p "$MCPB_SHIM_PATH" "${DMG_ROOT}/${MCPB_DMG_NAME}"
-cp -p "$MCPB_NO_PROMPTS_PATH" "${DMG_ROOT}/${MCPB_NO_PROMPTS_DMG_NAME}"
 
 create-dmg \
   --volname "${PRODUCT_NAME}" \
   --volicon "$ICNS_PATH" \
   --window-pos 200 120 \
-  --window-size 760 400 \
+  --window-size 600 400 \
   --icon-size 128 \
-  --icon "${PKG_DMG_NAME}" 150 170 \
-  --icon "${MCPB_DMG_NAME}" 380 170 \
-  --icon "${MCPB_NO_PROMPTS_DMG_NAME}" 610 170 \
+  --icon "${PKG_DMG_NAME}" 170 170 \
+  --icon "${MCPB_DMG_NAME}" 430 170 \
   --no-internet-enable \
   "$DMG_PATH" \
   "$DMG_ROOT"

@@ -65,25 +65,13 @@ The Start Menu has three entries:
 
 ## Connect Claude Desktop
 
-The installer puts two Claude Desktop extensions into `%ProgramFiles%\PrivacyFence\`. Install
-**one** of them:
-
-- `PrivacyFence-<version>.mcpb`, the default. Claude Desktop may ask you before a write, and then
-  PrivacyFence's approval asks too.
-- `PrivacyFence-no-prompts-<version>.mcpb`, shown in Claude Desktop as *PrivacyFence (no Claude
-  prompts)*. Claude Desktop does not ask; PrivacyFence's own approval still does.
-
-With both installed, Claude lists every tool twice. Which to pick is explained in
-[Confirmations](connect-claude-desktop.md#confirmations).
-
 The checkbox on the installer's last page reads one of two things:
 
 - **Install PrivacyFence into Claude Desktop**: Claude Desktop opens and offers to install the
-  default extension. Accept it. For the no-prompts one, skip this checkbox and open
-  `PrivacyFence-no-prompts-<version>.mcpb` from the install folder instead, as below.
-- **Show the PrivacyFence Claude Desktop extensions in File Explorer**: Windows has no working
+  extension. Accept it.
+- **Show the PrivacyFence Claude Desktop extension in File Explorer**: Windows has no working
   `.mcpb` file association, which can happen even with Claude Desktop installed. In the File
-  Explorer window, drag the extension you chose onto Claude Desktop's
+  Explorer window, drag `PrivacyFence-<version>.mcpb` onto Claude Desktop's
   **Settings → Extensions** page, or right-click it → **Open with** → **Claude** and tick
   *Always use this app*.
 

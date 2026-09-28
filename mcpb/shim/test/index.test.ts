@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ControlChannelError } from "../src/controlChannel.js";
 import { ShimExitError } from "../src/errors.js";
-import { daemonHeaders, isEntryPoint, main, parseArgs, TOOL_ANNOTATIONS_HEADER } from "../src/index.js";
+import { isEntryPoint, main, parseArgs } from "../src/index.js";
 import { FakeMcpDaemon } from "./fakeMcpDaemon.js";
 import { makeTempMcpFiles } from "./testFiles.js";
 
@@ -37,31 +37,6 @@ describe("parseArgs", () => {
 
   it("ignores unrecognized flags alongside a --config it understands", () => {
     assert.doesNotThrow(() => parseArgs(["--config", "/tmp/x.yaml", "--pool", "--session-id=abc"]));
-  });
-
-  it("returns no tool-annotations choice when the flag is absent", () => {
-    assert.deepEqual(parseArgs([]), {});
-    assert.deepEqual(parseArgs(["--config", "/tmp/x.yaml"]), {});
-  });
-
-  for (const mode of ["truthful", "all-read-only"] as const) {
-    it(`accepts --tool-annotations=${mode}`, () => {
-      assert.deepEqual(parseArgs([`--tool-annotations=${mode}`]), { toolAnnotations: mode });
-    });
-  }
-
-  // Same reasoning as the unrecognized-flag case above: a value this shim
-  // does not know must not cost the connection. It is dropped, so the daemon
-  // applies its own default instead of answering every request 400.
-  it("ignores a --tool-annotations value it does not know, instead of refusing to start", () => {
-    assert.deepEqual(parseArgs(["--tool-annotations=all_read_only"]), {});
-    assert.deepEqual(parseArgs(["--tool-annotations="]), {});
-  });
-
-  it("keeps --tool-annotations alongside --config and unknown flags", () => {
-    assert.deepEqual(parseArgs(["--config", "/tmp/x.yaml", "--pool", "--tool-annotations=all-read-only"]), {
-      toolAnnotations: "all-read-only",
-    });
   });
 });
 
@@ -102,22 +77,6 @@ describe("isEntryPoint", () => {
   it("falls back to the path as given when it does not exist", () => {
     const missing = path.join(tmpdir(), "shim-entry-missing", "shim.js");
     assert.equal(isEntryPoint(missing, pathToFileURL(missing).href), true);
-  });
-});
-
-describe("daemonHeaders", () => {
-  it("sends only the bearer token and the file-bridge header without a tool-annotations choice", () => {
-    const headers = daemonHeaders("Bearer t", {});
-    assert.equal(headers.Authorization, "Bearer t");
-    assert.equal(headers["X-PrivacyFence-File-Bridge"], "1");
-    assert.equal(TOOL_ANNOTATIONS_HEADER in headers, false);
-  });
-
-  it("adds X-PrivacyFence-Tool-Annotations carrying the chosen mode verbatim", () => {
-    assert.equal(TOOL_ANNOTATIONS_HEADER, "X-PrivacyFence-Tool-Annotations");
-    const headers = daemonHeaders("Bearer t", { toolAnnotations: "all-read-only" });
-    assert.equal(headers[TOOL_ANNOTATIONS_HEADER], "all-read-only");
-    assert.equal(headers.Authorization, "Bearer t");
   });
 });
 
@@ -172,50 +131,6 @@ describe("main() end-to-end orchestration", () => {
     await daemon.stop();
     cleanup();
   });
-
-  // The second extension (PrivacyFence-no-prompts.mcpb) is this same shim
-  // started with --tool-annotations=all-read-only. The daemon reads the
-  // header per tools/list, so it has to be on every /mcp request, not just
-  // the first -- and without the flag, no request may carry it.
-  for (const [argv, expected] of [
-    [["--tool-annotations=all-read-only"], "all-read-only"],
-    [["--tool-annotations=truthful"], "truthful"],
-    [[], undefined],
-  ] as const) {
-    it(`sends X-PrivacyFence-Tool-Annotations=${expected ?? "(none)"} on every /mcp request for argv ${JSON.stringify(argv)}`, async () => {
-      const { mcpUrlFile, writeUrl, token, cleanup } = makeTempMcpFiles();
-      const daemon = new FakeMcpDaemon(token);
-      const url = await daemon.start();
-      writeUrl(url);
-
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      let resolveDisconnect: () => void = () => {};
-      const waitForDisconnect = () => new Promise<void>((resolve) => (resolveDisconnect = resolve));
-      const mainPromise = main([...argv], {
-        mcpUrlFile,
-        mintMcpToken: async () => token,
-        transport: serverTransport,
-        waitForDisconnect,
-      });
-
-      const client = new Client({ name: "index-test-client", version: "1.0.0" });
-      await client.connect(clientTransport);
-      await client.listTools();
-      await client.callTool({ name: "shim_test_echo", arguments: {} });
-
-      // initialize, notifications/initialized, tools/list, tools/call at least.
-      assert.ok(daemon.receivedToolAnnotationsHeaders.length >= 4);
-      for (const header of daemon.receivedToolAnnotationsHeaders) {
-        assert.equal(header, expected);
-      }
-
-      await client.close();
-      resolveDisconnect();
-      await mainPromise;
-      await daemon.stop();
-      cleanup();
-    });
-  }
 
   // The "mcp_url isn't there yet, launch the daemon" path (findDaemonCmd +
   // spawn) is covered by daemon.test.ts's ensureDaemonRunning/
