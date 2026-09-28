@@ -559,8 +559,17 @@ def main(argv: list[str] | None = None) -> int:
     elif any([
         args.server_issuer_url, args.idp_issuer, args.idp_client_id, args.idp_client_secret,
         args.server_tls_cert, args.server_tls_key, args.server_trusted_proxies, args.idp_step_up_acr_values,
+        args.idp_admin_group_claim, args.idp_admin_group_values,
     ]):
-        raise SystemExit("--server-*/--idp-*/--idp-step-up-acr-value flags require --mode org.")
+        # Without --mode org these would otherwise be dropped silently: idp is
+        # only ever written whole, from a --mode org run's flags, so e.g.
+        # "--merge --idp-admin-group-value new@x" alone used to exit 0 with
+        # the admin list unchanged.
+        raise SystemExit(
+            "--server-*/--idp-* flags (including --idp-admin-group-*) require --mode org. "
+            "--mode org rebuilds the server and idp sections as a whole, so with --merge pass "
+            "every --server-* and --idp-* flag again, including the full admin list."
+        )
 
     if (
         args.step_up_enabled or args.step_up_disabled or args.step_up_scope or args.step_up_rp_id
