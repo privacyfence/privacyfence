@@ -152,7 +152,7 @@ In the audit log, the `approval_pending` row, the row for your decision and, for
 row for the file being fetched share one `request_id`. A decision the AI system never came back for
 is logged as `expired` with what you decided and when (`expired_decision`, `decided_at`), so it
 reads differently from a card nobody answered
-([ADR 0092](adr/0092-a-pending-approval-releases-nothing.md)). The limits are in the
+([ADR 0093](adr/0093-a-pending-approval-releases-nothing.md)). The limits are in the
 [Configuration reference](configuration-reference.md); cards, the PII check, passkey step-up and
 rules are in [Approvals and policy](approvals-and-policy.md).
 
@@ -194,9 +194,13 @@ client ([ADR 0007](adr/0007-local-file-bridge.md),
 - **An install that is not privilege-separated** (a source checkout, a `pip`/`pipx` install): the
   daemon runs as you and reads and writes the file itself.
 
-- **Organization mode.** Small downloads come back inside the tool result; larger ones become a
-  short-lived, one-time link. The limits are organization bundle settings
-  (`download_delivery.*`, see [Configuration reference](configuration-reference.md)).
+- **Organization mode.** Small downloads come back inside the tool result, base64-encoded; larger
+  ones become a short-lived, one-time link. By default "small" means the whole tool result fits
+  100,000 bytes, a file of about 75 KB, because claude.ai and Claude Desktop truncate a tool result
+  over about 150,000 characters
+  ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)). The
+  limits are organization bundle settings (`download_delivery.*`, see
+  [Configuration reference](configuration-reference.md)).
 
 In local mode a downloaded file is held in the daemon's memory before it is handed over, so every
 local-mode download is limited to 200 MB by default (`file_bridge.max_download_bytes`).

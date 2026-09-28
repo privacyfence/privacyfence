@@ -112,7 +112,7 @@ class StagedDownload:
     # Who this file was released to, and on which gated decision -- the
     # request_id of the approved row (audit_log.current_released_request_id)
     # and the agent that made the call, both captured at stage() time so
-    # the row written when the file is fetched can name them (ADR 0092).
+    # the row written when the file is fetched can name them (ADR 0093).
     # The fetch itself carries neither: a capability link has no bearer.
     request_id: str = ""
     agent: AgentIdentity = UNKNOWN_AGENT
@@ -254,7 +254,7 @@ class DownloadStagingStore:
         """``claim()`` (a ``principal_id``) or ``claim_capability()``
         (``None``), returning the staged entry's request_id and agent as well
         -- what the routes that serve a staged file audit the fetch under
-        (ADR 0092). Same single-use, "no oracle" contract as both."""
+        (ADR 0093). Same single-use, "no oracle" contract as both."""
         lookup_id = _lookup_id(token)
         with self._lock:
             self._sweep_expired_locked()

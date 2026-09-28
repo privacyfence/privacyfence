@@ -1,4 +1,4 @@
-# ADR 0092: a pending approval releases nothing, and one request_id ties its audit trail together
+# ADR 0093: a pending approval releases nothing, and one request_id ties its audit trail together
 
 ## Status
 

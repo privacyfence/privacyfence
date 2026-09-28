@@ -212,7 +212,7 @@ class ApprovalPending(Exception):
     this back into a tool result.
 
     Raised rather than returned so that no gated call can take effect while
-    its approval is still pending (ADR 0092): most connector methods run
+    its approval is still pending (ADR 0093): most connector methods run
     ``await gated_call(...)`` for the gate alone and then act, so a returned
     pending result was silently discarded and the download or write went
     ahead with no decision. An exception stops every such caller by
@@ -456,7 +456,7 @@ class LedgerHit:
     expires_at: float | None = None
     # The request_id of the call that created the approval this decision
     # was made on, so the release it authorizes is audited under the same
-    # request_id as that call's "approval_pending" row (ADR 0092).
+    # request_id as that call's "approval_pending" row (ADR 0093).
     request_id: str = ""
 
 

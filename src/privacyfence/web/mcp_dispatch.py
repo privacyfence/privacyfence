@@ -244,7 +244,7 @@ class McpDispatcher:
             ):
                 result = await connector.call(tool, args)
         except ApprovalPending as pending:
-            # The one place a pending gate becomes a tool result (ADR 0092):
+            # The one place a pending gate becomes a tool result (ADR 0093):
             # the connector stopped at gated_call, so nothing was fetched,
             # written or staged. Never cached -- popped at once, like the
             # CancelledError branch below, so the identical call the agent

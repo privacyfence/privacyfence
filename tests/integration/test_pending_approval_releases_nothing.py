@@ -1,7 +1,7 @@
 """A gated call whose approval is still pending releases nothing, and an
-approved one is audited end to end under one request_id (ADR 0092).
+approved one is audited end to end under one request_id (ADR 0093).
 
-Before ADR 0092, 5.0.0a1/a2 manual QA recorded this for a gated
+Before ADR 0093, 5.0.0a1/a2 manual QA recorded this for a gated
 ``drive_download_file`` from a client *without* the ``.mcpb`` shim (so the
 file leaves through a one-time capability link, ADR 0028):
 

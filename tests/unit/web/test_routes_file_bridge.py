@@ -264,7 +264,7 @@ class TestCapabilityDownloadRoute:
         assert r.status_code == 404
 
     def test_served_row_names_the_releasing_request_and_agent(self, tmp_path):
-        """ADR 0092: the fetch carries no bearer, so the row is tied to its
+        """ADR 0093: the fetch carries no bearer, so the row is tied to its
         request through what stage() captured."""
         init_audit_logger(str(tmp_path / "audit"))
         agent = AgentIdentity(id="claude-code", name="Claude Code", version="2.1", source=AgentSource.CLIENT_INFO)

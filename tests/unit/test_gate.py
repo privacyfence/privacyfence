@@ -194,7 +194,7 @@ FILTERED = object()  # sentinel: always what gated_call must return on success
 
 
 async def gated_call_or_pending(**kwargs):
-    """gate.gated_call(), with the pending result it raises (ADR 0092)
+    """gate.gated_call(), with the pending result it raises (ADR 0093)
     returned instead -- exactly what web/mcp_dispatch.py hands the agent --
     for the deferred-protocol tests below, which follow one call through
     pending and then decided."""
@@ -2606,7 +2606,7 @@ class TestDeferredApprovalProtocol:
         # unlike a synchronous mock racing the clock.
 
         # Raised, never returned: a caller that awaits gated_call for the
-        # gate alone must not carry on and act (ADR 0092).
+        # gate alone must not carry on and act (ADR 0093).
         with pytest.raises(ApprovalPending) as raised:
             await gate.gated_call(**base_kwargs(gate="review"))
         result = raised.value.result

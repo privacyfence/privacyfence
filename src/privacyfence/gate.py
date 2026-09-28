@@ -413,7 +413,7 @@ _PENDING = object()
 
 # approvals.PendingApproval.final_decision -> the audit decision a call
 # collecting it would have recorded, for the "expired" row of a decision no
-# call ever collected (AuditEntry.expired_decision, ADR 0092).
+# call ever collected (AuditEntry.expired_decision, ADR 0093).
 _UNCOLLECTED_DECISION = {
     "accept": "approved",
     "deny": "rejected",
@@ -470,7 +470,7 @@ async def _resolve_decision(
     call's own for one it created, the original call's for a coalesced wait
     or a ledger hit -- and "" on the no-registry path; gated_call audits the
     outcome under it, so an approved re-issue shares its "approval_pending"
-    row's request_id (ADR 0092).
+    row's request_id (ADR 0093).
 
     Raises approvals.IdenticalWriteAwaitingApprovalError, releasing nothing,
     for a write whose identical twin is still waiting on its own approval
@@ -634,7 +634,7 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
                 pii_detected=approval.pii_detected, pii_categories=approval.pii_categories,
                 claude_reason=approval.claude_reason,
                 # What the human decided and when, which nothing ever
-                # collected (ADR 0092) -- without these the row reads the
+                # collected (ADR 0093) -- without these the row reads the
                 # same as a card nobody answered.
                 decided_at=approval.decided_at,
                 expired_decision=_UNCOLLECTED_DECISION.get(approval.final_decision or "", ""),
@@ -1141,7 +1141,7 @@ async def gated_call(
             # Every row from here on is about the approval's request, not
             # just this invocation: a coalesced wait or a ledger hit is
             # audited under the request_id its "approval_pending" row
-            # carried (ADR 0092).
+            # carried (ADR 0093).
             request_id = approval_request_id or request_id
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring
@@ -1267,7 +1267,7 @@ async def gated_call(
             # Every row from here on is about the approval's request, not
             # just this invocation: a coalesced wait or a ledger hit is
             # audited under the request_id its "approval_pending" row
-            # carried (ADR 0092).
+            # carried (ADR 0093).
             request_id = approval_request_id or request_id
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring

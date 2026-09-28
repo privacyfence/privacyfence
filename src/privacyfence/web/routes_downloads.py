@@ -61,7 +61,7 @@ def _audit_staged_download_served(principal_id: str, claimed: ClaimedDownload) -
     never allowed to block the response, same posture as gate.py's own
     _audit and daemon_main.log_org_config_bundle_hash. Recorded under the
     request_id of the gated decision that released the file and the agent
-    whose call staged it (ADR 0092)."""
+    whose call staged it (ADR 0093)."""
     try:
         with agent_scope(claimed.agent):
             get_audit_logger().record(AuditEntry(

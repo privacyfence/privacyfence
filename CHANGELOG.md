@@ -81,6 +81,15 @@ Organization deployments now work from a phone, and the app looks like the websi
   instead of repeating the steps.
 ### Changed
 
+- **Organization mode sends downloads over about 75 KB as a link, not inside the tool result.**
+  claude.ai and Claude Desktop truncate a tool result over about 150,000 characters, so a 1.7 MB
+  PDF returned inline arrived cut short and the task failed
+  ([QA of 5.0.0a2](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865753049)).
+  `--downloads-inline-max-bytes` (`download_delivery.inline_max_bytes`) now defaults to 100,000
+  instead of 8,000,000, and it measures the tool result, base64-encoded file included, rather than
+  the file. A bundle that sets its own value keeps it, but because base64 now counts, the same
+  value inlines files about a quarter smaller. Raise it only if every AI client your organization
+  uses accepts larger results. See ADR 0092.
 - **Local installs show every requester as "Undetected".** Every AI system on your computer uses
   the same credential, so PrivacyFence cannot tell them apart. Approval cards, the approvals list
   and the Audit Log page now say **Undetected** instead of a name the AI system gave itself with a
@@ -159,7 +168,7 @@ Organization deployments now work from a phone, and the app looks like the websi
   log now shows that trail as one request: the pending row, the approved row and the row for the
   downloaded file share one request ID, and the file's row names the AI system that asked. An
   approval nobody came back for says what you decided and when, instead of reading like a card
-  nobody answered. The Excel export gains Request ID and Expired Decision columns. See ADR 0092.
+  nobody answered. The Excel export gains Request ID and Expired Decision columns. See ADR 0093.
 - **`build_org_bundle.py` no longer ignores admin changes made without `--mode org`.** A command
   such as `--merge --idp-admin-group-value new@example.com` finished without an error but left the
   admin list as it was. It now stops and explains that changing the admin list means passing

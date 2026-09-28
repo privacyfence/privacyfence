@@ -1128,7 +1128,7 @@ class TestDenyFeedbackFields:
 
 
 class TestApprovalLinkageFields:
-    """Schema 7 (ADR 0092): expired_decision says what a human decided on an
+    """Schema 7 (ADR 0093): expired_decision says what a human decided on an
     approval no call collected, and the Excel export carries request_id, the
     field that ties a pending row to its release and the file served."""
 

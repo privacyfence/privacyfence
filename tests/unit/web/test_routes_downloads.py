@@ -194,7 +194,7 @@ class TestClaimSuccess:
         assert _url_token(token) not in json.dumps(entries[0])
 
     def test_claim_audit_names_the_releasing_request_and_agent(self, tmp_path):
-        """ADR 0092: org mode's staged link is tied to the gated decision
+        """ADR 0093: org mode's staged link is tied to the gated decision
         that released it, like the local capability link."""
         init_audit_logger(str(tmp_path / "audit"))
         app, sessions, store = _app()

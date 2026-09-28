@@ -264,7 +264,7 @@ class TestClaimCapability:
 
 
 class TestReleaseAttribution:
-    """ADR 0092: a staged file remembers the gated decision that released it
+    """ADR 0093: a staged file remembers the gated decision that released it
     and the agent whose call staged it, so the row written when it is
     fetched -- by a capability link that carries neither -- can name them."""
 

@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 #   5 -- agent attribution (ADR 0006, ADR 0035): + agent_id, agent_name,
 #        agent_version, agent_source
 #   6 -- deny feedback (ADR 0084): + deny_intent, deny_note_chars
-#   7 -- approval linkage (ADR 0092): + expired_decision; bridge_download_served /
+#   7 -- approval linkage (ADR 0093): + expired_decision; bridge_download_served /
 #        staged_download_served rows carry the releasing request's request_id and agent
 CURRENT_SCHEMA_VERSION = 7
 
@@ -100,7 +100,7 @@ APPROVED_LIKE_DECISIONS = frozenset({
 # tool call is about to hand out -- set by gate.py's _audit on an approved-
 # like row, read by download_staging.stage() so the row written when the
 # staged file is later fetched names the request that authorized it
-# (ADR 0092). Scoped per tool call by released_request_scope(), which
+# (ADR 0093). Scoped per tool call by released_request_scope(), which
 # web/mcp_dispatch.py enters around every connector call.
 _released_request_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
     "privacyfence_released_request_id", default="",
@@ -223,7 +223,7 @@ class AuditEntry:
                             #  bridge_download_served/staged_download_served under that same
                             #  request_id too. Nothing is released on a pending row itself: gated_call
                             #  raises approvals.ApprovalPending, so the call it came from stops there
-                            #  (ADR 0092).)
+                            #  (ADR 0093).)
                             # ("expired": a pending approval nobody decided within its TTL (still
                             #  "pending" the whole time -- fail-closed, never silently auto-approved),
                             #  or one a human DID decide but whose outcome no call ever collected --
@@ -232,7 +232,7 @@ class AuditEntry:
                             #  collected outcome, a replayed read included, lapses without a row.
                             #  Either way: no data was ever released on this request_id's strength.
                             #  ADR 0073. The second case sets expired_decision and decided_at (below),
-                            #  so it can be told apart from a card nobody answered -- ADR 0092.)
+                            #  so it can be told apart from a card nobody answered -- ADR 0093.)
                             # ("error": gate.py's gated_call exited without reaching a normal decision
                             #  branch -- a fallback so an unanticipated failure still leaves a trail)
                             # ("cancelled": the MCP client that issued the corresponding tool call
@@ -414,7 +414,7 @@ class AuditEntry:
     # The note's text is deliberately not recorded anywhere (see deny_feedback.py).
     deny_intent: str = ""     # one of deny_feedback.INTENTS' keys, or ""
     deny_note_chars: int = 0  # length of the sanitized note; 0 for none
-    # ---- Approval linkage (schema 7, ADR 0092) ----
+    # ---- Approval linkage (schema 7, ADR 0093) ----
     expired_decision: str = ""  # On an "expired" row for a decision a human DID make but no call
                               # ever collected: the decision a collecting call would have recorded
                               # ("approved" | "rejected" | "accepted_via_accept_all" |
@@ -778,7 +778,7 @@ class AuditLogger:
             # Appended last, like the deny columns before them, so every
             # earlier index stays stable. Request ID is what ties a pending
             # row to the approved row and the served file it led to
-            # (ADR 0092).
+            # (ADR 0093).
             "Request ID", "Expired Decision",
         ]
         COL_WIDTHS = [

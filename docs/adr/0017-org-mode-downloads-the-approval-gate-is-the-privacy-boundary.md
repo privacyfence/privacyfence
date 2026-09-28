@@ -11,6 +11,9 @@ actually for, and what that means for priority"). Implemented. The mechanism is 
 "Local mode" section was later amended by [ADR 0007](0007-local-file-bridge.md). This ADR concerns
 org mode only.
 
+Amended by [ADR 0092](0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md),
+2026-09-28: `inline_max_bytes` caps the tool result, base64 included, and defaults to 100,000.
+
 ## Context
 
 `drive_download_file`, `gmail_download_attachment` and `confluence_download_attachment` wrote file

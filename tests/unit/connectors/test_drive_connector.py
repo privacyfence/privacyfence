@@ -854,7 +854,7 @@ class TestOrgModeDownloadDelivery:
         connector, client = self._org_connector(inline_max_bytes=1_000)
         client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=50)
         client.download_file_bytes.return_value = {
-            "data": b"hello file bytes", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 17,
+            "data": b"hello file bytes", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 16,
         }
 
         result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
@@ -862,7 +862,7 @@ class TestOrgModeDownloadDelivery:
         assert result["delivery"] == "inline"
         assert result["name"] == "f.pdf"
         assert result["mime_type"] == "application/pdf"
-        assert result["size_bytes"] == 17
+        assert result["size_bytes"] == 16
         import base64
         assert base64.b64decode(result["content_base64"]) == b"hello file bytes"
         client.download_file.assert_not_called()
@@ -946,6 +946,92 @@ class TestOrgModeDownloadDelivery:
 
         result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
         assert result["delivery"] == "link"
+
+    @staticmethod
+    def _largest_inline_size(name: str, mime_type: str, limit: int) -> int:
+        from privacyfence.org_mode import inline_result_length
+
+        low, high = 0, limit  # inline_result_length(0) <= limit < inline_result_length(limit)
+        while high - low > 1:
+            mid = (low + high) // 2
+            if inline_result_length(name, mime_type, mid) <= limit:
+                low = mid
+            else:
+                high = mid
+        return low
+
+    @pytest.mark.parametrize("offset, expected", [(0, "inline"), (1, "link")])
+    async def test_default_limit_boundary(self, gated_call_spy, offset, expected):
+        """With no inline_max_bytes configured, the largest file whose whole
+        tool result fits the default goes inline and one byte more goes out
+        as a link -- the case claude.ai truncated at 8,000,000 (QA of
+        5.0.0a2, https://github.com/privacyfence/privacyfence/issues/46)."""
+        from privacyfence.org_mode import DEFAULT_INLINE_MAX_BYTES, DownloadDeliveryConfig
+
+        connector, client = make_connector()
+        connector.download_mode = "org"
+        connector.download_config = DownloadDeliveryConfig()
+        connector.download_base_url = "https://pf.example.com"
+        size = self._largest_inline_size("f.pdf", "application/pdf", DEFAULT_INLINE_MAX_BYTES) + offset
+        client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=size)
+        client.download_file_bytes.return_value = {
+            "data": b"x" * size, "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": size,
+        }
+
+        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        assert result["delivery"] == expected
+        assert gated_call_spy[0]["delivery"] == ("inline_base64" if expected == "inline" else "staged_link")
+        if expected == "inline":
+            assert len(json.dumps(result, default=str)) <= DEFAULT_INLINE_MAX_BYTES
+
+    async def test_file_under_the_limit_but_over_it_once_encoded_gets_a_link(self, gated_call_spy):
+        """The limit is on the tool result, so base64's 4/3 inflation
+        counts: a 900-byte file (1,200 once encoded) does not fit 1,000."""
+        connector, client = self._org_connector(inline_max_bytes=1_000)
+        client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=900)
+        client.download_file_bytes.return_value = {
+            "data": b"x" * 900, "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 900,
+        }
+
+        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        assert result["delivery"] == "link"
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_export_larger_than_its_metadata_size_gets_a_link(self, gated_call_spy):
+        """The preview estimates from metadata; the delivery decides on the
+        bytes actually fetched, so an export that comes back bigger than
+        Drive said goes out as a link rather than an over-limit result."""
+        connector, client = self._org_connector(inline_max_bytes=1_000)
+        client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=50)
+        client.download_file_bytes.return_value = {
+            "data": b"x" * 2_000, "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 2_000,
+        }
+
+        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        assert gated_call_spy[0]["delivery"] == "inline_base64"
+        assert result["delivery"] == "link"
+
+    async def test_staging_disabled_refusal_states_the_encoded_size(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=1_000, allow_disk_staging=False)
+        client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=900)
+
+        with pytest.raises(RuntimeError, match=r"900 bytes \(1,200 once base64-encoded"):
+            await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        client.download_file_bytes.assert_not_called()
+
+    async def test_staging_disabled_refuses_an_export_that_outgrew_the_limit(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=1_000, allow_disk_staging=False)
+        client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=50)
+        client.download_file_bytes.return_value = {
+            "data": b"x" * 2_000, "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 2_000,
+        }
+
+        with pytest.raises(RuntimeError, match=r"\"f.pdf\" is 2,000 bytes"):
+            await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
 
 
 class TestWriteToolsGateAndPreview:

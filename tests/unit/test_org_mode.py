@@ -1,6 +1,9 @@
 """Tests for org_mode.py: the mode toggle and org mode's server config."""
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 
 from privacyfence import org_mode
@@ -102,7 +105,14 @@ class TestDefaults:
 
 class TestDownloadDeliveryConfigFromOrgConfig:
     """An existing org install with no "download_delivery" section keeps
-    working exactly as before (inline-first, 8MB cap, staging allowed)."""
+    working exactly as before (inline-first, staging allowed), under the
+    default inline limit (ADR 0092)."""
+
+    def test_default_inline_limit_fits_the_hosted_clients(self):
+        # claude.ai and Claude Desktop document a ~150,000-character tool
+        # result limit; the default leaves a third of that as headroom.
+        assert org_mode.DEFAULT_INLINE_MAX_BYTES == 100_000
+        assert org_mode.DownloadDeliveryConfig().inline_max_bytes == 100_000
 
     def test_absent_section_uses_defaults(self):
         config = org_mode.DownloadDeliveryConfig.from_org_config({})
@@ -141,6 +151,72 @@ class TestDownloadDeliveryConfigFromOrgConfig:
     def test_non_positive_link_ttl_raises(self):
         with pytest.raises(org_mode.ConfigurationError):
             org_mode.DownloadDeliveryConfig.from_org_config({"download_delivery": {"link_ttl_seconds": 0}})
+
+
+class TestInlineSizing:
+    """The inline limit caps the serialized tool result -- base64 payload
+    and envelope together -- not the raw file (ADR 0092)."""
+
+    @pytest.mark.parametrize("size", [0, 1, 2, 3, 4, 5, 6, 99, 100, 101, 75_000])
+    def test_base64_length_matches_b64encode(self, size):
+        assert org_mode.base64_length(size) == len(base64.b64encode(b"\xff" * size))
+
+    @pytest.mark.parametrize("name, mime_type", [
+        ("f.pdf", "application/pdf"),
+        ("Árvíztűrő \"tükör\".pdf", "application/pdf"),  # escaped by json.dumps: longer than it looks
+        ("", ""),
+    ])
+    @pytest.mark.parametrize("size", [0, 1, 2, 3, 1_000])
+    def test_inline_result_length_is_exact(self, name, mime_type, size):
+        config = org_mode.DownloadDeliveryConfig(inline_max_bytes=10_000)
+        result = config.inline_result(name, mime_type, b"\x00" * size)
+        assert result is not None
+        # The same serialization web/mcp_tools.to_call_tool_result sends.
+        assert org_mode.inline_result_length(name, mime_type, size) == len(json.dumps(result, default=str))
+
+    def test_boundary_is_on_the_encoded_result(self):
+        size = 300
+        exact = org_mode.inline_result_length("f.pdf", "application/pdf", size)
+        assert exact > org_mode.base64_length(size) > size
+        assert org_mode.DownloadDeliveryConfig(inline_max_bytes=exact).fits_inline(size, "f.pdf", "application/pdf")
+        assert not org_mode.DownloadDeliveryConfig(inline_max_bytes=exact - 1).fits_inline(
+            size, "f.pdf", "application/pdf",
+        )
+
+    def test_raw_size_under_the_limit_is_not_enough(self):
+        config = org_mode.DownloadDeliveryConfig(inline_max_bytes=1_000)
+        assert not config.fits_inline(900)
+        assert config.inline_result("f.pdf", "application/pdf", b"x" * 900) is None
+
+    def test_inline_result_round_trips(self):
+        config = org_mode.DownloadDeliveryConfig(inline_max_bytes=1_000)
+        result = config.inline_result("f.pdf", "application/pdf", b"hello")
+        assert result == {
+            "delivery": "inline", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 5,
+            "content_base64": base64.b64encode(b"hello").decode("ascii"),
+        }
+
+    def test_zero_limit_never_inlines(self):
+        config = org_mode.DownloadDeliveryConfig(inline_max_bytes=0)
+        assert not config.fits_inline(0)
+        assert config.inline_result("f.pdf", "application/pdf", b"") is None
+
+    def test_bundle_override_raises_the_limit(self):
+        # An admin whose clients take larger results (Claude Code, say) can
+        # raise it; the same file that is linked by default then inlines.
+        data = b"x" * 1_000_000
+        assert org_mode.DownloadDeliveryConfig().inline_result("f.pdf", "application/pdf", data) is None
+        raised = org_mode.DownloadDeliveryConfig.from_org_config(
+            {"download_delivery": {"inline_max_bytes": 2_000_000}},
+        )
+        assert raised.inline_result("f.pdf", "application/pdf", data) is not None
+
+    def test_refusal_message_states_both_sizes(self):
+        message = org_mode.DownloadDeliveryConfig(inline_max_bytes=1_000).over_inline_limit_message(
+            "This file", 900,
+        )
+        assert "900 bytes (1,200 once base64-encoded" in message
+        assert "1,000-byte inline-delivery limit" in message
 
 
 class TestDownloadDeliveryConfigStagedLinkPath:

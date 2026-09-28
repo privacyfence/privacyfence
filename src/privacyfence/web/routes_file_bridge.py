@@ -92,7 +92,7 @@ def _audit_bridge_upload_received(principal_id: str, size_bytes: int) -> None:
 
 def _audit_bridge_download_served(principal_id: str, claimed: ClaimedDownload) -> None:
     """Recorded under the request_id of the gated decision that released
-    the file and the agent whose call staged it (ADR 0092) -- neither is on
+    the file and the agent whose call staged it (ADR 0093) -- neither is on
     the fetch itself, which for a capability link carries no bearer."""
     try:
         with agent_scope(claimed.agent):

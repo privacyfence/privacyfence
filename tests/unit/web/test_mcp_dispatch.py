@@ -185,7 +185,7 @@ class TestCall:
 
     async def test_a_pending_approval_result_is_never_cached_for_reuse(self):
         # A gated call that went pending (gate.gated_call raises
-        # ApprovalPending, ADR 0092) comes back as its
+        # ApprovalPending, ADR 0093) comes back as its
         # {"status": "approval_pending", ...} result and must be
         # re-runnable immediately -- Claude re-issuing the identical call
         # is exactly how it collects the real decision from gate.py's
@@ -214,7 +214,7 @@ class TestCall:
 
     async def test_a_released_request_does_not_outlive_its_call(self):
         # What one call's gate released (the request_id a staged download
-        # is attributed to) is scoped to that call -- ADR 0092.
+        # is attributed to) is scoped to that call -- ADR 0093.
         seen = []
 
         class ReleasingConnector(FakeConnector):
