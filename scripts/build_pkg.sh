@@ -14,12 +14,11 @@
 # this repo's CLAUDE.md.
 #
 # **This package is not released on its own.** scripts/build_dmg.sh calls this
-# script and puts the resulting .pkg inside the DMG, next to PrivacyFence.mcpb
-# and PrivacyFence-no-prompts.mcpb; that DMG is the only macOS artifact that
-# ships. The .pkg's conclusion screen names both extensions and says to open
-# one of them, "next to this installer", which is only true when the .pkg and
-# the .mcpb files sit in the same disk image. Carrying all three in one DMG
-# keeps that sentence true and leaves exactly one macOS download to explain.
+# script and puts the resulting .pkg inside the DMG, next to PrivacyFence.mcpb;
+# that DMG is the only macOS artifact that ships. The .pkg's conclusion screen
+# says "open <mcpb>, next to this installer", which is only true when the .pkg
+# and the .mcpb sit in the same disk image. Carrying both in one DMG keeps that
+# sentence true and leaves exactly one macOS download to explain.
 #
 # A pkg-installed .app lands root:wheel-owned by pkgbuild's own default
 # ownership -- but /Applications itself is always root:admin, so that alone
@@ -118,7 +117,7 @@ BUNDLE_ARCHS=$(lipo -archs "${BUNDLE}/Contents/MacOS/${APP_NAME}")
 echo "=== Building ${PRODUCT_NAME} ${VERSION} installer package (macOS ${MIN_MACOS}+, ${HOST_ARCH}) ==="
 
 # ── 1. Stage a clean package root ─────────────────────────────────────────
-# Not `--root dist` directly: dist/ also holds the .mcpb files this same build
+# Not `--root dist` directly: dist/ also holds the .mcpb this same build
 # produces (and, once scripts/build_dmg.sh wraps this .pkg up, the DMG
 # itself), none of which belongs under /Applications. ditto (not
 # cp -R) to preserve the .app bundle's extended attributes and, if it was
@@ -132,18 +131,14 @@ cp -p installer/macos/pkg/postinstall "${SCRIPTS_DIR}/postinstall"
 chmod +x "${SCRIPTS_DIR}/postinstall"
 
 cp -p installer/macos/pkg/resources/welcome.html "${RESOURCES_DIR}/welcome.html"
-# The conclusion screen tells the user to open one of the two .mcpb files
-# sitting next to this installer, so the names baked in have to be the names
-# the extensions have *in the DMG* -- not dist/'s versioned
-# PrivacyFence-<version>.mcpb and PrivacyFence-no-prompts-<version>.mcpb.
-# scripts/build_dmg.sh passes its own stable in-DMG names through
-# MCPB_DMG_NAME and MCPB_NO_PROMPTS_DMG_NAME; the defaults below duplicate them
-# only so a standalone run of this script still renders something true
-# (change one, change the other).
+# The conclusion screen tells the user to open the .mcpb sitting next to this
+# installer, so the name baked in has to be the name the extension has *in the
+# DMG* -- not dist/'s versioned PrivacyFence-<version>.mcpb. scripts/build_dmg.sh
+# passes its own stable in-DMG name through MCPB_DMG_NAME; the default below
+# duplicates it only so a standalone run of this script still renders something
+# true (both names are "PrivacyFence.mcpb" -- change one, change the other).
 MCPB_NAME="${MCPB_DMG_NAME:-${PRODUCT_NAME}.mcpb}"
-MCPB_NO_PROMPTS_NAME="${MCPB_NO_PROMPTS_DMG_NAME:-${PRODUCT_NAME}-no-prompts.mcpb}"
 sed -e "s|__MCPB_NAME__|${MCPB_NAME}|g" \
-  -e "s|__MCPB_NO_PROMPTS_NAME__|${MCPB_NO_PROMPTS_NAME}|g" \
   installer/macos/pkg/resources/conclusion.html.tmpl > "${RESOURCES_DIR}/conclusion.html"
 
 # ── 2. Build the component package ────────────────────────────────────────

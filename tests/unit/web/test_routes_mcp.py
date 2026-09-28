@@ -860,16 +860,13 @@ class TestRehomingAStaleSessionId:
         assert again.headers.get("mcp-session-id", session_id) == session_id
 
 
-_HEADER = "X-PrivacyFence-Tool-Annotations"
-# (readOnlyHint, destructiveHint, idempotentHint) per tool, per mode (ADR 0086).
+# (readOnlyHint, destructiveHint, idempotentHint) per tool (ADR 0089).
 _EXPECTED = {
-    "truthful": {
-        "rwd_read": (True, False, True), "rwd_write": (False, False, False), "rwd_delete": (False, True, False),
-    },
-    "all_read_only": {
-        "rwd_read": (True, False, True), "rwd_write": (True, False, True), "rwd_delete": (True, False, True),
-    },
+    "rwd_read": (True, False, True), "rwd_write": (False, False, False), "rwd_delete": (False, True, False),
 }
+# The header 5.0.0a1's second Claude Desktop extension sent to ask for every tool read-only. Removed
+# by ADR 0089: a client still sending it is neither refused nor obeyed.
+_REMOVED_HEADER = "X-PrivacyFence-Tool-Annotations"
 
 
 def _triples(tools) -> dict[str, tuple]:
@@ -880,70 +877,37 @@ def _triples(tools) -> dict[str, tuple]:
 
 
 class TestToolAnnotationsOverTheWire:
-    """ADR 0086, checked on a live ``/mcp`` ``list_tools``: which annotation mode a session gets,
-    and that the meta-tools keep their own annotations whichever it is."""
+    """ADR 0089, checked on a live ``/mcp`` ``list_tools``: every connector tool is annotated
+    truthfully in both modes, whatever the client sends, and the meta-tools keep their own."""
 
     @pytest.mark.parametrize("dispatcher_mode", ["local", "org"])
-    @pytest.mark.parametrize("bundle", ["truthful", "all_read_only"])
-    @pytest.mark.parametrize("header", [None, "truthful", "all-read-only"])
-    async def test_mode_precedence(self, dispatcher_mode, bundle, header):
-        # Local mode: the connection's header wins over the bundle. Org mode: the header is
-        # ignored and the administrator's bundle decides.
-        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()}, mode=dispatcher_mode, tool_annotations=bundle)
+    @pytest.mark.parametrize("header", [None, "all-read-only", "truthful", "read-only"])
+    async def test_connector_tools_are_always_truthful(self, dispatcher_mode, header):
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()}, mode=dispatcher_mode)
         verifier = _OrgVerifier("alice@example.com") if dispatcher_mode == "org" else None
-        headers = {_HEADER: header} if header is not None else None
+        headers = {_REMOVED_HEADER: header} if header is not None else None
         async with _connected_session(dispatcher, verifier=verifier, headers=headers) as session:
             result = await session.list_tools()
-        expected_mode = bundle
-        if dispatcher_mode == "local" and header is not None:
-            expected_mode = header.replace("-", "_")
         triples = _triples(result.tools)
-        assert {name: triples[name] for name in _EXPECTED[expected_mode]} == _EXPECTED[expected_mode]
+        assert {name: triples[name] for name in _EXPECTED} == _EXPECTED
 
-    async def test_defaults_to_truthful(self):
-        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
-        async with _connected_session(dispatcher) as session:
-            result = await session.list_tools()
-        triples = _triples(result.tools)
-        assert {name: triples[name] for name in _EXPECTED["truthful"]} == _EXPECTED["truthful"]
-
-    @pytest.mark.parametrize("header", [None, "truthful", "all-read-only"])
-    async def test_meta_tools_keep_their_own_annotations_in_every_mode(self, header):
+    @pytest.mark.parametrize("header", [None, "all-read-only"])
+    async def test_meta_tools_keep_their_own_annotations(self, header):
         from privacyfence.web.mcp_tools import META_TOOLS
 
         dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
-        headers = {_HEADER: header} if header is not None else None
+        headers = {_REMOVED_HEADER: header} if header is not None else None
         async with _connected_session(dispatcher, headers=headers) as session:
             result = await session.list_tools()
         advertised = {t.name: t.annotations for t in result.tools if t.name in META_TOOL_NAMES}
         assert advertised == {t.name: t.annotations for t in META_TOOLS}
 
-    async def test_a_bad_header_is_refused_with_400_in_local_mode(self):
+    async def test_the_removed_header_is_not_refused(self):
+        # A 5.0.0a1 no-prompts extension left installed keeps working, with truthful annotations,
+        # rather than failing every request -- the 400 it used to get for a bad value is gone too.
         dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
         async with _raw_client_on_a_running_app(dispatcher) as client:
             response = await client.post(
-                "/mcp", headers={_HEADER: "read-only", "Accept": "application/json, text/event-stream"},
-                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-                    "protocolVersion": "2025-06-18", "capabilities": {},
-                    "clientInfo": {"name": "t", "version": "1"},
-                }},
+                "/mcp", json=_INIT_BODY, headers={**_WIRE_HEADERS, _REMOVED_HEADER: "read-only"},
             )
-        assert response.status_code == 400
-        assert "X-PrivacyFence-Tool-Annotations" in response.text
-        assert "all-read-only" in response.text
-        assert "mcp-session-id" not in response.headers
-
-    async def test_a_bad_header_is_ignored_in_org_mode(self):
-        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()}, mode="org", tool_annotations="all_read_only")
-        async with _connected_session(
-            dispatcher, verifier=_OrgVerifier("alice@example.com"), headers={_HEADER: "read-only"},
-        ) as session:
-            result = await session.list_tools()
-        triples = _triples(result.tools)
-        assert {name: triples[name] for name in _EXPECTED["all_read_only"]} == _EXPECTED["all_read_only"]
-
-    async def test_an_unauthenticated_request_is_still_401_before_the_header_is_judged(self):
-        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
-        async with _raw_client(dispatcher) as client:
-            response = await client.post("/mcp", headers={_HEADER: "read-only"}, json={})
-        assert response.status_code == 401
+        assert response.status_code == 200
