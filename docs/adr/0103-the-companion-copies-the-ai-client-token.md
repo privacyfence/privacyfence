@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted — 2026-09-28. Implements [issue 795](https://github.com/privacyfence/privacyfence/issues/795).
+Accepted — 2026-09-28. Implements [issue 795](https://github.com/privacyfence/privacyfence/issues/795)
+except its ChatGPT desktop steps, which follow with ChatGPT's own setup doc.
 Amends [ADR 0008](0008-one-principal-per-os-user.md) D3, which names only the `.mcpb` shim and
 `privacyfence-app --print-mcp-token` as ways to get the MCP token.
 
