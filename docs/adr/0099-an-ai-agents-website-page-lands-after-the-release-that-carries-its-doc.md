@@ -1,4 +1,4 @@
-# ADR 0098: An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc
+# ADR 0099: An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc
 
 ## Status
 
@@ -11,7 +11,7 @@ clients: docs in [PR 766](https://github.com/privacyfence/privacyfence/pull/766)
 ## Context
 
 Every page under `/ai-agents/<slug>/` links its setup doc at `/docs/connect-<slug>/`
-([ADR 0097](0097-each-ai-agent-has-its-own-setup-doc-and-website-page.md)). The hand-written
+([ADR 0098](0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md)). The hand-written
 website pages deploy from `main` on merge (`pages.yml`), but `/docs/` is rendered from the newest
 **stable release tag**, not from `main`
 ([ADR 0052](0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md)). A setup doc merged
@@ -67,5 +67,5 @@ it.
 
 ## Related
 
-- [ADR 0099](0099-unverified-client-setup-instructions-never-merge-to-main.md): the docs PR itself
+- [ADR 0100](0100-unverified-client-setup-instructions-never-merge-to-main.md): the docs PR itself
   waits until the instructions are verified.

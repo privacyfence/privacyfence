@@ -1,4 +1,4 @@
-# ADR 0099: Unverified AI-client setup instructions never merge to `main`
+# ADR 0100: Unverified AI-client setup instructions never merge to `main`
 
 ## Status
 
@@ -52,7 +52,7 @@ itself.
 - A client's docs PR can stay open for as long as the manual check takes; plans that add a client
   schedule the check before the docs merge, not after.
 - The website page follows the doc by one release
-  ([ADR 0098](0098-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md)),
+  ([ADR 0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md)),
   so a client is never named on the site before its instructions were run.
 - The rule covers new client pages. It does not stop an ordinary docs fix to an already verified
   page.
@@ -64,5 +64,5 @@ itself.
 
 ## Related
 
-- [ADR 0097](0097-each-ai-agent-has-its-own-setup-doc-and-website-page.md): the per-client docs
+- [ADR 0098](0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md): the per-client docs
   this rule governs.

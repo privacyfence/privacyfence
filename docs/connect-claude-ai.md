@@ -25,8 +25,11 @@ Your administrator gives you the deployment's URL, for example `https://pf.examp
 1. In claude.ai's connector settings, add a custom connector with the URL
    `https://pf.example.com/mcp`. Leave the optional OAuth client ID and secret empty: claude.ai
    registers itself.
-2. Click **Connect** on the connector and sign in with your organization account.
-3. Connect your services at `https://pf.example.com/connect`.
+2. Add the deployment's host, `pf.example.com`, to **Settings → Capabilities → Domain
+   allowlist**. Without it, every file larger than about 75 KB and every upload fails after you
+   approve it; see [Files](#files).
+3. Click **Connect** on the connector and sign in with your organization account.
+4. Connect your services at `https://pf.example.com/connect`.
 
 On Team and Enterprise plans an owner adds the connector once for the whole organization, and each
 person connects it with their own sign-in. Access tokens last one hour and are refreshed silently;
@@ -43,10 +46,19 @@ extension. Files travel through one-time links instead
   `privacyfence_create_upload_slot`, sends the file to the returned URL with an HTTP `PUT`, and
   passes the returned `upload_id` to the tool.
 - **Download** (for example `drive_download_file`): a file of up to about 75 KB comes back in the
-  tool result; a larger one becomes a short-lived, one-time link that claude.ai fetches itself.
-  claude.ai truncates a tool result over about 150,000 characters, which is why the default inline
-  limit is well below that
+  tool result; a larger one becomes a short-lived, one-time link. claude.ai truncates a tool
+  result over about 150,000 characters, which is why the default inline limit is well below that
   ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)).
+
+**Both need the host on claude.ai's domain allowlist.** claude.ai opens a link and sends an upload
+from its own sandbox, not through the connector. That sandbox reaches only the domains on
+**Settings → Capabilities → Domain allowlist**. If the deployment's host is not on the list, the
+approval goes through and claude.ai then reports that it cannot reach the site. PrivacyFence never
+sees the attempt ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)).
+
+**To read a document, no download is needed.** `drive_get_file_content` returns a PDF, Word,
+PowerPoint or Excel file's text, so claude.ai can read it whatever its network settings. A scanned
+PDF has no text; figures and layout are not in the text either.
 
 Sizes, lifetimes and the organization settings are in [Files](how-it-works.md#files) and
 [File delivery](org-mode-setup-guide.md#13-file-delivery).

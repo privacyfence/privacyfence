@@ -1,4 +1,4 @@
-# ADR 0100: The website shows no third-party logos; AI agents and connectors are named in text
+# ADR 0101: The website shows no third-party logos; AI agents and connectors are named in text
 
 ## Status
 
@@ -10,7 +10,7 @@ followed it.
 ## Context
 
 privacyfence.eu names the AI clients PrivacyFence is tested with (the "Works with" strip and the
-`/ai-agents/` pages, [ADR 0097](0097-each-ai-agent-has-its-own-setup-doc-and-website-page.md))
+`/ai-agents/` pages, [ADR 0098](0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md))
 and the services its connectors reach (`/connectors/`). Integration pages elsewhere usually show
 each vendor's logo, and a newcomer building the next client's page would reasonably add one.
 

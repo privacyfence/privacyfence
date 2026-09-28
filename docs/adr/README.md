@@ -197,12 +197,13 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0089](0089-tool-annotations-are-always-truthful.md) | Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed | Accepted |
 | [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |
 | [0091](0091-the-configured-step-up-scope-is-a-minimum-each-person-can-widen.md) | The configured step-up scope is a minimum each person can widen | Accepted |
-| [0092](0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md) | The inline download limit caps the tool result, at 100,000 bytes by default | Accepted |
+| [0092](0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md) | The inline download limit caps the tool result, at 100,000 bytes by default | Accepted; amended by 0097 |
 | [0093](0093-a-pending-approval-releases-nothing.md) | A pending approval releases nothing, and one request_id ties its audit trail together | Accepted |
 | [0094](0094-claude-clients-are-matched-by-their-observed-names.md) | Claude clients are matched by the names they were seen sending, and an unrecognised DCR name yields to a recognised handshake name | Accepted |
 | [0095](0095-gmail-signature-cid-images-are-copied-from-sent-mail.md) | A Gmail signature's `cid:` images are copied from the user's own sent mail | Accepted |
 | [0096](0096-gmail-get-message-returns-html-only-when-asked.md) | `gmail_get_message` returns the HTML body only when asked, under the same `body` policy | Accepted |
-| [0097](0097-each-ai-agent-has-its-own-setup-doc-and-website-page.md) | Each AI agent has its own setup doc and its own website page, counted as the `ai-agent` content group | Accepted (retroactive) |
-| [0098](0098-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md) | An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc | Accepted (retroactive) |
-| [0099](0099-unverified-client-setup-instructions-never-merge-to-main.md) | Unverified AI-client setup instructions never merge to `main` | Accepted (retroactive) |
-| [0100](0100-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |
+| [0097](0097-a-download-link-needs-a-client-that-can-reach-the-server.md) | A download link needs a client that can reach the server; `drive_get_file_content` returns a document's text | Accepted |
+| [0098](0098-each-ai-agent-has-its-own-setup-doc-and-website-page.md) | Each AI agent has its own setup doc and its own website page, counted as the `ai-agent` content group | Accepted (retroactive) |
+| [0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md) | An AI agent's website page lands after the stable release whose `/docs/` carries its setup doc | Accepted (retroactive) |
+| [0100](0100-unverified-client-setup-instructions-never-merge-to-main.md) | Unverified AI-client setup instructions never merge to `main` | Accepted (retroactive) |
+| [0101](0101-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |

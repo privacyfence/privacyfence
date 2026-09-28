@@ -148,7 +148,8 @@ class ServerConfig:
 # https://github.com/privacyfence/privacyfence/issues/46). 100,000 leaves
 # a third of that documented, approximate limit as headroom and still
 # inlines files up to ~75 KB; anything larger gets a one-time link, which
-# every client handles. See ADR 0092.
+# works for any client that can reach this server's host -- claude.ai only
+# once the host is on its domain allowlist. See ADRs 0092 and 0097.
 DEFAULT_INLINE_MAX_BYTES = 100_000
 
 

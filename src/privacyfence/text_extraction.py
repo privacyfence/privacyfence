@@ -121,11 +121,13 @@ def is_prefetch_worthy(mime_type: str) -> bool:
     return mime_type.startswith("image/") or mime_type.startswith("text/") or mime_type in EXTRACTABLE_MIME_TYPES
 
 
-def extract_text(data: bytes, mime_type: str) -> str:
+def extract_text(data: bytes, mime_type: str, max_chars: int = MAX_SCAN_CHARS) -> str:
     """Best-effort text from ``data`` -- Markdown syntax where the format's
     own structure supports it (DOCX/PPTX/XLSX/HTML), plain text otherwise --
     or "" if ``mime_type`` isn't a supported format or the content fails to
-    parse. Truncated to MAX_SCAN_CHARS.
+    parse. Truncated to ``max_chars``: MAX_SCAN_CHARS by default, the PII
+    scan's and preview pane's cap; drive_get_file_content passes a larger
+    one, because there the text is the tool result itself.
     """
     if not data:
         return ""
@@ -136,7 +138,7 @@ def extract_text(data: bytes, mime_type: str) -> str:
         elif mime_type.startswith("text/"):
             text = data.decode("utf-8", errors="replace")
         elif mime_type == "application/pdf":
-            text = _extract_pdf_text(data)
+            text = _extract_pdf_text(data, max_chars)
         elif mime_type == _DOCX_MIME:
             text = _extract_docx_markdown(data)
         elif mime_type == _PPTX_MIME:
@@ -150,7 +152,7 @@ def extract_text(data: bytes, mime_type: str) -> str:
     except Exception:
         logger.warning("extract_text: failed to parse %s content", mime_type, exc_info=True)
         return ""
-    return text[:MAX_SCAN_CHARS]
+    return text[:max_chars]
 
 
 def preview_blocks_for(details: str, extracted: str) -> list[dict] | None:
@@ -173,9 +175,9 @@ def preview_blocks_for(details: str, extracted: str) -> list[dict] | None:
     return blocks or None
 
 
-def _extract_pdf_text(data: bytes) -> str:
+def _extract_pdf_text(data: bytes, max_chars: int = MAX_SCAN_CHARS) -> str:
     """Page text joined in document order, stopping as soon as the running
-    total passes MAX_SCAN_CHARS rather than always walking every page --
+    total passes ``max_chars`` rather than always walking every page --
     extract_text()'s own truncation to that same cap happens after this
     returns, so a large multi-hundred-page PDF would otherwise pay for
     pages whose text never survives the truncation anyway, in the
@@ -188,7 +190,7 @@ def _extract_pdf_text(data: bytes) -> str:
         text = page.extract_text() or ""
         parts.append(text)
         length += len(text)
-        if length >= MAX_SCAN_CHARS:
+        if length >= max_chars:
             break
     return "\n".join(parts)
 

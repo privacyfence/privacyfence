@@ -23,7 +23,7 @@ from ..gate import current_reason, gated_call
 from ..org_mode import DownloadDeliveryConfig, base64_length
 from ..principal import current_principal
 from ..privacy_filter import apply_list, apply_text, category_policy
-from ..text_extraction import extract_text, guess_mime_type, is_prefetch_worthy, preview_blocks_for
+from ..text_extraction import EXTRACTABLE_MIME_TYPES, extract_text, guess_mime_type, is_prefetch_worthy, preview_blocks_for
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,37 @@ _UPLOAD_MAX_BYTES = 50_000_000
 # _download_file's own PII-scan comment for why a *truncated* prefetch is
 # actively wrong for a format like PDF, not just incomplete.
 _FULL_FETCH_PII_SCAN_MAX_BYTES = 5_000_000
+
+# drive_get_file_content reads a PDF/DOCX/PPTX/XLSX in full, up to this
+# size, to return its text rather than a pointer to drive_download_file
+# (see _get_file_content).
+_EXTRACT_FULL_FETCH_MAX_BYTES = 20_000_000
+
+# The most text drive_get_file_content returns from an extracted file,
+# measured as the JSON the tool result carries it in: json.dumps escapes
+# every non-ASCII character as \uXXXX, so a Hungarian or Greek document is
+# longer on the wire than in characters. Same figure, and same reason, as
+# org mode's inline-download limit: two thirds of the ~150,000-character
+# tool result claude.ai and Claude Desktop accept (ADR 0092).
+_EXTRACTED_TEXT_MAX_CHARS = 100_000
+
+
+def _truncate_to_json_chars(text: str, max_chars: int) -> tuple[str, bool]:
+    """The longest prefix of ``text`` whose JSON string encoding (quotes
+    excluded) is at most ``max_chars`` long, and whether it was cut."""
+    def encoded_length(prefix: str) -> int:
+        return len(json.dumps(prefix)) - 2
+
+    if encoded_length(text) <= max_chars:
+        return text, False
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if encoded_length(text[:middle]) <= max_chars:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low], True
 
 
 def _parse_json_str_list(value: str) -> list[str] | None:
@@ -182,16 +213,16 @@ class DriveConnector(Connector):
                 description=(
                     "Fetch the content of a Drive file by id. A Google Doc comes back as "
                     "Markdown (headings, **bold**, *italic*, ~~strikethrough~~, __underline__, "
-                    "`code`, [link](url), ==highlight==, a '---' horizontal-rule divider, "
-                    "bullet/numbered lists including nesting (2-space indent per level), and GFM "
-                    "pipe tables (real grid, with column alignment) — the same syntax "
-                    "drive_write_doc_content accepts, so the result round-trips straight back "
-                    "into it or drive_docs_edit_content. ==highlight== always renders the tool's "
-                    "own default color; when a run's exact highlight or text color differs from "
-                    "that, the result also includes 'highlights'/'text_colors' — each a list of "
-                    "{text, hex} — since Markdown alone can't carry an exact color (text color "
-                    "has no Markdown syntax at all). Sheets/Slides and other files are "
-                    "unaffected. Requires user approval."
+                    "`code`, [link](url), ==highlight==, '---' dividers, nested bullet/numbered "
+                    "lists with a 2-space indent per level, GFM pipe tables with alignment), the "
+                    "syntax drive_write_doc_content accepts, so it round-trips into it or "
+                    "drive_docs_edit_content. An exact highlight or text color Markdown can't "
+                    "carry comes back in 'highlights'/'text_colors' ({text, hex} lists). A Sheet "
+                    "comes back as CSV, Slides as plain text. A PDF, .docx, .pptx or .xlsx comes "
+                    "back as its extracted text (a scanned PDF has none), with 'truncated': true "
+                    "when cut to fit; a .zip as its list of entries. Other files, such as images, "
+                    "only get a placeholder: use drive_download_file for those. Requires user "
+                    "approval."
                 ),
                 params=[ToolParam("file_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
                 read_only=True,
@@ -731,12 +762,46 @@ class DriveConnector(Connector):
         owners = getattr(drive_file, "owners", [])
         size = getattr(drive_file, "size", "")
         modified = getattr(drive_file, "modified_time", "")
+        mime_type = getattr(drive_file, "mime_type", "") or ""
         content_bytes = getattr(content, "content_bytes", b"") or b""
-        raw_text = getattr(content, "content_text", "") or (
-            f"[binary content — {len(content_bytes)} bytes; use drive_download_file to save it]"
-            if content_bytes else "(no content)"
-        )
+        # A PDF/DOCX/PPTX/XLSX comes back as its text, not as a pointer to
+        # drive_download_file: in organization mode a file over about 75 KB
+        # downloads only as a link, which a client whose sandbox cannot
+        # reach this server cannot open, and the text is usually what the
+        # agent wanted anyway. The capped fetch above cut a larger file
+        # short, and pypdf cannot parse a PDF without its end, so a
+        # truncated one is fetched again in full.
+        extracted = ""
+        extracted_truncated = False
+        if content_bytes and mime_type in EXTRACTABLE_MIME_TYPES:
+            extract_from = content_bytes
+            if getattr(content, "truncated", False):
+                extract_from = b""
+                if isinstance(size, int) and 0 < size <= _EXTRACT_FULL_FETCH_MAX_BYTES:
+                    full = await self._fetch(self._drive.get_file_content, file_id, size + 1)
+                    if not full.truncated:
+                        extract_from = full.content_bytes or b""
+            if extract_from:
+                extracted = await asyncio.to_thread(
+                    extract_text, extract_from, mime_type, _EXTRACTED_TEXT_MAX_CHARS,
+                )
+        if extracted:
+            raw_text = extracted
+        elif content_bytes and mime_type in EXTRACTABLE_MIME_TYPES:
+            raw_text = (
+                f"[no text could be extracted from this {mime_type} file ({size or len(content_bytes)} "
+                "bytes): a scanned PDF has no text layer, and a file over "
+                f"{_EXTRACT_FULL_FETCH_MAX_BYTES:,} bytes is not read in full; drive_download_file "
+                "returns the file itself]"
+            )
+        else:
+            raw_text = getattr(content, "content_text", "") or (
+                f"[binary content — {len(content_bytes)} bytes; use drive_download_file to save it]"
+                if content_bytes else "(no content)"
+            )
         text = apply_text("drive_privacy", "file_content", raw_text)
+        if extracted:
+            text, extracted_truncated = _truncate_to_json_chars(text, _EXTRACTED_TEXT_MAX_CHARS)
         # Native PDFView embed instead of the placeholder text above.
         # Gated on category_policy == "allow", the same condition
         # raw_text/text already require to
@@ -766,7 +831,9 @@ class DriveConnector(Connector):
             "Size": size_display or "(unknown)",
             "Modified": modified_display or "(unknown)",
         }
-        filtered = {"file_id": file_id, "content": text}
+        filtered: dict[str, Any] = {"file_id": file_id, "content": text}
+        if extracted_truncated:
+            filtered["truncated"] = True
         # Color sidecar -- Google-Doc-only, and only present when there's
         # something a plain ==highlight== marker can't already say on its
         # own: an exact color that isn't the tool's own default, or any

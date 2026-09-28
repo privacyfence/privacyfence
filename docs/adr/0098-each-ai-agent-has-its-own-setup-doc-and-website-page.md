@@ -1,4 +1,4 @@
-# ADR 0097: Each AI agent has its own setup doc and its own website page, counted as the `ai-agent` content group
+# ADR 0098: Each AI agent has its own setup doc and its own website page, counted as the `ai-agent` content group
 
 ## Status
 
@@ -70,7 +70,7 @@ website page, `/ai-agents/<slug>/`, both in the GA4 content group `ai-agent`.**
 
 - Adding a client means four things together: a `clients.json` entry, a website page, a
   `connect-<slug>.md`, and its line under "AI agent setup". Guardrail 14 fails until all four
-  exist. When the website half may land is [ADR 0098](0098-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md).
+  exist. When the website half may land is [ADR 0099](0099-an-ai-agents-website-page-lands-after-the-release-that-carries-its-doc.md).
 - The `ai-agent` content group reports client interest separately from platform and connector
   interest, without any new tracking code.
 - Guidance that applies to every client (how `/mcp` authenticates, what the client is told) stays
@@ -90,4 +90,4 @@ website page, `/ai-agents/<slug>/`, both in the GA4 content group `ai-agent`.**
 - [ADR 0050](0050-website-analytics-is-ga4-behind-consent.md): the content groups this reuses.
 - [ADR 0051](0051-privacyfence-eu-publishes-the-user-and-operator-docs-only.md): the published
   half of `docs/README.md` that "AI agent setup" is part of.
-- [ADR 0100](0100-the-website-shows-no-third-party-logos.md): the pages are text only.
+- [ADR 0101](0101-the-website-shows-no-third-party-logos.md): the pages are text only.
