@@ -67,11 +67,14 @@ instead still sees `"denied"` as that approval's status, and the feedback under 
 ```
 
 `denial_feedback` appears only when a denied approval in that call has feedback; `intent`, `note`
-and `guidance` are `null` when absent.
+and `guidance` are `null` when absent. The note is never written to the audit log, which records
+only the intent and the note's length. See
+[ADR 0083](adr/0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) and
+[ADR 0084](adr/0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md).
 
-Re-issuing the denied call within the approval's ledger lifetime (5 minutes by default), from the
-same session or another, fails without a new card. A read's denial is reused for every identical
-call in that window. The text is the same, with one sentence after the prefix saying so:
+Re-issuing a denied call within the approval's ledger lifetime (5 minutes by default) fails
+without a new card. A read's denial is reused for every identical call in that window, from any
+session. The text is the same, with one sentence after the prefix saying the denial was reused:
 
 ```
 Request denied by user. This is not an error and the user was not asked again: PrivacyFence
@@ -79,11 +82,8 @@ reused the user's denial of an identical request made 2 minutes ago, as it does 
 requests for 5 minutes after a decision. Don't retry the same call; ask the user how to proceed.
 ```
 
-(One line in reality; see
-[ADR 0089](adr/0089-a-reused-denial-says-it-is-an-earlier-decision.md).) The note is never written to the audit log, which records only
-the intent and the note's length. See
-[ADR 0083](adr/0083-a-humans-deny-note-reaches-the-agent-as-delimited-sanitized-user-text.md) and
-[ADR 0084](adr/0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md).
+(One line in reality.) See
+[ADR 0089](adr/0089-a-reused-denial-says-it-is-an-earlier-decision.md).
 
 ## Summary
 
