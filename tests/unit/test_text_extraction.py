@@ -199,6 +199,22 @@ class TestPdf:
         assert len(calls) == 2
         assert len(result) <= MAX_SCAN_CHARS
 
+    def test_max_chars_raises_the_cap_for_a_caller_that_returns_the_text(self, monkeypatch):
+        # drive_get_file_content hands the text itself to the AI, so it
+        # asks for more than the PII scan's MAX_SCAN_CHARS -- and the page
+        # walk has to honour that larger cap too, not stop at the default.
+        class FakePage:
+            def extract_text(self):
+                return "a" * (MAX_SCAN_CHARS // 2 + 1)
+
+        class FakeReader:
+            def __init__(self, _stream):
+                self.pages = [FakePage() for _ in range(10)]
+
+        monkeypatch.setattr("pypdf.PdfReader", FakeReader)
+        result = extract_text(b"%PDF-1.1 fake", "application/pdf", max_chars=3 * MAX_SCAN_CHARS)
+        assert len(result) == 3 * MAX_SCAN_CHARS
+
 
 class TestDocx:
     def test_extracts_text_from_a_single_paragraph(self):
