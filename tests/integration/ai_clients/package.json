@@ -4,6 +4,7 @@
   "description": "Exact-pinned AI-client CLIs for the T3 contract tests; how to bump a pin is in tests/integration/ai_client_harness.py's module docstring.",
   "license": "Apache-2.0",
   "devDependencies": {
-    "@anthropic-ai/claude-code": "2.1.283"
+    "@anthropic-ai/claude-code": "2.1.283",
+    "@google/gemini-cli": "0.61.0"
   }
 }
