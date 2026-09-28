@@ -403,6 +403,13 @@ class TestPiiDetection:
         assert cfg["pii_detection"].get("detect_financial_figures", True) is True
 
 
+class TestSetStepUpScope:
+    def test_no_step_up_wired_is_refused(self, controller):
+        state = controller.set_step_up_scope("writes_and_reads")
+        assert controller.error
+        assert state["general"]["step_up_scope_active"] is False
+
+
 class TestEnableStepUp:
     """The browser-reachable counterpart to hand-editing config/
     settings.yaml's own step_up: section. See SettingsController.

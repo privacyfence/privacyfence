@@ -132,7 +132,7 @@ from starlette.routing import Route
 from .. import web_shell, webauthn_stepup
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal
-from ..step_up_config import StepUpConfig
+from ..step_up_config import StepUpConfig, effective_scope
 from ..webauthn_stepup import RegistrationChallengeStore, StepUpChallengeStore, WebAuthnError
 from .csp import nonce_for as _csp_nonce_for
 from .session_auth import human_session_required_json
@@ -1074,7 +1074,7 @@ def _render_security_page(
         f'<ul class="creds stack">{rows}</ul>' if creds
         else '<div class="empty card">No passkeys added yet.</div>'
     )
-    scope_note = _SCOPE_NOTES.get(step_up.scope, _SCOPE_NOTES["writes"])
+    scope_note = _SCOPE_NOTES.get(effective_scope(step_up, principal), _SCOPE_NOTES["writes"])
     # ADR 0003 decision 7: shown at the top of the page body, so it lands
     # inside whichever shell is used below -- web_shell.wrap()'s nav in org
     # mode, the bare document in local mode, which is the only one that ever

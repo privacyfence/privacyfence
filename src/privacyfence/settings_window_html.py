@@ -141,6 +141,9 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-seg-btn.policy-allow { color: var(--success); background: var(--success-soft); border-color: currentColor; }
 .pf-seg-btn.policy-redact { color: var(--warning); background: var(--warning-soft); border-color: currentColor; }
 .pf-seg-btn.policy-block { color: var(--danger); background: var(--danger-soft); border-color: currentColor; }
+/* A rung below a configured minimum (the step-up scope control): shown, so the ladder reads whole,
+   but not choosable, and says so by more than its colour (aria-disabled, no pointer). */
+.pf-seg-btn.pf-seg-locked, .pf-seg-btn.pf-seg-locked:hover { color: var(--ink-soft); background: none; opacity: 0.55; cursor: not-allowed; }
 
 /* ---- Buttons and links drawn as <div role=button>: the shared .button, and tap-sized links ---- */
 .button { text-decoration: none; }
@@ -515,6 +518,39 @@ _JS = r"""
     return html;
   }
 
+  // Which approvals ask for a passkey (ADR 0091). The configured
+  // step_up.scope -- the org's bundle, or config/settings.yaml in local
+  // mode -- is the minimum: a rung narrower than it is drawn locked, with
+  // no data-action, so this control can only ever ask for more.
+  var STEP_UP_SCOPE_LABELS = [
+    ['writes', 'Writes only'],
+    ['writes_and_pii_reads', 'Writes & PII reads'],
+    ['writes_and_reads', 'Writes & all reads'],
+  ];
+
+  function renderStepUpScopeRow(g) {
+    var floorRank = -1;
+    STEP_UP_SCOPE_LABELS.forEach(function (it, i) { if (it[0] === g.step_up_scope_floor) { floorRank = i; } });
+    var groupLabel = 'Passkey required for';
+    var seg = '<div class="pf-seg-group" role="radiogroup" aria-label="' + esc(groupLabel) + '">';
+    STEP_UP_SCOPE_LABELS.forEach(function (it, i) {
+      var active = it[0] === g.step_up_scope;
+      var locked = i < floorRank;
+      var cls = 'pf-seg-btn' + (active ? ' plain-active' : '') + (locked ? ' pf-seg-locked' : '');
+      seg += '<div class="' + cls + '" role="radio" aria-checked="' + (active ? 'true' : 'false') + '"' +
+        (locked ? ' aria-disabled="true"' : ' tabindex="0" ' + dataAttr('set_step_up_scope', { scope: it[0] })) +
+        ' aria-label="' + esc(groupLabel + ': ' + it[1]) + '">' + esc(it[1]) + '</div>';
+    });
+    seg += '</div>';
+    var minimumLabel = '';
+    STEP_UP_SCOPE_LABELS.forEach(function (it) { if (it[0] === g.step_up_scope_floor) { minimumLabel = it[1]; } });
+    var source = CAPS.mode === 'org' ? 'Your organization requires' : '<code>config/settings.yaml</code> requires';
+    return rowHtml(groupLabel,
+      'Which approvals ask for your passkey. ' + source + ' at least <strong>' + esc(minimumLabel) +
+      '</strong>; you can require it for more of your own approvals, never less.',
+      seg, 'pf-row-sub');
+  }
+
   function renderGeneral(state) {
     var g = state.general;
     var html = '<div class="pf-page">';
@@ -538,6 +574,10 @@ _JS = r"""
       html += '</div>';
     }
 
+    // Install-wide and admin-only in org mode (toggle_pii_* are admin_only
+    // in ACTION_SCOPES); every other org principal sees General only for
+    // their own notification and passkey settings.
+    if (CAPS.mode !== 'org' || CAPS.is_admin) {
     html += '<div class="card pf-card">';
     html += rowHtml('PII Detection Gate',
       'Scans review-popup content for likely personal data (IBANs, national IDs, financial figures) before you approve it. A match requires a second confirmation.',
@@ -549,6 +589,7 @@ _JS = r"""
       toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures'),
       'pf-row-sub', !g.pii_enabled);
     html += '</div>';
+    }
 
     // A plain same-origin <a>, not a data-action AJAX call --
     // /security is its own standalone page (web/routes_security.py), not
@@ -582,6 +623,9 @@ _JS = r"""
       html += rowHtml('Step-up for approvals', 'Off. Require your passkey for every write approval and every sensitive settings change.',
         '<div class="button primary" role="button" tabindex="0" aria-label="Turn on step-up for approvals" ' +
         dataAttr('enable_step_up', {}) + '>Turn on</div>', 'pf-row-sub');
+    }
+    if (g.step_up_scope_active && !notApplicable('set_step_up_scope')) {
+      html += renderStepUpScopeRow(g);
     }
     html += '</div>';
 
@@ -1454,7 +1498,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin,
         "sections": {
-            "general": is_admin, "connectors": False, "auto_accept": True,
+            "general": True, "connectors": False, "auto_accept": True,
             "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),

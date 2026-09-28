@@ -259,6 +259,42 @@ class TestGuardDecision:
         assert response is sentinel
 
 
+class TestPersonalScope:
+    """ADR 0091: a principal's own Settings choice widens the configured
+    scope for their decisions -- an unflagged read the org's
+    ``writes_and_pii_reads`` releases on a session alone asks for a passkey
+    once that principal chose ``writes_and_reads``."""
+
+    def _decide(self, step_up: StepUpConfig):
+        plain_read = _card("a1", gate_kind="review", pii_detected=False)
+        sentinel = JSONResponse({"error": "step_up_required"}, status_code=428)
+        return approval_step_up.guard_decision(
+            PRINCIPAL, step_up,
+            approval=plain_read, approval_id="a1", result="accept", choice=None,
+            step_up_results=STEP_UP_RESULTS, assertion=None, origin=ORIGIN,
+            challenges=StepUpChallengeStore(), step_up_response=lambda: sentinel,
+        )
+
+    def test_a_wider_personal_scope_gates_an_unflagged_read(self):
+        from privacyfence.step_up_config import set_personal_scope
+        step_up = StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_pii_reads")
+        assert self._decide(step_up) is None
+        set_personal_scope(PRINCIPAL, "writes_and_reads", floor=step_up.scope)
+        assert self._decide(step_up).status_code == 428
+
+    def test_the_batch_path_uses_the_same_personal_scope(self):
+        from privacyfence.step_up_config import effective_scope, set_personal_scope
+        step_up = StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_pii_reads")
+        set_personal_scope(PRINCIPAL, "writes_and_reads", floor=step_up.scope)
+        plain_read = _card("a1", gate_kind="review", pii_detected=False)
+        needs = approval_step_up.batch_needs_step_up(
+            [("a1", "accept")], principal_id=PRINCIPAL.id, registry=_FakeRegistry({"a1": plain_read}),
+            step_up=step_up, batch_step_up_results=BATCH_STEP_UP_RESULTS,
+            scope=effective_scope(step_up, PRINCIPAL),
+        )
+        assert needs is True
+
+
 class TestBatchNeedsStepUp:
     def test_empty_batch_needs_nothing(self):
         step_up = StepUpConfig(enabled=True, rp_id="localhost")

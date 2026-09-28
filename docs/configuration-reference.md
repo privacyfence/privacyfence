@@ -179,7 +179,7 @@ Denying never needs one. Passkeys are enrolled at `/security`, linked from
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
 | `step_up.enabled` | bool | `true` on a packaged install, `false` otherwise | not set (commented out) | Require a passkey at decide time for the approvals `scope` covers. With nothing enrolled and `require_passkey` off, decisions go through without one (in organization mode, a single decision offers an identity-provider sign-in instead, and an approving batch is refused). |
-| `step_up.scope` | string | `writes_and_pii_reads` | not set (commented out) | `writes` (write approvals), `writes_and_pii_reads` (also reads the PII check flagged), or `writes_and_reads` (every gated read too). An auto-accepted read never asks. Needs a restart. |
+| `step_up.scope` | string | `writes_and_pii_reads` | not set (commented out) | `writes` (write approvals), `writes_and_pii_reads` (also reads the PII check flagged), or `writes_and_reads` (every gated read too). The minimum: **Settings > General > Security > Passkey required for** can widen it for your own approvals, never narrow it (ADR 0091). An auto-accepted read never asks. Needs a restart. |
 | `step_up.require_passkey` | bool | `true` on a packaged install, `false` otherwise | not set (commented out) | Make the passkey mandatory: with nothing enrolled, approving decisions that need step-up (see `step_up.scope`) and sensitive settings changes are refused (a banner points to `/security`) rather than released. The daemon still starts. Setting it to `true` on an install that is not privilege-separated stops the daemon at start. |
 | `step_up.rp_id` | string | `localhost` | `localhost` | WebAuthn relying-party id. Leave as is. |
 | `step_up.rp_name` | string | `PrivacyFence` | `PrivacyFence` | Name shown in your system's passkey prompt. |
@@ -195,6 +195,13 @@ shows **Step-up for approvals** with a **Turn on** button. It writes `step_up.en
 no control to turn step-up off: set `step_up.require_passkey` (and `step_up.enabled`) to `false` in
 the file and restart. Changing `scope` or `batch` also needs a file edit and a restart. The button
 is not shown on an organization server.
+
+**Passkey required for.** With step-up enabled, the same card shows the three scopes with the
+configured `step_up.scope` as the minimum; the ones below it are locked. Picking a wider one applies
+to your own approvals at once, with no restart, and is stored beside your passkeys
+(`step_up_preference.json` under the authority directory), not in this file. In organization mode
+every member sees this control, and the org bundle's `step_up.scope` is the minimum. Once a passkey
+is required for settings changes, changing this needs one too. See ADR 0091.
 
 ### AI system names
 

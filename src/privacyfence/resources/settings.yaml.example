@@ -302,7 +302,9 @@ step_up:
   # A read that an auto-accept rule already covers never becomes an approval
   # at all, so no scope here asks for a passkey on one. Changing this value
   # needs a daemon restart (the Settings page's "Turn on" button writes
-  # `enabled`/`require_passkey` only).
+  # `enabled`/`require_passkey` only). This is the minimum: Settings >
+  # General > Security > "Passkey required for" can widen it for your own
+  # approvals, never narrow it (ADR 0091).
   #
   # Unset means `writes_and_pii_reads`: the widest scope that only ever
   # asks about something PrivacyFence has an actual reason to think is

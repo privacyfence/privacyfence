@@ -302,6 +302,10 @@ and the daemon uses its default, `writes_and_pii_reads`. If you pass a value, it
 bundle and stays exactly that. To keep step-up to writes only, pass `--step-up-scope writes`
 explicitly. `enabled` and `require_passkey` work differently: absent from the bundle, both are off.
 
+The bundle's scope is a minimum. Each member can require a passkey on more of their own approvals
+from **Settings > General > Security > Passkey required for** (for example every read), but never on
+less than the bundle says. See ADR 0091.
+
 ### Changing a bundle later
 
 `--merge` reads the existing bundle at the output path, applies only the flags you pass, and signs
