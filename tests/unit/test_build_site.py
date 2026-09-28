@@ -127,7 +127,7 @@ def test_header_nav_lists_the_target_site_in_both_places():
     header = build_site.render_partial("header")
     inline = re.findall(r'<a href="([^"]+)">', header.split('<div class="nav-links">', 1)[1].split("</div>", 1)[0])
     menu = re.findall(r'<a href="([^"]+)">', header.split('<div class="nav-menu-panel">', 1)[1].split("</div>", 1)[0])
-    assert inline == menu == ["/how-it-works/", "/security/", "/enterprise/", "/connectors/", "/docs/", "/faq/"]
+    assert inline == menu == ["/how-it-works/", "/security/", "/enterprise/", "/connectors/", "/ai-agents/", "/docs/", "/faq/"]
 
 
 def test_clients_include_is_rendered_from_the_data_file():
@@ -137,6 +137,23 @@ def test_clients_include_is_rendered_from_the_data_file():
         assert f">{client['name']}" in page
     with pytest.raises(build_site.BuildError):
         build_site.assemble_page('<main>\n<!-- include: clients colour="red" -->\n</main>\n')
+
+
+@pytest.mark.parametrize(
+    "clients",
+    [
+        [{"name": "A", "deployments": ["local"]}],
+        [{"name": "A", "slug": "Not A Slug", "deployments": ["local"]}],
+        [{"name": "A", "slug": "a", "deployments": ["local"]}, {"name": "B", "slug": "a", "deployments": ["local"]}],
+    ],
+    ids=["no-slug", "bad-slug", "shared-slug"],
+)
+def test_clients_need_a_unique_slug(tmp_path, monkeypatch, clients):
+    data = tmp_path / "clients.json"
+    data.write_text(json.dumps({"clients": clients, "others": "others"}), encoding="utf-8")
+    monkeypatch.setattr(build_site, "CLIENTS_FILE", data)
+    with pytest.raises(build_site.BuildError):
+        build_site.load_clients()
 
 
 def test_clients_requirement_sentence():

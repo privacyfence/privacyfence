@@ -14,7 +14,8 @@ What it does, in order:
    `<!-- include: NAME key="value" -->` lines are replaced with `website/_partials/NAME.html`, and
    it is written to the same path under the output directory. An `include: clients` line is the
    "Works with" strip, rendered from `website/_data/clients.json`, which also fills the JSON-LD
-   `softwareRequirements` (guardrail 10). Every file in `STATIC` is copied
+   `softwareRequirements` (guardrail 10); each client in it links to its page under `/ai-agents/`
+   (guardrail 14). Every file in `STATIC` is copied
    as is. Nothing else under `website/` is published: `REPOSITORY_ONLY` files stay in the
    repository, and `BUILD_INPUTS` are read by this script and never copied.
    tests/unit/test_website_download_cta.py holds every file under `website/` to exactly one of
@@ -104,6 +105,10 @@ PAGES: dict[str, str] = {
     "/connectors/salesforce/": "connectors/salesforce/index.html",
     "/connectors/jira-confluence/": "connectors/jira-confluence/index.html",
     "/connectors/telegram/": "connectors/telegram/index.html",
+    "/ai-agents/": "ai-agents/index.html",
+    "/ai-agents/claude-desktop/": "ai-agents/claude-desktop/index.html",
+    "/ai-agents/claude-code/": "ai-agents/claude-code/index.html",
+    "/ai-agents/claude-ai/": "ai-agents/claude-ai/index.html",
     "/faq/": "faq/index.html",
     "/download/": "download/index.html",
     "/releases/": "releases/index.html",
@@ -312,15 +317,29 @@ def render_partial(name: str, indent: str = "", **overrides: str) -> str:
 
 CLIENTS_FILE = WEBSITE / "_data" / "clients.json"
 DEPLOYMENT_NOTES = {("organization",): "organization deployment"}
+# A client's slug names its page, /ai-agents/<slug>/, and its setup doc, docs/connect-<slug>.md
+# (guardrail 14, tests/unit/test_website_agent_pages.py).
+SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def load_clients() -> dict:
     """website/_data/clients.json: the one list of AI clients the site names as tested."""
     data = json.loads(CLIENTS_FILE.read_text(encoding="utf-8"))
+    slugs = []
     for client in data["clients"]:
         if not client.get("name") or not set(client.get("deployments", [])) <= {"local", "organization"}:
             raise BuildError(f"{CLIENTS_FILE.name}: a client needs a name and deployments from local/organization: {client}")
+        if not SLUG_RE.fullmatch(client.get("slug", "")):
+            raise BuildError(f"{CLIENTS_FILE.name}: a client needs a lowercase, hyphenated slug: {client}")
+        slugs.append(client["slug"])
+    if len(slugs) != len(set(slugs)):
+        raise BuildError(f"{CLIENTS_FILE.name}: two clients share a slug: {slugs}")
     return data
+
+
+def agent_page(client: dict) -> str:
+    """The client's page on the site."""
+    return f"/ai-agents/{client['slug']}/"
 
 
 def render_clients(indent: str = "") -> str:
@@ -331,7 +350,10 @@ def render_clients(indent: str = "") -> str:
     for client in data["clients"]:
         note = DEPLOYMENT_NOTES.get(tuple(client["deployments"]))
         suffix = f' <small>{e(note)}</small>' if note else ""
-        items.append(f'  <li class="client" title="{e(client["name"])}, {e(client["connects"])}">{e(client["name"])}{suffix}</li>')
+        items.append(
+            f'  <li class="client"><a href="{agent_page(client)}" title="{e(client["name"])}, {e(client["connects"])}">'
+            f'{e(client["name"])}{suffix}</a></li>'
+        )
     lines = [
         '<ul class="works-with cluster" aria-label="Tested AI clients">',
         '  <li class="works-with-label">Works with</li>',
@@ -999,6 +1021,10 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         f"- [Salesforce connector]({SITE_URL}/connectors/salesforce/): read-only Salesforce records, search and reports, each reviewed before release",
         f"- [Jira and Confluence connector]({SITE_URL}/connectors/jira-confluence/): Jira and Confluence Cloud through one Atlassian sign-in; changes approved, nothing can be deleted",
         f"- [Telegram connector]({SITE_URL}/connectors/telegram/): your own Telegram account: chats reviewed before release, messages approved before they are sent",
+        f"- [AI agents]({SITE_URL}/ai-agents/): the AI clients PrivacyFence is tested with, and connecting any other MCP client over Streamable HTTP with OAuth",
+        f"- [Claude Desktop]({SITE_URL}/ai-agents/claude-desktop/): Claude Desktop through PrivacyFence's extension on your own computer, or as a custom connector to an organization deployment",
+        f"- [Claude Code]({SITE_URL}/ai-agents/claude-code/): Claude Code over HTTP with your own token on your own computer, or with OAuth sign-in to an organization deployment",
+        f"- [claude.ai]({SITE_URL}/ai-agents/claude-ai/): claude.ai as a custom connector to an organization deployment, with OAuth sign-in",
         f"- [FAQ]({SITE_URL}/faq/): where your data goes, which AI clients work, what the AI sees before approval, certification, cost and verifying a download",
         f"- [Download]({SITE_URL}/download/): installers for macOS, Windows and Linux, each with its SHA-256 checksum",
         f"- [Releases]({SITE_URL}/releases/): the newest release on every channel, stable and pre-release, with its installers and release notes",

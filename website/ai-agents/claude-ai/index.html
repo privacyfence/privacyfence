@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>claude.ai with PrivacyFence — a custom connector to your organization</title>
+  <meta name="description" content="Connect claude.ai to your organization's PrivacyFence deployment as a custom connector with OAuth sign-in. Why it needs an organization deployment, what it asks before a write, and how it is named on the approval card.">
+  <meta name="pf-content-group" content="ai-agent">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/ai-agents/claude-ai/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/ai-agents/claude-ai/">
+  <meta property="og:title" content="claude.ai with PrivacyFence">
+  <meta property="og:description" content="claude.ai as a custom connector to your organization's PrivacyFence, with OAuth sign-in. Every gated call still waits for your approval.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">AI agent · claude.ai</p>
+      <h1>claude.ai, with every gated call waiting for you.</h1>
+      <p class="lede">claude.ai reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with <strong>organization mode only</strong>: PrivacyFence run by your organization, reachable over public HTTPS. On your own computer, use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> or <a href="/ai-agents/claude-code/">Claude Code</a> instead.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="connects-heading">
+      <div class="section-heading">
+        <p class="kicker">How it connects</p>
+        <h2 id="connects-heading">From Anthropic's servers, with OAuth sign-in.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Why an organization deployment</h3>
+          <p>claude.ai connects to MCP servers from Anthropic's servers, not from your computer. A PrivacyFence on your own computer listens on <code>localhost</code> only, on purpose, so claude.ai cannot reach it. An organization deployment is reachable over public HTTPS.</p>
+        </article>
+        <article class="card stack">
+          <h3>OAuth with dynamic registration</h3>
+          <p>claude.ai registers itself with PrivacyFence's authorization server, and you sign in with your organization account. There is no token to copy. Access tokens last one hour and are refreshed silently; after 30 days you sign in again.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">Add a custom connector, then sign in.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode</h3>
+          <p>Not available: claude.ai cannot reach a PrivacyFence on your own computer. Use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> on macOS or Windows, or <a href="/ai-agents/claude-code/">Claude Code</a> on macOS, Windows or Linux.</p>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode</h3>
+          <ol class="steps">
+            <li>Your administrator gives you the deployment's URL, for example <code>https://pf.example.com</code>.</li>
+            <li>In claude.ai's connector settings, add a custom connector with the URL <code>https://pf.example.com/mcp</code>. Leave the OAuth client ID and secret empty.</li>
+            <li>Click <strong>Connect</strong> and sign in with your organization account.</li>
+            <li>Connect your services at <code>https://pf.example.com/connect</code>.</li>
+          </ol>
+        </article>
+      </div>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/connect-claude-ai/">Set it up</a>
+        <a class="button secondary" href="/enterprise/">Organization deployment</a>
+      </p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="confirmations-heading">
+      <div class="section-heading">
+        <p class="kicker">Confirmations</p>
+        <h2 id="confirmations-heading">claude.ai may ask first. PrivacyFence's card decides.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence tells claude.ai truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. claude.ai decides from that whether to ask you before it calls a tool, so it may ask before a write, in front of PrivacyFence's own card. On the Team plan, a tool marked as a write prompts on every call.</p>
+        <p>Where claude.ai offers to always allow a tool, allowing it only stops claude.ai asking: a gated call still waits for PrivacyFence's approval card at <code>/approvals</code>, whatever claude.ai was told or allowed. There is no mode that advertises writes as read-only.</p>
+        <p>What we observed: claude.ai asked before creating a calendar event; choosing to always allow the tool stopped it asking, and PrivacyFence's approval card was still shown.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="files-heading">
+      <div class="section-heading">
+        <p class="kicker">Files</p>
+        <h2 id="files-heading">Files travel through one-time links.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>A local path means nothing to the server, and claude.ai does not run PrivacyFence's Claude Desktop extension. To upload, claude.ai asks PrivacyFence for a single-use upload address and sends the file there. A download of up to about 75 KB comes back in the tool result; a larger one becomes a short-lived, one-time link that claude.ai fetches itself. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="identified-heading">
+      <div class="section-heading">
+        <p class="kicker">How it's identified</p>
+        <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>claude.ai registers with PrivacyFence as <code>Claude</code>, so the approval card says <strong>Says it is Claude</strong>, marked <strong>Not verified</strong>, because any program that can reach the deployment can register under the same name. An administrator can pin claude.ai's registration on <strong>Settings → AI systems</strong>, for example by matching its last-used time to their own sign-in from claude.ai, and the cards for it are then verified.</p>
+        <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="settings-heading">
+      <div class="section-heading">
+        <p class="kicker">Client settings worth knowing</p>
+        <h2 id="settings-heading">Add it once for the whole organization.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li><strong>Team and Enterprise plans.</strong> An owner adds the connector once for the whole organization, and each person connects it with their own sign-in.</li>
+          <li><strong>Tool permissions.</strong> Where claude.ai lets you always allow a tool, doing so leaves PrivacyFence's card as the only confirmation for it.</li>
+          <li><strong>Signing in again.</strong> A sign-in lasts 30 days; after that, click <strong>Connect</strong> on the connector again.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Other clients, and what they can reach.</h2>
+          <p>Compare the AI clients PrivacyFence is tested with, or see what each connector lets them read and change.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/ai-agents/">All AI agents</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
