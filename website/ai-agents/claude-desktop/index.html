@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Desktop with PrivacyFence — extension or custom connector</title>
+  <meta name="description" content="Connect Claude Desktop to PrivacyFence: the extension on your own computer, or a custom connector to your organization's deployment. What it asks before a write, and how it is named on the approval card.">
+  <meta name="pf-content-group" content="ai-agent">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/ai-agents/claude-desktop/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/ai-agents/claude-desktop/">
+  <meta property="og:title" content="Claude Desktop with PrivacyFence">
+  <meta property="og:description" content="Claude Desktop through PrivacyFence's extension on your own computer, or as a custom connector to an organization deployment. Every gated call still waits for your approval.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">AI agent · Claude Desktop</p>
+      <h1>Claude Desktop, with every gated call waiting for you.</h1>
+      <p class="lede">Claude Desktop reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: PrivacyFence on your own computer (<strong>local mode</strong>) and PrivacyFence run by your organization (<strong>organization mode</strong>). Claude Desktop runs on macOS and Windows; on Linux, use <a href="/ai-agents/claude-code/">Claude Code</a>.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="connects-heading">
+      <div class="section-heading">
+        <p class="kicker">How it connects</p>
+        <h2 id="connects-heading">An extension on your computer, a connector to your organization.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode: the extension</h3>
+          <p>PrivacyFence ships its own Claude Desktop extension, <code>PrivacyFence.mcpb</code>. It waits for PrivacyFence to answer, asks it for your token over its local control channel, and relays Claude Desktop's requests to PrivacyFence's <code>/mcp</code> endpoint. Nothing is edited in Claude Desktop's configuration, and no token is stored in a file you can read.</p>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode: a custom connector</h3>
+          <p>Claude Desktop connects to your organization's PrivacyFence at its <code>/mcp</code> URL, registers itself, and you sign in with your organization account. There is no extension and no token to copy. Access tokens last one hour and are refreshed silently; after 30 days you sign in again.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">A few steps, and no configuration file.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode</h3>
+          <ol class="steps">
+            <li>Install PrivacyFence from the <a href="/download/">download page</a>.</li>
+            <li>Open the extension that came with it: double-click <code>PrivacyFence.mcpb</code> on the macOS DMG, or accept it on the Windows installer's last page.</li>
+            <li>Accept when Claude Desktop offers to install it. There is nothing to configure and no token to copy.</li>
+            <li>Connect your services in PrivacyFence's Settings.</li>
+          </ol>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode</h3>
+          <ol class="steps">
+            <li>Your administrator gives you the deployment's URL, for example <code>https://pf.example.com</code>.</li>
+            <li>In Claude Desktop's connector settings, add a custom connector with the URL <code>https://pf.example.com/mcp</code>. Leave the OAuth client ID and secret empty.</li>
+            <li>Click <strong>Connect</strong> and sign in with your organization account.</li>
+            <li>Connect your services at <code>https://pf.example.com/connect</code>.</li>
+          </ol>
+        </article>
+      </div>
+      <div class="page-copy stack">
+        <p>Install the extension or the custom connector, not both: with both, Claude Desktop lists every tool twice, and the extension only talks to a PrivacyFence on the same computer.</p>
+      </div>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/connect-claude-desktop/">Set it up</a>
+        <a class="button secondary" href="/docs/how-it-works/#local-mode-and-organization-mode">Local or organization mode?</a>
+      </p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="confirmations-heading">
+      <div class="section-heading">
+        <p class="kicker">Confirmations</p>
+        <h2 id="confirmations-heading">Claude Desktop may ask first. PrivacyFence's card decides.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence tells Claude Desktop truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. Claude Desktop uses that to decide when to ask you before it calls a tool, so it may ask before a write, in front of PrivacyFence's own card.</p>
+        <p>When it asks, you can allow the tool for the rest of the chat or always. Allowing it only stops Claude Desktop asking: a gated call still waits for PrivacyFence's approval card, whatever Claude Desktop was told or allowed. There is no mode that advertises writes as read-only.</p>
+        <p>What we observed with the extension: with default tool permissions, Claude Desktop asked before creating a calendar event; choosing to always allow the tool stopped it asking, and PrivacyFence's approval card was still shown. The custom connector has not been checked yet.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="files-heading">
+      <div class="section-heading">
+        <p class="kicker">Files</p>
+        <h2 id="files-heading">Local paths through the extension, one-time links otherwise.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p><strong>Local mode.</strong> Tools that read or save a file work with paths on your computer. The extension reads or writes the file as you and passes it to or from PrivacyFence. On macOS, the first time a tool uses a folder outside Claude's own, macOS may ask whether Claude may access it; allow it once per folder.</p>
+        <p><strong>Organization mode.</strong> A local path means nothing to the server, so files travel through one-time links: Claude uploads to a single-use address, and a download comes back in the tool result or as a one-time link. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="identified-heading">
+      <div class="section-heading">
+        <p class="kicker">How it's identified</p>
+        <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p><strong>Local mode.</strong> Every AI client on your computer uses the same credential, so PrivacyFence cannot tell them apart, and the approval card names the requester <strong>Undetected</strong>. The audit log still records the name Claude Desktop sent.</p>
+        <p><strong>Organization mode.</strong> The card shows the name Claude Desktop registers with as a claim (<strong>Says it is</strong>, then the name), marked <strong>Not verified</strong>, because any program can send the same name. Its custom connector most likely registers as <code>Claude</code>, as claude.ai does; that has not been verified. An administrator can pin the registration on <strong>Settings → AI systems</strong>, and the cards for it are then verified.</p>
+        <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="settings-heading">
+      <div class="section-heading">
+        <p class="kicker">Client settings worth knowing</p>
+        <h2 id="settings-heading">Set up once, for you or for everyone.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li><strong>Claude Desktop's tool permissions.</strong> Always allowing a PrivacyFence tool leaves PrivacyFence's card as the only confirmation for it.</li>
+          <li><strong>Team and Enterprise plans.</strong> An owner can add the custom connector for the whole organization; each person then connects it with their own sign-in.</li>
+          <li><strong>If the tools do not appear.</strong> PrivacyFence is stopped: choose <strong>Start PrivacyFence…</strong> from the companion's menu, and the extension picks it up by itself.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Other clients, and what they can reach.</h2>
+          <p>Compare the AI clients PrivacyFence is tested with, or see what each connector lets them read and change.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/ai-agents/">All AI agents</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

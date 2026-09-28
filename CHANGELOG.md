@@ -43,6 +43,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **An AI agents section on privacyfence.eu.** A new **AI agents** menu leads to
+  [privacyfence.eu/ai-agents/](https://privacyfence.eu/ai-agents/), with one page each for Claude
+  Desktop, Claude Code and claude.ai: how the client connects in local mode and in an organization
+  deployment, what it asks you before PrivacyFence's own approval card, how files reach it, and how
+  it is named on the card. Each page's **Set it up** button opens the client's setup doc, and the
+  "Works with" list on the homepage, Enterprise and FAQ links each client to its page.
+
 ## [5.0.0] — 2026-09-28
 
 PrivacyFence now tells AI clients the truth about every tool: reads are read-only, writes are writes.

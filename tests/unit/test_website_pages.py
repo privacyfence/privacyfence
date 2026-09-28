@@ -27,7 +27,7 @@ from tests.website_site import WEBSITE, build_site, built_site, read_page
 pytestmark = pytest.mark.unit
 
 APEX = "https://privacyfence.eu"
-CONTENT_GROUPS = {"marketing", "download", "connector", "platform", "docs"}
+CONTENT_GROUPS = {"marketing", "download", "connector", "platform", "ai-agent", "docs"}
 MEASUREMENT_ID = "G-7Z3PFP4XPT"
 
 

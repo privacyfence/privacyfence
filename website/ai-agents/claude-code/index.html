@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Code with PrivacyFence — local token or organization sign-in</title>
+  <meta name="description" content="Connect Claude Code to PrivacyFence: straight to /mcp with your own token on your own computer, or with OAuth sign-in to your organization's deployment. What it asks before a write, and how it is named on the approval card.">
+  <meta name="pf-content-group" content="ai-agent">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/ai-agents/claude-code/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/ai-agents/claude-code/">
+  <meta property="og:title" content="Claude Code with PrivacyFence">
+  <meta property="og:description" content="Claude Code over HTTP with your own token on your own computer, or with OAuth sign-in to an organization deployment. Every gated call still waits for your approval.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">AI agent · Claude Code</p>
+      <h1>Claude Code, with every gated call waiting for you.</h1>
+      <p class="lede">Claude Code reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: PrivacyFence on your own computer (<strong>local mode</strong>) on macOS, Windows and Linux, and PrivacyFence run by your organization (<strong>organization mode</strong>).</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="connects-heading">
+      <div class="section-heading">
+        <p class="kicker">How it connects</p>
+        <h2 id="connects-heading">Straight to <code>/mcp</code>, over HTTP.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode: your own token</h3>
+          <p>Claude Code connects to PrivacyFence's <code>/mcp</code> endpoint on <code>localhost</code> with a bearer token. PrivacyFence mints one token per account on your computer, each with its own connectors, rules and approvals.</p>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode: OAuth sign-in</h3>
+          <p>Claude Code discovers PrivacyFence's authorization server, registers itself, and opens your organization's sign-in page in the browser. It then holds its own tokens; there is nothing to copy or paste. Access tokens last one hour and are refreshed silently; after 30 days you sign in again.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">One <code>claude mcp add</code> command.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode</h3>
+          <ol class="steps">
+            <li>Install PrivacyFence from the <a href="/download/">download page</a>, then log out and back in once.</li>
+            <li>From your own account, read the <code>/mcp</code> URL from PrivacyFence's <code>mcp_url</code> file and print your token with <code>--print-mcp-token</code>. The docs have the paths for each platform.</li>
+            <li>Run <code>claude mcp add --transport http --scope user privacyfence</code> with that URL and an <code>Authorization: Bearer</code> header carrying the token.</li>
+            <li>Run <code>/mcp</code> inside Claude Code to check that <code>privacyfence</code> is connected.</li>
+          </ol>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode</h3>
+          <ol class="steps">
+            <li>Your administrator gives you the deployment's URL, for example <code>https://pf.example.com</code>.</li>
+            <li>Run <code>claude mcp add --transport http --scope user privacyfence https://pf.example.com/mcp</code>.</li>
+            <li>Run <code>/mcp</code> inside Claude Code, choose <strong>privacyfence</strong>, and sign in with your organization account in the browser.</li>
+            <li>Connect your services at <code>https://pf.example.com/connect</code>.</li>
+          </ol>
+        </article>
+      </div>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/connect-claude-code/">Set it up</a>
+        <a class="button secondary" href="/docs/how-it-works/#local-mode-and-organization-mode">Local or organization mode?</a>
+      </p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="confirmations-heading">
+      <div class="section-heading">
+        <p class="kicker">Confirmations</p>
+        <h2 id="confirmations-heading">Claude Code follows its own permission rules. PrivacyFence's card decides.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence tells Claude Code truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. Whether Claude Code asks before it calls a tool from an MCP server depends on its permission mode and rules, not on those annotations.</p>
+        <p>If it asks, you can choose not to be asked again for that tool, or allow <code>mcp__privacyfence</code> under <code>/permissions</code> for all of PrivacyFence's tools at once. That only stops Claude Code asking: a gated call still waits for PrivacyFence's approval card, whatever Claude Code was told or allowed. There is no mode that advertises writes as read-only.</p>
+        <p>What we observed in local mode: with no permission rules configured, Claude Code did not ask before calling any PrivacyFence tool in the run, creating a calendar event included, and PrivacyFence's approval card was the only confirmation.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="files-heading">
+      <div class="section-heading">
+        <p class="kicker">Files</p>
+        <h2 id="files-heading">Files travel through one-time links.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Claude Code does not run PrivacyFence's Claude Desktop extension, so PrivacyFence never opens a path on your computer for it. To upload, Claude Code asks PrivacyFence for a single-use upload address and sends the file there. A download comes back as a one-time link, or in organization mode as the file itself when it is small enough. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="identified-heading">
+      <div class="section-heading">
+        <p class="kicker">How it's identified</p>
+        <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p><strong>Local mode.</strong> Every AI client on your computer uses the same credential, so PrivacyFence cannot tell them apart, and the approval card names the requester <strong>Undetected</strong>. The audit log still records the name Claude Code sent.</p>
+        <p><strong>Organization mode.</strong> Claude Code registers as <code>Claude Code (&lt;name&gt;)</code>, where <code>&lt;name&gt;</code> is the server name you gave <code>claude mcp add</code>, and PrivacyFence recognises it as Claude Code. That name is a claim: the card says <strong>Says it is Claude Code</strong>, marked <strong>Not verified</strong>, because any program can send the same name. An administrator can pin the registration on <strong>Settings → AI systems</strong>, and the cards for it are then verified.</p>
+        <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="settings-heading">
+      <div class="section-heading">
+        <p class="kicker">Client settings worth knowing</p>
+        <h2 id="settings-heading">Scope, permissions and the connection check.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li><strong><code>--scope user</code></strong> makes PrivacyFence available in every project. Leave it out to add it to the current project only.</li>
+          <li><strong><code>/permissions</code>.</strong> Allowing <code>mcp__privacyfence</code> stops Claude Code asking about PrivacyFence's tools; PrivacyFence's card still decides.</li>
+          <li><strong><code>/mcp</code>.</strong> Shows whether <code>privacyfence</code> is connected, and is where you sign in again in organization mode.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Other clients, and what they can reach.</h2>
+          <p>Compare the AI clients PrivacyFence is tested with, or see what each connector lets them read and change.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/ai-agents/">All AI agents</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

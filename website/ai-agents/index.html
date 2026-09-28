@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI agents that work with PrivacyFence — Claude Desktop, Claude Code, claude.ai</title>
+  <meta name="description" content="The AI clients PrivacyFence is tested with, how each one connects on your own computer or to an organization deployment, and how any other MCP client connects.">
+  <meta name="pf-content-group" content="ai-agent">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/ai-agents/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/ai-agents/">
+  <meta property="og:title" content="AI agents that work with PrivacyFence">
+  <meta property="og:description" content="Claude Desktop, Claude Code and claude.ai: how each connects to PrivacyFence, what it asks you, and how it is identified on the approval card.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">AI agents</p>
+      <h1>Keep your AI client. PrivacyFence sits behind it.</h1>
+      <p class="lede">An AI client reaches your services only through PrivacyFence's <code>/mcp</code> endpoint. Whichever client asks, PrivacyFence's own gate decides: reads are reviewed before release, and changes wait for your approval. These are the clients we test with, one page each.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="clients-heading">
+      <div class="section-heading">
+        <p class="kicker">Tested clients</p>
+        <h2 id="clients-heading">One page per client.</h2>
+        <p>Each page says how the client connects, what it asks you before PrivacyFence's own card, how it is named on that card, and links its setup steps in the docs.</p>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack" id="claude-desktop">
+          <h3>Claude Desktop</h3>
+          <p><strong>Local mode and organization mode.</strong> On your own computer, through PrivacyFence's extension, <code>PrivacyFence.mcpb</code>: no token to copy. With an organization deployment, as a custom connector with your organization sign-in.</p>
+          <p><a href="/ai-agents/claude-desktop/">Claude Desktop with PrivacyFence</a></p>
+        </article>
+        <article class="card stack" id="claude-code">
+          <h3>Claude Code</h3>
+          <p><strong>Local mode and organization mode.</strong> On your own computer, straight to <code>/mcp</code> over HTTP with your own token. With an organization deployment, it registers itself and you sign in with your organization account.</p>
+          <p><a href="/ai-agents/claude-code/">Claude Code with PrivacyFence</a></p>
+        </article>
+        <article class="card stack" id="claude-ai">
+          <h3>claude.ai</h3>
+          <p><strong>Organization mode only.</strong> claude.ai connects from Anthropic's servers, so it needs a PrivacyFence it can reach over public HTTPS. It is added as a custom connector, and you sign in with your organization account.</p>
+          <p><a href="/ai-agents/claude-ai/">claude.ai with PrivacyFence</a></p>
+        </article>
+        <article class="card stack" id="other-mcp-clients">
+          <h3>Other MCP clients</h3>
+          <p>Any client that speaks MCP over <strong>Streamable HTTP</strong> connects the way Claude Code does: on your own computer with the <code>/mcp</code> URL and your bearer token, and to an organization deployment with <strong>OAuth 2.1 and dynamic client registration</strong>. Clients not listed here have not been tested.</p>
+          <p><a href="/docs/how-it-works/#how-an-ai-system-connects">How an AI system connects</a></p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="same-gate-heading">
+      <div class="section-heading">
+        <p class="kicker">Whichever client</p>
+        <h2 id="same-gate-heading">The same gate, the same card.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence tells every client truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. A client may use that to ask you before a write, and may let you always allow a tool. Either way, a gated call still waits for PrivacyFence's approval card, and that card is the confirmation that decides.</p>
+        <p>On your own computer every client uses the same credential, so the card names the requester <strong>Undetected</strong>. In an organization deployment the card shows the name the client sends as a claim, marked <strong>Not verified</strong>, until an administrator pins that client's registration.</p>
+        <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Choose what the assistant can reach.</h2>
+          <p>See what each connector lets an AI client read, what is reviewed, and which writes need your approval.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/connectors/">All connectors</a>
+          <a class="button secondary" href="/download/">Download PrivacyFence</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

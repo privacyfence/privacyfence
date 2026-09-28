@@ -108,7 +108,10 @@ main { container-type: inline-size; }
    website/_data/clients.json (an `include: clients` line). */
 .works-with { --cluster-gap: 8px; margin: 26px 0 0; padding: 0; list-style: none; font-size: 13px; }
 .works-with-label { color: var(--muted); font-weight: 700; margin-right: 4px; }
-.works-with .client { padding: 7px 11px; border: 1px solid var(--line); background: #fff; border-radius: 9px; font-weight: 700; color: var(--ink); }
+.works-with .client { border: 1px solid var(--line); background: #fff; border-radius: 9px; font-weight: 700; }
+/* Each client links to its page under /ai-agents/ (guardrail 14). */
+.works-with .client a { display: block; padding: 7px 11px; border-radius: inherit; color: var(--ink); font-weight: 700; text-decoration: none; }
+.works-with .client a:hover { color: var(--accent-dark); text-decoration: underline; text-underline-offset: 2px; }
 .works-with .client small { font-size: 12px; font-weight: 600; color: var(--muted); }
 .works-with-more { color: var(--muted); }
 
