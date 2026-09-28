@@ -52,6 +52,7 @@ PUBLISHED_DOCS = (
     "docs/connect-claude-desktop.md",
     "docs/connect-claude-code.md",
     "docs/connect-claude-ai.md",
+    "docs/connect-chatgpt.md",
 )
 
 CONTRIBUTOR_DOCS = (

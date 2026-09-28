@@ -163,7 +163,7 @@ class TestAgentPinStore:
 class TestOrgPinCapture:
     async def test_a_pinned_client_attributes_as_oauth_client(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
 
         agent = _resolve_org(provider, "c1")
@@ -172,7 +172,7 @@ class TestOrgPinCapture:
 
     async def test_unpinning_reverts_to_client_info(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
         provider.agent_pins.unpin("c1")
 
@@ -192,7 +192,7 @@ class TestOrgPinCapture:
 
     async def test_an_unpinned_registration_stays_claimed(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
 
         agent = _resolve_org(provider, "c1")
 
@@ -200,8 +200,8 @@ class TestOrgPinCapture:
 
     async def test_a_pin_never_transfers_to_another_registration_with_the_same_name(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
-        await _register(provider, "c2", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
+        await _register(provider, "c2", "ChatGPT")
         provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
 
         assert _resolve_org(provider, "c2").source is AgentSource.CLIENT_INFO
@@ -218,7 +218,7 @@ class TestOrgPinCapture:
         provider = _provider(tmp_path, monkeypatch)
         fake_now = [time.time()]
         monkeypatch.setattr(op.time, "time", lambda: fake_now[0])
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
         fake_now[0] += op._STALE_CLIENT_TTL_SECONDS + 1
         await _register(provider, "c2", "cursor-vscode")
@@ -229,12 +229,12 @@ class TestOrgPinCapture:
 
     async def test_listing_clients_does_not_count_as_using_them(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         before = (tmp_path / "oauth_clients.json").read_text()
 
         listed = provider.list_clients()
 
-        assert [(c.client_id, c.client_name) for c in listed] == [("c1", "openai-mcp")]
+        assert [(c.client_id, c.client_name) for c in listed] == [("c1", "ChatGPT")]
         assert (tmp_path / "oauth_clients.json").read_text() == before
 
     def test_a_pin_needs_an_access_token(self):
@@ -305,7 +305,7 @@ class TestLocalOverrideNeverAttests:
     def test_an_unmatched_name_falls_through_to_the_claim(self):
         overrides = agent_overrides.AgentOverrides(mapping={"my-wrapper": "claude-code"})
 
-        agent = _resolve_agent(_ctx("openai-mcp"), None, None, overrides=overrides)
+        agent = _resolve_agent(_ctx("ChatGPT"), None, None, overrides=overrides)
 
         assert (agent.id, agent.source) == ("chatgpt", AgentSource.CLIENT_INFO)
 
@@ -316,7 +316,7 @@ class TestLocalOverrideNeverAttests:
 
     def test_a_relabel_outranks_the_dcr_name(self):
         overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
-        agent = _resolve_agent(_ctx("x"), _token(), lambda _c: "openai-mcp", pinned_agents=lambda _c: None, overrides=overrides)
+        agent = _resolve_agent(_ctx("x"), _token(), lambda _c: "ChatGPT", pinned_agents=lambda _c: None, overrides=overrides)
         assert (agent.id, agent.source) == ("cursor", AgentSource.CLIENT_INFO)
 
     def test_no_claimed_name_matches_no_override(self):
@@ -376,7 +376,7 @@ def org_home(tmp_path, monkeypatch):
 class TestPinActions:
     async def test_an_admin_pins_and_the_pin_is_audited(self, org_home, monkeypatch):
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         client, sessions = _settings_client(provider)
         csrf = _sign_in(client, sessions, ADMIN)
 
@@ -399,7 +399,7 @@ class TestPinActions:
 
     async def test_a_repeat_pin_and_an_absent_unpin_change_nothing_and_audit_nothing(self, org_home, monkeypatch):
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         provider.agent_pins.pin("c1", "chatgpt", pinned_by="carol")
         client, sessions = _settings_client(provider)
         csrf = _sign_in(client, sessions, ADMIN)
@@ -411,7 +411,7 @@ class TestPinActions:
 
     async def test_a_non_admin_cannot_pin(self, org_home, monkeypatch):
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         client, sessions = _settings_client(provider)
         csrf = _sign_in(client, sessions, ALICE)
 
@@ -424,7 +424,7 @@ class TestPinActions:
         from privacyfence import webauthn_stepup as wa
 
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         wa.add_credential(ADMIN, wa.WebAuthnCredential(
             credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
         ))
@@ -444,7 +444,7 @@ class TestPinActions:
     ])
     async def test_a_pin_must_name_a_live_registration_and_a_registry_entry(self, org_home, monkeypatch, payload):
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         client, sessions = _settings_client(provider)
         csrf = _sign_in(client, sessions, ADMIN)
 
@@ -486,7 +486,7 @@ class TestAgentsPageState:
         # to fail this test on unrelated commits.
         client_id = "registered-client-not-for-alice"
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, client_id, "openai-mcp")
+        await _register(provider, client_id, "ChatGPT")
         client, sessions = _settings_client(provider)
         _sign_in(client, sessions, ALICE)
 
@@ -497,7 +497,7 @@ class TestAgentsPageState:
 
     async def test_the_admin_page_embeds_the_ai_systems_section(self, org_home, monkeypatch):
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, "c1", "ChatGPT")
         client, sessions = _settings_client(provider)
         _sign_in(client, sessions, ADMIN)
 
