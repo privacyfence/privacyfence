@@ -910,6 +910,43 @@ class TestOrgModeDownloadDelivery:
 
         client.fetch_attachment_bytes.assert_not_called()
 
+    async def test_prefetched_attachment_over_the_default_limit_gets_a_link(self, gated_call_spy):
+        """The 1.7 MB case from QA of 5.0.0a2
+        (https://github.com/privacyfence/privacyfence/issues/46): under the
+        5MB prefetch cap, so its bytes are already in hand, but far over
+        the default inline limit -- it goes out as a link, not inline."""
+        from privacyfence.org_mode import DownloadDeliveryConfig
+
+        connector, client = self._org_connector()
+        connector.download_config = DownloadDeliveryConfig()
+        client.get_message.return_value = self._message_with_attachment(
+            name="photo.png", mime_type="image/png", size=1_700_000,
+        )
+        client.fetch_attachment_bytes.return_value = b"x" * 1_700_000
+
+        result = await connector.call(
+            "gmail_download_attachment",
+            {"message_id": "m1", "attachment_name": "photo.png", "destination_dir": "/tmp"},
+        )
+
+        assert result["delivery"] == "link"
+        assert "content_base64" not in result
+        client.fetch_attachment_bytes.assert_called_once_with("m1", "att-1")
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_attachment_over_the_limit_once_encoded_gets_a_link(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=1_000)
+        client.get_message.return_value = self._message_with_attachment(size=900)
+        client.fetch_attachment_bytes.return_value = b"x" * 900
+
+        result = await connector.call(
+            "gmail_download_attachment",
+            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+        )
+
+        assert result["delivery"] == "link"
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
 
 class TestPiiScanWiring:
     """gmail_download_attachment used to pass pii_scan_text="" unconditionally

@@ -14,6 +14,7 @@ keeps meaning exactly what it already means, with no migration.
 from __future__ import annotations
 
 import base64
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -134,14 +135,48 @@ class ServerConfig:
         )
 
 
-# Deliberately *larger* than connectors/drive.py's/connectors/gmail.py's/
-# connectors/confluence.py's own pre-approval prefetch caps (5MB),
-# reflecting that in org mode, inline delivery is the primary transport
-# for drive_download_file/gmail_download_attachment/confluence_download_
-# attachment, not a small-file convenience. The real ceiling here is
-# practical MCP Streamable HTTP response size and base64's ~33%
-# inflation, not a privacy argument for staying small.
-DEFAULT_INLINE_MAX_BYTES = 8_000_000
+# A cap on the *tool result*, not on the file: the length of the JSON text
+# web/mcp_tools.to_call_tool_result sends for an inline download, base64
+# payload and envelope included (see inline_result_length). The ceiling
+# that matters is what the client accepts as one tool result, and the
+# clients org mode exists for are the hosted ones: Anthropic documents a
+# maximum tool result size of ~150,000 characters for claude.ai and
+# Claude Desktop (https://claude.com/docs/connectors/building, "Design
+# within the size and timeout limits"). The old 8,000,000-byte default
+# was a file size, so a 1.7 MB PDF (~2.3 MB once base64-encoded) went
+# inline and claude.ai truncated it (manual QA of 5.0.0a2, see
+# https://github.com/privacyfence/privacyfence/issues/46). 100,000 leaves
+# a third of that documented, approximate limit as headroom and still
+# inlines files up to ~75 KB; anything larger gets a one-time link, which
+# every client handles. See ADR 0092.
+DEFAULT_INLINE_MAX_BYTES = 100_000
+
+
+def base64_length(size_bytes: int) -> int:
+    """Length of ``base64.b64encode`` output for ``size_bytes`` input bytes
+    -- the 4/3 inflation an inline download's content pays, padding
+    included."""
+    return 4 * ((size_bytes + 2) // 3)
+
+
+def _inline_envelope(name: str, mime_type: str, size_bytes: int, content_base64: str) -> dict[str, Any]:
+    return {
+        "delivery": "inline",
+        "name": name,
+        "mime_type": mime_type,
+        "size_bytes": size_bytes,
+        "content_base64": content_base64,
+    }
+
+
+def inline_result_length(name: str, mime_type: str, size_bytes: int) -> int:
+    """Length of the tool-result text an inline download of ``size_bytes``
+    would produce, computed without encoding anything: the JSON envelope
+    with an empty ``content_base64``, plus the base64 length (base64's
+    alphabet needs no JSON escaping, so the two simply add). Serialized the
+    way web/mcp_tools.to_call_tool_result serializes it."""
+    envelope = json.dumps(_inline_envelope(name, mime_type, size_bytes, ""), default=str)
+    return len(envelope) + base64_length(size_bytes)
 
 # 5 minutes -- see download_staging.DEFAULT_TTL_SECONDS's own docstring for
 # why this is short: staging means an encrypted-but-real copy of the file
@@ -154,8 +189,9 @@ class DownloadDeliveryConfig:
     """How org mode delivers file bytes for ``drive_download_file``/
     ``gmail_download_attachment``/``confluence_download_attachment`` to a
     principal who has no shell on the daemon's own machine: inline in the
-    MCP tool result by default, or staged behind a short-lived, single-
-    claim link when the file is too large to return inline (see ADR 0017
+    MCP tool result when the whole result fits ``inline_max_bytes``, or
+    staged behind a short-lived, single-claim link when it does not (ADR
+    0092 for the limit's unit and default; see ADR 0017
     for the rationale and the inline/staging split). Lives in
     ``org_config.json``'s ``download_delivery`` section, org-mode-only for
     the same reason ``ServerConfig`` is -- local mode never reads this
@@ -203,14 +239,46 @@ class DownloadDeliveryConfig:
         encoded = base64.urlsafe_b64encode(token).decode("ascii")
         return f"/mcp-files/fetch/{encoded}" if self.agent_links else f"/downloads/{encoded}"
 
-    def fits_inline(self, size_bytes: int) -> bool:
-        """Whether a file this size should be delivered inline (base64, in
-        the tool result) rather than staged behind a one-time link.
+    def fits_inline(self, size_bytes: int, name: str = "", mime_type: str = "") -> bool:
+        """Whether a file this size would be delivered inline (base64, in
+        the tool result) rather than staged behind a one-time link: the
+        whole tool result, base64 inflation and envelope included, must fit
+        ``inline_max_bytes`` (see inline_result_length). Used before the
+        bytes are fetched -- for the approval preview, the audit record and
+        the staging-disabled early refusal -- so it works from a metadata
+        size; inline_result makes the binding decision on the real bytes.
         ``inline_max_bytes == 0`` (the "force every download through a
         staged link, unconditionally" knob) always returns False here --
-        even for an empty (0-byte) file -- rather than the arithmetically
-        tempting but wrong ``0 <= 0``."""
-        return self.inline_max_bytes > 0 and size_bytes <= self.inline_max_bytes
+        even for an empty (0-byte) file."""
+        return (
+            self.inline_max_bytes > 0
+            and inline_result_length(name, mime_type, size_bytes) <= self.inline_max_bytes
+        )
+
+    def inline_result(self, name: str, mime_type: str, data: bytes) -> dict[str, Any] | None:
+        """The inline tool result for ``data``, or None when it would not
+        fit ``inline_max_bytes`` -- the caller then stages a link (or
+        refuses, with staging disabled) instead of sending a result the
+        client would truncate. Decided on the real byte count, which can
+        differ from the metadata size fits_inline was first asked about
+        (a Google Workspace export, say); inline_result_length is exact for
+        the envelope built here, so the result returned is never over the
+        limit."""
+        if not self.fits_inline(len(data), name, mime_type):
+            return None
+        return _inline_envelope(name, mime_type, len(data), base64.b64encode(data).decode("ascii"))
+
+    def over_inline_limit_message(self, subject: str, size_bytes: int) -> str:
+        """The staging-disabled refusal, stated in the unit the limit is
+        actually in -- a file under ``inline_max_bytes`` can still be over
+        it once base64-encoded."""
+        return (
+            f"{subject} is {size_bytes:,} bytes ({base64_length(size_bytes):,} once base64-encoded "
+            f"for the tool result), over this organization's {self.inline_max_bytes:,}-byte "
+            "inline-delivery limit, and disk staging is disabled for this organization -- there is "
+            "no way to deliver it through this tool. Ask the user for a narrower export or a "
+            "different way to share it."
+        )
 
     @staticmethod
     def from_org_config(org_config: dict[str, Any]) -> "DownloadDeliveryConfig":
@@ -423,5 +491,7 @@ __all__ = [
     "ServerConfig",
     "SyslogProtocol",
     "WebPushConfig",
+    "base64_length",
+    "inline_result_length",
     "resolve_mode",
 ]

@@ -353,9 +353,11 @@ def build_parser() -> argparse.ArgumentParser:
     downloads.add_argument(
         "--downloads-inline-max-bytes", type=int, metavar="BYTES", default=None,
         help="drive_download_file/gmail_download_attachment/confluence_download_attachment: "
-             "files at or under this size are returned directly in the tool result instead of "
-             "written to destination_dir (meaningless in local mode). Default: 8000000 (8MB). "
-             "0 forces every download through a one-time staged link instead.",
+             "a file is returned directly in the tool result when that whole result -- the "
+             "base64-encoded file plus its JSON envelope -- is at or under this size, and gets a "
+             "one-time staged link otherwise. Default: 100000, sized for claude.ai's and Claude "
+             "Desktop's ~150,000-character tool-result limit (ADR 0092). 0 forces every download "
+             "through a link.",
     )
     downloads.add_argument(
         "--downloads-link-ttl-seconds", type=float, metavar="SECONDS", default=None,

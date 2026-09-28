@@ -278,7 +278,7 @@ The script writes `org_config.json` with mode `0600` and prints what it contains
 | `--step-up-rp-name NAME` | `PrivacyFence` | The name shown in the operating system's passkey prompt. |
 | `--idp-step-up-acr-value ACR` | none | `acr_values` sent when step-up asks the identity provider for a fresh sign-in (repeatable). Without it, the request uses `prompt=login` and `max_age=0` only. |
 | `--enable-unattended-sessions` / `--disable-unattended-sessions` | off | Let an AI client declare a scheduled, unattended run (`privacyfence_begin_unattended_session`). The declaration is advisory and grants nothing by itself; see [how it works](how-it-works.md). |
-| `--downloads-inline-max-bytes BYTES` | `8000000` | Files up to this size are returned inside the tool result. `0` sends every file through a download link ([section 13](#13-file-delivery)). |
+| `--downloads-inline-max-bytes BYTES` | `100000` | A file is returned inside the tool result when the whole result, base64 included, fits this size (a file of about 75 KB by default). `0` sends every file through a download link ([section 13](#13-file-delivery)). |
 | `--downloads-link-ttl-seconds SECONDS` | `300` | How long a download link stays valid. |
 | `--downloads-disable-staging` | staging on | Refuse a file too large to return inline instead of staging it on disk. |
 | `--agent-links` / `--no-agent-links` | agent links on | Whether the AI client can fetch a download link itself, or only a signed-in person in a browser can. |
@@ -713,10 +713,17 @@ The server cannot write into a person's own folders, so download tools (`drive_d
 `gmail_download_attachment`, `confluence_download_attachment`) hand the file back in one of two
 ways, after the approval:
 
-| File size | Delivery |
+| Tool result size | Delivery |
 |---|---|
-| Up to `--downloads-inline-max-bytes` (8,000,000 bytes by default) | Inline: the file's bytes are in the tool result. |
+| Up to `--downloads-inline-max-bytes` (100,000 bytes by default, a file of about 75 KB) | Inline: the file's bytes, base64-encoded, are in the tool result. |
 | Larger | Staged: the file is encrypted on disk and the tool result carries a single-use link that expires after `--downloads-link-ttl-seconds` (300 seconds by default). |
+
+The limit is measured on the tool result the client receives, the base64-encoded file and its
+JSON envelope together, not on the file: base64 makes a file a third larger. The default fits the
+~150,000-character tool-result limit Anthropic documents for claude.ai and Claude Desktop, which
+truncate a larger result rather than refuse it. Raise it only if every client your organization
+uses accepts larger results; Claude Code, for example, handles more
+([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)).
 
 Which link a staged file gets:
 
@@ -846,7 +853,7 @@ are removed and the file is rewritten.
 | Size of one client registration | 8 KiB | No |
 | Sign-ins in progress | 1,000 at a time, each valid 5 minutes | No |
 | Pending approvals | 50 across the install, 20 per person; a pending approval expires after 15 minutes | `web.approvals` in the install-wide `settings.yaml` ([configuration reference](configuration-reference.md)) |
-| Inline download | 8,000,000 bytes | `--downloads-inline-max-bytes` |
+| Inline download | 100,000-byte tool result, base64 included | `--downloads-inline-max-bytes` |
 | Download link lifetime | 300 seconds | `--downloads-link-ttl-seconds` |
 | Upload slot | 50,000,000 bytes, 10 minutes | No |
 | Gmail attachments per message | 18,000,000 bytes in total | No |

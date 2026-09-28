@@ -95,8 +95,8 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
      `privacyfence_create_upload_slot`, `PUT`s the file to the returned URL, and passes the
      `upload_id` to `drive_upload_file`. Approve the card; the file appears in Drive.
    - **Download:** ask it to download a Drive file larger than the inline limit (organization mode:
-     `--downloads-inline-max-bytes`, 8,000,000 bytes by default). The tool result carries a one-time
-     link, and the file reaches you through it.
+     `--downloads-inline-max-bytes`, a 100,000-byte tool result by default, so any file over about
+     75 KB). The tool result carries a one-time link, and the file reaches you through it.
 
    For Claude Desktop with the extension, do the same upload and download through local paths
    instead: the extension reads and writes the file as you.
