@@ -538,6 +538,12 @@ class TestAiClientSection:
         assert "connect-claude-code/" in html
         assert "Copy AI Client Token" in html
 
+    def test_the_template_carries_chatgpt_desktops_steps(self):
+        html = build_html(_make_state(), ai_client=self.AI_CLIENT)
+        assert "ChatGPT desktop" in html
+        assert "Settings → MCP servers → Add server" in html
+        assert "connect-chatgpt/#chatgpt-desktop" in html
+
 
 class TestOrgCapabilities:
     """window.__pfCapabilities is a separate embedded global from

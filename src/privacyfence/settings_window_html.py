@@ -1104,6 +1104,10 @@ _JS = r"""
       ' \\\n  --header "Authorization: Bearer &lt;token&gt;"</code></pre>';
     html += '<div>' + docLink('connect-claude-code/', 'Claude Code setup') + '</div></div>';
 
+    html += '<h2 class="pf-group-title">ChatGPT desktop</h2>';
+    html += '<div class="card pf-card"><div class="pf-hint">In ChatGPT desktop, open <strong>Settings → MCP servers → Add server</strong>. Choose <strong>Streamable HTTP</strong>, enter the MCP URL above, and add the header <code>Authorization</code> with the value <code>Bearer &lt;token&gt;</code>, pasting the token you copied.</div>';
+    html += '<div>' + docLink('connect-chatgpt/#chatgpt-desktop', 'ChatGPT setup') + '</div></div>';
+
     html += '<h2 class="pf-group-title">Other MCP clients</h2>';
     html += '<div class="card pf-card"><div class="pf-hint">Any client that speaks MCP over Streamable HTTP and can send a custom header: add a server with the MCP URL above and the <code>Authorization</code> header, with the token you copied. Clients PrivacyFence has not been tested with may still work, but are not supported.</div>';
     html += '<div>' + docLink('how-it-works/#how-an-ai-system-connects', 'How an AI system connects') + '</div></div>';
