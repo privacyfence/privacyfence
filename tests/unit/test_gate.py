@@ -42,7 +42,7 @@ import pytest
 import yaml
 
 from privacyfence import approval_ui, auto_accept, gate
-from privacyfence.approvals import IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
+from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from privacyfence.pii_detector import init_pii_detection
@@ -191,6 +191,17 @@ def read_audit_entries(audit_dir):
 
 RAW = object()      # sentinel: never returned
 FILTERED = object()  # sentinel: always what gated_call must return on success
+
+
+async def gated_call_or_pending(**kwargs):
+    """gate.gated_call(), with the pending result it raises (ADR 0093)
+    returned instead -- exactly what web/mcp_dispatch.py hands the agent --
+    for the deferred-protocol tests below, which follow one call through
+    pending and then decided."""
+    try:
+        return await gate.gated_call(**kwargs)
+    except ApprovalPending as pending:
+        return pending.result
 
 
 def base_kwargs(**overrides):
@@ -2399,7 +2410,7 @@ class TestPendingApprovalCarriesPreview:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        task = asyncio.create_task(gate.gated_call(**base_kwargs(
+        task = asyncio.create_task(gated_call_or_pending(**base_kwargs(
             gate="review", preview={"from": "alice@example.com", "subject": "Q3 plan"},
         )))
         try:
@@ -2421,7 +2432,7 @@ class TestPendingApprovalCarriesPreview:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        task = asyncio.create_task(gate.gated_call(**base_kwargs(
+        task = asyncio.create_task(gated_call_or_pending(**base_kwargs(
             gate="popup", tool="gmail_create_draft", preview={"to": "bob@example.com"},
         )))
         try:
@@ -2440,7 +2451,7 @@ class TestPendingApprovalCarriesPreview:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        task = asyncio.create_task(gate.gated_call(**base_kwargs(gate="review", preview=None)))
+        task = asyncio.create_task(gated_call_or_pending(**base_kwargs(gate="review", preview=None)))
         try:
             assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
             approval = registry.list_pending()[0]
@@ -2463,7 +2474,7 @@ class TestPendingApprovalCarriesPreview:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
         preview = {"from": "alice@example.com"}
-        task = asyncio.create_task(gate.gated_call(**base_kwargs(
+        task = asyncio.create_task(gated_call_or_pending(**base_kwargs(
             gate="review", preview=preview, details_text="the full message body, never in preview",
         )))
         try:
@@ -2495,7 +2506,7 @@ class TestManyPendingApprovalsAreAllReviewable:
             # the same instant.
             #
             # pending_ttl bounds how long an approval may sit un-answered,
-            # and gate.gated_call() sweeps every lapsed one (_pop_registry_
+            # and gated_call_or_pending() sweeps every lapsed one (_pop_registry_
             # expirations -> pop_expired_events, which finalizes them as
             # "expired" and sets their UI-step event, so they leave
             # list_pending()). That sweep runs *partway through* gated_call,
@@ -2535,7 +2546,7 @@ class TestManyPendingApprovalsAreAllReviewable:
         monkeypatch.setattr(gate, "_popup_executor", test_executor)
 
         tasks = [
-            asyncio.create_task(gate.gated_call(**base_kwargs(gate="review", tool=f"gmail_get_message_{i}")))
+            asyncio.create_task(gated_call_or_pending(**base_kwargs(gate="review", tool=f"gmail_get_message_{i}")))
             for i in range(n)
         ]
         try:
@@ -2594,7 +2605,11 @@ class TestDeferredApprovalProtocol:
         # answers it -- so this reliably stays pending past the hold window,
         # unlike a synchronous mock racing the clock.
 
-        result = await gate.gated_call(**base_kwargs(gate="review"))
+        # Raised, never returned: a caller that awaits gated_call for the
+        # gate alone must not carry on and act (ADR 0093).
+        with pytest.raises(ApprovalPending) as raised:
+            await gate.gated_call(**base_kwargs(gate="review"))
+        result = raised.value.result
 
         assert result["status"] == "approval_pending"
         assert result["approval_id"]
@@ -2615,7 +2630,7 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        result = await gate.gated_call(**base_kwargs(gate="review"))
+        result = await gated_call_or_pending(**base_kwargs(gate="review"))
 
         assert result["url"] == f"http://localhost:8765/approvals/{result['approval_id']}"
         registry.answer(registry.get(result["approval_id"]).id, "deny")
@@ -2629,7 +2644,7 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        first = await gate.gated_call(**base_kwargs(gate="review"))
+        first = await gated_call_or_pending(**base_kwargs(gate="review"))
         assert first["status"] == "approval_pending"
 
         approval = registry.get(first["approval_id"])
@@ -2637,7 +2652,7 @@ class TestDeferredApprovalProtocol:
         assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
         assert approval.final_decision == "accept"
 
-        second = await gate.gated_call(**base_kwargs(gate="review"))
+        second = await gated_call_or_pending(**base_kwargs(gate="review"))
 
         assert second is FILTERED
         entries = read_audit_entries(audit_dir)
@@ -2659,14 +2674,14 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        first = await gate.gated_call(**base_kwargs(gate="review"))
+        first = await gated_call_or_pending(**base_kwargs(gate="review"))
         assert first["status"] == "approval_pending"
 
         approval = registry.get(first["approval_id"])
         assert registry.answer(approval.id, "accept", decided_via="binder", batch_id="batch-123") is True
         assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
 
-        second = await gate.gated_call(**base_kwargs(gate="review"))
+        second = await gated_call_or_pending(**base_kwargs(gate="review"))
 
         assert second is FILTERED
         entries = read_audit_entries(audit_dir)
@@ -2688,16 +2703,16 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        first = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        first = await gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft"))
         assert first["status"] == "approval_pending"
         approval = registry.get(first["approval_id"])
         registry.answer(approval.id, "accept")
         assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
 
-        second = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        second = await gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft"))
         assert second is FILTERED  # ledger hit, no popup
 
-        third = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        third = await gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft"))
         assert third["status"] == "approval_pending"  # ledger already consumed -- re-gates
 
         # Clean up the third call's own still-running background interaction.
@@ -2725,14 +2740,14 @@ class TestDeferredApprovalProtocol:
         kwargs = base_kwargs(gate="popup", tool="gmail_create_draft")
 
         first, first_id = await asyncio.gather(
-            gate.gated_call(**kwargs), self._decide_first_pending(registry, "accept"),
+            gated_call_or_pending(**kwargs), self._decide_first_pending(registry, "accept"),
         )
         assert first is FILTERED
 
         # A new card, not a replay: deny it, and the call is denied.
         with pytest.raises(gate.GateDeniedError):
             await asyncio.gather(
-                gate.gated_call(**kwargs),
+                gated_call_or_pending(**kwargs),
                 self._decide_first_pending(registry, "deny", exclude={first_id}),
             )
 
@@ -2746,7 +2761,7 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
         first, _ = await asyncio.gather(
-            gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft")),
+            gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft")),
             self._decide_first_pending(registry, "accept"),
         )
         assert first is FILTERED
@@ -2764,7 +2779,7 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
         first, _ = await asyncio.gather(
-            gate.gated_call(**base_kwargs(gate="review")), self._decide_first_pending(registry, "accept"),
+            gated_call_or_pending(**base_kwargs(gate="review")), self._decide_first_pending(registry, "accept"),
         )
         assert first is FILTERED
 
@@ -2782,14 +2797,14 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        first = await gate.gated_call(**base_kwargs(gate="review"))
+        first = await gated_call_or_pending(**base_kwargs(gate="review"))
         assert first["status"] == "approval_pending"
         approval = registry.get(first["approval_id"])
         registry.answer(approval.id, "accept")
         assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
 
-        assert await gate.gated_call(**base_kwargs(gate="review")) is FILTERED
-        assert await gate.gated_call(**base_kwargs(gate="review")) is FILTERED  # replays
+        assert await gated_call_or_pending(**base_kwargs(gate="review")) is FILTERED
+        assert await gated_call_or_pending(**base_kwargs(gate="review")) is FILTERED  # replays
 
         approval.ledger_expires_at = 0.0  # the ledger TTL lapses
         gate._pop_registry_expirations(registry)
@@ -2804,7 +2819,7 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        first = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        first = await gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft"))
         assert first["status"] == "approval_pending"
         approval = registry.get(first["approval_id"])
         registry.answer(approval.id, "accept")
@@ -2826,11 +2841,11 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
         kwargs = base_kwargs(gate="popup", tool="gmail_create_draft")
 
-        first = asyncio.create_task(gate.gated_call(**kwargs))
+        first = asyncio.create_task(gated_call_or_pending(**kwargs))
         assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
 
         with pytest.raises(IdenticalWriteAwaitingApprovalError, match="already awaiting approval"):
-            await gate.gated_call(**kwargs)
+            await gated_call_or_pending(**kwargs)
         assert len(registry.list_pending()) == 1  # no second card either
 
         registry.answer(registry.list_pending()[0].id, "accept")
@@ -2849,12 +2864,12 @@ class TestDeferredApprovalProtocol:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
         kwargs = base_kwargs(gate="popup", tool="gmail_create_draft")
 
-        first = await gate.gated_call(**kwargs)
+        first = await gated_call_or_pending(**kwargs)
         assert first["status"] == "approval_pending"
         registry.hold_window = 5.0
 
         second, _ = await asyncio.gather(
-            gate.gated_call(**kwargs), self._decide_first_pending(registry, "accept"),
+            gated_call_or_pending(**kwargs), self._decide_first_pending(registry, "accept"),
         )
         assert second is FILTERED
 
@@ -2878,13 +2893,13 @@ class TestAdaptiveHoldWindow:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
         first_task = asyncio.create_task(
-            gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_1"))
+            gated_call_or_pending(**base_kwargs(gate="review", tool="gmail_get_message_1"))
         )
         try:
             assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
 
             started = time.monotonic()
-            second = await gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_2"))
+            second = await gated_call_or_pending(**base_kwargs(gate="review", tool="gmail_get_message_2"))
             elapsed = time.monotonic() - started
 
             assert second["status"] == "approval_pending"
@@ -2910,7 +2925,7 @@ class TestAdaptiveHoldWindow:
             registry.answer(registry.list_pending()[0].id, "accept")
 
         result, _ = await asyncio.gather(
-            gate.gated_call(**base_kwargs(gate="review")), _decide_once_pending(),
+            gated_call_or_pending(**base_kwargs(gate="review")), _decide_once_pending(),
         )
 
         # No other approval was ever pending, so adaptive_hold never
@@ -2927,13 +2942,13 @@ class TestAdaptiveHoldWindow:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
         first_task = asyncio.create_task(
-            gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_1"))
+            gated_call_or_pending(**base_kwargs(gate="review", tool="gmail_get_message_1"))
         )
         try:
             assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
 
             started = time.monotonic()
-            second = await gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_2"))
+            second = await gated_call_or_pending(**base_kwargs(gate="review", tool="gmail_get_message_2"))
             elapsed = time.monotonic() - started
 
             assert second["status"] == "approval_pending"
@@ -2960,7 +2975,7 @@ class TestPendingResultPointsAtTheBinder:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
-        result = await gate.gated_call(**base_kwargs(gate="review"))
+        result = await gated_call_or_pending(**base_kwargs(gate="review"))
 
         assert result["pending_count"] == 1
         assert result["binder_url"] == "http://localhost:8765/approvals"
@@ -2977,12 +2992,12 @@ class TestPendingResultPointsAtTheBinder:
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
 
         first_task = asyncio.create_task(
-            gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_1"))
+            gated_call_or_pending(**base_kwargs(gate="review", tool="gmail_get_message_1"))
         )
         try:
             assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
 
-            second = await gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_2"))
+            second = await gated_call_or_pending(**base_kwargs(gate="review", tool="gmail_get_message_2"))
 
             assert second["pending_count"] == 2
             assert second["binder_url"] == "http://localhost:8765/approvals"
@@ -3471,7 +3486,7 @@ class TestCancellation:
 
         monkeypatch.setattr(gate, "show_read_popup", slow_popup)
 
-        task = asyncio.create_task(gate.gated_call(**base_kwargs(gate="review")))
+        task = asyncio.create_task(gated_call_or_pending(**base_kwargs(gate="review")))
         assert await wait_until_async(started.is_set, timeout=2.0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -3499,7 +3514,7 @@ class TestCancellation:
         # test ever answers it, so the driving call's own interaction never
         # completes either.
 
-        driver = asyncio.create_task(gate.gated_call(**base_kwargs(gate="review")))
+        driver = asyncio.create_task(gated_call_or_pending(**base_kwargs(gate="review")))
         assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
 
         # A spy on
@@ -3517,7 +3532,7 @@ class TestCancellation:
 
         monkeypatch.setattr(registry, "wait_async", spy_wait_async)
 
-        coalesced = asyncio.create_task(gate.gated_call(**base_kwargs(gate="review")))
+        coalesced = asyncio.create_task(gated_call_or_pending(**base_kwargs(gate="review")))
         assert await wait_until_async(entered_wait.is_set, timeout=2.0)
         coalesced.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -3773,7 +3788,7 @@ class TestDenyFeedback:
         registry = self._registry(monkeypatch)
         with pytest.raises(gate.GateDeniedError) as excinfo:
             await asyncio.gather(
-                gate.gated_call(**base_kwargs(gate=gate_kind, tool=tool)),
+                gated_call_or_pending(**base_kwargs(gate=gate_kind, tool=tool)),
                 self._deny_first_pending(registry, self.FB),
             )
         assert str(excinfo.value) == denial_message(self.FB)
@@ -3790,7 +3805,7 @@ class TestDenyFeedback:
         registry = self._registry(monkeypatch)
         with pytest.raises(gate.GateDeniedError) as excinfo:
             await asyncio.gather(
-                gate.gated_call(**base_kwargs(gate=gate_kind, tool=tool)),
+                gated_call_or_pending(**base_kwargs(gate=gate_kind, tool=tool)),
                 self._deny_first_pending(registry, DenialFeedback()),
             )
         assert str(excinfo.value) == self.DEFAULT
@@ -3806,7 +3821,7 @@ class TestDenyFeedback:
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("deny", None))
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("deny", None))
         with pytest.raises(gate.GateDeniedError) as excinfo:
-            await gate.gated_call(**base_kwargs(gate=gate_kind, tool=tool))
+            await gated_call_or_pending(**base_kwargs(gate=gate_kind, tool=tool))
         assert str(excinfo.value) == self.DEFAULT
 
     @pytest.mark.parametrize("gate_kind,tool", [("review", "gmail_get_message"), ("popup", "gmail_create_draft")])
@@ -3817,7 +3832,7 @@ class TestDenyFeedback:
         registry = self._registry(monkeypatch, hold_window=0.05, ledger_ttl=300.0)
         kwargs = base_kwargs(gate=gate_kind, tool=tool)
 
-        first = await gate.gated_call(**kwargs)
+        first = await gated_call_or_pending(**kwargs)
         assert first["status"] == "approval_pending"
         approval = registry.get(first["approval_id"])
         registry.answer(approval.id, "deny", feedback=self.FB)
@@ -3826,7 +3841,7 @@ class TestDenyFeedback:
         self._backdate(approval, seconds=120.0)
 
         with pytest.raises(gate.GateDeniedError) as excinfo:
-            await gate.gated_call(**kwargs)
+            await gated_call_or_pending(**kwargs)
         # Taken from the ledger: the human's feedback, plus the sentence
         # saying it is an earlier decision reused (ADR 0090).
         assert str(excinfo.value) == denial_message(self.FB, EarlierDecision(120.0, 300.0))
@@ -3844,14 +3859,14 @@ class TestDenyFeedback:
         registry = self._registry(monkeypatch, ledger_ttl=300.0)
         kwargs = base_kwargs(gate="review", tool="gmail_get_message")
         with pytest.raises(gate.GateDeniedError) as first:
-            await asyncio.gather(gate.gated_call(**kwargs), self._deny_first_pending(registry, DenialFeedback()))
+            await asyncio.gather(gated_call_or_pending(**kwargs), self._deny_first_pending(registry, DenialFeedback()))
         assert str(first.value) == self.DEFAULT
 
         [denied] = [a for a in registry._pending.values() if a.final_decision == "deny"]
         self._backdate(denied, seconds=120.0)
 
         with pytest.raises(gate.GateDeniedError) as second:
-            await gate.gated_call(**kwargs)
+            await gated_call_or_pending(**kwargs)
         assert registry.list_pending() == []  # no new card
         assert str(second.value) == (
             "Request denied by user. This is not an error and the user was not asked again: "
@@ -3863,7 +3878,7 @@ class TestDenyFeedback:
     async def test_uncollected_deny_expires_with_the_feedback_shape(self, monkeypatch, audit_dir, caplog):
         caplog.set_level("DEBUG")
         registry = self._registry(monkeypatch, hold_window=0.05, ledger_ttl=0.05)
-        first = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        first = await gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft"))
         approval = registry.get(first["approval_id"])
         registry.answer(approval.id, "deny", feedback=self.FB)
         assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
@@ -3879,7 +3894,7 @@ class TestDenyFeedback:
 
     async def test_uncollected_approval_expires_without_feedback_fields(self, monkeypatch, audit_dir):
         registry = self._registry(monkeypatch, hold_window=0.05, ledger_ttl=0.05)
-        first = await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+        first = await gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft"))
         approval = registry.get(first["approval_id"])
         registry.answer(approval.id, "accept")
         assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
@@ -3902,7 +3917,7 @@ class TestDenyFeedback:
 
         monkeypatch.setattr(gate, "show_popup", crashing_popup)
         with pytest.raises(gate.GateDeniedError) as excinfo:
-            await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_create_draft"))
+            await gated_call_or_pending(**base_kwargs(gate="popup", tool="gmail_create_draft"))
         [approval] = seen
         assert str(excinfo.value) == self.DEFAULT
         assert approval.deny_feedback == DenialFeedback()

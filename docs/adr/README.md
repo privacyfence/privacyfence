@@ -198,3 +198,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |
 | [0091](0091-the-configured-step-up-scope-is-a-minimum-each-person-can-widen.md) | The configured step-up scope is a minimum each person can widen | Accepted |
 | [0092](0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md) | The inline download limit caps the tool result, at 100,000 bytes by default | Accepted |
+| [0093](0093-a-pending-approval-releases-nothing.md) | A pending approval releases nothing, and one request_id ties its audit trail together | Accepted |

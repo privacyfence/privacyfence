@@ -27,6 +27,8 @@ but doesn't implement any transport itself.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import hmac
 import json
@@ -39,7 +41,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 
 from . import paths
 from .agent_identity import current_agent
@@ -66,7 +68,9 @@ logger = logging.getLogger(__name__)
 #   5 -- agent attribution (ADR 0006, ADR 0035): + agent_id, agent_name,
 #        agent_version, agent_source
 #   6 -- deny feedback (ADR 0084): + deny_intent, deny_note_chars
-CURRENT_SCHEMA_VERSION = 6
+#   7 -- approval linkage (ADR 0093): + expired_decision; bridge_download_served /
+#        staged_download_served rows carry the releasing request's request_id and agent
+CURRENT_SCHEMA_VERSION = 7
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -91,6 +95,35 @@ _CHAIN_STATE_FILENAME = ".audit_chain_state.json"
 APPROVED_LIKE_DECISIONS = frozenset({
     "approved", "auto_accepted", "accepted_via_accept_all", "accepted_via_temp_session",
 })
+
+# The request_id of the gated decision that released whatever the current
+# tool call is about to hand out -- set by gate.py's _audit on an approved-
+# like row, read by download_staging.stage() so the row written when the
+# staged file is later fetched names the request that authorized it
+# (ADR 0093). Scoped per tool call by released_request_scope(), which
+# web/mcp_dispatch.py enters around every connector call.
+_released_request_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "privacyfence_released_request_id", default="",
+)
+
+
+def set_released_request_id(request_id: str) -> None:
+    _released_request_ctx.set(request_id)
+
+
+def current_released_request_id() -> str:
+    return _released_request_ctx.get()
+
+
+@contextlib.contextmanager
+def released_request_scope() -> Iterator[None]:
+    """Starts one tool call with no released request, and forgets whatever
+    it released once it returns."""
+    token = _released_request_ctx.set("")
+    try:
+        yield
+    finally:
+        _released_request_ctx.reset(token)
 
 
 @dataclass
@@ -185,7 +218,12 @@ class AuditEntry:
                             #  something (a re-issued identical call, most often) actually releases on
                             #  the strength of it; that entry's decided_at (below) is when the human
                             #  actually clicked, which can be well before this entry's own timestamp
-                            #  if it took a while for anything to come back and collect the decision.)
+                            #  if it took a while for anything to come back and collect the decision.
+                            #  A file the release hands out through a staged link is audited as
+                            #  bridge_download_served/staged_download_served under that same
+                            #  request_id too. Nothing is released on a pending row itself: gated_call
+                            #  raises approvals.ApprovalPending, so the call it came from stops there
+                            #  (ADR 0093).)
                             # ("expired": a pending approval nobody decided within its TTL (still
                             #  "pending" the whole time -- fail-closed, never silently auto-approved),
                             #  or one a human DID decide but whose outcome no call ever collected --
@@ -193,7 +231,8 @@ class AuditEntry:
                             #  through the ledger -- before the shorter decision-ledger TTL ran out. A
                             #  collected outcome, a replayed read included, lapses without a row.
                             #  Either way: no data was ever released on this request_id's strength.
-                            #  ADR 0073.)
+                            #  ADR 0073. The second case sets expired_decision and decided_at (below),
+                            #  so it can be told apart from a card nobody answered -- ADR 0093.)
                             # ("error": gate.py's gated_call exited without reaching a normal decision
                             #  branch -- a fallback so an unanticipated failure still leaves a trail)
                             # ("cancelled": the MCP client that issued the corresponding tool call
@@ -375,6 +414,13 @@ class AuditEntry:
     # The note's text is deliberately not recorded anywhere (see deny_feedback.py).
     deny_intent: str = ""     # one of deny_feedback.INTENTS' keys, or ""
     deny_note_chars: int = 0  # length of the sanitized note; 0 for none
+    # ---- Approval linkage (schema 7, ADR 0093) ----
+    expired_decision: str = ""  # On an "expired" row for a decision a human DID make but no call
+                              # ever collected: the decision a collecting call would have recorded
+                              # ("approved" | "rejected" | "accepted_via_accept_all" |
+                              # "auto_accepted"), with decided_at set to when it was made. "" on a
+                              # card nobody answered, on every other decision, and on every entry
+                              # recorded before this field existed.
 
     # ---- Hash-chain and provenance fields ----
     # All six below default to a value meaning "not yet stamped" and are
@@ -729,10 +775,15 @@ class AuditLogger:
             # Deny feedback (schema 6): appended last, same reason again. The note's
             # text is never recorded (ADR 0084), only its length.
             "Deny Intent", "Deny Note Length (chars)",
+            # Appended last, like the deny columns before them, so every
+            # earlier index stays stable. Request ID is what ties a pending
+            # row to the approved row and the served file it led to
+            # (ADR 0093).
+            "Request ID", "Expired Decision",
         ]
         COL_WIDTHS = [
             22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30, 14,
-            24, 24, 16, 22, 18, 14,
+            24, 24, 16, 22, 18, 14, 16, 22,
         ]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
@@ -787,6 +838,7 @@ class AuditLogger:
                 _excel_literal(entry.agent_id or ""), _excel_literal(entry.agent_name or ""),
                 _excel_literal(entry.agent_version or ""), entry.agent_source or "",
                 entry.deny_intent or "", entry.deny_note_chars or "",
+                entry.request_id or "", entry.expired_decision or "",
             ])
             fill = decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):

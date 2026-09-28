@@ -1061,15 +1061,15 @@ class TestDenyFeedbackFields:
 
     _KEYS = ("deny_intent", "deny_note_chars")
 
-    def test_schema_version_is_six(self):
-        assert CURRENT_SCHEMA_VERSION == 6
+    def test_schema_version_is_at_least_six(self):
+        assert CURRENT_SCHEMA_VERSION >= 6
 
     def test_defaults_are_empty(self, tmp_path):
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry())
         line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
         assert (line["deny_intent"], line["deny_note_chars"]) == ("", 0)
-        assert line["schema_version"] == 6
+        assert line["schema_version"] == CURRENT_SCHEMA_VERSION
 
     @freeze_time("2026-07-06")
     def test_v5_entries_without_deny_fields_load_with_defaults(self, tmp_path):
@@ -1096,7 +1096,7 @@ class TestDenyFeedbackFields:
         logger.record(make_entry(decision="rejected", deny_intent="wrong_target", deny_note_chars=12))
 
         lines = [json.loads(x) for x in (tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert [x["schema_version"] for x in lines] == [5, 6]
+        assert [x["schema_version"] for x in lines] == [5, CURRENT_SCHEMA_VERSION]
         assert "deny_intent" not in lines[0]
         assert (lines[1]["deny_intent"], lines[1]["deny_note_chars"]) == ("wrong_target", 12)
         assert logger.verify_chain("2026-W28").ok is True
@@ -1122,6 +1122,46 @@ class TestDenyFeedbackFields:
         headers = [c.value for c in ws[1]]
         # Appended after the agent columns, so every earlier index stays stable.
         assert headers.index("AI System ID") == 22
-        assert headers[26:] == ["Deny Intent", "Deny Note Length (chars)"]
-        assert [c.value for c in ws[2]][26:] == ["rewrite", 42]
-        assert [c.value for c in ws[3]][26:] == [None, None]
+        assert headers[26:28] == ["Deny Intent", "Deny Note Length (chars)"]
+        assert [c.value for c in ws[2]][26:28] == ["rewrite", 42]
+        assert [c.value for c in ws[3]][26:28] == [None, None]
+
+
+class TestApprovalLinkageFields:
+    """Schema 7 (ADR 0093): expired_decision says what a human decided on an
+    approval no call collected, and the Excel export carries request_id, the
+    field that ties a pending row to its release and the file served."""
+
+    def test_schema_version_is_seven(self):
+        assert CURRENT_SCHEMA_VERSION == 7
+
+    def test_expired_decision_defaults_to_empty(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry())
+        line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
+        assert line["expired_decision"] == ""
+        assert line["schema_version"] == 7
+
+    @freeze_time("2026-07-06")
+    def test_v6_entries_without_it_load_with_the_default(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        v6 = {k: v for k, v in make_entry(week=current_week(), schema_version=6).__dict__.items()
+              if k != "expired_decision"}
+        (tmp_path / f"{current_week()}.jsonl").write_text(json.dumps(v6) + "\n", encoding="utf-8")
+
+        [entry] = logger.recent_entries()
+        assert entry.schema_version == 6
+        assert entry.expired_decision == ""
+
+    def test_excel_export_appends_request_id_and_expired_decision(self, tmp_path):
+        openpyxl = pytest.importorskip("openpyxl")
+
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(request_id="req-1", decision="expired", expired_decision="approved"))
+        logger.record(make_entry(request_id="req-1", decision="bridge_download_served"))
+
+        ws = openpyxl.load_workbook(logger.export_week_to_excel("2026-W28"))["Decisions"]
+        headers = [c.value for c in ws[1]]
+        assert headers[26:] == ["Deny Intent", "Deny Note Length (chars)", "Request ID", "Expired Decision"]
+        assert [c.value for c in ws[2]][28:] == ["req-1", "approved"]
+        assert [c.value for c in ws[3]][28:] == ["req-1", None]
