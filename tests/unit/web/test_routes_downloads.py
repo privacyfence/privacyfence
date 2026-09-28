@@ -12,7 +12,8 @@ from starlette.testclient import TestClient
 
 from privacyfence import org_identity as oi
 from privacyfence import paths
-from privacyfence.audit_log import current_week, init_audit_logger
+from privacyfence.agent_identity import AgentIdentity, AgentSource, agent_scope
+from privacyfence.audit_log import current_week, init_audit_logger, released_request_scope, set_released_request_id
 from privacyfence.download_staging import DownloadStagingStore
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_downloads
@@ -191,6 +192,25 @@ class TestClaimSuccess:
         assert entries[0]["sender"] == "alice"
         assert "report.pdf" in entries[0]["summary"]
         assert _url_token(token) not in json.dumps(entries[0])
+
+    def test_claim_audit_names_the_releasing_request_and_agent(self, tmp_path):
+        """ADR 0092: org mode's staged link is tied to the gated decision
+        that released it, like the local capability link."""
+        init_audit_logger(str(tmp_path / "audit"))
+        app, sessions, store = _app()
+        agent = AgentIdentity(id="claude-code", name="Claude Code", version="2.1", source=AgentSource.CLIENT_INFO)
+        with released_request_scope(), agent_scope(agent):
+            set_released_request_id("req-9")
+            token = store.stage(ALICE, b"file bytes", "report.pdf", "application/pdf")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+
+        client.get(f"/downloads/{_url_token(token)}")
+
+        week_file = tmp_path / "audit" / f"{current_week()}.jsonl"
+        [row] = [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+        assert row["request_id"] == "req-9"
+        assert row["agent_id"] == "claude-code"
 
 
 class TestClaimFailures:

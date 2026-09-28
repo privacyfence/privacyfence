@@ -18,8 +18,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Hashable
 
-from ..approvals import PendingApprovalRegistry, is_pending_result
-from ..audit_log import AuditEntry, current_week, get_audit_logger
+from ..approvals import ApprovalPending, PendingApprovalRegistry
+from ..audit_log import AuditEntry, current_week, get_audit_logger, released_request_scope
 from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
 from .. import local_files
 from ..connector import Connector
@@ -238,8 +238,22 @@ class McpDispatcher:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._inflight[key] = (fut, now)
         try:
-            with unattended_scope(session_key in self._unattended_sessions), reason_scope(reason):
+            with (
+                unattended_scope(session_key in self._unattended_sessions), reason_scope(reason),
+                released_request_scope(),
+            ):
                 result = await connector.call(tool, args)
+        except ApprovalPending as pending:
+            # The one place a pending gate becomes a tool result (ADR 0092):
+            # the connector stopped at gated_call, so nothing was fetched,
+            # written or staged. Never cached -- popped at once, like the
+            # CancelledError branch below, so the identical call the agent
+            # re-issues once a human decides reaches gate.gated_call() again
+            # and collects the decision from the ledger, instead of being
+            # handed this same stale pending blob back.
+            self._inflight.pop(key, None)
+            fut.set_result(pending.result)
+            return pending.result
         except asyncio.CancelledError:
             self._inflight.pop(key, None)
             if not fut.done():
@@ -260,15 +274,6 @@ class McpDispatcher:
             self._inflight.pop(key, None)
             raise
         fut.set_result(result)
-        if is_pending_result(result):
-            # Never cache a {"status": "approval_pending", ...} result
-            # -- see approvals.is_pending_result's own docstring. Popped
-            # immediately, same as the CancelledError branch above, so the
-            # re-issued call Claude is expected to make once a human
-            # decides reaches gate.gated_call() again
-            # instead of being handed this same stale pending blob back.
-            self._inflight.pop(key, None)
-            return result
         if local_files.call_produced_deliveries():
             # A result that staged a file-bridge download carries a
             # single-use download_staging token in its _meta -- reusing it

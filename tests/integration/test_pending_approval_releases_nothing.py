@@ -1,4 +1,7 @@
-"""Reproduces the 5.0.0a1/a2 manual-QA audit sequence for a gated
+"""A gated call whose approval is still pending releases nothing, and an
+approved one is audited end to end under one request_id (ADR 0092).
+
+Before ADR 0092, 5.0.0a1/a2 manual QA recorded this for a gated
 ``drive_download_file`` from a client *without* the ``.mcpb`` shim (so the
 file leaves through a one-time capability link, ADR 0028):
 
@@ -6,17 +9,18 @@ file leaves through a one-time capability link, ADR 0028):
     (tool "")            bridge_download_served
     drive_download_file  expired
 
+-- the file handed out by the very call that went pending, because
+drive.py discarded gated_call's returned pending result and delivered
+anyway. The tests below pin the fixed sequence instead.
+
 Driven through the real stack: a socket-bound local-mode ``WebServer``,
 the official ``mcp`` client over ``/mcp`` with a bearer token and no
 ``X-PrivacyFence-File-Bridge`` header, the real connectors (only their
 Google clients are faked), the real ``gate.gated_call`` and the real
 ``PendingApprovalRegistry``. A short hold window stands in for a human who
 has not answered yet, exactly as ``test_deferred_approval_round_trip.py``
-does. Nobody ever decides anything in these tests.
-
-The invariant under test: while a gated call's approval is still pending,
-the call returns the ``approval_pending`` result and has no effect -- no
-file handed out, no write performed.
+does; a decision, where a test makes one, goes through the real decide
+route a human's browser posts to.
 """
 from __future__ import annotations
 
@@ -44,7 +48,7 @@ from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
 from privacyfence.web.server import WebServer  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 
-from .test_deferred_approval_round_trip import _free_port, _wait_until_connectable  # noqa: E402
+from .test_deferred_approval_round_trip import _decide, _free_port, _wait_until_connectable  # noqa: E402
 
 pytestmark = [pytest.mark.timeout(30), pytest.mark.integration]
 
@@ -109,39 +113,98 @@ async def _call(server: WebServer, tool: str, args: dict) -> dict:
     return result.structured_content or json.loads(result.content[0].text)
 
 
-def _decisions(audit_dir) -> list[tuple[str, str]]:
+def _rows(audit_dir) -> list[dict]:
     rows = []
     for path in sorted(audit_dir.glob("*.jsonl")):
         rows.extend(json.loads(line) for line in path.read_text().splitlines() if line.strip())
-    return [(r.get("tool", ""), r.get("decision", "")) for r in rows]
+    return rows
+
+
+def _decisions(audit_dir) -> list[tuple[str, str]]:
+    return [(r.get("tool", ""), r.get("decision", "")) for r in _rows(audit_dir)]
+
+
+_DOWNLOAD_ARGS = {"file_id": "f1", "destination_dir": "~/Downloads", "reason": "check the audit trail"}
 
 
 async def test_pending_drive_download_hands_out_no_link(local_server):
+    """Nobody decides: the call returns approval_pending and nothing to
+    fetch, and the card later expires with nothing ever served."""
     server, audit_dir, _calendar_client = local_server
-    args = {"file_id": "f1", "destination_dir": "~/Downloads", "reason": "reproduce the QA audit trail"}
 
-    body = await _call(server, "drive_download_file", args)
+    body = await _call(server, "drive_download_file", _DOWNLOAD_ARGS)
 
-    # What a client without the shim does with whatever came back: fetch
-    # the one-time link, if there is one.
-    served = None
-    if body.get("download_url"):
-        async with httpx.AsyncClient() as http_client:
-            served = await http_client.get(body["download_url"])
-
+    assert body.get("status") == "approval_pending", body
+    assert "download_url" not in body
     # Let the (short) pending TTL lapse, then let the next gated call's
     # opportunistic sweep audit it, exactly as a later call did in QA.
     await asyncio.sleep(0.7)
-    await _call(server, "drive_download_file", {**args, "file_id": "f2"})
-
+    await _call(server, "drive_download_file", {**_DOWNLOAD_ARGS, "file_id": "f2"})
     sequence = _decisions(audit_dir)
-    assert body.get("status") == "approval_pending", (
-        f"a still-pending drive_download_file returned {body!r}; fetching it gave "
-        f"{served.status_code if served else None} {served.content if served else b''!r}; "
-        f"audit sequence: {sequence}"
-    )
-    assert "download_url" not in body
+    assert sequence[:2] == [("drive_download_file", "approval_pending"), ("drive_download_file", "expired")]
     assert ("", "bridge_download_served") not in sequence
+    expired = _rows(audit_dir)[1]
+    # A card nobody answered: no decision to report.
+    assert expired["expired_decision"] == ""
+    assert expired["decided_at"] == ""
+
+
+async def test_approved_download_is_audited_as_approved_under_one_request_id(local_server):
+    """The human approves, the agent re-issues the identical call, fetches
+    the link: pending, approved and served all carry one request_id and
+    the agent, and the approval is collected, so it never expires."""
+    server, audit_dir, _calendar_client = local_server
+
+    pending = await _call(server, "drive_download_file", _DOWNLOAD_ARGS)
+    assert pending["status"] == "approval_pending"
+    response = await _decide(server, pending["approval_id"], "accept")
+    assert response.status_code == 200, response.text
+
+    released = await _call(server, "drive_download_file", _DOWNLOAD_ARGS)
+    assert released["delivery"] == "link"
+    async with httpx.AsyncClient() as http_client:
+        served = await http_client.get(released["download_url"])
+    assert served.status_code == 200
+    assert served.content == _FILE_BYTES
+
+    # Past both TTLs: a sweep must find nothing left to report as expired.
+    await asyncio.sleep(0.7)
+    await _call(server, "drive_download_file", {**_DOWNLOAD_ARGS, "file_id": "f2"})
+
+    rows = _rows(audit_dir)
+    assert [(r["tool"], r["decision"]) for r in rows[:3]] == [
+        ("drive_download_file", "approval_pending"),
+        ("drive_download_file", "approved"),
+        ("", "bridge_download_served"),
+    ]
+    assert ("drive_download_file", "expired") not in _decisions(audit_dir)
+    pending_row, approved_row, served_row = rows[:3]
+    assert pending_row["request_id"]
+    assert approved_row["request_id"] == served_row["request_id"] == pending_row["request_id"]
+    assert approved_row["decided_at"]
+    assert served_row["agent_id"]
+    assert served_row["agent_id"] == approved_row["agent_id"] == pending_row["agent_id"]
+
+
+async def test_uncollected_approval_expires_saying_what_was_decided(local_server):
+    """The human approves but the agent never comes back for it: the
+    "expired" row says it was approved, and when."""
+    server, audit_dir, _calendar_client = local_server
+
+    pending = await _call(server, "drive_download_file", _DOWNLOAD_ARGS)
+    response = await _decide(server, pending["approval_id"], "accept")
+    assert response.status_code == 200, response.text
+    await asyncio.sleep(0.7)
+    await _call(server, "drive_download_file", {**_DOWNLOAD_ARGS, "file_id": "f2"})
+
+    rows = _rows(audit_dir)
+    assert [(r["tool"], r["decision"]) for r in rows[:2]] == [
+        ("drive_download_file", "approval_pending"), ("drive_download_file", "expired"),
+    ]
+    assert rows[1]["request_id"] == rows[0]["request_id"]
+    assert rows[1]["expired_decision"] == "approved"
+    assert rows[1]["decided_at"]
+    assert ("", "bridge_download_served") not in _decisions(audit_dir)
 
 
 async def test_pending_calendar_write_is_not_performed(local_server):

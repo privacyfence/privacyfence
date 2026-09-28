@@ -47,8 +47,9 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.routing import BaseRoute, Mount, Route, get_route_path
 from starlette.types import ASGIApp
 
+from ..agent_identity import agent_scope
 from ..audit_log import AuditEntry, current_week, get_audit_logger
-from ..download_staging import get_download_staging_store
+from ..download_staging import ClaimedDownload, get_download_staging_store
 from ..upload_staging import UploadAlreadyFilledError, UploadTooLargeError, get_upload_staging_store
 from .mcp_auth import principal_from_access_token, single_token_verifier as _single_token_verifier
 
@@ -89,14 +90,19 @@ def _audit_bridge_upload_received(principal_id: str, size_bytes: int) -> None:
         logger.warning("Audit log write failed for bridge upload: %s", exc)
 
 
-def _audit_bridge_download_served(principal_id: str, name: str, size_bytes: int) -> None:
+def _audit_bridge_download_served(principal_id: str, claimed: ClaimedDownload) -> None:
+    """Recorded under the request_id of the gated decision that released
+    the file and the agent whose call staged it (ADR 0092) -- neither is on
+    the fetch itself, which for a capability link carries no bearer."""
     try:
-        get_audit_logger().record(AuditEntry(
-            timestamp=_now_iso(), week=current_week(), request_id="", connector="", tool="",
-            tool_name="", summary=f"File bridge download served: {name!r} ({size_bytes} bytes)",
-            sender=principal_id, decision="bridge_download_served", auto_accept_rule="",
-            latency_seconds=0.0, pii_detected=False,
-        ))
+        with agent_scope(claimed.agent):
+            get_audit_logger().record(AuditEntry(
+                timestamp=_now_iso(), week=current_week(), request_id=claimed.request_id, connector="",
+                tool="", tool_name="",
+                summary=f"File bridge download served: {claimed.name!r} ({len(claimed.data)} bytes)",
+                sender=principal_id, decision="bridge_download_served", auto_accept_rule="",
+                latency_seconds=0.0, pii_detected=False,
+            ))
     except Exception as exc:  # noqa: BLE001 -- audit logging must never break the download
         logger.warning("Audit log write failed for bridge download: %s", exc)
 
@@ -129,11 +135,11 @@ async def _get_download(request: Request) -> Response:
     token = _decode_token(request.path_params["token"])
     if token is None:
         return _NOT_FOUND
-    result = get_download_staging_store().claim(token, principal.id)
-    if result is None:
+    claimed = get_download_staging_store().claim_staged(token, principal.id)
+    if claimed is None:
         return _NOT_FOUND
-    data, name, _mime_type = result
-    _audit_bridge_download_served(principal.id, name, len(data))
+    data = claimed.data
+    _audit_bridge_download_served(principal.id, claimed)
     return Response(
         content=data,
         media_type="application/octet-stream",
@@ -173,11 +179,11 @@ async def _get_fetch(request: Request) -> Response:
     token = _decode_token(request.path_params["token"])
     if token is None:
         return _NOT_FOUND
-    result = get_download_staging_store().claim_capability(token)
-    if result is None:
+    claimed = get_download_staging_store().claim_staged(token, None)
+    if claimed is None:
         return _NOT_FOUND
-    data, name, _mime_type = result
-    _audit_bridge_download_served("(capability)", name, len(data))
+    data = claimed.data
+    _audit_bridge_download_served("(capability)", claimed)
     return Response(
         content=data,
         media_type="application/octet-stream",

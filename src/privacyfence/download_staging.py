@@ -56,6 +56,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from . import paths
+from .agent_identity import UNKNOWN_AGENT, AgentIdentity, current_agent
+from .audit_log import current_released_request_id
 from .secure_files import atomic_write_bytes
 
 if TYPE_CHECKING:
@@ -107,6 +109,24 @@ class StagedDownload:
     created_at: float
     expires_at: float
     claimed_at: float | None = None
+    # Who this file was released to, and on which gated decision -- the
+    # request_id of the approved row (audit_log.current_released_request_id)
+    # and the agent that made the call, both captured at stage() time so
+    # the row written when the file is fetched can name them (ADR 0092).
+    # The fetch itself carries neither: a capability link has no bearer.
+    request_id: str = ""
+    agent: AgentIdentity = UNKNOWN_AGENT
+
+
+@dataclass
+class ClaimedDownload:
+    """A successful claim: the plaintext plus what the served-row audit
+    needs. See ``DownloadStagingStore.claim_staged``."""
+    data: bytes
+    name: str
+    mime_type: str
+    request_id: str
+    agent: AgentIdentity
 
 
 class DownloadStagingStore:
@@ -189,6 +209,8 @@ class DownloadStagingStore:
             mime_type=mime_type or "application/octet-stream",
             created_at=now,
             expires_at=now + ttl_seconds,
+            request_id=current_released_request_id(),
+            agent=current_agent(),
         )
         with self._lock:
             self._sweep_expired_locked()
@@ -211,7 +233,8 @@ class DownloadStagingStore:
         them). On success, both the ciphertext file and the registry entry
         are deleted before this returns.
         """
-        return self._claim(token, principal_id)
+        claimed = self.claim_staged(token, principal_id)
+        return None if claimed is None else (claimed.data, claimed.name, claimed.mime_type)
 
     def claim_capability(self, token: bytes) -> tuple[bytes, str, str] | None:
         """The capability claim, for the unauthenticated ``GET
@@ -224,9 +247,14 @@ class DownloadStagingStore:
         token itself is what authorizes the claim, exactly like
         ``UploadStagingStore.afill_capability``'s own upload-side
         counterpart. Same "no oracle" posture otherwise as ``claim()``."""
-        return self._claim(token, None)
+        claimed = self.claim_staged(token, None)
+        return None if claimed is None else (claimed.data, claimed.name, claimed.mime_type)
 
-    def _claim(self, token: bytes, principal_id: str | None) -> tuple[bytes, str, str] | None:
+    def claim_staged(self, token: bytes, principal_id: str | None) -> ClaimedDownload | None:
+        """``claim()`` (a ``principal_id``) or ``claim_capability()``
+        (``None``), returning the staged entry's request_id and agent as well
+        -- what the routes that serve a staged file audit the fetch under
+        (ADR 0092). Same single-use, "no oracle" contract as both."""
         lookup_id = _lookup_id(token)
         with self._lock:
             self._sweep_expired_locked()
@@ -261,7 +289,7 @@ class DownloadStagingStore:
             # of this method.
             logger.warning("download_staging: AES-GCM decrypt failed for %s", lookup_id)
             return None
-        return plaintext, staged.name, staged.mime_type
+        return ClaimedDownload(plaintext, staged.name, staged.mime_type, staged.request_id, staged.agent)
 
     # ------------------------------------------------------------------ #
     # Expiry -- opportunistic, mirroring approvals.PendingApprovalRegistry's
@@ -305,6 +333,7 @@ def get_download_staging_store() -> DownloadStagingStore:
 
 __all__ = [
     "DEFAULT_TTL_SECONDS",
+    "ClaimedDownload",
     "DownloadStagingStore",
     "StagedDownload",
     "get_download_staging_store",

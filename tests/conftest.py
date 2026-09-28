@@ -89,6 +89,10 @@ def _reset() -> None:
     # (ADR 0088); a test that starts the daemon in org mode must not leave
     # every later test rendering org-mode labels.
     agent_label.set_local_mode(True)
+    # The request a gated call released (ADR 0092) is scoped per tool
+    # call by the dispatcher; a test that calls gate._audit directly sets
+    # it outside any such scope, so it must not carry into the next test.
+    audit_log.set_released_request_id("")
 
 
 @pytest.fixture(autouse=True)

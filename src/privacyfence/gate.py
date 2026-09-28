@@ -154,8 +154,8 @@ from typing import Any
 from .agent_identity import agent_scope
 from .approval_ui import get_approval_ui
 from .approval_window_html import NARROW, WIDE
-from .approvals import DEFAULT_MAX_PENDING, PendingApproval, PendingApprovalRegistry, canonical_key
-from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger
+from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, canonical_key
+from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
     TOOL_TO_OPERATION,
     ReviewContext,
@@ -411,6 +411,16 @@ def _deferred_registry() -> PendingApprovalRegistry | None:
 # "auto_accepted"), none of which this object could ever equal.
 _PENDING = object()
 
+# approvals.PendingApproval.final_decision -> the audit decision a call
+# collecting it would have recorded, for the "expired" row of a decision no
+# call ever collected (AuditEntry.expired_decision, ADR 0092).
+_UNCOLLECTED_DECISION = {
+    "accept": "approved",
+    "deny": "rejected",
+    "accept_all": "accepted_via_accept_all",
+    "auto_accepted": "auto_accepted",
+}
+
 
 async def _resolve_decision(
     *,
@@ -430,14 +440,15 @@ async def _resolve_decision(
     pii_categories: list[str],
     claude_reason: str,
     interact: Any,
-) -> tuple[Any, Any, float | None, str, str, DenialFeedback, EarlierDecision | None]:
+) -> tuple[Any, Any, float | None, str, str, DenialFeedback, EarlierDecision | None, str]:
     """Shared plumbing for the review/popup gate branches: get a decision
     for this call, either by running ``interact`` (see each branch's own
     definition of it) directly, or -- when ``registry`` is not None --
     checking the decision ledger first, then registering (or coalescing
     onto) a pending approval and waiting up to ``registry.hold_window``.
 
-    Returns ``(decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier)``.
+    Returns ``(decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier,
+    approval_request_id)``.
     ``decision`` is one of "accept"/"deny"/"accept_all"/"auto_accepted", or
     the module-level ``_PENDING`` sentinel -- in which case ``rule_name``
     is instead the ``PendingApproval`` the caller should build a pending
@@ -454,7 +465,12 @@ async def _resolve_decision(
     ``earlier`` is set only for a "deny" taken from the decision ledger --
     a decision made before this call, possibly for another session's
     identical call (ADR 0073) -- so the denial can say it was reused rather
-    than decided now (ADR 0090).
+    than decided now (ADR 0090). ``approval_request_id`` is the request_id of
+    the call that created the approval this decision was made on -- this
+    call's own for one it created, the original call's for a coalesced wait
+    or a ledger hit -- and "" on the no-registry path; gated_call audits the
+    outcome under it, so an approved re-issue shares its "approval_pending"
+    row's request_id (ADR 0092).
 
     Raises approvals.IdenticalWriteAwaitingApprovalError, releasing nothing,
     for a write whose identical twin is still waiting on its own approval
@@ -463,7 +479,7 @@ async def _resolve_decision(
     """
     if registry is None:
         decision, rule_name = await interact(None)
-        return decision, rule_name, None, "", "", DenialFeedback(), None
+        return decision, rule_name, None, "", "", DenialFeedback(), None, ""
 
     ledger_hit = registry.consume_ledger(dedupe_key)
     if ledger_hit is not None:
@@ -477,7 +493,7 @@ async def _resolve_decision(
             )
         return (
             ledger_hit.decision, ledger_hit.rule_name, ledger_hit.decided_at, ledger_hit.decided_via,
-            ledger_hit.batch_id, ledger_hit.feedback, earlier,
+            ledger_hit.batch_id, ledger_hit.feedback, earlier, ledger_hit.request_id,
         )
 
     approval, created = registry.register_or_coalesce(
@@ -503,7 +519,7 @@ async def _resolve_decision(
 
         decided = await registry.wait_async(approval, hold_window)
         if not decided:
-            return _PENDING, approval, None, "", "", DenialFeedback(), None
+            return _PENDING, approval, None, "", "", DenialFeedback(), None, approval.request_id
         # Decided within the hold window: this call collects the outcome
         # directly, so a write is consumed exactly as a ledger hit would be,
         # and an identical write afterwards goes back through the gate
@@ -515,7 +531,7 @@ async def _resolve_decision(
     feedback = approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback()
     return (
         approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via,
-        approval.batch_id, feedback, None,
+        approval.batch_id, feedback, None, approval.request_id,
     )
 
 
@@ -617,6 +633,11 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
                 decision="expired", auto_accept_rule=approval.final_rule_name,
                 pii_detected=approval.pii_detected, pii_categories=approval.pii_categories,
                 claude_reason=approval.claude_reason,
+                # What the human decided and when, which nothing ever
+                # collected (ADR 0092) -- without these the row reads the
+                # same as a card nobody answered.
+                decided_at=approval.decided_at,
+                expired_decision=_UNCOLLECTED_DECISION.get(approval.final_decision or "", ""),
                 # A deny nobody collected -- the normal case when the agent
                 # learned of it through privacyfence_await_approval and never
                 # re-issued. Records that feedback was given, never its text
@@ -1108,17 +1129,24 @@ async def gated_call(
                     d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier = await _resolve_decision(
+            (
+                decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier, approval_request_id,
+            ) = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="review",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=bool(pii_categories),
                 pii_categories=audit_pii_categories, claude_reason=claude_reason, interact=_interact,
             )
+            # Every row from here on is about the approval's request, not
+            # just this invocation: a coalesced wait or a ledger hit is
+            # audited under the request_id its "approval_pending" row
+            # carried (ADR 0092).
+            request_id = approval_request_id or request_id
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring
                 audit(decision="approval_pending", auto_accept_rule="", pii_detected=bool(pii_categories))
-                return _pending_result(registry, pending_approval)
+                raise ApprovalPending(_pending_result(registry, pending_approval))
 
             if decision == "auto_accepted":
                 audit(
@@ -1227,17 +1255,24 @@ async def gated_call(
                         d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier = await _resolve_decision(
+            (
+                decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier, approval_request_id,
+            ) = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="popup",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
                 pii_forces_confirmation=upload_pii_categories, pii_detected=bool(upload_pii_categories),
                 pii_categories=audit_pii_categories, claude_reason=claude_reason, interact=_interact,
             )
+            # Every row from here on is about the approval's request, not
+            # just this invocation: a coalesced wait or a ledger hit is
+            # audited under the request_id its "approval_pending" row
+            # carried (ADR 0092).
+            request_id = approval_request_id or request_id
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring
                 audit(decision="approval_pending", auto_accept_rule="", pii_detected=bool(upload_pii_categories))
-                return _pending_result(registry, pending_approval)
+                raise ApprovalPending(_pending_result(registry, pending_approval))
 
             if decision == "auto_accepted":
                 audit(
@@ -1503,8 +1538,13 @@ def _audit(
     *, created_at, request_id, connector, tool, tool_name, summary, sender, decision, auto_accept_rule,
     pii_detected=False, pii_categories=None, pii_match_details="", claude_reason="", decided_at=None,
     delivery="", decided_via="", batch_id="", rule_id="", deny_feedback: DenialFeedback | None = None,
+    expired_decision="",
 ) -> None:
     feedback = deny_feedback if deny_feedback is not None else DenialFeedback()
+    if decision in APPROVED_LIKE_DECISIONS:
+        # Whatever this call now hands out (a staged download link) is
+        # attributed to this request -- see audit_log.released_request_scope.
+        set_released_request_id(request_id)
     try:
         get_audit_logger().record(AuditEntry(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1546,6 +1586,7 @@ def _audit(
             # ADR 0084: that a deny carried feedback, never the note's text.
             deny_intent=feedback.intent,
             deny_note_chars=len(feedback.note),
+            expired_decision=expired_decision,
         ))
     except Exception as exc:
         logger.warning("Audit log write failed: %s", exc)

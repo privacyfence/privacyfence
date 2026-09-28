@@ -4,11 +4,14 @@ PUT /mcp-files/uploads/{slot} and GET /mcp-files/downloads/{token} routes
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 from starlette.testclient import TestClient
 
 from privacyfence import paths
+from privacyfence.agent_identity import AgentIdentity, AgentSource, agent_scope
+from privacyfence.audit_log import current_week, init_audit_logger, released_request_scope, set_released_request_id
 from privacyfence.download_staging import get_download_staging_store
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.upload_staging import get_upload_staging_store
@@ -259,6 +262,23 @@ class TestCapabilityDownloadRoute:
     def test_malformed_token_is_404_not_500(self):
         r = _capability_client().get("/mcp-files/fetch/a")
         assert r.status_code == 404
+
+    def test_served_row_names_the_releasing_request_and_agent(self, tmp_path):
+        """ADR 0092: the fetch carries no bearer, so the row is tied to its
+        request through what stage() captured."""
+        init_audit_logger(str(tmp_path / "audit"))
+        agent = AgentIdentity(id="claude-code", name="Claude Code", version="2.1", source=AgentSource.CLIENT_INFO)
+        with released_request_scope(), agent_scope(agent):
+            set_released_request_id("req-1")
+            token = get_download_staging_store().stage(LOCAL_PRINCIPAL, b"data", "f.txt", "text/plain")
+
+        assert _capability_client().get(f"/mcp-files/fetch/{_b64(token)}").status_code == 200
+
+        week_file = tmp_path / "audit" / f"{current_week()}.jsonl"
+        [row] = [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+        assert row["decision"] == "bridge_download_served"
+        assert row["request_id"] == "req-1"
+        assert (row["agent_id"], row["agent_name"]) == ("claude-code", "Claude Code")
 
 
 class TestAuditLoggingNeverBlocks:

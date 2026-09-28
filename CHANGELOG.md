@@ -145,6 +145,15 @@ Organization deployments now work from a phone, and the app looks like the websi
 
 ### Fixed
 
+- **A request still waiting for your approval no longer goes ahead before you decide.** When you
+  took longer than the approval hold window (30 seconds by default), or another approval was
+  already waiting, many actions ran anyway: a Drive download was handed to the AI system, or a
+  calendar event, draft or other change was made, with only "approval pending" in the audit log.
+  They now wait for your decision, and the AI system repeats the request once you approve. The audit
+  log now shows that trail as one request: the pending row, the approved row and the row for the
+  downloaded file share one request ID, and the file's row names the AI system that asked. An
+  approval nobody came back for says what you decided and when, instead of reading like a card
+  nobody answered. The Excel export gains Request ID and Expired Decision columns. See ADR 0092.
 - **`build_org_bundle.py` no longer ignores admin changes made without `--mode org`.** A command
   such as `--merge --idp-admin-group-value new@example.com` finished without an error but left the
   admin list as it was. It now stops and explains that changing the admin list means passing
