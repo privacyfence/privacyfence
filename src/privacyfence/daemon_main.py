@@ -87,6 +87,7 @@ import yaml
 
 from . import (
     __version__,
+    agent_label,
     agent_overrides,
     audit_forwarding,
     org_bundle_signing,
@@ -1830,6 +1831,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # rest of this function's fail-safe defaults now that mode is known.
     check_storage_permissions(org_mode.resolve_mode(org_config) == "org")
     init_privacy_filter(config, org_managed=org_mode.resolve_mode(org_config) == "org")
+    # ADR 0088: a local install shows every requester as "Undetected".
+    agent_label.set_local_mode(org_mode.resolve_mode(org_config) == "local")
     for warning in check_consistency_warnings():
         logger.warning(warning)
 

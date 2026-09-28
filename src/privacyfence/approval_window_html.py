@@ -69,7 +69,7 @@ from collections.abc import Callable, Sequence
 from html import escape as _html_escape
 from pathlib import Path
 
-from .agent_label import NEUTRAL_SUBJECT, NOT_VERIFIED, TIER_ATTESTED, UNKNOWN_AGENT_LABEL, AgentLabel
+from .agent_label import NEUTRAL_SUBJECT, NOT_VERIFIED, TIER_ATTESTED, TIER_UNDETECTED, AgentLabel, unknown_agent_label
 from .deny_note_html import PANEL_JS as _DENY_NOTE_JS
 from .deny_note_html import panel_html as _deny_note_panel_html
 from .design_css import DOCUMENT_CSS
@@ -983,7 +983,7 @@ def build_card_stack_html(
     """
     nonce = nonce or _new_nonce()
     if agent_label is None:
-        agent_label = UNKNOWN_AGENT_LABEL
+        agent_label = unknown_agent_label()
     agent_display_name = agent_label.subject
     width = CONTENT_WIDTH[layout]
     # Two ordering groups inside the one shared scroll region: the cards read first, then the
@@ -1113,8 +1113,17 @@ def _agent_html(label: AgentLabel, icon_data_uri: str) -> str:
     "Verified" badge. Claimed and unknown: a neutral "?" glyph in place of
     any mark, the claim worded as a claim, and a "Not verified" badge. The
     mark is dropped here for anything not attested even if a caller passed
-    one -- the rule lives where the markup is written, not only upstream."""
+    one -- the rule lives where the markup is written, not only upstream.
+    Undetected (every local-mode request, ADR 0088): the word "Undetected"
+    alone -- no glyph, no claim, no badge."""
     tier = label.tier
+    if tier == TIER_UNDETECTED:
+        return (
+            f'<div class="pf-agent pf-agent-{tier}" data-agent-tier="{tier}">'
+            '<span class="pf-agent-by">Requested by</span>'
+            f'<span class="pf-agent-name">{_html_escape(label.headline)}</span>'
+            '</div>'
+        )
     attested = tier == TIER_ATTESTED
     if attested and icon_data_uri:
         mark = f'<img class="pf-agent-icon" src="{icon_data_uri}" alt="">'

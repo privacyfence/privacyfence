@@ -75,7 +75,7 @@
           <ol class="steps">
             <li>The assistant calls <code>gmail_get_thread</code> and says why. Reading a thread is a <strong>reviewed</strong> read, and no rule covers it, so PrivacyFence holds the result.</li>
             <li>Before you see anything, PrivacyFence fetches the thread and <strong>scans it locally</strong> for personal data. Here it finds a date of birth, a home address, an IBAN and salary information, and highlights each one.</li>
-            <li>The card shows what the assistant already knows (subject, participants, dates), its stated reason, <strong>who is asking</strong> (a name the client sent is marked <em>Not verified</em>), and exactly what will be released.</li>
+            <li>The card shows what the assistant already knows (subject, participants, dates), its stated reason, <strong>who is asking</strong> (<em>Undetected</em> on a local install; in organization mode a name the client sent is marked <em>Not verified</em>), and exactly what will be released.</li>
             <li>You choose <strong>Allow once</strong> or <strong>Deny</strong>. Because personal data was found, allowing asks for a second confirmation, and a packaged install also asks for your passkey.</li>
             <li>If you decide within 30 seconds the call simply returns. Otherwise the assistant gets a link to the card to send you, and repeats the call once you have approved. After a denial it gets nothing from the thread.</li>
             <li>The decision goes to the audit log, with the categories found but never the matched text.</li>

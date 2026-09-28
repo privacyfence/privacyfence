@@ -21,7 +21,7 @@ from pydantic import AnyUrl
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import agent_overrides, org_identity, paths, privilege_separation
+from privacyfence import agent_label, agent_overrides, org_identity, paths, privilege_separation
 from privacyfence.agent_identity import (
     REGISTRY,
     UNKNOWN_AGENT,
@@ -38,6 +38,12 @@ from privacyfence.web import agent_pins, org_session
 from privacyfence.web import oauth_provider as op
 from privacyfence.web import routes_settings as ros
 from privacyfence.web.routes_mcp import _resolve_agent
+
+
+@pytest.fixture(autouse=True)
+def _org_mode_labels(monkeypatch):
+    """The tiered labels here are org mode's; local mode's "Undetected" is ADR 0088."""
+    monkeypatch.setattr(agent_label, "_local_mode", False)
 
 BASE_URL = "https://pf.example.com"
 ALICE = Principal(id="alice", email="alice@example.com")

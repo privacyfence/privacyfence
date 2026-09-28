@@ -23,7 +23,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
-from privacyfence import agent_overrides, card_builder, gate, org_identity
+from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity
 from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, current_agent
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -206,7 +206,9 @@ class TestClientInfoIconsAreNeverRead:
         def website_url(self):
             raise AssertionError("clientInfo.website_url was read")
 
-    def test_neither_capture_nor_the_card_touches_them(self):
+    def test_neither_capture_nor_the_card_touches_them(self, monkeypatch):
+        # Org mode's tiers: a local install shows every requester as "Undetected" (ADR 0088).
+        monkeypatch.setattr(agent_label, "_local_mode", False)
         session = SimpleNamespace(client_params=SimpleNamespace(client_info=self._ClientInfo()))
         agent = rm._resolve_agent(SimpleNamespace(session=session), None, None)
         assert agent.id == "chatgpt"

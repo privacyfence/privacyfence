@@ -310,10 +310,13 @@ resources were used even when no content was released.
 ## Which AI system the audit log names
 
 Each gated call records the calling AI system in `agent_id`, `agent_name`, `agent_version` and
-`agent_source`. The approval card, the approvals list and the Audit Log page show it as
-**Verified**, **Not verified** ("Says it is …"), or **Unrecognised AI system** with the name sent.
+`agent_source`. In organization mode the approval card, the approvals list and the Audit Log page
+show it as **Verified**, **Not verified** ("Says it is …"), or **Unrecognised AI system** with the
+name sent. In local mode they show every request as **Undetected**, with no name and no badge; the
+fields are still recorded
+([ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md)).
 
-| `agent_source` | Meaning | Shown as |
+| `agent_source` | Meaning | Shown as (organization mode) |
 | --- | --- | --- |
 | `oauth_client` | Organization mode: the call's access token belongs to an OAuth client an administrator pinned to an AI system on the **AI systems** page | Verified |
 | `client_info` | The name the client sent (MCP `clientInfo`, or an organization-mode client's registered name), including one relabelled by a local `agent_overrides:` entry | Not verified, or Unrecognised if it matches no known AI system |
@@ -324,7 +327,7 @@ it does not follow a client that registers again under the same name, and it lap
 registration expires. Every pin and unpin is audited
 ([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)).
 In local mode every AI client of one OS account holds the same MCP token, so nothing can tell them
-apart. An `agent_overrides:` entry only relabels a name and never makes it verified
+apart. An `agent_overrides:` entry only relabels the recorded name and never makes it verified
 ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)).
 
 No name, verified or not, changes an outcome: it selects no rule and releases nothing. The card

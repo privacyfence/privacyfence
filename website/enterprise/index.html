@@ -50,7 +50,7 @@
             <tr><th scope="row">Protection from the AI client</th><td>Privilege separation: PrivacyFence runs under its own service account</td><td>The AI client reaches the server only through <code>/mcp</code></td></tr>
             <tr><th scope="row">Policy</th><td>Set by the person, in Settings</td><td>Privacy filter and PII detection set install-wide by admins; each person keeps their own always-allow rules</td></tr>
             <tr><th scope="row">Passkey step-up</th><td>On by default with the installers</td><td>Set in the organization config bundle</td></tr>
-            <tr><th scope="row">Verified AI-system identity</th><td>No: the name a client sends is shown as not verified</td><td>Admins pin OAuth clients to known AI systems</td></tr>
+            <tr><th scope="row">Verified AI-system identity</th><td>No: every request is shown as Undetected</td><td>Admins pin OAuth clients to known AI systems</td></tr>
             <tr><th scope="row">Audit log</th><td>On the computer</td><td>On the server, and optionally forwarded to syslog or an HTTP endpoint</td></tr>
           </tbody>
         </table>
