@@ -114,6 +114,7 @@ from .control_channel import (
     ControlChannelServer,
     request_enrollment_confirmation,
     request_recovery_confirmation,
+    send_mcp_token,
     send_recovery_code,
 )
 from .csp import build_csp
@@ -125,6 +126,7 @@ from .oauth_provider import OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
+from .routes_settings import AiClientConnect
 from .routes_settings import build_routes as build_settings_routes
 from .routes_settings import settings_page_state
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
@@ -239,6 +241,33 @@ def present_recovery_code(code: str) -> tuple[bool, str]:
     nobody has.
     """
     return send_recovery_code(code)
+
+
+def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -> tuple[bool, str]:
+    """The Settings page's Copy token and Rotate token buttons, from the
+    daemon's side (ADR 0103): mint (or rotate) the owner's MCP token and
+    hand it to the owner's companion, which puts it on the clipboard. The
+    token never comes back to the caller, so the HTTP route that calls this
+    has nothing secret to put in its response.
+
+    ``mint`` is ``WebServer._mint_mcp_token``, the same callback the
+    control channel's ``MINT MCP``/``ROTATE MCP`` use, called here inside
+    the owner's own ``principal_scope`` -- settings is owner-only
+    (``_owner_only_routes``), so the owner is whose token this is, and
+    ``send_mcp_token`` addresses the owner's companion by the same scope.
+
+    A rotation that reached no companion has still happened: the old token
+    is gone either way, and the reason says so, and how to get the new one.
+    """
+    with principal_scope(LOCAL_PRINCIPAL):
+        token = mint(rotate)
+        copied, reason = send_mcp_token(token)
+    if copied or not rotate:
+        return copied, reason
+    return False, (
+        f"The token was rotated, but the new one could not be copied: {reason} Use the "
+        "companion's Copy AI Client Token menu item to copy it."
+    )
 
 
 def reissue_local_recovery_code() -> tuple[bool, str]:
@@ -808,6 +837,8 @@ def build_app(
     step_up: StepUpConfig | None = None,
     step_up_issuer_url: str = "",
     agent_overrides: AgentOverrides | None = None,
+    mint_mcp_token: Callable[[bool], str] | None = None,
+    mcp_url: str | None = None,
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -855,6 +886,11 @@ def build_app(
     always constructs and shares one pair for its whole lifetime. Every
     optional surface's parameter defaults to ``None``, so a caller (a test,
     usually) that omits it simply does not get that surface.
+
+    ``mint_mcp_token``/``mcp_url`` (local mode, both or neither) add the
+    settings page's "Connect an AI client" section (ADR 0103) --
+    ``mint_mcp_token`` is ``WebServer._mint_mcp_token``, the callback its
+    control channel's ``MINT MCP`` already uses.
 
     ``step_up``/``step_up_issuer_url`` mount ``/security`` in
     local mode -- ignored when ``org`` is given, since ``_build_org_app``
@@ -919,10 +955,18 @@ def build_app(
     require_human_session = privilege_separation.is_enabled()
 
     if controller is not None:
+        ai_client = None
+        if mint_mcp_token is not None and mcp_url is not None:
+            token_mint = mint_mcp_token
+            ai_client = AiClientConnect(
+                mcp_url=mcp_url,
+                copy_token=lambda: copy_local_mcp_token(token_mint),
+                rotate_token=lambda: copy_local_mcp_token(token_mint, rotate=True),
+            )
         extra_routes.extend(_owner_only_routes(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
-            require_human_session=require_human_session,
+            require_human_session=require_human_session, ai_client=ai_client,
         )))
 
     # The /security enrollment surface: mounted whenever step_up.rp_id is
@@ -1329,6 +1373,8 @@ class WebServer:
             step_up=step_up,
             step_up_issuer_url=f"http://{host}:{port}",
             agent_overrides=agent_overrides,
+            mint_mcp_token=self._mint_mcp_token if self.mcp_verifier is not None else None,
+            mcp_url=f"http://{host}:{port}{MCP_PATH}" if self.mcp_verifier is not None else None,
         )
         if trusted_proxies:
             # Honored only when this explicit list is non-empty --

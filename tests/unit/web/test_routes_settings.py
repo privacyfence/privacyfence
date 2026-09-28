@@ -1170,6 +1170,160 @@ class TestOrgConfigUploadHumanSession:
         assert r.status_code == 200
 
 
+def _ai_client(copied: list, rotated: list, *, ok: bool = True, reason: str = ""):
+    return rs.AiClientConnect(
+        mcp_url="http://127.0.0.1:8765/mcp",
+        copy_token=lambda: copied.append("copy") or (ok, reason),
+        rotate_token=lambda: rotated.append("rotate") or (ok, reason),
+    )
+
+
+class TestAiClientTokenRoutes:
+    """The "Connect an AI client" section's two routes (ADR 0103). Neither
+    response ever carries a token -- the callbacks hand it to the companion
+    -- so what is tested here is the gating: copying needs only an ordinary
+    settings mutation's checks; rotating needs a confirmation, a human
+    session where the install asks for one, and the passkey step-up."""
+
+    def _client(self, controller, sessions, **kwargs):
+        copied, rotated = [], []
+        app = create_app(
+            controller, sessions=sessions, ai_client=_ai_client(copied, rotated, **kwargs.pop("result", {})),
+            **kwargs,
+        )
+        return TestClient(app, base_url=ORIGIN), copied, rotated
+
+    def test_the_routes_are_absent_without_an_ai_client(self, client, sessions):
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/mcp_token/copy", json={"csrf": csrf})
+        assert r.status_code in (404, 405)
+
+    def test_the_page_shows_the_mcp_url(self, controller, sessions):
+        client, _copied, _rotated = self._client(controller, sessions)
+        _authed(client, sessions)
+        page = client.get("/settings").text
+        assert 'window.__pfAiClient = {"mcp_url": "http://127.0.0.1:8765/mcp"};' in page
+
+    def test_copy_asks_the_companion_and_returns_no_token(self, controller, sessions):
+        client, copied, _rotated = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/mcp_token/copy", json={"csrf": csrf})
+        assert r.status_code == 200
+        assert copied == ["copy"]
+        assert "token" not in r.json()
+
+    def test_copy_needs_csrf_and_a_session(self, controller, sessions):
+        client, copied, _rotated = self._client(controller, sessions)
+        _authed(client, sessions)
+        assert client.post("/api/settings/mcp_token/copy", json={"csrf": "wrong"}).status_code == 401
+        client.cookies.clear()
+        r = client.post("/api/settings/mcp_token/copy", json={"csrf": "x"})
+        assert r.status_code == 401
+        assert copied == []
+
+    @pytest.mark.usefixtures("_data_dir")
+    def test_copy_is_open_to_an_unattested_session_and_needs_no_passkey(self, controller, sessions):
+        # Anything running as this user can already get the token over
+        # MINT MCP, so neither gate would protect anything (ADR 0103).
+        self._enroll_passkey()
+        client, copied, _rotated = self._client(
+            controller, sessions, require_human_session=True,
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True), step_up_origin=ORIGIN,
+        )
+        session_id = sessions.create(provenance=PROVENANCE_UNATTESTED)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        r = client.post("/api/settings/mcp_token/copy", json={"csrf": session_id})
+        assert r.status_code == 200
+        assert copied == ["copy"]
+
+    def test_a_copy_that_reached_no_companion_says_why(self, controller, sessions):
+        client, _copied, _rotated = self._client(
+            controller, sessions, result={"ok": False, "reason": "PrivacyFence could not reach its companion app."},
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/mcp_token/copy", json={"csrf": csrf})
+        assert r.status_code == 503
+        assert "companion" in r.json()["error"]
+
+    def test_rotate_needs_an_explicit_confirmation(self, controller, sessions):
+        client, _copied, rotated = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/mcp_token/rotate", json={"csrf": csrf})
+        assert r.status_code == 400
+        assert rotated == []
+        r = client.post("/api/settings/mcp_token/rotate", json={"csrf": csrf, "confirmed": True})
+        assert r.status_code == 200
+        assert rotated == ["rotate"]
+
+    def test_rotate_needs_a_human_session_where_the_install_asks(self, controller, sessions):
+        client, _copied, rotated = self._client(controller, sessions, require_human_session=True)
+        session_id = sessions.create(provenance=PROVENANCE_UNATTESTED)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        r = client.post("/api/settings/mcp_token/rotate", json={"csrf": session_id, "confirmed": True})
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+        assert rotated == []
+
+        session_id = sessions.create(provenance=PROVENANCE_HUMAN)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        r = client.post("/api/settings/mcp_token/rotate", json={"csrf": session_id, "confirmed": True})
+        assert r.status_code == 200
+        assert rotated == ["rotate"]
+
+    @pytest.fixture
+    def _data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    def _enroll_passkey(self):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    @pytest.mark.usefixtures("_data_dir")
+    def test_rotate_takes_the_passkey_step_up_when_it_is_required(self, controller, sessions):
+        self._enroll_passkey()
+        client, _copied, rotated = self._client(
+            controller, sessions,
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True), step_up_origin=ORIGIN,
+        )
+        csrf = _authed(client, sessions)
+        first = client.post("/api/settings/mcp_token/rotate", json={"csrf": csrf, "confirmed": True})
+        assert first.status_code == 428
+        assert "webauthn_options" in first.json()
+        assert rotated == []
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post(
+                "/api/settings/mcp_token/rotate",
+                json={"csrf": csrf, "confirmed": True, "webauthn_assertion": {"id": "Y3JlZC0x"}},
+            )
+        assert second.status_code == 200
+        assert rotated == ["rotate"]
+
+    @pytest.mark.usefixtures("_data_dir")
+    def test_rotate_with_no_passkey_enrolled_hard_fails(self, controller, sessions):
+        client, _copied, rotated = self._client(
+            controller, sessions,
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True), step_up_origin=ORIGIN,
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/mcp_token/rotate", json={"csrf": csrf, "confirmed": True})
+        assert r.status_code == 403
+        assert r.json()["enroll_url"] == "/security"
+        assert rotated == []
+
+    def test_the_bridge_shim_routes_both_actions_and_asks_before_rotating(self, controller, sessions):
+        client, _copied, _rotated = self._client(controller, sessions)
+        _authed(client, sessions)
+        page = client.get("/settings").text
+        assert "url = '/api/settings/mcp_token/copy'" in page
+        assert "url = '/api/settings/mcp_token/rotate'; rest.confirmed = true;" in page
+        assert "window.confirm('Rotate the AI client token?" in page
+
+
 class TestAuditLogDownload:
     def test_nothing_to_export_is_404(self, client, sessions):
         _authed(client, sessions)
@@ -1360,7 +1514,8 @@ class TestBespokeRoutesAreClassified:
     matching entry in either set (ADR 0014)."""
 
     def test_every_post_route_is_the_generic_dispatcher_sensitive_or_explicitly_exempt(self, controller, sessions):
-        routes = build_routes(controller, sessions=sessions)
+        # With ai_client, so the two optional token routes are built too.
+        routes = build_routes(controller, sessions=sessions, ai_client=_ai_client([], []))
         checked_any_bespoke = False
         for route in routes:
             methods = getattr(route, "methods", None) or set()

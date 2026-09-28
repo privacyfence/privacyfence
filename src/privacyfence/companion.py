@@ -20,8 +20,8 @@ application (decision 4), not a new binary.
 Platform behavior:
   - **macOS/Windows**: with no ``--action``, runs a persistent process with
     a tray/menu-bar icon (``pystray``) offering Open Approvals, Open
-    Settings, New Recovery Code and Quit -- the whole product surface
-    decision 2 describes.
+    Settings, Copy AI Client Token, New Recovery Code and Quit -- the
+    product surface decision 2 describes, plus ADR 0103's token item.
     While running, it also runs a ``CompanionChannelServer`` so the
     daemon's own connector OAuth flows (``oauth_loopback.py``) can hand it
     a URL to open instead of calling ``webbrowser.open()`` themselves
@@ -31,8 +31,8 @@ Platform behavior:
   - **Linux**: no tray (decision 4's dependency-budget call) -- ``main()``
     instead dispatches once on a single ``--action`` and exits, invoked by
     ``resources/linux/privacyfence-companion.desktop``'s main ``Exec=``
-    (Open Approvals) and its ``Desktop Action`` entries (Settings, New
-    Recovery Code, Quit).
+    (Open Approvals) and its ``Desktop Action`` entries (Settings, Copy AI
+    Client Token, New Recovery Code, Quit).
     ``--serve`` is the third shape: the
     ``CompanionChannelServer`` alone, with no tray and no menu, so a
     separated install's daemon -- which runs as its own account with no
@@ -108,8 +108,10 @@ from .web.control_channel import (
     ControlChannelError,
     _dialog_for,
     _NoDialogAvailable,
+    copy_mcp_token_to_clipboard,
     enrollment_state,
     mint_bootstrap_code,
+    mint_mcp_token,
     open_attested_url,
     read_base_url,
     request_quit,
@@ -132,6 +134,11 @@ ACTION_OPEN_SETTINGS = "open-settings"
 # It is a menu entry rather than anything on /security because the code is
 # not the daemon's to hand a browser any more -- see _show_recovery_code().
 ACTION_RECOVERY_CODE = "recovery-code"
+# Puts this user's AI client (MCP) token on the clipboard -- the menu's
+# answer to ``privacyfence-app --print-mcp-token`` for somebody who does not
+# use a terminal. No confirmation: anything running as this user can already
+# get the same token over MINT MCP (ADR 0103).
+ACTION_COPY_MCP_TOKEN = "copy-mcp-token"  # nosec B105  # an action name, not a credential
 # The daemon-management surface (companion-as-daemon-manager, ADR 0026)
 # that ADR 0002's Amendment adds to the companion's
 # menu -- see daemon_status.py/
@@ -144,7 +151,7 @@ ACTION_SERVICE_RESTART = "service-restart"
 ACTION_SERVICE_STOP = "service-stop"
 ACTION_QUIT = "quit"
 _ACTIONS = (
-    ACTION_OPEN_APPROVALS, ACTION_OPEN_SETTINGS, ACTION_RECOVERY_CODE,
+    ACTION_OPEN_APPROVALS, ACTION_OPEN_SETTINGS, ACTION_COPY_MCP_TOKEN, ACTION_RECOVERY_CODE,
     ACTION_SERVICE_STATUS, ACTION_SERVICE_START, ACTION_SERVICE_RESTART, ACTION_SERVICE_STOP,
     ACTION_QUIT,
 )
@@ -238,6 +245,7 @@ def _menu_model(status: "daemon_status.DaemonStatus") -> list[_MenuEntry]:
         _MenuEntry("Restart PrivacyFence…", ACTION_SERVICE_RESTART, visible=running),
         _MenuEntry("Stop PrivacyFence…", ACTION_SERVICE_STOP, visible=running),
         _MenuEntry("Service Details…", ACTION_SERVICE_STATUS),
+        _MenuEntry("Copy AI Client Token", ACTION_COPY_MCP_TOKEN),
         _MenuEntry("New Recovery Code…", ACTION_RECOVERY_CODE),
         # Renamed from "Quit" (ADR 0002's Amendment): on a privilege-
         # separated install this only ever quits the companion -- the
@@ -378,6 +386,31 @@ def _show_recovery_code() -> bool:
     return True
 
 
+def _copy_mcp_token() -> bool:
+    """The "Copy AI Client Token" item: get this user's own MCP token over
+    the daemon's control channel (``MINT MCP``, the same command
+    ``privacyfence-app --print-mcp-token`` and the ``.mcpb`` shim send) and
+    put it on the clipboard here, with a notice saying so. The daemon scopes
+    ``MINT MCP`` by the connecting process's own OS account (ADR 0008), so
+    this is always the token of whoever is logged in to this session.
+
+    Returns False (logging why) on every failure, the same posture as the
+    rest of this menu. The token itself is never logged."""
+    try:
+        token = mint_mcp_token()
+    except (OSError, ControlChannelError) as exc:
+        logger.error("Could not get the AI client token from PrivacyFence: %s", exc)
+        _show_message(f"PrivacyFence could not provide the AI client token: {exc}")
+        return False
+    reply = copy_mcp_token_to_clipboard(token)
+    if not reply.startswith("OK"):
+        reason = reply.strip().removeprefix("ERROR").strip()
+        logger.error("Could not copy the AI client token: %s", reason)
+        _show_message(f"PrivacyFence could not copy the AI client token: {reason}")
+        return False
+    return True
+
+
 def _show_message(text: str) -> bool:
     """Put ``text`` in front of whoever is at this login session, with no
     reply expected -- the companion's own local report of a service action's
@@ -426,6 +459,8 @@ def _run_action(action: str) -> bool:
         return _open_path("/settings")
     if action == ACTION_RECOVERY_CODE:
         return _show_recovery_code()
+    if action == ACTION_COPY_MCP_TOKEN:
+        return _copy_mcp_token()
     if action == ACTION_SERVICE_STATUS:
         return _show_service_status()
     if action == ACTION_SERVICE_START:
@@ -730,6 +765,13 @@ def _run_tray(initial_path: str | None = None) -> int:
             target=_show_recovery_code, name="privacyfence-recovery-code", daemon=True,
         ).start()
 
+    def _on_copy_mcp_token(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
+        # Its own thread for the same reason recovery-code's is: the notice
+        # is a modal dialog, and the menu must not wait on it.
+        threading.Thread(
+            target=_copy_mcp_token, name="privacyfence-copy-mcp-token", daemon=True,
+        ).start()
+
     def _on_service_status(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
         threading.Thread(
             target=_show_service_status, name="privacyfence-service-status", daemon=True,
@@ -754,6 +796,7 @@ def _run_tray(initial_path: str | None = None) -> int:
         ACTION_SERVICE_RESTART: _make_service_handler("restart"),
         ACTION_SERVICE_STOP: _make_service_handler("stop"),
         ACTION_SERVICE_STATUS: _on_service_status,
+        ACTION_COPY_MCP_TOKEN: _on_copy_mcp_token,
         ACTION_RECOVERY_CODE: _on_recovery_code,
         ACTION_QUIT: _on_quit,
     }

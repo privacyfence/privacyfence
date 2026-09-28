@@ -572,6 +572,62 @@ class TestRecoveryCodeAction:
         assert seen == [companion.ACTION_RECOVERY_CODE]
 
 
+class TestCopyMcpTokenAction:
+    """The "Copy AI Client Token" item (ADR 0103): the companion asks the
+    daemon for this user's token over MINT MCP and puts it on the clipboard
+    itself. The token is never logged, whatever happens."""
+
+    TOKEN = "ab" * 32
+
+    def test_mints_then_copies(self, monkeypatch):
+        copied = []
+        monkeypatch.setattr(companion, "mint_mcp_token", lambda: self.TOKEN)
+        monkeypatch.setattr(companion, "copy_mcp_token_to_clipboard", lambda t: copied.append(t) or "OK\n")
+        assert companion._copy_mcp_token() is True
+        assert copied == [self.TOKEN]
+
+    def test_no_daemon_is_reported_not_raised(self, monkeypatch, caplog):
+        def _raise():
+            raise OSError("no such socket")
+
+        shown = []
+        monkeypatch.setattr(companion, "mint_mcp_token", _raise)
+        monkeypatch.setattr(companion, "_show_message", lambda text: shown.append(text) or True)
+        with caplog.at_level("ERROR"):
+            assert companion._copy_mcp_token() is False
+        assert "no such socket" in shown[0]
+
+    def test_a_failed_copy_is_reported_without_the_token(self, monkeypatch, caplog):
+        shown = []
+        monkeypatch.setattr(companion, "mint_mcp_token", lambda: self.TOKEN)
+        monkeypatch.setattr(
+            companion, "copy_mcp_token_to_clipboard", lambda _t: "ERROR no clipboard program found\n",
+        )
+        monkeypatch.setattr(companion, "_show_message", lambda text: shown.append(text) or True)
+        with caplog.at_level("DEBUG"):
+            assert companion._copy_mcp_token() is False
+        assert "no clipboard program found" in shown[0]
+        assert self.TOKEN not in caplog.text
+        assert self.TOKEN not in shown[0]
+
+    def test_the_action_is_dispatchable_and_argparse_accepts_it(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(companion, "_copy_mcp_token", lambda: seen.append("copied") or True)
+        assert companion._run_action(companion.ACTION_COPY_MCP_TOKEN) is True
+        # resources/linux/privacyfence-companion.desktop's CopyMcpToken action runs this argv.
+        assert companion.main(["--action", "copy-mcp-token"]) == 0
+        assert seen == ["copied", "copied"]
+
+    def test_the_linux_desktop_entry_offers_it(self):
+        from pathlib import Path
+
+        desktop = (
+            Path(__file__).resolve().parents[2] / "resources" / "linux" / "privacyfence-companion.desktop"
+        ).read_text(encoding="utf-8")
+        assert "CopyMcpToken;" in desktop
+        assert "Exec=/usr/bin/privacyfence-companion --action=copy-mcp-token" in desktop
+
+
 class TestFirstEnrollmentOffer:
     """The other half of defaulting step-up on for packaged
     installs. A fresh install requires a passkey it does not have, which is
@@ -741,7 +797,8 @@ class TestMenuModel:
         assert actions == [
             companion.ACTION_OPEN_APPROVALS, companion.ACTION_OPEN_SETTINGS,
             companion.ACTION_SERVICE_START, companion.ACTION_SERVICE_RESTART, companion.ACTION_SERVICE_STOP,
-            companion.ACTION_SERVICE_STATUS, companion.ACTION_RECOVERY_CODE, companion.ACTION_QUIT,
+            companion.ACTION_SERVICE_STATUS, companion.ACTION_COPY_MCP_TOKEN, companion.ACTION_RECOVERY_CODE,
+            companion.ACTION_QUIT,
         ]
 
 
@@ -1041,7 +1098,7 @@ class TestTrayLoop:
             "● PrivacyFence is running (v4.2.0)",
             "Open Approvals", "Open Settings",
             "Start PrivacyFence…", "Restart PrivacyFence…", "Stop PrivacyFence…",
-            "Service Details…", "New Recovery Code…", "Quit Companion",
+            "Service Details…", "Copy AI Client Token", "New Recovery Code…", "Quit Companion",
         ]
         assert rows[0]["enabled"] is False
         # Running: Start is hidden, Restart/Stop are offered.

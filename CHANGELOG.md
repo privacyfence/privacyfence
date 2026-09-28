@@ -55,6 +55,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deployment, what it asks you before PrivacyFence's own approval card, how files reach it, and how
   it is named on the card. Each page's **Set it up** button opens the client's setup doc, and the
   "Works with" list on the homepage, Enterprise and FAQ links each client to its page.
+- **Copy your AI client token without a terminal.** The companion's menu has **Copy AI Client
+  Token** (on Linux, the **Copy AI client token** action of the PrivacyFence Applications-menu
+  entry), which puts the token Claude Code and other directly connected MCP clients need on your
+  clipboard. Settings has a new **AI clients** section with the `/mcp` URL, the header format, the
+  `claude mcp add` command, a **Copy token** button that asks the companion to copy it (the token
+  never passes through the web page), and **Rotate token**, which asks for your passkey when
+  passkeys are required ([#795](https://github.com/privacyfence/privacyfence/issues/795),
+  [ADR 0103](docs/adr/0103-the-companion-copies-the-ai-client-token.md)).
 
 ### Fixed
 

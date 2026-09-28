@@ -58,7 +58,7 @@ Linux has no tray icon. The **PrivacyFence** entry in your Applications menu is 
 
 - Clicking it opens Approvals; you are asked to confirm first
   ([ADR 0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md)).
-- Right-clicking it (or your desktop's equivalent) offers **Settings**,
+- Right-clicking it (or your desktop's equivalent) offers **Settings**, **Copy AI client token**,
   **New PrivacyFence recovery code**, **PrivacyFence service status**, **Start PrivacyFence**,
   **Restart PrivacyFence**, **Stop PrivacyFence** and **Quit PrivacyFence**.
 

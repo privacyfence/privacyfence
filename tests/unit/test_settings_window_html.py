@@ -500,6 +500,45 @@ class TestStepUpCard:
         assert guard < fn.index("'PII Detection Gate'")
 
 
+class TestAiClientSection:
+    """The "Connect an AI client" section (ADR 0103): drawn in local mode
+    when the caller has an /mcp URL to show, never in org mode, and never
+    carrying a token -- the page only ever asks the companion to copy one."""
+
+    AI_CLIENT = {"mcp_url": "http://127.0.0.1:8765/mcp"}
+
+    def _caps(self, html: str) -> dict:
+        match = re.search(r"window\.__pfCapabilities = (\{.*?\});</script>", html, re.DOTALL)
+        assert match
+        return json.loads(match.group(1))
+
+    def test_local_mode_with_an_mcp_url_shows_the_section(self):
+        html = build_html(_make_state(), ai_client=self.AI_CLIENT)
+        assert self._caps(html)["sections"]["ai_client"] is True
+        assert 'window.__pfAiClient = {"mcp_url": "http://127.0.0.1:8765/mcp"};' in html
+
+    def test_org_mode_never_shows_it(self):
+        for is_admin in (True, False):
+            html = build_html(_make_state(), mode="org", is_admin=is_admin, ai_client=self.AI_CLIENT)
+            assert self._caps(html)["sections"]["ai_client"] is False
+            assert "window.__pfAiClient = " not in html
+
+    def test_state_is_unaffected(self):
+        state = _make_state()
+        assert _extract_initial_state(build_html(state, ai_client=self.AI_CLIENT)) == state
+
+    def test_the_template_carries_the_header_format_steps_and_both_actions(self):
+        html = build_html(_make_state(), ai_client=self.AI_CLIENT)
+        assert "['ai_client', 'AI clients']" in html
+        assert "Connect an AI client" in html
+        assert "Authorization: Bearer &lt;token&gt;" in html
+        assert "claude mcp add --transport http --scope user privacyfence" in html
+        assert "dataAttr('copy_mcp_token', {})" in html
+        assert "dataAttr('rotate_mcp_token', {})" in html
+        assert "connect-claude-code/" in html
+        assert "Copy AI Client Token" in html
+
+
 class TestOrgCapabilities:
     """window.__pfCapabilities is a separate embedded global from
     window.__pfInitialState -- state itself must stay exactly what the
@@ -516,10 +555,12 @@ class TestOrgCapabilities:
         caps = self._extract_capabilities(build_html(_make_state()))
         assert caps["mode"] == "local"
         assert caps["is_admin"] is False
-        # AI systems is org-only (no DCR registrations to pin locally);
+        # AI systems is org-only (no DCR registrations to pin locally), and
+        # Connect an AI client needs an /mcp URL the caller did not pass;
         # every other section stays.
         assert caps["sections"]["agents"] is False
-        assert all(v for k, v in caps["sections"].items() if k != "agents")
+        assert caps["sections"]["ai_client"] is False
+        assert all(v for k, v in caps["sections"].items() if k not in ("agents", "ai_client"))
         assert caps["not_applicable_actions"] == []
 
     def test_local_state_is_unaffected_by_capabilities(self):
