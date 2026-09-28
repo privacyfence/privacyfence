@@ -43,6 +43,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`gmail_get_message` can return the HTML version of a message.** Pass `include_html: true` to
+  get `body_html` alongside `body_text`. The approval card says the HTML is included, and your
+  body privacy setting applies to it too
+  ([#783](https://github.com/privacyfence/privacyfence/issues/783)).
+
+### Fixed
+
+- **Signature images show up in drafts.** A Gmail signature that embeds its images (a logo, social
+  icons) instead of linking to them lost every image when a draft was created with
+  `include_signature`. PrivacyFence now attaches them the way Gmail's own compose window does,
+  copying them from your most recent sent mail. If one can't be found there, its description is used instead, and the
+  approval card says so ([#783](https://github.com/privacyfence/privacyfence/issues/783)).
+- Images in an HTML-only email or signature now appear in its plain-text version as
+  `[image: description]`, the way Gmail shows them, instead of disappearing.
+
 ## [5.0.0] — 2026-09-28
 
 PrivacyFence now tells AI clients the truth about every tool: reads are read-only, writes are writes.

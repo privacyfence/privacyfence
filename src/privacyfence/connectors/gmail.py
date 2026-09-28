@@ -18,7 +18,10 @@ from ..gate import current_reason, gated_call
 from ..gmail_client import (
     GmailClient,
     GmailClientError,
+    InlineImage,
+    drop_unresolved_cid_images,
     resolve_attachment_destination,
+    signature_cid_refs,
     signature_has_content,
     signature_plain_text,
 )
@@ -179,22 +182,48 @@ class _DraftSender:
     from_header: str = ""
     alias_email: str = ""
     signature_requested: bool = False
+    # The parts the signature's cid: images point to, and how many of those
+    # images weren't found (and so were replaced by their alt text).
+    signature_images: tuple[InlineImage, ...] = ()
+    missing_images: int = 0
 
-    def client_kwargs(self) -> dict[str, str]:
-        kwargs = {"signature_html": self.signature_html, "from_header": self.from_header}
+    def client_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "signature_html": self.signature_html, "from_header": self.from_header,
+            "signature_images": self.signature_images,
+        }
         return {k: v for k, v in kwargs.items() if v}
+
+    def _image_note(self) -> str:
+        found = len(self.signature_images)
+        total = found + self.missing_images
+        if not total:
+            return ""
+        if not self.missing_images:
+            return f"; {total} image(s) copied from your sent mail"
+        return (
+            f"; {self.missing_images} of {total} image(s) not found in your recent sent mail, "
+            "shown as their alt text"
+        )
 
     def preview(self, preview: dict[str, str]) -> dict[str, str]:
         """``preview`` with From/Signature rows added -- metadata only, the
         signature's text itself is in details_text with the body."""
         out = {"From": self.alias_email, **preview} if self.from_header else dict(preview)
         if self.signature_requested:
-            if not self.signature_html:
+            if not self.signature_html and self.missing_images:
+                out["Signature"] = (
+                    f"Not appended ({self.alias_email}; its {self.missing_images} image(s) "
+                    "weren't found in your recent sent mail)"
+                )
+            elif not self.signature_html:
                 out["Signature"] = f"None set for {self.alias_email} -- nothing appended"
             elif signature_plain_text(self.signature_html):
-                out["Signature"] = f"Appended ({self.alias_email})"
+                out["Signature"] = f"Appended ({self.alias_email}{self._image_note()})"
             else:
-                out["Signature"] = f"Appended ({self.alias_email}; image only, rich-text drafts only)"
+                out["Signature"] = (
+                    f"Appended ({self.alias_email}; image only, rich-text drafts only{self._image_note()})"
+                )
         return out
 
     def details_text(self, body: str, body_markdown: str) -> str:
@@ -260,7 +289,20 @@ class GmailConnector(Connector):
                     "Fetch a single Gmail message by id, including body, metadata, "
                     "and attachment list. Requires user approval."
                 ),
-                params=[ToolParam("message_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("message_id", "str"),
+                    ToolParam(
+                        "include_html", "bool", required=False, default=False,
+                        description=(
+                            "Also return the message's HTML part as body_html "
+                            "(empty for a plain-text-only message). Only when you "
+                            "need the markup itself, e.g. to check how a draft's "
+                            "formatting or signature was saved -- body_text is "
+                            "enough to read a message."
+                        ),
+                    ),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
@@ -651,7 +693,7 @@ class GmailConnector(Connector):
     # Review gate (reads)
     # ------------------------------------------------------------------ #
 
-    async def _get_message(self, message_id: str) -> Any:
+    async def _get_message(self, message_id: str, include_html: bool = False) -> Any:
         message = await self._fetch(self._gmail.get_message, message_id)
         recipients_raw = message.recipients if isinstance(message.recipients, str) else ", ".join(message.recipients or [])
         sender = apply_text("privacy", "metadata", message.sender or "")
@@ -685,6 +727,17 @@ class GmailConnector(Connector):
             "attachments": attachments,
             "labels": message.labels,
         }
+        pii_scan_text = body
+        if include_html:
+            # The same "body" category as body_text: it is the same content.
+            # The reviewer is told the markup goes too, and the PII scan
+            # reads it, since HTML can carry text body_text doesn't show
+            # (alt text, link targets, hidden elements).
+            body_html = apply_text("privacy", "body", message.body_html or "")
+            filtered["body_html"] = body_html
+            new_info["HTML body"] = "Included" if body_html else "None (plain-text message)"
+            if body_html:
+                pii_scan_text = f"{body}\n\n{body_html}"
         return await gated_call(
             connector=self.name,
             tool="gmail_get_message",
@@ -697,7 +750,7 @@ class GmailConnector(Connector):
             preview=preview,
             new_info=new_info,
             details_text=body or "(no body)",
-            pii_scan_text=body,
+            pii_scan_text=pii_scan_text,
             # No "Sender & metadata" row here: From/Date/Subject are already
             # in the preview (known via gmail_list_messages) and To is already
             # a concrete recipient list in new_info above -- an abstract
@@ -1034,22 +1087,44 @@ class GmailConnector(Connector):
     # Popup gate (writes)
     # ------------------------------------------------------------------ #
 
-    async def _resolve_draft_sender(self, include_signature: bool | None, send_as: str) -> _DraftSender:
+    async def _resolve_draft_sender(
+        self, include_signature: bool | None, send_as: str, body_markdown: str = "",
+    ) -> _DraftSender:
         """Resolve the signature/From: a draft gets, before gating -- so the
         reviewer approves the exact signature that is saved, and an unknown
         ``send_as`` is rejected without ever raising a popup. Costs no API
-        call when neither is wanted."""
+        call when neither is wanted.
+
+        A rich-text draft (``body_markdown``) whose signature embeds
+        ``cid:`` images also gets those images' parts, copied from the
+        user's sent mail (``GmailClient.find_signature_images``); any not
+        found are replaced by their alt text, so the saved HTML never points
+        at a part the draft doesn't carry. A plain-text draft carries no
+        HTML, so it never looks."""
         signature_requested = self.append_signature if include_signature is None else bool(include_signature)
         send_as = (send_as or "").strip()
         if not signature_requested and not send_as:
             return _DraftSender()
         alias = await self._fetch(self._gmail.resolve_send_as, send_as)
         has_signature = signature_requested and signature_has_content(alias.signature_html)
+        signature_html = alias.signature_html if has_signature else ""
+        images: tuple[InlineImage, ...] = ()
+        missing = 0
+        cids = signature_cid_refs(signature_html) if body_markdown else []
+        if cids:
+            found = await self._fetch(self._gmail.find_signature_images, cids)
+            images = tuple(found[cid] for cid in cids if cid in found)
+            missing = len(cids) - len(images)
+            signature_html = drop_unresolved_cid_images(signature_html, set(found))
+            if not signature_has_content(signature_html):
+                signature_html = ""
         return _DraftSender(
-            signature_html=alias.signature_html if has_signature else "",
+            signature_html=signature_html,
             from_header=alias.from_header() if send_as else "",
             alias_email=alias.email,
             signature_requested=signature_requested,
+            signature_images=images,
+            missing_images=missing,
         )
 
     async def _create_draft(
@@ -1057,7 +1132,7 @@ class GmailConnector(Connector):
         include_signature: bool | None = None, send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_create_draft")
-        sender = await self._resolve_draft_sender(include_signature, send_as)
+        sender = await self._resolve_draft_sender(include_signature, send_as, body_markdown)
         preview = {"To": to}
         if cc:
             preview["Cc"] = cc
@@ -1091,7 +1166,7 @@ class GmailConnector(Connector):
         include_signature: bool | None = None, send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_draft")
-        sender = await self._resolve_draft_sender(include_signature, send_as)
+        sender = await self._resolve_draft_sender(include_signature, send_as, body_markdown)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=False)
         await gated_call(
             connector=self.name,
@@ -1121,7 +1196,7 @@ class GmailConnector(Connector):
         include_signature: bool | None = None, send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_all_draft")
-        sender = await self._resolve_draft_sender(include_signature, send_as)
+        sender = await self._resolve_draft_sender(include_signature, send_as, body_markdown)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=True)
         await gated_call(
             connector=self.name,
@@ -1165,7 +1240,7 @@ class GmailConnector(Connector):
         # reference's own path shape.
         self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
-        sender = await self._resolve_draft_sender(include_signature, send_as)
+        sender = await self._resolve_draft_sender(include_signature, send_as, body_markdown)
         preview = {"To": to}
         if cc:
             preview["Cc"] = cc
@@ -1213,7 +1288,7 @@ class GmailConnector(Connector):
         paths = _parse_attachment_paths(attachments)
         self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
-        sender = await self._resolve_draft_sender(include_signature, send_as)
+        sender = await self._resolve_draft_sender(include_signature, send_as, body_markdown)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=False)
         preview["Attachments"] = self._format_attachment_preview(attachment_info)
         await gated_call(
@@ -1256,7 +1331,7 @@ class GmailConnector(Connector):
         paths = _parse_attachment_paths(attachments)
         self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
-        sender = await self._resolve_draft_sender(include_signature, send_as)
+        sender = await self._resolve_draft_sender(include_signature, send_as, body_markdown)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=True)
         preview["Attachments"] = self._format_attachment_preview(attachment_info)
         await gated_call(

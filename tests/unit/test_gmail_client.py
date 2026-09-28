@@ -38,8 +38,11 @@ from privacyfence.gmail_client import (
     GmailClient,
     GmailClientError,
     GmailMessage,
+    InlineImage,
     SendAsAlias,
+    drop_unresolved_cid_images,
     resolve_attachment_destination,
+    signature_cid_refs,
     signature_has_content,
     signature_plain_text,
 )
@@ -1378,7 +1381,7 @@ class TestDraftSignature:
         )
         _, parts = _draft_parts(service)
         assert parts["text/plain"] == "Hi"
-        assert parts["text/html"].endswith(f'<div class="gmail_signature">{logo}</div>')
+        assert parts["text/html"].endswith(f'<div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">{logo}</div>')
 
     def test_plain_body_gets_the_text_signature_and_stays_plain(self):
         service = _send_as_service([])
@@ -1396,7 +1399,7 @@ class TestDraftSignature:
 
         _, parts = _draft_parts(service)
         assert parts["text/plain"].endswith(signature_plain_text(_SIGNATURE_HTML))
-        assert parts["text/html"].endswith(f'<br><div class="gmail_signature">{_SIGNATURE_HTML}</div>')
+        assert parts["text/html"].endswith(f'<br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">{_SIGNATURE_HTML}</div>')
         assert parts["text/html"].startswith("<p><b>Hi</b></p>")
 
     def test_from_header_set_only_when_given(self):
@@ -1442,6 +1445,221 @@ class TestDraftSignature:
         assert parsed["from"] == "team@x.com"
         assert parts["text/plain"].endswith(signature_plain_text(_SIGNATURE_HTML))
         assert 'class="gmail_signature"' in parts["text/html"]
+
+
+# A redacted copy of the signature from issue #783: every image is a cid:
+# reference to a part Gmail's compose window attaches itself.
+_CID_SIGNATURE_HTML = (
+    '<table><tr><td><strong>Jane Doe</strong><br>Job Title</td></tr>'
+    '<tr><td><a href="https://www.example.com/"><img src="cid:companyLogo" width="126" height="25" '
+    'alt="ExampleCo" style="display:block;border:0px"></a></td>'
+    '<td><a href="https://www.linkedin.com/company/ExampleCo"><img src="cid:linkedinLogo" '
+    'width="20" height="20" alt="LinkedIn"></a></td></tr></table>'
+)
+_LOGO = InlineImage("companyLogo", "image/png", b"\x89PNG-logo", "companyLogoBlob")
+_LINKEDIN = InlineImage("linkedinLogo", "image/png", b"\x89PNG-in", "linkedinLogoBlob")
+
+
+def _image_part(content_id: str, data: bytes = b"img", *, mime: str = "image/png", attachment_id: str = "",
+                header: str = "Content-ID") -> dict:
+    body = {"size": len(data)}
+    if attachment_id:
+        body["attachmentId"] = attachment_id
+    else:
+        body["data"] = base64.urlsafe_b64encode(data).decode()
+    value = f"<{content_id}>" if header == "Content-ID" else content_id
+    return {"mimeType": mime, "filename": f"{content_id}Blob", "headers": header_list(**{header: value}), "body": body}
+
+
+def _sent_mail_service(messages: dict[str, dict]) -> MagicMock:
+    """A service whose in:sent listing returns ``messages`` (id -> payload), newest first."""
+    service = MagicMock()
+    api = service.users.return_value.messages.return_value
+    api.list.return_value.execute.return_value = {"messages": [{"id": mid} for mid in messages]}
+    api.get.side_effect = lambda userId, id, format: MagicMock(
+        execute=MagicMock(return_value={"id": id, "payload": messages[id]}),
+    )
+    return service
+
+
+class TestSignatureCidHelpers:
+    def test_cid_refs_are_ordered_and_deduplicated_and_skip_urls(self):
+        html = (
+            '<img src="cid:a"><img src=\'cid:b\'><img alt="x" src=cid:c>'
+            '<img src="https://example.com/d.png"><img src="cid:a">'
+        )
+        assert signature_cid_refs(html) == ["a", "b", "c"]
+        assert signature_cid_refs("") == []
+
+    def test_unresolved_images_become_their_escaped_alt_text(self):
+        html = '<a href="u"><img src="cid:a" alt="A &amp; &lt;B&gt;"></a><img src="cid:b"><img src="cid:c" alt=C>'
+        assert drop_unresolved_cid_images(html, {"a", "b", "c"}) == html
+        assert drop_unresolved_cid_images(html, set()) == '<a href="u">A &amp; &lt;B&gt;</a>C'
+
+    def test_url_images_are_left_alone(self):
+        html = '<img src="https://example.com/logo.png" alt="Logo">'
+        assert drop_unresolved_cid_images(html, set()) == html
+
+
+class TestSignatureInlineImages:
+    def test_rich_draft_carries_the_images_as_related_inline_parts(self):
+        service = _send_as_service([])
+        make_client(service).create_draft(
+            to="a@x.com", subject="s", body="", body_markdown="Hi",
+            signature_html=_CID_SIGNATURE_HTML, signature_images=(_LOGO, _LINKEDIN),
+        )
+        parsed, parts = _draft_parts(service)
+
+        assert parsed.get_content_type() == "multipart/related"
+        assert parsed["to"] == "a@x.com"
+        alternative, *images = parsed.get_payload()
+        assert alternative.get_content_type() == "multipart/alternative"
+        assert [(i["Content-ID"], i.get_content_disposition(), i.get_filename(), i.get_payload(decode=True))
+                for i in images] == [
+            ("<companyLogo>", "inline", "companyLogoBlob", b"\x89PNG-logo"),
+            ("<linkedinLogo>", "inline", "linkedinLogoBlob", b"\x89PNG-in"),
+        ]
+        assert 'src="cid:companyLogo"' in parts["text/html"]
+        assert "[image: ExampleCo] (https://www.example.com/)" in parts["text/plain"]
+
+    def test_images_the_signature_does_not_reference_are_not_attached(self):
+        service = _send_as_service([])
+        stray = InlineImage("other", "image/gif", b"GIF")
+        make_client(service).create_draft(
+            to="a@x.com", subject="s", body="", body_markdown="Hi",
+            signature_html=_CID_SIGNATURE_HTML, signature_images=(stray, _LOGO),
+        )
+        parsed, _ = _draft_parts(service)
+        assert [p["Content-ID"] for p in parsed.get_payload()[1:]] == ["<companyLogo>"]
+
+    def test_without_matching_images_the_draft_stays_alternative(self):
+        service = _send_as_service([])
+        make_client(service).create_draft(
+            to="a@x.com", subject="s", body="", body_markdown="Hi",
+            signature_html=_CID_SIGNATURE_HTML, signature_images=(InlineImage("other", "image/gif", b"GIF"),),
+        )
+        assert _draft_parts(service)[0].get_content_type() == "multipart/alternative"
+
+    def test_plain_draft_ignores_images(self):
+        service = _send_as_service([])
+        make_client(service).create_draft(
+            to="a@x.com", subject="s", body="Hello",
+            signature_html=_CID_SIGNATURE_HTML, signature_images=(_LOGO,),
+        )
+        parsed, _ = _draft_parts(service)
+        assert not parsed.is_multipart()
+
+    def test_draft_with_attachments_nests_related_inside_mixed(self, tmp_path):
+        attachment = tmp_path / "f.txt"
+        attachment.write_bytes(b"x")
+        service = _send_as_service([])
+        make_client(service).create_draft_with_attachments(
+            to="a@x.com", subject="s", body="", body_markdown="Hi", attachments=[str(attachment)],
+            signature_html=_CID_SIGNATURE_HTML, signature_images=(_LOGO,),
+        )
+        parsed, _ = _draft_parts(service)
+        assert [p.get_content_type() for p in parsed.get_payload()] == ["multipart/related", "text/plain"]
+
+    def test_reply_drafts_carry_the_images(self, tmp_path):
+        attachment = tmp_path / "f.txt"
+        attachment.write_bytes(b"x")
+        headers = {"Subject": "Original", "From": "sender@x.com"}
+        service = make_reply_service(headers)
+        make_client(service).create_reply_draft(
+            "m1", body="", body_markdown="Thanks", my_email="me@x.com",
+            signature_html=_CID_SIGNATURE_HTML, signature_images=(_LOGO,),
+        )
+        assert _draft_parts(service)[0].get_content_type() == "multipart/related"
+
+        service = make_reply_service(headers)
+        make_client(service).create_reply_draft_with_attachments(
+            "m1", body="", body_markdown="Thanks", attachments=[str(attachment)], my_email="me@x.com",
+            signature_html=_CID_SIGNATURE_HTML, signature_images=(_LOGO,),
+        )
+        assert _draft_parts(service)[0].get_payload()[0].get_content_type() == "multipart/related"
+
+
+class TestFindSignatureImages:
+    def test_copies_parts_from_recent_sent_mail_stopping_once_all_are_found(self):
+        service = _sent_mail_service({
+            "s1": {"mimeType": "multipart/related", "parts": [
+                {"mimeType": "multipart/alternative", "parts": [{"mimeType": "text/html", "body": {"data": b64("x")}}]},
+                _image_part("companyLogo", b"LOGO"),
+            ]},
+            "s2": {"mimeType": "multipart/related", "parts": [
+                _image_part("companyLogo", b"OLDER"),
+                _image_part("linkedinLogo", attachment_id="att-1"),
+            ]},
+            "s3": {"mimeType": "text/plain"},
+        })
+        api = service.users.return_value.messages.return_value
+        api.attachments.return_value.get.return_value.execute.return_value = {
+            "data": base64.urlsafe_b64encode(b"IN").decode(),
+        }
+
+        found = make_client(service).find_signature_images(["companyLogo", "linkedinLogo", "companyLogo"])
+
+        assert found == {
+            "companyLogo": InlineImage("companyLogo", "image/png", b"LOGO", "companyLogoBlob"),
+            "linkedinLogo": InlineImage("linkedinLogo", "image/png", b"IN", "linkedinLogoBlob"),
+        }
+        api.list.assert_called_once_with(userId="me", q="in:sent", maxResults=10)
+        assert [c.kwargs["id"] for c in api.get.call_args_list] == ["s1", "s2"]
+        api.attachments.return_value.get.assert_called_once_with(userId="me", messageId="s2", id="att-1")
+
+    def test_matches_x_attachment_id_when_there_is_no_content_id(self):
+        service = _sent_mail_service({"s1": _image_part("companyLogo", header="X-Attachment-Id")})
+        assert set(make_client(service).find_signature_images(["companyLogo"])) == {"companyLogo"}
+
+    @pytest.mark.parametrize("part", [
+        _image_part("companyLogo", mime="application/pdf"),
+        _image_part("companyLogo", b"x" * 1_000_001),
+        {**_image_part("companyLogo"), "body": {"size": 5_000_000, "attachmentId": "big"}},
+        {**_image_part("companyLogo"), "body": {"size": 3}},
+        _image_part("somethingElse"),
+    ], ids=["not-an-image", "too-big", "declared-too-big", "no-data", "other-cid"])
+    def test_skips_parts_that_are_not_a_usable_match(self, part):
+        service = _sent_mail_service({"s1": part})
+        assert make_client(service).find_signature_images(["companyLogo"]) == {}
+        service.users.return_value.messages.return_value.attachments.return_value.get.assert_not_called()
+
+    def test_nothing_wanted_costs_no_api_call(self):
+        service = MagicMock()
+        assert make_client(service).find_signature_images(["", ""]) == {}
+        service.users.assert_not_called()
+
+    def test_api_errors_are_logged_not_raised_keeping_what_was_found(self, caplog):
+        service = _sent_mail_service({"s1": _image_part("companyLogo"), "s2": {}})
+        api = service.users.return_value.messages.return_value
+        first = api.get.side_effect
+        api.get.side_effect = lambda userId, id, format: (
+            first(userId, id, format) if id == "s1" else MagicMock(execute=MagicMock(side_effect=http_error(500)))
+        )
+
+        found = make_client(service).find_signature_images(["companyLogo", "linkedinLogo"])
+
+        assert set(found) == {"companyLogo"}
+        assert "searching sent mail failed" in caplog.text
+
+    def test_empty_sent_folder_finds_nothing(self):
+        service = MagicMock()
+        service.users.return_value.messages.return_value.list.return_value.execute.return_value = {}
+        assert make_client(service).find_signature_images(["companyLogo"]) == {}
+
+    def test_cached_within_ttl_refetched_after(self, monkeypatch):
+        service = _sent_mail_service({"s1": _image_part("companyLogo")})
+        client = make_client(service)
+        now = [1000.0]
+        monkeypatch.setattr("privacyfence.gmail_client.time.monotonic", lambda: now[0])
+        list_call = service.users.return_value.messages.return_value.list
+
+        first = client.find_signature_images(["companyLogo"])
+        assert client.find_signature_images(["companyLogo"]) == first
+        assert list_call.call_count == 1
+
+        now[0] += 301
+        client.find_signature_images(["companyLogo"])
+        assert list_call.call_count == 2
 
 
 class TestAddLabel:

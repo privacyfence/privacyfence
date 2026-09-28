@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import base64
 import email.policy
+import html as html_lib
 import logging
 import mimetypes
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -186,6 +188,20 @@ _SIGNATURE_TEXT_SEPARATOR = "\n\n-- \n"
 # within minutes without restarting anything.
 _SEND_AS_CACHE_TTL_SECONDS = 300.0
 
+# How many of the user's most recent sent messages find_signature_images()
+# reads looking for a signature's cid: image parts, and the largest single
+# image it will copy out of one. A signature logo is a few KB; anything this
+# big is not one.
+_SIGNATURE_IMAGE_SEARCH_MESSAGES = 10
+_SIGNATURE_IMAGE_MAX_BYTES = 1_000_000
+
+# <img ... src="cid:..." ...> -- a signature image that lives in a MIME part
+# of the message rather than at a URL. Gmail's sendAs API returns such a
+# signature's HTML but not the parts it points to.
+_CID_IMG_TAG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_CID_SRC_ATTR = re.compile(r"""\bsrc\s*=\s*(["']?)cid:([^"'\s>]+)\1""", re.IGNORECASE)
+_ALT_ATTR = re.compile(r"""\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
+
 
 def signature_plain_text(signature_html: str) -> str:
     """The plain-text rendering of a Gmail signature, including its leading
@@ -205,14 +221,72 @@ def signature_has_content(signature_html: str) -> bool:
     return bool(html_to_text(html)) or "<img" in html.lower()
 
 
+def signature_cid_refs(signature_html: str) -> list[str]:
+    """The Content-IDs a signature's ``<img src="cid:...">`` tags point to,
+    in order of first appearance and without duplicates."""
+    refs: list[str] = []
+    for tag in _CID_IMG_TAG.findall(signature_html or ""):
+        match = _CID_SRC_ATTR.search(tag)
+        if match and match.group(2) not in refs:
+            refs.append(match.group(2))
+    return refs
+
+
+def drop_unresolved_cid_images(signature_html: str, resolved: set[str] | frozenset[str]) -> str:
+    """``signature_html`` with every ``cid:`` image not in ``resolved``
+    replaced by its alt text (nothing, when it has none). A draft that
+    references a MIME part it doesn't carry shows a broken-image box in
+    Gmail and most clients; the alt text keeps what the image said."""
+
+    def replace(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        src = _CID_SRC_ATTR.search(tag)
+        if not src or src.group(2) in resolved:
+            return tag
+        alt = _ALT_ATTR.search(tag)
+        text = next((g for g in alt.groups() if g is not None), "") if alt else ""
+        return html_lib.escape(html_lib.unescape(text), quote=False)
+
+    return _CID_IMG_TAG.sub(replace, signature_html or "")
+
+
+@dataclass(frozen=True)
+class InlineImage:
+    """An image part a draft's HTML refers to as ``cid:<content_id>``."""
+
+    content_id: str
+    mime_type: str
+    data: bytes
+    filename: str = ""
+
+
 def _signature_html_block(signature_html: str) -> str:
     # Gmail's own compose window wraps the signature this way; keeping the
-    # class means Gmail (and clients that know it) treat it as a signature,
-    # e.g. hiding it in collapsed replies.
-    return f'<br><div class="gmail_signature">{signature_html}</div>'
+    # class and data-smartmail means Gmail (and clients that know them)
+    # treat it as a signature, e.g. hiding it in collapsed replies.
+    return (
+        '<br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">'
+        f"{signature_html}</div>"
+    )
 
 
-def _build_body_part(body: str, body_markdown: str = "", *, policy=None, signature_html: str = ""):
+def _inline_image_part(image: InlineImage):
+    import email.encoders
+    import email.mime.base
+
+    maintype, _, subtype = image.mime_type.partition("/")
+    part = email.mime.base.MIMEBase(maintype, subtype or "octet-stream")
+    part.set_payload(image.data)
+    email.encoders.encode_base64(part)
+    part.add_header("Content-ID", f"<{image.content_id}>")
+    part.add_header("Content-Disposition", "inline", filename=image.filename or image.content_id)
+    return part
+
+
+def _build_body_part(
+    body: str, body_markdown: str = "", *, policy=None, signature_html: str = "",
+    signature_images: tuple[InlineImage, ...] = (),
+):
     """Build the body part(s) of a draft: a plain ``MIMEText`` when no
     ``body_markdown`` is given (today's behavior, unchanged), or a
     ``multipart/alternative`` (text/plain + text/html) when it is.
@@ -231,6 +305,12 @@ def _build_body_part(body: str, body_markdown: str = "", *, policy=None, signatu
     a switch to ``multipart/alternative`` just to carry the signature's
     markup, so an image-only signature adds nothing to it. A signature with
     no content at all (``signature_has_content``) adds nothing anywhere.
+
+    ``signature_images`` are the parts the signature's ``cid:`` images point
+    to (see ``GmailClient.find_signature_images``). When the HTML part
+    carries them, the alternative is wrapped in a ``multipart/related`` with
+    one inline part per image -- the same shape Gmail's own compose window
+    saves -- so the images display instead of as broken references.
 
     Callers that build a bare top-level message (no attachments) pass
     ``policy`` here so it lands on the object that will carry the address
@@ -252,12 +332,21 @@ def _build_body_part(body: str, body_markdown: str = "", *, policy=None, signatu
 
     plain_text = body if body else markdown_to_plain(body_markdown)
     html = markdown_to_html(body_markdown)
+    images: tuple[InlineImage, ...] = ()
     if signature_has_content(signature_html):
         html += _signature_html_block(signature_html)
-    alt = email.mime.multipart.MIMEMultipart("alternative", policy=policy)
+        referenced = set(signature_cid_refs(signature_html))
+        images = tuple(image for image in signature_images if image.content_id in referenced)
+    alt = email.mime.multipart.MIMEMultipart("alternative", policy=None if images else policy)
     alt.attach(email.mime.text.MIMEText(plain_text + signature_text, "plain"))
     alt.attach(email.mime.text.MIMEText(html, "html"))
-    return alt
+    if not images:
+        return alt
+    related = email.mime.multipart.MIMEMultipart("related", policy=policy)
+    related.attach(alt)
+    for image in images:
+        related.attach(_inline_image_part(image))
+    return related
 
 
 @dataclass
@@ -340,6 +429,7 @@ class GmailClient:
         self._creds_lock = threading.Lock()
         self._send_as_lock = threading.Lock()
         self._send_as_cache: tuple[float, list[SendAsAlias]] | None = None
+        self._signature_image_cache: dict[frozenset[str], tuple[float, dict[str, InlineImage]]] = {}
 
     # ------------------------------------------------------------------ #
     # Authentication
@@ -651,16 +741,90 @@ class GmailClient:
                     return alias
         raise GmailClientError("list_send_as returned no send-as addresses for this account")
 
+    def find_signature_images(self, content_ids: list[str]) -> dict[str, InlineImage]:
+        """The image parts a signature's ``cid:`` references point to, copied
+        from the user's own recent sent mail.
+
+        Gmail's sendAs API returns a signature's HTML but not the images it
+        embeds as ``cid:`` parts; Gmail's compose window attaches those
+        itself, so every message the user sent from Gmail with that
+        signature carries them. This reads the ``_SIGNATURE_IMAGE_SEARCH_MESSAGES``
+        most recent sent messages, newest first, and keeps the first image
+        part found for each wanted Content-ID. Only image parts whose
+        Content-ID is one of ``content_ids`` are kept; nothing else read here
+        leaves this method. See docs/adr/0095-gmail-signature-cid-images-are-copied-from-sent-mail.md.
+
+        Best-effort: an API error or a Content-ID not found is logged and
+        left out of the result, never raised -- the caller falls back to the
+        image's alt text rather than failing the draft.
+        """
+        wanted = [cid for cid in dict.fromkeys(content_ids) if cid]
+        if not wanted:
+            return {}
+        key = frozenset(wanted)
+        with self._send_as_lock:
+            cached = self._signature_image_cache.get(key)
+            if cached is not None and time.monotonic() - cached[0] < _SEND_AS_CACHE_TTL_SECONDS:
+                return dict(cached[1])
+
+        found: dict[str, InlineImage] = {}
+        try:
+            messages = self._get_service().users().messages()
+            listing = messages.list(
+                userId="me", q="in:sent", maxResults=_SIGNATURE_IMAGE_SEARCH_MESSAGES,
+            ).execute()
+            for stub in listing.get("messages", []) or []:
+                if len(found) == len(wanted):
+                    break
+                raw = messages.get(userId="me", id=stub.get("id", ""), format="full").execute()
+                self._collect_cid_images(raw.get("payload", {}), raw.get("id", ""), key, found)
+        except (HttpError, GmailClientError, ValueError) as exc:
+            logger.warning("find_signature_images: searching sent mail failed: %s", exc)
+        missing = [cid for cid in wanted if cid not in found]
+        if missing:
+            logger.info(
+                "find_signature_images: %d of %d signature image(s) not found in recent sent mail",
+                len(missing), len(wanted),
+            )
+        with self._send_as_lock:
+            self._signature_image_cache[key] = (time.monotonic(), dict(found))
+        return found
+
+    def _collect_cid_images(
+        self, part: dict[str, Any], message_id: str, wanted: frozenset[str], found: dict[str, InlineImage],
+    ) -> None:
+        headers = {h.get("name", "").lower(): h.get("value", "") for h in part.get("headers", []) or []}
+        content_id = headers.get("content-id", "").strip().strip("<>") or headers.get("x-attachment-id", "")
+        mime_type = part.get("mimeType", "")
+        if content_id in wanted and content_id not in found and mime_type.startswith("image/"):
+            part_body = part.get("body", {}) or {}
+            if int(part_body.get("size", 0) or 0) <= _SIGNATURE_IMAGE_MAX_BYTES:
+                data = part_body.get("data")
+                if data:
+                    raw_bytes = base64.urlsafe_b64decode(data.encode("utf-8"))
+                elif part_body.get("attachmentId"):
+                    raw_bytes = self.fetch_attachment_bytes(message_id, part_body["attachmentId"])
+                else:
+                    raw_bytes = b""
+                if raw_bytes and len(raw_bytes) <= _SIGNATURE_IMAGE_MAX_BYTES:
+                    found[content_id] = InlineImage(
+                        content_id=content_id, mime_type=mime_type, data=raw_bytes,
+                        filename=part.get("filename", "") or "",
+                    )
+        for sub_part in part.get("parts", []) or []:
+            self._collect_cid_images(sub_part, message_id, wanted, found)
+
     # ------------------------------------------------------------------ #
     # Write operations
     # ------------------------------------------------------------------ #
     def create_draft(
         self, to: str, subject: str, body: str, cc: str = "", bcc: str = "", body_markdown: str = "",
-        *, signature_html: str = "", from_header: str = "",
+        *, signature_html: str = "", from_header: str = "", signature_images: tuple[InlineImage, ...] = (),
     ) -> dict:
         """Create a Gmail draft and return its id.
 
-        ``signature_html`` is appended to the body (see ``_build_body_part``);
+        ``signature_html`` is appended to the body, with ``signature_images``
+        as the parts its ``cid:`` images point to (see ``_build_body_part``);
         ``from_header``, when given, sets From: to that send-as alias --
         otherwise Gmail fills in the account's default. Both come from
         ``resolve_send_as``, resolved by the caller before approval so what
@@ -668,7 +832,10 @@ class GmailClient:
         """
         import base64
 
-        msg = _build_body_part(body, body_markdown, policy=_UNFOLDED_POLICY, signature_html=signature_html)
+        msg = _build_body_part(
+            body, body_markdown, policy=_UNFOLDED_POLICY,
+            signature_html=signature_html, signature_images=signature_images,
+        )
         if from_header:
             msg["from"] = from_header
         msg["to"] = self._encode_addresses(to)
@@ -706,6 +873,7 @@ class GmailClient:
         *,
         signature_html: str = "",
         from_header: str = "",
+        signature_images: tuple[InlineImage, ...] = (),
     ) -> dict:
         """Create a Gmail draft with one or more local-file attachments.
 
@@ -728,7 +896,9 @@ class GmailClient:
             msg["cc"] = self._encode_addresses(cc)
         if bcc:
             msg["bcc"] = self._encode_addresses(bcc)
-        msg.attach(_build_body_part(body, body_markdown, signature_html=signature_html))
+        msg.attach(_build_body_part(
+            body, body_markdown, signature_html=signature_html, signature_images=signature_images,
+        ))
         _attach_files(msg, attachments, download_mode=download_mode)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
@@ -761,6 +931,7 @@ class GmailClient:
         *,
         signature_html: str = "",
         from_header: str = "",
+        signature_images: tuple[InlineImage, ...] = (),
     ) -> dict:
         """Create a draft that replies to an existing message in-thread.
 
@@ -775,7 +946,10 @@ class GmailClient:
 
         # The signature goes at the end: Gmail's UI puts it above the quoted
         # original, but these drafts don't quote it.
-        msg = _build_body_part(body, body_markdown, policy=_UNFOLDED_POLICY, signature_html=signature_html)
+        msg = _build_body_part(
+            body, body_markdown, policy=_UNFOLDED_POLICY,
+            signature_html=signature_html, signature_images=signature_images,
+        )
         if from_header:
             msg["from"] = from_header
         msg["to"] = self._encode_address(target["to_addr"])
@@ -830,6 +1004,7 @@ class GmailClient:
         *,
         signature_html: str = "",
         from_header: str = "",
+        signature_images: tuple[InlineImage, ...] = (),
     ) -> dict:
         """Create a reply draft with one or more local-file attachments.
 
@@ -858,7 +1033,9 @@ class GmailClient:
         if target["original_message_id"]:
             msg["In-Reply-To"] = target["original_message_id"]
             msg["References"] = target["references"]
-        msg.attach(_build_body_part(body, body_markdown, signature_html=signature_html))
+        msg.attach(_build_body_part(
+            body, body_markdown, signature_html=signature_html, signature_images=signature_images,
+        ))
         _attach_files(msg, attachments, download_mode=download_mode)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
