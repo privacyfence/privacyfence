@@ -1579,7 +1579,8 @@ class TestAiClientTokenDelivery:
         monkeypatch.setattr(
             srv, "send_mcp_token", lambda token: sent.append((token, current_principal().id)) or (True, ""),
         )
-        assert srv.copy_local_mcp_token(_mint) == (True, "")
+        result = srv.copy_local_mcp_token(_mint)
+        assert result == (True, "")
         assert minted == [(False, LOCAL_PRINCIPAL.id)]
         assert sent == [(self.TOKEN, LOCAL_PRINCIPAL.id)]
 
@@ -1588,7 +1589,8 @@ class TestAiClientTokenDelivery:
 
         minted = []
         monkeypatch.setattr(srv, "send_mcp_token", lambda token: (True, ""))
-        assert srv.copy_local_mcp_token(lambda rotate: minted.append(rotate) or self.TOKEN, rotate=True) == (True, "")
+        result = srv.copy_local_mcp_token(lambda rotate: minted.append(rotate) or self.TOKEN, rotate=True)
+        assert result == (True, "")
         assert minted == [True]
 
     def test_a_rotation_nobody_received_says_it_still_happened(self, monkeypatch):
