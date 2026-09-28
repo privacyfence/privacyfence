@@ -411,6 +411,142 @@ class TestDrivePrivacyFilter:
         assert gated_call_spy[0]["visibility"]["Cell values"] == "block"
 
 
+
+class TestGetFileContentExtractsText:
+    """A PDF/DOCX/PPTX/XLSX comes back as its text rather than a pointer to
+    drive_download_file: in organization mode a download over about 75 KB
+    is only a link, which a client whose sandbox cannot reach the server
+    (claude.ai without the host on its domain allowlist) cannot open."""
+
+    DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    async def test_docx_comes_back_as_its_text(self, gated_call_spy):
+        connector, client = make_connector()
+        data = _make_docx_bytes("Find the angle ABC.")
+        client.get_file_content.return_value = DriveFileContent(
+            file=make_file(mime_type=self.DOCX_MIME, size=len(data)), content_bytes=data,
+        )
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["filtered_data"] == {"file_id": "f1", "content": "Find the angle ABC."}
+        # The reviewer sees exactly what the AI receives, and the PII scan runs on it.
+        assert kwargs["details_text"] == "Find the angle ABC."
+        assert kwargs["pii_scan_text"] == "Find the angle ABC."
+        client.get_file_content.assert_called_once_with("f1")
+
+    async def test_truncated_file_is_fetched_again_in_full(self, gated_call_spy, monkeypatch):
+        connector, client = make_connector()
+        drive_file = make_file(mime_type="application/pdf", size=500_000)
+        prefix = DriveFileContent(file=drive_file, content_bytes=b"%PDF-1.4 prefix", truncated=True)
+        full = DriveFileContent(file=drive_file, content_bytes=b"%PDF-1.4 the whole file")
+        client.get_file_content.side_effect = [prefix, full]
+        seen = []
+
+        def fake_extract(data, mime_type, max_chars):
+            seen.append(data)
+            return "1. feladat: Egy háromszög szögei"
+
+        monkeypatch.setattr(drive_module, "extract_text", fake_extract)
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        assert client.get_file_content.call_args_list[1].args == ("f1", 500_001)
+        assert seen == [b"%PDF-1.4 the whole file"]
+        kwargs = gated_call_spy[0]
+        assert kwargs["filtered_data"]["content"] == "1. feladat: Egy háromszög szögei"
+        # The approval card's PDF embed still comes from the capped fetch:
+        # the full re-fetch is for the text only and can be 20 MB.
+        assert kwargs["pdf_bytes"] == b""
+
+    async def test_file_over_the_full_fetch_cap_is_not_fetched_again(self, gated_call_spy, monkeypatch):
+        connector, client = make_connector()
+        size = drive_module._EXTRACT_FULL_FETCH_MAX_BYTES + 1
+        client.get_file_content.return_value = DriveFileContent(
+            file=make_file(mime_type="application/pdf", size=size), content_bytes=b"%PDF", truncated=True,
+        )
+        monkeypatch.setattr(drive_module, "extract_text", lambda *a: pytest.fail("must not parse a prefix"))
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        client.get_file_content.assert_called_once_with("f1")
+        content = gated_call_spy[0]["filtered_data"]["content"]
+        assert "no text could be extracted" in content
+        assert "drive_download_file" in content
+
+    async def test_refetch_that_is_still_truncated_is_not_parsed(self, gated_call_spy, monkeypatch):
+        # The file grew between the metadata and the second fetch: still
+        # a prefix, so still nothing pypdf can parse.
+        connector, client = make_connector()
+        drive_file = make_file(mime_type="application/pdf", size=500_000)
+        client.get_file_content.side_effect = [
+            DriveFileContent(file=drive_file, content_bytes=b"%PDF-1.4 prefix", truncated=True),
+            DriveFileContent(file=drive_file, content_bytes=b"%PDF-1.4 longer prefix", truncated=True),
+        ]
+        monkeypatch.setattr(drive_module, "extract_text", lambda *a: pytest.fail("must not parse a prefix"))
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        assert "no text could be extracted" in gated_call_spy[0]["filtered_data"]["content"]
+
+    async def test_scanned_pdf_says_there_is_no_text(self, gated_call_spy, monkeypatch):
+        connector, client = make_connector()
+        client.get_file_content.return_value = DriveFileContent(
+            file=make_file(mime_type="application/pdf", size=20), content_bytes=b"%PDF-1.4 image only",
+        )
+        monkeypatch.setattr(drive_module, "extract_text", lambda *a: "")
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        content = gated_call_spy[0]["filtered_data"]["content"]
+        assert "no text could be extracted" in content
+        assert "scanned PDF" in content
+
+    async def test_long_text_is_cut_to_fit_the_tool_result_as_json(self, gated_call_spy, monkeypatch):
+        # json.dumps escapes every non-ASCII character as \uXXXX, so the
+        # cap is on the encoded length, not on the character count.
+        connector, client = make_connector()
+        client.get_file_content.return_value = DriveFileContent(
+            file=make_file(mime_type="application/pdf", size=20), content_bytes=b"%PDF-1.4",
+        )
+        monkeypatch.setattr(
+            drive_module, "extract_text",
+            lambda data, mime_type, max_chars: "é" * max_chars,
+        )
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        filtered = gated_call_spy[0]["filtered_data"]
+        assert filtered["truncated"] is True
+        encoded = json.dumps(filtered["content"])
+        assert len(encoded) - 2 <= drive_module._EXTRACTED_TEXT_MAX_CHARS
+        assert len(filtered["content"]) == drive_module._EXTRACTED_TEXT_MAX_CHARS // 6
+
+    async def test_text_that_fits_is_not_marked_truncated(self, gated_call_spy):
+        connector, client = make_connector()
+        data = _make_docx_bytes("Short.")
+        client.get_file_content.return_value = DriveFileContent(
+            file=make_file(mime_type=self.DOCX_MIME, size=len(data)), content_bytes=data,
+        )
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        assert "truncated" not in gated_call_spy[0]["filtered_data"]
+
+
+class TestTruncateToJsonChars:
+    def test_ascii_under_the_limit_is_unchanged(self):
+        assert drive_module._truncate_to_json_chars("abc", 3) == ("abc", False)
+
+    def test_cut_never_splits_an_escape(self):
+        # "é" encodes as six characters; a budget of 8 fits "a" plus one.
+        assert drive_module._truncate_to_json_chars("aéé", 8) == ("aé", True)
+
+    def test_newlines_count_as_their_escape(self):
+        assert drive_module._truncate_to_json_chars("a\nb", 3) == ("a\n", True)
+
+
 class TestPdfViewEmbed:
     """drive_get_file_content passes pdf_bytes through to gate.py only
     when every one of: real PDF mime type, content wasn't truncated by
