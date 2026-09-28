@@ -96,7 +96,11 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
      `upload_id` to `drive_upload_file`. Approve the card; the file appears in Drive.
    - **Download:** ask it to download a Drive file larger than the inline limit (organization mode:
      `--downloads-inline-max-bytes`, a 100,000-byte tool result by default, so any file over about
-     75 KB). The tool result carries a one-time link, and the file reaches you through it.
+     75 KB). The tool result carries a one-time link, and the file reaches you through it. On
+     claude.ai, check that the host is on **Settings → Capabilities → Domain allowlist** first
+     ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)); without
+     it the fetch fails from claude.ai's sandbox, so the access log shows no
+     `/mcp-files/fetch/` request.
 
    For Claude Desktop with the extension, do the same upload and download through local paths
    instead: the extension reads and writes the file as you.

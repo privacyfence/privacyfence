@@ -541,6 +541,10 @@ the organization's sign-in page. After sign-in it holds its own tokens; there is
 paste. Access tokens last one hour and are refreshed silently; a refresh chain lasts 30 days, after
 which the person signs in again.
 
+claude.ai also needs this host on its **Settings → Capabilities → Domain allowlist** to move
+files larger than about 75 KB, in either direction; see
+[File delivery](#13-file-delivery).
+
 Each AI client has its own page with the exact steps, what it asks before PrivacyFence's card, and
 how it is identified: [claude.ai](connect-claude-ai.md), [Claude Desktop](connect-claude-desktop.md)
 (as a custom connector) and [Claude Code](connect-claude-code.md). Any other client that supports
@@ -729,8 +733,19 @@ Which link a staged file gets:
 
 | Setting | Link | Who can fetch it |
 |---|---|---|
-| Agent links on (default) | `https://<host>/mcp-files/fetch/<token>` | Whoever holds the link, once, before it expires. The token is the credential, so the AI client can fetch the file itself. |
+| Agent links on (default) | `https://<host>/mcp-files/fetch/<token>` | Whoever holds the link, once, before it expires. The token is the credential, so the AI client can fetch the file itself, if it can reach `<host>` (see below). |
 | `--no-agent-links` | `https://<host>/downloads/<token>` | Only the person the file belongs to, signed in, in a browser. |
+
+**The AI client has to be able to reach this host.** A client opens an agent link, and sends an
+upload, from wherever it runs its own code, which is not necessarily where it runs the MCP
+connection. claude.ai does both from its sandbox, which reaches only the domains on
+**Settings → Capabilities → Domain allowlist**. Put this deployment's host there, or every file
+over the inline limit, and every upload, fails from claude.ai after it has been approved. A
+failure there never reaches PrivacyFence; see
+[Connect claude.ai](connect-claude-ai.md#files) and
+[ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md). To read a
+document's text, `drive_get_file_content` needs no link at all: it returns a PDF, DOCX, PPTX or
+XLSX file as text.
 
 Opening a `/downloads/` link while signed out goes through sign-in and then back to the same
 link, so the link still works if it has not expired by then. Signing in as someone else does

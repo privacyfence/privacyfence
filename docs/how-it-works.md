@@ -198,7 +198,9 @@ client ([ADR 0007](adr/0007-local-file-bridge.md),
   ones become a short-lived, one-time link. By default "small" means the whole tool result fits
   100,000 bytes, a file of about 75 KB, because claude.ai and Claude Desktop truncate a tool result
   over about 150,000 characters
-  ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)). The
+  ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)). A link
+  only works for a client that can reach the server: claude.ai needs the host on its domain
+  allowlist ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)). The
   limits are organization bundle settings (`download_delivery.*`, see
   [Configuration reference](configuration-reference.md)).
 

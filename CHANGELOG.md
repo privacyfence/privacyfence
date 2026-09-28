@@ -59,6 +59,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   approval card says so ([#783](https://github.com/privacyfence/privacyfence/issues/783)).
 - Images in an HTML-only email or signature now appear in its plain-text version as
   `[image: description]`, the way Gmail shows them, instead of disappearing.
+- **`drive_get_file_content` reads PDFs and Office files.** A PDF, Word, PowerPoint or Excel file
+  now comes back as its text instead of a note saying to download it, so an AI system can read a
+  document without a download link. A scanned PDF has no text to return, and the result says so.
+- **claude.ai setup now covers file transfers.** In organization mode, claude.ai can move a file
+  larger than about 75 KB, or upload anything, only if the deployment's host is on claude.ai's
+  **Settings → Capabilities → Domain allowlist**. Without it, the file is approved and claude.ai
+  then cannot reach it. [Connect claude.ai](docs/connect-claude-ai.md) now includes this step.
 
 ## [5.0.0] — 2026-09-28
 
