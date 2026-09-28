@@ -49,6 +49,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   get `body_html` alongside `body_text`. The approval card says the HTML is included, and your
   body privacy setting applies to it too
   ([#783](https://github.com/privacyfence/privacyfence/issues/783)).
+- **An AI agents section on privacyfence.eu.** A new **AI agents** menu leads to
+  [privacyfence.eu/ai-agents/](https://privacyfence.eu/ai-agents/), with one page each for Claude
+  Desktop, Claude Code and claude.ai: how the client connects in local mode and in an organization
+  deployment, what it asks you before PrivacyFence's own approval card, how files reach it, and how
+  it is named on the card. Each page's **Set it up** button opens the client's setup doc, and the
+  "Works with" list on the homepage, Enterprise and FAQ links each client to its page.
 
 ### Fixed
 
