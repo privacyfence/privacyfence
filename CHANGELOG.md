@@ -47,7 +47,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **ChatGPT (Developer Mode, with an organization deployment).** ChatGPT on the web connects to an
   organization deployment's `/mcp` as a Developer Mode app, signing in with OAuth, and has been
-  checked end to end: reads, gated writes on PrivacyFence's approval card, and files through
+  checked end to end with a personal ChatGPT plan: reads, gated writes on PrivacyFence's approval card, and files through
   one-time links, which ChatGPT's code sandbox uses with no allowlist to set up.
   [Connect ChatGPT](docs/connect-chatgpt.md) has the steps, what ChatGPT asks before PrivacyFence's
   card, and how uploads and downloads work. ChatGPT is now recognised by the name it registers

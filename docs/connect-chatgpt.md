@@ -25,9 +25,13 @@ yet.
 
 Your administrator gives you the deployment's URL, for example `https://pf.example.com`.
 
-You need a ChatGPT plan with Developer Mode. OpenAI documents it for Business, Enterprise and Edu
-workspaces; on a workspace, an administrator may have to allow Developer Mode first. Whether Pro
-and Plus accounts can add an app that writes is *unverified*.
+You need a ChatGPT plan with Developer Mode. These steps were checked with a **personal ChatGPT
+plan**.
+
+**Business, Enterprise and Edu workspaces are not verified.** On a workspace, an administrator may
+have to allow Developer Mode first, and ChatGPT may behave differently from what this page
+describes. A connector the workspace administrator publishes for every member is not covered here;
+it is tracked in [issue 796](https://github.com/privacyfence/privacyfence/issues/796).
 
 1. Turn on Developer Mode: profile icon → **Settings** → **Security and login** →
    **Developer mode**. OpenAI moves this setting now and then; some of its pages still place it
@@ -91,9 +95,11 @@ Two things can ask you before a tool runs:
 
 1. **ChatGPT's own confirmation.** Whether ChatGPT asks is decided by ChatGPT's permission
    setting, not by PrivacyFence. ChatGPT sorts PrivacyFence's tools into **Read** and **Write** by
-   their annotations, with no separate group for the two that delete something. With the setting
-   **Allow low-risk tools**, ChatGPT did not ask before creating a calendar event. It asked once,
-   before an upload, and offered to always allow that tool; after that it did not ask again.
+   their annotations, with no separate group for the two that delete something. On a personal
+   plan, with the setting **Allow low-risk tools**, ChatGPT did not ask before creating a calendar
+   event. It asked once, before an upload, and offered to always allow that tool; after that it
+   did not ask again. OpenAI documents that a lasting **Always allow** is not offered to members of
+   a managed workspace, so a workspace member may be asked every time; that is not verified.
 2. **PrivacyFence's approval card.** A gated call waits for you at `/approvals`, whatever ChatGPT
    was told or allowed. This is the confirmation that always decides; see
    [Approvals and policy](approvals-and-policy.md).
@@ -103,10 +109,10 @@ and the two tools that delete something are destructive
 ([What the AI system is told](how-it-works.md#what-the-ai-system-is-told)). There is no switch that
 advertises writes as read-only ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)).
 
-**What to expect:** depending on ChatGPT's permission setting, a write is confirmed once, on
-PrivacyFence's card, or twice, once in ChatGPT and once on PrivacyFence's card. Allowing a tool in
-ChatGPT only stops ChatGPT's question: every call still goes through PrivacyFence's gate, and
-PrivacyFence's card is the one that decides.
+**What to expect:** depending on ChatGPT's permission setting and your plan, a write is confirmed
+once, on PrivacyFence's card, or twice, once in ChatGPT and once on PrivacyFence's card. Allowing a
+tool in ChatGPT only stops ChatGPT's question: every call still goes through PrivacyFence's gate,
+and PrivacyFence's card is the one that decides.
 
 ## How the client is identified
 
