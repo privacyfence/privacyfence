@@ -123,10 +123,10 @@ if the client can reach the deployment's host
 sandbox fetches a download link and sends an upload's `PUT` itself, over public HTTPS, so unlike
 claude.ai there is no domain list to add the host to.
 
-**Uploads need the next release after 5.0.0 when the approval waits.** In 5.0.0, an upload whose
+**Uploads need 5.1.0 or later when the approval waits.** In 5.0.0, an upload whose
 approval card was still waiting when ChatGPT asked fails after you approve it, with "the upload
 expired or was already used", and ChatGPT may then retry by sending the file inside the tool call
-instead. The release after 5.0.0 keeps the uploaded file until the approved upload runs
+instead. 5.1.0 keeps the uploaded file until the approved upload runs
 ([ADR 0102](adr/0102-an-upload-slot-is-consumed-after-the-gate-not-before.md)).
 
 **To read a document, no download is needed.** `drive_get_file_content` returns a PDF, Word,
@@ -187,7 +187,7 @@ registration are then verified. See
 | PrivacyFence's tools are missing from a chat | Turn the app on for that chat: **+** → **Developer mode** → **PrivacyFence**. |
 | Tools are listed but none of your services' tools | No service is connected yet. Ask ChatGPT to call `privacyfence_status`, then connect services at `/connect`. See [Connecting a service](connecting-a-service.md). |
 | A call waits and nothing happens | It is waiting for your approval at `/approvals`. |
-| An upload fails after you approve it, with "the upload expired or was already used" | The deployment runs 5.0.0, and the approval waited. Ask your administrator to upgrade to the next release after 5.0.0. |
+| An upload fails after you approve it, with "the upload expired or was already used" | The deployment runs 5.0.0, and the approval waited. Ask your administrator to upgrade to 5.1.0 or later. |
 | Every card says **Not verified** | Expected until an administrator pins your registration. |
 | ChatGPT desktop cannot connect to PrivacyFence | Check that PrivacyFence is running, that the URL matches **Settings → AI clients**, and that the header value is `Bearer ` followed by the token. After **Rotate token**, paste the new token. |
 | **Copy token** says the companion is not running | Start PrivacyFence's companion app, or run `--print-mcp-token` in a terminal (see [Connect Claude Code](connect-claude-code.md#local-mode)). |
