@@ -17,8 +17,9 @@ organization-mode run in `ai-client-qa.md`
   `REDIRECT_PATH` and `getRedirectUri()`.
 - [`packages/core/src/tools/mcp-client.ts`](https://github.com/google-gemini/gemini-cli/blob/bb523741c7429a44d03e964bc124c7c92df59d5f/packages/core/src/tools/mcp-client.ts):
   `connectToMcpServer()` names the MCP client and registers its capabilities.
-- [`docs/tools/mcp-server.md`](https://github.com/google-gemini/gemini-cli/blob/bb523741c7429a44d03e964bc124c7c92df59d5f/docs/tools/mcp-server.md),
-  "OAuth support for remote MCP servers": the redirect goes to
+- Gemini CLI's MCP server guide, `mcp-server.md` in its
+  [`docs/tools`](https://github.com/google-gemini/gemini-cli/tree/bb523741c7429a44d03e964bc124c7c92df59d5f/docs/tools)
+  directory, "OAuth support for remote MCP servers": the redirect goes to
   `http://localhost:<random-port>/oauth/callback`.
 
 ## What each file holds
