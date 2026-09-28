@@ -144,8 +144,15 @@ waiting 30 seconds (`web.approvals.adaptive_hold`). When more than one is pendin
 points at a page where you can decide them together.
 
 After you approve, the AI system repeats the original call with the same arguments and gets the
-result. A pending approval nobody decides expires after 15 minutes
-(`web.approvals.pending_ttl_seconds`). The limits are in the
+result. While the approval is pending, the call does nothing: no data is returned, no file is
+handed out and no change is made. A pending approval nobody decides expires after 15 minutes
+(`web.approvals.pending_ttl_seconds`).
+
+In the audit log, the `approval_pending` row, the row for your decision and, for a download, the
+row for the file being fetched share one `request_id`. A decision the AI system never came back for
+is logged as `expired` with what you decided and when (`expired_decision`, `decided_at`), so it
+reads differently from a card nobody answered
+([ADR 0092](adr/0092-a-pending-approval-releases-nothing.md)). The limits are in the
 [Configuration reference](configuration-reference.md); cards, the PII check, passkey step-up and
 rules are in [Approvals and policy](approvals-and-policy.md).
 
