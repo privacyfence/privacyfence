@@ -32,7 +32,7 @@ from starlette.responses import JSONResponse
 from .. import webauthn_stepup
 from ..approvals import CONFIRM_RESULTS, PendingApproval, PendingApprovalRegistry
 from ..principal import Principal
-from ..step_up_config import StepUpConfig
+from ..step_up_config import StepUpConfig, effective_scope
 from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
 from . import step_up_decide
 
@@ -105,7 +105,8 @@ def guard_decision(
       modules' own module docstrings);
     - an **ordinary approving decision** (``result`` in ``step_up_results``)
       that ``webauthn_stepup.is_step_up_required`` says this install's/org's
-      ``scope`` covers.
+      ``scope`` covers -- widened, never narrowed, by the principal's own
+      Settings choice (``step_up_config.effective_scope``, ADR 0091).
 
     Returns ``None`` when neither trigger applies, when step-up is off
     entirely (``step_up is None`` or ``step_up.enabled`` is ``False``), when
@@ -129,7 +130,8 @@ def guard_decision(
             return response
 
     if result in step_up_results and webauthn_stepup.is_step_up_required(
-        gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=step_up.scope,
+        gate_kind=approval.gate_kind, pii_detected=approval.pii_detected,
+        scope=effective_scope(step_up, principal),
     ):
         fingerprint = webauthn_stepup.decision_fingerprint(
             approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
@@ -148,11 +150,15 @@ def batch_needs_step_up(
     registry: PendingApprovalRegistry,
     step_up: StepUpConfig,
     batch_step_up_results: tuple[str, ...],
+    scope: str | None = None,
 ) -> bool:
     """True iff at least one *known, batchable, approving* item in ``parsed``
     actually needs step-up -- an unknown id or a non-batchable item
     contributes nothing here, since ``registry.answer_batch`` will never
-    apply either one regardless of step-up."""
+    apply either one regardless of step-up. ``scope`` is the principal's
+    effective scope (``step_up_config.effective_scope``); ``None`` checks
+    against ``step_up.scope`` alone."""
+    scope = scope if scope is not None else step_up.scope
     for approval_id, result in parsed:
         if result not in batch_step_up_results:
             continue
@@ -160,7 +166,7 @@ def batch_needs_step_up(
         if (
             approval is not None and approval.is_batchable()
             and webauthn_stepup.is_step_up_required(
-                gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=step_up.scope,
+                gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=scope,
             )
         ):
             return True
@@ -242,7 +248,7 @@ def guard_batch_decision(
     answer_batch``'s own ``batch_id``)."""
     if step_up is None or not step_up.enabled or not batch_needs_step_up(
         parsed, principal_id=principal.id, registry=registry, step_up=step_up,
-        batch_step_up_results=batch_step_up_results,
+        batch_step_up_results=batch_step_up_results, scope=effective_scope(step_up, principal),
     ):
         return None, False
 

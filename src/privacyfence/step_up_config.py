@@ -21,13 +21,19 @@ config; web/routes_approvals.py and web/routes_settings.py enforce it.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Any, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 from . import paths, privilege_separation
 from .org_mode import ConfigurationError
+from .secure_files import atomic_write_json
+
+if TYPE_CHECKING:
+    from .principal import Principal
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +85,88 @@ DEFAULT_RP_NAME = "PrivacyFence"
 # run the ceremony, and can default rp_id to a value that just works rather
 # than requiring an install to set one before /security does anything.
 DEFAULT_LOCAL_RP_ID = "localhost"
+
+
+def widest_scope(*scopes: str) -> StepUpScope:
+    """The widest of ``scopes`` on the ``STEP_UP_SCOPES`` ladder. A value
+    that is not on the ladder (a hand-edited preference file, say) is
+    ignored rather than trusted, so it can never narrow anything; with no
+    valid value at all, the narrowest rung comes back."""
+    ranks = [STEP_UP_SCOPES.index(s) for s in scopes if s in STEP_UP_SCOPES]
+    return STEP_UP_SCOPES[max(ranks, default=0)]
+
+
+# --------------------------------------------------------------------- #
+# A principal's own hardening on top of the configured scope (ADR 0091).
+#
+# ``step_up.scope`` -- org_config.json's in org mode, config/settings.yaml's
+# in local mode -- is the *minimum*: nothing a person does from the
+# Settings page can make an install ask for a passkey on less than that.
+# What a person can do is ask for more, for their own approvals only: one
+# small file per principal under ``paths.authority_dir()``, the same
+# service-owned root the passkey credential store itself lives in (ADR
+# 0003), so the agent step-up defends against cannot quietly narrow it
+# back either. ``effective_scope`` is the one place the two combine.
+# --------------------------------------------------------------------- #
+
+STEP_UP_PREFERENCE_FILE_NAME = "step_up_preference.json"
+
+
+def _preference_path(principal: "Principal") -> Path:
+    return paths.authority_dir(principal) / STEP_UP_PREFERENCE_FILE_NAME
+
+
+def personal_scope(principal: "Principal") -> StepUpScope | None:
+    """The scope ``principal`` chose for themselves in Settings, or ``None``
+    when they never chose one (or the file cannot be read -- which only
+    ever falls back to the configured minimum, never below it)."""
+    path = _preference_path(principal)
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("Could not read the step-up preference for %s -- using the configured scope", principal.id)
+        return None
+    scope = raw.get("scope") if isinstance(raw, dict) else None
+    return scope if scope in STEP_UP_SCOPES else None
+
+
+def set_personal_scope(principal: "Principal", scope: str, *, floor: str) -> StepUpScope:
+    """Record ``scope`` as ``principal``'s own choice and return the scope
+    now in effect for them. A choice no wider than ``floor`` (the configured
+    minimum) is stored as no choice at all, so a later widening of the
+    configured scope is never held back by a stale personal value. Raises
+    ``ValueError`` for a value that is not on the ladder."""
+    if scope not in STEP_UP_SCOPES:
+        raise ValueError(f"step-up scope must be one of {_SCOPE_CHOICES_TEXT}, got {scope!r}")
+    effective = widest_scope(floor, scope)
+    stored = scope if effective != widest_scope(floor) else None
+    atomic_write_json(_preference_path(principal), {"scope": stored})
+    return effective
+
+
+def effective_scope(step_up: "StepUpConfig | LiveStepUpConfig", principal: "Principal") -> StepUpScope:
+    """The scope a decision by ``principal`` is actually checked against:
+    the configured ``step_up.scope``, widened by the principal's own
+    Settings choice, never narrowed by it."""
+    chosen = personal_scope(principal)
+    return widest_scope(step_up.scope, chosen) if chosen is not None else widest_scope(step_up.scope)
+
+
+def step_up_scope_fields(step_up: "StepUpConfig | LiveStepUpConfig | None", principal: "Principal") -> dict[str, Any]:
+    """The Settings page's view of the above, one shape for both modes'
+    ``general`` state: whether a scope is in force at all (``step_up.
+    enabled``), the configured minimum, and the scope in effect for
+    ``principal``. settings_window_html.py's Security card draws the
+    ``set_step_up_scope`` control from these three."""
+    if step_up is None:
+        return {"step_up_scope_active": False, "step_up_scope_floor": "", "step_up_scope": ""}
+    return {
+        "step_up_scope_active": bool(step_up.enabled),
+        "step_up_scope_floor": widest_scope(step_up.scope),
+        "step_up_scope": effective_scope(step_up, principal),
+    }
 
 
 def default_local_step_up() -> bool:
@@ -442,4 +530,9 @@ __all__ = [
     "StepUpConfig",
     "StepUpScope",
     "default_local_step_up",
+    "effective_scope",
+    "personal_scope",
+    "set_personal_scope",
+    "step_up_scope_fields",
+    "widest_scope",
 ]

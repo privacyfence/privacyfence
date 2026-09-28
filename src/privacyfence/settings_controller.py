@@ -65,7 +65,7 @@ from .policy.resource_registry import (
 )
 from .resource_names import ResourceNameResolver, get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
-from .step_up_config import LiveStepUpConfig, StepUpConfig
+from .step_up_config import LiveStepUpConfig, StepUpConfig, set_personal_scope, step_up_scope_fields
 from . import telegram_auth
 from .tasks_client import TasksClient
 from .update_checker import (
@@ -878,6 +878,28 @@ class SettingsController:
         # unlike a disable).
         if observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True) is not None:
             self._audit_step_up_enabled()
+        return self.snapshot()
+
+    def set_step_up_scope(self, scope: str) -> dict[str, Any]:
+        """Widen which approvals ask for a passkey, for this install's own
+        principal, past ``config/settings.yaml``'s ``step_up.scope`` -- which
+        stays the minimum: a choice narrower than it is stored as no choice
+        at all (``step_up_config.set_personal_scope``). The preference lives
+        under ``paths.authority_dir()``, next to the passkey store, not in
+        settings.yaml, so the configured minimum and the person's own
+        hardening never overwrite each other. A sensitive action
+        (routes_settings._SENSITIVE_ACTIONS): narrowing back needs the
+        passkey it would stop asking for, and the dispatcher audits it like
+        every other settings change. See ADR 0091."""
+        if self._step_up is None:
+            self.error = "Step-up is not available on this install."
+            return self.snapshot()
+        try:
+            set_personal_scope(LOCAL_PRINCIPAL, scope, floor=self._step_up.scope)
+        except ValueError as exc:
+            self.error = str(exc)
+            return self.snapshot()
+        self.error = ""
         return self.snapshot()
 
     def _audit_step_up_enabled(self) -> None:
@@ -1705,6 +1727,8 @@ class SettingsController:
                 self._step_up is not None and self._step_up.enabled and self._step_up.require_passkey
             ),
             "step_up_has_passkey": _has_webauthn_credentials(LOCAL_PRINCIPAL),
+            # The per-principal scope control on the same card (ADR 0091).
+            **step_up_scope_fields(self._step_up, LOCAL_PRINCIPAL),
         }
 
     def _connectors_state(self, cfg: dict[str, Any], org_config: dict[str, Any]) -> list[dict[str, Any]]:

@@ -154,7 +154,7 @@ from ..settings_controller import (
     _parse_value_list, _pii_general_fields, _privacy_state_from_config, _relative_time, _rule_usage_map,
     audit_rows, cached_rule_value, rule_resource_ids,
 )
-from ..step_up_config import StepUpConfig
+from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_install_policy, org_session, step_up_decide
 from .approval_step_up import _verify_or_challenge
@@ -233,6 +233,12 @@ _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # enable_step_up itself enforces instead. See that method's own
     # docstring.
     "enable_step_up",
+    # Narrowing one's own step-up scope back towards the configured minimum
+    # makes fewer approvals ask for a passkey, so it needs one itself. The
+    # widening direction goes through the same gate: one action, one rule.
+    # Nothing here can go below the configured minimum either way
+    # (step_up_config.set_personal_scope, ADR 0091).
+    "set_step_up_scope",
     # Re-enabling a connector a human
     # deliberately switched off is access an agent did not already have
     # -- unlike disable_connector below, this is not a no-op change of
@@ -1011,6 +1017,7 @@ _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "toggle_pii_detection", "toggle_pii_category",
     "set_default_policy", "set_category_policy",
     "pin_agent_client", "unpin_agent_client",
+    "set_step_up_scope",
 })
 
 
@@ -1192,6 +1199,7 @@ def build_org_routes(
                 "org_button_label": "", "version": about["version"],
                 "notifications_enabled": True, "notifications_detail": "minimal",
                 "step_up_available": False, "step_up_on": False, "step_up_has_passkey": False,
+                **step_up_scope_fields(step_up, principal),
             },
             "connectors": [],
             "telegram_auth": {"step": None, "error": ""},
@@ -1411,6 +1419,8 @@ def build_org_routes(
             if not auto_accept.remove_policy_v2_rule(rule_id):
                 return None
             return f"Removed auto-accept rule {rule_id!r} (principal={principal.id})"
+        if action == "set_step_up_scope":
+            return _set_step_up_scope(principal, body)
         if action == "pin_agent_client":
             return _pin_agent_client(principal, body)
         if action == "unpin_agent_client":
@@ -1426,6 +1436,18 @@ def build_org_routes(
             install_wide_settings, install_wide_settings_path, action=action, payload=body,
         )
         return f"{summary} (admin={principal.id})"
+
+    def _set_step_up_scope(principal: Principal, body: dict[str, Any]) -> str | None:
+        """This principal's own step-up scope (ADR 0091): widens, never
+        narrows, the org's ``step_up.scope`` for their approvals only."""
+        before = effective_scope(step_up, principal)
+        try:
+            after = set_personal_scope(principal, str(body.get("scope", "")), floor=step_up.scope)
+        except ValueError as exc:
+            raise org_install_policy.PolicyChangeRejected(str(exc)) from exc
+        if after == before:
+            return None
+        return f"Step-up scope for this principal changed from {before!r} to {after!r} (principal={principal.id})"
 
     def _pin_agent_client(principal: Principal, body: dict[str, Any]) -> str | None:
         """Pin one *current* registration to a registry AI system. Both halves are validated
