@@ -56,6 +56,7 @@ Connecting each AI client, in local mode and in an organization deployment:
   or as a custom connector
 - [`connect-claude-code.md`](connect-claude-code.md) — Claude Code
 - [`connect-claude-ai.md`](connect-claude-ai.md) — claude.ai, through an organization deployment
+- [`connect-gemini-cli.md`](connect-gemini-cli.md) — Gemini CLI
 
 ### Reference appendices
 

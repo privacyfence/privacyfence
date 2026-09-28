@@ -547,7 +547,8 @@ files larger than about 75 KB, in either direction; see
 
 Each AI client has its own page with the exact steps, what it asks before PrivacyFence's card, and
 how it is identified: [claude.ai](connect-claude-ai.md), [Claude Desktop](connect-claude-desktop.md)
-(as a custom connector) and [Claude Code](connect-claude-code.md). Any other client that supports
+(as a custom connector), [Claude Code](connect-claude-code.md) and
+[Gemini CLI](connect-gemini-cli.md). Any other client that supports
 the Streamable HTTP transport with OAuth 2.1 and dynamic client registration works the same way.
 
 Each client registration shows up on the admin's **AI systems** page
