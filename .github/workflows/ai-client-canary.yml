@@ -9,11 +9,12 @@ name: AI-client canary
 # before users who auto-update do.
 #
 # The binary comes from `npx --yes <package>@latest`, handed to the test
-# through its override variable (CLAUDE_CODE_BIN, ...). Setting that
+# through its override variable (CLAUDE_CODE_BIN, GEMINI_CLI_BIN, ...). Setting that
 # variable is what makes the test mandatory rather than skippable; see
 # tests/integration/ai_client_harness.py's resolve_client_command. No
 # vendor credential exists in this workflow or is needed by it: the harness
-# strips every ANTHROPIC_*/CLAUDE* variable before starting the client.
+# strips every ANTHROPIC_*/CLAUDE*/GEMINI_*/GOOGLE_* variable before
+# starting the client.
 #
 # On failure it opens one issue per client, titled
 # "AI-client canary: <client> @latest broke /mcp", or comments on that
@@ -52,6 +53,10 @@ jobs:
             package: '@anthropic-ai/claude-code'
             bin_var: CLAUDE_CODE_BIN
             test: tests/integration/test_claude_code_contract.py
+          - client: gemini-cli
+            package: '@google/gemini-cli'
+            bin_var: GEMINI_CLI_BIN
+            test: tests/integration/test_gemini_cli_contract.py
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
