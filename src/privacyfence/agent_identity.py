@@ -23,6 +23,7 @@ Invariants this module is where the rest of the tree gets them from (ADR 0006, A
 from __future__ import annotations
 
 import contextvars
+import re
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum
@@ -88,20 +89,33 @@ def sanitize_client_string(value: object) -> str:
     return cleaned[:MAX_CLIENT_STRING_LENGTH].strip()
 
 
+# The one placeholder a registry name template may carry: the MCP server name the user chose when
+# adding PrivacyFence to the client (``claude mcp add <name>``, an extension's manifest name).
+SERVER_PLACEHOLDER = "{server}"
+
+
 @dataclass(frozen=True)
 class RegistryEntry:
     agent_id: str
     display_name: str
     client_names: tuple[str, ...]
+    # Names that embed the user's server name, as a fixed prefix and suffix around one
+    # ``{server}`` (ADR 0094). Never an arbitrary pattern: the fixed parts are the vendor's.
+    name_templates: tuple[str, ...] = ()
 
 
-# ADR 0035 decision 2's initial registry. Matching is exact, case-insensitive equality on the
-# sanitized clientInfo.name -- never prefix, substring or regex, so a name that merely contains
-# "claude" is not Claude. Entries marked "guess" in that ADR are corrected from a real handshake
-# when one is seen; an unrecognised name is never promoted to an entry by default.
+# ADR 0035 decision 2's registry, corrected from real handshakes by ADR 0094. Matching is exact,
+# case-insensitive equality on the sanitized name -- never prefix, substring or regex, so a name
+# that merely contains "claude" is not Claude -- except for a name template, which matches a whole
+# name made of its fixed prefix, a non-empty server name, and its fixed suffix. An unrecognised
+# name is never promoted to an entry by default.
 REGISTRY: tuple[RegistryEntry, ...] = (
-    RegistryEntry("claude-code", "Claude Code", ("claude-code",)),
-    RegistryEntry("claude", "Claude", ("claude-ai",)),
+    # DCR client_name "Claude Code (<server>)"; handshake clientInfo "claude-code" (ADR 0094).
+    RegistryEntry("claude-code", "Claude Code", ("claude-code",), ("Claude Code ({server})",)),
+    # claude.ai's DCR client_name. Its handshake clientInfo name has not been observed (ADR 0094).
+    RegistryEntry("claude", "Claude", ("Claude",)),
+    # Claude Desktop's handshake through the .mcpb extension, "local-agent-mode-<server>".
+    RegistryEntry("claude-desktop", "Claude Desktop", (), ("local-agent-mode-{server}",)),
     RegistryEntry("chatgpt", "ChatGPT", ("openai-mcp",)),
     RegistryEntry("gemini-cli", "Gemini CLI", ("gemini-cli-mcp-client",)),
     RegistryEntry("cursor", "Cursor", ("cursor-vscode",)),
@@ -112,16 +126,33 @@ _BY_CLIENT_NAME: dict[str, RegistryEntry] = {
 }
 
 
+def _template_regex(template: str) -> re.Pattern[str]:
+    prefix, _, suffix = template.partition(SERVER_PLACEHOLDER)
+    return re.compile(re.escape(prefix) + r".+" + re.escape(suffix), re.IGNORECASE | re.DOTALL)
+
+
+_BY_TEMPLATE: tuple[tuple[re.Pattern[str], RegistryEntry], ...] = tuple(
+    (_template_regex(template), entry) for entry in REGISTRY for template in entry.name_templates
+)
+
+
 _BY_AGENT_ID: dict[str, RegistryEntry] = {entry.agent_id: entry for entry in REGISTRY}
 
 
+def _match(name: str) -> RegistryEntry | None:
+    entry = _BY_CLIENT_NAME.get(name.casefold())
+    if entry is not None:
+        return entry
+    return next((entry for regex, entry in _BY_TEMPLATE if regex.fullmatch(name)), None)
+
+
 def lookup(client_name: str) -> RegistryEntry | None:
-    """The registry entry whose match list contains ``client_name`` exactly (case-insensitively,
-    after sanitizing), or None."""
+    """The registry entry whose match list contains ``client_name`` exactly, or one of whose name
+    templates it fills (case-insensitively, after sanitizing), or None."""
     name = sanitize_client_string(client_name)
     if not name:
         return None
-    return _BY_CLIENT_NAME.get(name.casefold())
+    return _match(name)
 
 
 def entry_for_id(agent_id: object) -> RegistryEntry | None:
@@ -157,7 +188,7 @@ def identify(client_name: object, version: object, source: AgentSource) -> Agent
     if not name or source is AgentSource.NONE:
         return UNKNOWN_AGENT
     clean_version = sanitize_client_string(version)
-    entry = _BY_CLIENT_NAME.get(name.casefold())
+    entry = _match(name)
     if entry is not None:
         return AgentIdentity(id=entry.agent_id, name=entry.display_name, version=clean_version, source=source)
     return AgentIdentity(id=UNKNOWN_ID_PREFIX + name, name=name, version=clean_version, source=source)

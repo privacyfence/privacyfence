@@ -111,6 +111,11 @@ async def _replay(recorded: RecordedClient, tmp_path, monkeypatch, *, pin: bool)
         registration = await register_client(client, recorded.register_body)
         assert registration["client_name"] == recorded.register_body.get("client_name")
         assert registration["redirect_uris"] == recorded.register_body["redirect_uris"]
+        auth_method = recorded.register_body.get("token_endpoint_auth_method", "client_secret_basic")
+        assert registration["token_endpoint_auth_method"] == auth_method
+        # A confidential client (claude.ai) needs a secret issued, and presents it at /token.
+        client_secret = registration.get("client_secret") if auth_method != "none" else None
+        assert (client_secret is not None) == (auth_method != "none"), registration
         client_id = registration["client_id"]
         code, verifier = await authorize_and_get_code(
             client, client_id=client_id, monkeypatch=monkeypatch, redirect_uri=recorded.redirect_uri,
@@ -118,6 +123,7 @@ async def _replay(recorded: RecordedClient, tmp_path, monkeypatch, *, pin: bool)
         )
         tokens = await exchange_for_tokens(
             client, client_id=client_id, code=code, code_verifier=verifier, redirect_uri=recorded.redirect_uri,
+            client_secret=client_secret,
         )
 
     if pin:

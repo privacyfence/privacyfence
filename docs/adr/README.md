@@ -199,3 +199,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0091](0091-the-configured-step-up-scope-is-a-minimum-each-person-can-widen.md) | The configured step-up scope is a minimum each person can widen | Accepted |
 | [0092](0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md) | The inline download limit caps the tool result, at 100,000 bytes by default | Accepted |
 | [0093](0093-a-pending-approval-releases-nothing.md) | A pending approval releases nothing, and one request_id ties its audit trail together | Accepted |
+| [0094](0094-claude-clients-are-matched-by-their-observed-names.md) | Claude clients are matched by the names they were seen sending, and an unrecognised DCR name yields to a recognised handshake name | Accepted |

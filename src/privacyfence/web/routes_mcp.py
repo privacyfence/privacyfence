@@ -45,7 +45,7 @@ from starlette.types import ASGIApp
 
 from .. import __version__ as PRIVACYFENCE_VERSION
 from .. import local_files
-from ..agent_identity import UNKNOWN_AGENT, AgentIdentity, AgentSource, agent_scope, identify, identify_registry_id
+from ..agent_identity import UNKNOWN_AGENT, UNKNOWN_ID_PREFIX, AgentIdentity, AgentSource, agent_scope, identify, identify_registry_id
 from ..agent_overrides import AgentOverrides
 from ..connector import Connector
 from ..principal import Principal, principal_scope
@@ -166,7 +166,9 @@ def _resolve_agent(
        selected by the name the caller sends, so it is a claim on every install (ADR 0037);
     3. org mode's DCR ``client_name``, then the handshake ``clientInfo`` -- both strings the
        client chose, so both ``client_info`` (ADR 0035 / gate G1: an unpinned DCR name is
-       claimed).
+       claimed). A DCR name the registry does not match yields to a handshake name it does
+       (ADR 0094); when neither matches, the DCR name is recorded, since that is the one an admin
+       sees and pins.
 
     Nothing a caller supplies can reach an attested source here: a pin is keyed by the access
     token's ``client_id``, which the authorization server issued, and every caller-supplied
@@ -181,11 +183,20 @@ def _resolve_agent(
     override = overrides.resolve(name, version) if overrides is not None else None
     if override is not None:
         return override
+    handshake_agent = identify(name, version, AgentSource.CLIENT_INFO)
     if client_names is not None and access_token is not None:
         dcr_agent = identify(client_names(access_token.client_id), "", AgentSource.CLIENT_INFO)
-        if dcr_agent is not UNKNOWN_AGENT:
+        if not _is_unrecognised(dcr_agent):
             return dcr_agent
-    return identify(name, version, AgentSource.CLIENT_INFO)
+        # An unrecognised DCR name gives way to a handshake name the registry does know (ADR 0094).
+        if dcr_agent is not UNKNOWN_AGENT and _is_unrecognised(handshake_agent):
+            return dcr_agent
+    return handshake_agent
+
+
+def _is_unrecognised(agent: AgentIdentity) -> bool:
+    """True for no usable name, or a name the registry does not match (``unknown:<name>``)."""
+    return agent is UNKNOWN_AGENT or agent.id.startswith(UNKNOWN_ID_PREFIX)
 
 
 def _session_key(ctx: ServerRequestContext) -> str:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from types import SimpleNamespace
 
@@ -498,9 +499,9 @@ class TestConnectorIconsSurviveLiveUpdates:
         # pending (see test_icon_css_present_even_when_nothing_is_pending
         # below), so the count is the whole bundled set's size, not "gmail"
         # alone -- and still exactly once per connector, not once per row.
-        # The bundled agent marks ride along the same way, once each.
+        # The bundled agent marks ride along the same way, once per distinct mark.
         assert html.count("data:image/png;base64,") == (
-            len(approval_icons.all_connector_icons()) + len(approval_icons.all_agent_icons())
+            len(approval_icons.all_connector_icons()) + len(set(approval_icons.all_agent_icons().values()))
         )
 
     def test_a_connector_with_no_bundled_icon_still_gets_a_letter_badge(self):
@@ -653,7 +654,7 @@ class TestAgentOnTheRow:
         html = approval_list_html.build_list_html([], csrf="t")
         for agent_id, uri in approval_icons.all_agent_icons().items():
             assert html.count(uri) == 1, agent_id
-            assert f".pf-approval-agent-mark-{agent_id}{{" in html
+            assert re.search(rf"\.pf-approval-agent-mark-{re.escape(agent_id)}[,{{]", html), agent_id
         assert json.dumps(sorted(approval_icons.all_agent_icons())) in html
 
     def test_live_rerender_mirrors_the_agent_label(self):

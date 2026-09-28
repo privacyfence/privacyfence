@@ -7,6 +7,7 @@ One PNG per registry entry, named for its `agent_id`:
 
 - `claude.png`
 - `claude-code.png`
+- `claude-desktop.png`
 - `chatgpt.png`
 - `gemini-cli.png`
 - `cursor.png`
@@ -33,6 +34,7 @@ change is the fill colour, set to the set's own recorded brand colour for monoch
 | --- | --- | --- | --- |
 | `claude.png` | [Simple Icons](https://simpleicons.org) 16.32.0, `icons/claude.svg` (npm `simple-icons`); Simple Icons records its source as `https://claude.ai` | CC0-1.0 | `#D97757` (Simple Icons' `hex`) |
 | `claude-code.png` | Simple Icons 16.32.0, `icons/claudecode.svg`; source recorded as `https://code.claude.com` | CC0-1.0 | `#D97757` |
+| `claude-desktop.png` | A byte-for-byte copy of `claude.png` (Simple Icons 16.32.0, `icons/claude.svg`). Claude Desktop carries the Claude mark; Simple Icons has no separate one for it | CC0-1.0 | `#D97757` |
 | `cursor.png` | Simple Icons 16.32.0, `icons/cursor.svg`; source recorded as `https://cursor.com/brand` (Cursor's brand page) | CC0-1.0 | `#000000` |
 | `chatgpt.png` | [Lobe Icons](https://github.com/lobehub/lobe-icons) 1.95.1, `icons/openai.svg` (npm `@lobehub/icons-static-svg`) — the OpenAI mark, which ChatGPT uses. Simple Icons no longer carries an OpenAI mark | MIT | `#000000` |
 | `gemini-cli.png` | Lobe Icons 1.95.1, `icons/geminicli-color.svg` — Gemini CLI's own terminal mark, in its own colours | MIT | as published |

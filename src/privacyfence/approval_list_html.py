@@ -1183,9 +1183,14 @@ def _agent_icon_uris() -> dict[str, str]:
 
 
 def _agent_icon_css(icon_uris: dict[str, str]) -> str:
+    # Agents that share a mark (Claude and Claude Desktop) share one rule, so the image data is
+    # baked into the page once.
+    slugs_by_uri: dict[str, list[str]] = {}
+    for slug, uri in sorted(icon_uris.items()):
+        slugs_by_uri.setdefault(uri, []).append(slug)
     return "".join(
-        f'.pf-approval-agent-mark-{slug}{{background-image:url("{uri}")}}'
-        for slug, uri in sorted(icon_uris.items())
+        ",".join(f".pf-approval-agent-mark-{slug}" for slug in slugs) + f'{{background-image:url("{uri}")}}'
+        for uri, slugs in slugs_by_uri.items()
     )
 
 

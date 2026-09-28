@@ -90,12 +90,14 @@ def _dispatcher(connector: Connector) -> McpDispatcher:
 
 
 @contextlib.asynccontextmanager
-async def _session(dispatcher, *, client_name: str | None, verifier=None, client_names=None, overrides=None):
+async def _session(
+    dispatcher, *, client_name: str | None, verifier=None, client_names=None, overrides=None, pinned_agents=None,
+):
     """A live, initialized ClientSession whose handshake claims ``client_name`` (None: the SDK's
     own default clientInfo)."""
     app, session_manager = build_mcp_asgi_app(
         dispatcher, token=None if verifier else TOKEN, verifier=verifier, client_names=client_names,
-        overrides=overrides,
+        overrides=overrides, pinned_agents=pinned_agents,
     )
     info = types.Implementation(name=client_name, version="9.9") if client_name is not None else None
     async with mcp_lifespan(session_manager):
@@ -124,7 +126,7 @@ class TestLocalModeCapture:
         assert await _agent_of_call(client_name="claude-code") == ["claude-code", "Claude Code", "9.9", "client_info"]
 
     async def test_an_unrecognised_client_keeps_its_claimed_name(self):
-        assert await _agent_of_call(client_name="Claude") == ["unknown:Claude", "Claude", "9.9", "client_info"]
+        assert await _agent_of_call(client_name="Claudia") == ["unknown:Claudia", "Claudia", "9.9", "client_info"]
 
     async def test_an_empty_name_is_unknown_not_a_default(self):
         assert await _agent_of_call(client_name="") == ["", "", "", ""]
@@ -247,11 +249,38 @@ class TestOrgModeCapture:
     async def test_a_registered_client_name_is_a_claim_not_an_attestation(self, tmp_path, monkeypatch):
         # Gate G1: an unpinned DCR client_name is claimed -- recorded as client_info.
         provider = _provider(tmp_path, monkeypatch)
-        await provider.register_client(_dcr_client("dcr-1", "claude-ai"))
+        await provider.register_client(_dcr_client("dcr-1", "Claude"))
         agent = await _agent_of_call(
             client_name="cursor-vscode", verifier=_OrgVerifier("dcr-1"), client_names=provider.client_name,
         )
         assert agent == ["claude", "Claude", "", "client_info"]
+
+    async def test_an_unrecognised_dcr_name_yields_to_a_recognised_handshake_name(self, tmp_path, monkeypatch):
+        # ADR 0094: Claude Code 2.1.283 registered as "Claude Code (privacyfence)" before the
+        # registry knew that name, and its registry-known handshake name was never tried.
+        provider = _provider(tmp_path, monkeypatch)
+        await provider.register_client(_dcr_client("dcr-1", "Some Client (privacyfence)"))
+        agent = await _agent_of_call(
+            client_name="cursor-vscode", verifier=_OrgVerifier("dcr-1"), client_names=provider.client_name,
+        )
+        assert agent == ["cursor", "Cursor", "9.9", "client_info"]
+
+    async def test_when_neither_name_is_recognised_the_dcr_name_is_recorded(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        await provider.register_client(_dcr_client("dcr-1", "Some Client"))
+        agent = await _agent_of_call(
+            client_name="some-handshake", verifier=_OrgVerifier("dcr-1"), client_names=provider.client_name,
+        )
+        assert agent == ["unknown:Some Client", "Some Client", "", "client_info"]
+
+    async def test_a_pin_still_wins_over_a_recognised_handshake_name(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        await provider.register_client(_dcr_client("dcr-1", "Some Client"))
+        agent = await _agent_of_call(
+            client_name="cursor-vscode", verifier=_OrgVerifier("dcr-1"), client_names=provider.client_name,
+            pinned_agents=lambda client_id: "chatgpt" if client_id == "dcr-1" else None,
+        )
+        assert agent == ["chatgpt", "ChatGPT", "9.9", "oauth_client"]
 
     @pytest.mark.parametrize("dcr_name", [None, "", "‮\n"])
     async def test_no_usable_dcr_name_falls_back_to_the_handshake(self, tmp_path, monkeypatch, dcr_name):
@@ -272,7 +301,7 @@ class TestOrgModeCapture:
 
     async def test_a_per_call_lookup_never_writes_the_clients_file(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        await provider.register_client(_dcr_client("dcr-1", "claude-ai"))
+        await provider.register_client(_dcr_client("dcr-1", "Claude"))
         clients_file = tmp_path / "oauth_clients.json"
         # Backdate the file so a rewrite within the same clock tick still shows up as a change.
         os.utime(clients_file, (1_000_000, 1_000_000))
@@ -289,8 +318,8 @@ class TestOrgModeCapture:
 
     def test_client_name_does_not_bump_last_used_at(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
-        provider._clients["dcr-1"] = op._StoredClient(info=_dcr_client("dcr-1", "claude-ai"), last_used_at=123.0)
-        assert provider.client_name("dcr-1") == "claude-ai"
+        provider._clients["dcr-1"] = op._StoredClient(info=_dcr_client("dcr-1", "Claude"), last_used_at=123.0)
+        assert provider.client_name("dcr-1") == "Claude"
         assert provider.client_name("missing") is None
         assert provider._clients["dcr-1"].last_used_at == 123.0
 

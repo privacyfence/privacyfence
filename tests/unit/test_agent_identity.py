@@ -9,6 +9,7 @@ import pytest
 from privacyfence.agent_identity import (
     MAX_CLIENT_STRING_LENGTH,
     REGISTRY,
+    SERVER_PLACEHOLDER,
     UNKNOWN_AGENT,
     UNKNOWN_ID_PREFIX,
     AgentIdentity,
@@ -84,22 +85,57 @@ class TestRegistry:
         ("client_name", "agent_id", "display"),
         [
             ("claude-code", "claude-code", "Claude Code"),
-            ("claude-ai", "claude", "Claude"),
+            ("Claude", "claude", "Claude"),
             ("openai-mcp", "chatgpt", "ChatGPT"),
             ("gemini-cli-mcp-client", "gemini-cli", "Gemini CLI"),
             ("cursor-vscode", "cursor", "Cursor"),
         ],
     )
-    def test_adr_0035_entries(self, client_name, agent_id, display):
+    def test_exact_entries(self, client_name, agent_id, display):
         entry = lookup(client_name)
         assert entry is not None
         assert (entry.agent_id, entry.display_name) == (agent_id, display)
+
+    @pytest.mark.parametrize(
+        ("client_name", "agent_id", "display"),
+        [
+            # DCR client_name, captured from Claude Code 2.1.283 (ADR 0094).
+            ("Claude Code (privacyfence)", "claude-code", "Claude Code"),
+            ("Claude Code (my-pf)", "claude-code", "Claude Code"),
+            # Claude Desktop 2.9939.2's handshake through the .mcpb extension (ADR 0094).
+            ("local-agent-mode-privacyfence", "claude-desktop", "Claude Desktop"),
+            ("local-agent-mode-other", "claude-desktop", "Claude Desktop"),
+        ],
+    )
+    def test_observed_name_templates(self, client_name, agent_id, display):
+        entry = lookup(client_name)
+        assert entry is not None
+        assert (entry.agent_id, entry.display_name) == (agent_id, display)
+
+    @pytest.mark.parametrize(
+        "near_miss",
+        [
+            "Claude Code ()", "Claude Code (x) extra", "xClaude Code (x)", "Claude Code (x",
+            "Claude Code", "local-agent-mode-", "my-local-agent-mode-x", "local-agent-mode",
+        ],
+    )
+    def test_a_template_matches_only_the_whole_name_with_a_non_empty_server(self, near_miss):
+        assert lookup(near_miss) is None
+
+    def test_the_unobserved_claude_ai_guess_is_gone(self):
+        # ADR 0035 guessed "claude-ai"; no Claude client was seen sending it (ADR 0094).
+        assert lookup("claude-ai") is None
+
+    def test_every_template_carries_exactly_one_server_placeholder(self):
+        for entry in REGISTRY:
+            for template in entry.name_templates:
+                assert template.count(SERVER_PLACEHOLDER) == 1, template
 
     def test_match_is_case_insensitive(self):
         entry = lookup("Claude-Code")
         assert entry is not None and entry.agent_id == "claude-code"
 
-    @pytest.mark.parametrize("near_miss", ["claude-code-x", "claude", "my-claude-code", "claude-cod", "claude code"])
+    @pytest.mark.parametrize("near_miss", ["claude-code-x", "claude-", "my-claude-code", "claude-cod", "claude code", "Claude AI"])
     def test_match_is_exact_not_prefix_or_substring(self, near_miss):
         assert lookup(near_miss) is None
 

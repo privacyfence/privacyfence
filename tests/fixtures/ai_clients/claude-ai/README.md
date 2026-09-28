@@ -1,35 +1,45 @@
 # claude.ai (organization mode, custom connector)
 
-**SEEDED FROM VENDOR DOCS, NOT YET CAPTURED.** WP 2.1 replaces this fixture with one captured
-from a real claude.ai connection, following `ai-client-qa.md`.
+**Captured 2026-09-28, client version: claude.ai web (no version exposed; handshake
+`clientInfo.version` 1.0.0), against PrivacyFence 5.0.0a2** — M1.3 in `ai-client-qa.md`, evidence
+at https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865753049.
 
-- Expected agent_id, unpinned: `unknown:Claude`
+- Expected agent_id, unpinned: `claude`
 - Expected agent_id, pinned: `claude`
 
-## What each file holds, and where it came from
+## What each file holds
 
-- `register.json`: the DCR `/register` body.
-  - `redirect_uris`: `https://claude.ai/api/mcp/auth_callback`, the callback URL Anthropic
-    documents for custom connectors. The same page says it may move to
-    `https://claude.com/api/mcp/auth_callback`.
-  - `client_name`: `Claude`. The same page gives "Claude" as claude.ai's OAuth client name.
-  - `token_endpoint_auth_method` `none`, `grant_types` and `response_types`: a public client
-    using PKCE, which is what the same page and the MCP authorization spec describe. Not
-    documented field by field.
-- `initialize.json`: the MCP `initialize` params. Anthropic does not document claude.ai's
-  `clientInfo`; `claude-ai` is `agent_identity.py`'s registry entry for Claude, which that
-  registry's ADR marks as a guess. The version is a placeholder.
+- `register.json`: the fields claude.ai sent to `/register`, from the deployment's
+  `oauth_clients.json`, verbatim. Scrubbed: the issued `client_id` and `client_secret` are
+  dropped, and so is `client_secret_expires_at` (`0`, never expires), which the server issues
+  rather than the client sending it.
+  - claude.ai is a **confidential web client**: `application_type` `web` and
+    `token_endpoint_auth_method` `client_secret_post`. The seeded fixture this replaced guessed
+    `none`; the replay now checks that a secret is issued and presented at `/token`.
+  - `client_name` is `Claude`, which the registry's `claude` entry matches (ADR 0094).
+- `initialize.json`: **only `clientInfo.version` (`1.0.0`) was observed**, through the pinned
+  audit entry. claude.ai's `clientInfo.name` could not be seen, because the DCR name decides
+  attribution before the handshake name is read, so the file says `not-observed` rather than
+  guessing. `protocolVersion` and `capabilities` were not captured; the replay uses only
+  `clientInfo`.
 
-## Why the unpinned agent_id is `unknown:Claude`
+## Request order
 
-In organization mode the DCR `client_name` wins over the handshake's `clientInfo.name`. The
-documented `client_name` is `Claude`, and the registry matches only `claude-ai`, so an unpinned
-claude.ai registration is attributed as an unrecognised client named "Claude" today. If the
-capture confirms that name, WP 2.1 adds it to the registry and changes the line above to `claude`.
+No unauthenticated `/mcp` probe first. Two HTTP stacks: `python-httpx/0.28.1` for discovery, DCR
+and `/token`, and `Claude-User` for `/mcp`.
 
-## Sources
+```text
+GET  /.well-known/oauth-protected-resource/mcp   python-httpx/0.28.1
+GET  /.well-known/oauth-authorization-server     python-httpx/0.28.1
+POST /register                                   python-httpx/0.28.1
+GET  /authorize                                  browser
+GET  /oauth/idp/callback                         browser
+POST /token                                      python-httpx/0.28.1
+POST /mcp  (initialize, then every call)         Claude-User
+```
 
-- Anthropic, "Building custom connectors via remote MCP servers":
-  https://support.anthropic.com/en/articles/11503834-building-custom-connectors-via-remote-mcp-servers
-- MCP specification, Authorization:
-  https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
+## Claude Desktop's custom connector
+
+Not captured: M1.5 was not run, because no account available allowed custom connectors. Claude
+Desktop's remote connectors most likely go through the same claude.ai account and register exactly
+as above, but that is unverified, so there is no `claude-desktop` fixture here.
