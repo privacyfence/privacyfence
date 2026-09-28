@@ -1315,6 +1315,27 @@ class TestAiClientTokenRoutes:
         assert r.json()["enroll_url"] == "/security"
         assert rotated == []
 
+    @pytest.mark.parametrize("path", ["/api/settings/mcp_token/copy", "/api/settings/mcp_token/rotate"])
+    def test_both_routes_refuse_no_session_bad_json_and_bad_csrf(self, controller, sessions, path):
+        client, copied, rotated = self._client(controller, sessions)
+        assert client.post(path, json={"csrf": "x", "confirmed": True}).status_code == 401
+        csrf = _authed(client, sessions)
+        r = client.post(path, content=b"not json", headers={"Content-Type": "application/json"})
+        assert r.status_code == 400
+        assert client.post(path, json={"csrf": "wrong", "confirmed": True}).status_code == 401
+        assert csrf
+        assert copied == [] and rotated == []
+
+    def test_a_rotation_the_companion_could_not_deliver_says_why(self, controller, sessions):
+        client, _copied, rotated = self._client(
+            controller, sessions, result={"ok": False, "reason": "The token was rotated, but the new one could not be copied."},
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/mcp_token/rotate", json={"csrf": csrf, "confirmed": True})
+        assert r.status_code == 503
+        assert "was rotated" in r.json()["error"]
+        assert rotated == ["rotate"]
+
     def test_the_bridge_shim_routes_both_actions_and_asks_before_rotating(self, controller, sessions):
         client, _copied, _rotated = self._client(controller, sessions)
         _authed(client, sessions)

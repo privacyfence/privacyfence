@@ -897,7 +897,7 @@ _ACKNOWLEDGE_LABEL = "OK"
 # admits the URL-safe alphabet and a range of lengths so a token minted by an
 # earlier release still copies, and nothing wider than that.
 _MCP_TOKEN_PATTERN = re.compile(r"\A[A-Za-z0-9_-]{32,128}\Z")
-# What the companion says once the token is on the clipboard (issue #795).
+# What the companion says once the token is on the clipboard (ADR 0103).
 # Deliberately does not contain the token.
 _MCP_TOKEN_COPIED_MESSAGE = (  # nosec B105  # user-facing notice text, not a credential
     "AI client token copied to the clipboard.\n\n"
@@ -1201,7 +1201,7 @@ def _copy_to_clipboard(text: str) -> None:
 
 def copy_mcp_token_to_clipboard(token: str) -> str:
     """Put an MCP token on the clipboard and tell the human it is there --
-    the companion's whole side of issue #795, used by both of its callers:
+    the companion's whole side of ADR 0103, used by both of its callers:
     ``COPY MCP`` below (the Settings page's Copy token button, relayed by
     the daemon) and the companion's own "Copy AI Client Token" menu item
     (``companion.py``, which mints the token itself over ``MINT MCP``).
@@ -1378,7 +1378,7 @@ def _handle_companion_request(line: str) -> str:
         return "ERROR unknown command\n"
     if command == "COPY":
         # ``COPY MCP <token>``: the Settings page's Copy token button, relayed
-        # by the daemon (issue #795). Daemon-only on a separated install,
+        # by the daemon (ADR 0103). Daemon-only on a separated install,
         # like every command but a page SHOW (_verify_companion_peer). The
         # shape check is in copy_mcp_token_to_clipboard itself, which the
         # companion's own menu item calls too.
@@ -2393,7 +2393,7 @@ def send_recovery_code(code: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SEC
 
 def send_mcp_token(token: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) -> tuple[bool, str]:
     """Hand an MCP token to a running companion to put on the clipboard --
-    the daemon's side of the Settings page's Copy token button (issue #795).
+    the daemon's side of the Settings page's Copy token button (ADR 0103).
     Returns ``(copied, reason)``. The token goes through the companion
     rather than back in the HTTP response for the same reason the recovery
     code does (ADR 0003's 2026-09-19 Out-of-scope amendment): no secret in
