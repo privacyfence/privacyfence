@@ -4,12 +4,10 @@
 # Windows build host -- mirrors build_dmg.sh being bash because it only
 # ever runs on macOS.
 #
-# Like the DMG, the installer is the single distributable: it carries every
-# half of PrivacyFence (the daemon .exe and the two Claude Desktop
-# extensions, PrivacyFence-<version>.mcpb and
-# PrivacyFence-no-prompts-<version>.mcpb) so the user flow is "run the
-# installer, then double-click one of the .mcpb files in Claude Desktop" --
-# no separate downloads.
+# Like the DMG, the installer is the single distributable: it carries both
+# halves of PrivacyFence (the daemon .exe and PrivacyFence.mcpb) so the user
+# flow is "run the installer, then double-click PrivacyFence.mcpb in Claude
+# Desktop" -- no separate downloads.
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e ".[dev]"     # PrivacyFence itself + pyinstaller + Pillow
@@ -122,18 +120,16 @@ $AliasExe = Join-Path $DistDir "privacyfence-app.exe"
 Write-Host "-> Creating privacyfence-app.exe copy..."
 Copy-Item -Force $MainExe $AliasExe
 
-# -- 5. Build the Claude Desktop extensions (.mcpb) --------------------------
+# -- 5. Build the Claude Desktop extension (.mcpb) ---------------------------
 # scripts/build_mcpb.sh is plain bash + Node/TypeScript -- no macOS-specific
 # step in it -- so it runs unchanged here via Git for Windows' bash.exe
 # rather than being ported to PowerShell: Git for Windows is already a
 # near-universal Windows dev-machine prerequisite, and this avoids a second,
 # drifting copy of that script's logic.
-# It builds both extensions (ADR 0087); the installer ships both.
-Write-Host "-> Building PrivacyFence's Claude Desktop extensions..."
+Write-Host "-> Building PrivacyFence's Claude Desktop extension..."
 bash scripts/build_mcpb.sh
 if ($LASTEXITCODE -ne 0) { throw "build_mcpb.sh failed" }
 $McpbPath = "dist/${ProductName}-${Version}.mcpb"
-$McpbNoPromptsPath = "dist/${ProductName}-no-prompts-${Version}.mcpb"
 
 # -- 6. Optional code-signing of the daemon + companion executables ---------
 # Sign PrivacyFenceApp.exe, privacyfence-app.exe, and (ADR 0002)
@@ -174,7 +170,6 @@ iscc.exe `
     "/DAppVersion=$Version" `
     "/DDistDir=$((Resolve-Path $DistDir).Path)" `
     "/DMcpbPath=$((Resolve-Path $McpbPath).Path)" `
-    "/DMcpbNoPromptsPath=$((Resolve-Path $McpbNoPromptsPath).Path)" `
     "/DIconPath=$((Resolve-Path $IcoPath).Path)" `
     "/DOutputDir=$((Resolve-Path 'dist').Path)" `
     "/DSetupBaseName=${ProductName}-${Version}-setup" `

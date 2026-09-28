@@ -7,7 +7,7 @@ The limits are the intersection of the clients' own: the input schema's root is 
 into their own function-calling format resolve neither); the name matches
 ``^[a-zA-Z0-9_-]{1,64}$`` (OpenAI's function-name rule, the strictest); the description is non-empty
 and at most 1024 characters (OpenAI's function-description limit); and every tool carries all three
-annotation hints in either annotation mode, so no client falls back to the MCP defaults (a tool
+annotation hints, so no client falls back to the MCP defaults (a tool
 without ``readOnlyHint`` is assumed to write, and without ``destructiveHint`` to destroy). Which
 values the hints take is not this file's business -- see test_mcp_tools.py.
 
@@ -29,7 +29,6 @@ import pytest
 from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
 
-from privacyfence.org_mode import TOOL_ANNOTATIONS_MODES, TOOL_ANNOTATIONS_TRUTHFUL
 from privacyfence.web import mcp_tools
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
@@ -47,28 +46,14 @@ CONNECTORS = {
     connector.name: connector
     for connector in (cls(MagicMock()) for cls in generate_tools_reference._connector_classes())
 }
-ADVERTISED_BY_MODE: dict[str, dict[str, types.Tool]] = {
-    mode: {
-        tool.name: tool
-        for tool in (
-            *(
-                mcp_tools.to_mcp_tool(spec, annotations_mode=mode)
-                for connector in CONNECTORS.values()
-                for spec in connector.tool_specs()
-            ),
-            *mcp_tools.META_TOOLS,
-        )
-    }
-    for mode in TOOL_ANNOTATIONS_MODES
+ADVERTISED: dict[str, types.Tool] = {
+    tool.name: tool
+    for tool in (
+        *(mcp_tools.to_mcp_tool(spec) for connector in CONNECTORS.values() for spec in connector.tool_specs()),
+        *mcp_tools.META_TOOLS,
+    )
 }
-# The annotation mode changes only the hints, so every other check runs once, on the default list.
-ADVERTISED = ADVERTISED_BY_MODE[TOOL_ANNOTATIONS_TRUTHFUL]
 TOOLS = [pytest.param(tool, id=name) for name, tool in sorted(ADVERTISED.items())]
-TOOLS_IN_EVERY_MODE = [
-    pytest.param(tool, id=f"{mode}-{name}")
-    for mode, advertised in ADVERTISED_BY_MODE.items()
-    for name, tool in sorted(advertised.items())
-]
 
 
 def _walk(node: Any, path: str = "$"):
@@ -102,6 +87,7 @@ async def test_the_live_tool_list_is_exactly_the_set_checked_here():
     assert sorted(tool.name for tool in listed.tools) == sorted(ADVERTISED)
     for tool in listed.tools:
         assert tool.input_schema == ADVERTISED[tool.name].input_schema, tool.name
+        assert tool.annotations == ADVERTISED[tool.name].annotations, tool.name
 
 
 def test_no_two_tools_share_a_name():
@@ -139,7 +125,7 @@ def test_description_is_non_empty_and_bounded(tool: types.Tool):
     assert len(description) <= MAX_DESCRIPTION_CHARS, f"{len(description)} characters"
 
 
-@pytest.mark.parametrize("tool", TOOLS_IN_EVERY_MODE)
+@pytest.mark.parametrize("tool", TOOLS)
 def test_all_three_annotation_hints_are_present(tool: types.Tool):
     annotations = tool.annotations
     assert annotations is not None

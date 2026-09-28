@@ -1,8 +1,7 @@
 ; PrivacyFence Windows installer (Inno Setup 6).
 ;
 ; The Windows analogue of build_dmg.sh's DMG: one distributable
-; carrying both the daemon and the two Claude Desktop extensions (.mcpb,
-; ADR 0087), plus
+; carrying both the daemon and the Claude Desktop extension (.mcpb), plus
 ; the privilege-separation step (ADR 0003 decision 4) that installs the
 ; daemon as a Windows service and the companion's sign-in task, and the
 ; matching `uninstall` step on the way out (ADR 0042).
@@ -24,9 +23,6 @@
 #endif
 #ifndef McpbPath
   #error "Pass /DMcpbPath=<path to the built .mcpb> (see scripts/build_installer.ps1)"
-#endif
-#ifndef McpbNoPromptsPath
-  #error "Pass /DMcpbNoPromptsPath=<path to the built no-prompts .mcpb> (see scripts/build_installer.ps1)"
 #endif
 #ifndef IconPath
   #error "Pass /DIconPath=<path to privacyfence.ico> (see scripts/build_installer.ps1)"
@@ -106,14 +102,11 @@ CloseApplications=force
 ; privacyfence-app.exe (built as a real copy, not a symlink; see
 ; build_installer.ps1 step 4), and every bundled dependency/data file.
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
-; The two Claude Desktop extensions, alongside the daemon -- mirrors the
-; DMG's "one distributable carries every half" (build_dmg.sh's own module
-; comment). The default one (truthful tool annotations) and the no-prompts
-; one (every tool advertised read-only, ADR 0087); a user opens one of them.
-; Kept at their versioned filenames so a user who's kept an older
-; installer's copy doesn't collide with them.
+; The Claude Desktop extension, alongside the daemon -- mirrors the DMG's
+; "one distributable carries both halves" (build_dmg.sh's own module
+; comment). Kept at its versioned filename so a user who's kept an older
+; installer's copy doesn't collide with it.
 Source: "{#McpbPath}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#McpbNoPromptsPath}"; DestDir: "{app}"; Flags: ignoreversion
 ; The privilege-separation tool and the companion
 ; autostart task it registers. Both are *installed* rather than extracted to
 ; {tmp}, because both outlive the install: the script is how a human inspects
@@ -188,12 +181,6 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 ; so that's reconstructed here rather than threaded through as its own /D
 ; value.
 ;
-; Only the default extension is offered here: the two are alternatives, and
-; opening both would list every tool twice in Claude Desktop. The checkbox
-; label names the other one, "{#AppName}-no-prompts-{#AppVersion}.mcpb",
-; for a user who wants no Claude prompts; it sits in the same folder, which
-; the File Explorer entry below shows either way.
-;
 ; Two mutually exclusive entries, gated by IsMcpbAssociated() below (see
 ; [Code]), because "shellexec" only actually does something useful once
 ; Windows has a real, working .mcpb file association to dispatch to. That
@@ -235,11 +222,11 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 ; annoyance, not a privilege-separation hole (nothing about the daemon's own
 ; separation depends on how this Finish-page convenience runs).
 Filename: "{app}\{#AppName}-{#AppVersion}.mcpb"; \
-    Description: "Install {#AppName} into Claude Desktop (for no Claude prompts, open {#AppName}-no-prompts-{#AppVersion}.mcpb from the install folder instead)"; \
+    Description: "Install {#AppName} into Claude Desktop"; \
     Flags: postinstall shellexec runascurrentuser skipifsilent; Check: IsMcpbAssociated
 Filename: "{win}\explorer.exe"; \
     Parameters: "/select,""{app}\{#AppName}-{#AppVersion}.mcpb"""; \
-    Description: "Show the {#AppName} Claude Desktop extensions in File Explorer (open one: {#AppName}-{#AppVersion}.mcpb, or {#AppName}-no-prompts-{#AppVersion}.mcpb for no Claude prompts)"; \
+    Description: "Show the {#AppName} Claude Desktop extension in File Explorer"; \
     Flags: postinstall runascurrentuser skipifsilent; Check: not IsMcpbAssociated
 
 [UninstallRun]

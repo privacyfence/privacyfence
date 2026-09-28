@@ -24,9 +24,7 @@
  *    ``mcp_url``).
  * 3. Open a Streamable HTTP client connection to /mcp, authenticated by
  *    that bearer token, advertising the local file bridge via the
- *    ``X-PrivacyFence-File-Bridge`` header, and passing
- *    ``--tool-annotations`` through as ``X-PrivacyFence-Tool-Annotations``
- *    when the manifest gave it (parseArgs()).
+ *    ``X-PrivacyFence-File-Bridge`` header.
  * 4. Proxy MCP frames between that connection and this process's own stdio
  *    transport (proxy.ts) -- Claude Desktop can now call tools, exactly as
  *    it could through the bridge.
@@ -70,32 +68,9 @@ function setupLogging(): void {
   console.warn = console.error;
 }
 
-/** Header the daemon reads, in local mode, to decide how this connection's
- * ``tools/list`` annotates each tool (ADR 0086, decision 4). The shim only
- * passes the value through: which tool is read-only is the daemon's
- * knowledge, never this process's. */
-export const TOOL_ANNOTATIONS_HEADER = "X-PrivacyFence-Tool-Annotations";
-
-/** The values the daemon accepts for ``TOOL_ANNOTATIONS_HEADER``. */
-export const TOOL_ANNOTATIONS_MODES = ["truthful", "all-read-only"] as const;
-export type ToolAnnotationsMode = (typeof TOOL_ANNOTATIONS_MODES)[number];
-
-export interface ParsedArgs {
-  /** From ``--tool-annotations=<mode>``; absent means the shim sends no
-   * header and the daemon's own default applies. */
-  toolAnnotations?: ToolAnnotationsMode;
-}
-
-function isToolAnnotationsMode(value: string): value is ToolAnnotationsMode {
-  return (TOOL_ANNOTATIONS_MODES as readonly string[]).includes(value);
-}
-
-/** Parses the flags this process was spawned with. ``--config`` is
+/** Logs the flags this process was spawned with. ``--config`` is
  * daemon-side only, accepted here for CLI compatibility with how the bridge
- * was invoked. ``--tool-annotations=<truthful|all-read-only>`` is what the
- * second extension's manifest passes (``PrivacyFence-no-prompts.mcpb``, see
- * scripts/build_mcpb.sh) -- main() turns it into ``TOOL_ANNOTATIONS_HEADER``
- * on every /mcp request. Anything else is *ignored*, not rejected.
+ * was invoked; anything else is *ignored*, not rejected.
  *
  * Rejecting used to mean throwing out of main(), which exits before
  * desktopSide.start() has read a single byte of stdin. The failure that
@@ -114,11 +89,8 @@ function isToolAnnotationsMode(value: string): value is ToolAnnotationsMode {
  * argument this transport proxy has no use for anyway trades a working
  * connection for exactly that silent failure, so unrecognized flags are
  * logged to stderr (which the host captures into its own server log) and
- * otherwise ignored. The same goes for a ``--tool-annotations`` value this
- * shim does not know: it is logged and no header is sent, so the connection
- * still works, with the daemon's default annotations. */
-export function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = {};
+ * otherwise ignored. */
+export function parseArgs(argv: string[]): void {
   const ignored: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -129,17 +101,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
     if (arg?.startsWith("--config=")) {
       continue;
     }
-    if (arg?.startsWith("--tool-annotations=")) {
-      const value = arg.slice("--tool-annotations=".length);
-      if (isToolAnnotationsMode(value)) {
-        parsed.toolAnnotations = value;
-      } else {
-        console.error(
-          `Ignoring --tool-annotations=${value}: expected one of ${TOOL_ANNOTATIONS_MODES.join(", ")}.`
-        );
-      }
-      continue;
-    }
     if (arg !== undefined) {
       ignored.push(arg);
     }
@@ -147,26 +108,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (ignored.length > 0) {
     console.error(`Ignoring unrecognized argument(s): ${ignored.join(" ")}`);
   }
-  return parsed;
-}
-
-/** Every header the shim puts on its /mcp requests. */
-export function daemonHeaders(authHeader: string, args: ParsedArgs): Record<string, string> {
-  const headers: Record<string, string> = {
-    Authorization: authHeader,
-    // Tells the daemon this shim can carry out the local file bridge
-    // handshake (ADR 0007) -- without it, local_files.py never offers
-    // need_uploads/deliver and instead falls back to the no-bridge
-    // messaging (a plain client, or an old .mcpb, gets that fallback
-    // instead of a silently-never-arriving upload prompt).
-    [FILE_BRIDGE_HEADER]: "1",
-  };
-  if (args.toolAnnotations !== undefined) {
-    // Sent on every request, not only initialize: the daemon reads it per
-    // tools/list (ADR 0086, Consequences).
-    headers[TOOL_ANNOTATIONS_HEADER] = args.toolAnnotations;
-  }
-  return headers;
 }
 
 export interface MainOptions {
@@ -283,7 +224,7 @@ async function getMcpToken(opts: MainOptions): Promise<string> {
 
 export async function main(argv = process.argv.slice(2), opts: MainOptions = {}): Promise<void> {
   setupLogging();
-  const args = parseArgs(argv);
+  parseArgs(argv);
 
   const mcpUrlFile = opts.mcpUrlFile ?? MCP_URL_FILE;
   await waitForDaemonPatiently({ mcpUrlFile });
@@ -296,7 +237,17 @@ export async function main(argv = process.argv.slice(2), opts: MainOptions = {})
   const daemonSide =
     opts.daemonTransport ??
     new StreamableHTTPClientTransport(new URL(mcpUrl), {
-      requestInit: { headers: daemonHeaders(authHeader, args) },
+      requestInit: {
+        headers: {
+          Authorization: authHeader,
+          // Tells the daemon this shim can carry out the local file bridge
+          // handshake (ADR 0007) -- without it, local_files.py never offers
+          // need_uploads/deliver and instead falls back to the no-bridge
+          // messaging (a plain client, or an old .mcpb, gets that fallback
+          // instead of a silently-never-arriving upload prompt).
+          [FILE_BRIDGE_HEADER]: "1",
+        },
+      },
       // Keeps a rejected request from leaving this connection pinned to a
       // session the daemon has already discarded -- see sessionFetch.ts.
       fetch: sessionSafeFetch(),

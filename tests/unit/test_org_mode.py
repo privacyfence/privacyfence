@@ -313,23 +313,16 @@ class TestConfigurationError:
         assert issubclass(org_mode.ConfigurationError, ValueError)
 
 
-class TestResolveToolAnnotations:
-    """``mcp.tool_annotations`` (ADR 0086): absent means truthful, and a value naming neither mode
-    refuses to start rather than falling back to either."""
+class TestRejectRemovedToolAnnotations:
+    """``mcp.tool_annotations`` was removed (ADR 0089): a bundle still carrying it -- whichever
+    value -- refuses to start, so an administrator who asked for all-read-only never silently gets
+    truthful annotations instead."""
 
-    def test_absent_is_truthful(self):
-        assert org_mode.resolve_tool_annotations({}) == "truthful"
-        assert org_mode.resolve_tool_annotations({"mcp": {}}) == "truthful"
+    @pytest.mark.parametrize("org_config", [{}, {"mcp": {}}, {"mcp": {"other": 1}}, {"mcp": "x"}])
+    def test_a_bundle_without_the_key_is_accepted(self, org_config):
+        org_mode.reject_removed_tool_annotations(org_config)
 
-    @pytest.mark.parametrize("value", ["truthful", "all_read_only"])
-    def test_each_documented_value_is_accepted(self, value):
-        assert org_mode.resolve_tool_annotations({"mcp": {"tool_annotations": value}}) == value
-
-    @pytest.mark.parametrize("value", ["all-read-only", "read_only", "", None, True])
-    def test_any_other_value_is_a_configuration_error(self, value):
-        with pytest.raises(org_mode.ConfigurationError, match="tool_annotations"):
-            org_mode.resolve_tool_annotations({"mcp": {"tool_annotations": value}})
-
-    def test_a_non_object_mcp_section_is_a_configuration_error(self):
-        with pytest.raises(org_mode.ConfigurationError, match="mcp"):
-            org_mode.resolve_tool_annotations({"mcp": "all_read_only"})
+    @pytest.mark.parametrize("value", ["truthful", "all_read_only", "all-read-only", "", None, True])
+    def test_any_value_is_refused_naming_the_removed_key(self, value):
+        with pytest.raises(org_mode.ConfigurationError, match=r"mcp\.tool_annotations.*removed"):
+            org_mode.reject_removed_tool_annotations({"mcp": {"tool_annotations": value}})

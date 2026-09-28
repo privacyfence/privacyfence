@@ -29,25 +29,21 @@ from typing import Any
 from mcp import types
 
 from ..connector import ToolSpec
-from ..org_mode import TOOL_ANNOTATIONS_ALL_READ_ONLY, TOOL_ANNOTATIONS_TRUTHFUL, ToolAnnotationsMode
 
 # MCP tool annotations are UI hints, not a security boundary (the spec says so
 # explicitly). The real authorization is gate.py's gate -- auto/review/popup,
 # auto-accept rules, the audit log -- enforced here in the daemon itself, not
-# in the calling client. So the hints only decide whether a client puts its own
-# confirmation in front of gate.py's.
-#
-# ADR 0086 (superseding ADR 0076, which advertised every tool read-only; see
-# https://github.com/privacyfence/privacyfence/issues/46): by default the hints
-# are truthful -- a read is read-only and idempotent, a write is neither, and
-# only a tool whose ToolSpec says it deletes something is destructive. An
-# organization bundle (``mcp.tool_annotations: all_read_only``) or, in local
-# mode, one connection (TOOL_ANNOTATIONS_HEADER) can ask for ADR 0076's uniform
-# triple instead, for a client that would otherwise prompt on every write.
+# in the calling client. The hints are still something PrivacyFence *tells* a
+# client, so they are always true: a read is read-only and idempotent, a write
+# is neither, and only a tool whose ToolSpec says it deletes something is
+# destructive. There is no mode that says otherwise (ADR 0089, removing the
+# all-read-only option ADR 0086 kept and ADR 0087 shipped; ADR 0076 was the
+# original uniform-read-only workaround). A user who does not want the client's
+# own confirmation in front of gate.py's always-allows PrivacyFence's tools in
+# the client; see https://github.com/privacyfence/privacyfence/issues/46.
 _READ_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True,
 )
-_UNIFORM_READ_ONLY_ANNOTATIONS = _READ_ANNOTATIONS
 _WRITE_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=False,
 )
@@ -55,25 +51,8 @@ _DESTRUCTIVE_WRITE_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=False,
 )
 
-# The request header one local-mode connection uses to pick its own annotation
-# mode (ADR 0086). Its values are spelled with hyphens, like the
-# --tool-annotations flags; the bundle key's are the org_mode constants.
-TOOL_ANNOTATIONS_HEADER = "x-privacyfence-tool-annotations"
-_HEADER_VALUES: dict[str, ToolAnnotationsMode] = {
-    "truthful": TOOL_ANNOTATIONS_TRUTHFUL,
-    "all-read-only": TOOL_ANNOTATIONS_ALL_READ_ONLY,
-}
 
-
-def annotations_mode_from_header(value: str) -> ToolAnnotationsMode | None:
-    """The mode a ``TOOL_ANNOTATIONS_HEADER`` value names, or ``None`` for a
-    value that names neither -- which routes_mcp.py answers with a 400."""
-    return _HEADER_VALUES.get(value.strip().lower())
-
-
-def tool_annotations(spec: ToolSpec, annotations_mode: ToolAnnotationsMode) -> types.ToolAnnotations:
-    if annotations_mode == TOOL_ANNOTATIONS_ALL_READ_ONLY:
-        return _UNIFORM_READ_ONLY_ANNOTATIONS
+def tool_annotations(spec: ToolSpec) -> types.ToolAnnotations:
     if spec.read_only:
         return _READ_ANNOTATIONS
     return _DESTRUCTIVE_WRITE_ANNOTATIONS if spec.destructive else _WRITE_ANNOTATIONS
@@ -112,12 +91,12 @@ def tool_input_schema(spec: ToolSpec) -> dict[str, Any]:
     return result
 
 
-def to_mcp_tool(spec: ToolSpec, *, annotations_mode: ToolAnnotationsMode) -> types.Tool:
+def to_mcp_tool(spec: ToolSpec) -> types.Tool:
     return types.Tool(
         name=spec.name,
         description=spec.description,
         input_schema=tool_input_schema(spec),
-        annotations=tool_annotations(spec, annotations_mode),
+        annotations=tool_annotations(spec),
     )
 
 
