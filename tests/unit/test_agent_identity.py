@@ -86,7 +86,8 @@ class TestRegistry:
         [
             ("claude-code", "claude-code", "Claude Code"),
             ("Claude", "claude", "Claude"),
-            ("openai-mcp", "chatgpt", "ChatGPT"),
+            # DCR client_name, captured from ChatGPT's Developer Mode connector (ADR 0103).
+            ("ChatGPT", "chatgpt", "ChatGPT"),
             ("gemini-cli-mcp-client", "gemini-cli", "Gemini CLI"),
             ("cursor-vscode", "cursor", "Cursor"),
         ],
@@ -126,6 +127,15 @@ class TestRegistry:
         # ADR 0035 guessed "claude-ai"; no Claude client was seen sending it (ADR 0094).
         assert lookup("claude-ai") is None
 
+    def test_the_unobserved_openai_mcp_guess_is_gone(self):
+        # ADR 0035 guessed "openai-mcp" for ChatGPT; its handshake name is not that, and
+        # "openai-mcp/1.0.0" is only the HTTP User-Agent (ADR 0103).
+        assert lookup("openai-mcp") is None
+
+    def test_chatgpt_desktops_codex_handshake_is_not_chatgpt(self):
+        # ChatGPT desktop and the Codex CLI share "codex-mcp-client", which has no entry yet (ADR 0103).
+        assert lookup("codex-mcp-client") is None
+
     def test_every_template_carries_exactly_one_server_placeholder(self):
         for entry in REGISTRY:
             for template in entry.name_templates:
@@ -159,8 +169,8 @@ class TestIdentify:
 
     def test_source_recorded_unchanged_never_upgraded(self):
         # A registry match names the system; it does not attest it.
-        assert identify("openai-mcp", "", AgentSource.CLIENT_INFO).source is AgentSource.CLIENT_INFO
-        assert identify("openai-mcp", "", AgentSource.OAUTH_CLIENT).source is AgentSource.OAUTH_CLIENT
+        assert identify("ChatGPT", "", AgentSource.CLIENT_INFO).source is AgentSource.CLIENT_INFO
+        assert identify("ChatGPT", "", AgentSource.OAUTH_CLIENT).source is AgentSource.OAUTH_CLIENT
 
     def test_unmatched_client_is_unknown_prefixed_with_its_claim(self):
         agent = identify("claude-exfil", "1.0", AgentSource.CLIENT_INFO)
@@ -193,7 +203,7 @@ class TestAgentScope:
 
     def test_scope_sets_and_restores(self):
         x = identify("claude-code", "", AgentSource.CLIENT_INFO)
-        y = identify("openai-mcp", "", AgentSource.CLIENT_INFO)
+        y = identify("ChatGPT", "", AgentSource.CLIENT_INFO)
         with agent_scope(x) as scope:
             assert isinstance(scope, agent_scope)
             assert current_agent() == x
@@ -208,7 +218,7 @@ class TestAgentScope:
 
     async def test_concurrent_tasks_do_not_see_each_others_agent(self):
         x = identify("claude-code", "", AgentSource.CLIENT_INFO)
-        y = identify("openai-mcp", "", AgentSource.CLIENT_INFO)
+        y = identify("ChatGPT", "", AgentSource.CLIENT_INFO)
         seen: dict[str, AgentIdentity] = {}
 
         async def run(label: str, agent: AgentIdentity) -> None:

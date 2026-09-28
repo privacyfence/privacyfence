@@ -667,7 +667,7 @@ class TestAgentOnTheRow:
     def test_summary_dict_carries_the_tiered_label(self):
         from privacyfence.agent_identity import AgentSource, agent_scope, identify
 
-        with agent_scope(identify("openai-mcp", "", AgentSource.CLIENT_INFO)):
+        with agent_scope(identify("ChatGPT", "", AgentSource.CLIENT_INFO)):
             approval = _real_card()
         assert approval.to_summary_dict()["agent"] == {
             "tier": "claimed", "headline": "Says it is ChatGPT", "claim": "", "icon_id": "",

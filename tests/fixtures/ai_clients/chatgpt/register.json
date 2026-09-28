@@ -1,7 +1,8 @@
 {
-  "client_name": "not-observed",
-  "redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
+  "application_type": "native",
+  "client_name": "ChatGPT",
+  "redirect_uris": ["https://chatgpt.com/connector/oauth/dummy-callback-id"],
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
-  "token_endpoint_auth_method": "none"
+  "token_endpoint_auth_method": "client_secret_post"
 }

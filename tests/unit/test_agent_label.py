@@ -48,7 +48,7 @@ class TestTiers:
 
     @pytest.mark.parametrize("source", CLAIMED_SOURCES)
     def test_claimed_registry_match_is_a_claim_with_no_mark(self, source):
-        label = label_for(identify("openai-mcp", "", source))
+        label = label_for(identify("ChatGPT", "", source))
         assert label.tier == TIER_CLAIMED
         assert label.headline == "Says it is ChatGPT"
         assert label.subject == NEUTRAL_SUBJECT

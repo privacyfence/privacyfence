@@ -41,8 +41,8 @@ your systems: the AI asks, PrivacyFence decides, and you see what is at stake be
 
 Claude Desktop connects through the PrivacyFence extension (`PrivacyFence.mcpb`); Claude Code and
 other clients that speak Streamable HTTP connect to the local `/mcp` endpoint directly; in an
-organization deployment, clients such as claude.ai sign in with OAuth through the organization's
-identity provider. [How it works](https://privacyfence.eu/how-it-works/) walks one read and one
+organization deployment, clients such as claude.ai and ChatGPT (Developer Mode) sign in with OAuth
+through the organization's identity provider. [How it works](https://privacyfence.eu/how-it-works/) walks one read and one
 write through, card by card.
 
 ## Platforms
@@ -54,8 +54,8 @@ write through, card by card.
 | Linux (`.deb`) | Ubuntu 24.04, Debian 13 or newer, amd64 |
 | Organization deployment | A Linux server with Python 3.11 or newer and systemd (`pip install privacyfence`) |
 
-Tested with Claude Desktop and Claude Code on every install, and with claude.ai through an
-organization deployment; any MCP-compatible client can connect. See
+Tested with Claude Desktop and Claude Code on every install, and with claude.ai and ChatGPT
+(Developer Mode) through an organization deployment; any MCP-compatible client can connect. See
 [Platform support](https://privacyfence.eu/docs/platform-support/).
 
 ## Connectors
@@ -88,7 +88,7 @@ tool and its gate.
 
 Step by step for each platform: [Getting started](https://privacyfence.eu/docs/getting-started/),
 then [macOS](https://privacyfence.eu/docs/install-macos/), [Windows](https://privacyfence.eu/docs/install-windows/)
-or [Linux](https://privacyfence.eu/docs/install-linux/). For claude.ai or a whole team, see
+or [Linux](https://privacyfence.eu/docs/install-linux/). For claude.ai, ChatGPT or a whole team, see
 [Organization deployment](https://privacyfence.eu/docs/org-mode-setup-guide/).
 
 ## Documentation

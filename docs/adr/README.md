@@ -208,3 +208,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0100](0100-unverified-client-setup-instructions-never-merge-to-main.md) | Unverified AI-client setup instructions never merge to `main` | Accepted (retroactive) |
 | [0101](0101-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |
 | [0102](0102-an-upload-slot-is-consumed-after-the-gate-not-before.md) | An upload slot is consumed after the gate, not before it | Accepted |
+| [0103](0103-chatgpt-is-matched-by-its-registered-name.md) | ChatGPT is matched by the name it registers with, and the `openai-mcp` guess is removed | Accepted |
