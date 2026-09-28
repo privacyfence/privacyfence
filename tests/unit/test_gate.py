@@ -44,7 +44,7 @@ import yaml
 from privacyfence import approval_ui, auto_accept, gate
 from privacyfence.approvals import IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
-from privacyfence.deny_feedback import DenialFeedback, denial_message
+from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from privacyfence.pii_detector import init_pii_detection
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
@@ -3752,6 +3752,13 @@ class TestDenyFeedback:
         assert "MARKER-7f3e" not in raw
         assert all("MARKER-7f3e" not in r.getMessage() for r in caplog.records)
 
+    @staticmethod
+    def _backdate(approval, *, seconds):
+        # Moves the decision into the past, keeping its ledger lifetime, so
+        # the reused-denial sentence's age is deterministic.
+        approval.decided_at -= seconds
+        approval.ledger_expires_at -= seconds
+
     def test_by_user_builds_the_message(self):
         exc = gate.GateDeniedError.by_user(self.FB)
         assert isinstance(exc, gate.GateDeniedError)
@@ -3807,7 +3814,7 @@ class TestDenyFeedback:
         self, monkeypatch, audit_dir, caplog, gate_kind, tool,
     ):
         caplog.set_level("DEBUG")
-        registry = self._registry(monkeypatch, hold_window=0.05)
+        registry = self._registry(monkeypatch, hold_window=0.05, ledger_ttl=300.0)
         kwargs = base_kwargs(gate=gate_kind, tool=tool)
 
         first = await gate.gated_call(**kwargs)
@@ -3816,15 +3823,42 @@ class TestDenyFeedback:
         registry.answer(approval.id, "deny", feedback=self.FB)
         assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
 
+        self._backdate(approval, seconds=120.0)
+
         with pytest.raises(gate.GateDeniedError) as excinfo:
             await gate.gated_call(**kwargs)
-        assert str(excinfo.value) == denial_message(self.FB)
+        # Taken from the ledger: the human's feedback, plus the sentence
+        # saying it is an earlier decision reused (ADR 0090).
+        assert str(excinfo.value) == denial_message(self.FB, EarlierDecision(120.0, 300.0))
 
         entries = read_audit_entries(audit_dir)
         assert [e["decision"] for e in entries] == ["approval_pending", "rejected"]
         assert (entries[0]["deny_intent"], entries[0]["deny_note_chars"]) == ("", 0)
         assert (entries[1]["deny_intent"], entries[1]["deny_note_chars"]) == ("wrong_target", len(self.NOTE))
         self._assert_note_absent(audit_dir, caplog)
+
+    async def test_identical_read_after_a_decided_deny_says_the_denial_was_reused(self, monkeypatch, audit_dir):
+        # ADR 0090: the first call is denied while it waits (no reuse
+        # sentence); an identical read afterwards -- e.g. from a new session --
+        # replays that denial from the ledger without a card, and says so.
+        registry = self._registry(monkeypatch, ledger_ttl=300.0)
+        kwargs = base_kwargs(gate="review", tool="gmail_get_message")
+        with pytest.raises(gate.GateDeniedError) as first:
+            await asyncio.gather(gate.gated_call(**kwargs), self._deny_first_pending(registry, DenialFeedback()))
+        assert str(first.value) == self.DEFAULT
+
+        [denied] = [a for a in registry._pending.values() if a.final_decision == "deny"]
+        self._backdate(denied, seconds=120.0)
+
+        with pytest.raises(gate.GateDeniedError) as second:
+            await gate.gated_call(**kwargs)
+        assert registry.list_pending() == []  # no new card
+        assert str(second.value) == (
+            "Request denied by user. This is not an error and the user was not asked again: "
+            "PrivacyFence reused the user's denial of an identical request made 2 minutes ago, as it "
+            "does for identical requests for 5 minutes after a decision. Don't retry the same call; "
+            "ask the user how to proceed."
+        )
 
     async def test_uncollected_deny_expires_with_the_feedback_shape(self, monkeypatch, audit_dir, caplog):
         caplog.set_level("DEBUG")

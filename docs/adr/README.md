@@ -195,3 +195,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md) | Two Claude Desktop extensions ship in the DMG and the Windows installer | Superseded by 0089 |
 | [0088](0088-local-mode-shows-every-requester-as-undetected.md) | Local mode shows every requester as "Undetected" | Accepted |
 | [0089](0089-tool-annotations-are-always-truthful.md) | Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed | Accepted |
+| [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |

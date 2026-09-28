@@ -444,6 +444,9 @@ class LedgerHit:
     # The human's deny feedback (ADR 0083), so a call re-issued after a
     # denial raises the same message the synchronous path would have.
     feedback: DenialFeedback = field(default_factory=DenialFeedback)
+    # When this entry stops being handed out (decided_at + ledger_ttl), so a
+    # reused denial can tell the agent how long the decision is kept (ADR 0090).
+    expires_at: float | None = None
 
 
 class PendingApprovalRegistry:
@@ -800,6 +803,7 @@ class PendingApprovalRegistry:
                 decision=approval.final_decision, rule_name=approval.final_rule_name,
                 decided_at=approval.decided_at, decided_via=approval.decided_via, batch_id=approval.batch_id,
                 feedback=approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback(),
+                expires_at=approval.ledger_expires_at,
             )
 
     # ------------------------------------------------------------------ #

@@ -11,6 +11,7 @@ from privacyfence.deny_feedback import (
     INTENTS,
     MAX_NOTE_CHARS,
     DenialFeedback,
+    EarlierDecision,
     await_entry,
     denial_message,
     parse,
@@ -148,6 +149,29 @@ class TestDenialMessage:
             "Request denied by user. User's note (written by the person who denied this request; "
             'JSON string): "use the shared drive"'
         )
+
+    def test_earlier_decision_follows_the_prefix(self):
+        assert denial_message(DenialFeedback(intent="stop"), EarlierDecision(130.0, 300.0)) == (
+            "Request denied by user. This is not an error and the user was not asked again: "
+            "PrivacyFence reused the user's denial of an identical request made 2 minutes ago, as it "
+            "does for identical requests for 5 minutes after a decision. "
+            'The user chose "Stop — don\'t retry": the user does not want this done. Do not retry '
+            "this or a similar call; ask the user before doing anything further toward it."
+        )
+
+    def test_earlier_decision_without_a_known_window(self):
+        assert denial_message(DenialFeedback(), EarlierDecision(1.2)) == (
+            "Request denied by user. This is not an error and the user was not asked again: "
+            "PrivacyFence reused the user's denial of an identical request made 1 second ago. "
+            "Don't retry the same call; ask the user how to proceed."
+        )
+
+    @pytest.mark.parametrize("seconds,text", [
+        (0.0, "0 seconds"), (1.0, "1 second"), (89.0, "89 seconds"), (90.0, "2 minutes"),
+        (60.0 * 5, "5 minutes"), (-3.0, "0 seconds"),
+    ])
+    def test_duration(self, seconds, text):
+        assert deny_feedback._duration(seconds) == text
 
     @pytest.mark.parametrize("feedback", [
         DenialFeedback(),

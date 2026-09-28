@@ -8,6 +8,11 @@ what the agent receives, on the synchronous path (``denial_message``, the text o
 ``gate.GateDeniedError.by_user``) and on the ``privacyfence_await_approval`` path
 (``await_entry``, one value under that tool's reserved ``denial_feedback`` key).
 
+A denial the call collected from the decision ledger (``EarlierDecision``) rather than from a card
+decided while it waited says so: an identical read re-issued within the ledger TTL, even from a new
+session, is denied without the user seeing a card (ADR 0073), and without that sentence the agent
+cannot tell a remembered decision from a failure (ADR 0090).
+
 The note is the deciding human's own words and nothing else. It is never content-filtered, and
 never written to the audit log, a log line, the approvals SSE stream or a web push (ADR 0084): only
 its length and the intent are audited. What keeps it from posing as PrivacyFence's own text is
@@ -66,6 +71,15 @@ _EXCESS_NEWLINES = re.compile(r"\n{3,}")
 
 
 @dataclass(frozen=True)
+class EarlierDecision:
+    """A denial this call collected from the decision ledger: how long ago the human decided it, and
+    how long the ledger keeps that decision for identical calls (``None`` if unknown)."""
+
+    age_seconds: float
+    reuse_window_seconds: float | None = None
+
+
+@dataclass(frozen=True)
 class DenialFeedback:
     """One denial's feedback. Both fields "" when none was given -- the plain Deny."""
 
@@ -119,11 +133,36 @@ def parse(payload: dict[str, Any]) -> DenialFeedback:
     return DenialFeedback(intent=intent, note=note)
 
 
-def denial_message(feedback: DenialFeedback) -> str:
-    """The text a human denial reaches the agent with. Always starts with ``DENIAL_PREFIX``. The
+def _duration(seconds: float) -> str:
+    """"1 second", "45 seconds", "1 minute", "5 minutes" -- whole minutes from 90 seconds up."""
+    value = max(0, round(seconds))
+    unit = "second"
+    if value >= 90:
+        value, unit = round(value / 60), "minute"
+    return f"{value} {unit}" if value == 1 else f"{value} {unit}s"
+
+
+def _earlier_decision_text(earlier: EarlierDecision) -> str:
+    text = (
+        "This is not an error and the user was not asked again: PrivacyFence reused the user's "
+        f"denial of an identical request made {_duration(earlier.age_seconds)} ago"
+    )
+    if earlier.reuse_window_seconds is not None:
+        text += (
+            f", as it does for identical requests for {_duration(earlier.reuse_window_seconds)} "
+            "after a decision"
+        )
+    return text + "."
+
+
+def denial_message(feedback: DenialFeedback, earlier: EarlierDecision | None = None) -> str:
+    """The text a human denial reaches the agent with. Always starts with ``DENIAL_PREFIX``. With
+    ``earlier``, a static sentence saying the denial is a reused earlier decision follows it. The
     note, when there is one, comes last, behind a fixed label and JSON-quoted, so nothing in it can
     end its string early or read as PrivacyFence's own text."""
     parts = [DENIAL_PREFIX]
+    if earlier is not None:
+        parts.append(_earlier_decision_text(earlier))
     if feedback.intent:
         label, guidance = INTENTS[feedback.intent]
         parts.append(f'The user chose "{label}": {guidance[0].lower()}{guidance[1:]}')
