@@ -18,6 +18,12 @@
       "slug": "claude-ai",
       "deployments": ["organization"],
       "connects": "straight to an organization deployment's /mcp over HTTPS, with OAuth sign-in"
+    },
+    {
+      "name": "Gemini Enterprise",
+      "slug": "gemini-enterprise",
+      "deployments": ["organization"],
+      "connects": "as a custom MCP server data store on an organization deployment, with OAuth sign-in"
     }
   ],
   "others": "other MCP-compatible clients"
