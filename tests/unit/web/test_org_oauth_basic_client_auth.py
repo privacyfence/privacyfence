@@ -172,3 +172,22 @@ class TestBasicAuthClientIdMiddleware:
         chunks = [b"grant_type=", b"authorization_code", b"&code=abc"]
         seen = await self._run(chunks, [(b"authorization", _basic("id", "s").encode())])
         assert seen["body"] == b"".join(chunks)
+
+    async def test_a_client_that_disconnects_before_its_body_is_passed_through(self):
+        received: list[dict] = []
+
+        async def app(scope, receive, send):
+            received.append(await receive())
+            received.append(await receive())
+
+        messages = [{"type": "http.disconnect"}, {"type": "http.disconnect"}]
+
+        async def receive():
+            return messages.pop(0)
+
+        scope = {"type": "http", "method": "POST", "path": "/token",
+                 "headers": [(b"authorization", _basic("id", "s").encode())]}
+        await _BasicAuthClientId(app)(scope, receive, None)
+        # Nothing was buffered or added; the app sees the disconnect itself.
+        assert received[0] == {"type": "http.request", "body": b"", "more_body": True}
+        assert received[1] == {"type": "http.disconnect"}
