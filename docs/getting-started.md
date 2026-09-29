@@ -8,8 +8,9 @@ what you need, which guide to follow, and what your first approval looks like.
 
 - A supported computer: see the [support matrix](platform-support.md#support-matrix).
 - Administrator rights on it, for the install.
-- An MCP-compatible AI client. Claude Desktop and Claude Code are tested with every install;
-  claude.ai works through an [organization deployment](#local-or-organization-deployment) only.
+- An MCP-compatible AI client. Claude Desktop and Claude Code are tested with every install, and
+  ChatGPT desktop on macOS; claude.ai, ChatGPT on the web and Gemini Enterprise work through an
+  [organization deployment](#local-or-organization-deployment) only.
 - A passkey authenticator that asks for your PIN, fingerprint or face: Touch ID on a Mac, Windows
   Hello on Windows, a USB or NFC security key, or your phone (the browser shows a QR code). On
   Linux, where there is usually nothing built in, use a security key or your phone.
@@ -24,7 +25,8 @@ what you need, which guide to follow, and what your first approval looks like.
 
 Each guide covers download and checksum, install, troubleshooting, uninstall and purge. Then
 connect your AI client: [Claude Desktop](connect-claude-desktop.md),
-[Claude Code](connect-claude-code.md) or [claude.ai](connect-claude-ai.md).
+[Claude Code](connect-claude-code.md), [ChatGPT](connect-chatgpt.md),
+[claude.ai](connect-claude-ai.md) or [Gemini Enterprise](connect-gemini-enterprise.md).
 
 ## Local or organization deployment
 

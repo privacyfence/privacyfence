@@ -41,8 +41,8 @@ your systems: the AI asks, PrivacyFence decides, and you see what is at stake be
 
 Claude Desktop connects through the PrivacyFence extension (`PrivacyFence.mcpb`); Claude Code and
 other clients that speak Streamable HTTP connect to the local `/mcp` endpoint directly; in an
-organization deployment, clients such as claude.ai and ChatGPT (Developer Mode) sign in with OAuth
-through the organization's identity provider. [How it works](https://privacyfence.eu/how-it-works/) walks one read and one
+organization deployment, clients such as claude.ai, ChatGPT (Developer Mode) and Gemini Enterprise
+sign in with OAuth through the organization's identity provider. [How it works](https://privacyfence.eu/how-it-works/) walks one read and one
 write through, card by card.
 
 ## Platforms
@@ -55,7 +55,7 @@ write through, card by card.
 | Organization deployment | A Linux server with Python 3.11 or newer and systemd (`pip install privacyfence`) |
 
 Tested with Claude Desktop and Claude Code on every install, with ChatGPT desktop on macOS, and
-with claude.ai and ChatGPT (Developer Mode) through an organization deployment; any
+with claude.ai, ChatGPT (Developer Mode) and Gemini Enterprise through an organization deployment; any
 MCP-compatible client can connect. See
 [Platform support](https://privacyfence.eu/docs/platform-support/).
 
