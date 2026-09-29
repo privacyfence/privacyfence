@@ -18,11 +18,14 @@ built, so it can't be the decorator-per-tool ``FastMCP`` surface) plus
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
+from urllib.parse import parse_qsl, quote, unquote
 
 from mcp import types
 from mcp.server.auth.middleware.auth_context import AuthContextMiddleware, get_access_token
@@ -41,7 +44,7 @@ from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .. import __version__ as PRIVACYFENCE_VERSION
 from .. import local_files
@@ -827,6 +830,100 @@ def mount_mcp(
     return Route(MCP_PATH, endpoint=app), session_manager
 
 
+# The SDK's endpoints that authenticate the client itself.
+_CLIENT_AUTHENTICATED_PATHS = frozenset({"/token", "/revoke"})
+# Past the SDK's own request-body cap (DEFAULT_MAX_REQUEST_BODY_SIZE, 1 MiB)
+# the wrapped endpoint rejects the request anyway; this only bounds what
+# _BasicAuthClientId buffers before handing the body on untouched.
+_MAX_BUFFERED_FORM_BYTES = 1024 * 1024
+
+
+def _client_id_from_basic(headers: list[tuple[bytes, bytes]]) -> str | None:
+    """The client ID from an ``Authorization: Basic`` header, URL-decoded as
+    RFC 6749 section 2.3.1 requires, or None when there is no usable one."""
+    for name, value in headers:
+        if name.lower() != b"authorization":
+            continue
+        scheme, _, encoded = value.decode("latin-1").partition(" ")
+        if scheme.lower() != "basic":
+            return None
+        try:
+            decoded = base64.b64decode(encoded.strip(), validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+        client_id, sep, _secret = decoded.partition(":")
+        return unquote(client_id) if sep and client_id else None
+    return None
+
+
+class _BasicAuthClientId:
+    """Lets a ``client_secret_basic`` client leave ``client_id`` out of the
+    form body, as RFC 6749 section 2.3.1 allows.
+
+    The SDK's ``ClientAuthenticator`` looks the client up by the body's
+    ``client_id`` before it reads the Basic header, so a client that sends
+    its ID only in the header -- Gemini Enterprise with "Use HTTP Basic
+    Authentication" ticked -- gets 401 "Missing client_id". When the body has
+    no ``client_id``, this copies the one from the header into it. The SDK
+    still checks that the header's ID matches and that the secret is right.
+
+    ``/revoke`` has a second copy of the same assumption: after the client
+    has authenticated, its form model still requires a ``client_secret``
+    field, which it then never reads. There, an empty one is added when the
+    body has none.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        headers = list(scope.get("headers", []))
+        client_id = _client_id_from_basic(headers) if scope["type"] == "http" and scope["method"] == "POST" else None
+        if client_id is None:
+            await self._app(scope, receive, send)
+            return
+
+        chunks: list[bytes] = []
+        size = 0
+        more = True
+        while more:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            chunk = message.get("body", b"")
+            chunks.append(chunk)
+            size += len(chunk)
+            more = message.get("more_body", False)
+            if size > _MAX_BUFFERED_FORM_BYTES:
+                break
+        body = b"".join(chunks)
+
+        if not more and size <= _MAX_BUFFERED_FORM_BYTES:
+            names = {name for name, _ in parse_qsl(body.decode("latin-1"), keep_blank_values=True)}
+            extra = []
+            if "client_id" not in names:
+                extra.append(f"client_id={quote(client_id, safe='')}")
+            if scope.get("path") == "/revoke" and "client_secret" not in names:
+                extra.append("client_secret=")
+            if extra:
+                added = "&".join(extra).encode("ascii")
+                body = body + b"&" + added if body else added
+                headers = [(k, v) for k, v in headers if k.lower() != b"content-length"]
+                headers.append((b"content-length", str(len(body)).encode("ascii")))
+                scope = {**scope, "headers": headers}
+
+        replayed = False
+
+        async def replay() -> Message:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": more}
+            return await receive()
+
+        await self._app(scope, replay, send)
+
+
 def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Route]:
     """Org mode's OAuth 2.1 authorization-server + resource-metadata
     surface (ADR 0011): the SDK's own
@@ -843,11 +940,15 @@ def mount_org_oauth(provider: OrgOAuthProvider, *, issuer_url: str) -> list[Rout
     """
     issuer = AnyHttpUrl(issuer_url)
     resource_url = AnyHttpUrl(f"{issuer_url.rstrip('/')}{MCP_PATH}")
-    routes = create_auth_routes(
-        provider, issuer_url=issuer,
-        client_registration_options=ClientRegistrationOptions(enabled=True),
-        revocation_options=RevocationOptions(enabled=True),
-    )
+    routes = [
+        Route(route.path, endpoint=_BasicAuthClientId(route.endpoint), methods=route.methods)
+        if route.path in _CLIENT_AUTHENTICATED_PATHS else route
+        for route in create_auth_routes(
+            provider, issuer_url=issuer,
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
+        )
+    ]
     routes.extend(create_protected_resource_routes(
         resource_url=resource_url, authorization_servers=[issuer], resource_name="PrivacyFence",
     ))

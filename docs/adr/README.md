@@ -213,3 +213,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md) | A Google API read is retried once when its connection drops; PrivacyFence never retries a write | Accepted |
 | [0106](0106-google-not-found-and-not-shared-errors-reach-the-agent.md) | A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic | Accepted |
 | [0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md) | Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise | Accepted |
+| [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted |
