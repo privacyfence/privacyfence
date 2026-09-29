@@ -12,8 +12,9 @@ Checked here, on the pages as built (tests/website_site.py):
 - the homepage carries the strip exactly as rendered from the data, and the strip markup is
   written nowhere by hand under website/;
 - the JSON-LD of `/` and `/download/` names the same clients;
-- no page names an AI client the data file does not list as tested (ChatGPT and Gemini are
-  expected in a later release, and are added to the data file then, not before).
+- no page names an AI client the data file does not list as tested. Gemini Enterprise is listed;
+  Gemini CLI, the Gemini app and Antigravity are not supported (ADR 0107), and ChatGPT, Copilot and
+  Cursor are added to the data file when a release supports them, not before.
 """
 
 from __future__ import annotations
@@ -31,11 +32,11 @@ DATA = json.loads((WEBSITE / "_data" / "clients.json").read_text(encoding="utf-8
 NAMES = [client["name"] for client in DATA["clients"]]
 PAGES = {path: read_page(path) for path in build_site.PAGES}
 # AI clients the site must not name until the data file lists them.
-NOT_YET_SUPPORTED = ("ChatGPT", "Gemini", "Copilot", "Cursor")
+NOT_YET_SUPPORTED = ("ChatGPT", "Gemini CLI", "Gemini app", "Antigravity", "Copilot", "Cursor")
 
 
 def test_the_data_file_lists_the_tested_clients():
-    assert NAMES == ["Claude Desktop", "Claude Code", "claude.ai"]
+    assert NAMES == ["Claude Desktop", "Claude Code", "claude.ai", "Gemini Enterprise"]
     for client in DATA["clients"]:
         assert client["deployments"], client
         assert set(client["deployments"]) <= {"local", "organization"}, client

@@ -158,7 +158,8 @@ def test_clients_need_a_unique_slug(tmp_path, monkeypatch, clients):
 
 def test_clients_requirement_sentence():
     assert build_site.clients_requirement() == (
-        "An MCP-compatible AI client, such as Claude Desktop, Claude Code or claude.ai (organization deployment)"
+        "An MCP-compatible AI client, such as Claude Desktop, Claude Code, claude.ai (organization deployment)"
+        " or Gemini Enterprise (organization deployment)"
     )
 
 

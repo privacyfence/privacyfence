@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gemini Enterprise with PrivacyFence — a custom MCP server for your organization</title>
+  <meta name="description" content="Connect Gemini Enterprise to your organization's PrivacyFence deployment as a custom MCP server data store. How an administrator registers it, what each person does once, what it asks before a write, and how it is named on the approval card.">
+  <meta name="pf-content-group" content="ai-agent">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/ai-agents/gemini-enterprise/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/ai-agents/gemini-enterprise/">
+  <meta property="og:title" content="Gemini Enterprise with PrivacyFence">
+  <meta property="og:description" content="Gemini Enterprise as a custom MCP server data store on your organization's PrivacyFence. Every gated call still waits for your approval.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">AI agent · Gemini Enterprise</p>
+      <h1>Gemini Enterprise, with every gated call waiting for you.</h1>
+      <p class="lede">Gemini Enterprise, Google's assistant for businesses, reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with <strong>organization mode only</strong>: PrivacyFence run by your organization, reachable over public HTTPS. On your own computer, use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> or <a href="/ai-agents/claude-code/">Claude Code</a> instead.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="connects-heading">
+      <div class="section-heading">
+        <p class="kicker">How it connects</p>
+        <h2 id="connects-heading">From Google's servers, as a custom MCP server.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Why an organization deployment</h3>
+          <p>Gemini Enterprise calls MCP servers from Google's servers, not from your computer. A PrivacyFence on your own computer listens on <code>localhost</code> only, on purpose, so Gemini Enterprise cannot reach it. An organization deployment is reachable over public HTTPS, with a certificate from a publicly trusted certificate authority.</p>
+        </article>
+        <article class="card stack">
+          <h3>Registered once by an administrator</h3>
+          <p>Gemini Enterprise does not register itself. An administrator registers it once with PrivacyFence's <code>/register</code> endpoint, then adds a <strong>custom MCP server data store</strong> in the Google Cloud console with OAuth and PKCE. Each person then signs in once from the Gemini Enterprise web app.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">Register it, add the data store, then authorise.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode</h3>
+          <p>Not available: Gemini Enterprise cannot reach a PrivacyFence on your own computer. Use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> on macOS or Windows, or <a href="/ai-agents/claude-code/">Claude Code</a> on macOS, Windows or Linux.</p>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode</h3>
+          <ol class="steps">
+            <li>In the Google Cloud project, allow custom MCP servers and enable the Discovery Engine, Connectors and Secret Manager APIs.</li>
+            <li>Register Gemini Enterprise with the deployment's <code>/register</code> endpoint, under the name <code>Gemini Enterprise</code>.</li>
+            <li>Create a <strong>Custom MCP Server</strong> data store with the URL <code>https://pf.example.com/mcp</code>, OAuth 2.0 and PKCE, and connect it to your app.</li>
+            <li>Each person clicks <strong>Authorise</strong> on the PrivacyFence row in the web app's chat bar and signs in with their organization account.</li>
+            <li>Enable the actions to offer, and connect your services at <code>https://pf.example.com/connect</code>.</li>
+          </ol>
+        </article>
+      </div>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/connect-gemini-enterprise/">Set it up</a>
+        <a class="button secondary" href="/enterprise/">Organization deployment</a>
+      </p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="confirmations-heading">
+      <div class="section-heading">
+        <p class="kicker">Confirmations</p>
+        <h2 id="confirmations-heading">Gemini shows its steps. PrivacyFence's card decides.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence tells Gemini Enterprise truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. Before a tool call, Gemini Enterprise shows its own steps, ending in <strong>Action Confirmed</strong>.</p>
+        <p>A gated call still waits for PrivacyFence's approval card at <code>/approvals</code>, whatever Gemini was told or allowed. Gemini Enterprise does not wait for it: it posts the approval link in the chat and asks you to say when you have approved. Approve the card, tell Gemini, and it makes the call again.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="files-heading">
+      <div class="section-heading">
+        <p class="kicker">Files</p>
+        <h2 id="files-heading">Small files inline, larger ones through a link you open.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Gemini Enterprise cannot move file bytes itself. A download of up to about 75 KB comes back in the tool result. A larger one becomes a short-lived, one-time link, which Gemini shows you to open in your browser. Uploads, such as a new Drive file or an email attachment, are not possible from Gemini Enterprise. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
+        <p>To read a document, no download is needed: PrivacyFence returns a PDF, Word, PowerPoint or Excel file from Drive as text.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="identified-heading">
+      <div class="section-heading">
+        <p class="kicker">How it's identified</p>
+        <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Gemini Enterprise's calls carry the name it was registered with, <code>Gemini Enterprise</code>, so the approval card says <strong>Says it is Gemini Enterprise</strong>, marked <strong>Not verified</strong>, because any program that can reach the deployment can register under the same name. An administrator can pin the registration on <strong>Settings → AI systems</strong>, and the cards for it are then verified.</p>
+        <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="settings-heading">
+      <div class="section-heading">
+        <p class="kicker">Client settings worth knowing</p>
+        <h2 id="settings-heading">Choose up to 100 actions.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li><strong>At most 100 actions.</strong> Gemini Enterprise enables at most 100 actions per data store, and PrivacyFence can list more when many services are connected. A tool that is not enabled is invisible to Gemini, so leave out the ones people rarely ask for.</li>
+          <li><strong>Authorise from the web app.</strong> Every person, the administrator included, authorises once from the web app's chat bar. Signing in from the console alone does not let Gemini make tool calls.</li>
+          <li><strong>Signing in again.</strong> A sign-in lasts 30 days; after that, click <strong>Authorise</strong> again.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Other clients, and what they can reach.</h2>
+          <p>Compare the AI clients PrivacyFence is tested with, or see what each connector lets them read and change.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/ai-agents/">All AI agents</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
