@@ -122,7 +122,7 @@ REGISTRY: tuple[RegistryEntry, ...] = (
     RegistryEntry("gemini-cli", "Gemini CLI", ("gemini-cli-mcp-client",)),
     # Gemini Enterprise cannot register itself; the admin registers it with the DCR client_name
     # "Gemini Enterprise" the setup instructions prescribe. Its handshake clientInfo name has not
-    # been observed yet (ADR 0109).
+    # been observed (ADR 0109).
     RegistryEntry("gemini-enterprise", "Gemini Enterprise", ("Gemini Enterprise",)),
     RegistryEntry("cursor", "Cursor", ("cursor-vscode",)),
 )

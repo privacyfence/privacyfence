@@ -15,7 +15,8 @@ Part of [issue 393](https://github.com/privacyfence/privacyfence/issues/393).
 Gemini client PrivacyFence supports. The maintainer's verification against a test organization
 deployment on 2026-09-29
 ([status](https://github.com/privacyfence/privacyfence/issues/393#issuecomment-5887866056),
-[tools load](https://github.com/privacyfence/privacyfence/issues/393#issuecomment-5889243926))
+[tools load](https://github.com/privacyfence/privacyfence/issues/393#issuecomment-5889243926),
+[M4 result](https://github.com/privacyfence/privacyfence/issues/393#issuecomment-5889486339))
 found:
 
 - Gemini Enterprise supports neither Dynamic Client Registration nor OAuth discovery. The admin
@@ -25,7 +26,10 @@ found:
   `"client_name": "Gemini Enterprise"`, and the setup instructions will prescribe exactly that.
 - Its MCP runtime sends the HTTP `User-Agent` `python-httpx/0.27.0`; its token exchange sends
   `Google`.
-- Its handshake `clientInfo.name` was not yet read out of the daemon log when this was decided.
+- Its handshake `clientInfo.name` could not be observed. Every call in the M4 run was recorded as
+  `agent_id` `unknown:Gemini Enterprise` with an empty `agent_version`: the unrecognised DCR name,
+  which ADR 0094 decision 3 records only when the handshake name is unrecognised too. As for
+  claude.ai (ADR 0094) and ChatGPT web (ADR 0103), the handshake name stays unobserved.
 - Settings → AI systems offered no Gemini Enterprise entry to pin a registration to, only
   "Gemini CLI", which is a different product
   ([ADR 0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md)).
@@ -46,10 +50,10 @@ it is no weaker a claim than any other registry name, because every DCR `client_
 caller-chosen text; it is only ever `client_info`, never attested, until an admin pins the
 registration.
 
-### 2. The handshake name is added when observed, and no other name is guessed
+### 2. The handshake name is not guessed
 
-The handshake `clientInfo.name` is added to the same entry, in a new ADR, once the maintainer's
-capture is posted on issue 393. Until then it is not guessed. It matters only when the admin
+The handshake `clientInfo.name` is not guessed. If it is ever observed, a new ADR adds it to the
+same entry. It matters only when the admin
 registers under a different `client_name`: attribution then falls to the handshake name (ADR 0094
 decision 3), which the registry does not yet recognise, so the call is recorded as
 `unknown:<the admin's name>`, and the admin can still pin that registration to
@@ -82,9 +86,9 @@ approval card and list, for an attested identity (ADR 0035 decision 4), never on
 
 ## Alternatives considered
 
-- **Wait for the handshake name and key the entry on it alone.** Rejected: the DCR name is the one
-  an admin sees on Settings → AI systems (ADR 0094 decision 3), and without an entry there is
-  nothing to pin to, which is what blocked the verification's pinning step.
+- **Key the entry on the handshake name instead.** Rejected: it could not be observed, and the DCR
+  name is the one an admin sees on Settings → AI systems (ADR 0094 decision 3). Without an entry
+  there is nothing to pin to, which is what blocked the M4 run's pinning step.
 - **Pin Gemini Enterprise registrations to `gemini-cli`.** Rejected: Gemini CLI is a separate,
   unsupported product (ADR 0107), and a pin is an admin's statement of which product is asking.
 - **Match the `User-Agent`.** Rejected, as for ChatGPT in
