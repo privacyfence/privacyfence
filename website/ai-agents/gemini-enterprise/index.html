@@ -27,7 +27,23 @@
     <section class="page-intro shell">
       <p class="kicker">AI agent · Gemini Enterprise</p>
       <h1>Gemini Enterprise, with every gated call waiting for you.</h1>
-      <p class="lede">Gemini Enterprise, Google's assistant for businesses, reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with <strong>organization mode only</strong>: PrivacyFence run by your organization, reachable over public HTTPS. On your own computer, use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> or <a href="/ai-agents/claude-code/">Claude Code</a> instead.</p>
+      <p class="lede">Gemini Enterprise, Google's assistant for businesses, reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with <strong>organization mode only</strong>: PrivacyFence run by your organization, reachable over public HTTPS. On your own computer, use <a href="/ai-agents/claude-desktop/">Claude Desktop</a>, <a href="/ai-agents/claude-code/">Claude Code</a> or <a href="/ai-agents/chatgpt/">ChatGPT desktop</a> instead.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="limits-heading">
+      <div class="section-heading">
+        <p class="kicker">Limits</p>
+        <h2 id="limits-heading">Know the limits before you set it up.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li><strong>Organization mode only.</strong> Gemini Enterprise calls PrivacyFence from Google's servers, and a PrivacyFence on your own computer listens on <code>localhost</code> only.</li>
+          <li><strong>An administrator registers it first.</strong> Unlike claude.ai and ChatGPT, Gemini Enterprise does not register itself: an administrator registers it through <code>/register</code>, then creates the data store in the Google Cloud console.</li>
+          <li><strong>Each person signs in once.</strong> Everyone who uses it, the administrator included, authorises it once from the Gemini Enterprise web app.</li>
+          <li><strong>At most 100 actions per data store.</strong> PrivacyFence can list more (the test deployment listed 109), so the administrator chooses which tools to enable. A tool that is not enabled is invisible to Gemini Enterprise.</li>
+          <li><strong>It can't upload files.</strong> Gemini Enterprise has no file to send to an upload link, and a download larger than about 75 KB comes back as a link you open in your browser.</li>
+        </ul>
+      </div>
     </section>
 
     <section class="page-section shell" aria-labelledby="connects-heading">
@@ -55,7 +71,7 @@
       <div class="card-grid grid-auto">
         <article class="card stack">
           <h3>Local mode</h3>
-          <p>Not available: Gemini Enterprise cannot reach a PrivacyFence on your own computer. Use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> on macOS or Windows, or <a href="/ai-agents/claude-code/">Claude Code</a> on macOS, Windows or Linux.</p>
+          <p>Not available: Gemini Enterprise cannot reach a PrivacyFence on your own computer. Use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> on macOS or Windows, <a href="/ai-agents/claude-code/">Claude Code</a> on macOS, Windows or Linux, or <a href="/ai-agents/chatgpt/">ChatGPT desktop</a> on macOS.</p>
         </article>
         <article class="card stack">
           <h3>Organization mode</h3>

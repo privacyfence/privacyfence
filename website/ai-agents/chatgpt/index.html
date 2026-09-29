@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChatGPT: desktop app or Developer Mode — PrivacyFence</title>
+  <meta name="description" content="Connect ChatGPT to PrivacyFence: ChatGPT desktop on your computer, or ChatGPT in Developer Mode through your organization, with human approval for writes.">
+  <meta name="pf-content-group" content="ai-agent">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/ai-agents/chatgpt/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/ai-agents/chatgpt/">
+  <meta property="og:title" content="ChatGPT with PrivacyFence">
+  <meta property="og:description" content="ChatGPT desktop on your own computer, or ChatGPT in Developer Mode through an organization deployment. Every gated call still waits for your approval.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">AI agent · ChatGPT</p>
+      <h1>ChatGPT, with every gated call waiting for you.</h1>
+      <p class="lede">ChatGPT reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with both deployments: ChatGPT desktop with PrivacyFence on your own computer (<strong>local mode</strong>), and ChatGPT on the web with PrivacyFence run by your organization (<strong>organization mode</strong>). Both were checked with a personal ChatGPT plan; Business, Enterprise and Edu workspaces are not verified.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="connects-heading">
+      <div class="section-heading">
+        <p class="kicker">How it connects</p>
+        <h2 id="connects-heading">The desktop app on your computer, the web app through your organization.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode: ChatGPT desktop</h3>
+          <p>ChatGPT desktop connects to PrivacyFence's <code>/mcp</code> endpoint on <code>localhost</code> as a Streamable HTTP server, with your own token in an <code>Authorization: Bearer</code> header. The token stays the same across restarts, upgrades and reboots. Checked on macOS; the Windows app is not verified, and there is no ChatGPT desktop app for Linux: use <a href="/ai-agents/claude-code/">Claude Code</a> there.</p>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode: a Developer Mode app</h3>
+          <p>ChatGPT on the web connects to MCP servers from OpenAI's servers, not from your computer, so it needs a PrivacyFence it can reach over public HTTPS. A PrivacyFence on your own computer listens on <code>localhost</code> only, on purpose. ChatGPT registers itself, and you sign in with your organization account. Access tokens last one hour and are refreshed silently; after 30 days you sign in again.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">Add a server, or create an app.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Local mode</h3>
+          <ol class="steps">
+            <li>Install PrivacyFence from the <a href="/download/">download page</a>.</li>
+            <li>In PrivacyFence, open <strong>Settings → AI clients</strong>. Note the <strong>MCP URL</strong>, normally <code>http://127.0.0.1:8765/mcp</code>, and click <strong>Copy token</strong>.</li>
+            <li>In ChatGPT desktop, open <strong>Settings → MCP servers → Add server</strong>. Name it <code>PrivacyFence</code>, choose <strong>Streamable HTTP</strong>, enter the MCP URL, and add the header <code>Authorization</code> with <code>Bearer </code> followed by your token.</li>
+            <li>Save, then turn the server on in a chat.</li>
+          </ol>
+        </article>
+        <article class="card stack">
+          <h3>Organization mode</h3>
+          <ol class="steps">
+            <li>Your administrator gives you the deployment's URL, for example <code>https://pf.example.com</code>.</li>
+            <li>In ChatGPT, turn on <strong>Developer mode</strong> under <strong>Settings → Security and login</strong>.</li>
+            <li>Open <strong>Settings → Apps → Create</strong>. Name it <code>PrivacyFence</code>, enter the MCP Server URL <code>https://pf.example.com/mcp</code>, choose <strong>OAuth</strong>, and leave the OAuth client ID and secret empty.</li>
+            <li>Sign in with your organization account when PrivacyFence's sign-in page opens.</li>
+            <li>Connect your services at <code>https://pf.example.com/connect</code>.</li>
+          </ol>
+        </article>
+      </div>
+      <div class="page-copy stack">
+        <p>A Developer Mode app is off in every new chat. Turn it on from <strong>+ → Developer mode → PrivacyFence</strong>.</p>
+      </div>
+      <p class="actions cluster">
+        <a class="button primary" href="/docs/connect-chatgpt/">Set it up</a>
+        <a class="button secondary" href="/docs/how-it-works/#local-mode-and-organization-mode">Local or organization mode?</a>
+      </p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="confirmations-heading">
+      <div class="section-heading">
+        <p class="kicker">Confirmations</p>
+        <h2 id="confirmations-heading">ChatGPT may ask first. PrivacyFence's card decides.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence tells ChatGPT truthfully what each tool does: reads are read-only, writes are writes, and the two tools that delete something are marked destructive. ChatGPT sorts the tools into <strong>Read</strong> and <strong>Write</strong>, and whether it asks you first is decided by ChatGPT's own permission setting.</p>
+        <p>What we observed on the web, with a personal plan and the setting <strong>Allow low-risk tools</strong>: ChatGPT did not ask before creating a calendar event. It asked once before an upload and offered to always allow the tool; after that it did not ask again. ChatGPT desktop asked before tools that are not read-only, with an option to always allow them. In every case PrivacyFence's approval card was still shown.</p>
+        <p>Allowing a tool in ChatGPT only stops ChatGPT's question: a gated call still waits for PrivacyFence's approval card, and that card decides. There is no mode that advertises writes as read-only.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="files-heading">
+      <div class="section-heading">
+        <p class="kicker">Files</p>
+        <h2 id="files-heading">One-time links, with no allowlist to set up.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p><strong>Local mode.</strong> A large file comes back as a one-time link on <code>127.0.0.1</code>, which ChatGPT desktop fetches itself; ChatGPT asks its own permission before saving to a folder such as <code>~/Downloads</code>. PrivacyFence runs under its own system account and cannot read your home folder, so a file path for an upload is refused, and ChatGPT sends the file through an upload link instead.</p>
+        <p><strong>Organization mode.</strong> A download of up to about 75 KB comes back in the tool result; a larger one becomes a short-lived, one-time link. ChatGPT's code sandbox fetches that link and sends uploads itself, over public HTTPS, so unlike claude.ai there is no domain list to fill in. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
+        <p>To read a document, no download is needed: PrivacyFence returns a PDF, Word, PowerPoint or Excel file from Drive as text.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="identified-heading">
+      <div class="section-heading">
+        <p class="kicker">How it's identified</p>
+        <h2 id="identified-heading">A name is a claim until an administrator pins it.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p><strong>Local mode.</strong> Every AI client on your computer uses the same credential, so the approval card names the requester <strong>Undetected</strong>. The audit log records the name ChatGPT desktop gives, <code>codex-mcp-client</code>, which OpenAI's Codex command-line tool gives too, so the two cannot be told apart.</p>
+        <p><strong>Organization mode.</strong> ChatGPT registers with PrivacyFence as <code>ChatGPT</code>, so the approval card says <strong>Says it is ChatGPT</strong>, marked <strong>Not verified</strong>, because any program that can reach the deployment can register under the same name. An administrator can pin ChatGPT's registration on <strong>Settings → AI systems</strong>, for example by matching its last-used time to their own sign-in from ChatGPT, and the cards for it are then verified.</p>
+        <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a></p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="settings-heading">
+      <div class="section-heading">
+        <p class="kicker">Client settings worth knowing</p>
+        <h2 id="settings-heading">A few ChatGPT settings to know.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li><strong>Developer Mode is per chat.</strong> Turn the app on in each new chat from <strong>+ → Developer mode → PrivacyFence</strong>.</li>
+          <li><strong>Business, Enterprise and Edu workspaces.</strong> An administrator may have to allow Developer Mode first. These workspaces have not been verified.</li>
+          <li><strong>Rotating the token.</strong> After <strong>Rotate token</strong> on <strong>Settings → AI clients</strong>, paste the new token into ChatGPT desktop.</li>
+          <li><strong>Deployments that accept only known addresses.</strong> They must accept the address ranges OpenAI publishes for ChatGPT's connectors. File links are fetched from ChatGPT's code sandbox, which may use other addresses.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Other clients, and what they can reach.</h2>
+          <p>Compare the AI clients PrivacyFence is tested with, or see what each connector lets them read and change.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/ai-agents/">All AI agents</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
