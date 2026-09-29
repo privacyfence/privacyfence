@@ -122,7 +122,7 @@ from .csp import new_nonce as _new_csp_nonce
 from . import mcp_auth
 from .mcp_auth import PerUserTokenVerifier, load_or_create_mcp_token
 from .mcp_dispatch import McpDispatcher
-from .oauth_provider import OrgOAuthProvider
+from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
@@ -394,6 +394,16 @@ def _clear_web_base_url_file() -> None:
     (paths.handoff_dir() / WEB_BASE_URL_FILE_NAME).unlink(missing_ok=True)
 
 
+# The two org-mode OAuth paths a client's sign-in popup passes through on
+# its way back to the client's own redirect URI. Cross-Origin-Opener-Policy
+# on any response in that chain, a 302 included, moves the popup into a new
+# browsing-context group and nulls its ``window.opener`` -- and a client
+# whose redirect page hands the code back through ``window.opener``
+# (Gemini Enterprise's does) then never exchanges it. Neither path renders
+# a document, so COOP protected nothing on them. ADR 0108.
+_OAUTH_POPUP_PATHS = frozenset({"/authorize", IDP_CALLBACK_PATH})
+
+
 class _SecurityHeadersMiddleware:
     """Plain ASGI middleware (not starlette.middleware.base.
     BaseHTTPMiddleware, which buffers the whole response) adding the fixed
@@ -469,7 +479,9 @@ class _SecurityHeadersMiddleware:
                 headers["referrer-policy"] = "no-referrer"
                 headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
-                headers["cross-origin-opener-policy"] = "same-origin"
+                headers["cross-origin-opener-policy"] = (
+                    "unsafe-none" if scope.get("path") in _OAUTH_POPUP_PATHS else "same-origin"
+                )
                 if self._hsts:
                     headers["strict-transport-security"] = _HSTS
             await send(message)
