@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Gemini Enterprise (organization deployments).** Gemini Enterprise connects to an organization deployment as a custom MCP server data store, set up by registering its client through `/register`. [Connect Gemini Enterprise](docs/connect-gemini-enterprise.md) has the steps, including the 100-action limit and what Gemini Enterprise can do with files ([ADR 0110](docs/adr/0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md)).
 - **Organization mode: Gemini Enterprise on Settings → AI systems.** An admin can now pin a Gemini Enterprise registration to Gemini Enterprise, and a registration named "Gemini Enterprise" is attributed to it in approval cards and the Audit Log without a pin ([issue 393](https://github.com/privacyfence/privacyfence/issues/393), [ADR 0109](docs/adr/0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md)).
 
 ### Changed

@@ -58,6 +58,8 @@ Connecting each AI client, in local mode and in an organization deployment:
 - [`connect-claude-ai.md`](connect-claude-ai.md) — claude.ai, through an organization deployment
 - [`connect-chatgpt.md`](connect-chatgpt.md) — ChatGPT desktop on your own computer, and ChatGPT
   (Developer Mode) through an organization deployment
+- [`connect-gemini-enterprise.md`](connect-gemini-enterprise.md) — Gemini Enterprise, through an
+  organization deployment
 
 ### Reference appendices
 
