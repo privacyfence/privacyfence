@@ -289,8 +289,9 @@ and source files, never to a plan document, which will not outlive it.
 
 - Branch names are `<type>/<kebab-case-description>`. Standard types: `feature/` for new
   functionality, `fix/` for bug fixes, `chore/` for non-functional maintenance, `tests/` for
-  test-only changes. Use `feature/`, not `feat/` — a few early branches used `feat/` before this
-  was settled; that prefix is retired, don't reintroduce it on new branches.
+  test-only changes, and `plan/` for a plan written by `/make-plan` (below). Use `feature/`, not
+  `feat/` — a few early branches used `feat/` before this was settled; that prefix is retired,
+  don't reintroduce it on new branches.
 - `main` is protected — all changes land via PR (`CONTRIBUTING.md`). PRs merge with a real merge
   commit (`Merge pull request #N from <fork>/<branch>`), not squash — keep that in mind when writing
   commit messages on a feature branch, since they survive into `main`'s history individually.
@@ -299,11 +300,23 @@ and source files, never to a plan document, which will not outlive it.
   CHANGELOG.md" above.
 - Definition of done for a PR is the checklist in
   [`docs/coding-and-testing-guidelines.md` §2.7](docs/coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo).
+- `/make-plan <prompt or issue>` (`.claude/commands/make-plan.md`, runs on Opus) researches the
+  change first. For a small scope (one session's worth, such as a single bug-fix issue) it writes
+  no plan: it hands back a self-contained prompt to paste into a new session, and says whether
+  that session should run on Sonnet (the default) or Opus. For a large scope it writes a
+  `docs/<slug>-plan.md` with an `## Implementation manifest` on its own `plan/<slug>` branch, cut
+  from `main`. A `plan/` branch is never PR'd: `/implement` cuts the feature branch from it, and
+  the plan's last phase deletes the plan document, so it reaches `main` only as that deletion in
+  the feature PR. Delete the `plan/` branch once the feature PR merges. Steps only the user can do
+  (third-party console setup, secrets, real-device checks) go only into the manifest's
+  `manual_before` and `manual_after`, never between phases, and get a step-by-step HTML artifact.
 - A plan with an `## Implementation manifest` can be run with `/implement <plan URL>`
-  (`.claude/commands/implement.md`). The orchestrator session builds the manifest's
-  `feature/<name>` branch out of `feature/<name>--<phase id>` branches, one child session each,
-  merged with `--no-ff` and a `Plan-Phase:` trailer, and opens a single PR to `main` at the end.
-  Phase branches are never PR'd on their own.
+  (`.claude/commands/implement.md`). The orchestrator session (Sonnet) waits for the user to
+  confirm `manual_before`, builds the manifest's `feature/<name>` branch out of
+  `feature/<name>--<phase id>` branches, one Sonnet child session each, merged with `--no-ff` and
+  a `Plan-Phase:` trailer, has one Opus session review the whole branch against the plan, and
+  opens a single PR to `main` at the end, with `manual_after` as unchecked items. Phase branches
+  are never PR'd on their own.
 - `releases/*` (e.g. `releases/4.1-dev`) is a long-lived, cross-cycle integration branch, cut from
   `main` when a batch of work for the next release needs to accumulate somewhere other than `main`
   while `main` stays frozen for a prior release's remaining blockers (renamed from the original,
