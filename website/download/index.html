@@ -100,6 +100,64 @@ sha256sum &lt;file&gt;                <span class="verify-os">Linux</span>
 Get-FileHash &lt;file&gt; -Algorithm SHA256   <span class="verify-os">Windows</span></code></pre>
     </section>
 
+    <section class="page-section" aria-labelledby="requirements-heading">
+      <div class="section-heading compact">
+        <p class="kicker">Before you install</p>
+        <h2 id="requirements-heading">System requirements</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>macOS</h3>
+          <p>macOS 13 or later on an Apple silicon Mac, and an administrator password. The installer refuses an older macOS and Intel Macs.</p>
+        </article>
+        <article class="card stack">
+          <h3>Windows</h3>
+          <p>Windows 10 or later, or Windows Server 2016 or later, on an x64 PC, with administrator rights. Set up Windows Hello (a PIN, fingerprint or face) before you add your first passkey.</p>
+        </article>
+        <article class="card stack">
+          <h3>Linux</h3>
+          <p>Ubuntu 24.04 or Debian 13 or newer, on amd64 (glibc 2.38 and systemd 242), with <code>sudo</code>, and <code>zenity</code> or <code>kdialog</code> for the companion's dialogs. <a href="/docs/install-linux/#other-linux-systems-and-arm64">Other Linux systems and arm64</a> can use <code>pipx install privacyfence</code>, which runs as you and is not privilege-separated.</p>
+        </article>
+      </div>
+      <p class="page-copy"><a href="/docs/platform-support/">Platform support</a> has every supported version, where PrivacyFence keeps its data, and its logs.</p>
+    </section>
+
+    <section class="page-section" aria-labelledby="installs-heading">
+      <div class="section-heading compact">
+        <p class="kicker">What the installer does</p>
+        <h2 id="installs-heading">What ends up on your computer</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>macOS</h3>
+          <p>The DMG holds <code>PrivacyFence.pkg</code> and the Claude Desktop extension, <code>PrivacyFence.mcpb</code>. The package installs <code>/Applications/PrivacyFenceApp.app</code>, creates the <code>_privacyfence</code> service account, runs PrivacyFence under it, and starts the menu-bar icon at each login.</p>
+        </article>
+        <article class="card stack">
+          <h3>Windows</h3>
+          <p>The installer puts PrivacyFence in <code>%ProgramFiles%\PrivacyFence\</code>, runs it as the <code>PrivacyFence</code> Windows service under its own account, keeps your data in <code>%ProgramData%\PrivacyFence\</code>, and starts the tray icon at each sign-in. Its last page offers the Claude Desktop extension.</p>
+        </article>
+        <article class="card stack">
+          <h3>Linux</h3>
+          <p>The <code>.deb</code> puts a self-contained PrivacyFence in <code>/opt/privacyfence</code>, runs it as the <code>privacyfence-daemon</code> system service under the <code>privacyfence</code> account, keeps your data in <code>/var/lib/privacyfence</code>, and adds a PrivacyFence entry to your Applications menu.</p>
+        </article>
+      </div>
+      <p class="page-copy">Every installer runs PrivacyFence under its own service account, so an AI client running as you cannot read or change its policy, passkeys, audit log or connector credentials. Log out (on Windows, sign out) and back in once after installing, so your account can reach it.</p>
+    </section>
+
+    <section class="page-section" aria-labelledby="next-heading">
+      <div class="section-heading compact">
+        <p class="kicker">After you install</p>
+        <h2 id="next-heading">Next steps</h2>
+      </div>
+      <div class="page-copy">
+        <ol class="steps">
+          <li>Follow the install guide for your platform: <a href="/docs/install-macos/">macOS</a>, <a href="/docs/install-windows/">Windows</a> or <a href="/docs/install-linux/">Linux</a>. Each one covers the first start, troubleshooting and uninstalling.</li>
+          <li>Connect Gmail, Slack or another service from PrivacyFence's Settings: <a href="/docs/connecting-a-service/">Connecting a service</a>.</li>
+          <li>Connect your AI client. <a href="/ai-agents/">AI agents</a> has a page for each tested client, with its setup steps.</li>
+        </ol>
+      </div>
+    </section>
+
     <!-- Hidden until some pre-release channel actually has a release. download.js tries rc, then
          beta, then alpha: a channel with nothing published should show nothing at all rather
          than an empty invitation. -->

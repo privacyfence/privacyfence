@@ -51,6 +51,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Clearer pages on privacyfence.eu.** Shorter page titles and descriptions, and a new FAQ answer, [Is PrivacyFence an MCP gateway?](https://privacyfence.eu/faq/#mcp-gateway)
+- **A fuller download page.** [privacyfence.eu/download](https://privacyfence.eu/download/) now lists the system requirements, what each installer puts on your computer, and the next steps after installing, with links to the install guides.
 
 ## [5.2.1] — 2026-09-29
 
