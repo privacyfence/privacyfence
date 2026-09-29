@@ -28,6 +28,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from .google_http import authorized_http
 from . import local_files
 from .email_markdown import markdown_to_html, markdown_to_plain
 from .google_oauth import authorize_local
@@ -500,7 +501,7 @@ class GmailClient:
             creds = self._load_credentials()
             # cache_discovery=False avoids noisy warnings without a file cache.
             service = build(
-                "gmail", "v1", credentials=creds, cache_discovery=False
+                "gmail", "v1", http=authorized_http(creds), cache_discovery=False
             )
             self._local.service = service
             logger.debug("Gmail API service initialized for thread %s", threading.current_thread().name)

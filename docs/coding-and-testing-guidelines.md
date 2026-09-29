@@ -472,6 +472,7 @@ runtime or in review, so work through them deliberately.
 |---|---|---|
 | API client with its own `<Name>ClientError` ([§1.4](#14-error-handling)); token writes through `secure_files` | `src/privacyfence/<name>_client.py` | **enforced** for token writes once added to `TOKEN_WRITE_SITES` in `tests/unit/test_systemic_gate_invariants.py` |
 | `Connector` subclass: `tool_specs()`, dispatch, `gated_call` or `_auto_audit` per tool, a required `reason` `ToolParam` on every gated tool | `src/privacyfence/connectors/<name>.py` | **enforced**: `test_systemic_gate_invariants.py` (`reason` param, `pii_scan_text` on review-gated reads) |
+| Google services are built with `google_http.authorized_http(creds)`, never `credentials=` (one retry of a dropped GET, ADR 0105) | `src/privacyfence/<name>_client.py` | **enforced**: `tests/unit/test_google_http.py` (source scan) |
 | Tests per [§2.6](#26-new-connector-checklist) | `tests/unit/connectors/test_<name>_connector.py`, `tests/unit/test_<name>_client.py` | review |
 | Add the class to `CONNECTOR_CLASSES` | `tests/unit/connectors/test_readme_manifest_alignment.py` and `tests/unit/test_systemic_gate_invariants.py` (two separate copies) | nothing — a connector missing here is silently skipped by every check built on these lists |
 

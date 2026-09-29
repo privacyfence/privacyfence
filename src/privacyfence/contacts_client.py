@@ -14,12 +14,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httplib2
-import google_auth_httplib2
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from .google_http import RetryOnceAuthorizedHttp, authorized_http
 from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
@@ -584,7 +584,7 @@ class ContactsClient:
 # HTTP helper
 # ------------------------------------------------------------------ #
 
-def _build_uncompressed_http(creds: Credentials) -> google_auth_httplib2.AuthorizedHttp:
+def _build_uncompressed_http(creds: Credentials) -> RetryOnceAuthorizedHttp:
     """Return an AuthorizedHttp that requests identity (uncompressed) responses.
 
     httplib2 sends Accept-Encoding: gzip by default.  The People API occasionally
@@ -600,7 +600,7 @@ def _build_uncompressed_http(creds: Credentials) -> google_auth_httplib2.Authori
             headers["Accept-Encoding"] = "identity"
             return super().request(uri, method=method, body=body, headers=headers, **kw)
 
-    return google_auth_httplib2.AuthorizedHttp(creds, http=_IdentityHttp())
+    return authorized_http(creds, http=_IdentityHttp())
 
 
 # ------------------------------------------------------------------ #
