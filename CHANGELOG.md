@@ -48,6 +48,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Gemini Enterprise on privacyfence.eu.** [privacyfence.eu/ai-agents/gemini-enterprise](https://privacyfence.eu/ai-agents/gemini-enterprise/) says how Gemini Enterprise connects to an organization deployment, what it asks before a write, what it can do with files and how it is named on the approval card. Gemini Enterprise is listed with the other tested clients on the homepage and the FAQ.
 - **ChatGPT on privacyfence.eu.** [privacyfence.eu/ai-agents/chatgpt](https://privacyfence.eu/ai-agents/chatgpt/) says how ChatGPT desktop connects on your own computer and ChatGPT in Developer Mode through an organization deployment, what it asks before a write, what it can do with files and how it is named on the approval card. ChatGPT is listed with the other tested clients on the homepage, Enterprise and the FAQ, and the Gemini Enterprise page now lists its limits first.
 
+- **GDPR and comparison pages on privacyfence.eu.** [privacyfence.eu/gdpr](https://privacyfence.eu/gdpr/) maps the GDPR principles to what PrivacyFence does and what stays with you, and lists the facts a DPIA will ask for. [privacyfence.eu/compare](https://privacyfence.eu/compare/) compares PrivacyFence with [Claude's built-in connectors](https://privacyfence.eu/compare/claude-connectors/) and with [general-purpose MCP gateways](https://privacyfence.eu/compare/mcp-gateways/), with sources and the date checked. Both are linked from the footer.
+
 ### Changed
 
 - **Clearer pages on privacyfence.eu.** Shorter page titles and descriptions, and a new FAQ answer, [Is PrivacyFence an MCP gateway?](https://privacyfence.eu/faq/#mcp-gateway)

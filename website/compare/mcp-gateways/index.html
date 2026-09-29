@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrivacyFence vs MCP gateways: what's different</title>
+  <meta name="description" content="How PrivacyFence differs from MCP gateways such as Docker, ContextForge and agentgateway: per-call human approval, content review and local PII checks.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/compare/mcp-gateways/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/compare/mcp-gateways/">
+  <meta property="og:title" content="PrivacyFence and general-purpose MCP gateways">
+  <meta property="og:description" content="Most MCP gateways route, authenticate and log traffic for platform teams. PrivacyFence puts a person in front of each sensitive read and write.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Compare · MCP gateways</p>
+      <h1>PrivacyFence and other MCP gateways: different jobs.</h1>
+      <p class="lede">Most MCP gateways sit between many AI agents and many MCP servers, and give a platform team one place for sign-in, access rules, rate limits and logs. PrivacyFence is an MCP gateway with a narrower job: it governs its own connectors to business systems, and puts the person whose data it is in front of each sensitive read and write. The <a href="/faq/#mcp-gateway">FAQ</a> has the short version.</p>
+      <p class="lede">Checked against each project's documentation on 29 September 2026. The sources are at the end of this page.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="jobs-heading">
+      <div class="section-heading">
+        <p class="kicker">Two jobs</p>
+        <h2 id="jobs-heading">Routing tool traffic, or deciding on each request.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>A general MCP gateway</h3>
+          <p>Puts any MCP server behind one endpoint. It handles sign-in and roles, chooses which tools each team sees, limits rates, and sends logs to your monitoring. Several also scan traffic for personal data or secrets. It treats a tool as a name and a set of arguments, so it works with any server.</p>
+        </article>
+        <article class="card stack">
+          <h3>PrivacyFence</h3>
+          <p>Brings its own connectors for Gmail, Drive, Slack, Salesforce, Jira, Confluence and more, and knows what each operation means. That is what lets it show a person the actual email, document or change before it happens. It is not a proxy for arbitrary MCP tools.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="compare-heading">
+      <div class="section-heading">
+        <p class="kicker">Side by side</p>
+        <h2 id="compare-heading">Typical MCP gateway and PrivacyFence.</h2>
+      </div>
+      <div class="table-scroll wide">
+        <table>
+          <thead>
+            <tr><th scope="col"></th><th scope="col">Typical MCP gateway</th><th scope="col">PrivacyFence</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Which tools</th><td>Any MCP server you register</td><td>Its own eleven connectors and their tools, each with a fixed gate</td></tr>
+            <tr><th scope="row">Built for</th><td>Platform and security teams running many agents and servers</td><td>The person whose mailbox or drive it is, with admins setting policy in an organization deployment</td></tr>
+            <tr><th scope="row">Sign-in</th><td>OAuth, SSO and role-based access</td><td>A local token and companion-app sign-in on a personal install; your OpenID Connect identity provider and OAuth 2.1 in an organization deployment</td></tr>
+            <tr><th scope="row">Human approval of a single call</th><td>Rare. Where offered, an approver role reviews the tool name and its arguments</td><td>Every gated call no always-allow rule covers, decided by the user on a card that shows the content or change in business terms</td></tr>
+            <tr><th scope="row">Reads reviewed before release</th><td>Not typical: a result passes through, possibly scanned</td><td>Yes: the result is held, previewed, and released only on approval</td></tr>
+            <tr><th scope="row">Personal data</th><td>Several redact or mask it automatically, for example with Microsoft Presidio or pattern plugins</td><td>A local pattern check that forces a review and a second confirmation, plus per-category redaction and blocking</td></tr>
+            <tr><th scope="row">Where it runs</th><td>Containers or Kubernetes you run, or a hosted service</td><td>An installer on each computer, or one Linux server</td></tr>
+            <tr><th scope="row">Audit</th><td>Central logs and traces, often exported to a SIEM</td><td>A chained per-person log of every decision; organization mode forwards it to syslog or an HTTP endpoint</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="examples-heading">
+      <div class="section-heading">
+        <p class="kicker">Examples</p>
+        <h2 id="examples-heading">Gateways we looked at.</h2>
+      </div>
+      <p class="page-copy">What each project's documentation describes. "Not described" means we did not find it there, not that it cannot be built.</p>
+      <div class="table-scroll wide">
+        <table>
+          <thead>
+            <tr><th scope="col">Gateway</th><th scope="col">Model</th><th scope="col">Personal data</th><th scope="col">Human approval of calls</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row"><a href="https://docs.docker.com/ai/mcp-catalog-and-toolkit/mcp-gateway/">Docker MCP Gateway</a></th><td>Open source; runs MCP servers in isolated containers, locally or self-hosted</td><td>Not described</td><td>Not described</td></tr>
+            <tr><th scope="row"><a href="https://ibm.github.io/mcp-context-forge/using/plugins/">IBM ContextForge</a></th><td>Open source, self-hosted; auth, roles, rate limits and a plugin system</td><td>A PII filter plugin that detects and masks it</td><td>Not described</td></tr>
+            <tr><th scope="row"><a href="https://github.com/microsoft/mcp-gateway">Microsoft MCP Gateway</a></th><td>Open source (MIT), on Kubernetes; Entra ID sign-in, roles, routing</td><td>Not described</td><td>Not described</td></tr>
+            <tr><th scope="row"><a href="https://github.com/lasso-security/mcp-gateway">Lasso MCP Gateway</a></th><td>Open source (MIT), self-hosted; plugins and audit logging</td><td>Presidio-based detection and secret masking</td><td>Not described</td></tr>
+            <tr><th scope="row"><a href="https://agentgateway.dev/">agentgateway</a></th><td>Open source, Agentic AI Foundation (Linux Foundation), self-hosted; policy-based access and tool scoping</td><td>PII redaction</td><td>Not described</td></tr>
+            <tr><th scope="row"><a href="https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/mcp-portals/">Cloudflare MCP server portals</a></th><td>Hosted by Cloudflare; sign-in, tool allowlists, logs</td><td>Data loss prevention rules</td><td>Not described</td></tr>
+            <tr><th scope="row"><a href="https://www.truefoundry.com/docs/ai-gateway/mcp/mcp-tool-approval">TrueFoundry AI Gateway</a></th><td>Commercial</td><td>Not described</td><td>Yes: gated calls are held for designated approvers, who see the tool, requester and arguments</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="fit-heading">
+      <div class="section-heading">
+        <p class="kicker">Which one</p>
+        <h2 id="fit-heading">Often both, for different traffic.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>A general gateway fits when</h3>
+          <ul>
+            <li>you run many internal MCP servers and need one place to route, authenticate and rate-limit them;</li>
+            <li>automatic scanning and central logs are the controls you need;</li>
+            <li>a platform team, not each user, owns the decisions.</li>
+          </ul>
+        </article>
+        <article class="card stack">
+          <h3>PrivacyFence fits when</h3>
+          <ul>
+            <li>assistants work with personal mailboxes, drives, chats and customer records;</li>
+            <li>a person should see the content and approve before it is released or changed;</li>
+            <li>credentials and the record of decisions should stay on computers you control.</li>
+          </ul>
+        </article>
+      </div>
+      <p class="page-copy">PrivacyFence governs only its own connectors, so tools from your other MCP servers keep going through whatever gateway you use for them.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="sources-heading">
+      <div class="section-heading">
+        <p class="kicker">Sources</p>
+        <h2 id="sources-heading">Where the comparison comes from.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li>The gateway documentation linked in the table above</li>
+          <li><a href="https://github.com/e2b-dev/awesome-mcp-gateways">awesome-mcp-gateways</a>, a community list of open-source and commercial MCP gateways</li>
+          <li><a href="https://zuplo.com/blog/what-the-best-mcp-gateways-do-in-2026">What the best MCP gateways do in 2026</a>, Zuplo, 5 June 2026</li>
+          <li><a href="https://www.integrate.io/blog/best-mcp-gateways-and-ai-agent-security-tools/">Best MCP gateways and AI agent security tools</a>, Integrate.io, 14 September 2026</li>
+          <li><a href="https://www.scalekit.com/blog/best-open-source-mcp-gateways">Best open-source MCP gateways</a>, Scalekit, 29 July 2026</li>
+          <li>For PrivacyFence: <a href="/how-it-works/">How it works</a>, <a href="/docs/tools-reference/">Tools reference</a> and <a href="/docs/security-and-compliance/">Security and compliance</a></li>
+        </ul>
+        <p>Spotted something out of date? Write to <a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a> and it will be corrected.</p>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>See a request go through the gate.</h2>
+          <p>Follow one read and one write from the assistant to your decision, or compare PrivacyFence with Claude's own connectors.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/how-it-works/">How it works</a>
+          <a class="button secondary" href="/compare/claude-connectors/">Claude's connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
