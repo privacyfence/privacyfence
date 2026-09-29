@@ -34,6 +34,7 @@ import pytest
 from googleapiclient.errors import HttpError
 
 from privacyfence import drive_client as drive_client_module
+from privacyfence import org_mode
 from privacyfence.google_errors import GoogleResourceUnavailableError
 from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE, public_message
 from privacyfence.audit_log import current_week, init_audit_logger
@@ -1048,6 +1049,7 @@ class TestOrgModeDownloadDelivery:
         # the_browser_link below for the opt-out.
         assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
         assert "content_base64" not in result
+        assert result["note"] == org_mode.LINK_RESULT_NOTE
         assert get_download_staging_store().pending_count == 1
 
         kwargs = gated_call_spy[0]

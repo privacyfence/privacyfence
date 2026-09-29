@@ -219,6 +219,27 @@ class TestInlineSizing:
         assert "1,000-byte inline-delivery limit" in message
 
 
+class TestDownloadDeliveryConfigLinkResult:
+    """The staged-download tool result the three download tools share."""
+
+    def test_carries_the_link_its_expiry_and_a_no_file_note(self, monkeypatch):
+        monkeypatch.setattr(org_mode.time, "time", lambda: 1_000.0)
+        config = org_mode.DownloadDeliveryConfig(link_ttl_seconds=300.0)
+        result = config.link_result("big.pdf", 5000, "https://pf.example.com/mcp-files/fetch/abc")
+        assert result == {
+            "delivery": "link",
+            "name": "big.pdf",
+            "size_bytes": 5000,
+            "download_url": "https://pf.example.com/mcp-files/fetch/abc",
+            "expires_at": "1970-01-01T00:21:40+00:00",
+            "note": org_mode.LINK_RESULT_NOTE,
+        }
+
+    def test_the_note_says_no_path_was_written(self):
+        assert "Nothing was saved to a file" in org_mode.LINK_RESULT_NOTE
+        assert "destination_dir is ignored" in org_mode.LINK_RESULT_NOTE
+
+
 class TestDownloadDeliveryConfigStagedLinkPath:
     """Which URL path a staged download's link should use, given
     agent_links (ADR 0028) -- see that field's own docstring for the
