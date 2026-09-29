@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI assistants and GDPR: data minimisation — PrivacyFence</title>
+  <meta name="description" content="Use AI assistants with Gmail, Drive and Slack under GDPR: review what is released, check for personal data locally, filter by category and keep a log.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/gdpr/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/gdpr/">
+  <meta property="og:title" content="AI assistants, company data and the GDPR">
+  <meta property="og:description" content="What changes when an AI assistant reads your mailbox, where PrivacyFence helps with data minimisation and accountability, and what stays your job.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">GDPR</p>
+      <h1>AI assistants and the GDPR: decide what leaves, and keep a record.</h1>
+      <p class="lede">When an AI assistant reads a mailbox, a shared drive or a Slack channel, the personal data in it goes to the AI provider along with everything else. The GDPR asks you to limit that to what the task needs, to protect it, and to be able to show how. PrivacyFence puts a checkpoint on that path that runs on your own computers: a person sees what would be released, personal data is checked for locally, whole categories can be withheld, and every decision is logged.</p>
+      <p class="lede">It is a tool for doing that work, not a substitute for it. PrivacyFence does not make a deployment meet the GDPR by itself; see <a href="/security/#what-privacyfence-does-not-claim">what PrivacyFence does not claim</a>. This page is not legal advice.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="changes-heading">
+      <div class="section-heading">
+        <p class="kicker">The problem</p>
+        <h2 id="changes-heading">What changes when an assistant reads your mailbox.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Other people's data comes with it</h3>
+          <p>An email thread carries names, addresses, bank details and salary figures of people who never chose to share them with an AI system. Searching a drive returns whatever matches, not only what the task needs.</p>
+        </article>
+        <article class="card stack">
+          <h3>A new recipient</h3>
+          <p>Whatever the assistant reads is sent to the AI provider to be processed, often outside the EU. That needs a legal basis, a processing agreement and, outside the EU, a transfer mechanism.</p>
+        </article>
+        <article class="card stack">
+          <h3>Access is broad by default</h3>
+          <p>A connection to Gmail or Drive lets the assistant read anything the account can. The assistant chooses what to fetch, and a permission granted once covers every later request.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="map-heading">
+      <div class="section-heading">
+        <p class="kicker">Where it helps</p>
+        <h2 id="map-heading">The GDPR principles, and what PrivacyFence does for each.</h2>
+      </div>
+      <div class="table-scroll wide">
+        <table>
+          <thead>
+            <tr><th scope="col">GDPR</th><th scope="col">What PrivacyFence does</th><th scope="col">What stays your job</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Data minimisation<br>Art. 5(1)(c)</th><td>Sensitive reads wait on a card that previews the actual content before it reaches the AI. On deny, the AI gets nothing. The <a href="/docs/approvals-and-policy/#privacy-filter">privacy filter</a> redacts or blocks whole categories, such as Gmail attachments or contact notes, before anything is shown.</td><td>Deciding what a task needs, and setting the filter to match.</td></tr>
+            <tr><th scope="row">Protection by design and by default<br>Art. 25</th><td>In a fresh configuration, reads that release content go to review, the personal-data check is on, and categories such as Gmail attachments and contact notes are blocked. Categories you haven't listed default to block, and in an organization deployment so does a missing filter group.</td><td>Keeping those defaults, or recording why you changed them.</td></tr>
+            <tr><th scope="row">Security of processing<br>Art. 32</th><td>Connector credentials are never passed to the AI client, and on packaged installs they sit under a separate service account where it can't read them. Approving a write or a flagged read can require a passkey.</td><td>Securing the computers and servers it runs on, and your identity provider.</td></tr>
+            <tr><th scope="row">Accountability and records<br>Art. 5(2), Art. 30</th><td>Every gate decision is written to an <a href="/docs/security-and-compliance/#audit-log-integrity">audit log</a> chained with HMAC-SHA256, recording the tool, the outcome and the AI system as it identifies itself. For personal data it records the category, never the matched text. Organization mode can forward entries to syslog or an HTTP endpoint.</td><td>Your records of processing, and how long you keep the log.</td></tr>
+            <tr><th scope="row">Processors<br>Art. 28</th><td>There is no PrivacyFence service. The software runs on your computers or your server, and no data passes through infrastructure operated by PrivacyFence: the project does not receive or process your data.</td><td>Agreements with the AI provider and with Google, Slack, Salesforce or Atlassian.</td></tr>
+            <tr><th scope="row">Transfers outside the EU<br>Chapter V</th><td>PrivacyFence runs where you put it, including on a server in the EU. What you release still goes to the AI provider, wherever it processes data.</td><td>The transfer mechanism for the AI provider.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="page-copy">The article references are to <a href="https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng">Regulation (EU) 2016/679</a>. The European Data Protection Board's <a href="https://www.edpb.europa.eu/our-work-tools/our-documents/guidelines/guidelines-42019-article-25-data-protection-design-and_en">guidelines on Article 25</a> explain data protection by design and by default in more detail.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="pii-heading">
+      <div class="section-heading">
+        <p class="kicker">The personal-data check</p>
+        <h2 id="pii-heading">A local check that makes you look twice.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>Before a read is shown for review, PrivacyFence scans it on your machine, with no network calls, for likely personal data in Hungarian, English and German: IBANs, card numbers, national ID, tax and social-security numbers, salary information and similar. The full list is in <a href="/docs/pii-detection-keywords/">PII detection keywords</a>.</p>
+        <ul>
+          <li><strong>It overrides your rules.</strong> A match sends the request to a card even if an always-allow rule covers it.</li>
+          <li><strong>It asks twice.</strong> The card names the categories found and highlights them, and approving needs a second confirmation.</li>
+          <li><strong>It logs the category, not the data.</strong> The audit log records "IBAN (bank account number)", never the number.</li>
+        </ul>
+        <p>It is a pattern-based heuristic, not a classifier. It can miss personal data and flag things that aren't. Email addresses and phone numbers are deliberately not detected, because nearly every email signature carries them. A match means "look more carefully", nothing more.</p>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="dpia-heading">
+      <div class="section-heading">
+        <p class="kicker">For your assessment</p>
+        <h2 id="dpia-heading">Questions a DPIA will ask, and where the answers are.</h2>
+      </div>
+      <p class="page-copy">If you run a data protection impact assessment (Art. 35) for AI assistants, these are the facts about PrivacyFence it will need.</p>
+      <div class="table-scroll wide">
+        <table>
+          <thead>
+            <tr><th scope="col">Question</th><th scope="col">Short answer</th><th scope="col">Details</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Where does the data flow?</th><td>From the computer or server running PrivacyFence straight to Google, Slack, Salesforce, Atlassian or Telegram, and only what is released on to the AI client.</td><td><a href="/docs/security-and-compliance/#deployment-modes">Deployment modes</a></td></tr>
+            <tr><th scope="row">What does the AI see before approval?</th><td>Only the tool, the arguments it sent and a status. Content held for review stays inside PrivacyFence.</td><td><a href="/docs/security-and-compliance/#what-the-ai-sees-before-approval">What the AI sees</a></td></tr>
+            <tr><th scope="row">Who can approve?</th><td>Only a person, in a session opened through the companion app or signed in through your identity provider. On a packaged install or an organization server, the AI client cannot approve its own request.</td><td><a href="/security/">Security model</a></td></tr>
+            <tr><th scope="row">What is withheld automatically?</th><td>Whatever the privacy filter redacts or blocks, per category and per service.</td><td><a href="/docs/approvals-and-policy/#privacy-filter">Privacy filter</a></td></tr>
+            <tr><th scope="row">What is logged?</th><td>Each gate decision, approval and security event, chained so that edits show. Personal data appears as a category name only.</td><td><a href="/docs/security-and-compliance/#audit-log-integrity">Audit log</a></td></tr>
+            <tr><th scope="row">Which services and actions?</th><td>A fixed list of connectors and tools, each with a gate that cannot be widened by the AI.</td><td><a href="/docs/tools-reference/">Tools reference</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="ai-act-heading">
+      <div class="section-heading">
+        <p class="kicker">EU AI Act</p>
+        <h2 id="ai-act-heading">Human oversight is where the rules are heading.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>The EU AI Act applies in stages. Its rules for high-risk AI systems, which include human oversight, were moved back in 2026 and apply from 2 December 2027 for the uses listed in Annex III. Using a general-purpose assistant for email and documents is usually not one of those uses. Whether your use is, and what follows from it, is a question for your own legal review; the <a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai">European Commission's overview</a> has the current timeline.</p>
+        <p>Either way, a person approving what an assistant reads and changes, with a record of each decision, supports the GDPR's accountability principle and is similar in spirit to the AI Act's human-oversight requirements.</p>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>See what a reviewed read looks like.</h2>
+          <p>Follow one email thread with personal data in it from the assistant's request to your decision, or read the full security model.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/how-it-works/#read-heading">Follow a read</a>
+          <a class="button secondary" href="/security/">Security model</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

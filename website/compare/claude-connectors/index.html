@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude's built-in connectors vs PrivacyFence</title>
+  <meta name="description" content="Claude's own Gmail, Drive and Slack connectors compared with PrivacyFence: where the connection runs, what you review, personal-data checks and audit.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/compare/claude-connectors/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/compare/claude-connectors/">
+  <meta property="og:title" content="Claude's built-in connectors or PrivacyFence?">
+  <meta property="og:description" content="Both let Claude work with Gmail, Drive and Slack. The difference is where the checkpoint sits, what you see before data is released, and who keeps the record.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Compare · Claude's connectors</p>
+      <h1>Claude's built-in connectors or PrivacyFence?</h1>
+      <p class="lede">Claude has its own connectors for Gmail, Google Drive, Calendar, Slack, Jira, Confluence and Salesforce, and they are the quickest way to start. PrivacyFence connects Claude to the same services through a checkpoint you run yourself. The difference is where that checkpoint sits, what you see before data is released, and who keeps the record.</p>
+      <p class="lede">Checked against Anthropic's and the partners' documentation on 29 September 2026. Connectors change often; the sources are at the end of this page.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="short-heading">
+      <div class="section-heading">
+        <p class="kicker">Short answer</p>
+        <h2 id="short-heading">Pick by what you need to control.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Claude's connectors fit when</h3>
+          <ul>
+            <li>you want it working in minutes, on every device Claude runs on, with nothing to install or operate;</li>
+            <li>approving actions such as sending, sharing or deleting is enough, and reads can go straight into the conversation;</li>
+            <li>your data may be retrieved and stored through Anthropic's service under your agreement with Anthropic.</li>
+          </ul>
+        </article>
+        <article class="card stack">
+          <h3>PrivacyFence fits when</h3>
+          <ul>
+            <li>you want to see the actual content of a sensitive read before Claude gets it, and deny it if needed;</li>
+            <li>you want personal data checked for, and whole categories withheld, before anything reaches the AI;</li>
+            <li>you want the connection and its credentials on your own computers, and a record of every decision you keep.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="compare-heading">
+      <div class="section-heading">
+        <p class="kicker">Side by side</p>
+        <h2 id="compare-heading">What each one does, point by point.</h2>
+      </div>
+      <div class="table-scroll wide">
+        <table>
+          <thead>
+            <tr><th scope="col"></th><th scope="col">Claude's built-in connectors</th><th scope="col">PrivacyFence</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Setup</th><td>Switch on in Claude's settings and sign in to the service. On Team and Enterprise plans an owner enables the Google Workspace connectors first.</td><td>An installer on each computer, or one Linux server for the organization. Claude connects to it as a custom connector.</td></tr>
+            <tr><th scope="row">Who builds them</th><td>Claude's Google Workspace connectors come with Claude; Slack, Atlassian and Salesforce build their own.</td><td>One open-source project under Apache 2.0, for all its connectors.</td></tr>
+            <tr><th scope="row">Where the connection runs</th><td>Through Anthropic's service and, for partner connectors, the partner's own. Anthropic stores data retrieved through the Google Workspace connectors on its servers.</td><td>From your computer or server straight to Google, Slack, Salesforce or Atlassian. Credentials are never passed to Claude, and on packaged installs they sit where it can't read them. No PrivacyFence-operated server is involved.</td></tr>
+            <tr><th scope="row">Approval of actions</th><td>By default Claude asks before sending, replying or forwarding email and before sharing, moving or trashing Drive files. Owners can set each tool to Always allow, Needs approval or Blocked.</td><td>Nearly all writes wait on a card that shows exactly what will change, in business terms, unless an always-allow rule you set covers them.</td></tr>
+            <tr><th scope="row">Review of what is read</th><td>A read tool can be set to need approval, which is decided before the call. What it returns goes into the conversation.</td><td>A read that releases content, such as an email body or a document, is fetched and held. You see a preview of the actual content, and on deny Claude gets nothing. Always-allow rules can release trusted sources without asking.</td></tr>
+            <tr><th scope="row">Personal-data check</th><td>None described in the connector documentation.</td><td>A local check for IBANs, card numbers, ID and tax numbers and salary information in Hungarian, English and German. A match forces a card and a second confirmation.</td></tr>
+            <tr><th scope="row">Withholding by category</th><td>Per tool: a tool can be blocked.</td><td>Per category of data: for example Gmail attachments or contact notes redacted or blocked while the rest is allowed.</td></tr>
+            <tr><th scope="row">Audit</th><td>On Enterprise plans, the Compliance API includes audit log events. Atlassian records calls in its own audit log.</td><td>A log of every gate decision on every install, chained so edits show. Organization mode can forward it to syslog or an HTTP endpoint.</td></tr>
+            <tr><th scope="row">Services</th><td>Gmail, Calendar, Drive; Slack; Jira, Confluence and other Atlassian apps; Salesforce (a beta plugin by Salesforce for organizations it approves; needs the latest Sales Cloud Enterprise edition; writes need approval by default). Many more in Claude's directory.</td><td>Gmail, Drive, Docs, Sheets, Apps Script, Calendar, Contacts, Tasks, Slack, Telegram, Salesforce (read-only), Jira and Confluence.</td></tr>
+            <tr><th scope="row">Where it works</th><td>Everywhere Claude runs, including claude.ai and mobile, with no server of your own.</td><td>Claude Desktop and Claude Code on the same computer, or claude.ai through an organization deployment. The same checkpoint also serves <a href="/ai-agents/chatgpt/">ChatGPT</a> and <a href="/ai-agents/gemini-enterprise/">Gemini Enterprise</a>.</td></tr>
+            <tr><th scope="row">Cost</th><td>Included in Claude plans; some partner connectors need the partner's own plan.</td><td>Free and open source. You run it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="both-heading">
+      <div class="section-heading">
+        <p class="kicker">Using both</p>
+        <h2 id="both-heading">Turn off the built-in connector for the same service.</h2>
+      </div>
+      <div class="page-copy stack">
+        <p>PrivacyFence and Claude's own connectors can sit side by side, but only one should reach each service. If the built-in Gmail connector stays on next to PrivacyFence's Gmail tools, Claude can read the mailbox either way, and the checkpoint only covers the calls that happen to go through it.</p>
+        <ul>
+          <li><strong>For services PrivacyFence governs,</strong> switch off Claude's connector. On Team and Enterprise plans an owner can do that for everyone.</li>
+          <li><strong>For services it doesn't,</strong> keep using Claude's connectors as before.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="sources-heading">
+      <div class="section-heading">
+        <p class="kicker">Sources</p>
+        <h2 id="sources-heading">Where the comparison comes from.</h2>
+      </div>
+      <div class="page-copy stack">
+        <ul>
+          <li><a href="https://support.claude.com/en/articles/10166901-use-google-workspace-connectors">Use Google Workspace connectors</a>, Claude Help Center</li>
+          <li><a href="https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities">Use connectors to extend Claude's capabilities</a>, Claude Help Center, updated 20 August 2026</li>
+          <li><a href="https://support.claude.com/en/articles/16952184-set-up-salesforce-in-claude-for-your-organization">Set up Salesforce in Claude for your organization</a>, Claude Help Center</li>
+          <li><a href="https://support.claude.com/en/articles/13015708-access-the-compliance-api">Access the Compliance API</a>, Claude Help Center</li>
+          <li><a href="https://claude.com/connectors/slack">Slack</a> and <a href="https://claude.com/connectors/atlassian">Atlassian</a> in Claude's connector directory</li>
+          <li>For PrivacyFence: <a href="/connectors/">Connectors</a>, <a href="/docs/approvals-and-policy/">Approvals and policy</a> and <a href="/docs/security-and-compliance/">Security and compliance</a></li>
+        </ul>
+        <p>Spotted something out of date? Write to <a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a> and it will be corrected.</p>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>See the checkpoint in Claude.</h2>
+          <p>Set up PrivacyFence with Claude Desktop in a few steps, or compare it with general-purpose MCP gateways.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/ai-agents/claude-desktop/">Claude Desktop</a>
+          <a class="button secondary" href="/compare/mcp-gateways/">Compare MCP gateways</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
