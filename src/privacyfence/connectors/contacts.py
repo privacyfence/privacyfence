@@ -11,6 +11,7 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..contacts_client import ContactsClient, ContactsClientError
+from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 from ..privacy_filter import apply_text
 
@@ -378,6 +379,9 @@ class ContactsConnector(Connector):
             return await asyncio.to_thread(func, *args)
         except ContactsClientError as exc:
             logger.error("Contacts fetch failed: %s", exc)
+            unavailable = unavailable_error("contacts", exc, self.my_email)
+            if unavailable is not None:
+                raise unavailable from exc
             raise RuntimeError(str(exc)) from exc
 
     def _auto_audit(

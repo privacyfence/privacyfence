@@ -1,4 +1,4 @@
-# ADR 0106: Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise
+# ADR 0107: Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise
 
 ## Status
 

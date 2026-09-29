@@ -14,11 +14,15 @@ underlying client call from ever happening.
 """
 from __future__ import annotations
 
+import types
 import json
 from unittest.mock import MagicMock
 
 import pytest
+from googleapiclient.errors import HttpError
 
+from privacyfence.google_errors import GoogleResourceUnavailableError
+from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE, public_message
 from privacyfence.apps_script_client import (
     AppsScriptClient,
     AppsScriptClientError,
@@ -31,6 +35,19 @@ from privacyfence.connectors import apps_script as apps_script_module
 from privacyfence.connectors.apps_script import AppsScriptConnector
 
 from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+
+
+
+def _http_error(status, body):
+    resp = types.SimpleNamespace(status=status, reason="error")
+    content = body if isinstance(body, bytes) else json.dumps(body).encode()
+    return HttpError(resp, content)
+
+
+def _client_error(cls, status, body):
+    err = cls("x failed")
+    err.__cause__ = _http_error(status, body)
+    return err
 
 
 def make_connector():
@@ -324,3 +341,32 @@ class TestEveryToolIsAudited:
             connector, apps_script_module, monkeypatch, tmp_path,
             arg_overrides={"apps_script_write_content": {"files": _VALID_FILES_JSON}},
         )
+
+
+class TestGoogleUnavailableErrors:
+    async def test_not_found_reaches_the_agent(self):
+        connector, client = make_connector()
+        connector.my_email = "alice@example.com"
+        client.get_content.side_effect = _client_error(
+            AppsScriptClientError, 404, {"error": {"code": 404, "errors": [{"reason": "notFound"}]}}
+        )
+
+        with pytest.raises(GoogleResourceUnavailableError) as excinfo:
+            await connector.call("apps_script_get_content", {"script_id": "s1"})
+
+        message = public_message(excinfo.value)
+        assert "Google Apps Script" in message or "Apps Script" in message
+        assert "alice@example.com" in message
+
+    async def test_other_http_errors_stay_generic(self):
+        connector, client = make_connector()
+        connector.my_email = "alice@example.com"
+        client.get_content.side_effect = _client_error(
+            AppsScriptClientError, 500, {"error": {"code": 500, "errors": [{"reason": "backendError"}]}}
+        )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await connector.call("apps_script_get_content", {"script_id": "s1"})
+
+        assert type(excinfo.value) is RuntimeError
+        assert public_message(excinfo.value) == GENERIC_PUBLIC_MESSAGE

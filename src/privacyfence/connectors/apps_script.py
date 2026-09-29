@@ -37,6 +37,7 @@ from typing import Any
 from ..apps_script_client import AppsScriptClient, AppsScriptClientError, ScriptFile
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
+from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ def _format_files(files: list[ScriptFile] | list[dict]) -> str:
 class AppsScriptConnector(Connector):
     def __init__(self, client: AppsScriptClient) -> None:
         self._apps_script = client
+        self.my_email: str = ""
 
     @property
     def name(self) -> str:
@@ -293,6 +295,9 @@ class AppsScriptConnector(Connector):
             return await asyncio.to_thread(func, *args)
         except AppsScriptClientError as exc:
             logger.error("Apps Script fetch failed: %s", exc)
+            unavailable = unavailable_error("apps_script", exc, self.my_email)
+            if unavailable is not None:
+                raise unavailable from exc
             raise RuntimeError(str(exc)) from exc
 
     def _auto_audit(

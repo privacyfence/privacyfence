@@ -3,7 +3,7 @@
 **SEEDED FROM VENDOR DOCS, NOT YET CAPTURED.** Written 2026-09-28 from the source of Gemini CLI
 0.61.0 (tag `v0.61.0`, commit `bb523741c7429a44d03e964bc124c7c92df59d5f`), not from a handshake
 against a PrivacyFence deployment. It stays seeded: Gemini CLI is not a supported AI client
-([ADR 0106](../../../../docs/adr/0106-gemini-cli-and-antigravity-are-not-supported-clients.md)), so
+([ADR 0107](../../../../docs/adr/0107-gemini-cli-and-antigravity-are-not-supported-clients.md)), so
 no manual run will capture it. It is kept because the registry still recognises Gemini CLI, and
 this replay is what checks that entry.
 

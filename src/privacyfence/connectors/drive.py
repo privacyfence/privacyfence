@@ -19,6 +19,7 @@ from ..drive_client import (
     _parse_a1_range,
     resolve_download_destination,
 )
+from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 from ..org_mode import DownloadDeliveryConfig, base64_length
 from ..principal import current_principal
@@ -1864,6 +1865,9 @@ class DriveConnector(Connector):
             return await asyncio.to_thread(func, *args)
         except DriveClientError as exc:
             logger.error("Drive fetch failed: %s", exc)
+            unavailable = unavailable_error("drive", exc, self.my_email)
+            if unavailable is not None:
+                raise unavailable from exc
             raise RuntimeError(str(exc)) from exc
 
     async def _note_own_write(self, file_id: str, modified_time: str = "") -> None:
