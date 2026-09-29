@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Organization mode: Gemini Enterprise on Settings → AI systems.** An admin can now pin a Gemini Enterprise registration to Gemini Enterprise, and a registration named "Gemini Enterprise" is attributed to it in approval cards and the Audit Log without a pin ([issue 393](https://github.com/privacyfence/privacyfence/issues/393), [ADR 0109](docs/adr/0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md)).
+
 ### Changed
 
 - **The AI client is told when a Google file isn't shared with you.** When Google Drive, Docs, Sheets, Gmail, Calendar, Contacts, Tasks or Apps Script answers that an item doesn't exist or isn't shared with the connected account, the AI client now gets that reason, and the account's address where PrivacyFence knows it, instead of "Tool call failed. See the PrivacyFence log for details." [#799](https://github.com/privacyfence/privacyfence/issues/799)
