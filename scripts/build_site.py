@@ -1029,7 +1029,7 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         f"- [claude.ai]({SITE_URL}/ai-agents/claude-ai/): claude.ai as a custom connector to an organization deployment, with OAuth sign-in",
         f"- [ChatGPT]({SITE_URL}/ai-agents/chatgpt/): ChatGPT desktop with your own token on your own computer, or ChatGPT in Developer Mode with OAuth sign-in to an organization deployment",
         f"- [Gemini Enterprise]({SITE_URL}/ai-agents/gemini-enterprise/): Gemini Enterprise as a custom MCP server data store on an organization deployment, with OAuth sign-in",
-        f"- [FAQ]({SITE_URL}/faq/): where your data goes, which AI clients work, what the AI sees before approval, certification, cost and verifying a download",
+        f"- [FAQ]({SITE_URL}/faq/): whether it is an MCP gateway, where your data goes, which AI clients work, what the AI sees before approval, certification, cost and verifying a download",
         f"- [Download]({SITE_URL}/download/): installers for macOS, Windows and Linux, each with its SHA-256 checksum",
         f"- [Releases]({SITE_URL}/releases/): the newest release on every channel, stable and pre-release, with its installers and release notes",
         f"- [Privacy policy]({SITE_URL}/privacy/): what this website and the download service do with visitor data",
