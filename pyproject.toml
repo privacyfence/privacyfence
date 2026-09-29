@@ -168,9 +168,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://privacyfence.eu"
 Download = "https://privacyfence.eu/download/"
-Documentation = "https://github.com/privacyfence/privacyfence/blob/main/docs/README.md"
+Documentation = "https://privacyfence.eu/docs/"
 Source = "https://github.com/privacyfence/privacyfence"
-Changelog = "https://github.com/privacyfence/privacyfence/blob/main/CHANGELOG.md"
+Changelog = "https://privacyfence.eu/releases/"
 Issues = "https://github.com/privacyfence/privacyfence/issues"
 Security = "https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md"
 

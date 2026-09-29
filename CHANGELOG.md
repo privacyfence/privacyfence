@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **PyPI links point at privacyfence.eu.** The Documentation and Changelog links on the PyPI project page now open [privacyfence.eu/docs](https://privacyfence.eu/docs/) and [privacyfence.eu/releases](https://privacyfence.eu/releases/) instead of files on GitHub.
+
 ## [5.2.0] — 2026-09-29
 
 ### Added
