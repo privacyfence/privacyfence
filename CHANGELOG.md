@@ -45,22 +45,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [5.2.1] — 2026-09-29
 
-*Supersedes 5.2.0, which was never published. GitHub started every workflow for the `v5.2.0` tag
-push twice, and the two `build.yml` runs each uploaded half of the artifacts to the R2 release
-archive: `r2_release.py upload` refuses to overwrite a published object with different bytes, and
-two separately signed builds never match. Neither run had all four build jobs succeed, so
-`finalize-release` created no GitHub Release and `publish-pypi.yml`'s `wait_for_build` published
-nothing to PyPI. 5.2.1 is 5.2.0's content, released from a new tag.*
+*Supersedes 5.2.0, which was never published. GitHub started the `v5.2.0` release build twice,
+and the two runs each uploaded half of the files, so no release was created. 5.2.1 carries all of
+5.2.0's changes, and a release build now cancels a duplicate run of itself
+([ADR 0111](docs/adr/0111-a-duplicate-release-run-cancels-itself.md)).*
 
 ### Added
 
 - **Gemini Enterprise (organization deployments).** Gemini Enterprise connects to an organization deployment as a custom MCP server data store, set up by registering its client through `/register`. [Connect Gemini Enterprise](docs/connect-gemini-enterprise.md) has the steps, including the 100-action limit and what Gemini Enterprise can do with files ([ADR 0110](docs/adr/0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md)).
 - **Organization mode: Gemini Enterprise on Settings → AI systems.** An admin can now pin a Gemini Enterprise registration to Gemini Enterprise, and a registration named "Gemini Enterprise" is attributed to it in approval cards and the Audit Log without a pin ([issue 393](https://github.com/privacyfence/privacyfence/issues/393), [ADR 0109](docs/adr/0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md)).
+- **Listed on the official MCP registry.** Each stable release now publishes the Claude Desktop extension to the MCP registry as `io.github.privacyfence/privacyfence`, and attaches `PrivacyFence.mcpb` to its GitHub Release on its own, because the registry only accepts a package hosted there. The DMG still carries it too ([ADR 0112](docs/adr/0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md)).
 
 ### Changed
 
 - **The AI client is told when a Google file isn't shared with you.** When Google Drive, Docs, Sheets, Gmail, Calendar, Contacts, Tasks or Apps Script answers that an item doesn't exist or isn't shared with the connected account, the AI client now gets that reason, and the account's address where PrivacyFence knows it, instead of "Tool call failed. See the PrivacyFence log for details." [#799](https://github.com/privacyfence/privacyfence/issues/799)
 - **PyPI links point at privacyfence.eu.** The Documentation and Changelog links on the PyPI project page now open [privacyfence.eu/docs](https://privacyfence.eu/docs/) and [privacyfence.eu/releases](https://privacyfence.eu/releases/) instead of files on GitHub.
+- **The Claude Desktop extension says it needs the PrivacyFence app.** Its description and its "daemon did not start" error now point to [privacyfence.eu/download](https://privacyfence.eu/download/) for macOS, Windows and Linux, instead of describing a macOS-only, hand-configured setup.
 
 ### Fixed
 
