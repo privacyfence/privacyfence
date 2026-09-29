@@ -43,7 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [5.2.0] — 2026-09-29
+## [5.2.1] — 2026-09-29
+
+*Supersedes 5.2.0, which was never published. GitHub started every workflow for the `v5.2.0` tag
+push twice, and the two `build.yml` runs each uploaded half of the artifacts to the R2 release
+archive: `r2_release.py upload` refuses to overwrite a published object with different bytes, and
+two separately signed builds never match. Neither run had all four build jobs succeed, so
+`finalize-release` created no GitHub Release and `publish-pypi.yml`'s `wait_for_build` published
+nothing to PyPI. 5.2.1 is 5.2.0's content, released from a new tag.*
 
 ### Added
 
@@ -3127,8 +3134,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.2.0...HEAD
-[5.2.0]: https://github.com/privacyfence/privacyfence/compare/v5.1.0...v5.2.0
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.2.1...HEAD
+[5.2.1]: https://github.com/privacyfence/privacyfence/compare/v5.1.0...v5.2.1
 [5.1.0]: https://github.com/privacyfence/privacyfence/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/privacyfence/privacyfence/compare/v4.7.0...v5.0.0
 [4.7.0]: https://github.com/privacyfence/privacyfence/compare/v4.6.1...v4.7.0
