@@ -97,6 +97,12 @@ class TestRealNamedRuntimeErrorSubclasses:
         assert public_message(exc) == str(exc)
         assert public_message(exc).endswith('JSON string): "say \\"less\\""')
 
+    def test_google_resource_unavailable_error_passes_through(self):
+        from privacyfence.google_errors import GoogleResourceUnavailableError
+
+        exc = GoogleResourceUnavailableError("Gmail says the item does not exist.")
+        assert public_message(exc) == "Gmail says the item does not exist."
+
     def test_gate_denied_error_by_user_note_is_still_redacted(self):
         from privacyfence.deny_feedback import DenialFeedback
         from privacyfence.gate import GateDeniedError

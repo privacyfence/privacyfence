@@ -18,6 +18,7 @@ from ..calendar_client import (
     normalize_event_color,
 )
 from ..connector import Connector, ToolParam, ToolSpec
+from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 
 logger = logging.getLogger(__name__)
@@ -976,6 +977,9 @@ class CalendarConnector(Connector):
             return await asyncio.to_thread(func, *args)
         except CalendarClientError as exc:
             logger.error("Calendar fetch failed: %s", exc)
+            unavailable = unavailable_error("calendar", exc, self.my_email)
+            if unavailable is not None:
+                raise unavailable from exc
             raise RuntimeError(str(exc)) from exc
 
     async def _calendar_name_for(self, calendar_id: str) -> str:
