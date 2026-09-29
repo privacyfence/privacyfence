@@ -185,8 +185,12 @@ process guarantees are:
   artifacts. `finalize-release` (`needs: [build, build-windows, build-deb, sbom]`, the same job that
   promotes R2's `latest.json`) downloads them all and makes the one `softprops/action-gh-release`
   call, so a release gets the complete file set or is not touched at all.
+- **One run per tag push:** GitHub occasionally starts a workflow twice for one push, and two
+  `build.yml` runs for one tag cannot both succeed. Each workflow's first job, `dedupe`, cancels
+  the newer of two runs for the same push (`scripts/release_run_guard.py`, see
+  [ADR 0111](docs/adr/0111-a-duplicate-release-run-cancels-itself.md)).
 - **PyPI waits for `build.yml`:** GitHub Actions has no `needs:` across workflow files, so
-  `publish-pypi.yml`'s first job, `wait_for_build`, polls for `build.yml`'s run on the same commit
+  `publish-pypi.yml`'s `wait_for_build` job polls for `build.yml`'s run on the same commit
   and fails, publishing nothing, unless it succeeded. It is keyed on commit SHA, not run recency,
   so a `workflow_dispatch` rerun after a fixed `build.yml` finds the new result immediately (see
   that job's own comment).

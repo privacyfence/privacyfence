@@ -34,6 +34,39 @@ permissions:
   contents: read
 
 jobs:
+  # GitHub occasionally starts a workflow twice for one tag push, and two runs for one tag cannot
+  # both succeed (ADR 0111). Every other job waits on this one; a duplicate cancels its own run.
+  # If the API can't be read, the run goes ahead: the guard is an addition, not a gate.
+  dedupe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write   # only to cancel this run when it is the duplicate
+    outputs:
+      duplicate: ${{ steps.check.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cancel this run if another run is already handling the same push
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-pypi.yml/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=30")"; then
+            DUPLICATE="$(python3 scripts/release_run_guard.py --run-id "$GITHUB_RUN_ID" \
+              --event "$GITHUB_EVENT_NAME" --ref-name "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" <<<"$RUNS")"
+          else
+            echo "::warning::Could not list this workflow's runs; not checking for a duplicate run."
+            DUPLICATE=false
+          fi
+          echo "duplicate=$DUPLICATE" >> "$GITHUB_OUTPUT"
+          if [[ "$DUPLICATE" == "true" ]]; then
+            echo "::warning::Another run of publish-pypi.yml is already handling ${GITHUB_REF_NAME} at ${GITHUB_SHA}; cancelling this duplicate run."
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          fi
+
   # Every published DMG/installer/.deb is started and exercised, automatically, before it (or
   # anything else from the same tag) actually ships -- see CLAUDE.md's "Packaged-artifact release
   # gating" section. This job wires that guarantee into this workflow's own publish steps too: a
@@ -64,6 +97,8 @@ jobs:
   # Polling via the `gh` CLI instead needs no `uses:` action at all (it's preinstalled on
   # ubuntu-latest and already authenticates from GH_TOKEN), so it can't be blocked the same way.
   wait_for_build:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read   # only permission this job needs -- it never checks out the repo
@@ -90,7 +125,9 @@ jobs:
             runs_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
               -f "head_sha=${GITHUB_SHA}" -F "per_page=10")"
             # Most recent attempt for this exact commit, in case of a manual re-run.
-            run="$(jq -c '.workflow_runs | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
+            # A cancelled run is left out: a duplicate run cancels itself (ADR 0111), and one cancelled
+            # by hand has nothing to say about this commit either way.
+            run="$(jq -c '[.workflow_runs[] | select(.conclusion != "cancelled")] | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
 
             if [[ -n "$run" ]]; then
               status="$(jq -r '.status' <<<"$run")"
@@ -120,6 +157,8 @@ jobs:
           done
 
   build:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: ubuntu-latest   # pure Python sdist/wheel -- no macOS-only step needed
     outputs:
       version: ${{ steps.release.outputs.version }}
