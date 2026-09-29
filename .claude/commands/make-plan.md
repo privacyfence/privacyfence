@@ -1,5 +1,5 @@
 ---
-description: Write a docs/*-plan.md with an /implement manifest on its own plan/ branch, plus a step-by-step HTML page for anything only a human can do
+description: Research a change, then write either a single-session prompt (small scope) or a docs/*-plan.md with an /implement manifest on its own plan/ branch (large scope), plus a step-by-step HTML page for anything only a human can do
 argument-hint: "<what to build: a prompt, an issue number, or both>"
 model: opus
 ---
@@ -8,12 +8,19 @@ You are the **planner** for:
 
 $ARGUMENTS
 
-You write the plan; you do not implement any of it. The output is one plan document on its own
-`plan/<slug>` branch, shaped so `/implement` (`.claude/commands/implement.md`) can run it with
-Sonnet worker sessions, and, when any step needs the user's hands, one HTML artifact with
-step-by-step instructions for those steps. The user started you with this command. That is their
-explicit permission to create and push the `plan/<slug>` branch. It is not permission to push
-anywhere else, open a pull request, or change `main`.
+You research and plan; you do not implement any of it. Depending on the size of the change (see
+section 0's last step), the output is one of:
+
+- **Single-session prompt** (small scope): a self-contained prompt the user copies into a new
+  session, meant for Sonnet unless you say it needs Opus. No branch, no plan document, no
+  orchestration. Sections 1 to 5 do not apply; follow "Small scope: a single-session prompt" below.
+- **Plan** (large scope): one plan document on its own `plan/<slug>` branch, shaped so
+  `/implement` (`.claude/commands/implement.md`) can run it with Sonnet worker sessions.
+
+Either way, when any step needs the user's hands, you also make one HTML artifact with
+step-by-step instructions for those steps (section 3). The user started you with this command.
+That is their explicit permission to create and push the `plan/<slug>` branch. It is not
+permission to push anywhere else, open a pull request, or change `main`.
 
 A plan branch is never PR'd. `/implement` cuts the feature branch from it, so the plan travels
 with the work, and the plan's last phase deletes the plan document; that deletion reaches `main`
@@ -31,6 +38,47 @@ in the feature PR. That is the only way a plan lands.
 3. If a decision is genuinely the user's (scope, product behaviour, a trade-off with no default in
    the code or the ADRs), ask it now with `AskUserQuestion`, all such questions in one call. Do not
    ask about things you can settle by reading the code. Do not start writing until they answer.
+4. **Decide the scope.** It is **small** when the whole change fits one "Sizing for Sonnet" phase
+   (section 2): complexity S or M, one coherent change, one PR, nothing that has to be merged and
+   reviewed in stages. A typical bug-fix issue or a contained feature is small. Otherwise it is
+   **large**. If the user said which they want, do that. When in doubt between the two, prefer
+   small: an orchestrated plan costs several sessions and a review round.
+
+## Small scope: a single-session prompt
+
+Skip sections 1, 2, 4 and 5. Section 3 still applies: manual steps go only at the very beginning
+and the very end of the prompt, and get the HTML artifact if there are any (publish it, but do not
+commit it; there is no branch).
+
+Write the prompt so a Sonnet session with no context but the repository can do the work and open
+the PR in one go. It holds, in this order:
+
+1. **Before you start**: the `manual_before` steps, if any, as "confirm with the user that these
+   are done before changing anything", with the artifact link.
+2. **Goal**: the issue link and what changes for the user.
+3. **Context**: what the code does today, with `path:line` references, and the ADRs and docs that
+   constrain the change.
+4. **Design**: every decision already made, as in a plan's Design section (names, signatures,
+   strings, schema), and what you rejected where it is not obvious.
+5. **Steps**: numbered and prescriptive, naming files, symbols and the tests to extend, ending
+   with docs, the `CHANGELOG.md` `[Unreleased]` line if user-visible, and an ADR if the change
+   meets CLAUDE.md's bar (with its number and one-line decision).
+6. **Acceptance**: each item a named test, a grep or a command.
+7. **Stop conditions**: what the session should see if this prompt is wrong, and that it should
+   then stop and ask instead of improvising.
+8. **Finish**: branch name (`<type>/<kebab-case>` per CLAUDE.md), run `/dod`, open one PR following
+   the repo template, and drive it to green per `.claude/skills/steward/SKILL.md`.
+9. **After merge-ready**: the `manual_after` steps, if any, as unchecked items in the PR's body
+   with the artifact link, and a note to the user in the final reply.
+
+The same "Sizing for Sonnet" rules apply to the prompt as to a phase brief: no open decisions,
+mechanical acceptance. Before you hand it over, have one `Plan` subagent (`model: "opus"`) review
+it against those rules and the code, as in section 4, and fix what it finds.
+
+Your final reply: one line saying which model to start the new session on (**Sonnet**, or **Opus**
+with the reason, for example a subtle concurrency or security-sensitive change that cannot be made
+mechanical), the artifact link and `manual_before` items if any, then the prompt in one fenced
+code block, ready to paste.
 
 ## 1. The plan branch
 
