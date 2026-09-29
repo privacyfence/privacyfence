@@ -15,7 +15,7 @@ that the connected account cannot reach an ID the caller supplied, plus that
 account's own address (when it looks like one). No Google response text is
 copied into it.
 
-See docs/adr/0105-google-not-found-and-not-shared-errors-reach-the-agent.md.
+See docs/adr/0106-google-not-found-and-not-shared-errors-reach-the-agent.md.
 """
 
 from __future__ import annotations

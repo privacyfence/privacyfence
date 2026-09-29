@@ -1,4 +1,4 @@
-# ADR 0105: A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic
+# ADR 0106: A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic
 
 ## Status
 

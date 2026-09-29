@@ -3655,6 +3655,22 @@ class TestFormatDocContent:
 # ---------------------------------------------------------------------------- #
 
 class TestServiceIsThreadLocal:
+    def test_service_uses_retrying_transport(self):
+        from privacyfence.google_http import RetryOnceAuthorizedHttp
+
+        client = DriveClient(client_config={}, token_file="/tmp/unused-token.json")
+        with patch("privacyfence.drive_client.build") as mock_build, \
+             patch.object(client, "_load_credentials", return_value=MagicMock()):
+            mock_build.side_effect = lambda *a, **k: MagicMock()
+            client._get_service()
+            client._get_docs_service()
+            client._get_sheets_service()
+
+        assert mock_build.call_count == 3
+        for call in mock_build.call_args_list:
+            assert isinstance(call.kwargs["http"], RetryOnceAuthorizedHttp)
+            assert "credentials" not in call.kwargs
+
     def test_each_thread_gets_its_own_service_instance(self):
         client = DriveClient(client_config={}, token_file="/tmp/unused-token.json")
         with patch("privacyfence.drive_client.build") as mock_build, \

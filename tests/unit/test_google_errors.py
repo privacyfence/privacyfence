@@ -1,5 +1,5 @@
 """google_errors: which Google answers count as "not found / not shared", and
-that the message the agent sees is entirely ours (ADR 0105)."""
+that the message the agent sees is entirely ours (ADR 0106)."""
 
 from __future__ import annotations
 

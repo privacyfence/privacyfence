@@ -47,6 +47,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The AI client is told when a Google file isn't shared with you.** When Google Drive, Docs, Sheets, Gmail, Calendar, Contacts, Tasks or Apps Script answers that an item doesn't exist or isn't shared with the connected account, the AI client now gets that reason, and the account's address where PrivacyFence knows it, instead of "Tool call failed. See the PrivacyFence log for details." [#799](https://github.com/privacyfence/privacyfence/issues/799)
 
+### Fixed
+
+- **A Google read no longer fails when its connection drops.** When Google or a network device had already closed the connection a Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks or Apps Script read was about to use (seen as "EOF occurred in violation of protocol"), the read failed and the AI system said it couldn't read the data. PrivacyFence now retries such a read once on a new connection, without a second approval. PrivacyFence never retries a write, so a retry can't create a second draft or event ([#800](https://github.com/privacyfence/privacyfence/issues/800), [ADR 0105](docs/adr/0105-a-google-read-is-retried-once-when-its-connection-drops.md)).
+
 ## [5.1.0] — 2026-09-28
 
 ### Added
