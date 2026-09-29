@@ -6,7 +6,42 @@ on:
   workflow_dispatch:   # allow manual runs from the Actions tab
 
 jobs:
+  # GitHub occasionally starts a workflow twice for one tag push, and two runs for one tag cannot
+  # both succeed (ADR 0111). Every other job waits on this one; a duplicate cancels its own run.
+  # If the API can't be read, the run goes ahead: the guard is an addition, not a gate.
+  dedupe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write   # only to cancel this run when it is the duplicate
+    outputs:
+      duplicate: ${{ steps.check.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cancel this run if another run is already handling the same push
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/build.yml/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=30")"; then
+            DUPLICATE="$(python3 scripts/release_run_guard.py --run-id "$GITHUB_RUN_ID" \
+              --event "$GITHUB_EVENT_NAME" --ref-name "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" <<<"$RUNS")"
+          else
+            echo "::warning::Could not list this workflow's runs; not checking for a duplicate run."
+            DUPLICATE=false
+          fi
+          echo "duplicate=$DUPLICATE" >> "$GITHUB_OUTPUT"
+          if [[ "$DUPLICATE" == "true" ]]; then
+            echo "::warning::Another run of build.yml is already handling ${GITHUB_REF_NAME} at ${GITHUB_SHA}; cancelling this duplicate run."
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          fi
+
   build:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: macos-latest   # arm64 Apple Silicon runner
     permissions:
       contents: read
@@ -287,6 +322,8 @@ jobs:
   # attaches them to the tag's GitHub Release, so the release either gets everything or nothing --
   # see that job's own comment for why.
   build-windows:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: windows-latest
     permissions:
       contents: read
@@ -512,6 +549,8 @@ jobs:
   # itself carries the macOS `.pkg` and the `.mcpb`), the Windows installer, and the `.deb` --
   # all attached together by `finalize-release`.
   build-deb:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: ubuntu-latest   # amd64 -- the only architecture debian/control declares (ADR 0044).
                               # arm64 needs its own leg here (PyInstaller doesn't cross-compile)
                               # plus the matching debian/control and support-matrix change.
@@ -646,6 +685,8 @@ jobs:
   # -- so it runs in parallel rather than gating on (or blocking) any of
   # them.
   sbom:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
