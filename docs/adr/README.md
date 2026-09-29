@@ -14,7 +14,7 @@ describe whatever the code does today, and neither keeps a rejected alternative 
 |---|---|---|---|
 | **Plan** | What are we about to do, and in what order? | A GitHub issue (preferred), or a `docs/*-plan.md` while its work is open | Temporary. Deleted when its work lands, **after** its decisions have been extracted here |
 | **ADR** | Why is it this way, and what was rejected? | `docs/adr/NNNN-*.md` | Permanent. Never deleted; after acceptance only its Status changes |
-| **Reference** | How does it work, or how do I do X, today? | `docs/*.md`, `CLAUDE.md`, code docstrings | Living. Edited in the same PR as the behavior. Links here for the *why* instead of retelling it |
+| **Reference** | How does it work, or how do I do X, today? | `docs/*.md`, `CONTRIBUTING.md`, code docstrings | Living. Edited in the same PR as the behavior. Links here for the *why* instead of retelling it |
 
 ## When a decision needs an ADR
 
@@ -218,3 +218,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0110](0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md) | Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command | Accepted |
 | [0111](0111-a-duplicate-release-run-cancels-itself.md) | A duplicate release run cancels itself | Accepted |
 | [0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) | Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release | Accepted |
+| [0113](0113-process-docs-live-in-docs-not-in-claude-md.md) | Project process documentation lives in `docs/` and `CONTRIBUTING.md`, not in `CLAUDE.md` | Accepted |

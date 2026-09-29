@@ -5,8 +5,8 @@ description: PrivacyFence repo policy for an agent session — which work has to
 
 # Stewarding a PrivacyFence pull request
 
-This is repo-specific policy. It sits alongside `CLAUDE.md` (release mechanics and branch
-hygiene), `docs/coding-and-testing-guidelines.md` (code and test conventions, and §2.7's
+This is repo-specific policy. It sits alongside `CONTRIBUTING.md` and `docs/releasing.md` (branch hygiene and release
+mechanics), `docs/coding-and-testing-guidelines.md` (code and test conventions, and §2.7's
 definition of done) and `docs/testing-policy.md` (which tier runs where) — none of which it
 replaces. What it adds is the part none of them covers: what a session should do when the box it
 is running on cannot do the thing being asked.
@@ -96,11 +96,11 @@ In particular:
 ## Conventions worth restating because they are easy to get wrong
 
 - **Never open a concrete `## [X.Y.Z]` heading in `CHANGELOG.md` on a feature branch.** Entries go
-  under `## [Unreleased]`. `CLAUDE.md` traces this to a real incident (`d929510`) and the release
+  under `## [Unreleased]`. `docs/releasing.md` traces this to a real incident (`d929510`) and the release
   build fails loudly on a duplicated or still-populated section.
 - **PRs merge with a real merge commit, not a squash.** Every commit message on the branch
   survives into `main`'s history individually, so write each one for that audience.
-- **Branch names.** `CLAUDE.md` specifies `<type>/<kebab-case-description>` (`feature/`, `fix/`,
+- **Branch names.** `CONTRIBUTING.md` specifies `<type>/<kebab-case-description>` (`feature/`, `fix/`,
   `chore/`, `tests/` — never `feat/`). A Claude Code on the web session is assigned a
   `claude/<generated-name>` branch it cannot rename or push around, so that convention cannot be
   met from here; use the assigned branch and put the `<type>` in the PR title instead. Apply the

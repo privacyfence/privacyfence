@@ -4,8 +4,8 @@
 #
 # Two problems, in order of how quietly they break:
 #
-# 1. The web checkout arrives shallow and with no tags at all. CLAUDE.md's "Releasing"
-#    section already spells out what that costs: setuptools_scm resolves the version
+# 1. The web checkout arrives shallow and with no tags at all. docs/releasing.md
+#    already spells out what that costs: setuptools_scm resolves the version
 #    through `git describe`, so with no tags it falls back to [tool.setuptools_scm]'s
 #    fallback_version -- "a placeholder that's never a real shipped version". Both
 #    tests.yml and build.yml pass `fetch-depth: 0` to actions/checkout for exactly this
@@ -35,7 +35,7 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
 
-echo "==> Restoring full history and tags (setuptools_scm needs them -- see CLAUDE.md)"
+echo "==> Restoring full history and tags (setuptools_scm needs them -- see docs/releasing.md)"
 if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
   # --unshallow fails outright on a complete repo, hence the branch; the bare --tags
   # retry covers a server that refuses the deepening but will still hand over tags.

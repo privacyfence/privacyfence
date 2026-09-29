@@ -108,7 +108,7 @@ class TestSection:
 
     def test_duplicate_headings_for_the_same_version_raise(self):
         # The duplicate-heading trap (ADR 0023): if 4.0.0's section was opened early, following
-        # CLAUDE.md's "rename [Unreleased]" step literally produces a *second* ## [4.0.0]. Without
+        # docs/releasing.md's "rename [Unreleased]" step literally produces a *second* ## [4.0.0]. Without
         # this guard the parser would match the first heading, stop at the next ##, emit whichever
         # half came first and exit 0 -- a green build shipping half the notes.
         duplicated = (
@@ -195,7 +195,7 @@ class TestMain:
 
     def test_populated_unreleased_exits_non_zero_rather_than_dropping_the_cycle(self, capsys, tmp_path):
         # The other half of the duplicate-heading trap. Doing only the "correct its date" half of
-        # CLAUDE.md's release step leaves one correct [2.1.0] heading with the whole cycle stranded
+        # docs/releasing.md's release step leaves one correct [2.1.0] heading with the whole cycle stranded
         # above it: the duplicate guard sees nothing wrong, and the release ships without any of it.
         path = tmp_path / "CHANGELOG.md"
         path.write_text(SAMPLE, encoding="utf-8")
@@ -233,7 +233,7 @@ class TestRealChangelog:
         assert "Upgrading from 3.x" in changelog_section.section(REAL_TEXT, "4.0.0")
 
     def test_unreleased_heading_is_present_and_first(self):
-        # CLAUDE.md's d929510 failure mode: without a permanent Unreleased heading, two branches in
+        # docs/releasing.md's d929510 failure mode: without a permanent Unreleased heading, two branches in
         # flight both open a concrete version heading and both claim the same next version.
         versions = changelog_section.known_versions(REAL_TEXT)
         assert versions[0] == "Unreleased"
@@ -255,7 +255,7 @@ class TestRealChangelog:
         # A section for a version that was never tagged would produce a release body for a release
         # that doesn't exist -- a mistyped heading is otherwise invisible until tag day. The one
         # legitimate exception is the newest section: the whole point of writing the notes before
-        # the release is cut (see CLAUDE.md) is that its own tag doesn't exist yet at PR-review
+        # the release is cut (see docs/releasing.md) is that its own tag doesn't exist yet at PR-review
         # time. Sections are ordered newest-first (test_sections_are_ordered_newest_version_first),
         # so that's structurally "whichever real version heads the list" rather than a version
         # string hand-maintained here release after release -- a stale, never-tagged heading

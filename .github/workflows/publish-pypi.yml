@@ -1,6 +1,6 @@
 name: Publish to PyPI
 
-# Same trigger as build.yml (see CLAUDE.md's "Releasing" section) -- one tag
+# Same trigger as build.yml (see docs/releasing.md) -- one tag
 # push does everything: builds and signs the DMG (build.yml) *and* builds
 # and publishes the sdist/wheel (this workflow), with no separate step.
 # Independently triggered, but no longer independently *gated*: the
@@ -17,7 +17,7 @@ name: Publish to PyPI
 # There is no long-lived secret anywhere for this workflow to leak. Before
 # this workflow can publish for the first time, a maintainer has to
 # register it as a Trusted Publisher on both test.pypi.org and pypi.org --
-# see CLAUDE.md.
+# see docs/releasing.md's "Publishing to PyPI".
 on:
   push:
     tags: ['v*']
@@ -68,7 +68,7 @@ jobs:
           fi
 
   # Every published DMG/installer/.deb is started and exercised, automatically, before it (or
-  # anything else from the same tag) actually ships -- see CLAUDE.md's "Packaged-artifact release
+  # anything else from the same tag) actually ships -- see docs/releasing.md's "Packaged-artifact release
   # gating" section. This job wires that guarantee into this workflow's own publish steps too: a
   # failed packaged-artifact test on any platform blocks publication here as well.
   #
@@ -166,7 +166,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -192,7 +192,7 @@ jobs:
           name: pypi-dist
           path: dist/
 
-      # Drives both the public-index gating below (see CLAUDE.md's "Releasing" section and
+      # Drives both the public-index gating below (see docs/releasing.md and
       # scripts/r2_release.py's module docstring: only a "stable" tag reaches PyPI/TestPyPI --
       # alpha/beta/rc stop at the private R2 mirror published by the publish-r2 job) and that
       # job's R2 key prefix (releases/<channel>/<version>/...). Same "skip off a tag" tolerance as
@@ -258,7 +258,7 @@ jobs:
 
   # Gated behind the TestPyPI job above, and behind the "pypi" GitHub
   # Environment's own protection rules if any are configured (e.g. a
-  # required reviewer) -- see CLAUDE.md for setting that up.
+  # required reviewer) -- see docs/releasing.md for setting that up.
   # No explicit channel gate needed here: `needs: publish-testpypi` already means this job is
   # skipped automatically whenever that job is (GitHub Actions skips a dependent job when its
   # `needs` job was itself skipped, not just when it failed) -- and publish-testpypi is the one

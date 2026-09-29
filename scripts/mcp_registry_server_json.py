@@ -5,7 +5,7 @@
 `PrivacyFence.mcpb` to the release's GitHub Release, then hands the output to `mcp-publisher
 publish`. The committed file is a template, `mcpb/server.json.tmpl`, for the same reason
 `mcpb/manifest.json.tmpl` is one: there is no version string in the source tree, and
-setuptools_scm stays the only version source (CLAUDE.md, "Releasing"). The workflow passes in the
+setuptools_scm stays the only version source (docs/releasing.md). The workflow passes in the
 version setuptools_scm resolved and the `.mcpb` it downloaded back from the release, and this
 fills in the three things that change per release -- `version`, the package `identifier` (a
 release-asset URL, the only host the registry accepts for an MCPB package besides GitLab) and its

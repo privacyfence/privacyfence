@@ -1,6 +1,6 @@
 name: Cut release tag
 
-# Cutting a release is "tag main's tip and push the tag" (CLAUDE.md's "Releasing" section). That
+# Cutting a release is "tag main's tip and push the tag" (docs/releasing.md). That
 # is a one-line operation with no undo, and until now it could only be done from a machine holding
 # push rights to refs/tags/* -- which a Claude Code on the web container is not, and which means
 # the checks scripts/tag_release.py exists to run were only ever run when someone remembered to run
@@ -19,7 +19,7 @@ name: Cut release tag
 #                                         [Unreleased] (the one the duplicate guard can't see).
 #                                         --allow-unreleased is deliberately never passed here.
 #   3. scripts/tag_release.py          -- clean tree, on main, local main == origin/main, no tag
-#                                         already on HEAD (CLAUDE.md's "One release tag per
+#                                         already on HEAD (docs/releasing.md's "One release tag per
 #                                         commit", i.e. the v4.1.0a6/a7 incident), PEP 440 short
 #                                         form, and sequential with no gaps (the d929510 incident).
 #
@@ -63,7 +63,7 @@ jobs:
 
     # Gives the release a place to hang a required reviewer (Settings -> Environments -> release ->
     # Required reviewers), turning a dispatch into a two-person go/no-go. Exactly the checkpoint
-    # CLAUDE.md's "Publishing to PyPI" section already suggests putting on the `pypi` environment,
+    # docs/releasing.md's "Publishing to PyPI" section already suggests putting on the `pypi` environment,
     # one step earlier in the chain. The environment is created on first use; adding the reviewer to
     # it is a separate, deliberate click and this workflow works either way.
     environment: release
@@ -79,14 +79,14 @@ jobs:
           if [ -z "${RELEASE_TAG_TOKEN}" ]; then
             echo "::error::RELEASE_TAG_TOKEN is not set. This workflow cannot use GITHUB_TOKEN --"
             echo "::error::a tag pushed with it does not start build.yml or publish-pypi.yml."
-            echo "::error::See this workflow's own header and CLAUDE.md's \"Releasing\" section."
+            echo "::error::See this workflow's own header and docs/releasing.md."
             exit 1
           fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Tag main's tip, never the dispatching ref -- a release is cut from main by definition
-          # (CLAUDE.md). tag_release.py independently refuses to tag anything else, so this is the
+          # (docs/releasing.md). tag_release.py independently refuses to tag anything else, so this is the
           # first of two locks on the same door, not the only one.
           ref: main
           # Full history AND tags. tag_release.py needs the whole tag list for its sequential/

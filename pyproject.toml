@@ -205,7 +205,7 @@ privacyfence = [
 dev = [
     "pyinstaller>=6.0",
     # sdist/wheel build + local upload, for rehearsing a release by hand --
-    # see the "Publishing to PyPI" section of CLAUDE.md. CI
+    # see the "Publishing to PyPI" section of docs/releasing.md. CI
     # (.github/workflows/publish-pypi.yml) installs `build` itself and
     # never needs twine: it uploads via pypa/gh-action-pypi-publish's OIDC
     # trusted-publishing flow, not a stored token, so nothing here signs
@@ -285,7 +285,7 @@ lint = [
 
 [tool.setuptools_scm]
 # The version is derived entirely from git tags now -- see this repo's
-# CLAUDE.md "Releasing" section. A release tag looks like `vX.Y.Z` (stable)
+# docs/releasing.md. A release tag looks like `vX.Y.Z` (stable)
 # or `vX.Y.Z<a|b|rc><N>` (pre-release, PEP 440 short form, e.g. `v4.0.0a13`);
 # setuptools_scm reads it via `importlib.metadata.version("privacyfence")`
 # at runtime (see src/privacyfence/__init__.py). Between tags it synthesizes
@@ -365,8 +365,8 @@ python_version = "3.11"
 # default strictness currently finds ~87 pre-existing errors across ~20
 # files (mostly connector wiring in daemon_main.py and a few Starlette/ASGI
 # signature mismatches) -- none of them are new to this change, and fixing
-# them all is out of this PR's scope (see CLAUDE.md's own "don't silently
-# expand scope" note). CI runs mypy over the whole tree non-blocking (informational only) so those
+# them all is out of this PR's scope.
+# CI runs mypy over the whole tree non-blocking (informational only) so those
 # pre-existing errors are visible without failing every build; per-module
 # `[[tool.mypy.overrides]]` blocks should be added below as modules get cleaned up and
 # promoted to blocking -- see url_safety.py's override just below for the first one, and its

@@ -14,7 +14,7 @@
 #                                # (icon conversion, step 1), so VERSION
 #                                # below can read its installed metadata
 #                                # (git-tag-derived, see this repo's
-#                                # CLAUDE.md "Releasing" section)
+#                                # docs/releasing.md)
 #   Inno Setup 6                # https://jrsoftware.org/isinfo.php -- iscc.exe
 #                                # must be on PATH (winget install
 #                                # JRSoftware.InnoSetup, or add its install
@@ -53,7 +53,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
 # Version comes from the git tag via setuptools_scm now (this repo's
-# CLAUDE.md "Releasing" section) -- read back through the installed
+# docs/releasing.md) -- read back through the installed
 # package's own metadata, same as PrivacyFenceApp.win.spec and
 # src/privacyfence/__init__.py. Fails clearly if PrivacyFence itself hasn't
 # been `pip install -e .`d yet, same as build_dmg.sh's identical check.

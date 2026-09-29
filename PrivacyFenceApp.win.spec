@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path("scripts").resolve()))
 from pyinstaller_common import DATAS, HIDDEN_IMPORTS  # noqa: E402
 
 # Version comes from the git tag via setuptools_scm now, not a hardcoded
-# string here (see this repo's CLAUDE.md "Releasing" section) -- read back
+# string here (see docs/releasing.md) -- read back
 # through the *installed* privacyfence package's own metadata
 # (build_installer.ps1 and CI both `pip install -e .` before running
 # PyInstaller), the same way src/privacyfence/__init__.py itself resolves

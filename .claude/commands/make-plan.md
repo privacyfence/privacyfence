@@ -30,7 +30,7 @@ in the feature PR. That is the only way a plan lands.
 
 1. If `$ARGUMENTS` names an issue (`#<n>` or a URL), read it and its comments with the GitHub MCP
    tools. If `$ARGUMENTS` is empty, stop and ask what to plan.
-2. Read `CLAUDE.md`, `docs/coding-and-testing-guidelines.md`, `docs/testing-policy.md`,
+2. Read `CLAUDE.md`, `CONTRIBUTING.md`, `docs/releasing.md`, `docs/coding-and-testing-guidelines.md`, `docs/testing-policy.md`,
    `.claude/skills/steward/SKILL.md`, `docs/adr/README.md`, and every ADR, reference doc and source
    module the change touches. Use `Explore` subagents for broad sweeps; read the files that matter
    yourself. The plan's quality depends on this step: a Sonnet worker executes what the plan says
@@ -62,11 +62,11 @@ the PR in one go. It holds, in this order:
    strings, schema), and what you rejected where it is not obvious.
 5. **Steps**: numbered and prescriptive, naming files, symbols and the tests to extend, ending
    with docs, the `CHANGELOG.md` `[Unreleased]` line if user-visible, and an ADR if the change
-   meets CLAUDE.md's bar (with its number and one-line decision).
+   meets CONTRIBUTING.md's ADR bar (with its number and one-line decision).
 6. **Acceptance**: each item a named test, a grep or a command.
 7. **Stop conditions**: what the session should see if this prompt is wrong, and that it should
    then stop and ask instead of improvising.
-8. **Finish**: branch name (`<type>/<kebab-case>` per CLAUDE.md), run `/dod`, open one PR following
+8. **Finish**: branch name (`<type>/<kebab-case>` per CONTRIBUTING.md), run `/dod`, open one PR following
    the repo template, and drive it to green per `.claude/skills/steward/SKILL.md`.
 9. **After merge-ready**: the `manual_after` steps, if any, as unchecked items in the PR's body
    with the artifact link, and a note to the user in the final reply.
@@ -104,7 +104,7 @@ code block, ready to paste.
    modules, functions, config keys, routes, schema versions, exact user-visible strings, error
    texts. Where you chose between alternatives, say what you rejected and why; that text becomes
    the ADRs in the last phase.
-4. **ADRs** — one bullet per decision that meets CLAUDE.md's ADR bar ("Decisions, plans and
+4. **ADRs** — one bullet per decision that meets CONTRIBUTING.md's ADR bar ("Decisions, plans and
    ADRs"), with the ADR number it will take (next free number in `docs/adr/`) and its one-line
    decision. Write "none" if there are none.
 5. **Manual steps** — a summary of `manual_before` and `manual_after` (see section 3), linking to the
@@ -119,7 +119,7 @@ code block, ready to paste.
 
 ```yaml
 plan_slug: <slug>
-feature_branch: feature/<slug>          # CLAUDE.md's <type>/<kebab-case>; fix/ or chore/ if that fits better
+feature_branch: feature/<slug>          # CONTRIBUTING.md's <type>/<kebab-case>; fix/ or chore/ if that fits better
 tracking_issue: <n>                     # optional; the orchestrator's ledger goes there
 max_parallel: 2                         # phases in one wave must have disjoint `touches`
 manual_steps_artifact: <claude.ai artifact URL, or omit if there are no manual steps>
@@ -241,7 +241,7 @@ Start one `Plan` subagent (`model: "opus"`, fresh context) and give it the plan 
 this command file's path. Ask it to report, as a numbered list with severities, anything that:
 fails "Sizing for Sonnet"; leaves a decision open in a brief; lets two phases in one wave share a
 path in `touches`; puts a manual step in the middle or calls something manual that the steward table
-can dispatch; contradicts `CLAUDE.md`, an accepted ADR or the code as it is; or would make the
+can dispatch; contradicts `CLAUDE.md`, `CONTRIBUTING.md`, `docs/releasing.md`, an accepted ADR or the code as it is; or would make the
 manifest fail `/implement`'s validation (unknown `depends_on`, a cycle, a missing `brief` or
 `acceptance`). Fix everything it finds that you agree with. When you disagree, say why in your
 final reply.

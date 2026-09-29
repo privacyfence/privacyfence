@@ -76,10 +76,10 @@ Release history is in [`../CHANGELOG.md`](../CHANGELOG.md).
 How PrivacyFence is built, tested and released. For people changing the code; not published on
 privacyfence.eu.
 
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — how to propose a change: issues, forks, pull
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — how to propose a change: issues, forks, branches, pull
   requests, license.
-- [`../CLAUDE.md`](../CLAUDE.md) — release mechanics and branch hygiene: cutting a tag, release
-  notes, branch naming, `releases/*`, worktrees.
+- [`releasing.md`](releasing.md) — versioning, cutting a tag, release notes, release gating,
+  PyPI and the R2 release archive.
 - [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — code and test
   conventions, adding a connector, and the definition of done for a pull request (§2.7).
 - [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — running PrivacyFence from source without

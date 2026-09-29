@@ -22,7 +22,7 @@ reason rather than leaving it blank.
 - [ ] In `mcpb/shim/`: `npm test` and `npm run typecheck` pass (CI blocks on both on every PR,
       whether or not it touches the shim).
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading — **not**
-      under a concrete `## [X.Y.Z]` heading, which a feature branch must never open (CLAUDE.md,
+      under a concrete `## [X.Y.Z]` heading, which a feature branch must never open (`docs/releasing.md`,
       "Release notes come from CHANGELOG.md"). Internal-only changes don't need one.
 - [ ] A decision that is hard to reverse, moves a trust boundary, changes the build/release/
       distribution path, or rejects a non-obvious alternative has an ADR in `docs/adr/`. A PR that

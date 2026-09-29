@@ -10,8 +10,8 @@ notes" button, produces a list of every merged pull request -- for 4.0.0 about 1
 reads (ADR 0023).
 
 Direction of the dependency matters: this reads a version *out of* the changelog, it never
-determines one. setuptools_scm remains the only version source (see this repo's CLAUDE.md
-"Releasing" section), there is no version string in the source tree, and nothing may parse
+determines one. setuptools_scm remains the only version source (see docs/releasing.md),
+there is no version string in the source tree, and nothing may parse
 CHANGELOG.md to find out what version is being built. The workflow passes in the version
 setuptools_scm already resolved.
 
@@ -26,7 +26,7 @@ read, so a missing section would otherwise ship the auto-generated pull-request 
 exists to replace.
 
 It exits non-zero on a *duplicated* section for the same reason, and that case is the sneakier of
-the two. CLAUDE.md's release step says to rename `## [Unreleased]` to `## [X.Y.Z] -- YYYY-MM-DD`,
+the two. docs/releasing.md's release step says to rename `## [Unreleased]` to `## [X.Y.Z] -- YYYY-MM-DD`,
 which is right whenever no such heading exists yet -- but 4.0.0's section was opened early, while
 the changelog was being written, so following that step literally would have produced a second
 `## [4.0.0]`. Matching the first heading and stopping at the next `##` then emits whichever half
@@ -34,7 +34,7 @@ came first and silently drops the other, with exit code 0: a green build shippin
 The loud failure the missing-section case already gets is what this deserves too.
 
 It exits non-zero on a populated `## [Unreleased]` too, which is the *other* half of that same
-trap and the one the duplicate check does not catch. CLAUDE.md's release step is "merge
+trap and the one the duplicate check does not catch. docs/releasing.md's release step is "merge
 [Unreleased]'s entries into the existing [4.0.0] section and correct its date"; doing only the
 date half leaves a correct, single [4.0.0] heading with every beta fix still stranded above it in
 [Unreleased]. The duplicate guard sees nothing wrong -- there is exactly one heading -- and the
@@ -224,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
             f"error: {args.changelog}'s [Unreleased] section still has entries, so the notes for "
             f"{args.version} would ship without them. The release PR must merge [Unreleased] into "
             f"[{_normalize(args.version)}] and leave a fresh empty [Unreleased] above it -- see "
-            f'CLAUDE.md\'s "Release notes come from CHANGELOG.md". Pass --allow-unreleased to '
+            f'docs/releasing.md\'s "Release notes come from CHANGELOG.md". Pass --allow-unreleased to '
             f"render anyway (never from a release build).",
             file=sys.stderr,
         )

@@ -63,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -103,7 +103,7 @@ jobs:
         run: playwright install chromium
 
       # Drives both the release-channel gating below (only a "stable" tag gets a public GitHub
-      # Release asset -- see CLAUDE.md's "Releasing" section and scripts/r2_release.py's module
+      # Release asset -- see docs/releasing.md and scripts/r2_release.py's module
       # docstring for why alpha/beta/rc stop at the private R2 archive) and the R2 upload's key
       # prefix (releases/<channel>/<version>/...).
       # A workflow_dispatch run off an untagged commit never reaches any of the tag-gated steps
@@ -355,7 +355,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -422,8 +422,7 @@ jobs:
       # rules mean SSL.com no longer issues code-signing certs as exportable .pfx files at
       # all -- the private key lives only on a FIPS token or in SSL.com's eSigner cloud
       # HSM, so this goes through SSL.com's CodeSignTool CLI (a Java tool) instead of
-      # signtool.exe against a locally imported .pfx. See this repo's CLAUDE.md
-      # "Releasing" section.
+      # signtool.exe against a locally imported .pfx. See docs/releasing.md.
       # CodeSignTool's Windows release zip bundles its own JDK (CodeSignTool.bat shells out to
       # .\jdk-11.0.2\bin\java, never a system `java`), so there's no separate JDK/setup-java step
       # needed here at all.
@@ -545,7 +544,7 @@ jobs:
       # Same private-by-default R2 archive as the `build` job's DMG upload --
       # every channel's installer lands in releases/<channel>/<version>/,
       # alongside whatever else that release shipped. See scripts/
-      # r2_release.py's module docstring and this repo's CLAUDE.md
+      # r2_release.py's module docstring and docs/releasing.md's
       # "Cloudflare R2 release archive" section.
       - name: Publish release artifacts to Cloudflare R2
         if: startsWith(github.ref, 'refs/tags/')
@@ -580,7 +579,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -713,7 +712,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -845,7 +844,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

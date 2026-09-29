@@ -7,7 +7,7 @@ are the only automated coverage for the thing every desktop user depends on and 
 until it breaks: the daemon starting itself at login. They run on packaging-related `main` pushes,
 a weekly schedule, and manual dispatch -- never on a tag push, and never as a `needs:` of
 `build.yml`'s `finalize-release` job, because this tier's own runtime cost must not sit on a
-release's critical path (see docs/testing-policy.md's Layer 6 row and this repo's CLAUDE.md). That
+release's critical path (see docs/testing-policy.md's Layer 6 row and docs/releasing.md). That
 leaves a gap: a tag can ship with autostart broken as long as the last packaging-touching push to
 `main` was green and nothing since then re-ran any of the three workflows.
 
@@ -15,7 +15,7 @@ This script closes the "nobody looked" half of that gap without touching the "mu
 live run]" half -- it never waits for a workflow to run, it only asks whether one already has. It
 first resolves which branch this release actually came from (`resolve_release_branch` -- `main`,
 unless `commit` is on a `releases/*` branch, since those get the same packaging-related trigger as
-`main`; see CLAUDE.md's branch-protection section), then for each workflow reads the single most
+`main`; see CONTRIBUTING.md's branch-protection section), then for each workflow reads the single most
 recent *completed* run on that branch and checks two things: that its commit is actually an
 ancestor of the commit being released (a run for a commit the branch hasn't reached yet says
 nothing about this tag), and that it succeeded. Anything else -- no run at all, the latest run not
@@ -44,7 +44,7 @@ so it's unit-testable without mocking either):
         --commit "$GITHUB_SHA" --channel "$CHANNEL"
 
 Run from a checkout with full history (`fetch-depth: 0`, same requirement as setuptools_scm's own
-tag resolution -- see this repo's CLAUDE.md). Full history here means every branch, not just the
+tag resolution -- see docs/releasing.md). Full history here means every branch, not just the
 one being released, which is what makes `resolve_release_branch` possible in the first place; it
 also shells out to `git merge-base --is-ancestor` to confirm a run's commit actually precedes the
 one being released.
@@ -82,7 +82,7 @@ def _get(url: str, token: str) -> Any:
 def resolve_release_branch(commit: str) -> str:
     """The branch `commit` is actually being released from: the `releases/*` branch containing it,
     if any, else `main`. `linux-graphical-session.yml`/`windows-graphical-session.yml` trigger on
-    packaging-related pushes to `main` *and* to `releases/**` alike (CLAUDE.md's branch-protection
+    packaging-related pushes to `main` *and* to `releases/**` alike (CONTRIBUTING.md's branch-protection
     section), so during a `releases/*` cycle their coverage lives on that branch, not `main` --
     querying `branch=main` unconditionally reads a branch this release never touched. Requires the
     full-history checkout the module docstring already asks for: `fetch-depth: 0` fetches every

@@ -2,7 +2,7 @@
 
 The one home for everything a human checks before a release: the gates in the order they run,
 then the manual checks per platform. What CI proves automatically, and where, is in
-[`testing-policy.md`](testing-policy.md). How a tag is cut is in `CLAUDE.md`'s "Releasing" section
+[`testing-policy.md`](testing-policy.md). How a tag is cut is in [`releasing.md`](releasing.md)
 and `/cut-release` (`.claude/commands/cut-release.md`).
 
 ## What stays manual

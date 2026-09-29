@@ -25,7 +25,7 @@
 #   pip install -e .   # PrivacyFence itself -- not built by this script, only
 #                       # needed so VERSION below can read its installed
 #                       # metadata (git-tag-derived, see this repo's
-#                       # CLAUDE.md "Releasing" section).
+#                       # docs/releasing.md).
 #
 # Usage:
 #   ./scripts/build_mcpb.sh

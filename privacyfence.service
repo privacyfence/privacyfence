@@ -1,6 +1,6 @@
 # PrivacyFence daemon systemd --user unit — Linux equivalent of
 # com.privacyfence.app.plist, for a real (non-editable) `pip`/`pipx install
-# privacyfence` (see CLAUDE.md's "Publishing to PyPI" section for how the
+# privacyfence` (see docs/releasing.md's "Publishing to PyPI" section for how the
 # package gets onto PyPI in the first place).
 #
 # The daemon has no native UI layer to import: `daemon_main.run_app()` ends
