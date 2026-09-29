@@ -56,7 +56,7 @@ and say which one in the ledger.
 
 ## 1. The feature branch
 
-- `feature_branch` comes from the manifest (it must follow CLAUDE.md's `<type>/<kebab-case>` rule).
+- `feature_branch` comes from the manifest (it must follow CONTRIBUTING.md's `<type>/<kebab-case>` rule).
 - **If it does not exist on origin yet:** create it from `<ref>` (the plan's own branch, so the plan
   and this command travel with it), then merge `origin/main` into it (a merge commit, not a rebase)
   and push. Try `git push -u origin <feature_branch>` first. If the git proxy refuses the push
@@ -114,7 +114,7 @@ Call `create_session` with:
 >    does not settle, stop and say so in your final report instead of improvising a different
 >    design. Never do anything the plan lists under `manual_before` or `manual_after`; if a step
 >    needs something from the user, stop with `status=blocked` and say what.
-> 2. Follow CLAUDE.md, `docs/coding-and-testing-guidelines.md` and `.claude/skills/steward/SKILL.md`.
+> 2. Follow CLAUDE.md, CONTRIBUTING.md, `docs/releasing.md`, `docs/coding-and-testing-guidelines.md` and `.claude/skills/steward/SKILL.md`.
 >    Add user-visible changes under `CHANGELOG.md`'s `## [Unreleased]`. Never add a version
 >    heading.
 > 3. Before your last push, run `/dod`. Every blocking row must pass. Also check every item in
@@ -190,7 +190,7 @@ start one review session with `create_session`: `source_revision` the feature br
 > You are the final reviewer for a plan that Sonnet sessions implemented phase by phase. You do not
 > change code and you push nothing. Read the plan (`<path>` at `<ref>` — `git fetch origin <ref>`,
 > then `git show FETCH_HEAD:<path>`, since the retirement phase has deleted it from this branch),
-> `CLAUDE.md`, and `docs/coding-and-testing-guidelines.md`. Then review
+> `CLAUDE.md`, `CONTRIBUTING.md`, and `docs/coding-and-testing-guidelines.md`. Then review
 > `git diff origin/main...HEAD` against the plan's Design section and each phase's `acceptance`:
 > behaviour that differs from the design, a design decision a worker made that the plan did not,
 > seams between phases (a function one phase added and another calls wrongly, duplicated
@@ -222,7 +222,7 @@ the PR body.
 
 1. Run the full `/dod` on the feature branch.
 2. Check the manifest's `final_checks` (for example: no `xfail` left that this plan added, and the
-   plan document is deleted and its decisions extracted into ADRs, per CLAUDE.md "Decisions, plans
+   plan document is deleted and its decisions extracted into ADRs, per CONTRIBUTING.md "Decisions, plans
    and ADRs").
 3. Open **one** pull request from the feature branch to `main`, following the PR template if the
    repo has one. The body lists each phase with its merge commit, the combined acceptance

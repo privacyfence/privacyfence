@@ -4,7 +4,7 @@ tests.yml` jobs that actually run on every PR and are meant to gate correctness 
 `docs/testing-policy.md`).
 
 Targets `main` by default, but `--branch` also accepts a glob pattern such as `releases/**` --
-CLAUDE.md's "Branching & PRs" section documents `releases/*` as a long-lived, cross-cycle
+CONTRIBUTING.md's "Release integration branches" section documents `releases/*` as a long-lived, cross-cycle
 integration branch pattern (e.g. `releases/4.1-dev`) protected by its own ruleset the same way
 `main` is. `REQUIRED_STATUS_CHECKS` is the same target list either way, since `tests.yml`'s push
 trigger runs the identical jobs on both. Pass the pattern exactly as it appears in that ruleset's

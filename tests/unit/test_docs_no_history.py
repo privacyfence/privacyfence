@@ -59,6 +59,7 @@ PUBLISHED_DOCS = (
 CONTRIBUTOR_DOCS = (
     "CONTRIBUTING.md",
     "CLAUDE.md",
+    "docs/releasing.md",
     "docs/README.md",
     "docs/coding-and-testing-guidelines.md",
     "docs/dev-vs-live-setup.md",

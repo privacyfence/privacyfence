@@ -4,7 +4,7 @@ PrivacyFence ships as a single DMG (app + `.mcpb` shim, one version number) via 
 ``v<major>.<minor>.<patch>[<stage><n>]`` — no PyPI package exists to check against instead.
 ``stage`` is one of ``a``/``b``/``rc`` (PEP 440's short pre-release spellings; this is also the
 exact scheme `__version__` itself now uses, derived from these same tags by setuptools_scm — see
-this repo's CLAUDE.md "Releasing" section and src/privacyfence/__init__.py); a bare
+docs/releasing.md and src/privacyfence/__init__.py); a bare
 ``v<major>.<minor>.<patch>`` tag is a stable release. The beta channel isn't hypothetical: it's the
 channel `website/download/download.js` reads to populate the "Want to test the next version?"
 section, and by now well over a dozen pre-release tags have been cut against it (``v4.0.0a11``,

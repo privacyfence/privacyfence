@@ -10,7 +10,7 @@ Every tagged release (stable and pre-release alike) uploads its artifacts here, 
       rc/<version>/...
 
 "<version>" is __version__ as setuptools_scm resolves it from the git tag (see this repo's
-CLAUDE.md "Releasing" section), e.g. "4.1.0" or "4.2.0b1" -- never the "v"-prefixed tag name
+docs/releasing.md), e.g. "4.1.0" or "4.2.0b1" -- never the "v"-prefixed tag name
 itself. The channel directory is derived from that version's PEP 440 pre-release suffix (a/b/rc,
 same short spellings src/privacyfence/update_checker.py's _STAGE_RANK already uses to rank
 update-check results); a version with no suffix is "stable".
@@ -20,7 +20,7 @@ stable, which also reaches PyPI and a public GitHub Release, pre-release tags st
 see .github/workflows/publish-pypi.yml and build.yml for exactly which channels reach which public
 index. The bucket itself is left at Cloudflare R2's default (private, no public bucket policy or
 custom domain) -- but that privacy doesn't gate who can download a pre-release. Decided
-2026-09-13 (see this repo's CLAUDE.md "Who can download a pre-release" section): anyone can,
+2026-09-13 (see docs/releasing.md's "Who can download a pre-release" section): anyone can,
 unauthenticated, through cloudflare/downloads/src/index.ts's `/download/<channel>/<artifact>`
 route, and website/download/download.js advertises whichever pre-release channel has a build to
 every visitor. What the bucket's privacy actually buys is making that Worker route the only public

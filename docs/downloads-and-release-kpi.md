@@ -6,7 +6,7 @@ counted. The code is the source of truth: `scripts/r2_release.py` (publication t
 KPI) and `website/download/` plus `website/stats.js` (the pages that show it).
 
 What a tag triggers, the channel scheme and the release checklist are in
-[`CLAUDE.md`](../CLAUDE.md) § "Releasing"; this document covers storage, delivery and counting.
+[`releasing.md`](releasing.md); this document covers storage, delivery and counting.
 
 ## How a release reaches a user
 

@@ -50,7 +50,7 @@ sys.path.insert(0, str(Path("scripts").resolve()))
 from pyinstaller_common import DATAS, HIDDEN_IMPORTS
 
 # Version comes from the git tag via setuptools_scm now, not a hardcoded string here (see this
-# repo's CLAUDE.md "Releasing" section) -- read back through the *installed* privacyfence
+# docs/releasing.md) -- read back through the *installed* privacyfence
 # package's own metadata (scripts/build_deb.sh and CI both `pip install -e .` before running
 # PyInstaller), same as PrivacyFenceApp.spec and src/privacyfence/__init__.py itself. Not used
 # directly in this spec (no BUNDLE()/plist to stamp a version into, unlike macOS) -- read anyway

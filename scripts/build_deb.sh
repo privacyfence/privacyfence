@@ -12,7 +12,7 @@
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e .        # PrivacyFence itself, so VERSION below can read its installed
-#                            # metadata (git-tag-derived, see this repo's CLAUDE.md "Releasing")
+#                            # metadata (git-tag-derived, see docs/releasing.md)
 #   pip install pyinstaller
 #   apt-get install -y dpkg-dev lintian patchelf   # dpkg-deb ships with dpkg-dev; lintian and
 #                                                   # patchelf are separate (see the RUNPATH
@@ -45,7 +45,7 @@ fi
 command -v dpkg-deb &>/dev/null || { echo "Required tool not found: dpkg-deb (apt-get install dpkg-dev)" >&2; exit 1; }
 command -v objdump &>/dev/null || { echo "Required tool not found: objdump (apt-get install binutils, a dpkg-dev dependency)" >&2; exit 1; }
 
-# Version comes from the git tag via setuptools_scm now (this repo's CLAUDE.md "Releasing")
+# Version comes from the git tag via setuptools_scm now (docs/releasing.md)
 # -- read back through the installed package's own metadata, same as PrivacyFenceApp.spec/
 # PrivacyFenceApp.linux.spec and src/privacyfence/__init__.py itself. Fails clearly if
 # PrivacyFence itself hasn't been `pip install -e .`d yet.
@@ -221,7 +221,7 @@ install -m 0755 debian/prerm "${STAGE}/DEBIAN/prerm"
 install -m 0755 debian/postrm "${STAGE}/DEBIAN/postrm"
 
 
-# debian/changelog isn't hand-maintained per release (this repo's CLAUDE.md "Releasing" section:
+# debian/changelog isn't hand-maintained per release (docs/releasing.md:
 # there's no hand-bumped version file at all, on the same reasoning) -- generate a single-entry
 # Debian changelog from the resolved version instead, matching debian/source/format's "3.0
 # (native)" (a native package's doc dir carries changelog.gz, not changelog.Debian.gz).

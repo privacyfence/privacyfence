@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Create a release tag safely -- the checks this repo's release history says a human keeps missing.
 
-Cutting a release is "tag `main`'s tip and push the tag" (this repo's CLAUDE.md "Releasing"
+Cutting a release is "tag `main`'s tip and push the tag" (docs/releasing.md
 section) -- there's no version-bump commit and no build step to catch a mistake before it's live.
 This script runs the checks that step has no other gate for, before creating the tag locally:
 
   1. **Top of main.** The checkout is on `main`, the working tree is clean, and local `main` is
      exactly `origin/main` (after a fetch) -- not ahead, not behind. Also refuses to tag a commit
-     that already carries a release tag: CLAUDE.md's "One release tag per commit" documents the
+     that already carries a release tag: docs/releasing.md's "One release tag per commit" documents the
      real incident this guards -- `git describe` (which `setuptools_scm` resolves `__version__`
      from) picks *one* tag when a commit carries several, so a second tag on the same commit as an
      existing one can silently build and try to publish under the wrong version
      (https://github.com/privacyfence/privacyfence/actions/runs/35388772087).
   2. **Valid version format.** The tag must be `vMAJOR.MINOR.PATCH`, optionally followed by
-     `a<N>`/`b<N>`/`rc<N>` -- the PEP 440 short form CLAUDE.md's "Releasing" section specifies.
+     `a<N>`/`b<N>`/`rc<N>` -- the PEP 440 short form docs/releasing.md specifies.
      Older spellings this repo's history carries (`-beta1`, `-alpha1`, ...) are tolerated when
      reading *existing* tags (see `_TAG_RE` below) but refused for a *new* one.
   3. **Sequential, no gaps.** A pre-release's number must be exactly one more than the highest
@@ -24,14 +24,14 @@ This script runs the checks that step has no other gate for, before creating the
      the first one was tagged.
 
 This does not replace human judgement about *what* to release next -- it only catches the
-mechanical slips CLAUDE.md's "Releasing" section calls out by name: `d929510` (a version bump
+mechanical slips docs/releasing.md calls out by name: `d929510` (a version bump
 landing after another release had already claimed that number, back when versions were hand-bumped
 commits rather than tags) and the `v4.1.0a6`/`v4.1.0a7` double-tag above. It does not check
 `CHANGELOG.md` -- `scripts/changelog_section.py` already gates that at release-build time, so a
 missing or unmerged `[Unreleased]` section fails loudly there rather than being duplicated here.
 
 Only creates the tag locally by default -- pushing it starts `build.yml` and `publish-pypi.yml`
-immediately (CLAUDE.md's "Releasing" section), which is not something this script does without
+immediately (docs/releasing.md), which is not something this script does without
 `--push` being passed explicitly.
 
 Stdlib only, no PrivacyFence install required -- same as scripts/r2_release.py and
@@ -60,7 +60,7 @@ from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The scheme new tags must use -- CLAUDE.md's "Releasing" section: "a=alpha, b=beta,
+# The scheme new tags must use -- docs/releasing.md: "a=alpha, b=beta,
 # rc=release-candidate (PEP 440 short form)". Same shape as
 # src/privacyfence/update_checker.py's _VERSION_RE / scripts/r2_release.py's _VERSION_RE, minus the
 # ".dev"/"+local" tail those two also match -- this script only ever writes a tag, never compares
@@ -107,8 +107,8 @@ def parse_version(version: str) -> Identity:
     if not match:
         raise TagError(
             f"{version!r} isn't a valid release version -- expected major.minor.patch, optionally "
-            "followed by a pre-release suffix a<N>/b<N>/rc<N> (PEP 440 short form; see CLAUDE.md's "
-            "\"Releasing\" section). Old spellings like '-beta1' or '-alpha1' are tolerated in this "
+            "followed by a pre-release suffix a<N>/b<N>/rc<N> (PEP 440 short form; see "
+            "docs/releasing.md). Old spellings like '-beta1' or '-alpha1' are tolerated in this "
             "repo's history but must not be used for a new tag."
         )
     major, minor, patch, stage, num = match.groups()
@@ -233,7 +233,7 @@ def check_no_tag_at_head(cwd: Path) -> None:
         raise TagError(
             f"HEAD already carries tag(s) {', '.join(tags)} -- `git describe` (which setuptools_scm "
             "resolves __version__ from) picks one tag when a commit carries several, so a second "
-            "tag here can silently build under the wrong version (CLAUDE.md's \"One release tag per "
+            "tag here can silently build under the wrong version (docs/releasing.md's \"One release tag per "
             "commit\"). Move the release forward onto a new commit instead."
         )
 

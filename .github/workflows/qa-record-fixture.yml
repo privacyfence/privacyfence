@@ -76,7 +76,7 @@ jobs:
       - name: Refuse to run against a protected branch
         run: |
           set -euo pipefail
-          # releases/* is protected the same as main (see CLAUDE.md) -- this workflow commits
+          # releases/* is protected the same as main (see CONTRIBUTING.md) -- this workflow commits
           # straight to the branch it runs on, which a ruleset-protected branch must never accept
           # outside a PR merge.
           if [ "${GITHUB_REF_NAME}" = "main" ] || [[ "${GITHUB_REF_NAME}" == releases/* ]]; then
@@ -90,7 +90,7 @@ jobs:
           # fetch-depth: 0 for the same reason tests.yml/build.yml pass it:
           # setuptools_scm resolves the version from tag history, and a
           # shallow clone silently falls back to fallback_version (see
-          # CLAUDE.md, "Releasing").
+          # docs/releasing.md).
           fetch-depth: 0
 
       # Rebuilt every run rather than kept as runner-local state, same

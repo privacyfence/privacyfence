@@ -350,7 +350,7 @@ commands and checks the conditional rows against the branch's diff, and
 - [ ] In `mcpb/shim/`: `npm test` and `npm run typecheck` pass (CI's `test` job runs both, and
       blocks on them, on every PR — whether or not the PR touches the shim).
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading (not under
-      a concrete version heading — see this repo's CLAUDE.md, "Release notes come from
+      a concrete version heading — see `docs/releasing.md`, "Release notes come from
       CHANGELOG.md"). Internal-only changes don't need one.
 - [ ] A decision that is hard to reverse, moves a trust boundary, changes the build/release/
       distribution path, or rejects a non-obvious alternative has an ADR in `docs/adr/`. A PR that

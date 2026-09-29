@@ -68,7 +68,6 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("cloudflare/", "D1"): "Cloudflare D1 is the Worker's database product, not a plan item",
     (".github/workflows/deploy-download-worker.yml", "D1"): "Cloudflare D1, the Worker's database",
     ("website/", "D1"): "Cloudflare D1, the Worker's database",
-    ("CLAUDE.md", "D1"): "Cloudflare D1, the Worker's database",
     ("privilege_separation.py", "since 4.3"): "4.3BSD, the Unix release, not a PrivacyFence version",
     ("privilege_separation.py", "§5.8"): "FHS 3.0 §5.8, the Filesystem Hierarchy Standard's /var/lib",
     ("installer/privacyfence.iss", "#13"): "Pascal's #13 character literal (CR, as in #13#10), not an issue",

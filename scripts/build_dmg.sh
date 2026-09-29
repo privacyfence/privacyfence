@@ -20,7 +20,7 @@
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e .        # PrivacyFence itself, so VERSION below can read
 #                            # its installed metadata (git-tag-derived, see
-#                            # this repo's CLAUDE.md "Releasing" section)
+#                            # docs/releasing.md)
 #   pip install pyinstaller
 #   brew install create-dmg
 #   brew install librsvg   # optional, only if you add SVG assets
@@ -60,8 +60,7 @@ else
   PYINSTALLER=".venv/bin/pyinstaller"
 fi
 
-# Version comes from the git tag via setuptools_scm now (this repo's CLAUDE.md
-# "Releasing" section) -- read back through the installed package's own
+# Version comes from the git tag via setuptools_scm now (docs/releasing.md) -- read back through the installed package's own
 # metadata, same as PrivacyFenceApp.spec and src/privacyfence/__init__.py.
 # Fails clearly if PrivacyFence itself hasn't been `pip install -e .`d yet.
 VERSION=$("$PYTHON" -c "from importlib.metadata import version; print(version('privacyfence'))")

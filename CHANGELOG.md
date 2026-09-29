@@ -6,7 +6,7 @@ HOW TO USE THIS FILE
 1. `## [Unreleased]` is permanent. A feature branch adds its user-visible change under that
    heading and nothing else. Do NOT open a concrete `## [X.Y.Z]` heading on a feature branch:
    two branches in flight would both claim the same next version, which is the exact failure
-   CLAUDE.md records at commit d929510 ("Revert version bump -- will release together with other
+   docs/releasing.md records at commit d929510 ("Revert version bump -- will release together with other
    pending CRs") from the era when versions were hand-bumped in two files. Only the PR that cuts
    a release turns `## [Unreleased]` into `## [X.Y.Z] -- YYYY-MM-DD`, adds a fresh empty
    `## [Unreleased]` above it, and updates the two link definitions at the bottom. If a section for
@@ -15,7 +15,7 @@ HOW TO USE THIS FILE
    scripts/changelog_section.py refuses to render a version that has two.
 
 2. This file is NEVER a version source. setuptools_scm derives the version from the git tag and
-   remains the only one -- see CLAUDE.md's "Releasing" section. Nothing may parse this file to
+   remains the only one -- see docs/releasing.md. Nothing may parse this file to
    determine a version, and no version string lives in the source tree. The dependency runs the
    other way: scripts/changelog_section.py reads a version *out* of this file to produce the
    GitHub Release body for that tag (see .github/workflows/build.yml).

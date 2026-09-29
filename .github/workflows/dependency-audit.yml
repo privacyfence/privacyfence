@@ -43,7 +43,7 @@ name: Dependency audit
 #     shim but a deliberately wider scope.
 on:
   push:
-    # releases/** is protected the same as main (see CLAUDE.md) and gets the same push-triggered
+    # releases/** is protected the same as main (see CONTRIBUTING.md) and gets the same push-triggered
     # audit run, not just the pull_request one.
     branches: [main, "releases/**"]
     paths:

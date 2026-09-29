@@ -2,7 +2,7 @@
 
 How each release artifact is built, signed and installed, and which CI job proves it. For the
 support matrix and what a user does to install, see [`platform-support.md`](platform-support.md);
-for cutting a release, see [`CLAUDE.md`'s "Releasing"](../CLAUDE.md#releasing); for what
+for cutting a release, see [`releasing.md`](releasing.md); for what
 privilege separation protects, see
 [`security-and-compliance.md`](security-and-compliance.md#privilege-separation).
 
@@ -18,7 +18,7 @@ privilege separation protects, see
 Every build reads its version from the installed package metadata
 (`importlib.metadata.version("privacyfence")`, resolved from git tags by `setuptools_scm`), so each
 build script needs `pip install -e .` first and a checkout with full tag history. There is no
-version string to edit; see [`CLAUDE.md`'s "Releasing"](../CLAUDE.md#releasing).
+version string to edit; see [`releasing.md`](releasing.md).
 
 Shared build inputs:
 
@@ -304,7 +304,7 @@ the companion's service controls;
 
 `build.yml` runs on a `v*` tag push and on `workflow_dispatch` (every upload, publish and release
 step is gated on a tag ref, so a dispatch against an untagged commit is the pre-flight described in
-[`CLAUDE.md`](../CLAUDE.md#releasing)). Each job builds one artifact, runs its
+[`releasing.md`](releasing.md)). Each job builds one artifact, runs its
 `pytest.mark.packaged` tests against it, and only then uploads it; a failed test stops the job
 before any upload.
 

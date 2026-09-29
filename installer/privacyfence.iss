@@ -10,7 +10,7 @@
 ; on the command line (/D...) rather than hardcoding a version or absolute
 ; paths here -- this file has no VERSION of its own to keep in sync, same
 ; "derive it from the git tag, don't hand-bump a second copy" reasoning this
-; repo's CLAUDE.md gives for pyproject.toml/__init__.py.
+; docs/releasing.md gives for pyproject.toml/__init__.py.
 ;
 ; Do not run this directly with defaults -- it expects every /D on
 ; build_installer.ps1's iscc.exe invocation to be supplied.

@@ -2,7 +2,7 @@
  * Version -> release-channel resolution, deliberately duplicated from
  * scripts/r2_release.py's `channel_for_version()` rather than shared across the Python/
  * TypeScript boundary -- see that function's own docstring for the reasoning (this repo's
- * CLAUDE.md "Releasing" section and src/privacyfence/update_checker.py's `_VERSION_RE`/
+ * docs/releasing.md and src/privacyfence/update_checker.py's `_VERSION_RE`/
  * `_STAGE_RANK` are the same PEP 440 short-form scheme this mirrors: no suffix = stable,
  * `a`/`b`/`rc` = alpha/beta/rc).
  */

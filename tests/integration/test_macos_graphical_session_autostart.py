@@ -68,7 +68,7 @@ passwordless sudo -- same posture as
 ``tests/integration/test_linux_graphical_session_autostart.py``, scheduled the same
 way via its own ``.github/workflows/macos-graphical-session.yml`` (packaging-related
 ``main`` pushes, weekly, manual dispatch -- never tag-gating a release; see that
-workflow's own docstring and this repo's ``CLAUDE.md``).
+workflow's own docstring and ``docs/releasing.md``).
 """
 from __future__ import annotations
 

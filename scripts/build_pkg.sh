@@ -11,7 +11,7 @@
 # a system account and a LaunchDaemon) happens there, once, with PrivacyFence's
 # own explanatory text (installer/macos/pkg/resources/*.html), instead of an
 # unexplained dialog appearing later at some unrelated moment. See ADR 0002 and
-# this repo's CLAUDE.md.
+# docs/releasing.md.
 #
 # **This package is not released on its own.** scripts/build_dmg.sh calls this
 # script and puts the resulting .pkg inside the DMG, next to PrivacyFence.mcpb;
@@ -64,7 +64,7 @@ else
 fi
 
 # Same git-tag-derived version as scripts/build_dmg.sh -- see this repo's
-# CLAUDE.md "Releasing" section.
+# docs/releasing.md.
 VERSION=$("$PYTHON" -c "from importlib.metadata import version; print(version('privacyfence'))")
 APP_NAME="PrivacyFenceApp"
 PRODUCT_NAME="PrivacyFence"
