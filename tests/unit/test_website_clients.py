@@ -7,13 +7,13 @@ release supports it is a one-line change to the data file, and no page can list 
 
 Checked here, on the pages as built (tests/website_site.py):
 
-- the data file is well formed, and claude.ai is listed for organization deployments only (local
-  mode listens on localhost, which claude.ai's servers cannot reach);
+- the data file is well formed, and claude.ai and Gemini Enterprise are listed for organization deployments only (local
+  mode listens on localhost, which their providers' servers cannot reach);
 - the homepage carries the strip exactly as rendered from the data, and the strip markup is
   written nowhere by hand under website/;
 - the JSON-LD of `/` and `/download/` names the same clients;
-- no page names an AI client the data file does not list as tested. Gemini Enterprise is listed;
-  Gemini CLI, the Gemini app and Antigravity are not supported (ADR 0107), and ChatGPT, Copilot and
+- no page names an AI client the data file does not list as tested. ChatGPT and Gemini Enterprise are listed;
+  Gemini CLI, the Gemini app and Antigravity are not supported (ADR 0107), and Copilot and
   Cursor are added to the data file when a release supports them, not before.
 """
 
@@ -32,11 +32,11 @@ DATA = json.loads((WEBSITE / "_data" / "clients.json").read_text(encoding="utf-8
 NAMES = [client["name"] for client in DATA["clients"]]
 PAGES = {path: read_page(path) for path in build_site.PAGES}
 # AI clients the site must not name until the data file lists them.
-NOT_YET_SUPPORTED = ("ChatGPT", "Gemini CLI", "Gemini app", "Antigravity", "Copilot", "Cursor")
+NOT_YET_SUPPORTED = ("Gemini CLI", "Gemini app", "Antigravity", "Copilot", "Cursor")
 
 
 def test_the_data_file_lists_the_tested_clients():
-    assert NAMES == ["Claude Desktop", "Claude Code", "claude.ai", "Gemini Enterprise"]
+    assert NAMES == ["Claude Desktop", "Claude Code", "claude.ai", "ChatGPT", "Gemini Enterprise"]
     for client in DATA["clients"]:
         assert client["deployments"], client
         assert set(client["deployments"]) <= {"local", "organization"}, client
@@ -46,6 +46,11 @@ def test_the_data_file_lists_the_tested_clients():
 def test_claude_ai_is_organization_only():
     claude_ai = next(c for c in DATA["clients"] if c["name"] == "claude.ai")
     assert claude_ai["deployments"] == ["organization"]
+
+
+def test_gemini_enterprise_is_organization_only():
+    gemini = next(c for c in DATA["clients"] if c["name"] == "Gemini Enterprise")
+    assert gemini["deployments"] == ["organization"]
 
 
 def test_the_homepage_renders_the_strip_from_the_data():

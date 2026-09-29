@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PrivacyFence FAQ — data flow, AI clients, approvals, cost</title>
-  <meta name="description" content="Short answers about PrivacyFence: where your data goes, which AI clients work, what the AI sees before you approve, automating routine requests, certification, cost and verifying a download.">
+  <meta name="description" content="PrivacyFence FAQ: where your data goes, which AI clients work, what the AI sees before human approval, always-allow rules, certification and cost.">
   <meta name="pf-content-group" content="marketing">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/faq/">
@@ -26,13 +26,14 @@
   <main id="top">
     <section class="page-intro shell">
       <p class="kicker">FAQ</p>
-      <h1>Questions people ask before they install.</h1>
-      <p class="lede">Short answers, each linking to the page or document that has the full detail.</p>
+      <h1>PrivacyFence FAQ</h1>
+      <p class="lede">Questions people ask before they install. Short answers, each linking to the page or document that has the full detail.</p>
     </section>
 
     <section class="page-section shell" aria-label="Questions">
       <nav class="faq-index" aria-label="Questions on this page">
         <ul class="cluster">
+          <li><a href="#mcp-gateway">Is PrivacyFence an MCP gateway?</a></li>
           <li><a href="#data-path">Does my data go through PrivacyFence's servers?</a></li>
           <li><a href="#clients">Which AI clients work?</a></li>
           <li><a href="#before-approval">What does the AI see before I approve?</a></li>
@@ -45,6 +46,13 @@
       </nav>
 
       <div class="faq-list">
+        <article class="faq-item page-copy stack" id="mcp-gateway">
+          <h2>Is PrivacyFence an MCP gateway?</h2>
+          <p><strong>Yes, with a difference.</strong> PrivacyFence is the MCP server your AI client connects to for Gmail, Drive, Slack and your other services. Every tool call passes its policy first: sensitive reads and changes wait for human approval, an optional local PII check runs before personal data reaches the AI, and every decision is audited. Connector credentials stay with PrivacyFence, never with the AI client.</p>
+          <p>Unlike a general-purpose MCP gateway, it governs defined connectors and the operations each one supports, each with a gate fixed in code. It is not a generic proxy for arbitrary MCP tools.</p>
+          <p><a href="/connectors/">What each connector can do</a></p>
+        </article>
+
         <article class="faq-item page-copy stack" id="data-path">
           <h2>Does my data go through PrivacyFence's servers?</h2>
           <p><strong>No. There are none.</strong> PrivacyFence runs on your own computer, or on a server your organization controls. Every tool call goes from there straight to the provider: Google, Slack, Salesforce, Atlassian or Telegram. No hosted service sits in the data path, and your connector sign-ins stay with PrivacyFence, never with the AI client.</p>
@@ -56,7 +64,7 @@
           <h2>Which AI clients work?</h2>
           <p>PrivacyFence is tested with these clients, and any MCP-compatible client can connect:</p>
           <!-- include: clients -->
-          <p>Web clients reach PrivacyFence only through an organization deployment, because on a single computer PrivacyFence listens only on that computer. <a href="/ai-agents/">AI agents</a> has a page for each client, with how it connects and what it asks you, and links its setup steps.</p>
+          <p>Web clients (claude.ai, ChatGPT on the web and Gemini Enterprise) reach PrivacyFence only through an organization deployment, because on a single computer PrivacyFence listens only on that computer. On your own computer, use Claude Desktop, Claude Code or ChatGPT desktop on macOS. <a href="/ai-agents/">AI agents</a> has a page for each client, with how it connects and what it asks you, and links its setup steps.</p>
         </article>
 
         <article class="faq-item page-copy stack" id="before-approval">
@@ -82,7 +90,7 @@
 
         <article class="faq-item page-copy stack" id="modes">
           <h2>Local or organization mode?</h2>
-          <p><strong>Local mode</strong> is the default: the installer for macOS, Windows or Linux runs PrivacyFence on one person's computer, under its own service account, for Claude Desktop and Claude Code on that computer. No server and no sign-in are needed.</p>
+          <p><strong>Local mode</strong> is the default: the installer for macOS, Windows or Linux runs PrivacyFence on one person's computer, under its own service account, for Claude Desktop, Claude Code or ChatGPT desktop (macOS) on that computer. No server and no sign-in are needed.</p>
           <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, behind your HTTPS reverse proxy. People sign in through your identity provider, administrators set the privacy filter and PII check for everyone, and web clients can connect too.</p>
           <p><a href="/enterprise/">Local and organization mode side by side</a></p>
         </article>
