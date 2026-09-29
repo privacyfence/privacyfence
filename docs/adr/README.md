@@ -212,3 +212,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0104](0104-the-companion-copies-the-ai-client-token.md) | The companion copies the AI client token to the clipboard, with no passkey; Settings reaches it only through the companion | Accepted |
 | [0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md) | A Google API read is retried once when its connection drops; PrivacyFence never retries a write | Accepted |
 | [0106](0106-google-not-found-and-not-shared-errors-reach-the-agent.md) | A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic | Accepted |
+| [0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md) | Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise | Accepted |

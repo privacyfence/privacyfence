@@ -82,8 +82,8 @@ Key modules in the suite:
   by the official `mcp` client over TCP.
 - `tests/integration/test_shim_mcp_contract.py` — the built `mcpb/shim/dist/shim.js` against that
   server, over MCP-over-stdio. Skips without Node.
-- `tests/integration/test_claude_code_contract.py`, `test_gemini_cli_contract.py` — the pinned
-  Claude Code and Gemini CLI against that server; see "AI-client contract tests (T3)" below.
+- `tests/integration/test_claude_code_contract.py` — the pinned Claude Code CLI against that
+  server; see "AI-client contract tests (T3)" below.
 - `tests/system/test_local_mode_system.py` — `python -m privacyfence.daemon_main` as a separate
   process: discovery, bootstrap into `/approvals` and `/settings`, a gated call allowed and denied
   through the HTTP decide route, the audit log read back, and "Quit PrivacyFence". Runs in every
@@ -113,20 +113,15 @@ connectors, so it cannot see a principal's tool list or auto-accept rules; those
 A real, unmodified AI-client CLI is configured against a real local-mode `/mcp` endpoint the way
 the install guides tell a user to, and must report it connected. Today that is Claude Code
 (`test_claude_code_contract.py`: `claude mcp add --transport http --scope user …`, then
-`claude mcp list`) and Gemini CLI (`test_gemini_cli_contract.py`: an `httpUrl` entry with a bearer
-header in `~/.gemini/settings.json`, the working directory trusted in `trustedFolders.json`, then
-`gemini mcp list`). `tests/integration/ai_client_harness.py` starts the endpoint under a throwaway
-data directory and runs the client under a throwaway `HOME` with every `ANTHROPIC_*`/`CLAUDE*`/
-`GEMINI_*`/`GOOGLE_*` variable removed: these tests need no vendor account or credential, and must
-keep needing none. `gemini mcp list` never calls `tools/list`, and listing tools in a Gemini CLI
-model session needs a Google credential, so its test proves a connected status, not a tool list.
+`claude mcp list`). `tests/integration/ai_client_harness.py` starts the endpoint under a throwaway
+data directory and runs the client under a throwaway `HOME` with every `ANTHROPIC_*`/`CLAUDE*`
+variable removed: these tests need no vendor account or credential, and must keep needing none.
 
 - **Pinned, every PR.** The CLIs are pinned to exact versions in
   `tests/integration/ai_clients/package.json` and its committed lockfile; the `test` job installs
-  them with `npm ci` and names each binary in its test's variable (`CLAUDE_CODE_BIN`,
-  `GEMINI_CLI_BIN`), which makes the test fail rather than skip if it cannot run. Elsewhere (the
-  other full-suite jobs, a laptop without that install) it skips. The harness's module docstring
-  says how to bump a pin.
+  them with `npm ci` and names the binary in `CLAUDE_CODE_BIN`, which makes the test fail rather
+  than skip if it cannot run. Elsewhere (the other full-suite jobs, a laptop without that install)
+  it skips. The harness's module docstring says how to bump a pin.
 - **`@latest`, weekly.** `ai-client-canary.yml` (Tuesday 06:17 UTC, and on dispatch) runs the same
   tests with `npx --yes <package>@latest` as the binary, one matrix entry per client. On failure
   it opens, or comments on, one issue per client titled "AI-client canary: <client> @latest broke

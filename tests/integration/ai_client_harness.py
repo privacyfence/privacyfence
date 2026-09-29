@@ -2,8 +2,7 @@
 (``docs/testing-policy.md``, "AI-client contract tests (T3)").
 
 A T3 test runs a real, unmodified AI-client CLI -- today Claude Code
-(tests/integration/test_claude_code_contract.py) and Gemini CLI
-(tests/integration/test_gemini_cli_contract.py) -- against a real
+(tests/integration/test_claude_code_contract.py) -- against a real
 local-mode ``/mcp`` endpoint and asserts that the client connects. This
 module owns the two halves every such test shares, so a second client is a
 new test file and a new ``package.json`` entry, not a second copy of either:
@@ -19,9 +18,9 @@ new test file and a new ``package.json`` entry, not a second copy of either:
   throwaway ``HOME`` (and ``USERPROFILE``/``XDG_CONFIG_HOME``, so the
   client's config file lands there on every platform) and **no** variable
   that could carry a vendor credential. A T3 test must pass with no API key
-  and no signed-in account; stripping ``ANTHROPIC_*``/``CLAUDE*`` and
-  ``GEMINI_*``/``GOOGLE_*`` here is what proves it, even on a machine (or a
-  Claude Code session) that has them set.
+  and no signed-in account; stripping ``ANTHROPIC_*``/``CLAUDE*`` here is
+  what proves it, even on a machine (or a Claude Code session) that has
+  them set.
 
 The client CLIs themselves are pinned, exact-version, in
 ``tests/integration/ai_clients/package.json`` and its committed
@@ -59,7 +58,7 @@ AI_CLIENTS_DIR = Path(__file__).resolve().parent / "ai_clients"
 # Environment variable prefixes a client CLI could read a credential,
 # account or config-directory override from. Everything else passes
 # through unchanged (PATH, proxy settings, npm's cache location).
-_STRIPPED_ENV_PREFIXES = ("ANTHROPIC_", "CLAUDE", "GEMINI_", "GOOGLE_")
+_STRIPPED_ENV_PREFIXES = ("ANTHROPIC_", "CLAUDE")
 
 
 class HarnessConnector(Connector):
