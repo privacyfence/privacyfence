@@ -97,11 +97,10 @@ jobs:
         working-directory: mcpb/shim
 
       # The exact-pinned AI-client CLIs the T3 contract tests run
-      # (tests/integration/test_claude_code_contract.py,
-      # test_gemini_cli_contract.py), integrity-checked against the committed
-      # lockfile. The pytest step below names each installed binary in its
-      # override variable (CLAUDE_CODE_BIN, GEMINI_CLI_BIN), which turns the
-      # tests' "not installed" skip into a failure: here they must run.
+      # (tests/integration/test_claude_code_contract.py), integrity-checked
+      # against the committed lockfile. The pytest step below names the
+      # installed binary in CLAUDE_CODE_BIN, which turns the test's
+      # "not installed" skip into a failure: here it must run.
       - name: Install AI-client CLIs
         run: npm ci --prefix tests/integration/ai_clients
 
@@ -116,7 +115,6 @@ jobs:
       - name: Run test suite (100% pass rate required)
         env:
           CLAUDE_CODE_BIN: ${{ github.workspace }}/tests/integration/ai_clients/node_modules/.bin/claude
-          GEMINI_CLI_BIN: ${{ github.workspace }}/tests/integration/ai_clients/node_modules/.bin/gemini
         run: |
           pytest -v --cov=src/privacyfence --cov-branch \
             --cov-report=term-missing \

@@ -70,7 +70,10 @@ exercised independently.
   an external cloud API always gets a dedicated error type.
 - Connectors catch the client's specific error type at the boundary, log it, and re-raise as
   `RuntimeError(str(exc)) from exc` — never swallow it, never let the raw client exception or a
-  bare `except Exception` leak past the connector into the tool-call response.
+  bare `except Exception` leak past the connector into the tool-call response. A Google connector
+  first offers the error to `google_errors.unavailable_error()`, which returns a
+  `GoogleResourceUnavailableError` (a named `RuntimeError` subclass the agent may see) for a
+  not-found or not-shared answer; raise that instead when it isn't `None` (ADR 0106).
 - Non-critical side effects (writing an audit entry) are wrapped in their own
   `try/except Exception: logger.warning(...)` so a logging failure never blocks the primary
   operation — see `gate.py::_audit` and every connector's `_auto_audit`.

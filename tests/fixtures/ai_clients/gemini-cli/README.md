@@ -2,9 +2,10 @@
 
 **SEEDED FROM VENDOR DOCS, NOT YET CAPTURED.** Written 2026-09-28 from the source of Gemini CLI
 0.61.0 (tag `v0.61.0`, commit `bb523741c7429a44d03e964bc124c7c92df59d5f`), not from a handshake
-against a PrivacyFence deployment. Replace it with a captured fixture after the Gemini CLI
-organization-mode run in `ai-client-qa.md`
-(https://github.com/privacyfence/privacyfence/issues/392).
+against a PrivacyFence deployment. It stays seeded: Gemini CLI is not a supported AI client
+([ADR 0107](../../../../docs/adr/0107-gemini-cli-and-antigravity-are-not-supported-clients.md)), so
+no manual run will capture it. It is kept because the registry still recognises Gemini CLI, and
+this replay is what checks that entry.
 
 - Expected agent_id, unpinned: `gemini-cli`
 - Expected agent_id, pinned: `gemini-cli`

@@ -14,6 +14,7 @@ from .. import local_files
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..download_staging import get_download_staging_store
+from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 from ..gmail_client import (
     GmailClient,
@@ -1700,6 +1701,9 @@ class GmailConnector(Connector):
             return await asyncio.to_thread(func, *args, **kwargs)
         except GmailClientError as exc:
             logger.error("Gmail fetch failed: %s", exc)
+            unavailable = unavailable_error("gmail", exc, self.my_email)
+            if unavailable is not None:
+                raise unavailable from exc
             raise RuntimeError(str(exc)) from exc
 
     def _auto_audit(

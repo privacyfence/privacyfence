@@ -34,7 +34,9 @@ alone. This module resolves that by giving every self-authored "denied, not fail
 its own named ``RuntimeError`` subclass instead (``gate.GateDeniedError``;
 ``approvals.TooManyPendingApprovalsError``,
 ``approvals.IdenticalWriteAwaitingApprovalError``,
-``connector_registry.TooManyPrincipalsError``) and having
+``connector_registry.TooManyPrincipalsError``;
+``google_errors.GoogleResourceUnavailableError``, whose text is written
+entirely in that module) and having
 ``public_message()`` below trust a *named* subclass but not the bare
 ``RuntimeError`` class itself -- so a connector's wrapped failure still
 falls through to the generic message, and a future call site gets the
@@ -116,7 +118,8 @@ def public_message(exc: BaseException) -> str:
     *ClientError types themselves. A named ``RuntimeError`` subclass
     (``gate.GateDeniedError``, ``approvals.TooManyPendingApprovalsError``,
     ``approvals.IdenticalWriteAwaitingApprovalError``,
-    ``connector_registry.TooManyPrincipalsError``) is still trusted --
+    ``connector_registry.TooManyPrincipalsError``,
+    ``google_errors.GoogleResourceUnavailableError``) is still trusted --
     whoever defined it reviewed what goes into it, the same review this
     module's own docstring describes for the other three builtins."""
     if isinstance(exc, PUBLIC_SAFE_EXCEPTION_TYPES) and type(exc) is not RuntimeError:

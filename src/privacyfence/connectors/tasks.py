@@ -23,6 +23,7 @@ from typing import Any
 
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
+from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 from ..privacy_filter import apply_text
 from ..tasks_client import TasksClient, TasksClientError
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 class TasksConnector(Connector):
     def __init__(self, client: TasksClient) -> None:
         self._tasks = client
+        self.my_email: str = ""
         self._list_name_cache: dict[str, str] = {}
 
     @property
@@ -323,6 +325,9 @@ class TasksConnector(Connector):
             return await asyncio.to_thread(func, *args)
         except TasksClientError as exc:
             logger.error("Tasks call failed: %s", exc)
+            unavailable = unavailable_error("tasks", exc, self.my_email)
+            if unavailable is not None:
+                raise unavailable from exc
             raise RuntimeError(str(exc)) from exc
 
     async def _list_name_for(self, task_list_id: str) -> str:
