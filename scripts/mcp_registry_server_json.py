@@ -14,7 +14,7 @@ release-asset URL, the only host the registry accepts for an MCPB package beside
 The hash is of the file the registry's clients will actually download, which is why the workflow
 fetches it from the public release URL rather than hashing the build job's copy: the registry does
 not check `fileSha256` itself, but every client that installs from it does, so a hash of anything
-else would publish an entry nobody can install (ADR 0111).
+else would publish an entry nobody can install (ADR 0112).
 
 Only a stable version renders. A pre-release's GitHub Release carries no files, so its
 `identifier` would point at nothing.

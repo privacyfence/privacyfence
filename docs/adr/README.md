@@ -216,4 +216,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted |
 | [0109](0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md) | Gemini Enterprise is matched by the name its admin registers it with | Accepted |
 | [0110](0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md) | Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command | Accepted |
-| [0111](0111-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) | Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release | Accepted |
+| [0111](0111-a-duplicate-release-run-cancels-itself.md) | A duplicate release run cancels itself | Accepted |
+| [0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) | Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release | Accepted |

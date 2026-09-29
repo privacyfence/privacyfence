@@ -70,7 +70,7 @@ every job that resolves a version runs `r2_release.py check-tag` before publishi
 The macOS `.pkg` and `.mcpb` travel inside the DMG and are never uploaded to R2 on their own
 (`scripts/build_dmg.sh`). A stable GitHub Release also carries `PrivacyFence.mcpb` by itself,
 because the official MCP registry only accepts a package hosted as a release asset
-([ADR 0111](adr/0111-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md)).
+([ADR 0112](adr/0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md)).
 
 ### Public distribution per channel
 

@@ -2,7 +2,7 @@ name: Publish to MCP Registry
 
 # Lists each stable release on the official MCP registry (registry.modelcontextprotocol.io) as
 # io.github.privacyfence/privacyfence, with the release's PrivacyFence.mcpb as its package -- see
-# ADR 0111 and CLAUDE.md's "Releasing" section. Directories and clients read from that registry,
+# ADR 0112 and CLAUDE.md's "Releasing" section. Directories and clients read from that registry,
 # so this is the one entry that spreads to the rest.
 #
 # Same trigger as build.yml and publish-pypi.yml, and the same `wait_for_build` gate as
@@ -33,12 +33,48 @@ env:
   SERVER_NAME: 'io.github.privacyfence/privacyfence'
 
 jobs:
+  # The same duplicate-run guard as build.yml and publish-pypi.yml (ADR 0111): GitHub occasionally
+  # starts a workflow twice for one tag push, and two runs would race to publish one immutable
+  # registry version. Every other job waits on this one; a duplicate cancels its own run. Fails
+  # open if the API can't be read.
+  dedupe:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write   # only to cancel this run when it is the duplicate
+    outputs:
+      duplicate: ${{ steps.check.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cancel this run if another run is already handling the same push
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-mcp-registry.yml/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=30")"; then
+            DUPLICATE="$(python3 scripts/release_run_guard.py --run-id "$GITHUB_RUN_ID" \
+              --event "$GITHUB_EVENT_NAME" --ref-name "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" <<<"$RUNS")"
+          else
+            echo "::warning::Could not list this workflow's runs; not checking for a duplicate run."
+            DUPLICATE=false
+          fi
+          echo "duplicate=$DUPLICATE" >> "$GITHUB_OUTPUT"
+          if [[ "$DUPLICATE" == "true" ]]; then
+            echo "::warning::Another run of publish-mcp-registry.yml is already handling ${GITHUB_REF_NAME} at ${GITHUB_SHA}; cancelling this duplicate run."
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          fi
+
   # A copy of publish-pypi.yml's `wait_for_build` -- see that job's own comment for why it polls
   # with the `gh` CLI keyed on commit SHA, rather than `needs:` (there is none across workflow
   # files) or `actions/github-script` (an action nothing else here uses can fail the whole run at
   # startup under the repo's actions allowlist).
   wait_for_build:
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -58,7 +94,8 @@ jobs:
           while true; do
             runs_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
               -f "head_sha=${GITHUB_SHA}" -F "per_page=10")"
-            run="$(jq -c '.workflow_runs | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
+            # A cancelled run is left out: a duplicate build.yml run cancels itself (ADR 0111).
+            run="$(jq -c '[.workflow_runs[] | select(.conclusion != "cancelled")] | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
 
             if [[ -n "$run" ]]; then
               status="$(jq -r '.status' <<<"$run")"
@@ -135,7 +172,7 @@ jobs:
           fi
 
       # From the public release URL, not a workflow artifact: fileSha256 has to be the hash of the
-      # exact bytes a registry client will download and check (ADR 0111).
+      # exact bytes a registry client will download and check (ADR 0112).
       - name: Download PrivacyFence.mcpb from the GitHub Release
         if: steps.release.outputs.channel == 'stable' && steps.listed.outputs.done != 'true'
         run: |

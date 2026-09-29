@@ -1,4 +1,4 @@
-# ADR 0111: Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release
+# ADR 0112: Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release
 
 ## Status
 
