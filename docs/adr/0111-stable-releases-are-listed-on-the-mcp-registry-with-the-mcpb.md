@@ -58,7 +58,9 @@ get one.
 - The first release that can be listed is the first stable tag cut after this lands.
 - The `.mcpb` alone does nothing without the PrivacyFence app: the shim connects to the local
   daemon. Someone who installs it from a registry client without the app gets an extension that
-  cannot connect; the manifest's long description already says the app is required.
+  cannot connect. So the registry description starts with "Needs the PrivacyFence app", its
+  `websiteUrl` is the download page, the extension's own long description says the same, and
+  the shim's "daemon did not start" error names the download page.
 - The listing's version is immutable on the registry: a re-run for a version already listed does
   nothing, and a wrong entry is fixed by the next release (or by `mcp-publisher status` to
   deprecate it), not by republishing.
