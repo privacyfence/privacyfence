@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PrivacyFence for organizations — local mode or a central deployment</title>
-  <meta name="description" content="Run PrivacyFence on each employee's computer or as one central deployment with sign-in through your identity provider: the two side by side, the prerequisites, and the limits.">
+  <title>Local or central deployment for organizations — PrivacyFence</title>
+  <meta name="description" content="Run PrivacyFence on each employee's computer or as one central MCP gateway with identity-provider sign-in: both modes side by side, prerequisites, limits.">
   <meta name="pf-content-group" content="marketing">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/enterprise/">
@@ -45,7 +45,7 @@
             <tr><th scope="row">Where it runs</th><td>Each person's own computer: macOS, Windows or Debian/Ubuntu</td><td>One Linux server the organization runs, behind its HTTPS reverse proxy</td></tr>
             <tr><th scope="row">Who uses it</th><td>The people signed in to that computer, each with their own connectors, rules and approvals</td><td>Everyone your identity provider lets in, each kept apart: connectors, approvals, passkeys and audit log per person</td></tr>
             <tr><th scope="row">Sign-in</th><td>None: the companion app opens the pages already signed in</td><td>Your OpenID Connect identity provider</td></tr>
-            <tr><th scope="row">AI clients</th><td>Claude Desktop and Claude Code on the same computer</td><td>Claude Desktop, Claude Code and web clients such as claude.ai and Gemini Enterprise, through OAuth 2.1</td></tr>
+            <tr><th scope="row">AI clients</th><td>Claude Desktop, Claude Code and ChatGPT desktop (macOS) on the same computer</td><td>Claude Desktop, Claude Code and web clients such as claude.ai, ChatGPT and Gemini Enterprise, through OAuth 2.1</td></tr>
             <tr><th scope="row">Install</th><td>The installer (<code>.dmg</code>, <code>.exe</code> or <code>.deb</code>)</td><td><code>pip install privacyfence</code> into a virtual environment, run by systemd</td></tr>
             <tr><th scope="row">Protection from the AI client</th><td>Privilege separation: PrivacyFence runs under its own service account</td><td>The AI client reaches the server only through <code>/mcp</code></td></tr>
             <tr><th scope="row">Policy</th><td>Set by the person, in Settings</td><td>Privacy filter and PII detection set install-wide by admins; each person keeps their own always-allow rules</td></tr>
@@ -70,7 +70,7 @@
         </article>
         <article class="card stack">
           <h3>A hostname and TLS</h3>
-          <p>A public hostname with DNS pointing at the server, and a certificate for it. If people will use claude.ai or Gemini Enterprise, the hostname must be reachable from the internet, because they connect from Anthropic's and Google's servers.</p>
+          <p>A public hostname with DNS pointing at the server, and a certificate for it. If people will use claude.ai, ChatGPT on the web or Gemini Enterprise, the hostname must be reachable from the internet, because they connect from Anthropic's, OpenAI's and Google's servers.</p>
         </article>
         <article class="card stack">
           <h3>A reverse proxy on the same host</h3>

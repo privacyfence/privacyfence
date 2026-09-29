@@ -20,6 +20,12 @@
       "connects": "straight to an organization deployment's /mcp over HTTPS, with OAuth sign-in"
     },
     {
+      "name": "ChatGPT",
+      "slug": "chatgpt",
+      "deployments": ["local", "organization"],
+      "connects": "from ChatGPT desktop straight to /mcp with your own token, or from ChatGPT on the web as a Developer Mode app with OAuth sign-in"
+    },
+    {
       "name": "Gemini Enterprise",
       "slug": "gemini-enterprise",
       "deployments": ["organization"],
