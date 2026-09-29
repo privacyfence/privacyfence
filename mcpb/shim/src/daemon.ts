@@ -326,7 +326,9 @@ async function waitForConnectable(
   throw new ShimExitError(
     "ERROR: PrivacyFence daemon did not start within " +
       `${connectTimeoutMs / 1000} seconds.\n` +
-      "Try running 'privacyfence-app' manually and check the logs.",
+      "If the PrivacyFence app is not installed, this extension cannot work without it: " +
+      "download it from https://privacyfence.eu/download/. If it is installed, start it " +
+      "from its menu-bar/tray icon (or run 'privacyfence-app') and check its logs.",
     1
   );
 }

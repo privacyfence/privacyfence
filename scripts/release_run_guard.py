@@ -8,7 +8,7 @@ refuses to overwrite an object with different bytes, and so each run uploads whi
 reaches first and fails on the other half. Neither finalizes a release. See
 docs/adr/0111-a-duplicate-release-run-cancels-itself.md.
 
-`build.yml` and `publish-pypi.yml` call this in their first job, with the runs of their own
+`build.yml`, `publish-pypi.yml` and `publish-mcp-registry.yml` call this in their first job, with the runs of their own
 workflow on the same commit piped in (the `workflow_runs` list GitHub's
 `GET /repos/{owner}/{repo}/actions/workflows/{workflow}/runs?head_sha=...` returns). It prints
 `true` when this run is the duplicate, and the job then cancels its own run.

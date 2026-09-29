@@ -1,0 +1,223 @@
+name: Publish to MCP Registry
+
+# Lists each stable release on the official MCP registry (registry.modelcontextprotocol.io) as
+# io.github.privacyfence/privacyfence, with the release's PrivacyFence.mcpb as its package -- see
+# ADR 0112 and CLAUDE.md's "Releasing" section. Directories and clients read from that registry,
+# so this is the one entry that spreads to the rest.
+#
+# Same trigger as build.yml and publish-pypi.yml, and the same `wait_for_build` gate as
+# publish-pypi.yml: nothing is listed until build.yml's run for this exact commit has succeeded,
+# which is also what guarantees the .mcpb is already attached to the GitHub Release (its
+# `finalize-release` job attaches it). Deliberately a workflow of its own rather than a job in
+# build.yml: publish-pypi.yml waits for build.yml to *succeed*, so a registry outage there would
+# hold PyPI back for a listing nothing else depends on.
+#
+# Authenticates with GitHub OIDC (`mcp-publisher login github-oidc`, `id-token: write` below): the
+# registry grants the io.github.<repository_owner>/* namespace to a token minted for this
+# repository, so there is no stored secret and no maintainer's organization membership involved.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # rerun by hand after a failed publish -- run it from the release's *tag*
+                        # ("Use workflow from" -> Tags); from a branch both jobs are skipped
+
+permissions:
+  contents: read
+
+env:
+  # Pinned, with the SHA-256 from that release's registry_<version>_checksums.txt. Bump both
+  # together: https://github.com/modelcontextprotocol/registry/releases
+  MCP_PUBLISHER_VERSION: '1.8.1'
+  MCP_PUBLISHER_SHA256: 'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc'
+  REGISTRY_URL: 'https://registry.modelcontextprotocol.io'
+  SERVER_NAME: 'io.github.privacyfence/privacyfence'
+
+jobs:
+  # The same duplicate-run guard as build.yml and publish-pypi.yml (ADR 0111): GitHub occasionally
+  # starts a workflow twice for one tag push, and two runs would race to publish one immutable
+  # registry version. Every other job waits on this one; a duplicate cancels its own run. Fails
+  # open if the API can't be read.
+  dedupe:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write   # only to cancel this run when it is the duplicate
+    outputs:
+      duplicate: ${{ steps.check.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cancel this run if another run is already handling the same push
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-mcp-registry.yml/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=30")"; then
+            DUPLICATE="$(python3 scripts/release_run_guard.py --run-id "$GITHUB_RUN_ID" \
+              --event "$GITHUB_EVENT_NAME" --ref-name "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" <<<"$RUNS")"
+          else
+            echo "::warning::Could not list this workflow's runs; not checking for a duplicate run."
+            DUPLICATE=false
+          fi
+          echo "duplicate=$DUPLICATE" >> "$GITHUB_OUTPUT"
+          if [[ "$DUPLICATE" == "true" ]]; then
+            echo "::warning::Another run of publish-mcp-registry.yml is already handling ${GITHUB_REF_NAME} at ${GITHUB_SHA}; cancelling this duplicate run."
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  # A copy of publish-pypi.yml's `wait_for_build` -- see that job's own comment for why it polls
+  # with the `gh` CLI keyed on commit SHA, rather than `needs:` (there is none across workflow
+  # files) or `actions/github-script` (an action nothing else here uses can fail the whole run at
+  # startup under the repo's actions allowlist).
+  wait_for_build:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for build.yml's run on this commit to succeed
+        run: |
+          set -euo pipefail
+          workflow_id="build.yml"
+          poll_interval_s=30
+          max_wait_s=$((60 * 60))
+          start=$(date +%s)
+
+          echo "Waiting for ${workflow_id}'s own run against commit ${GITHUB_SHA}..."
+
+          while true; do
+            runs_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=10")"
+            # A cancelled run is left out: a duplicate build.yml run cancels itself (ADR 0111).
+            run="$(jq -c '[.workflow_runs[] | select(.conclusion != "cancelled")] | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
+
+            if [[ -n "$run" ]]; then
+              status="$(jq -r '.status' <<<"$run")"
+              conclusion="$(jq -r '.conclusion' <<<"$run")"
+              html_url="$(jq -r '.html_url' <<<"$run")"
+              echo "Found ${html_url} (status=${status}, conclusion=${conclusion})"
+
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "build.yml succeeded for this commit -- proceeding to publish."
+                  exit 0
+                fi
+                echo "::error::build.yml's own run for this commit did not succeed" \
+                  "(conclusion=${conclusion}): ${html_url}. Fix and re-run" \
+                  "\"Build & Release\" for this tag, then re-run \"Publish to MCP Registry\"."
+                exit 1
+              fi
+            fi
+
+            now=$(date +%s)
+            if (( now - start > max_wait_s )); then
+              echo "::error::Timed out after $((max_wait_s / 60)) minutes waiting for" \
+                "${workflow_id}'s run against ${GITHUB_SHA} to complete."
+              exit 1
+            fi
+            sleep "$poll_interval_s"
+          done
+
+  publish:
+    needs: wait_for_build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # mcp-publisher login github-oidc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # Same resolution build.yml's `finalize-release` uses. Only a stable release's GitHub
+      # Release carries files, so a pre-release tag stops here, green.
+      - name: Determine version and release channel
+        id: release
+        run: |
+          pip install --quiet setuptools_scm
+          VERSION="$(python3 -m setuptools_scm)"
+          python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
+          CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          if [[ "$CHANNEL" != "stable" ]]; then
+            echo "::notice::$VERSION is a $CHANNEL release; only stable releases are listed on the MCP registry."
+          fi
+
+      # A registry version is immutable: publishing one twice is refused. Treat "already listed"
+      # as done, so re-running this workflow after a later step failed is safe.
+      - name: Check whether this version is already listed
+        id: listed
+        if: steps.release.outputs.channel == 'stable'
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          status="$(curl -sS -o /dev/null -w '%{http_code}' \
+            "$REGISTRY_URL/v0.1/servers/${SERVER_NAME//\//%2F}/versions/$VERSION")"
+          echo "Registry answered $status for $SERVER_NAME $VERSION"
+          if [[ "$status" == "200" ]]; then
+            echo "::notice::$SERVER_NAME $VERSION is already on the MCP registry; nothing to do."
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # From the public release URL, not a workflow artifact: fileSha256 has to be the hash of the
+      # exact bytes a registry client will download and check (ADR 0112).
+      - name: Download PrivacyFence.mcpb from the GitHub Release
+        if: steps.release.outputs.channel == 'stable' && steps.listed.outputs.done != 'true'
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${{ steps.release.outputs.version }}/PrivacyFence.mcpb"
+          if ! curl -fsSL --retry 3 -o PrivacyFence.mcpb "$url"; then
+            echo "::error::$url is not downloadable. Only a release whose build.yml attached" \
+              "PrivacyFence.mcpb can be listed; GitHub Releases are immutable, so an older one" \
+              "cannot be fixed after the fact -- list the next stable release instead."
+            exit 1
+          fi
+          sha256sum PrivacyFence.mcpb
+
+      - name: Render server.json
+        if: steps.release.outputs.channel == 'stable' && steps.listed.outputs.done != 'true'
+        run: |
+          python3 scripts/mcp_registry_server_json.py \
+            --version "${{ steps.release.outputs.version }}" --mcpb PrivacyFence.mcpb --out server.json
+          cat server.json
+
+      - name: Install mcp-publisher
+        if: steps.release.outputs.channel == 'stable' && steps.listed.outputs.done != 'true'
+        run: |
+          curl -fsSL --retry 3 -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --check --strict
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+      - name: Validate, log in and publish
+        if: steps.release.outputs.channel == 'stable' && steps.listed.outputs.done != 'true'
+        run: |
+          ./mcp-publisher validate server.json
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish server.json
+
+      - name: Confirm the listing is live
+        if: steps.release.outputs.channel == 'stable' && steps.listed.outputs.done != 'true'
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          url="$REGISTRY_URL/v0.1/servers/${SERVER_NAME//\//%2F}/versions/$VERSION"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS "$url" -o listing.json; then
+              jq '.server | {name, version, packages: [.packages[] | {identifier, fileSha256}]}' listing.json
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$url did not return the new version after publishing."
+          exit 1

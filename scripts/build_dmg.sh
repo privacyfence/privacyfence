@@ -39,7 +39,8 @@
 #
 # Output: dist/PrivacyFence-<version>.dmg (carrying dist/PrivacyFence-<version>.pkg
 # and dist/PrivacyFence-<version>.mcpb, both of which stay in dist/ too -- they
-# are inputs to this image, not separately released artifacts)
+# are inputs to this image, not separately released artifacts, except that a
+# stable GitHub Release also carries the .mcpb for the MCP registry, ADR 0112)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
