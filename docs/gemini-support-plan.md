@@ -12,7 +12,7 @@ which needs server code. It's written `I393` below. Docs and test code must neve
 form ([ADR 0056](adr/0056-code-carries-no-project-history.md)).
 
 > **Scope change, 2026-09-29.** This plan started with three Gemini clients. Two are dropped, and
-> [ADR 0106](adr/0106-gemini-cli-and-antigravity-are-not-supported-clients.md)
+> [ADR 0107](adr/0107-gemini-cli-and-antigravity-are-not-supported-clients.md)
 > ([PR 806](https://github.com/privacyfence/privacyfence/pull/806)) records why:
 >
 > - **Gemini CLI** ([issue 392](https://github.com/privacyfence/privacyfence/issues/392), closed
@@ -88,7 +88,7 @@ when its "Depends on" items are done.
 2. **Guardrail 10** (`tests/unit/test_website_clients.py`) has `NOT_YET_SUPPORTED = ("ChatGPT",
    "Gemini", "Copilot", "Cursor")`, banned on every hand-written page. Naming Gemini Enterprise
    needs a finer list (WP 4.2), with "Gemini CLI", "Gemini app" and "Antigravity" staying banned
-   (ADR 0106).
+   (ADR 0107).
 3. **Annotations are always truthful**
    ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md)). How Gemini Enterprise confirms a
    write is what the setup page's "Confirmations" section records. PrivacyFence offers no switch.
@@ -124,9 +124,9 @@ when its "Depends on" items are done.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D3 | Public claim wording | At Gate C: "Gemini Enterprise (organization deployments)". Nothing else Gemini is claimed (ADR 0106). |
+| D3 | Public claim wording | At Gate C: "Gemini Enterprise (organization deployments)". Nothing else Gemini is claimed (ADR 0107). |
 | D4 | How I393 writes a client while the daemon runs → **ADR** | A `privacyfence-app --register-oauth-client` subcommand that **refuses to run while the daemon holds its lock**. It writes through a new `OrgOAuthProvider.register_static_client()`, and the record carries `"source": "admin"` so it's never pruned as stale. It gets a `gemini-enterprise` registry entry with an icon. Later, maybe: the same action on org **Settings → AI systems** with step-up (ADR 0034). If M3.1 finds that Gemini Enterprise supports DCR, D4 is not needed and WAVE 4 is docs only. |
-| D16 | Gemini CLI, Antigravity and Spark → **ADR** | Not supported. Recorded as [ADR 0106](adr/0106-gemini-cli-and-antigravity-are-not-supported-clients.md). |
+| D16 | Gemini CLI, Antigravity and Spark → **ADR** | Not supported. Recorded as [ADR 0107](adr/0107-gemini-cli-and-antigravity-are-not-supported-clients.md). |
 
 ---
 
@@ -135,7 +135,7 @@ when its "Depends on" items are done.
 ```text
 🧑 M0  ✅ plan 1 finished (v5.0.0); test org deployment (ai-client-qa.md) up to date
 │
-🤖 WAVE 1  ✅ done 2026-09-28 (research on I393; the Gemini CLI parts were later dropped, ADR 0106)
+🤖 WAVE 1  ✅ done 2026-09-28 (research on I393; the Gemini CLI parts were later dropped, ADR 0107)
 │
 🧑 M3.1  confirm Google's Gemini Enterprise requirements          ← next
 🤖 WAVE 4   WP4.1 ADR + pre-registered OAuth clients + tests + connect-gemini-enterprise.md
@@ -261,7 +261,7 @@ The latest stable release's /docs/ has connect-gemini-enterprise. Add "Gemini En
 clients.json (["organization"], slug gemini-enterprise), website/ai-agents/gemini-enterprise/,
 PAGES, llms.txt and the /ai-agents/ index. Guardrail 10 (tests/unit/test_website_clients.py): add
 "Gemini Enterprise" to NAMES, and replace the bare "Gemini" in NOT_YET_SUPPORTED with "Gemini CLI",
-"Gemini app" and "Antigravity" (ADR 0106: not supported), so Gemini Enterprise may be named and
+"Gemini app" and "Antigravity" (ADR 0107: not supported), so Gemini Enterprise may be named and
 those may not. Canonical description (guardrail 1): if its client examples change, change it,
 README.md's opening and website/index.html in one commit. CHANGELOG. Run /dod; one PR; drive to
 green.
@@ -275,7 +275,7 @@ green.
 
 ```text
 Issue 393 is closed. For every "→ ADR" marker confirm an ADR exists on main (D4 from WP 4.1, D16 as
-ADR 0106; write any missing one) in one PR to main, citing issues and PRs, never the plan; name the
+ADR 0107; write any missing one) in one PR to main, citing issues and PRs, never the plan; name the
 ADRs in the PR description. Do not add or delete plan files on main.
 ```
 
@@ -285,9 +285,9 @@ ADRs in the PR description. Do not add or delete plan files on main.
 
 | Issue | Closed by | Evidence it needs |
 |---|---|---|
-| I392 | ✅ closed as not planned, 2026-09-29 | ADR 0106 |
+| I392 | ✅ closed as not planned, 2026-09-29 | ADR 0107 |
 | I393 | WP 4.1, then WP 4.2 | M3.1 and M4 logged |
-| I394 | ✅ closed as not planned, 2026-09-29 | ADR 0106 |
+| I394 | ✅ closed as not planned, 2026-09-29 | ADR 0107 |
 
 ## 6. Accounts you need
 
