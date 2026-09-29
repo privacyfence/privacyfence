@@ -84,9 +84,22 @@ retagging. A version that has already published artifacts stays published; cut t
 
 **macOS ships one file.** The DMG carries the `.pkg` and the one Claude Desktop extension,
 `PrivacyFence.mcpb` ([ADR 0089](docs/adr/0089-tool-annotations-are-always-truthful.md) removed the
-second one ADR 0087 added), and nothing else; the `.pkg` and the `.mcpb` are never uploaded or
-attached on their own, so releasing the DMG releases all three. How each artifact
+second one ADR 0087 added), and nothing else; the `.pkg` is never uploaded or attached on its
+own, so releasing the DMG releases all three. The one exception is the MCP registry below: a
+stable GitHub Release also carries that same `PrivacyFence.mcpb` on its own. How each artifact
 is built and signed is [`docs/packaging.md`](docs/packaging.md).
+
+**The official MCP registry lists every stable release.** `.github/workflows/publish-mcp-registry.yml`
+triggers on the same tag push, waits for `build.yml` to succeed on that commit (the same
+`wait_for_build` gate as PyPI), downloads `PrivacyFence.mcpb` back from the GitHub Release, renders
+`mcpb/server.json.tmpl` with `scripts/mcp_registry_server_json.py` (version, release-asset URL,
+SHA-256) and runs `mcp-publisher publish` as `io.github.privacyfence/privacyfence`. It
+authenticates with GitHub OIDC, so there is no secret to set up and no maintainer's organization
+membership involved; pre-release tags are skipped, and a version already listed is left alone, so
+a re-run (`workflow_dispatch` from the tag) is safe. It is a workflow of its own so a registry
+outage can never hold back `build.yml` or PyPI. A release whose GitHub Release has no `.mcpb`
+(everything before this landed) cannot be listed: GitHub Releases here are immutable. See
+[ADR 0111](docs/adr/0111-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md).
 
 That tag push is what `.github/workflows/build.yml` **and** `.github/workflows/publish-pypi.yml`
 both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
@@ -100,7 +113,7 @@ artifacts always uploads to the private Cloudflare R2 release archive (see "Clou
 archive" below);
 whether it *also* reaches a public GitHub Release / PyPI/TestPyPI depends on the tag's channel
 (`a`/`b`/`rc` suffix, or none for stable — same PEP 440 short-form scheme `update_checker.py`'s
-beta channel already ranks by): only a stable tag's DMG/SBOMs get attached to a public GitHub
+beta channel already ranks by): only a stable tag's DMG/`.mcpb`/SBOMs get attached to a public GitHub
 Release and only a stable tag's sdist/wheel reach PyPI/TestPyPI; a pre-release tag still gets a
 GitHub Release entry (marked prerelease, so `update_checker.py`'s beta channel — which reads
 exactly that flag — keeps working), just with no files attached to it. The one thing that does need to be

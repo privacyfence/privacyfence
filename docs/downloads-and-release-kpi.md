@@ -67,14 +67,16 @@ every job that resolves a version runs `r2_release.py check-tag` before publishi
 | `publish-pypi.yml` · `publish-r2` | the sdist and wheel (`dist/*`); runs after `build` and `wait_for_build` |
 | `build.yml` · `finalize-release` | `manifest.json`, then `latest.json` (`r2_release.py finalize`) |
 
-The macOS `.pkg` and `.mcpb` travel inside the DMG and are never uploaded on their own
-(`scripts/build_dmg.sh`).
+The macOS `.pkg` and `.mcpb` travel inside the DMG and are never uploaded to R2 on their own
+(`scripts/build_dmg.sh`). A stable GitHub Release also carries `PrivacyFence.mcpb` by itself,
+because the official MCP registry only accepts a package hosted as a release asset
+([ADR 0111](adr/0111-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md)).
 
 ### Public distribution per channel
 
 | Channel | R2 | GitHub Release | PyPI / TestPyPI |
 | ------- | -- | -------------- | --------------- |
-| `stable` | every file above | created by `finalize-release` with the DMG, `-setup.exe`, `.deb`, both SBOMs and both org-config scripts attached; body from `CHANGELOG.md` | sdist + wheel |
+| `stable` | every file above | created by `finalize-release` with the DMG, `PrivacyFence.mcpb`, `-setup.exe`, `.deb`, both SBOMs and both org-config scripts attached; body from `CHANGELOG.md` | sdist + wheel |
 | `alpha` / `beta` / `rc` | every file above | created, marked prerelease, **no files attached** (`update_checker.py`'s beta channel reads that flag) | never |
 
 A pre-release's DMG, installers, SBOMs, sdist and wheel are stored only in R2 and reachable only

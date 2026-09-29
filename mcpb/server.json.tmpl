@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.privacyfence/privacyfence",
+  "title": "PrivacyFence",
+  "description": "Human approval, local PII checks and audit for AI access to Gmail, Slack, Salesforce and more",
+  "websiteUrl": "https://privacyfence.eu/",
+  "repository": {
+    "url": "https://github.com/privacyfence/privacyfence",
+    "source": "github"
+  },
+  "version": "__VERSION__",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/privacyfence/privacyfence/releases/download/v__VERSION__/PrivacyFence.mcpb",
+      "fileSha256": "__SHA256__",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

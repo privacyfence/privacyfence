@@ -236,8 +236,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # The DMG is the macOS release artifact -- the .pkg and the .mcpb ride inside it and are
-      # never uploaded on their own (see scripts/build_dmg.sh's own header for why). Uploaded
+      # The DMG is the macOS release artifact -- the .pkg and the .mcpb ride inside it (see
+      # scripts/build_dmg.sh's own header for why); the .pkg is never uploaded on its own, and the
+      # .mcpb only to the stable GitHub Release, for the MCP registry (next steps, ADR 0111). Uploaded
       # after *both* smoke tests above, so a broken .pkg stops this job before its carrier
       # reaches `finalize-release`.
       - name: Upload DMG as artifact
@@ -245,6 +246,25 @@ jobs:
         with:
           name: PrivacyFence-dmg
           path: dist/PrivacyFence-*.dmg
+          retention-days: 30
+
+      # The one exception to "the .mcpb rides inside the DMG": a stable release's GitHub Release
+      # also carries it on its own, as PrivacyFence.mcpb, because the official MCP registry only
+      # accepts an MCPB package hosted as a GitHub (or GitLab) release asset --
+      # publish-mcp-registry.yml lists that URL (ADR 0111). The same file the DMG carries, under
+      # the same unversioned name it has there; the release URL's tag carries the version. Not
+      # uploaded to R2: the download site keeps offering the DMG, which has the app the shim needs.
+      - name: Stage .mcpb for the GitHub Release
+        run: |
+          mkdir -p dist/release-mcpb
+          cp -p "dist/PrivacyFence-${{ steps.release.outputs.version }}.mcpb" dist/release-mcpb/PrivacyFence.mcpb
+
+      - name: Upload .mcpb as artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: PrivacyFence-mcpb
+          path: dist/release-mcpb/PrivacyFence.mcpb
+          if-no-files-found: error
           retention-days: 30
 
       # Every channel's DMG + the two org config build scripts land in the private R2
@@ -827,9 +847,9 @@ jobs:
             --repo "${{ github.repository }}" --commit "${{ github.sha }}" \
             --channel "${{ steps.release.outputs.channel }}"
 
-      # Pulls together the four workflow artifacts `build`/`build-windows`/`build-deb`/`sbom`
-      # uploaded above (`PrivacyFence-dmg`, `PrivacyFence-windows-installer`, `PrivacyFence-deb`,
-      # `PrivacyFence-sbom`) into one flat directory -- `merge-multiple: true` so files land
+      # Pulls together the workflow artifacts `build`/`build-windows`/`build-deb`/`sbom`
+      # uploaded above (`PrivacyFence-dmg`, `PrivacyFence-mcpb`, `PrivacyFence-windows-installer`,
+      # `PrivacyFence-deb`, `PrivacyFence-sbom`) into one flat directory -- `merge-multiple: true` so files land
       # directly under `release-assets/` rather than one subdirectory per artifact name, matching
       # the flat file list the "Attach release assets" step below references.
       - name: Download build artifacts
@@ -863,6 +883,7 @@ jobs:
         with:
           files: |
             release-assets/PrivacyFence-*.dmg
+            release-assets/PrivacyFence.mcpb
             scripts/build_org_bundle.py
             scripts/sync_room_directory.py
             release-assets/PrivacyFence-*-setup.exe
