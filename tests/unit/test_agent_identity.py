@@ -89,6 +89,8 @@ class TestRegistry:
             # DCR client_name, captured from ChatGPT's Developer Mode connector (ADR 0103).
             ("ChatGPT", "chatgpt", "ChatGPT"),
             ("gemini-cli-mcp-client", "gemini-cli", "Gemini CLI"),
+            # DCR client_name the admin registers Gemini Enterprise with (ADR 0109).
+            ("Gemini Enterprise", "gemini-enterprise", "Gemini Enterprise"),
             ("cursor-vscode", "cursor", "Cursor"),
         ],
     )
@@ -135,6 +137,12 @@ class TestRegistry:
     def test_chatgpt_desktops_codex_handshake_is_not_chatgpt(self):
         # ChatGPT desktop and the Codex CLI share "codex-mcp-client", which has no entry yet (ADR 0103).
         assert lookup("codex-mcp-client") is None
+
+    def test_gemini_enterprises_user_agent_is_not_a_name(self):
+        # Gemini Enterprise's MCP runtime sends User-Agent "python-httpx/0.27.0"; attribution never
+        # reads headers, and a generic HTTP library's name is not a product's (ADR 0109).
+        assert lookup("python-httpx/0.27.0") is None
+        assert lookup("python-httpx") is None
 
     def test_every_template_carries_exactly_one_server_placeholder(self):
         for entry in REGISTRY:
