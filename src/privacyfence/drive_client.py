@@ -31,6 +31,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
+from .google_http import authorized_http
 from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
@@ -1250,7 +1251,7 @@ class DriveClient:
             creds = self._load_credentials()
             # cache_discovery=False avoids noisy warnings without a file cache.
             service = build(
-                "drive", "v3", credentials=creds, cache_discovery=False
+                "drive", "v3", http=authorized_http(creds), cache_discovery=False
             )
             self._local.service = service
             logger.debug("Drive API service initialized for thread %s", threading.current_thread().name)
@@ -1271,7 +1272,7 @@ class DriveClient:
         if service is None:
             creds = self._load_credentials()
             service = build(
-                "docs", "v1", credentials=creds, cache_discovery=False
+                "docs", "v1", http=authorized_http(creds), cache_discovery=False
             )
             self._local.docs_service = service
             logger.debug("Docs API service initialized for thread %s", threading.current_thread().name)
@@ -2205,7 +2206,7 @@ class DriveClient:
         if service is None:
             creds = self._load_credentials()
             service = build(
-                "sheets", "v4", credentials=creds, cache_discovery=False
+                "sheets", "v4", http=authorized_http(creds), cache_discovery=False
             )
             self._local.sheets_service = service
             logger.debug("Sheets API service initialized for thread %s", threading.current_thread().name)

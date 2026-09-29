@@ -21,6 +21,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from .google_http import authorized_http
 from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
@@ -138,7 +139,7 @@ class TasksClient:
         service = getattr(self._local, "service", None)
         if service is None:
             creds = self._load_credentials()
-            service = build("tasks", "v1", credentials=creds, cache_discovery=False)
+            service = build("tasks", "v1", http=authorized_http(creds), cache_discovery=False)
             self._local.service = service
             logger.debug("Tasks API service initialized for thread %s", threading.current_thread().name)
         return service
