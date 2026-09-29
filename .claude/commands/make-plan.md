@@ -21,7 +21,7 @@ in the feature PR. That is the only way a plan lands.
 
 ## 0. Understand the ask
 
-1. If `$ARGUMENTS` names an issue (`#123` or a URL), read it and its comments with the GitHub MCP
+1. If `$ARGUMENTS` names an issue (`#<n>` or a URL), read it and its comments with the GitHub MCP
    tools. If `$ARGUMENTS` is empty, stop and ask what to plan.
 2. Read `CLAUDE.md`, `docs/coding-and-testing-guidelines.md`, `docs/testing-policy.md`,
    `.claude/skills/steward/SKILL.md`, `docs/adr/README.md`, and every ADR, reference doc and source
