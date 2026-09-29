@@ -50,13 +50,13 @@
           <h2>Is PrivacyFence an MCP gateway?</h2>
           <p><strong>Yes, with a difference.</strong> PrivacyFence is the MCP server your AI client connects to for Gmail, Drive, Slack and your other services. Every tool call passes its policy first: sensitive reads and changes wait for human approval, an optional local PII check runs before personal data reaches the AI, and every decision is audited. Connector credentials stay with PrivacyFence, never with the AI client.</p>
           <p>Unlike a general-purpose MCP gateway, it governs defined connectors and the operations each one supports, each with a gate fixed in code. It is not a generic proxy for arbitrary MCP tools.</p>
-          <p><a href="/connectors/">What each connector can do</a></p>
+          <p><a href="/compare/mcp-gateways/">PrivacyFence and other MCP gateways compared</a> · <a href="/connectors/">What each connector can do</a></p>
         </article>
 
         <article class="faq-item page-copy stack" id="data-path">
           <h2>Does my data go through PrivacyFence's servers?</h2>
           <p><strong>No. There are none.</strong> PrivacyFence runs on your own computer, or on a server your organization controls. Every tool call goes from there straight to the provider: Google, Slack, Salesforce, Atlassian or Telegram. No hosted service sits in the data path, and your connector sign-ins stay with PrivacyFence, never with the AI client.</p>
-          <p>The AI client itself is a different matter: whatever you approve is sent to the AI, under that AI provider's terms. PrivacyFence decides what reaches it.</p>
+          <p>The AI client itself is a different matter: whatever you approve is sent to the AI, under that AI provider's terms. PrivacyFence decides what reaches it. <a href="/gdpr/">How this fits the GDPR</a>.</p>
           <p>This website is separate from the product. It uses Google Analytics, only if you accept it in the cookie banner; the <a href="/privacy/">privacy policy</a> says what it collects.</p>
         </article>
 

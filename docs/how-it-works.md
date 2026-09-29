@@ -1,7 +1,7 @@
 # How PrivacyFence works
 
-PrivacyFence sits between an MCP-compatible AI system (Claude Desktop, Claude Code, claude.ai
-through an organization deployment) and the services it can reach for you: Gmail, Google Drive,
+PrivacyFence sits between an MCP-compatible AI system (Claude Desktop, Claude Code, ChatGPT, claude.ai
+or Gemini Enterprise through an organization deployment) and the services it can reach for you: Gmail, Google Drive,
 Calendar, Contacts, Tasks, Apps Script, Slack, Telegram, Salesforce, Jira and Confluence. The AI
 system never holds your credentials for those services. It asks PrivacyFence, and PrivacyFence
 decides whether the request runs straight away, needs your approval first, or is filtered.
@@ -89,7 +89,9 @@ There are two ways in, and each AI client has its own setup page:
 |---|---|---|---|
 | Claude Desktop | the extension | custom connector | [Connect Claude Desktop](connect-claude-desktop.md) |
 | Claude Code | `/mcp` with a bearer token | OAuth sign-in | [Connect Claude Code](connect-claude-code.md) |
+| ChatGPT | ChatGPT desktop, `/mcp` with a bearer token (checked on macOS) | Developer Mode app with OAuth sign-in | [Connect ChatGPT](connect-chatgpt.md) |
 | claude.ai | not reachable | custom connector | [Connect claude.ai](connect-claude-ai.md) |
+| Gemini Enterprise | not reachable | custom MCP server data store | [Connect Gemini Enterprise](connect-gemini-enterprise.md) |
 
 Any other MCP client that supports Streamable HTTP connects the way Claude Code does: with the
 same URL and bearer token in local mode, or with OAuth 2.1 and dynamic client registration in

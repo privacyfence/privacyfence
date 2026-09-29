@@ -50,6 +50,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **GDPR and comparison pages on privacyfence.eu.** [privacyfence.eu/gdpr](https://privacyfence.eu/gdpr/) maps the GDPR principles to what PrivacyFence does and what stays with you, and lists the facts a DPIA will ask for. [privacyfence.eu/compare](https://privacyfence.eu/compare/) compares PrivacyFence with [Claude's built-in connectors](https://privacyfence.eu/compare/claude-connectors/) and with [general-purpose MCP gateways](https://privacyfence.eu/compare/mcp-gateways/), with sources and the date checked. Both are linked from the footer.
 
+- **The GDPR and comparison pages are linked from the site's own pages, and `llms.txt` lists them.** The homepage, security, enterprise, FAQ, how-it-works and AI agent pages now link to them, and the docs and README name ChatGPT and Gemini Enterprise next to the Claude clients.
+
 ### Changed
 
 - **Clearer pages on privacyfence.eu.** Shorter page titles and descriptions, and a new FAQ answer, [Is PrivacyFence an MCP gateway?](https://privacyfence.eu/faq/#mcp-gateway)
