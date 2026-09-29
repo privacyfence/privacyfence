@@ -146,7 +146,7 @@ def test_homepage_json_ld_declares_the_website():
 
 def test_homepage_title_and_heading():
     page = PAGES["/"]
-    assert "<title>PrivacyFence — privacy and approval gateway for AI assistants (MCP)</title>" in page
+    assert "<title>Open-source MCP gateway with human approval — PrivacyFence</title>" in page
     h1 = re.sub(r"<[^>]+>", "", re.search(r"<h1>(.*?)</h1>", page, flags=re.DOTALL).group(1))
     assert re.sub(r"\s+", " ", h1).strip() == "AI access without giving AI the keys."
     assert "Approve the sensitive. Automate the routine." in page
