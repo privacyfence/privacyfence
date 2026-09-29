@@ -580,7 +580,13 @@ def _clean_separation_state(request):
     finds belongs to whatever ran before this test (which, if it was a test in
     this module, has already failed for it), so it is only warned about.
     """
-    found, survivors = _tear_down_separation()
+    try:
+        found, survivors = _tear_down_separation()
+    except subprocess.TimeoutExpired as exc:
+        # The setup half never fails (see above): a machine too slow even to list its
+        # processes is warned about, and the test itself decides whether it can run.
+        warnings.warn(f"the setup sweep could not list processes: {exc}", stacklevel=1)
+        found, survivors = [], []
     if found:
         warnings.warn(
             "PrivacyFence processes were already running before this test and were swept:\n"
@@ -683,10 +689,13 @@ def _win32_processes() -> list[_Process]:
         "ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | "
         "Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine)"
     )
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True, encoding="utf-8", errors="replace", timeout=60,
-    )
+    command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]
+    try:
+        result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+    except subprocess.TimeoutExpired:
+        # The first CIM query on a freshly booted runner can take over a minute while
+        # WMI starts, so one slow listing is retried once with a longer timeout.
+        result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace", timeout=180)
     assert result.returncode == 0, f"listing processes failed (exit {result.returncode}):\n{result.stderr}"
     rows = json.loads(result.stdout or "[]")
     if isinstance(rows, dict):  # defensive: a single object rather than a one-element array
