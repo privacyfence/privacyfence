@@ -215,3 +215,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md) | Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise | Accepted |
 | [0108](0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md) | An OAuth sign-in popup keeps its opener, and an HTTP Basic client need not repeat its client ID in the body | Accepted |
 | [0109](0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md) | Gemini Enterprise is matched by the name its admin registers it with | Accepted |
+| [0110](0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md) | Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command | Accepted |

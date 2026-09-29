@@ -547,12 +547,21 @@ files larger than about 75 KB, in either direction; see
 
 Each AI client has its own page with the exact steps, what it asks before PrivacyFence's card, and
 how it is identified: [claude.ai](connect-claude-ai.md), [Claude Desktop](connect-claude-desktop.md)
-(as a custom connector), [Claude Code](connect-claude-code.md) and
-[ChatGPT](connect-chatgpt.md) (Developer Mode). Any other client that supports
-the Streamable HTTP transport with OAuth 2.1 and dynamic client registration works the same way.
+(as a custom connector), [Claude Code](connect-claude-code.md),
+[ChatGPT](connect-chatgpt.md) (Developer Mode) and [Gemini Enterprise](connect-gemini-enterprise.md).
+Any other client that supports the Streamable HTTP transport with OAuth 2.1 and dynamic client
+registration works the same way.
 
 Each client registration shows up on the admin's **AI systems** page
 ([section 11](#11-ai-systems)).
+
+#### Gemini Enterprise
+
+Gemini Enterprise does not register itself. An admin registers it once with a `curl` call to
+`/register`, creates a custom MCP server data store in the Google Cloud console with that client
+ID and secret, and each person then authorises it once from the Gemini Enterprise web app. The
+steps, the 100-action limit and what it can do with files are on
+[Connect Gemini Enterprise](connect-gemini-enterprise.md).
 
 ### Validation checklist
 
