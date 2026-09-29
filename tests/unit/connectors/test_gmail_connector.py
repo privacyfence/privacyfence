@@ -16,13 +16,17 @@ spawning a real approval popup. Two things matter most here:
 """
 from __future__ import annotations
 
+import types
 import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from googleapiclient.errors import HttpError
 
+from privacyfence.google_errors import GoogleResourceUnavailableError
+from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE, public_message
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import gmail as gmail_module
 from privacyfence.connectors.gmail import GmailConnector
@@ -41,6 +45,19 @@ from privacyfence.privacy_filter import init_privacy_filter
 from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "gmail"
+
+
+
+def _http_error(status, body):
+    resp = types.SimpleNamespace(status=status, reason="error")
+    content = body if isinstance(body, bytes) else json.dumps(body).encode()
+    return HttpError(resp, content)
+
+
+def _client_error(cls, status, body):
+    err = cls("x failed")
+    err.__cause__ = _http_error(status, body)
+    return err
 
 
 def make_connector(my_email="me@example.com"):
@@ -2116,3 +2133,32 @@ class TestEveryToolIsAudited:
                 "gmail_reply_all_draft_with_attachments": {"attachments": attachments_arg, "body": "stub"},
             },
         )
+
+
+class TestGoogleUnavailableErrors:
+    async def test_not_found_reaches_the_agent(self):
+        connector, client = make_connector()
+        connector.my_email = "alice@example.com"
+        client.get_message.side_effect = _client_error(
+            GmailClientError, 404, {"error": {"code": 404, "errors": [{"reason": "notFound"}]}}
+        )
+
+        with pytest.raises(GoogleResourceUnavailableError) as excinfo:
+            await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        message = public_message(excinfo.value)
+        assert "Gmail" in message or "Gmail" in message
+        assert "alice@example.com" in message
+
+    async def test_other_http_errors_stay_generic(self):
+        connector, client = make_connector()
+        connector.my_email = "alice@example.com"
+        client.get_message.side_effect = _client_error(
+            GmailClientError, 500, {"error": {"code": 500, "errors": [{"reason": "backendError"}]}}
+        )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        assert type(excinfo.value) is RuntimeError
+        assert public_message(excinfo.value) == GENERIC_PUBLIC_MESSAGE

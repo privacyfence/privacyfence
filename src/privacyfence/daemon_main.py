@@ -1402,7 +1402,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             )
             email = client.check_connection()
             logger.info("Apps Script connector ready for %s", email)
-            connectors.append(AppsScriptConnector(client))
+            connector = AppsScriptConnector(client)
+            connector.my_email = email
+            connectors.append(connector)
         except (AppsScriptClientError, FileNotFoundError) as exc:
             logger.warning("Apps Script connector disabled: %s", exc)
             failures["apps_script"] = _classify_connector_failure(exc)
