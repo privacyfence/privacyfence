@@ -104,11 +104,11 @@ class RegistryEntry:
     name_templates: tuple[str, ...] = ()
 
 
-# ADR 0035 decision 2's registry, corrected from real handshakes by ADR 0094 and ADR 0103. Matching
-# is exact, case-insensitive equality on the sanitized name -- never prefix, substring or regex, so
-# a name that merely contains "claude" is not Claude -- except for a name template, which matches a
-# whole name made of its fixed prefix, a non-empty server name, and its fixed suffix. An
-# unrecognised name is never promoted to an entry by default.
+# ADR 0035 decision 2's registry, corrected from real handshakes by ADR 0094 and ADR 0103 and
+# extended by ADR 0109. Matching is exact, case-insensitive equality on the sanitized name -- never
+# prefix, substring or regex, so a name that merely contains "claude" is not Claude -- except for a
+# name template, which matches a whole name made of its fixed prefix, a non-empty server name, and
+# its fixed suffix. An unrecognised name is never promoted to an entry by default.
 REGISTRY: tuple[RegistryEntry, ...] = (
     # DCR client_name "Claude Code (<server>)"; handshake clientInfo "claude-code" (ADR 0094).
     RegistryEntry("claude-code", "Claude Code", ("claude-code",), ("Claude Code ({server})",)),
@@ -120,6 +120,10 @@ REGISTRY: tuple[RegistryEntry, ...] = (
     # not been observed, and it is not the "openai-mcp" ADR 0035 guessed (ADR 0103).
     RegistryEntry("chatgpt", "ChatGPT", ("ChatGPT",)),
     RegistryEntry("gemini-cli", "Gemini CLI", ("gemini-cli-mcp-client",)),
+    # Gemini Enterprise cannot register itself; the admin registers it with the DCR client_name
+    # "Gemini Enterprise" the setup instructions prescribe. Its handshake clientInfo name has not
+    # been observed (ADR 0109).
+    RegistryEntry("gemini-enterprise", "Gemini Enterprise", ("Gemini Enterprise",)),
     RegistryEntry("cursor", "Cursor", ("cursor-vscode",)),
 )
 

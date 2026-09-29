@@ -10,6 +10,7 @@ One PNG per registry entry, named for its `agent_id`:
 - `claude-desktop.png`
 - `chatgpt.png`
 - `gemini-cli.png`
+- `gemini-enterprise.png`
 - `cursor.png`
 
 **Where a mark may appear is decided in
@@ -38,6 +39,7 @@ change is the fill colour, set to the set's own recorded brand colour for monoch
 | `cursor.png` | Simple Icons 16.32.0, `icons/cursor.svg`; source recorded as `https://cursor.com/brand` (Cursor's brand page) | CC0-1.0 | `#000000` |
 | `chatgpt.png` | [Lobe Icons](https://github.com/lobehub/lobe-icons) 1.95.1, `icons/openai.svg` (npm `@lobehub/icons-static-svg`) — the OpenAI mark, which ChatGPT uses. Simple Icons no longer carries an OpenAI mark | MIT | `#000000` |
 | `gemini-cli.png` | Lobe Icons 1.95.1, `icons/geminicli-color.svg` — Gemini CLI's own terminal mark, in its own colours | MIT | as published |
+| `gemini-enterprise.png` | Lobe Icons 1.95.1, `icons/gemini-color.svg` — the Gemini mark, which Gemini Enterprise carries. Neither set has a separate Gemini Enterprise mark | MIT | as published |
 
 Both sets' licences cover their SVG data only. **The marks themselves are trademarks of their
 owners** (Anthropic, Anysphere, OpenAI, Google), used here nominatively, to tell the person

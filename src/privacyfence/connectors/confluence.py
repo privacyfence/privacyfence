@@ -149,7 +149,9 @@ class ConfluenceConnector(Connector):
                         "str",
                         required=True,
                         description=(
-                            "Where to save the attachment -- required, no default. "
+                            "Local install only: where to save the attachment -- required, no default. "
+                            "On an organization-managed install it is ignored and nothing is "
+                            "saved to it; any value will do. "
                             "Use ~/Downloads (or a path the user specified) if the "
                             "user should find this file afterward; use your own "
                             "working/scratch directory if it's only for you to read "
@@ -566,15 +568,7 @@ class ConfluenceConnector(Connector):
             get_download_staging_store().stage, current_principal(), data, attachment.name, attachment.media_type,
             ttl_seconds=cfg.link_ttl_seconds,
         )
-        return {
-            "delivery": "link",
-            "name": attachment.name,
-            "size_bytes": size_bytes,
-            "download_url": f"{self.download_base_url}{cfg.staged_link_path(token)}",
-            "expires_at": datetime.fromtimestamp(
-                time.time() + cfg.link_ttl_seconds, tz=timezone.utc,
-            ).isoformat(),
-        }
+        return cfg.link_result(attachment.name, size_bytes, f"{self.download_base_url}{cfg.staged_link_path(token)}")
 
     async def _create_page(
         self,

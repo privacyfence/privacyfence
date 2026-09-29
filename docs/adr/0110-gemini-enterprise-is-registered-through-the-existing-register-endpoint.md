@@ -1,4 +1,4 @@
-# ADR 0109: Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command
+# ADR 0110: Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command
 
 ## Status
 

@@ -12,10 +12,6 @@ Unlike claude.ai and ChatGPT, Gemini Enterprise does not register itself with Pr
 administrator registers it once, then creates the data store in the Google Cloud console. Each
 person then signs in once from the Gemini Enterprise web app.
 
-> **Verification pending.** These steps were run end to end on a test deployment, but pinning
-> Gemini Enterprise on **Settings → AI systems** has not been verified yet. Progress is tracked in
-> [issue 393](https://github.com/privacyfence/privacyfence/issues/393).
-
 ## Before you start
 
 - An [organization deployment](org-mode-setup-guide.md) that Google's servers can reach over
@@ -179,8 +175,9 @@ the deployment can register under the same name. An administrator can **pin** th
 [Which AI system is asking](how-it-works.md#which-ai-system-is-asking) and
 [AI systems](org-mode-setup-guide.md#11-ai-systems).
 
-**Pinning needs a PrivacyFence release that lists Gemini Enterprise as an AI system.** Until then,
-the calls are recorded under the claimed name `Gemini Enterprise` and cannot be pinned.
+Pinning needs a PrivacyFence release that lists Gemini Enterprise as an AI system
+([ADR 0109](adr/0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md)). An earlier
+release records the calls under the claimed name `Gemini Enterprise` and cannot pin them.
 
 A registration nobody has used for 180 days is removed. A connector in use keeps its registration,
 because each token refresh counts as use. Once it is removed, Gemini Enterprise stops working, and

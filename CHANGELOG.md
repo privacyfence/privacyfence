@@ -45,7 +45,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Gemini Enterprise (organization deployments).** Gemini Enterprise connects to an organization deployment as a custom MCP server data store, set up by registering its client through `/register`. [Connect Gemini Enterprise](docs/connect-gemini-enterprise.md) has the steps, including the 100-action limit and what Gemini Enterprise can do with files ([ADR 0109](docs/adr/0109-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md)).
+- **Gemini Enterprise (organization deployments).** Gemini Enterprise connects to an organization deployment as a custom MCP server data store, set up by registering its client through `/register`. [Connect Gemini Enterprise](docs/connect-gemini-enterprise.md) has the steps, including the 100-action limit and what Gemini Enterprise can do with files ([ADR 0110](docs/adr/0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md)).
+- **Organization mode: Gemini Enterprise on Settings → AI systems.** An admin can now pin a Gemini Enterprise registration to Gemini Enterprise, and a registration named "Gemini Enterprise" is attributed to it in approval cards and the Audit Log without a pin ([issue 393](https://github.com/privacyfence/privacyfence/issues/393), [ADR 0109](docs/adr/0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md)).
 
 ### Changed
 
@@ -53,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Organization mode: a downloaded file's link no longer reads like a saved file.** When a Drive file or a Gmail or Confluence attachment is too large to return inline, the tool result now says plainly that nothing was saved (the `destination_dir` argument is ignored on an organization-managed install) and that the file is only at the one-time link, for the AI client to fetch or pass to the user. Gemini Enterprise had treated the `~/Downloads` path it passed as the file's location.
 - **A Google read no longer fails when its connection drops.** When Google or a network device had already closed the connection a Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks or Apps Script read was about to use (seen as "EOF occurred in violation of protocol"), the read failed and the AI system said it couldn't read the data. PrivacyFence now retries such a read once on a new connection, without a second approval. PrivacyFence never retries a write, so a retry can't create a second draft or event ([#800](https://github.com/privacyfence/privacyfence/issues/800), [ADR 0105](docs/adr/0105-a-google-read-is-retried-once-when-its-connection-drops.md)).
 
 - **Organization mode: sign-in from an AI client that uses a popup.** An AI client that opens the sign-in in a popup and reads the result back from it (Gemini Enterprise does) never finished connecting: PrivacyFence's `Cross-Origin-Opener-Policy` header on `/authorize` and `/oauth/idp/callback` cut the popup off from the page that opened it. Those two redirect-only paths no longer send it ([ADR 0108](docs/adr/0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md)).

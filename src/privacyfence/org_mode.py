@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -185,6 +187,16 @@ def inline_result_length(name: str, mime_type: str, size_bytes: int) -> int:
 DEFAULT_LINK_TTL_SECONDS = 300.0
 
 
+# What a staged download's tool result tells the AI client. Nothing is on
+# any disk the client or the human can see: destination_dir was ignored.
+LINK_RESULT_NOTE = (
+    "Nothing was saved to a file: on an organization-managed install destination_dir is ignored. "
+    "The file is only at download_url, a one-time link that expires at expires_at. "
+    "Fetch it yourself if you can reach this server; otherwise give the link to the user "
+    "to open in their own browser. Don't refer to it as a local path."
+)
+
+
 @dataclass(frozen=True)
 class DownloadDeliveryConfig:
     """How org mode delivers file bytes for ``drive_download_file``/
@@ -239,6 +251,24 @@ class DownloadDeliveryConfig:
         the choice is made in exactly one place rather than three."""
         encoded = base64.urlsafe_b64encode(token).decode("ascii")
         return f"/mcp-files/fetch/{encoded}" if self.agent_links else f"/downloads/{encoded}"
+
+    def link_result(self, name: str, size_bytes: int, download_url: str) -> dict[str, Any]:
+        """The tool result for a download staged behind ``download_url``,
+        shared by the three connectors that deliver files this way.
+
+        ``note`` says in plain words that nothing was saved to a path. The
+        tools' ``destination_dir`` is required (local mode needs it) and
+        ignored here, and a remote client that passed ``~/Downloads``
+        otherwise goes on to treat that path as the file's location
+        (Gemini Enterprise did, trying to upload the "saved" file)."""
+        return {
+            "delivery": "link",
+            "name": name,
+            "size_bytes": size_bytes,
+            "download_url": download_url,
+            "expires_at": datetime.fromtimestamp(time.time() + self.link_ttl_seconds, tz=timezone.utc).isoformat(),
+            "note": LINK_RESULT_NOTE,
+        }
 
     def fits_inline(self, size_bytes: int, name: str = "", mime_type: str = "") -> bool:
         """Whether a file this size would be delivered inline (base64, in

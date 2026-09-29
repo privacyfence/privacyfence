@@ -198,6 +198,16 @@ class TestOrgPinCapture:
 
         assert (agent.id, agent.source) == ("chatgpt", AgentSource.CLIENT_INFO)
 
+    async def test_an_unpinned_gemini_enterprise_registration_is_attributed_by_its_dcr_name(self, tmp_path, monkeypatch):
+        # The admin registers Gemini Enterprise with the prescribed client_name; its handshake name
+        # is not recognised, so the registered name decides (ADR 0109).
+        provider = _provider(tmp_path, monkeypatch)
+        await _register(provider, "c1", "Gemini Enterprise")
+
+        agent = _resolve_org(provider, "c1", handshake="not-a-registry-name")
+
+        assert (agent.id, agent.name, agent.source) == ("gemini-enterprise", "Gemini Enterprise", AgentSource.CLIENT_INFO)
+
     async def test_a_pin_never_transfers_to_another_registration_with_the_same_name(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)
         await _register(provider, "c1", "ChatGPT")
@@ -396,6 +406,22 @@ class TestPinActions:
         with principal_scope(ADMIN):
             summaries = [e.summary for e in get_audit_logger().recent_entries(10)]
         assert any("Unpinned OAuth client 'c1'" in s for s in summaries)
+
+    async def test_an_admin_pins_a_gemini_enterprise_registration(self, org_home, monkeypatch):
+        provider = _provider(org_home, monkeypatch)
+        await _register(provider, "c1", "Gemini Enterprise")
+        client, sessions = _settings_client(provider)
+        csrf = _sign_in(client, sessions, ADMIN)
+
+        r = client.post("/api/settings/pin_agent_client", json={"client_id": "c1", "agent_id": "gemini-enterprise", "csrf": csrf})
+
+        assert r.status_code == 200
+        agents = r.json()["agents"]
+        assert {"id": "gemini-enterprise", "name": "Gemini Enterprise"} in agents["registry"]
+        row = agents["clients"][0]
+        assert (row["client_id"], row["pinned_agent_id"], row["pinned_agent_name"]) == ("c1", "gemini-enterprise", "Gemini Enterprise")
+        agent = _resolve_org(provider, "c1")
+        assert (agent.id, agent.source) == ("gemini-enterprise", AgentSource.OAUTH_CLIENT)
 
     async def test_a_repeat_pin_and_an_absent_unpin_change_nothing_and_audit_nothing(self, org_home, monkeypatch):
         provider = _provider(org_home, monkeypatch)
