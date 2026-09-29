@@ -744,6 +744,8 @@ class TestBuildConnectorsGoogleFamily:
 
         assert len(connectors) == 1
         assert connectors[0].name == name
+        if name != "tasks":
+            assert connectors[0].my_email == "user@example.com"
         assert fake.captured_kwargs["client_config"] == {"installed": GOOGLE_ORG_CONFIG["google"]}
 
     @pytest.mark.parametrize("name,client_attr,error_attr,connector_attr", GOOGLE_CONNECTORS)

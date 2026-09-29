@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The AI client is told when a Google file isn't shared with you.** When Google Drive, Docs, Sheets, Gmail, Calendar, Contacts, Tasks or Apps Script answers that an item doesn't exist or isn't shared with the connected account, the AI client now gets that reason, and the account's address where PrivacyFence knows it, instead of "Tool call failed. See the PrivacyFence log for details." [#799](https://github.com/privacyfence/privacyfence/issues/799)
+
 ## [5.1.0] — 2026-09-28
 
 ### Added

@@ -23,6 +23,7 @@ TestAutoTools below for the regression coverage.
 """
 from __future__ import annotations
 
+import types
 import json
 import sys
 from dataclasses import asdict
@@ -30,8 +31,11 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from googleapiclient.errors import HttpError
 
 from privacyfence import drive_client as drive_client_module
+from privacyfence.google_errors import GoogleResourceUnavailableError
+from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE, public_message
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import drive as drive_module
 from privacyfence.connectors.drive import DriveConnector
@@ -42,6 +46,19 @@ from privacyfence.privacy_filter import init_privacy_filter
 from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "drive"
+
+
+
+def _http_error(status, body):
+    resp = types.SimpleNamespace(status=status, reason="error")
+    content = body if isinstance(body, bytes) else json.dumps(body).encode()
+    return HttpError(resp, content)
+
+
+def _client_error(cls, status, body):
+    err = cls("x failed")
+    err.__cause__ = _http_error(status, body)
+    return err
 
 
 def make_connector(my_email="me@example.com"):
@@ -1230,6 +1247,22 @@ class TestWriteToolsGateAndPreview:
     async def test_move_file_falls_back_to_raw_folder_id_when_lookup_fails(self, gated_call_spy):
         connector, client = make_connector()
         client.get_file_metadata.side_effect = [make_file(), DriveClientError("not found")]
+        client.move_file.return_value = {"ok": True}
+
+        await connector.call("drive_move_file", {"file_id": "f1", "destination_folder_id": "folderB"})
+
+        assert gated_call_spy[0]["preview"]["Folder"] == "(unknown) → folderB"
+
+    async def test_move_file_falls_back_when_destination_lookup_is_not_found(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.side_effect = [
+            make_file(),
+            _client_error(
+                DriveClientError,
+                404,
+                {"error": {"code": 404, "message": "File not found", "errors": [{"reason": "notFound"}]}},
+            ),
+        ]
         client.move_file.return_value = {"ok": True}
 
         await connector.call("drive_move_file", {"file_id": "f1", "destination_folder_id": "folderB"})
@@ -2461,3 +2494,32 @@ class TestEveryToolIsAudited:
                 "drive_sheets_delete_dimensions": {"dimension": "ROWS"},
             },
         )
+
+
+class TestGoogleUnavailableErrors:
+    async def test_not_found_reaches_the_agent(self):
+        connector, client = make_connector()
+        connector.my_email = "alice@example.com"
+        client.get_file_metadata.side_effect = _client_error(
+            DriveClientError, 404, {"error": {"code": 404, "errors": [{"reason": "notFound"}]}}
+        )
+
+        with pytest.raises(GoogleResourceUnavailableError) as excinfo:
+            await connector.call("drive_get_file_metadata", {"file_id": "f1"})
+
+        message = public_message(excinfo.value)
+        assert "Google Drive" in message or "Drive" in message
+        assert "alice@example.com" in message
+
+    async def test_other_http_errors_stay_generic(self):
+        connector, client = make_connector()
+        connector.my_email = "alice@example.com"
+        client.get_file_metadata.side_effect = _client_error(
+            DriveClientError, 500, {"error": {"code": 500, "errors": [{"reason": "backendError"}]}}
+        )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await connector.call("drive_get_file_metadata", {"file_id": "f1"})
+
+        assert type(excinfo.value) is RuntimeError
+        assert public_message(excinfo.value) == GENERIC_PUBLIC_MESSAGE
