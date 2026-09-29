@@ -51,6 +51,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A Google read no longer fails when its connection drops.** When Google or a network device had already closed the connection a Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks or Apps Script read was about to use (seen as "EOF occurred in violation of protocol"), the read failed and the AI system said it couldn't read the data. PrivacyFence now retries such a read once on a new connection, without a second approval. PrivacyFence never retries a write, so a retry can't create a second draft or event ([#800](https://github.com/privacyfence/privacyfence/issues/800), [ADR 0105](docs/adr/0105-a-google-read-is-retried-once-when-its-connection-drops.md)).
 
+- **Organization mode: sign-in from an AI client that uses a popup.** An AI client that opens the sign-in in a popup and reads the result back from it (Gemini Enterprise does) never finished connecting: PrivacyFence's `Cross-Origin-Opener-Policy` header on `/authorize` and `/oauth/idp/callback` cut the popup off from the page that opened it. Those two redirect-only paths no longer send it ([ADR 0108](docs/adr/0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md)).
+- **Organization mode: AI clients that authenticate with HTTP Basic.** A client that sends its client ID and secret only in the `Authorization` header, as OAuth allows, was refused at `/token` with "Missing client_id", and could not revoke its tokens. Both now work ([ADR 0108](docs/adr/0108-oauth-sign-in-popups-keep-their-opener-and-basic-clients-need-not-repeat-their-id.md)).
+
 ## [5.1.0] — 2026-09-28
 
 ### Added

@@ -256,6 +256,32 @@ class TestSecurityHeadersOrgMode:
         assert "strict-transport-security" in r.headers
 
 
+class TestCrossOriginOpenerPolicyOrgMode:
+    """The two OAuth paths a client's sign-in popup passes through send
+    ``unsafe-none``, so the popup keeps its ``window.opener`` (ADR 0108);
+    every other response keeps ``same-origin``."""
+
+    def _client(self, tmp_path, monkeypatch) -> TestClient:
+        org = _org_auth(tmp_path, monkeypatch)
+        app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
+        return TestClient(app, base_url=ISSUER, follow_redirects=False)
+
+    def test_authorize_does_not_isolate_the_popup(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/authorize", params={"client_id": "unknown"})
+        assert r.headers.get("cross-origin-opener-policy") == "unsafe-none"
+
+    def test_idp_callback_does_not_isolate_the_popup(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/oauth/idp/callback", params={"state": "x", "code": "y"})
+        assert r.status_code == 400
+        assert r.headers.get("cross-origin-opener-policy") == "unsafe-none"
+
+    def test_every_other_response_is_still_same_origin(self, tmp_path, monkeypatch):
+        client = self._client(tmp_path, monkeypatch)
+        for path in ("/login", "/approvals", "/token", "/.well-known/oauth-authorization-server"):
+            r = client.get(path)
+            assert r.headers.get("cross-origin-opener-policy") == "same-origin", path
+
+
 class TestCacheControlOnSensitivePagesOrgMode:
     """The org-mode counterpart of web/test_server.py's own
     TestCacheControlOnSensitivePages -- every principal-aware page org mode
