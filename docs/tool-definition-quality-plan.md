@@ -27,23 +27,25 @@ outside this plan (see the Risks section).
 - Glama lists the same definitions through `catalog_server.py` → `connector_catalog.catalog_tools()`
   (ADR 0114). The 8 `privacyfence_*` meta-tools (`web/mcp_tools.py`) scored 4.6–4.9 and are
   out of scope.
-- Connector tools, measured on `origin/main` at `5e99d00e`. Counts leave out the `reason`
-  parameter, which every tool already describes.
+- Connector tools, measured on `origin/main` at `5e99d00e` with D1's own rules. Counts leave out
+  the `reason` parameter, which every tool already describes. "Failing" means no description, one
+  under 20 characters, or one that only repeats the name: existing short descriptions have to be
+  rewritten too.
 
-  | Connector | Tools | Params without a description | Tools that never say what they return |
+  | Connector | Tools | Params failing D1 | Tools without the word `Returns` |
   |---|---|---|---|
-  | apps_script | 4 | 5 / 6 | 3 |
-  | calendar | 14 | 27 / 54 | 12 |
-  | confluence | 10 | 15 / 22 | 6 |
+  | apps_script | 4 | 5 / 6 | 4 |
+  | calendar | 14 | 34 / 54 | 13 |
+  | confluence | 10 | 15 / 22 | 8 |
   | contacts | 7 | 17 / 24 | 6 |
-  | drive | 23 | 43 / 80 | 19 |
-  | gmail | 20 | 53 / 85 | 15 |
-  | jira | 8 | 8 / 19 | 7 |
-  | salesforce | 4 | 3 / 7 | 2 |
-  | slack | 11 | 14 / 21 | 8 |
+  | drive | 23 | 45 / 80 | 23 |
+  | gmail | 20 | 54 / 85 | 20 |
+  | jira | 8 | 13 / 19 | 7 |
+  | salesforce | 4 | 3 / 7 | 3 |
+  | slack | 11 | 14 / 21 | 9 |
   | tasks | 8 | 19 / 20 | 8 |
   | telegram | 5 | 7 / 7 | 5 |
-  | **total** | **114** | **211 / 345** | **91** |
+  | **total** | **114** | **226 / 345** | **106** |
 
 - `src/privacyfence/connectors/tasks.py:48-126` is typical: `"List tasks in a task list.
   Auto-approved."` and parameters with no description at all. It scored 2.6, the lowest.
@@ -67,8 +69,9 @@ outside this plan (see the Risks section).
 ### D1. The completeness check (`tests/helpers.py`)
 
 Add this to `tests/helpers.py`, next to the other shared helpers (§2.5 of the coding guidelines).
-Import `TOOL_TO_GATE` from `privacyfence.auto_accept` at the top of the module (`ReviewContext`
-already comes from that module).
+Add `import re` to the module's imports, and add `TOOL_TO_GATE` to the existing
+`from privacyfence.auto_accept import ReviewContext` line. Sibling names are matched as whole
+words, so `gmail_reply_draft_with_attachments` does not count as a mention of `gmail_reply_draft`.
 
 ```python
 MIN_PARAM_DESCRIPTION_CHARS = 20
@@ -98,7 +101,7 @@ def assert_tool_definitions_complete(
         for other in siblings.get(name, ()):
             if other not in specs:
                 problems.append(f"{name}: sibling {other!r} is not a tool of this connector")
-            elif other not in spec.description:
+            elif not re.search(rf"\b{re.escape(other)}\b", spec.description):
                 problems.append(f"{name}: description never mentions {other}")
     assert not problems, "\n".join(problems)
 ```
@@ -117,16 +120,21 @@ class TestToolDefinitions:
 ```
 
 `<NAME>_SIBLINGS` is a module-level `dict[str, tuple[str, ...]]` defined right above the class
-(`TASKS_SIBLINGS`, `GMAIL_SIBLINGS`, ...). Use `from unittest.mock import MagicMock` if the module
-does not import it already.
+(`TASKS_SIBLINGS`, `GMAIL_SIBLINGS`, ...). Every connector test module already imports `MagicMock` and
+`pytest`, and imports helpers as `from ...helpers import ...`: add `assert_tool_definitions_complete`
+to that line.
 
 ### D2. How a tool description is written
 
 Keep this order:
 
 1. **The first sentence stays byte-for-byte as it is.** `docs/tools-reference.md` and the website
-   render it, and `test_docs_tools_reference.py` fails if it changes. Never edit text before the
-   first `. ` of an existing description.
+   render it, and `test_docs_tools_reference.py` fails if it changes. "First sentence" means what
+   `scripts/generate_tools_reference.py`'s `first_sentence()` returns. It skips `e.g. `, `i.e. `,
+   `etc. ` and `vs. `, and cuts a sentence over its length cap at `: `. So calendar_get_event_details,
+   calendar_list_colors, contacts_get, drive_upload_file, jira_get_issue and jira_transition_issue
+   have an `e.g.` inside their first sentence, and drive_write_doc_content's rendered sentence ends
+   at its first `: `. Never edit text inside that span.
 2. The existing detail sentences stay. You may reword them in only two cases: to fit under 1024
    characters (D5), or to turn "comes back as" into a `Returns` sentence. Never drop a behavioural
    fact while rewording.
@@ -348,8 +356,8 @@ Phase p1 applies exactly this text. The later phases copy its style. Description
 sentence is unchanged in each):
 
 - **tasks_list_task_lists**: `"List all Google Task lists. Returns a list of {id, title,
-  updated}, only the first page the Tasks API sends (up to 20 lists). Pass an id as task_list_id
-  to tasks_list_tasks and the other task tools. Auto-approved."`
+  updated}. Pass an id as task_list_id to tasks_list_tasks and the other task tools.
+  Auto-approved."`
 - **tasks_list_tasks**: `"List tasks in a task list. Returns a list of tasks as {id,
   task_list_id, title, notes, due, status ('needsAction' or 'completed'), completed, updated,
   position, parent, deleted}, only the first page the Tasks API sends (up to 20 tasks), in the
@@ -383,7 +391,7 @@ Parameter descriptions (`reason` unchanged):
 | Tool(s) | Param | Description |
 |---|---|---|
 | all that take it | task_list_id | `"Id of the task list, from tasks_list_task_lists (its id field, not its title)."` |
-| tasks_list_tasks | show_completed | `"Include completed tasks. Default false: only tasks still to do."` |
+| tasks_list_tasks | show_completed | `"Include tasks completed through the API. Default false: only tasks still to do. Tasks completed in Google's own Tasks, Gmail or Calendar apps are hidden and are not returned either way."` |
 | get, update, complete, uncomplete | task_id | `"Id of the task, from tasks_list_tasks (its id field)."` |
 | tasks_create_task | title | `"Title of the new task, as shown in Google Tasks. Must not be empty."` |
 | tasks_create_task | notes | `"Free-text notes for the task (its description). Empty means no notes."` |
@@ -396,8 +404,12 @@ Parameter descriptions (`reason` unchanged):
 | tasks_move_task | destination_list_id | `"Id of the list to move the task to, from tasks_list_task_lists."` |
 
 These facts were checked against `src/privacyfence/tasks_client.py`:
-- `list_task_lists` and `list_tasks` make one `.list()` call and pass no `pageToken`; the Tasks
-  API's default page size is 20.
+- `list_tasks` makes one `tasks.list` call with no `pageToken` and no `maxResults`, so it gets the
+  API's default page of 20 tasks. `list_task_lists` does the same with `tasklists.list`, whose
+  default page is 1000 lists, so the description makes no paging claim for lists.
+- `list_tasks` sends `showCompleted` but never `showHidden`. Google hides tasks completed in its
+  own apps unless `showHidden` is true, so `show_completed=true` returns only tasks completed
+  through the API.
 - `update_task` receives `title or None`, `notes or None` and `due or None` from
   `connectors/tasks.py`, and `None` keeps the existing value.
 - `move_task` inserts `{title, notes, due}` into the destination and deletes the source.
@@ -421,10 +433,14 @@ These facts were checked against `src/privacyfence/tasks_client.py`:
 
 ## ADRs
 
-None. Every decision here can be undone by editing strings or deleting one helper. None of them
-touches a trust boundary or the release or distribution path. The rejected `enum` alternative is
-recorded above and in the coding guidelines row p8 adds, and is reversible. The PR description
-says the plan made no ADR-level decisions.
+- **ADR 0115: Tool definitions carry their parameter, return and routing guidance in prose, and a
+  test enforces it.** Every connector parameter has a description, every tool description has a
+  `Returns` sentence and names the related tool to use instead, and the first sentence stays fixed
+  as the published summary. Rejected: JSON Schema `enum` for fixed choices (clients that enforce it
+  would reject aliases that work today, such as a color name in `calendar_set_event_color`), and
+  rewriting first sentences (they are the published tools reference). Written in p8 from the
+  Design and Rejected sections above. It links to `tests/helpers.py` and this change's PR, never
+  to this plan.
 
 ## Manual steps
 
@@ -442,8 +458,9 @@ maintainer's call through `/cut-release`, and it is not part of this plan or its
   that is silently ignored, a shape that differs from the dataclass), describe what the code does.
   If it looks like a bug, add a line to the phase's result note for the PR description, and do not
   fix it in this plan.
-- **Tasks paging.** `tasks_list_tasks` and `tasks_list_task_lists` return only the first page (up
-  to 20). The PR description should suggest a follow-up issue. The same first-page pattern may
+- **Tasks paging and hidden tasks.** `tasks_list_tasks` returns only the first page (up to 20
+  tasks). It also never sends `showHidden`, so tasks completed in Google's own apps never come
+  back. The PR description should suggest a follow-up issue for both. The same first-page pattern may
   exist in other clients. Record each one found in the same way.
 - **A first sentence that has to change** because it is wrong, not just thin. Stop with
   `status=blocked` and name the tool. Changing it regenerates `docs/tools-reference.md`, which
@@ -470,7 +487,8 @@ verify_after_merge:
   - ruff check .
 final_checks:
   - docs/tool-definition-quality-plan.md is deleted and nothing links to it (git grep -n tool-definition-quality-plan returns nothing)
-  - The PR description says the plan made no ADR-level decisions (the plan's ADRs section is "none")
+  - docs/adr/0115-*.md exists, is Accepted, and is in docs/adr/README.md's index
+  - Spot-check 10 tools across at least 5 connectors against their handlers - each Returns sentence names real fields or a status shape, and each stated default or limit matches the code
   - CHANGELOG.md has an [Unreleased] entry for this change and no new version heading
   - docs/tools-reference.md is unchanged against main (git diff --exit-code origin/main -- docs/tools-reference.md)
   - The PR description links the connector-live-check.yml run p8 dispatched, and lists the paging or behaviour oddities phases reported
@@ -492,11 +510,12 @@ phases:
          and add each parameter's `description=` exactly as D6 gives them. Keep the `reason`
          parameters and all other ToolParam fields unchanged. Wrap long strings with parenthesised
          implicit concatenation as drive.py:214-227 does.
-      3. In tests/unit/connectors/test_tasks_connector.py, import `assert_tool_definitions_complete`
-         from `tests.helpers` (match how the module already imports from tests.helpers, if it does),
+      3. In tests/unit/connectors/test_tasks_connector.py, add `assert_tool_definitions_complete` to
+         the existing `from ...helpers import ...` line,
          define `TASKS_SIBLINGS` with the D4 tasks rows, and add `class TestToolDefinitions` from D1
          right after `class TestDispatch`, with `TasksConnector(MagicMock())`.
-      4. In the same class, add `test_the_check_reports_a_missing_parameter_description`: build a
+      4. Import `Connector`, `ToolParam` and `ToolSpec` from `privacyfence.connector` in that module.
+         In the same class, add `test_the_check_reports_a_missing_parameter_description`: build a
          minimal `Connector` subclass inside the test whose `name` is "tasks" and whose
          `tool_specs()` returns one `ToolSpec(name="tasks_get_task", description="Fetch a task.
          Returns it. Auto-approved.", params=[ToolParam("task_id", "str")])`, whose `call` raises
@@ -505,6 +524,8 @@ phases:
          check itself against passing vacuously.
       5. Run python3 scripts/generate_tools_reference.py. docs/tools-reference.md must not change.
          If it does, a first sentence changed: restore it.
+      Do not edit CHANGELOG.md or dispatch connector-live-check.yml: p8 owns both. Report those
+      /dod rows as deferred to p8.
       Stop with status=blocked if any test other than those you added fails on description text.
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_tasks_connector.py -q passes
@@ -522,7 +543,7 @@ phases:
       - tests/unit/connectors/test_gmail_connector.py
     brief: |
       Read the plan's Design D2, D3, D4 (gmail rows) and D5, the appendix rows for gmail, and the
-      p1 commit on the feature branch (git log --grep "Plan-Phase: p1-check-and-tasks") as the
+      p1 commit on the feature branch (git log --grep "Plan-Phase: tool-definition-quality/p1-check-and-tasks") as the
       style to copy.
       1. For each of the 20 tools in src/privacyfence/connectors/gmail.py `tool_specs()`, read its
          `call()` branch, the GmailClient method it reaches (src/privacyfence/gmail_client.py) and
@@ -534,10 +555,12 @@ phases:
          format of `to`/`cc`/`bcc` exactly as the handler parses them. Say what `body` vs
          `body_markdown` does, and that `include_signature`'s text still contains "signature".
       3. Keep gmail_download_attachment at or under 1000 characters per D5.
-      4. In tests/unit/connectors/test_gmail_connector.py, import
-         `assert_tool_definitions_complete` from tests.helpers, define `GMAIL_SIBLINGS` with the D4
+      4. In tests/unit/connectors/test_gmail_connector.py, add `assert_tool_definitions_complete` to
+         the existing `from ...helpers import ...` line, define `GMAIL_SIBLINGS` with the D4
          gmail rows, and add `class TestToolDefinitions` per D1 after `class TestDispatch`.
       5. Run python3 scripts/generate_tools_reference.py. docs/tools-reference.md must not change.
+      Do not edit CHANGELOG.md or dispatch connector-live-check.yml: p8 owns both. Report those
+      /dod rows as deferred to p8.
       Stop with status=blocked if a first sentence would have to change, or if a test other than
       the one at test_gmail_connector.py:1695 asserts description text and fails.
     acceptance:
@@ -555,7 +578,7 @@ phases:
       - tests/unit/connectors/test_drive_connector.py
     brief: |
       Read the plan's Design D2, D3, D4 (drive rows) and D5, the appendix rows for drive, and the
-      p1 commit (git log --grep "Plan-Phase: p1-check-and-tasks") as the style to copy.
+      p1 commit (git log --grep "Plan-Phase: tool-definition-quality/p1-check-and-tasks") as the style to copy.
       1. For each of the 23 tools in src/privacyfence/connectors/drive.py `tool_specs()`, read its
          `call()` branch, the client method it reaches (src/privacyfence/drive_client.py and the
          Sheets/Docs helpers it calls) and any `_parse_*`, and extend the description per D2.
@@ -571,6 +594,8 @@ phases:
       4. In tests/unit/connectors/test_drive_connector.py, add `DRIVE_SIBLINGS` (D4 drive rows) and
          `class TestToolDefinitions` per D1 after `class TestDispatch`.
       5. Run python3 scripts/generate_tools_reference.py. docs/tools-reference.md must not change.
+      Do not edit CHANGELOG.md or dispatch connector-live-check.yml: p8 owns both. Report those
+      /dod rows as deferred to p8.
       Stop with status=blocked if a first sentence would have to change, or if an existing test
       fails on description text.
     acceptance:
@@ -588,7 +613,7 @@ phases:
       - tests/unit/connectors/test_calendar_connector.py
     brief: |
       Read the plan's Design D2, D3, D4 (calendar rows), the appendix rows for calendar, and the p1
-      commit (git log --grep "Plan-Phase: p1-check-and-tasks") as the style to copy.
+      commit (git log --grep "Plan-Phase: tool-definition-quality/p1-check-and-tasks") as the style to copy.
       1. For each of the 14 tools in src/privacyfence/connectors/calendar.py `tool_specs()`, read
          its `call()` branch and the client method (src/privacyfence/calendar_client.py), and
          extend the description per D2.
@@ -602,6 +627,8 @@ phases:
       3. In tests/unit/connectors/test_calendar_connector.py, add `CALENDAR_SIBLINGS` (D4
          calendar rows) and `class TestToolDefinitions` per D1 after `class TestDispatch`.
       4. Run python3 scripts/generate_tools_reference.py. docs/tools-reference.md must not change.
+      Do not edit CHANGELOG.md or dispatch connector-live-check.yml: p8 owns both. Report those
+      /dod rows as deferred to p8.
       Stop with status=blocked if a first sentence would have to change, or if an existing test
       fails on description text.
     acceptance:
@@ -621,7 +648,7 @@ phases:
       - tests/unit/connectors/test_apps_script_connector.py
     brief: |
       Read the plan's Design D2, D3, D4 (contacts and apps_script rows), the appendix rows for
-      contacts, and the p1 commit (git log --grep "Plan-Phase: p1-check-and-tasks") as the style
+      contacts, and the p1 commit (git log --grep "Plan-Phase: tool-definition-quality/p1-check-and-tasks") as the style
       to copy.
       1. For each of the 7 tools in src/privacyfence/connectors/contacts.py and the 4 in
          src/privacyfence/connectors/apps_script.py, read the `call()` branch and client method
@@ -636,6 +663,8 @@ phases:
          add `APPS_SCRIPT_SIBLINGS` (D4 rows), each with `class TestToolDefinitions` per D1 after
          `class TestDispatch`.
       4. Run python3 scripts/generate_tools_reference.py. docs/tools-reference.md must not change.
+      Do not edit CHANGELOG.md or dispatch connector-live-check.yml: p8 owns both. Report those
+      /dod rows as deferred to p8.
       Stop with status=blocked if a first sentence would have to change, or if an existing test
       fails on description text.
     acceptance:
@@ -655,7 +684,7 @@ phases:
       - tests/unit/connectors/test_telegram_connector.py
     brief: |
       Read the plan's Design D2, D3, D4 (slack and telegram rows), the appendix rows for slack and
-      telegram, and the p1 commit (git log --grep "Plan-Phase: p1-check-and-tasks") as the style
+      telegram, and the p1 commit (git log --grep "Plan-Phase: tool-definition-quality/p1-check-and-tasks") as the style
       to copy.
       1. For each of the 11 tools in src/privacyfence/connectors/slack.py and the 5 in
          src/privacyfence/connectors/telegram.py, read the `call()` branch and client method
@@ -671,6 +700,8 @@ phases:
          `TELEGRAM_SIBLINGS` (D4 rows), each with `class TestToolDefinitions` per D1 after
          `class TestDispatch`.
       4. Run python3 scripts/generate_tools_reference.py. docs/tools-reference.md must not change.
+      Do not edit CHANGELOG.md or dispatch connector-live-check.yml: p8 owns both. Report those
+      /dod rows as deferred to p8.
       Stop with status=blocked if a first sentence would have to change, or if an existing test
       fails on description text.
     acceptance:
@@ -692,7 +723,7 @@ phases:
       - tests/unit/connectors/test_salesforce_connector.py
     brief: |
       Read the plan's Design D2, D3, D4 (confluence, jira and salesforce rows) and D5, the appendix
-      rows for those three, and the p1 commit (git log --grep "Plan-Phase: p1-check-and-tasks") as
+      rows for those three, and the p1 commit (git log --grep "Plan-Phase: tool-definition-quality/p1-check-and-tasks") as
       the style to copy.
       1. For each of the 10 confluence, 8 jira and 4 salesforce tools, read the `call()` branch
          and client method (src/privacyfence/confluence_client.py, jira_client.py,
@@ -708,6 +739,8 @@ phases:
          `SALESFORCE_SIBLINGS` (D4 rows), each with `class TestToolDefinitions` per D1 after
          `class TestDispatch`.
       4. Run python3 scripts/generate_tools_reference.py. docs/tools-reference.md must not change.
+      Do not edit CHANGELOG.md or dispatch connector-live-check.yml: p8 owns both. Report those
+      /dod rows as deferred to p8.
       Stop with status=blocked if a first sentence would have to change, or if an existing test
       fails on description text.
     acceptance:
@@ -717,19 +750,21 @@ phases:
       - ruff check src/privacyfence/connectors/confluence.py src/privacyfence/connectors/jira.py src/privacyfence/connectors/salesforce.py tests/unit/connectors/test_confluence_connector.py tests/unit/connectors/test_jira_connector.py tests/unit/connectors/test_salesforce_connector.py passes
 
   - id: p8-retire
-    title: Guard every future connector, document the rule, changelog, live check, delete the plan
+    title: Guard every future connector, ADR 0115, document the rule, changelog, live check, delete the plan
     depends_on: [p2-gmail, p3-drive, p4-calendar, p5-contacts-apps-script, p6-slack-telegram, p7-confluence-jira-salesforce]
     complexity: S
     touches:
       - tests/unit/web/test_tool_schema_portability.py
       - docs/coding-and-testing-guidelines.md
+      - docs/adr/0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md
+      - docs/adr/README.md
       - CHANGELOG.md
       - docs/tool-definition-quality-plan.md
     brief: |
       1. In tests/unit/web/test_tool_schema_portability.py, add a bare module-level test
          `test_every_connector_tool_definition_is_complete`, parametrized over `CONNECTORS.values()`
-         (id = connector name). It calls `assert_tool_definitions_complete(connector, {})` from
-         tests.helpers, so a connector added later cannot ship parameters without descriptions,
+         (`ids=list(CONNECTORS)`). It calls `assert_tool_definitions_complete(connector, {})`,
+         imported with `from ...helpers import assert_tool_definitions_complete`, so a connector added later cannot ship parameters without descriptions,
          with no Returns sentence, or with the wrong approval wording. Mention it in the module
          docstring's list of limits in one clause.
       2. In docs/coding-and-testing-guidelines.md §3's "Client and connector" table, add a row:
@@ -737,20 +772,30 @@ phases:
          sentence, the related tool to use instead, and the approval wording its gate implies;
          every parameter but `reason` has a description saying its format, where the value comes
          from and what empty means. Fixed choices are listed in the text, not as a JSON Schema
-         `enum`, because some connectors accept aliases a strict client would reject." Where =
+         `enum`, because some connectors accept aliases a strict client would reject (ADR 0115)." Where =
          "`src/privacyfence/connectors/<name>.py`'s `tool_specs()`". Enforced by = "**enforced**:
          `tests/helpers.py`'s `assert_tool_definitions_complete`, run for every connector by
          `tests/unit/web/test_tool_schema_portability.py`, and with the sibling map by each
          connector's `TestToolDefinitions`". Add to §2.6's checklist item list: "6.
          `TestToolDefinitions`, calling `assert_tool_definitions_complete` with the connector's
-         sibling map."
-      3. In CHANGELOG.md under `## [Unreleased]`, add a `### Changed` subsection (create it if
+         sibling map." Add `assert_tool_definitions_complete` to §2.5's list of shared helpers in
+         `tests/helpers.py`, with a one-clause description.
+      3. Write docs/adr/0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md
+         using the template in docs/adr/README.md ("## Template"), with Status "Accepted —
+         <today's date>. Implemented: `tests/helpers.py`'s `assert_tool_definitions_complete`,
+         `src/privacyfence/connectors/*.py`'s `tool_specs()`." Decision and Alternatives considered
+         come from the plan's ADRs bullet, Design D2/D3 and "Rejected" (the enum, shared
+         REASON_PARAM and first-sentence rewrite rejections). Context: Glama's TDQS for v5.3.0 (B,
+         Parameters 2.9/5, Usage Guidelines 3.2/5) and that clients choose tools from these
+         descriptions. Related: ADR 0114 and ADR 0089. Do not link to the plan document. Add its
+         row to the index table at the end of docs/adr/README.md, after 0114, in the same format.
+      4. In CHANGELOG.md under `## [Unreleased]`, add a `### Changed` subsection (create it if
          absent) with: "- Every connector tool now describes each of its parameters, says what it
          returns (fields, limits and paging), and names the related tool to use instead, so AI
          clients choose and call the right tool more often." Do not add a version heading.
-      4. Delete docs/tool-definition-quality-plan.md. Run `git grep -n tool-definition-quality-plan`.
+      5. Delete docs/tool-definition-quality-plan.md. Run `git grep -n tool-definition-quality-plan`.
          It must print nothing.
-      5. Dispatch `connector-live-check.yml` against the feature branch (steward dispatch table;
+      6. Dispatch `connector-live-check.yml` against the feature branch (steward dispatch table;
          §2.7 requires it for a PR touching src/privacyfence/connectors/**). Put the run URL in
          the phase result so the PR description links it. A missing credential on the runner is
          not a blocker for this phase. Report it instead.
@@ -758,7 +803,9 @@ phases:
       - python3 -m pytest tests/unit/web/test_tool_schema_portability.py -q -k every_connector_tool_definition_is_complete reports 11 passed
       - python3 -m pytest tests/unit -q passes
       - git grep -n tool-definition-quality-plan prints nothing
-      - grep -n "assert_tool_definitions_complete" docs/coding-and-testing-guidelines.md prints at least one line
+      - grep -n "assert_tool_definitions_complete" docs/coding-and-testing-guidelines.md prints at least two lines
+      - grep -n "0115" docs/adr/README.md prints one index row, and the ADR file's Status line starts with "Accepted"
+      - grep -n "tool-definition-quality-plan" docs/adr/0115-*.md prints nothing
       - python3 -c "import re;t=open('CHANGELOG.md').read();u=t.split('## [Unreleased]')[1].split('\n## [')[0];assert 'names the related tool' in u" exits 0
 ```
 
