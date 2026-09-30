@@ -16,6 +16,7 @@ from ..atlassian_users import (
     markup_to_storage,
     storage_mention_ids,
     storage_mentions_to_text,
+    storage_unrecognised_user_mentions,
 )
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..confluence_client import ConfluenceClient, ConfluenceClientError, resolve_attachment_destination
@@ -768,7 +769,8 @@ class ConfluenceConnector(Connector):
         mentioned account for the approver. Returns (storage_body, mentions_row)
         with an empty row when the body mentions nobody. Markup ids Atlassian
         cannot resolve are refused; raw <ri:user> ids already in the body are
-        listed as unknown but not refused."""
+        listed as unknown, and <ri:user> tags with no account id (legacy userkey/username)
+        as unrecognised, but neither is refused: refusing would make existing pages uneditable."""
         markup_ids = markup_mention_ids(body)
         ids = list(dict.fromkeys([*markup_ids, *storage_mention_ids(body)]))
         names: dict[str, str] = {}
@@ -780,7 +782,11 @@ class ConfluenceConnector(Connector):
                 f"Unknown Atlassian account id(s): {', '.join(missing)}. "
                 "Look the person up with confluence_find_users and use their account_id."
             )
-        mentions = ", ".join(names.get(i) or f"unknown account {i}" for i in ids)
+        parts = [names.get(i) or f"unknown account {i}" for i in ids]
+        unrecognised = storage_unrecognised_user_mentions(body)
+        if unrecognised:
+            parts.append(f"{unrecognised} unrecognised user mention(s)")
+        mentions = ", ".join(parts)
         return markup_to_storage(body), mentions
 
     async def _fetch(self, func, *args) -> Any:

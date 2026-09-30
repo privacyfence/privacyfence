@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import threading
+from html.parser import HTMLParser
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -33,13 +34,6 @@ FIND_USERS_MAX_RESULTS = 50
 _HTTP_TIMEOUT_SECONDS = 30
 ACCOUNT_ID_RE = re.compile(r"[A-Za-z0-9:_-]{10,128}")  # always used with .fullmatch()
 MENTION_MARKUP_RE = re.compile(r"@\[([^\]\n]{1,200})\]\(([A-Za-z0-9:_-]{10,128})\)")
-_ACCOUNT_ID_ATTR = r"""\bri:account-id\s*=\s*(?:"(?P<dq>[^"]+)"|'(?P<sq>[^']+)')"""
-_STORAGE_USER_RE = re.compile(r"<ri:user\b[^>]*?" + _ACCOUNT_ID_ATTR + r"[^>]*>")
-_STORAGE_MENTION_RE = re.compile(
-    r"<ac:link\b[^>]*>\s*<ri:user\b[^>]*?" + _ACCOUNT_ID_ATTR + r"[^>]*?(?:/>|>\s*</ri:user>)\s*"
-    r'(?:<ac:(?:plain-text-)?link-body>.*?</ac:(?:plain-text-)?link-body>\s*)?</ac:link>',
-    re.S,
-)
 UNKNOWN_USER_LABEL = "unknown user"
 
 
@@ -120,15 +114,73 @@ def display_markup(text: str, names: Mapping[str, str] | None = None) -> str:
     return MENTION_MARKUP_RE.sub(replace, text)
 
 
+class _StorageScan(HTMLParser):
+    """Tokenise Confluence storage format, collecting every ``<ri:user>`` start tag and the
+    ``<ac:link>`` element spans (absolute offsets) that wrap one. A real tokenizer, so a ``>``
+    inside a quoted attribute, either quote style and entity-encoded values all behave as they do
+    for Confluence's own XML parser."""
+
+    CDATA_CONTENT_ELEMENTS = ()  # <script>/<style> are ordinary elements in storage format
+    RCDATA_CONTENT_ELEMENTS = ()
+
+    def __init__(self, text: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self._text = text
+        self._line_starts = [0]
+        for line in text.split("\n")[:-1]:
+            self._line_starts.append(self._line_starts[-1] + len(line) + 1)
+        self.users: list[dict[str, str]] = []
+        self.links: list[tuple[int, int, int | None]] = []  # (start, end, index into users)
+        self._open: tuple[int, int | None] | None = None
+        self.feed(text)
+        self.close()
+
+    def _offset(self) -> int:
+        line, col = self.getpos()
+        return self._line_starts[line - 1] + col
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "ac:link":
+            self._open = (self._offset(), None)
+        elif tag == "ri:user":
+            values: dict[str, str] = {}
+            for key, value in attrs:
+                values.setdefault(key, (value or "").strip())
+            self.users.append(values)
+            if self._open is not None and self._open[1] is None:
+                self._open = (self._open[0], len(self.users) - 1)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "ac:link" and self._open is not None:
+            start, user = self._open
+            end = self._text.find(">", self._offset()) + 1
+            if end and user is not None:
+                self.links.append((start, end, user))
+            self._open = None
+
+
 def storage_mention_ids(html: str) -> list[str]:
-    return list(dict.fromkeys(m["dq"] or m["sq"] for m in _STORAGE_USER_RE.finditer(html)))
+    users = _StorageScan(html).users
+    return list(dict.fromkeys(u["ri:account-id"] for u in users if u.get("ri:account-id")))
+
+
+def storage_unrecognised_user_mentions(html: str) -> int:
+    """Count ``<ri:user>`` tags with no usable ``ri:account-id`` (legacy ``ri:userkey`` /
+    ``ri:username`` forms, or none at all), which cannot be named from the directory."""
+    return sum(1 for u in _StorageScan(html).users if not u.get("ri:account-id"))
 
 
 def storage_mentions_to_text(html: str, names: Mapping[str, str]) -> str:
-    def replace(match: re.Match[str]) -> str:
-        return "@" + html_lib.escape(names.get(match["dq"] or match["sq"]) or UNKNOWN_USER_LABEL)
-
-    return _STORAGE_MENTION_RE.sub(replace, html)
+    scan = _StorageScan(html)
+    out: list[str] = []
+    cursor = 0
+    for start, end, index in scan.links:
+        name = names.get(scan.users[index].get("ri:account-id", "")) or UNKNOWN_USER_LABEL
+        out.append(html[cursor:start])
+        out.append("@" + html_lib.escape(name))
+        cursor = end
+    out.append(html[cursor:])
+    return "".join(out)
 
 
 def markup_to_storage(text: str) -> str:

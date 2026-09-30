@@ -1142,3 +1142,33 @@ class TestWriteMentions:
 
         assert gated_call_spy[0]["preview"]["Mentions"] == "Jane Doe"
         client.resolve_user_names.assert_called_once_with([_JANE])
+
+    _REAL = "557058:f58131cb-b67d-43c7-b30d-6b58d40bd077"
+
+    @pytest.mark.parametrize("raw", [
+        f'<ac:link><ri:user ri:local-id="a>b" ri:account-id="{_REAL}" />'
+        '<ac:plain-text-link-body><![CDATA[Bob]]></ac:plain-text-link-body></ac:link>',
+        '<ac:link><ri:user ri:account-id="557058&#58;f58131cb-b67d-43c7-b30d-6b58d40bd077" /></ac:link>',
+    ])
+    async def test_tricky_raw_mentions_named_in_preview(self, gated_call_spy, raw):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {self._REAL: "Bob Real"}
+        client.create_page.return_value = make_page()
+
+        await connector.call("confluence_create_page", self._create_args(f"<p>{raw}</p>"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Bob Real"
+        client.resolve_user_names.assert_called_once_with([self._REAL])
+
+    @pytest.mark.parametrize("attr", ['ri:userkey="8a7f"', "ri:username='bob'"])
+    async def test_legacy_raw_mention_listed_as_unrecognised(self, gated_call_spy, attr):
+        connector, client = make_connector()
+        client.create_page.return_value = make_page()
+
+        await connector.call(
+            "confluence_create_page",
+            self._create_args(f"<p><ac:link><ri:user {attr} /></ac:link></p>"),
+        )
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "1 unrecognised user mention(s)"
+        client.resolve_user_names.assert_not_called()

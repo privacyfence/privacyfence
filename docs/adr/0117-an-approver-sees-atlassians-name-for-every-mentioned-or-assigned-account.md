@@ -24,7 +24,8 @@ An id in mention markup, or an `assignee_account_id`, that cannot be resolved is
 Mentions already present in a Confluence body in storage format are shown, not refused. Raw
 storage-format mentions already worked before this change and may be unresolvable on a
 Confluence-only site, where refusing them would make existing pages uneditable. The card labels an
-unresolved one as `unknown account <id>`.
+unresolved one as `unknown account <id>`, and a legacy `ri:userkey` / `ri:username` mention (no account
+id) as `unrecognised user mention(s)`. Storage tags are found with an HTML tokenizer, not a regex.
 
 ## Alternatives considered
 
