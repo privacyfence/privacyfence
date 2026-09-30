@@ -357,9 +357,11 @@ class ConfluenceClient:
                 max_results,
             )
         except Exception as exc:
-            raise ConfluenceClientError(f"find_users failed: {exc}") from exc
+            raise ConfluenceClientError(
+                f"find_users failed: {atlassian_users.redact_query(exc, query)}"
+            ) from exc
         self._users.remember(users)
-        logger.info("find_users query=%r returned %d user(s)", query, len(users))
+        logger.info("find_users returned %d user(s)", len(users))
         return users
 
     def refresh_user_cache(self) -> int:

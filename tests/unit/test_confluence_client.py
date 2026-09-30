@@ -7,6 +7,7 @@ pattern.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -767,6 +768,24 @@ class TestUserLookups:
         client.find_users("a", max_results=0)
         client.find_users("a", max_results=10_000)
         assert seen == [1, atlassian_users.FIND_USERS_MAX_RESULTS]
+
+    def test_find_users_never_logs_the_query(self, monkeypatch, caplog):
+        query = "jane@example.com"
+        monkeypatch.setattr(atlassian_users, "search_users",
+                            lambda *a: [atlassian_users.AtlassianUser("acc-jane-000001", "Jane")])
+        with caplog.at_level(logging.DEBUG):
+            make_client().find_users(query)
+        assert caplog.records
+        assert not any(query in r.getMessage() or query in str(r.args) for r in caplog.records)
+
+    def test_find_users_error_text_omits_the_query(self, monkeypatch):
+        def boom(session, cloud_id, query, max_results):
+            raise RuntimeError(f"400 Client Error for url: https://x/user/search?query=jane%40example.com&q={query}")
+
+        monkeypatch.setattr(atlassian_users, "search_users", boom)
+        with pytest.raises(ConfluenceClientError) as err:
+            make_client().find_users("jane@example.com")
+        assert "jane" not in str(err.value)
 
     def test_find_users_failure_becomes_client_error(self, monkeypatch):
         def boom(session, cloud_id, query, max_results):

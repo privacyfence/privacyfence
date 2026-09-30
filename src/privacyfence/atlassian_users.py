@@ -14,6 +14,7 @@ import os
 import re
 import threading
 from html.parser import HTMLParser
+from urllib.parse import quote, quote_plus
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -109,6 +110,14 @@ def search_users(
     )
     response.raise_for_status()
     return [u for u in (parse_user(v) for v in response.json()) if u is not None]
+
+
+def redact_query(exc: Exception, query: str) -> str:
+    """``str(exc)`` with the search text removed; requests' HTTPError embeds the request URL."""
+    text = str(exc)
+    for variant in (query, quote(query, safe=""), quote_plus(query)):
+        text = text.replace(variant, "<query>")
+    return text
 
 
 def mention_markup(name: str, account_id: str) -> str:
@@ -244,8 +253,11 @@ class AtlassianUserDirectory:
                 )
                 failed = True
                 break
-            got = {u.account_id for u in returned}
-            fetched.extend(returned)
+            # A blank display name is not a usable name: treat it like a missing id (negative-cached,
+            # refused on writes) rather than caching it as resolved.
+            named = [u for u in returned if u.display_name.strip()]
+            got = {u.account_id for u in named}
+            fetched.extend(named)
             missing.extend(i for i in chunk if i not in got)
 
         with self._lock:
@@ -267,6 +279,8 @@ class AtlassianUserDirectory:
             self._load_locked()
             now = datetime.now(timezone.utc)
             for user in users:
+                if not user.display_name.strip():
+                    continue
                 self._users[user.account_id] = user
                 self._fetched_at[user.account_id] = now
                 self._negative.pop(user.account_id, None)
@@ -290,6 +304,7 @@ class AtlassianUserDirectory:
                 raise AtlassianUsersError(f"refresh failed: {exc}") from exc
             with self._lock:
                 now = datetime.now(timezone.utc)
+                fresh = [u for u in fresh if u.display_name.strip()]
                 self._users = {u.account_id: u for u in fresh}
                 self._fetched_at = {u.account_id: now for u in fresh}
                 for account_id in ids:
@@ -320,20 +335,27 @@ class AtlassianUserDirectory:
             if data.get("cloud_id") != self._cloud_id:
                 return
             raw_users = data.get("users") or {}
+            if not isinstance(raw_users, dict):
+                raise TypeError("'users' is not an object")
         except Exception as exc:
             logger.warning("Could not load Atlassian user cache (non-fatal): %s", exc)
             return
         for account_id, raw in raw_users.items():
             try:
+                if not isinstance(account_id, str):
+                    continue
                 fetched_at = datetime.fromisoformat(raw["fetched_at"])
                 if fetched_at.tzinfo is None:
                     fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-                self._users.setdefault(account_id, AtlassianUser(
+                user = AtlassianUser(
                     account_id=raw["account_id"],
                     display_name=raw["display_name"],
                     active=raw.get("active", True),
                     account_type=raw.get("account_type", ""),
-                ))
+                )
+                if not user.display_name.strip():
+                    continue
+                self._users.setdefault(account_id, user)
                 self._fetched_at.setdefault(account_id, fetched_at)
             except (KeyError, TypeError, ValueError, AttributeError):
                 continue

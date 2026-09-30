@@ -400,6 +400,93 @@ class TestDirectoryResolve:
         fetch.assert_not_called()
 
 
+class TestBlankNames:
+    @pytest.mark.parametrize("name", ["", " ", " \t\n "])
+    def test_blank_name_is_unresolved_and_negative_cached(self, name: str):
+        directory = AtlassianUserDirectory()
+        fetch = MagicMock(return_value=[_user(ID_A, name)])
+        assert directory.resolve([ID_A], fetch) == {}
+        assert directory.resolve([ID_A], fetch) == {}
+        fetch.assert_called_once_with([ID_A])
+
+    def test_blank_name_not_persisted(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        directory = AtlassianUserDirectory(str(path), CLOUD)
+        directory.resolve([ID_A, ID_B], MagicMock(return_value=[_user(ID_A, " "), _user(ID_B, "Bo")]))
+        assert list(json.loads(path.read_text())["users"]) == [ID_B]
+
+    def test_blank_name_in_cache_file_is_ignored(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        stamp = "2026-01-01T00:00:00+00:00"
+        path.write_text(json.dumps({"cloud_id": CLOUD, "users": {
+            ID_A: {"account_id": ID_A, "display_name": "  ", "fetched_at": stamp}}}))
+        fetch = MagicMock(return_value=[])
+        with freeze_time("2026-01-02"):
+            assert AtlassianUserDirectory(str(path), CLOUD).resolve([ID_A], fetch) == {}
+        fetch.assert_called_once_with([ID_A])
+
+    def test_remember_skips_blank_names(self):
+        directory = AtlassianUserDirectory()
+        directory.remember([_user(ID_A, ""), _user(ID_B, "Bo")])
+        assert directory.resolve([ID_A, ID_B], MagicMock(return_value=[])) == {ID_B: "Bo"}
+
+    def test_refresh_drops_blank_names(self):
+        directory = AtlassianUserDirectory()
+        directory.remember([_user(ID_A, "Al"), _user(ID_B, "Bo")])
+        assert directory.refresh(MagicMock(return_value=[_user(ID_A, " "), _user(ID_B, "Bo")])) == 1
+        assert directory.resolve([ID_A], MagicMock(return_value=[])) == {}
+
+    def test_redact_query_hides_search_text_in_all_encodings(self):
+        exc = RuntimeError("400 for url: x?query=jane%40example.com&q=jane@example.com+jane+doe")
+        for query in ("jane@example.com", "jane doe"):
+            assert query not in au.redact_query(exc, query)
+        assert "jane%40example.com" not in au.redact_query(exc, "jane@example.com")
+
+
+class TestMalformedCacheFile:
+    STAMP = "2026-01-01T00:00:00+00:00"
+
+    def _resolve(self, tmp_path: Path, payload) -> dict:
+        path = tmp_path / "users.json"
+        path.write_text(payload if isinstance(payload, str) else json.dumps(payload))
+        fetch = MagicMock(return_value=[_user(ID_A, "Fresh")])
+        with freeze_time("2026-01-01 01:00:00"):
+            return AtlassianUserDirectory(str(path), CLOUD).resolve([ID_A], fetch)
+
+    @pytest.mark.parametrize("users", [["x"], "x", 7, True])
+    def test_non_dict_users(self, tmp_path: Path, users):
+        assert self._resolve(tmp_path, {"cloud_id": CLOUD, "users": users}) == {ID_A: "Fresh"}
+
+    @pytest.mark.parametrize("payload", [["x"], "{", 3, None])
+    def test_non_dict_document(self, tmp_path: Path, payload):
+        assert self._resolve(tmp_path, payload) == {ID_A: "Fresh"}
+
+    @pytest.mark.parametrize("entry", [
+        "x", None, 5, ["a"], {},
+        {"account_id": ID_A, "display_name": "Old"},
+        {"account_id": ID_A, "display_name": "Old", "fetched_at": 12},
+        {"account_id": ID_A, "display_name": "Old", "fetched_at": "garbage"},
+        {"account_id": ID_A, "display_name": 5, "fetched_at": STAMP},
+        {"account_id": ["l"], "display_name": "Old", "fetched_at": STAMP},
+        {"account_id": ID_A, "display_name": "Old", "fetched_at": STAMP, "active": {}, "account_type": []},
+    ])
+    def test_bad_entries(self, tmp_path: Path, entry):
+        # Entries that load give "Old"; the rest are skipped and re-fetched. None may raise.
+        result = self._resolve(tmp_path, {"cloud_id": CLOUD, "users": {ID_A: entry}})
+        assert result in ({ID_A: "Fresh"}, {ID_A: "Old"})
+
+    def test_non_str_key_skipped(self, tmp_path: Path, monkeypatch):
+        path = tmp_path / "users.json"
+        path.write_text("{}")  # JSON keys are always str, so feed the loader a decoded document
+        monkeypatch.setattr(au.json, "load", lambda fh: {
+            "cloud_id": CLOUD,
+            "users": {5: {"account_id": ID_A, "display_name": "Old", "fetched_at": self.STAMP}},
+        })
+        fetch = MagicMock(return_value=[_user(ID_A, "Fresh")])
+        with freeze_time("2026-01-01 01:00:00"):
+            assert AtlassianUserDirectory(str(path), CLOUD).resolve([ID_A], fetch) == {ID_A: "Fresh"}
+
+
 class TestDirectoryPersistence:
     def test_writes_file_in_documented_format(self, tmp_path: Path):
         path = tmp_path / "users.json"

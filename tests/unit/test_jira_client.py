@@ -572,6 +572,15 @@ class TestUserLookups:
         with pytest.raises(JiraClientError, match="find_users failed: nope"):
             make_client().find_users("jane")
 
+    def test_find_users_error_text_omits_the_query(self, monkeypatch):
+        def boom(*a):
+            raise RuntimeError("400 for url: https://x/user/search?query=jane%40example.com")
+
+        monkeypatch.setattr("privacyfence.atlassian_users.search_users", boom)
+        with pytest.raises(JiraClientError) as err:
+            make_client().find_users("jane@example.com")
+        assert "jane" not in str(err.value)
+
     def test_refresh_user_cache_returns_count(self, monkeypatch):
         fake_bulk(monkeypatch, {JANE_ID: "Jane Doe"})
         client = make_client()
