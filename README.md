@@ -1,5 +1,7 @@
 # PrivacyFence
 
+[![privacyfence/privacyfence MCP server](https://glama.ai/mcp/servers/privacyfence/privacyfence/badges/score.svg)](https://glama.ai/mcp/servers/privacyfence/privacyfence)
+
 **AI access without giving AI the keys.** Approve the sensitive. Automate the routine.
 
 PrivacyFence is an open-source privacy and approval gateway between AI assistants and your business systems. It connects MCP-compatible assistants such as Claude Desktop and Claude Code to Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram, and more.
