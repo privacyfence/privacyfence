@@ -54,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Better signals on privacyfence.eu for search engines.** Each connector page ends with an "Other connectors" block linking the rest, [How it works](https://privacyfence.eu/how-it-works/) and [Download](https://privacyfence.eu/download/) link the [FAQ](https://privacyfence.eu/faq/), the AI agent, comparison and connector pages carry breadcrumb data, the homepage and download page list the [Glama](https://glama.ai/mcp/servers/privacyfence/privacyfence) listing, and `sitemap.xml` gives each page a last-modified date taken from git history.
 - **`glama.json`** at the repository root, which claims the Glama listing for its maintainer.
+- **A tool catalog for MCP directories.** `python -m privacyfence.catalog_server` lists every PrivacyFence tool over stdio without any credentials and answers every call with a message to install PrivacyFence, so Glama can check and grade its listing. It is not a way to run PrivacyFence.
 
 ### Changed
 
