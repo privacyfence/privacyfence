@@ -245,8 +245,9 @@ otherwise `await sftp.rmtree(folder)` and return `True`.
 
 Every `asyncssh.Error` and `OSError` (including `asyncio.TimeoutError`) raised inside either method
 is logged with `logger.warning("Web pages SFTP %s failed: %s", <"publish"|"unpublish">, exc)` and
-re-raised as `PagesClientError(<message>)` with exactly one of these messages, chosen by type
-(`{host}` is `config.sftp_host`, `{port}` `config.sftp_port`, `{user}` `config.sftp_user`,
+re-raised as `PagesClientError(<message>)` with exactly one of these messages, chosen by type,
+checking the rows **in this order** (the first two are both `asyncssh.DisconnectError` subclasses
+of `asyncssh.Error`, so a broader `except` first would swallow them) (`{host}` is `config.sftp_host`, `{port}` `config.sftp_port`, `{user}` `config.sftp_user`,
 `{dir}` `config.remote_dir`):
 
 | Caught | Message |
@@ -424,22 +425,50 @@ then `_auto_audit("pages_list_pages", "List Web Pages", f"{n} page(s)", "", t0)`
 - `tests/unit/test_connector_tool_annotations.py` `DESTRUCTIVE_TOOLS` gains
   `"pages_unpublish_page"`, with its comment updated to "a calendar event, rows or columns of a
   spreadsheet, and a published web page".
-- `CONNECTOR_CLASSES` in `tests/unit/connectors/test_readme_manifest_alignment.py` and
-  `tests/unit/test_systemic_gate_invariants.py` gain `PagesConnector`.
+- `CONNECTOR_CLASSES` in `tests/unit/connectors/test_readme_manifest_alignment.py` (`:36-40`)
+  gains `PagesConnector`. (`test_systemic_gate_invariants.py` discovers connector classes itself
+  and needs nothing.)
 - `scripts/generate_tools_reference.py`: `CONNECTOR_TITLES["pages"] = "Web pages"` and
   `CONNECTOR_SHORT["pages"] = "Web pages"`, placed last; then regenerate `docs/tools-reference.md`
   and `docs/always-allow-rules-reference.md` with their scripts.
 - `scripts/pyinstaller_common.py`: `"privacyfence.connectors.pages"` after
   `"privacyfence.connectors.apps_script"`.
-- `website/connectors/index.html`: a card after the last one, in the same markup as the Telegram
-  card (`website/connectors/index.html:112-121`) but with `id="web-pages"`,
-  `data-connector="Web pages"`, the counts the regenerated reference prints, a one-sentence body
-  "Publish a single-file HTML page on a web server your organization runs, and get back a link
-  anyone can open.", and a single link
-  `<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/tools-reference.md#web-pages">Every Web pages tool</a>`
-  (a `/docs/` link would fail the website build's link check until a stable release carries the
-  new section, ADR 0052). "Eleven connectors" becomes "Twelve connectors", and the tool totals
-  on `/connectors/` and `/how-it-works/` become the new total the tests compute.
+- **Website and README (guardrail 8, `tests/unit/test_website_connector_pages.py`)**: every
+  module in `connectors/` needs a connector page, a published setup guide and a README row, in the
+  same phase as the module:
+  - `website/connectors/web-pages/index.html`, a copy of `website/connectors/telegram/index.html`
+    (same structure, `pf-content-group` `connector`, same sections) rewritten for Web pages, with
+    `<title>Web pages for AI assistants, over MCP — PrivacyFence</title>`, `<h1>Share a page your
+    AI assistant made, with a link, after you approve it.</h1>`, a meta description and
+    `og:description` of 140-155 characters, `Publish a single-file HTML page your AI assistant made
+    to a web server you run, after you approve it, and share the link with anyone who needs it.`
+    (146 characters), body copy taken from the Goal and D11 of this plan (no claims beyond them),
+    and its "Set it up" button `<a class="button primary" href="GUIDE_URL">Set it up</a>`, where
+    `GUIDE_URL` is `https://github.com/privacyfence/privacyfence/blob/main/docs/` immediately
+    followed by `web-pages-setup.md` (written split here only because this plan must not name a
+    docs path that does not exist yet, `tests/unit/test_docs_references_exist.py`)
+    (the test accepts a GitHub `blob/<ref>/docs/<guide>.md` link; a `/docs/` link would fail the
+    website build's link check until a stable release carries the guide, ADR 0052).
+  - `scripts/build_site.py`: `"/connectors/web-pages/": "connectors/web-pages/index.html"` in
+    `PAGES` after the Telegram entry, and `"web-pages-setup"` in `CONNECTOR_GUIDES`.
+  - `tests/unit/test_website_connector_pages.py` `CONNECTORS`:
+    `"pages": ("/connectors/web-pages/", "web-pages-setup", "Web pages")`.
+  - `README.md`'s Connectors table: a row after Telegram's,
+    `| Web pages | Publish a single-file HTML page to your own web server; list and take down your pages |`.
+  - `website/connectors/index.html`: a card after the last one, in the Telegram card's markup
+    (`website/connectors/index.html:112-121`) with `id="web-pages"`, `data-connector="Web pages"`,
+    the counts the regenerated reference prints (3 tools: 1 without a card · 0 reviewed · 2 need
+    approval), the `<dl class="connector-gates">` rows
+    `<dt>Without a card</dt><dd>The list of pages you published.</dd>`,
+    `<dt>Reviewed before release</dt><dd>Nothing: this connector reads nothing from a service.</dd>`,
+    `<dt>Needs your approval</dt><dd>Publishing or replacing a page, and taking one down.</dd>`,
+    and the links line
+    `<p class="cluster connector-links"><a href="https://github.com/privacyfence/privacyfence/blob/main/docs/tools-reference.md#web-pages">Every Web pages tool</a> <a href="/connectors/web-pages/">Web pages connector</a></p>`.
+  - "Eleven connectors" becomes "Twelve connectors" on `/connectors/`, "its own eleven connectors"
+    becomes "its own twelve connectors" in `website/compare/mcp-gateways/index.html:62`, and the
+    tool totals on `/connectors/` (`114 tools`) and `/how-it-works/` (`114 connector tools`) become
+    117. `tests/unit/test_website_connectors_page.py:60` changes to
+    `len(REFERENCE) == 12 and "Twelve connectors" in PAGE`.
 
 ### D8. Daemon wiring
 
@@ -533,13 +562,28 @@ commented example:
 In `settings_controller.py`:
 
 - `ALL_CONNECTORS` gains `"pages"` last; `_CONNECTOR_LABEL_OVERRIDES["pages"] = "Web pages"`.
+- `settings_controller.py` must not import `daemon_main` at module level (circular import; see
+  the comment at `settings_controller.py:911`). Every use below imports it inside the function,
+  as `refresh_connectors` does at `:1165`.
 - `_connectors_state()`: for `"pages"`, `has_org` is whether
   `daemon_main.pages_config(self._load_config(), {})` returns a config without raising
   `PagesConfigError` (a raise counts as `False`). The pages row also carries
   `"auth_label": "Change…" if has_org else "Set up…"` and a `"pages"` dict:
-  `{"public_key": public_key_line(load_or_create_ssh_key(daemon_main.pages_key_path({}))), "sftp_host": ..., "sftp_port": ..., "sftp_user": ..., "sftp_host_key": ..., "remote_dir": ..., "public_base_url": ...}`,
+  `{"public_key": ..., "sftp_host": ..., "sftp_port": ..., "sftp_user": ..., "sftp_host_key": ..., "remote_dir": ..., "public_base_url": ...}`,
   the six values read from the raw `pages:` mapping as strings (`""` when absent, the port as a
-  string). No other row gets a `"pages"` key.
+  string). No other row gets a `"pages"` key. `public_key` is
+  `public_key_line(asyncssh.import_private_key(path.read_text(encoding="utf-8")))` when the key
+  file at `daemon_main.pages_key_path({})` **already exists**, else `""`: building a snapshot never
+  creates a key (snapshots run in many tests whose fixtures do not sandbox `PROJECT_ROOT`).
+- A second new action creates the key when the modal needs it:
+
+```python
+def pages_create_key(self) -> dict[str, Any]:
+```
+
+It calls `load_or_create_ssh_key(daemon_main.pages_key_path({}))` and returns `self.snapshot()`.
+It is in `_NON_SENSITIVE_ACTIONS` (a key nobody has authorized yet grants nothing) and in
+`ACTION_SCOPES` as `ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True)`.
 - A new action, copying `toggle_gmail_signature`'s shape:
 
 ```python
@@ -554,11 +598,12 @@ It builds the mapping, validates it with
 `self.error = str(exc)` and returns `self.snapshot()` without saving; otherwise sets
 `cfg["pages"] = mapping` (keys exactly the six fields, values as validated: host key stripped,
 `public_base_url` without trailing `/`), `_save_config(cfg)`, `self.refresh_connectors()`, returns
-`self.snapshot()`. How `self.error` is shown follows `export_audit_log_path`'s existing use.
+`self.snapshot()`. On success it also sets `self.error = ""`. The page shows `self.error` the
+same way it already shows it for `export_audit_log_path`.
 
 - `web/org_settings_scope.py` `ACTION_SCOPES`:
-  `"pages_configure": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True)`, next to
-  `toggle_gmail_signature`.
+  `"pages_configure"` and `"pages_create_key"`, each
+  `ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True)`, next to `toggle_gmail_signature`.
 - `web/routes_settings.py`: `"pages_configure"` goes into `_SENSITIVE_ACTIONS` (it decides where
   published content goes and which server key is trusted; like `enable_connector`, ADR 0070), so it
   needs a human session and step-up (ADR 0034).
@@ -571,7 +616,9 @@ In `settings_window_html.py` (JS inside the Python string):
   `authenticate_connector`, like Telegram's `data-telegram-auth`, and its text is `c.auth_label`.
 - A modal `renderPagesModal()` built like `renderTelegramModal`, open while `ui.pagesSetup` is
   true, its six inputs held in `ui.pages.*` (so a snapshot re-render keeps what was typed,
-  following the `onInput` pattern) and pre-filled from the row's `pages` dict when opened.
+  following the `onInput` pattern) and pre-filled from the row's `pages` dict when opened. Opening
+  it posts `pages_create_key` when the row's `pages.public_key` is `""`; until the snapshot brings
+  the key, the textarea shows `Creating PrivacyFence's key…`.
   Exact strings:
   - heading `Web pages`;
   - intro `PrivacyFence publishes pages over SFTP to a web server you run. Anyone with a page's link can open it.`;
@@ -585,7 +632,9 @@ In `settings_window_html.py` (JS inside the Python string):
 - The modal closes after a save that leaves `snapshot.error` empty.
 
 Org mode gets no settings surface: the connectors section stays hidden there, and
-`pages_configure` is local-only through `ACTION_SCOPES`.
+both new actions are local-only through `ACTION_SCOPES`. The modal gets no `TestPhoneLayout`
+case: that class covers the org shell pages (`tests/integration/test_browser_smoke.py:2861`), and
+the modal reuses the Telegram modal's classes, which carry no layout of their own.
 
 ### D10. Approval: the PII scan applies and "Always allow" is not offered
 
@@ -594,13 +643,13 @@ may be a file Claude never read. So `pages_publish_html` passes `upload_pii_scan
 page's extracted text), which makes a PII match force the same second confirmation
 `drive_upload_file` gets. The gate's docstrings that say only `drive_upload_file` sets it
 (`gate.py:109-139` and the `upload_pii_scan_text` parameter comment at `:876-882`, and the comment
-at `:955-960`) are updated to name both tools and point to ADR 0120. No scope proposals are added,
+at `:955-960`) are updated, in p4-daemon-wiring, to name both tools and point to ADR 0120. No scope proposals are added,
 so the card has no "Always allow"; a rule written by hand for `pages.publish_page` still works like
 any other operation-level rule.
 
 ### D11. The web server (documentation only)
 
-PrivacyFence does not serve pages. `docs/web-pages-setup.md` (new, in the last phase) tells the
+PrivacyFence does not serve pages. The setup guide `web-pages-setup.md` in `docs/` (new, written in p2-bundle-flags-and-guide) tells the
 administrator, for Ubuntu 24.04, whether the web server is the PrivacyFence host or another one:
 
 1. A dedicated account that can only use SFTP:
@@ -646,10 +695,12 @@ like any upload (ADR 0097).
 ### D12. Bundle flags
 
 `scripts/build_org_bundle.py` (stdlib-only; it cannot import `privacyfence`) gains an argument
-group `Web pages (org mode, docs/web-pages-setup.md)` with `--pages-sftp-host HOST`,
+group `Web pages (org mode)` with `--pages-sftp-host HOST`,
 `--pages-sftp-port PORT` (int), `--pages-sftp-user USER`, `--pages-sftp-host-key LINE`,
 `--pages-remote-dir PATH`, `--pages-public-base-url URL`, `--pages-max-bytes BYTES` (int), all
-`default=None`, and `--no-pages` (`action="store_true"`, removes the section). Merge logic copies
+`default=None`, and `--no-pages` (`action="store_true"`, removes the section). `--no-pages` has
+the same `--mode org` requirement as the others, and combined with any other `--pages-*` flag
+raises `SystemExit("--no-pages cannot be combined with other --pages-* options.")`. Merge logic copies
 the `--downloads-*` block (`:607-623`): the flags require `--mode org` (or `--merge` against an
 org bundle), else `SystemExit("--pages-* flags require --mode org (or --merge against an existing org-mode bundle).")`;
 given values are merged into `bundle["pages"]` (flag names map to the D2 keys without the `pages-`
@@ -659,6 +710,18 @@ prefix and with `-` → `_`); after merging, when `bundle["pages"]` exists it mu
 `SystemExit("--pages-* needs --pages-sftp-host, --pages-sftp-user, --pages-sftp-host-key, --pages-remote-dir and an https:// --pages-public-base-url.")`.
 The daemon repeats the full D2 validation at startup. `--mode local` pops `"pages"` like it pops
 `"download_delivery"` (`:557`). The printed summary lists the section like the others.
+
+### D13. No live connector check
+
+§2.7's row for `*_client.py`/`connectors/**` asks for `scripts/qa_fixture_recorder.py --check
+<connector>` or a `connector-live-check.yml` run, and §2.6/§3 for a recorded fixture. Web pages has
+no provider API to drift and no QA account: the "provider" is an sshd the organization runs. So
+`CONNECTOR_CHECKS`/`EXPECTED_FIXTURES` are not extended, there is no `TestLiveFixtureParsing`, and
+`tests/integration/test_pages_sftp.py` (a real asyncssh SFTP server on 127.0.0.1) stands in. Every
+phase that touches `pages_client.py` or `connectors/pages.py` says so in its report for that row
+("no live check: Web pages talks to the organization's own SFTP server, covered by
+tests/integration/test_pages_sftp.py, plan D13"), and the PR description repeats it. ADR 0117
+records it under Consequences.
 
 ## ADRs
 
@@ -675,7 +738,7 @@ Written in the last phase, each `Accepted — <date of that phase>` and added to
   EPL-2.0 or GPL-2.0-or-later). Rejected: the system OpenSSH `sftp` binary (key-file ACL checks
   under the Windows virtual service account, `known_hosts` handling, subprocess plumbing per OS);
   paramiko (synchronous, pulls in bcrypt and PyNaCl). Departs from "standard library first" the
-  way ADR 0009's SDK choice does.
+  way ADR 0009's SDK choice does. Consequences include D13: no live connector check exists for it.
 - **0118** — PrivacyFence generates its own SFTP key, pins the server's host key from its
   configuration, and shows the public key only on trusted surfaces (startup log, CLI, local
   Settings), never to the AI client. Rejected: trust on first use (the first connection is an
@@ -706,28 +769,36 @@ Written in the last phase, each `Accepted — <date of that phase>` and added to
 
 ## Risks and open questions
 
-- **asyncssh on Windows and macOS CI.** The client tests run a real in-process `asyncssh` server
-  with `SFTPServer(chan, chroot=...)`. If the `platform-windows` or `platform-macos` job fails in
-  that fixture on path handling, the fix is in the fixture (the root path passed as
-  `str(tmp_path).encode()`, the remote paths relative), never a skip. If that does not fix it, the
+- **Docs paths in this plan.** `tests/unit/test_docs_references_exist.py` fails on any tracked file
+  naming a `docs/…md` path that does not exist, and this plan is tracked on the feature branch until
+  p6. So the plan names the new guide and ADR files without that exact shape, and every phase keeps
+  it that way: a new doc is created in the same phase as the first file that names it. If that test
+  fails after a phase, the phase named a file too early.
+- **asyncssh on Windows and macOS CI.** `tests/integration/test_pages_sftp.py` runs a real
+  in-process `asyncssh` server with `SFTPServer(chan, chroot=str(root).encode())`. If the
+  `platform-windows` or `platform-macos` job fails in that fixture on path handling, the fix is in
+  the fixture (relative remote paths inside the chroot), never a skip. If that does not fix it, the
   phase stops with `status=blocked`.
+- **The orchestrator's environment.** p1 adds a dependency, so `verify_after_merge` reinstalls the
+  package first; otherwise the suite fails to import `asyncssh` after p1 merges.
 - **PyInstaller.** `connectors/pages.py` imports `pages_client`, which imports `asyncssh` at the top,
   and `daemon_main` imports the connector, so a bundle missing asyncssh fails `build.yml`'s smoke
-  start. The last phase dispatches `build.yml`; a failure there naming `asyncssh` means the hidden
-  import needs `collect_submodules`, which that phase adds in `scripts/pyinstaller_common.py`.
+  start. p6 dispatches `build.yml` on its own phase branch; the fallback there is
+  `HIDDEN_IMPORTS += collect_submodules("asyncssh")` after the list literal (the list itself is read
+  with `ast.literal_eval` by `tests/unit/test_pyinstaller_hidden_imports.py`, so no call may go
+  inside it).
 - **License.** asyncssh is EPL-2.0 OR GPL-2.0-or-later. The maintainer accepted the dependency when
   choosing asyncssh in the `/make-plan` session; ADR 0117 records it.
 - **Policy tables.** If a policy test (`tests/unit/policy/`) fails because `pages.publish_page` or
   `pages.unpublish_page` has no scope selector or catalogue entry, the brief is wrong about
   "no entry needed": stop with `status=blocked` rather than inventing a scope.
 - **Snapshot keys.** `test_snapshot_has_one_key_per_page` pins the settings snapshot's top-level
-  keys; D9 adds nothing at the top level (the pages data rides on its connector row). If that test
-  fails, the change added a key it should not have.
-- **ADR numbers.** 0116-0120 are free on `main` today; if a parallel branch takes one first, the
-  last phase renumbers (ADR README rule 6).
-- **Website counts.** `test_the_totals_in_the_copy_match` asserts `len(REFERENCE) == 11` and
-  "Eleven connectors"; the connector phase changes both to 12/"Twelve". If other copy on the
-  website counts connectors in words and a website test fails on it, update that copy the same way.
+  keys; D9 adds nothing at the top level (the pages data rides on its connector row).
+- **ADR numbers.** 0116-0120 are free on `main` today; if a parallel branch takes one first, p6
+  renumbers (ADR README rule 6).
+- **Website copy counting connectors.** p3 updates the three places D7 names. If another website
+  test fails on a count, update that copy the same way; if the failure is anything else, stop with
+  `status=blocked`.
 
 ## Implementation manifest
 
@@ -746,14 +817,17 @@ manual_after:
     title: Set up Web pages in a desktop install's Settings and publish from Claude Desktop
     why: The Settings modal, step-up on save and a packaged build's asyncssh are only exercised by a real desktop install.
 verify_after_merge:
+  - python3 -m pip install --quiet -e ".[dev,test,lint]"
   - python3 -m pytest tests/unit -q
+  - python3 -m pytest tests/integration -q -k "pages"
   - ruff check .
   - python3 scripts/mypy_strict_modules.py
 final_checks:
-  - docs/web-pages-plan.md and docs/web-pages-plan-manual-steps.html are deleted and nothing links to them (git grep -n "web-pages-plan" returns nothing)
-  - docs/adr/0116-*.md through docs/adr/0120-*.md exist, each says Accepted, and each is in docs/adr/README.md's index
+  - docs/web-pages-plan.md and docs/web-pages-plan-manual-steps.html are deleted and nothing links to them (git grep -n "web-pages-plan" prints nothing)
+  - the five ADRs numbered 0116 to 0120 exist under docs/adr/, each says Accepted, and each is in docs/adr/README.md's index
   - CHANGELOG.md has an [Unreleased] entry for Web pages and no new version heading
   - build.yml dispatched against feature/web-pages is green, and its run is linked in the PR
+  - the PR description says, for the live-check row of the definition of done, that Web pages has no live check (plan D13)
 phases:
   - id: p1-sftp-client
     title: asyncssh dependency, PagesConfig, SSH key, SFTP client and the per-person page index
@@ -769,104 +843,136 @@ phases:
       - scripts/pyinstaller_common.py
       - tests/unit/test_pages_client.py
       - tests/unit/test_pages_index.py
+      - tests/integration/test_pages_sftp.py
       - tests/unit/test_systemic_gate_invariants.py
     brief: |
-      Read docs/web-pages-plan.md sections D1-D6 first; they hold every name, message and rule.
+      Read docs/web-pages-plan.md sections D1-D6 and D13 first; they hold every name, message
+      and rule. Do not write any docs path that does not exist yet (see the plan's Risks).
       1. pyproject.toml: add "asyncssh>=2.24,<3.0" to [project] dependencies after
          "portalocker>=2.8", with a comment in the file's style: SFTP client for the Web pages
          connector (ADR 0117); pure Python on cryptography, already a dependency; licensed
          EPL-2.0 or GPL-2.0-or-later. Run scripts/update_dependency_locks.sh (uv is on PATH) and
-         commit whichever requirements/*.lock.txt it changes. pip install -e ".[test]" again.
+         commit whichever requirements/*.lock.txt it changes. Then
+         python3 -m pip install -e ".[dev,test,lint]" into the session's environment.
       2. scripts/pyinstaller_common.py: add "asyncssh" to HIDDEN_IMPORTS after "telethon", with
          the comment "# asyncssh (Web pages connector's SFTP client)".
-      3. Create src/privacyfence/pages_client.py (module docstring explaining: the Web pages
-         SFTP client, why the host key is pinned (ADR 0118), why errors carry only text written
-         here). Contents exactly per D2 (PagesConfigError, PagesConfig with from_mapping and its
-         messages table, DEFAULT_MAX_BYTES, MAX_MAX_BYTES), D3 (KEY_COMMENT, ORG_KEY_FILE_NAME,
+      3. Create src/privacyfence/pages_client.py (module docstring: the Web pages SFTP client;
+         the host key is pinned from configuration because the first connection is an unattended
+         tool call, ADR 0118; error messages carry only text written in this module). Contents
+         exactly per D2 (PagesConfigError, PagesConfig with from_mapping and its messages table,
+         DEFAULT_MAX_BYTES, MAX_MAX_BYTES), D3 (KEY_COMMENT, ORG_KEY_FILE_NAME,
          LOCAL_KEY_RELATIVE_PATH, load_or_create_ssh_key copying
          web_push.load_or_create_vapid_key at src/privacyfence/web_push.py:128, public_key_line),
          D5 (PagesClientError, PagesUnavailableError(RuntimeError), PagesSftpClient.publish and
          .unpublish with the exact connect() arguments, the page_id/slug checks, the four-row
-         error table, new_page_id, slugify, page_url). Use `from __future__ import annotations`
-         and `X | None`; no Optional.
+         error table checked in the stated order, new_page_id, slugify, page_url). Use
+         `from __future__ import annotations` and `X | None`.
       4. Create src/privacyfence/pages_index.py per D6 (PageIndexError, PageRecord, PageIndex,
          module-level _LOCK = threading.Lock()), writing with secure_files.atomic_write_json.
       5. tests/unit/test_systemic_gate_invariants.py: add ("pages_client", None,
-         "load_or_create_ssh_key") to TOKEN_WRITE_SITES (alphabetical position) and change
-         `assert len(TOKEN_WRITE_SITES) == 10` to 11, renaming the test to
-         test_eleven_token_write_sites_are_listed and updating its comment's count.
-      6. tests/unit/test_pages_client.py (marker unit; module docstring naming the invariant:
-         nothing is sent to a server whose host key does not match). A fixture starts a real
-         in-process server: asyncssh.listen("127.0.0.1", 0, server_host_keys=[host_key],
-         server_factory=<SSHServer subclass accepting only the client key via
-         validate_public_key>, sftp_factory=lambda chan: asyncssh.SFTPServer(chan,
-         chroot=str(root).encode()), allow_scp=False), yielding (port, root, host_key, client_key);
-         config remote_dir is "site" (relative, inside the chroot). Classes:
-         TestPagesConfig (every row of D2's table: one accepted value, one rejected value with its
-         exact message; defaults; trailing-slash and normpath normalization; bool rejected for
-         ints), TestSlugify (the D5 example, empty → "page", 60-char cap, no leading/trailing
-         "-"), TestNewPageId (24 chars of [a-z2-7], two calls differ), TestSshKey (creates 0600
-         file on POSIX, reloads the same key, refuses a non-Ed25519 key with the D3 message,
-         public_key_line ends with " privacyfence-pages"), TestPublish (file lands at
-         root/site/<id>/<slug>.html with the bytes, mode 0644, folder 0755 on POSIX; replacing
-         overwrites; no *.tmp left), TestUnpublish (removes the folder, returns True; missing →
-         False), TestFailures (wrong pinned host key → PagesClientError with the exact
-         HostKeyNotVerifiable message and no file written; wrong client key → PermissionDenied
-         message; closed port → connect message; remote_dir pointing at a file → SFTPError
-         message; bad page_id/slug → ValueError before connecting). Every async test finishes in
-         well under the 30 s timeout: connect_timeout stays 15 but tests use 127.0.0.1.
-      7. tests/unit/test_pages_index.py: empty when missing, upsert/get/list order by
-         updated_at desc, replace keeps one record, remove True/False, malformed JSON / wrong
-         version → PageIndexError with the D6 message, file written 0600 on POSIX.
-      8. Run ruff check ., bandit -c pyproject.toml -r src, python3 -m pytest
-         tests/unit/test_pages_client.py tests/unit/test_pages_index.py
-         tests/unit/test_systemic_gate_invariants.py tests/unit/test_pyinstaller_hidden_imports.py -q.
-      No CHANGELOG line in this phase (nothing is user-visible yet).
+         "load_or_create_ssh_key") to TOKEN_WRITE_SITES in alphabetical position; change
+         `assert len(TOKEN_WRITE_SITES) == 10` to 11 and rename the test to
+         test_eleven_token_write_sites_are_listed; update every "ten" that counts these sites in
+         the module docstring and in that test's comment to "eleven" (the comment's "not the
+         review's original eleven" clause becomes a plain statement that Web pages' key writer is
+         the eleventh).
+      6. tests/unit/test_pages_client.py (marker unit, no sockets). Classes: TestPagesConfig
+         (every row of D2's table: one accepted and one rejected value with its exact message;
+         defaults; trailing-slash and normpath normalization; bool rejected for ints),
+         TestSlugify (the D5 example, empty → "page", 60-char cap, no leading or trailing "-"),
+         TestNewPageId (24 chars of [a-z2-7], two calls differ), TestSshKey (creates the file,
+         mode 0600 on POSIX, reloads the same key, refuses a non-Ed25519 key with the D3 message,
+         public_key_line ends with " privacyfence-pages"), TestArgumentChecks (bad page_id or slug
+         → ValueError from publish/unpublish before any connection: patch asyncssh.connect to
+         fail the test if called).
+      7. tests/integration/test_pages_sftp.py (marker integration; module docstring naming the
+         invariant: nothing is sent to a server whose host key does not match). A fixture starts
+         asyncssh.listen("127.0.0.1", 0, server_host_keys=[host_key], server_factory=<SSHServer
+         subclass accepting only the client key in validate_public_key>,
+         sftp_factory=lambda chan: asyncssh.SFTPServer(chan, chroot=str(root).encode()),
+         allow_scp=False) and yields (port, root, host_key, client_key); configs use remote_dir
+         "site". Classes: TestPublish (file at root/site/<id>/<slug>.html with the bytes, mode
+         0644 and folder 0755 on POSIX; replacing overwrites; no *.tmp left), TestUnpublish
+         (removes the folder, returns True; missing → False), TestFailures (wrong pinned host key
+         → PagesClientError with the exact HostKeyNotVerifiable message and no file written;
+         wrong client key → the PermissionDenied message; a closed port → the connect message;
+         remote_dir naming an existing regular file → the SFTPError message).
+      8. tests/unit/test_pages_index.py: empty when missing; upsert/get/list ordered by
+         updated_at descending; replacing keeps one record; remove True then False; malformed
+         JSON and a wrong version → PageIndexError with the D6 message; file mode 0600 on POSIX.
+      9. Run ruff check ., bandit -c pyproject.toml -r src, python3 scripts/mypy_strict_modules.py,
+         python3 -m pytest tests/unit -q and python3 -m pytest tests/integration/test_pages_sftp.py -q.
+      No CHANGELOG line in this phase. For the definition-of-done live-check row, report as D13
+      says.
       Stop with status=blocked if: asyncssh>=2.24 cannot be resolved by the lock script; the
-      in-process server cannot be made to work with chroot on Linux; or
-      test_pyinstaller_hidden_imports.py rejects a non-connector entry in HIDDEN_IMPORTS.
+      chroot server fixture cannot be made to work on Linux; or
+      tests/unit/test_pyinstaller_hidden_imports.py rejects the new "asyncssh" entry.
     acceptance:
-      - python3 -m pytest tests/unit/test_pages_client.py tests/unit/test_pages_index.py -q passes
-      - python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/test_pyinstaller_hidden_imports.py -q passes
-      - grep -n '"asyncssh>=2.24,<3.0"' pyproject.toml prints one line, and grep -n '^asyncssh==' requirements/runtime.lock.txt prints one line
+      - python3 -m pytest tests/unit/test_pages_client.py tests/unit/test_pages_index.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_pyinstaller_hidden_imports.py -q passes
+      - python3 -m pytest tests/integration/test_pages_sftp.py -q passes with no skips
+      - python3 -m pytest tests/unit -q passes
+      - grep -c '"asyncssh>=2.24,<3.0"' pyproject.toml prints 1, and grep -c '^asyncssh==' requirements/runtime.lock.txt prints 1
       - ruff check . and bandit -c pyproject.toml -r src pass
 
-  - id: p2-bundle-flags
-    title: build_org_bundle.py --pages-* flags and their configuration-reference rows
+  - id: p2-bundle-flags-and-guide
+    title: build_org_bundle.py --pages-* flags, their configuration-reference rows, and the setup guide
     depends_on: []
-    complexity: S
+    complexity: M
     touches:
       - scripts/build_org_bundle.py
       - tests/unit/test_build_org_bundle.py
       - docs/configuration-reference.md
+      - docs/web-pages-setup.*
+      - docs/README.md
     brief: |
-      Read docs/web-pages-plan.md sections D2 and D12 first.
-      1. scripts/build_org_bundle.py: add the argument group, flags, merge block, required-key
-         check, --no-pages, the --mode local pop and the summary line exactly as D12 says,
-         copying the --downloads-* code (arg group near line 350, merge near line 607, pop near
-         line 557). The script stays standard-library only; do not import privacyfence.
-      2. tests/unit/test_build_org_bundle.py: extend it with a TestPagesFlags class, following the
-         file's existing tests of --downloads-*: all flags → bundle["pages"] has the D2 keys with
-         the right types (sftp_port and max_bytes ints); --merge adds/changes one key and keeps the
-         rest; --no-pages removes the section; missing required key → the exact SystemExit text;
-         http:// URL → the same SystemExit; --pages-* without --mode org → its SystemExit;
-         --mode local drops a pages section.
-      3. docs/configuration-reference.md: in the "Build options" table add one row per new flag
-         in the style of the download_delivery rows, pointing to docs/web-pages-setup.md (that
-         file is written by a later phase; keep the link). Add the pages.* keys to the bundle-key
-         list if the doc lists bundle keys separately.
-      4. Run python3 -m pytest tests/unit/test_build_org_bundle.py -q and ruff check .
+      Read docs/web-pages-plan.md sections D2, D3, D5, D9, D11 and D12 first.
+      1. scripts/build_org_bundle.py: add the argument group, the eight options, the merge
+         block, the --no-pages rules, the required-key check, the --mode local pop and the
+         summary line exactly as D12 says, copying the --downloads-* code (argument group near
+         line 350, merge near line 607, pop near line 557). The script stays standard-library
+         only; do not import privacyfence.
+      2. tests/unit/test_build_org_bundle.py: a TestPagesFlags class in the style of the file's
+         --downloads-* tests: all flags → bundle["pages"] has the D2 keys (sftp_port and
+         max_bytes as ints); --merge changes one key and keeps the rest; --no-pages removes the
+         section; --no-pages with --pages-sftp-host → its SystemExit text; a missing required key
+         → the exact SystemExit text; an http:// URL → the same SystemExit; --pages-* without
+         --mode org → its SystemExit; --mode local drops a pages section.
+      3. Create the setup guide, file name web-pages-setup.md in the docs directory, in the style
+         of the existing telegram-setup.md there, for an administrator (organization) and a
+         person (desktop). Sections, in order: "What Web pages does" (from the plan's Goal);
+         "Set up the web server" (D11 steps 1-5, commands and the Caddy block verbatim, plus the
+         nginx server block D11 describes, written out in full with listen 443 ssl, server_name,
+         ssl_certificate lines as in org-mode-setup-guide.md's nginx example, root /srv/pages,
+         autoindex off, location / { try_files $uri =404; } and the five add_header ... always
+         lines); "Give PrivacyFence access" (organization: the startup log line from D8 and
+         `sudo -u privacyfence-org -H /opt/privacyfence/venv/bin/privacyfence-app --pages-public-key`;
+         desktop: Settings → Connectors → Web pages → Set up…, and the key shown there; then the
+         authorized_keys commands with the `restrict ` prefix); "Organization: bundle options" (a
+         table of the eight D12 options and a build_org_bundle.py --merge example); "Desktop:
+         Settings" (the six D9 fields and what goes in each; saving asks for a passkey or
+         sign-in); "Publish a test page"; "Limits" (16,000,000 bytes by default, anyone with the
+         link, no listing, the sandbox header's effect on storage, claude.ai-only artifact
+         features, an upload_id publish from claude.ai needing the domain allowlist, linking
+         connect-claude-ai.md#files); "Troubleshooting" (a table: each D5 error message, what it
+         means, what to do). No links to ADRs yet (they do not exist; p6 adds them).
+      4. docs/README.md: list the new guide next to telegram-setup.md, same format.
+      5. docs/configuration-reference.md: one row per new option (all eight, including
+         --no-pages) in the "Build options" table, in the style of the download_delivery rows,
+         each linking the new guide. Nothing else in that file.
+      6. Run python3 -m pytest tests/unit -q and ruff check .
       No CHANGELOG line in this phase.
-      Stop with status=blocked if the existing --downloads-* merge code does not exist in the
-      shape D12 describes (lines 350-379 and 607-623).
+      Stop with status=blocked if the --downloads-* code does not have the shape D12 cites, or
+      if tests/unit/test_docs_links.py or test_docs_references_exist.py fails on the new guide
+      for a reason other than a typo you can fix.
     acceptance:
       - python3 -m pytest tests/unit/test_build_org_bundle.py -q passes, including TestPagesFlags
-      - python3 scripts/build_org_bundle.py --help | grep -c -- '--pages-' prints 8
-      - ruff check . passes
+      - python3 -c "import sys; sys.path.insert(0, 'scripts'); import build_org_bundle as b; print(sorted(o for a in b.build_parser()._actions for o in a.option_strings if 'pages' in o))" prints ['--no-pages', '--pages-max-bytes', '--pages-public-base-url', '--pages-remote-dir', '--pages-sftp-host', '--pages-sftp-host-key', '--pages-sftp-port', '--pages-sftp-user']
+      - python3 -m pytest tests/unit/test_docs_configuration_reference.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q passes
+      - python3 -m pytest tests/unit -q passes
 
   - id: p3-connector
-    title: PagesConnector, its gate/policy tables, generated references and the website card
-    depends_on: [p1-sftp-client]
+    title: PagesConnector, its gate/policy tables, generated references, website pages and README row
+    depends_on: [p1-sftp-client, p2-bundle-flags-and-guide]
     complexity: M
     touches:
       - src/privacyfence/connectors/pages.py
@@ -876,126 +982,142 @@ phases:
       - src/privacyfence/gate.py
       - scripts/pyinstaller_common.py
       - scripts/generate_tools_reference.py
+      - scripts/build_site.py
       - docs/tools-reference.md
       - docs/always-allow-rules-reference.md
+      - README.md
       - website/connectors/index.html
+      - website/connectors/web-pages/index.html
       - website/how-it-works/index.html
+      - website/compare/mcp-gateways/index.html
       - tests/unit/connectors/test_pages_connector.py
       - tests/unit/connectors/test_readme_manifest_alignment.py
-      - tests/unit/test_systemic_gate_invariants.py
       - tests/unit/test_connector_tool_annotations.py
       - tests/unit/test_website_connectors_page.py
-      - tests/unit/test_gate.py
+      - tests/unit/test_website_connector_pages.py
     brief: |
-      Read docs/web-pages-plan.md sections D1, D5-D7 and D10 first; tool texts, card fields and
-      messages are given there verbatim. Template: src/privacyfence/connectors/telegram.py.
+      Read docs/web-pages-plan.md sections D1, D5-D7 and D13 first; tool texts, card fields,
+      messages, wiring and website strings are given there verbatim. Template for the connector:
+      src/privacyfence/connectors/telegram.py. The size estimate excludes the two generated
+      references and the website page copied from website/connectors/telegram/index.html.
       1. Create src/privacyfence/connectors/pages.py with PagesConnector exactly per D7 (module
-         docstring "Web pages connector." plus one sentence on why the index, not the server,
-         decides whose page it is, ADR 0119). Group methods under the telegram.py banner comments
-         ("Auto", "Popup gate (writes)", "Helpers"). tool_specs() must not touch the client
-         (catalog builds cls(None)). A PagesClientError is re-raised as
-         PagesUnavailableError(str(exc)) from exc. Use asyncio-native calls only (asyncssh is
-         async; no to_thread needed); PageIndex file I/O is small and stays synchronous.
-      2. Wiring tables exactly per D7's "Wiring tables" list: auto_accept.TOOL_TO_OPERATION and
-         TOOL_TO_GATE, policy/registry.py TOOL_TO_VERB, write_effects.EFFECT_BY_TOOL,
-         gate._TOOL_LAYOUT, scripts/pyinstaller_common.py's connector list,
-         scripts/generate_tools_reference.py's two dicts.
-      3. gate.py: update the three places D10 names so they say upload_pii_scan_text is set by
-         drive_upload_file and pages_publish_html, with the reason for the second one in one
-         sentence (content published behind a public link) and "ADR 0120". Change no logic.
-      4. Regenerate docs/tools-reference.md with python3 scripts/generate_tools_reference.py and
-         docs/always-allow-rules-reference.md with python3
-         scripts/generate_always_allow_reference.py; commit both outputs unedited.
-      5. Website per D7's last bullet: the card in website/connectors/index.html, "Twelve
-         connectors", and the tool totals on /connectors/ and website/how-it-works/index.html.
-         In tests/unit/test_website_connectors_page.py change `len(REFERENCE) == 11 and
-         "Eleven connectors"` to 12 and "Twelve connectors".
-      6. tests/unit/connectors/test_readme_manifest_alignment.py and
-         tests/unit/test_systemic_gate_invariants.py: add PagesConnector to CONNECTOR_CLASSES.
-         tests/unit/test_connector_tool_annotations.py: DESTRUCTIVE_TOOLS per D7.
-      7. tests/unit/connectors/test_pages_connector.py (marker unit), following
+         docstring "Web pages connector." plus one sentence: the per-person index, not the
+         server, decides whose page it is, ADR 0119). Group methods under telegram.py's banner
+         comments ("Auto", "Popup gate (writes)", "Helpers"). tool_specs() must not touch the
+         client (the catalog builds cls(None)). A PagesClientError is re-raised as
+         PagesUnavailableError(str(exc)) from exc. asyncssh is async, so no to_thread; PageIndex
+         file I/O stays synchronous.
+      2. Every item of D7's "Wiring tables" list, in the files it names (gate.py: only the
+         _TOOL_LAYOUT entry in this phase).
+      3. Regenerate docs/tools-reference.md (python3 scripts/generate_tools_reference.py) and
+         docs/always-allow-rules-reference.md (python3 scripts/generate_always_allow_reference.py);
+         commit both outputs unedited.
+      4. Every item of D7's "Website and README" list: the new connector page, build_site.py's
+         PAGES and CONNECTOR_GUIDES, the test's CONNECTORS entry, the README row, the card, the
+         three count changes and the test_website_connectors_page.py line.
+      5. tests/unit/connectors/test_pages_connector.py (marker unit), following
          docs/coding-and-testing-guidelines.md §2.6 and the gated_call_spy pattern of
          tests/unit/connectors/test_telegram_connector.py; the client is an AsyncMock with
-         spec=PagesSftpClient, the index a real PageIndex under tmp_path. Classes: TestDispatch
-         (unknown tool → ValueError); TestListPages (auto, never calls gated_call, writes its own
-         audit entry, order, limit clamp 0→1 and 500→200, no client call); TestPublishNew (card
-         kwargs: preview has exactly the six D7 keys and no HTML body, Address uses "<new id>",
-         upload_pii_scan_text is the extracted text, args carry title/html/upload_id/page_id,
-         WIDE layout; client.publish called with a 24-char id and the slug; result shape; index
-         record); TestPublishReplace (unknown page_id → the exact ValueError, no gate; known →
+         spec=PagesSftpClient, the index a real PageIndex under tmp_path, the config a
+         PagesConfig built in the test. Classes:
+         TestDispatch (unknown tool → ValueError);
+         TestListPages (never calls gated_call, writes its own audit entry, order, limit clamped
+         0→1 and 500→200, no client call);
+         TestPublishNew (card kwargs: preview has exactly D7's six keys and no HTML, Address
+         contains "<new id>", upload_pii_scan_text is the extracted text, args carry
+         title/html/upload_id/page_id; client.publish gets a 24-char id and the slug; result
+         shape; index record);
+         TestPublishReplace (unknown page_id → the exact ValueError, gate not reached; known →
          same page_id and slug, created_at kept, "Replace ..." summary and Action text);
-         TestPublishValidation (both/neither of html and upload_id, empty and 201-char title,
-         over max_bytes, non-UTF-8 upload – each the exact message, gate never reached);
-         TestPublishUpload (upload_id path: require_local_files/read_local_file used and
-         commit_uploads called after the gate – copy the Drive upload_id tests' setup in
-         tests/unit/connectors/test_drive_connector.py); TestUnpublish (unknown → ValueError;
-         known → gated card, client.unpublish, record removed, result; client failure → 
-         PagesUnavailableError with the client's message and the record kept); TestErrors
-         (PagesClientError on publish → PagesUnavailableError, index unchanged; and
-         safe_errors.public_message on it returns its text, not the generic message);
-         assert_all_tools_leave_an_audit_trail with arg_overrides for publish (html="<p>x</p>")
-         and unpublish (a page_id present in the index); TestToolDefinitions calling
-         assert_tool_definitions_complete with D7's sibling map.
-      8. tests/unit/test_gate.py: one test in the existing upload_pii_scan_text coverage
-         proving a popup call with tool="pages_publish_html" and a PII-bearing
-         upload_pii_scan_text forces the confirmation (copy the drive_upload_file case).
-      9. Run python3 -m pytest tests/unit -q, ruff check ., bandit -c pyproject.toml -r src,
+         TestPublishValidation (both or neither of html/upload_id, empty and 201-char titles, over
+         max_bytes, non-UTF-8 upload: each the exact message, gate not reached);
+         TestPublishUpload (copy the upload_id setup of the Drive tests in
+         tests/unit/connectors/test_drive_connector.py: require_local_files and read_local_file
+         used, commit_uploads called after the gate);
+         TestUnpublish (unknown → ValueError; known → card fields, client.unpublish called,
+         record removed, result; client failure → PagesUnavailableError with the client's
+         message and the record kept);
+         TestErrors (safe_errors.public_message on a PagesUnavailableError returns its own text,
+         not GENERIC_PUBLIC_MESSAGE);
+         a test calling assert_all_tools_leave_an_audit_trail with arg_overrides for
+         pages_publish_html (html="<p>x</p>") and pages_unpublish_page (a page_id seeded in the
+         index); TestToolDefinitions calling assert_tool_definitions_complete with D7's sibling
+         map.
+      6. Run python3 -m pytest tests/unit -q, ruff check ., bandit -c pyproject.toml -r src,
          python3 scripts/mypy_strict_modules.py.
-      No CHANGELOG line yet (the last phase writes it).
+      No CHANGELOG line yet. For the live-check row, report as D13 says.
       Stop with status=blocked if: a tests/unit/policy test demands a scope selector or
-      catalogue entry for pages.* (see the plan's Risks); test_docs_tools_reference or the
-      website tests still fail after regenerating and updating the counts; or
-      assert_tool_definitions_complete rejects a D7 text as written (report which rule).
+      catalogue entry for pages.*; a website or docs test still fails after the D7 changes and
+      the failure is not a count or copy D7 describes; or assert_tool_definitions_complete
+      rejects a D7 text as written (report which rule).
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_pages_connector.py -q passes
-      - python3 -m pytest tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_connector_tool_annotations.py tests/unit/test_write_effects.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/web/test_tool_schema_portability.py -q passes
+      - python3 -m pytest tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_connector_tool_annotations.py tests/unit/test_write_effects.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/web/test_tool_schema_portability.py -q passes
       - python3 -m pytest tests/unit -q passes
-      - grep -n '^## Web pages' docs/tools-reference.md prints one line
-      - grep -c 'pages_publish_html' src/privacyfence/gate.py prints at least 2
+      - grep -c '^## Web pages' docs/tools-reference.md prints 1
 
   - id: p4-daemon-wiring
-    title: Build the connector in both modes, org startup log and --pages-public-key
-    depends_on: [p3-connector]
+    title: Build the connector in both modes, org startup log, --pages-public-key, gate docstrings
+    depends_on: [p2-bundle-flags-and-guide, p3-connector]
     complexity: S
     touches:
       - src/privacyfence/daemon_main.py
       - src/privacyfence/resources/settings.yaml.example
+      - src/privacyfence/gate.py
+      - docs/configuration-reference.md
       - tests/unit/test_daemon_main.py
+      - tests/unit/test_gate.py
     brief: |
-      Read docs/web-pages-plan.md section D8 first; it gives the code.
-      1. src/privacyfence/daemon_main.py: add the imports, pages_config(), pages_key_path(), the
-         build_connectors block after the Telegram block (daemon_main.py:1503-1536), and
+      Read docs/web-pages-plan.md sections D8 and D10 first; D8 gives the code.
+      1. src/privacyfence/daemon_main.py: the imports, pages_config(), pages_key_path(), the
+         build_connectors block after the Telegram block (daemon_main.py:1503-1536),
          _log_pages_setup() called in _start_org_web_server just before `server = WebServer(`,
-         the --pages-public-key flag in parse_args, its branch in main() and
-         run_print_pages_public_key(), all exactly as D8 says.
+         the --pages-public-key option in parse_args, its branch in main() and
+         run_print_pages_public_key(), all as D8 says.
       2. src/privacyfence/resources/settings.yaml.example: the commented pages block from D8,
          after the connectors: section.
-      3. tests/unit/test_daemon_main.py: a TestPagesConnectorBuild class copying how the file
-         already tests settings.yaml plumbing into build_connectors (around lines 840-847) and
-         failure classification (around 1216-1238): local config present → a PagesConnector
-         with download_mode "local", its key file created under the sandboxed PROJECT_ROOT's
-         credentials/; local config absent → failures["pages"] == "not_authenticated"; invalid
-         local config → failures["pages"] is the redacted public message (not a crash);
-         org bundle with pages → key at org_dir()/pages_ssh_key (monkeypatch org_dir to tmp_path);
-         org bundle without pages → failures["pages"] == "no_org_config";
-         connectors.pages.enabled false → no connector and no failure entry.
-         TestLogPagesSetup: valid section → one INFO record containing "Web pages: publishing over
-         SFTP as" and "ssh-ed25519 "; invalid section → org_mode.ConfigurationError; no section →
-         nothing logged. TestPrintPagesPublicKey: local → exit 1 and the exact stderr text;
-         org → exit 0 and stdout is the key line, stable across two runs.
-      4. Run python3 -m pytest tests/unit/test_daemon_main.py -q, then python3 -m pytest
-         tests/unit -q, ruff check ., bandit -c pyproject.toml -r src.
+      3. docs/configuration-reference.md: under "settings.yaml keys", a "Web pages (local mode)"
+         subsection documenting pages.sftp_host, pages.sftp_port, pages.sftp_user,
+         pages.sftp_host_key, pages.remote_dir and pages.public_base_url (D2's rules in words; say
+         Settings → Connectors → Web pages writes them and an organization server reads the
+         bundle's pages section instead); and a `--pages-public-key` row in the "Command-line
+         options" table (near the --print-mcp-token row, ~line 312), saying it is for
+         organization mode and must run as the service account.
+      4. src/privacyfence/gate.py: the three docstring/comment places D10 names now say
+         upload_pii_scan_text is set by drive_upload_file and pages_publish_html, with one
+         sentence of reason for the second (content published behind a link anyone can open) and
+         "ADR 0120". No logic change.
+      5. tests/unit/test_gate.py: in the class holding the upload_pii_scan_text tests (~line
+         1311), one test copying the drive_upload_file PII case with tool="pages_publish_html",
+         proving a PII-bearing upload_pii_scan_text forces the confirmation.
+      6. tests/unit/test_daemon_main.py:
+         TestPagesConnectorBuild, copying how the file tests settings.yaml plumbing into
+         build_connectors (~840-847) and failure classification (~1216-1296): local config
+         present → a PagesConnector with download_mode "local" and its key file under the
+         sandboxed PROJECT_ROOT's credentials/; local config absent → failures["pages"] ==
+         "not_authenticated"; invalid local config → failures["pages"] equals
+         safe_errors.public_message of the PagesConfigError (no crash); org bundle with pages →
+         key at org_dir()/pages_ssh_key (monkeypatch org_dir to tmp_path); org bundle without
+         pages → failures["pages"] == "no_org_config"; connectors.pages.enabled false → no
+         connector and no failures entry.
+         TestLogPagesSetup: valid section → one INFO record containing "Web pages: publishing
+         over SFTP as" and "ssh-ed25519 "; invalid section → org_mode.ConfigurationError; no
+         section → nothing logged.
+         TestPrintPagesPublicKey: local → returns 1 with the exact stderr text; org → returns 0,
+         stdout is the key line, the same on two runs.
+      7. Run python3 -m pytest tests/unit -q, ruff check ., bandit -c pyproject.toml -r src.
       No CHANGELOG line yet.
       Stop with status=blocked if build_connectors has no `download_mode` variable holding
-      org_mode.resolve_mode(org_config), or if _start_org_web_server no longer builds the
-      WebServer in one place.
+      org_mode.resolve_mode(org_config), or _start_org_web_server does not build the WebServer in
+      one place.
     acceptance:
-      - python3 -m pytest tests/unit/test_daemon_main.py -q passes, including TestPagesConnectorBuild, TestLogPagesSetup and TestPrintPagesPublicKey
-      - python3 -m privacyfence.daemon_main --help 2>/dev/null | grep -c -- '--pages-public-key' prints 1 (or the same via the privacyfence-app console script)
+      - python3 -m pytest tests/unit/test_daemon_main.py tests/unit/test_gate.py -q passes, including TestPagesConnectorBuild, TestLogPagesSetup and TestPrintPagesPublicKey
+      - python3 -c "from privacyfence.daemon_main import parse_args; print(parse_args(['--pages-public-key']).pages_public_key)" prints True
+      - python3 -m pytest tests/unit/test_docs_configuration_reference.py -q passes
       - python3 -m pytest tests/unit -q passes
 
   - id: p5-settings
-    title: Desktop Settings row, setup modal and the pages_configure action
+    title: Desktop Settings row, setup modal, and the pages_configure and pages_create_key actions
     depends_on: [p4-daemon-wiring]
     complexity: M
     touches:
@@ -1011,119 +1133,121 @@ phases:
     brief: |
       Read docs/web-pages-plan.md section D9 first; it gives names and every UI string.
       1. settings_controller.py: ALL_CONNECTORS, _CONNECTOR_LABEL_OVERRIDES, the pages branch of
-         _connectors_state() (has_org, auth_label, the "pages" dict), and pages_configure(),
-         copying toggle_gmail_signature (settings_controller.py:1585-1591).
-      2. web/org_settings_scope.py ACTION_SCOPES and web/routes_settings.py _SENSITIVE_ACTIONS,
-         as D9 says.
-      3. settings_window_html.py: connectorStatus() "Not configured", the data-pages-setup link,
-         renderPagesModal() with ui.pagesSetup / ui.pages.* state and its click/input/submit
-         handlers, copying the Telegram modal's structure (renderTelegramModal ~line 1185, its
-         handlers ~1327-1377, the ui fields ~299-324 and the onInput pattern ~1423-1443). Use the
-         existing design-system classes only; no colour literals and no width @media queries
-         (tests/unit/test_design_system.py).
+         _connectors_state() (has_org, auth_label, the "pages" dict, public_key only from an
+         existing key file), pages_create_key() and pages_configure(), copying
+         toggle_gmail_signature (settings_controller.py:1585-1591). Import daemon_main inside each
+         function, never at module level.
+      2. web/org_settings_scope.py ACTION_SCOPES entries for both actions;
+         web/routes_settings.py: pages_configure in _SENSITIVE_ACTIONS, pages_create_key in
+         _NON_SENSITIVE_ACTIONS.
+      3. settings_window_html.py: connectorStatus()'s "Not configured", the data-pages-setup
+         link, renderPagesModal() with ui.pagesSetup / ui.pages.* and its click, input and submit
+         handlers, and the pages_create_key post on open, copying the Telegram modal
+         (renderTelegramModal at ~line 1204, its handlers ~1327-1377, the ui fields ~299-324, the
+         onInput pattern ~1423-1443). Existing design-system classes only; no colour literals and
+         no width @media queries (tests/unit/test_design_system.py).
       4. Tests:
-         tests/unit/test_settings_controller.py – the connectors row set still equals
-         ALL_CONNECTORS; the pages row: has_org False and auth_label "Set up…" with no pages:
-         section, True and "Change…" with a valid one; its "pages" dict has public_key starting
-         "ssh-ed25519 " and the six fields; pages_configure saves the six keys and calls
-         refresh_connectors; an invalid host key sets error to the PagesConfigError text and
-         leaves settings.yaml unchanged; test_snapshot_has_one_key_per_page still passes
-         unchanged.
-         tests/unit/web/test_routes_settings.py – pages_configure is in _SENSITIVE_ACTIONS and
-         requires step-up like enable_connector (copy that test).
-         tests/unit/web/test_org_settings_scope.py – pages_configure is local-only and never
-         permitted in org (the parametrized local-only test covers it once it is in the table;
-         add it explicitly if the test lists names).
-         tests/unit/test_settings_window_html.py – the rendered page carries data-pages-setup,
-         the "Not configured" branch, and every D9 string.
-         tests/integration/test_browser_smoke.py – one case: open Settings → Connectors, click
-         the Web pages row, the modal shows the public key textarea and six inputs, typing
-         survives a snapshot push (copy the setup of TestSettingsPageRendering and its
-         local_server_with_settings fixture, tests/integration/test_browser_smoke.py ~line 2501).
+         tests/unit/test_settings_controller.py: rows still equal ALL_CONNECTORS; pages row with
+         no pages: section → has_org False, auth_label "Set up…", public_key "" and no key file
+         created; after pages_create_key → public_key starts "ssh-ed25519 "; with a valid section
+         → has_org True, "Change…", the six fields; pages_configure saves exactly the six keys,
+         sets error "" and calls refresh_connectors; an invalid host key sets error to the
+         PagesConfigError text and leaves settings.yaml unchanged. Sandbox daemon_main.PROJECT_ROOT
+         to tmp_path in every new test that creates a key.
+         tests/unit/web/test_routes_settings.py: pages_configure needs step-up like
+         enable_connector (copy that test); pages_create_key does not.
+         tests/unit/web/test_org_settings_scope.py: run it; its tests derive from ACTION_SCOPES.
+         Only if a test there lists local-only action names explicitly and fails, add the two
+         names to that list.
+         tests/unit/test_settings_window_html.py: the rendered page carries data-pages-setup,
+         the "Not configured" branch and every D9 string.
+         tests/integration/test_browser_smoke.py: one case using TestSettingsPageRendering's
+         local_server_with_settings fixture (~line 2501) with daemon_main.PROJECT_ROOT sandboxed:
+         open Settings → Connectors, click the Web pages link, the modal shows the public key
+         textarea (filled after pages_create_key) and six inputs, and typed text survives a
+         snapshot push.
       5. Run python3 -m pytest tests/unit -q, python3 -m pytest
          tests/integration/test_browser_smoke.py -q -k "pages or Pages" (Chromium via
-         PRIVACYFENCE_TEST_CHROMIUM; a SKIPPED result is not a pass), ruff check .
+         PRIVACYFENCE_TEST_CHROMIUM; SKIPPED is not a pass), ruff check .
       No CHANGELOG line yet.
       Stop with status=blocked if: _connectors_state has no single has_org expression to extend;
-      a test pins the org-only action set in a way pages_configure breaks; or the browser test
-      cannot run at all in this container (report the hook's Chromium line).
+      a test pins the org-only action set in a way these local-only actions break; or the browser
+      test cannot run in this container (report the session hook's Chromium line).
     acceptance:
       - python3 -m pytest tests/unit/test_settings_controller.py tests/unit/test_settings_window_html.py tests/unit/web/test_routes_settings.py tests/unit/web/test_org_settings_scope.py -q passes
-      - python3 -m pytest tests/integration/test_browser_smoke.py -q -k "pages or Pages" reports at least one passed and no skipped
+      - python3 -m pytest tests/integration/test_browser_smoke.py -q -k "pages or Pages" reports at least one passed and none skipped
       - python3 -m pytest tests/unit -q passes
-      - grep -n '"pages_configure"' src/privacyfence/web/org_settings_scope.py src/privacyfence/web/routes_settings.py prints two lines
+      - git status --porcelain shows no credentials/pages_ssh_key file in the checkout after the test runs
 
   - id: p6-docs-adrs-retire
-    title: Setup guide, reference docs, ADRs 0116-0120, CHANGELOG, build.yml check, plan deletion
-    depends_on: [p2-bundle-flags, p5-settings]
+    title: Org guide rows, ADRs 0116-0120, CHANGELOG, build.yml check, plan deletion
+    depends_on: [p5-settings]
     complexity: M
     touches:
-      - docs/web-pages-setup.md
       - docs/org-mode-setup-guide.md
-      - docs/configuration-reference.md
       - docs/connecting-a-service.md
-      - docs/README.md
-      - README.md
-      - scripts/build_site.py
-      - scripts/pyinstaller_common.py
-      - docs/adr/0116-web-pages-are-published-over-sftp-never-served-by-privacyfence.md
-      - docs/adr/0117-privacyfence-speaks-sftp-with-asyncssh.md
-      - docs/adr/0118-privacyfence-generates-its-sftp-key-and-pins-the-host-key.md
-      - docs/adr/0119-a-page-link-is-a-random-id-and-each-person-manages-their-own-pages.md
-      - docs/adr/0120-publishing-a-web-page-runs-the-real-pii-scan.md
+      - docs/web-pages-setup.*
+      - docs/adr/0116-*
+      - docs/adr/0117-*
+      - docs/adr/0118-*
+      - docs/adr/0119-*
+      - docs/adr/0120-*
       - docs/adr/README.md
       - CHANGELOG.md
+      - scripts/pyinstaller_common.py
       - docs/web-pages-plan.md
       - docs/web-pages-plan-manual-steps.html
     brief: |
-      Read the whole of docs/web-pages-plan.md first, D11 and the ADRs section in particular.
-      1. docs/web-pages-setup.md (new): for an administrator (org) and a person (desktop), in
-         the style of docs/telegram-setup.md: what Web pages does; the Ubuntu 24.04 server steps
-         of D11 (commands verbatim, Caddy and nginx configs); how to get PrivacyFence's public key
-         (org: the startup log line and `sudo -u privacyfence-org -H
-         /opt/privacyfence/venv/bin/privacyfence-app --pages-public-key`; desktop: Settings →
-         Connectors → Web pages); the bundle flags (org) or the Settings modal fields (desktop);
-         a test publish; limits (max_bytes default 16,000,000, anyone with the link, no listing,
-         sandboxed origin, claude.ai-only artifact features); troubleshooting, one row per D5
-         error message with its fix. Link ADRs 0116-0120 for the why.
-      2. docs/org-mode-setup-guide.md: a Web pages row in section 5's connector table (redirect
-         URI "none", flags "--pages-*", guide docs/web-pages-setup.md); the --pages-* rows in
-         section 6's options table (same text as p2 put in configuration-reference.md).
-         docs/configuration-reference.md: the settings.yaml `pages:` keys (D2 table, local mode).
-         docs/connecting-a-service.md and README.md: add Web pages wherever connectors are
-         listed, one line each. docs/README.md: list web-pages-setup.md next to
-         telegram-setup.md. scripts/build_site.py: add "web-pages-setup" to CONNECTOR_GUIDES.
-      3. ADRs 0116-0120 from docs/adr/README.md's template, one decision each, with the
-         decisions and rejected alternatives the plan's ADRs section and D3, D4, D6, D10, D11
-         give; Status "Accepted — <today's date>"; Verification names the files and tests that
-         enforce each (pages_client.py and test_pages_client.py for 0117/0118, pages_index.py
-         and test_pages_connector.py for 0119, gate.py and test_gate.py for 0120,
-         docs/web-pages-setup.md for 0116); Related links ADR 0028, 0086, 0093, 0097, 0102 and
-         0009 where relevant, never the plan. Add five rows to the README index. If a parallel
-         branch has taken any of 0116-0120 on main, renumber and fix every reference.
+      Read the whole of docs/web-pages-plan.md first, the ADRs section and D13 in particular.
+      1. ADRs 0116-0120 from docs/adr/README.md's template, one decision each, with the
+         decisions and rejected alternatives the plan's ADRs section and D3, D4, D6, D10, D11 and
+         D13 give. File names: 0116-web-pages-are-published-over-sftp-never-served-by-privacyfence,
+         0117-privacyfence-speaks-sftp-with-asyncssh,
+         0118-privacyfence-generates-its-sftp-key-and-pins-the-host-key,
+         0119-a-page-link-is-a-random-id-and-each-person-manages-their-own-pages,
+         0120-publishing-a-web-page-runs-the-real-pii-scan (each with .md). Status
+         "Accepted — <today's date>". Verification names the files and tests enforcing each
+         (pages_client.py, tests/unit/test_pages_client.py and tests/integration/test_pages_sftp.py
+         for 0117 and 0118; pages_index.py and tests/unit/connectors/test_pages_connector.py for
+         0119; gate.py and tests/unit/test_gate.py for 0120; the setup guide for 0116). Related
+         links ADR 0009, 0028, 0086, 0093, 0097 and 0102 where relevant, never the plan. Add five
+         rows to the README index. If main already has any of 0116-0120, renumber and fix every
+         reference.
+      2. The setup guide (web-pages-setup.md in docs): add a closing "Why it works this way"
+         list linking ADRs 0116-0120.
+      3. docs/org-mode-setup-guide.md: a Web pages row in section 5's connector table (redirect
+         URI "none", bundle flags "--pages-*", setup guide the new guide), and the eight --pages-*
+         / --no-pages rows in section 6's options table, with the same text as the Build options
+         rows in configuration-reference.md.
+         docs/connecting-a-service.md: after the Telegram bullet (~line 97), one bullet:
+         "**Web pages** has no account to connect. It is set up once per install; see
+         Web pages setup.", where "Web pages setup" is a relative Markdown link to the new guide.
       4. CHANGELOG.md, under [Unreleased], a new "### Added" subsection above "### Changed" with
          one bullet in the file's style: **Web pages.** An AI client can publish a single-file
          HTML page to a web server you run and get back a link anyone can open
-         (`pages_publish_html`, `pages_list_pages`, `pages_unpublish_page`); every publish is
-         approved on the usual card. PrivacyFence copies the page over SFTP with its own key;
-         see [Web pages setup](docs/web-pages-setup.md). Desktop installs set it up under
-         Settings → Connectors, organization servers with the `--pages-*` bundle options.
-      5. Dispatch build.yml against feature/web-pages (GitHub MCP actions_run_trigger) and wait
-         for it. If a platform job fails importing asyncssh in the bundle, change the
-         "asyncssh" entry in scripts/pyinstaller_common.py to the package's collected
-         submodules (PyInstaller.utils.hooks.collect_submodules("asyncssh"), spread into
-         HIDDEN_IMPORTS), push, and dispatch again. Put the green run's URL in your final report.
-      6. Delete docs/web-pages-plan.md and docs/web-pages-plan-manual-steps.html. git grep -n
-         "web-pages-plan" must print nothing.
-      7. Run python3 -m pytest tests/unit -q, ruff check ., and the website tests
-         python3 -m pytest tests/unit/test_build_site.py tests/unit/test_website_connectors_page.py -q.
+         (`pages_publish_html`, `pages_list_pages`, `pages_unpublish_page`); every publish and
+         take-down is approved on the usual card. PrivacyFence copies the page over SFTP with a
+         key of its own; see [Web pages setup](docs/ followed by web-pages-setup.md, as a
+         relative Markdown link). Desktop installs set it up under Settings → Connectors,
+         organization servers with the `--pages-*` bundle options.
+      5. Dispatch build.yml (GitHub MCP actions_run_trigger, workflow build.yml) against your own
+         phase branch, feature/web-pages--p6-docs-adrs-retire, after pushing it, and wait for it.
+         If a platform job fails because the bundle lacks an asyncssh module, add
+         `collect_submodules` to scripts/pyinstaller_common.py's existing PyInstaller.utils.hooks
+         import and, after the HIDDEN_IMPORTS list literal, the line
+         `HIDDEN_IMPORTS += collect_submodules("asyncssh")` (never inside the literal, which
+         test_pyinstaller_hidden_imports.py reads with ast), push, and dispatch again. Put the
+         green run's URL in your report.
+      6. Delete docs/web-pages-plan.md and docs/web-pages-plan-manual-steps.html.
+      7. Run python3 -m pytest tests/unit -q and ruff check .
+      For the live-check row, report as D13 says.
       Stop with status=blocked if build.yml fails for a reason other than a missing asyncssh
       module in the bundle, or fails again after the collect_submodules change.
     acceptance:
-      - ls docs/adr/0116-*.md docs/adr/0117-*.md docs/adr/0118-*.md docs/adr/0119-*.md docs/adr/0120-*.md lists five files, and grep -c 'Accepted' on each prints at least 1
-      - grep -c '011[6-9]\|0120' docs/adr/README.md prints at least 5
+      - ls docs/adr/ | grep -c '^01\(1[6-9]\|20\)-' prints 5, and each of those files contains "Accepted"
+      - grep -c '(01\(1[6-9]\|20\)-' docs/adr/README.md prints 5
       - git grep -n "web-pages-plan" prints nothing
       - grep -n 'Web pages' CHANGELOG.md prints a line above the first '## [5.' heading
       - python3 -m pytest tests/unit -q passes
-      - the dispatched build.yml run on feature/web-pages is green
+      - the build.yml run dispatched on feature/web-pages--p6-docs-adrs-retire is green
 ```

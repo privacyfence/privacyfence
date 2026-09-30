@@ -60,7 +60,7 @@ button.reset:focus-visible, input:focus-visible, a:focus-visible { outline: 2px 
 
   <section style="display:grid;gap:18px">
     <h2>After implementation</h2>
-    <p class="lede">Do these once the orchestrator has opened the pull request from <code>feature/web-pages</code>. The PR lists both as unchecked items. The setup guide is written in the last phase, so it exists only on the feature branch until the PR merges: <a href="https://github.com/privacyfence/privacyfence/blob/feature/web-pages/docs/web-pages-setup.md">docs/web-pages-setup.md on feature/web-pages</a>.</p>
+    <p class="lede">Do these once the orchestrator has opened the pull request from <code>feature/web-pages</code>. The PR lists both as unchecked items. The setup guide is written in the last phase, so it exists only on the feature branch until the PR merges: the <strong>Web pages setup</strong> guide (<code>web-pages-setup.md</code>) in the <a href="https://github.com/privacyfence/privacyfence/tree/feature/web-pages/docs">docs folder of feature/web-pages</a>.</p>
 
     <article class="item" data-item="ma1">
       <div class="item-head">
@@ -117,7 +117,7 @@ sudo chmod 600 /var/lib/pf-pages/.ssh/authorized_keys</pre></div></li>
       </div>
       <p class="see">Uses the same web server as item 1. A separate <code>authorized_keys</code> line is needed, because a desktop install has its own key.</p>
       <ol class="steps">
-        <li><input type="checkbox" id="ma2-1"><div><p>Open the green <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml">build.yml run</a> the last phase dispatched on <code>feature/web-pages</code> (its URL is in the PR) and download your platform's installer from its artifacts.</p></div></li>
+        <li><input type="checkbox" id="ma2-1"><div><p>Open the green <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml">build.yml run</a> on <code>feature/web-pages</code> that the PR links and download your platform's installer from its artifacts.</p></div></li>
         <li><input type="checkbox" id="ma2-2"><div><p>Install it on a test machine, not one with your everyday PrivacyFence.</p><p class="see">PrivacyFence starts and its companion icon appears.</p></div></li>
         <li><input type="checkbox" id="ma2-3"><div><p>Open PrivacyFence Settings → Connectors.</p><p class="see">A <strong>Web pages</strong> row shows “Not configured” and a “Set up…” link.</p></div></li>
         <li><input type="checkbox" id="ma2-4"><div><p>Click <strong>Set up…</strong> and fill Server, Port, Account, Server's host key, Folder on the server and Public address, using the values from item 1.</p></div></li>
