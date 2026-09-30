@@ -47,6 +47,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Narrower Salesforce report runs.** salesforce_run_report can return only some of a report's columns, add filters for one run (such as a list of opportunity IDs), or return totals only, without changing the saved report. It now asks Salesforce for detail rows explicitly, and says when Salesforce cut a report off at 2,000 rows.
 
+- **Organization deployment guide: automatic upgrades and IP hardening.** Two optional sections in the org-mode setup guide: a nightly systemd timer that upgrades to the latest stable release and falls back to the previous version if the daemon does not come back, and how to limit the MCP endpoints to Anthropic's addresses at the proxy and close unused ports with `ufw`, including what port 80 is still needed for.
+
 ### Changed
 
 - Every connector tool now describes each of its parameters, says what it returns (fields, limits and paging), and names the related tool to use instead, so AI clients choose and call the right tool more often.
