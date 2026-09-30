@@ -100,10 +100,14 @@ class AppsScriptConnector(Connector):
                     "List standalone Google Apps Script projects visible to "
                     "the user (id, name, last-modified time). Container-bound "
                     "scripts attached to a Sheet/Doc/Form are not returned. "
+                    "Returns a list of {id, name, created_time, modified_time}, only the first "
+                    "page, in Drive's order, up to max_results. Pass an id as script_id to "
+                    "apps_script_get_content and the other Apps Script tools. "
                     "Auto-approved."
                 ),
                 params=[
-                    ToolParam("max_results", "int", required=False, default=50),
+                    ToolParam("max_results", "int", required=False, default=50,
+                              description="Most projects to return. Default 50, capped at 1000."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -113,10 +117,16 @@ class AppsScriptConnector(Connector):
                 description=(
                     "Fetch the full source of a Google Apps Script project -- "
                     "every file (.gs/.html) plus the appsscript.json manifest. "
+                    "Returns {script_id, files}, where files is a list of {name, type, source} "
+                    "and type is 'SERVER_JS', 'HTML' or 'JSON'. Get the script id from "
+                    "apps_script_list_projects, and change the source with "
+                    "apps_script_write_content. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("script_id", "str"),
+                    ToolParam("script_id", "str",
+                              description="Id of the script project, from "
+                                           "apps_script_list_projects (its id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -133,17 +143,22 @@ class AppsScriptConnector(Connector):
                     "files you aren't touching). This only writes source -- "
                     "PrivacyFence never runs the script; the user runs it "
                     "themselves in the Apps Script editor once this write is "
-                    "approved. Requires user approval."
+                    "approved. Returns {script_id, file_count}, the number of files now in "
+                    "the project. Requires user approval."
                 ),
                 params=[
-                    ToolParam("script_id", "str"),
+                    ToolParam("script_id", "str",
+                              description="Id of the script project to overwrite, from "
+                                           "apps_script_list_projects (its id field)."),
                     ToolParam(
                         "files", "str",
                         description=(
                             'JSON array of {"name": str, "type": "SERVER_JS"|'
                             '"HTML"|"JSON", "source": str}, one entry per file '
                             '(a JSON manifest file is named "appsscript" with '
-                            'type "JSON").'
+                            'type "JSON"). Replaces the project\'s whole file set: any '
+                            'file left out is deleted. Must be valid JSON with at least '
+                            'one file.'
                         ),
                     ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -155,11 +170,18 @@ class AppsScriptConnector(Connector):
                     "Read the result of the most recent run(s) of a script "
                     "that the user triggered themselves outside PrivacyFence "
                     "(status, duration, which function ran) -- not a live "
-                    "console.log transcript. Requires user approval."
+                    "console.log transcript. Returns a list of {function_name, status, "
+                    "start_time, duration, process_type}, where status is for example "
+                    "COMPLETED, FAILED, RUNNING or TIMED_OUT and duration is like '1.234s'; "
+                    "only the first page comes back, up to max_results. Get the script id from "
+                    "apps_script_list_projects. Requires user approval."
                 ),
                 params=[
-                    ToolParam("script_id", "str"),
-                    ToolParam("max_results", "int", required=False, default=10),
+                    ToolParam("script_id", "str",
+                              description="Id of the script project, from "
+                                           "apps_script_list_projects (its id field)."),
+                    ToolParam("max_results", "int", required=False, default=10,
+                              description="Most runs to return. Default 10, capped at 50."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
