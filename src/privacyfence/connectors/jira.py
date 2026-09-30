@@ -9,6 +9,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from ..atlassian_users import display_markup
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
@@ -66,7 +67,8 @@ class JiraConnector(Connector):
                 name="jira_get_issue",
                 description=(
                     "Fetch full details of a Jira issue by key (e.g. PROJ-123), "
-                    "including description and comments. Requires user approval."
+                    "including description and comments. Requires user approval. "
+                    "Mentions appear as @[Name](accountId)."
                 ),
                 params=[ToolParam("issue_key", "str", description="e.g. PROJ-123"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
                 read_only=True,
@@ -79,6 +81,31 @@ class JiraConnector(Connector):
                     "jira_transition_issue to see what transition names are valid. Auto-approved."
                 ),
                 params=[ToolParam("issue_key", "str", description="e.g. PROJ-123"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="jira_find_users",
+                description=(
+                    "Find Atlassian users by name or email and return their account ids. "
+                    "Auto-approved -- mention someone in a comment or description by writing "
+                    "@[Name](accountId), or assign an issue with assignee_account_id. "
+                    "Email addresses are never returned."
+                ),
+                params=[
+                    ToolParam("query", "str", description="Part of a person's name or email address"),
+                    ToolParam("max_results", "int", required=False, default=10),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="jira_refresh_user_cache",
+                description=(
+                    "Re-fetch the names of every Atlassian account id PrivacyFence has cached. "
+                    "Auto-approved -- use this when a renamed or newly added person shows up "
+                    "wrong; cached names otherwise refresh on their own after 7 days."
+                ),
+                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
                 read_only=True,
             ),
             ToolSpec(
@@ -148,6 +175,10 @@ class JiraConnector(Connector):
             return await self._get_issue(**args)
         if tool == "jira_get_transitions":
             return await self._get_transitions(**args)
+        if tool == "jira_find_users":
+            return await self._find_users(**args)
+        if tool == "jira_refresh_user_cache":
+            return await self._refresh_user_cache(**args)
         if tool == "jira_create_issue":
             return await self._create_issue(**args)
         if tool == "jira_add_comment":
@@ -186,6 +217,21 @@ class JiraConnector(Connector):
                          f"List transitions: {issue_key}", f"{len(transitions)} transition(s)", t0)
         return data
 
+    async def _find_users(self, query: str, max_results: int = 10) -> Any:
+        t0 = time.time()
+        users = await self._fetch(self._jira.find_users, query, max_results)
+        data = [asdict(u) for u in users]
+        self._auto_audit("jira_find_users", "Find Jira Users",
+                         f"Find users: {query[:80]}", f"{len(users)} user(s)", t0)
+        return data
+
+    async def _refresh_user_cache(self) -> Any:
+        t0 = time.time()
+        count = await self._fetch(self._jira.refresh_user_cache)
+        self._auto_audit("jira_refresh_user_cache", "Refresh Atlassian User Cache",
+                         "Refresh Atlassian user cache", f"{count} user(s)", t0)
+        return {"cached_users": count}
+
     # ------------------------------------------------------------------ #
     # Review gate (reads)
     # ------------------------------------------------------------------ #
@@ -212,6 +258,8 @@ class JiraConnector(Connector):
             "Description": "Full description text",
             "Comments": "Author, created date, and body per comment",
         }
+        description_text = display_markup(getattr(issue, "description", "") or "")
+        comment_bodies = [display_markup(getattr(c, "body", "") or "") for c in comments]
         details_parts = []
         if len(issue.summary) > 80:
             # Preview truncates the summary at 80 chars -- the untruncated
@@ -219,15 +267,14 @@ class JiraConnector(Connector):
             details_parts.append(f"Summary: {issue.summary}\n")
         details_parts.append(
             f"Reporter: {getattr(issue, 'reporter', '')}\n\n"
-            f"Description:\n{getattr(issue, 'description', '') or '(none)'}"
+            f"Description:\n{description_text or '(none)'}"
         )
         # details_text/pii_scan_text stay a flat string -- kept for legacy
         # display and the PII scan's default fallback, unrelated to how v2
         # renders the same content (preview_blocks below).
         details = "".join(details_parts)
         pii_scan_text = (
-            f"{getattr(issue, 'description', '') or ''}\n\n" +
-            "\n".join(getattr(c, "body", "") or "" for c in comments)
+            f"{description_text}\n\n" + "\n".join(comment_bodies)
         )
         # v2's right pane: Reporter/Summary as standalone labeled fields
         # (same font as a table header -- see approval_window_html.py's
@@ -241,7 +288,7 @@ class JiraConnector(Connector):
             blocks.append({"type": "field", "label": "Summary", "value": issue.summary})
         blocks.append({"type": "field", "label": "Reporter", "value": getattr(issue, "reporter", "") or ""})
         blocks.append({"type": "heading", "label": "Description"})
-        blocks.append({"type": "text", "text": getattr(issue, "description", "") or "(none)"})
+        blocks.append({"type": "text", "text": description_text or "(none)"})
         if comments:
             blocks.append({
                 "type": "table",
@@ -251,9 +298,9 @@ class JiraConnector(Connector):
                     [
                         getattr(c, "author", "unknown"),
                         format_preview_datetime(getattr(c, "created", "")),
-                        getattr(c, "body", ""),
+                        body,
                     ]
-                    for c in comments
+                    for c, body in zip(comments, comment_bodies, strict=True)
                 ],
             })
         return await gated_call(
