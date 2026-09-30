@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import re
 
 from privacyfence.audit_log import current_week, init_audit_logger
-from privacyfence.auto_accept import ReviewContext
+from privacyfence.auto_accept import TOOL_TO_GATE, ReviewContext
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
@@ -66,6 +67,38 @@ def build_stub_args(spec: ToolSpec, overrides: dict | None = None) -> dict:
         args[p.name] = p.default if not p.required else _DUMMY_BY_ANNOTATION.get(p.annotation, "stub")
     args.update(overrides or {})
     return args
+
+
+MIN_PARAM_DESCRIPTION_CHARS = 20
+
+
+def assert_tool_definitions_complete(
+    connector: Connector, siblings: dict[str, tuple[str, ...]],
+) -> None:
+    """Fails, listing every gap at once, unless each of ``connector``'s tools tells an AI client
+    what it needs to pick and call it: a description for every parameter, a ``Returns`` sentence,
+    the approval wording its gate implies, and a mention of each related tool in ``siblings``
+    (keyed by tool name) that the client could confuse it with."""
+    specs = {spec.name: spec for spec in connector.tool_specs()}
+    problems = [f"siblings names unknown tool {name!r}" for name in sorted(set(siblings) - set(specs))]
+    for name, spec in specs.items():
+        for param in spec.params:
+            text = param.description.strip()
+            if param.name != "reason" and (len(text) < MIN_PARAM_DESCRIPTION_CHARS or text.lower() == param.name.lower()):
+                problems.append(f"{name}.{param.name}: no useful parameter description")
+        if "Returns" not in spec.description:
+            problems.append(f"{name}: no 'Returns' sentence")
+        if len(spec.description) > 1024:
+            problems.append(f"{name}: description is {len(spec.description)} characters, over 1024")
+        wording = "Auto-approved" if TOOL_TO_GATE[name] == "auto" else "Requires user approval"
+        if wording not in spec.description:
+            problems.append(f"{name}: description lacks {wording!r}")
+        for other in siblings.get(name, ()):
+            if other not in specs:
+                problems.append(f"{name}: sibling {other!r} is not a tool of this connector")
+            elif not re.search(rf"\b{re.escape(other)}\b", spec.description):
+                problems.append(f"{name}: description never mentions {other}")
+    assert not problems, "\n".join(problems)
 
 
 async def assert_all_tools_leave_an_audit_trail(
