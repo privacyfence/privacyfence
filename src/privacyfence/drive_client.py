@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 # Full Drive scope: read + write + create + move + comment.
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
+# Most list requests a single call may issue while following ``nextPageToken``.
+MAX_PAGES = 10
+
 # Google Workspace MIME types that must be exported (they cannot be downloaded
 # directly). We export everything as plain text for review.
 _GOOGLE_DOC_EXPORTS = {
@@ -1298,25 +1301,39 @@ class DriveClient:
         query syntax. Returns normalized ``DriveFile`` metadata.
         """
         max_results = self._clamp_max_results(max_results)
-        service = self._get_service()
-        try:
-            response = (
-                service.files()
-                .list(
-                    q=query or None,
-                    pageSize=max_results,
-                    fields=f"files({_FILE_FIELDS})",
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
-                )
-                .execute()
-            )
-        except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
-            raise DriveClientError(f"list_files failed: {exc}") from exc
-
-        files = [self._parse_file(f) for f in response.get("files", [])]
+        files = self._collect_file_pages(query or None, max_results, "list_files")
         logger.info("list_files query=%r returned %d files", query, len(files))
         return files
+
+    def _collect_file_pages(
+        self, query: str | None, max_results: int, op: str
+    ) -> list[DriveFile]:
+        """Follow ``nextPageToken`` until ``max_results`` files or ``MAX_PAGES`` requests."""
+        service = self._get_service()
+        files: list[DriveFile] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(files)
+            if remaining <= 0:
+                break
+            kwargs: dict = {
+                "q": query,
+                "pageSize": min(remaining, 1000),
+                "fields": f"nextPageToken,files({_FILE_FIELDS})",
+                "supportsAllDrives": True,
+                "includeItemsFromAllDrives": True,
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                response = service.files().list(**kwargs).execute()
+            except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+                raise DriveClientError(f"{op} failed: {exc}") from exc
+            files.extend(self._parse_file(f) for f in response.get("files", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        return files[:max_results]
 
     def get_file_metadata(self, file_id: str) -> DriveFile:
         """Fetch metadata for a single file."""
@@ -1607,23 +1624,9 @@ class DriveClient:
             raise DriveClientError("list_folder requires a non-empty folder_id")
         max_results = self._clamp_max_results(max_results)
         query = f"'{folder_id}' in parents and trashed = false"
-        service = self._get_service()
-        try:
-            response = (
-                service.files()
-                .list(
-                    q=query,
-                    pageSize=max_results,
-                    fields=f"files({_FILE_FIELDS})",
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
-                )
-                .execute()
-            )
-        except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
-            raise DriveClientError(f"list_folder({folder_id}) failed: {exc}") from exc
-
-        files = [self._parse_file(f) for f in response.get("files", [])]
+        files = self._collect_file_pages(
+            query, max_results, f"list_folder({folder_id})"
+        )
         logger.info("list_folder %s returned %d children", folder_id, len(files))
         return files
 
@@ -2182,15 +2185,27 @@ class DriveClient:
         """Return a list of Shared Drives the authorized user can access."""
         max_results = self._clamp_max_results(max_results)
         service = self._get_service()
-        try:
-            response = (
-                service.drives()
-                .list(pageSize=max_results, fields="drives(id,name,kind)")
-                .execute()
-            )
-        except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
-            raise DriveClientError(f"list_shared_drives failed: {exc}") from exc
-        drives = response.get("drives", [])
+        drives: list[dict] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(drives)
+            if remaining <= 0:
+                break
+            kwargs: dict = {
+                "pageSize": min(remaining, 100),
+                "fields": "nextPageToken,drives(id,name,kind)",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                response = service.drives().list(**kwargs).execute()
+            except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+                raise DriveClientError(f"list_shared_drives failed: {exc}") from exc
+            drives.extend(response.get("drives", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        drives = drives[:max_results]
         logger.info("list_shared_drives returned %d drives", len(drives))
         return [{"id": d.get("id", ""), "name": d.get("name", "")} for d in drives]
 

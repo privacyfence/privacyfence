@@ -182,8 +182,8 @@ class DriveConnector(Connector):
                     "Search Google Drive and return matching file metadata "
                     "(id, name, mime_type, owners, sharing status). Returns a list of {id, name, "
                     "mime_type, size, created_time, modified_time, owners, shared, web_view_link, "
-                    "parent_ids, drive_id, thumbnail_link}, only the first page: at most "
-                    "max_results files (default 20, capped at 1000), in the order the Drive API "
+                    "parent_ids, drive_id, thumbnail_link}: at most "
+                    "max_results files (default 20, capped at 1000), read across pages, in the order the Drive API "
                     "gives for the query; fields may be redacted by the user's privacy settings. "
                     "Use drive_list_folder to list one folder's children, or "
                     "drive_get_file_metadata when you already have a file's id. Auto-approved."
@@ -195,8 +195,8 @@ class DriveConnector(Connector):
                         "See https://developers.google.com/drive/api/guides/search-files"
                     )),
                     ToolParam("max_results", "int", required=False, default=20, description=(
-                        "Most files to return. Default 20, capped at 1000; only the first page "
-                        "is returned, so a larger result set is cut off."
+                        "Most files to return. Default 20, capped at 1000. Reads up to "
+                        "max_results items across pages."
                     )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -223,8 +223,8 @@ class DriveConnector(Connector):
                 name="drive_list_folder",
                 description=(
                     "List the direct children of a Drive folder by id. Returns a list of files in "
-                    "the same shape drive_list_files returns, only the first page: at most "
-                    "max_results children (default 50, capped at 1000), excluding trashed files, "
+                    "the same shape drive_list_files returns: at most "
+                    "max_results children (default 50, capped at 1000), read across pages, excluding trashed files, "
                     "in the order the Drive API gives. Use drive_list_files to search by name or "
                     "content instead of browsing one folder. Auto-approved."
                 ),
@@ -235,8 +235,8 @@ class DriveConnector(Connector):
                         "lists its top level)."
                     )),
                     ToolParam("max_results", "int", required=False, default=50, description=(
-                        "Most children to return. Default 50, capped at 1000; only the first "
-                        "page is returned."
+                        "Most children to return. Default 50, capped at 1000. Reads up to "
+                        "max_results items across pages."
                     )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -377,15 +377,15 @@ class DriveConnector(Connector):
                 name="drive_list_shared_drives",
                 description=(
                     "List all Google Workspace Shared Drives the user can access "
-                    "(returns id and name for each). Returns a list of {id, name}, only the "
-                    "first page: at most max_results drives (default 50, capped at 1000). "
+                    "(returns id and name for each). Returns a list of {id, name}: at most "
+                    "max_results drives (default 50, capped at 1000), read across pages. "
                     "Pass a drive's id as folder_id to drive_list_folder to browse it. "
                     "Auto-approved."
                 ),
                 params=[
                     ToolParam("max_results", "int", required=False, default=50, description=(
-                        "Most shared drives to return. Default 50, capped at 1000; only the "
-                        "first page is returned."
+                        "Most shared drives to return. Default 50, capped at 1000. Reads up to "
+                        "max_results items across pages."
                     )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
