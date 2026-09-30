@@ -52,9 +52,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The GDPR and comparison pages are linked from the site's own pages, and `llms.txt` lists them.** The homepage, security, enterprise, FAQ, how-it-works and AI agent pages now link to them, and the docs and README name ChatGPT and Gemini Enterprise next to the Claude clients.
 
+- **Better signals on privacyfence.eu for search engines.** Each connector page ends with an "Other connectors" block linking the rest, [How it works](https://privacyfence.eu/how-it-works/) and [Download](https://privacyfence.eu/download/) link the [FAQ](https://privacyfence.eu/faq/), the AI agent, comparison and connector pages carry breadcrumb data, the homepage and download page list the [Glama](https://glama.ai/mcp/servers/privacyfence/privacyfence) listing, and `sitemap.xml` gives each page a last-modified date taken from git history.
+- **`glama.json`** at the repository root, which claims the Glama listing for its maintainer.
+
 ### Changed
 
 - **Clearer pages on privacyfence.eu.** Shorter page titles and descriptions, and a new FAQ answer, [Is PrivacyFence an MCP gateway?](https://privacyfence.eu/faq/#mcp-gateway)
+- **`LICENSE` is now the verbatim Apache License 2.0.** It had drifted from the official text in about a dozen places (a shortened "Contribution" definition, a reworded end of section 4, "exemplary" for "consequential" in section 8, and a filled-in notice in place of the appendix), so GitHub showed the license as "Other". The terms are unchanged in intent; the copyright line stays in `NOTICE`.
 - **A fuller download page.** [privacyfence.eu/download](https://privacyfence.eu/download/) now lists the system requirements, what each installer puts on your computer, and the next steps after installing, with links to the install guides.
 
 ## [5.2.1] — 2026-09-29

@@ -151,6 +151,7 @@ BUILD_INPUTS: frozenset[str] = frozenset(
     {
         "_partials/header.html",
         "_partials/footer.html",
+        "_partials/other-connectors.html",
         "_docs/overrides/main.html",
         "_data/clients.json",
     }
@@ -297,7 +298,17 @@ INCLUDE_RE = re.compile(r"^(?P<indent>[ \t]*)<!-- include: (?P<name>[a-z-]+)(?P<
 PARTIAL_DEFAULTS = {
     "header": {"skip_target": "#top", "cta_href": "/download/", "cta_label": "Download"},
     "footer": {},
+    "other-connectors": {"current": ""},
 }
+
+
+def _without_current_connector(text: str, current: str) -> str:
+    """The "Other connectors" partial minus the line for the page it is included in."""
+    marker = f'data-connector="{current}"'
+    kept = [line for line in text.splitlines(keepends=True) if marker not in line]
+    if len(kept) == len(text.splitlines()):
+        raise BuildError(f"partial 'other-connectors' needs current=\"SLUG\" naming a connector page, got {current!r}")
+    return "".join(kept)
 
 
 def render_partial(name: str, indent: str = "", **overrides: str) -> str:
@@ -314,6 +325,8 @@ def render_partial(name: str, indent: str = "", **overrides: str) -> str:
     text = re.sub(r"^<!--#.*?-->\n", "", text, flags=re.M | re.S)
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", html.escape(value, quote=True))
+    if name == "other-connectors":
+        text = _without_current_connector(text, values["current"])
     leftover = re.findall(r"\{\{\w+\}\}", text)
     if leftover:
         raise BuildError(f"partial {name!r} has unfilled placeholders {leftover}")
@@ -628,6 +641,49 @@ def prerender_releases(page: str, data: dict) -> str:
         raise BuildError("website/releases/index.html no longer has the loading row the pre-render fills")
     releases = published_releases(data)
     return page.replace(RELEASES_LOADING_ROW, render_release_rows(releases)) if releases else page
+
+
+# The section index pages the second-level pages sit under, for their BreadcrumbList.
+SECTIONS: dict[str, str] = {"ai-agents": "AI agents", "compare": "Compare", "connectors": "Connectors"}
+KICKER_RE = re.compile(r'<p class="kicker">([^<]*?) · ([^<]+)</p>')
+
+
+def breadcrumb_for(url_path: str, page: str) -> dict | None:
+    """The BreadcrumbList node (Home > section > page) for a second-level page, /section/page/,
+    or None for any other page. The page's name is the part of its intro kicker after the
+    middle dot ("Connector · Slack"), so no page is named twice."""
+    parts = url_path.strip("/").split("/")
+    if len(parts) != 2 or parts[0] not in SECTIONS:
+        return None
+    kicker = KICKER_RE.search(page)
+    if not kicker:
+        raise BuildError(f'{url_path} needs an intro kicker of the form "Section · Page name" for its BreadcrumbList')
+    items = [
+        ("PrivacyFence", f"{SITE_URL}/"),
+        (SECTIONS[parts[0]], f"{SITE_URL}/{parts[0]}/"),
+        (html.unescape(kicker[2]), f"{SITE_URL}{url_path}"),
+    ]
+    return {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": i, "name": name, "item": item} for i, (name, item) in enumerate(items, 1)
+        ],
+    }
+
+
+def add_breadcrumb(page: str, url_path: str) -> str:
+    """`page` with a BreadcrumbList JSON-LD script before `</head>`, if it is a second-level page."""
+    node = breadcrumb_for(url_path, page)
+    if node is None:
+        return page
+    script = (
+        '  <script type="application/ld+json">\n  '
+        + json.dumps({"@context": "https://schema.org", **node}, indent=2, ensure_ascii=False).replace("\n", "\n  ")
+        + "\n  </script>\n"
+    )
+    if "</head>" not in page:
+        raise BuildError(f"{url_path} has no </head> to put its BreadcrumbList in")
+    return page.replace("</head>", script + "</head>", 1)
 
 
 JSON_LD_RE = re.compile(r'(<script type="application/ld\+json">)(.*?)(</script>)', re.S)
@@ -984,8 +1040,40 @@ def render_docs(config_file: Path, out_docs: Path) -> None:
 # ---- Generated files ---------------------------------------------------------------------------
 
 
-def sitemap_xml(paths: list[str]) -> str:
-    urls = "".join(f"  <url><loc>{html.escape(SITE_URL + path)}</loc></url>\n" for path in paths)
+def last_commit_date(path: str, ref: str = "HEAD") -> str | None:
+    """`YYYY-MM-DD` of the last commit at `ref` that touched `path`, or None when git cannot say:
+    no git, no history for the file, or a shallow clone, whose oldest commit would stand in for
+    every file's real date."""
+    try:
+        if _git("rev-parse", "--is-shallow-repository").strip() != "false":
+            return None
+        date = _git("log", "-1", "--format=%cs", ref, "--", path).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return date if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else None
+
+
+def sitemap_lastmods(docs_pages: list[str], docs_source: DocsSource | None) -> dict[str, str]:
+    """URL path -> lastmod for every page whose source has a date in git history. A hand-written
+    page dates from its file under website/; a docs page from its markdown at the ref the docs are
+    built from (`docs/README.md` for the /docs/ index)."""
+    dates: dict[str, str | None] = {path: last_commit_date(f"website/{source}") for path, source in PAGES.items()}
+    ref = (docs_source.ref if docs_source else None) or "HEAD"
+    for path in docs_pages:
+        stem = path.strip("/").removeprefix("docs").strip("/")
+        dates[path] = last_commit_date(f"docs/{stem}.md" if stem else "docs/README.md", ref)
+    return {path: date for path, date in dates.items() if date}
+
+
+def sitemap_xml(paths: list[str], lastmods: dict[str, str] | None = None) -> str:
+    """The sitemap. A page with no entry in `lastmods` gets no <lastmod>: none beats a guess."""
+    lastmods = lastmods or {}
+    urls = "".join(
+        f"  <url><loc>{html.escape(SITE_URL + path)}</loc>"
+        + (f"<lastmod>{lastmods[path]}</lastmod>" if path in lastmods else "")
+        + "</url>\n"
+        for path in paths
+    )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
@@ -1238,6 +1326,7 @@ def build(
             page = set_software_version(page, str(manifest["version"]))
         if releases and url_path == "/releases/":
             page = prerender_releases(page, releases)
+        page = add_breadcrumb(page, url_path)
         target = out / source
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(page, encoding="utf-8")
@@ -1289,7 +1378,8 @@ def build(
         point_docs_links_at_github(out, "main")
     fingerprint_assets(out)
     pages = list(PAGES)
-    (out / "sitemap.xml").write_text(sitemap_xml(pages + docs_pages), encoding="utf-8")
+    lastmods = sitemap_lastmods(docs_pages, source)
+    (out / "sitemap.xml").write_text(sitemap_xml(pages + docs_pages, lastmods), encoding="utf-8")
     (out / "robots.txt").write_text(ROBOTS_TXT, encoding="utf-8")
     (out / "llms.txt").write_text(llms_txt(export, version or docs_version), encoding="utf-8")
 

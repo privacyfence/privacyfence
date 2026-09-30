@@ -582,6 +582,21 @@ def test_sitemap_and_robots():
     assert "Sitemap: https://privacyfence.eu/sitemap.xml" in build_site.ROBOTS_TXT
 
 
+def test_sitemap_lastmod_only_where_a_date_is_known():
+    xml = build_site.sitemap_xml(["/", "/faq/"], {"/": "2026-09-01"})
+    assert "<loc>https://privacyfence.eu/</loc><lastmod>2026-09-01</lastmod>" in xml
+    assert "<url><loc>https://privacyfence.eu/faq/</loc></url>" in xml
+
+
+def test_last_commit_date_is_omitted_when_git_cannot_say(monkeypatch):
+    monkeypatch.setattr(
+        build_site, "_git", lambda *args: "true\n" if "--is-shallow-repository" in args else "2026-01-02\n"
+    )
+    assert build_site.last_commit_date("LICENSE") is None, "a shallow clone has no trustworthy dates"
+    monkeypatch.setattr(build_site, "_git", lambda *args: "false\n" if "--is-shallow-repository" in args else "\n")
+    assert build_site.last_commit_date("no/such/file") is None
+
+
 def test_llms_txt_starts_with_the_canonical_description():
     llms = build_site.llms_txt(None, "4.5.0")
     first = build_site.canonical_description()[0]
