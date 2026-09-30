@@ -28,6 +28,7 @@ import sys
 import pytest
 
 from privacyfence.calendar_client import (
+    MAX_PAGES,
     EVENT_COLOR_NAMES,
     SCOPES,
     VALID_EVENT_SCOPES,
@@ -639,6 +640,34 @@ class TestListEvents:
         assert kwargs["timeMin"] == "a"
         assert kwargs["timeMax"] == "b"
         assert kwargs["q"] == "standup"
+
+    def test_follows_next_page_token_until_max_results(self):
+        service = MagicMock()
+        service.events.return_value.list.return_value.execute.side_effect = [
+            {"items": [{"id": "e1"}, {"id": "e2"}], "nextPageToken": "p2"},
+            {"items": [{"id": "e3"}, {"id": "e4"}], "nextPageToken": "p3"},
+        ]
+        client = make_client(service)
+        events = client.list_events("primary", max_results=3)
+        assert [e.id for e in events] == ["e1", "e2", "e3"]
+        calls = service.events.return_value.list.call_args_list
+        assert len(calls) == 2
+        assert calls[0].kwargs["maxResults"] == 3
+        assert "pageToken" not in calls[0].kwargs
+        assert calls[1].kwargs["pageToken"] == "p2"
+        assert calls[1].kwargs["maxResults"] == 1
+        assert calls[1].kwargs["singleEvents"] is True
+        assert calls[1].kwargs["orderBy"] == "startTime"
+
+    def test_stops_at_the_page_budget(self):
+        service = MagicMock()
+        service.events.return_value.list.return_value.execute.return_value = {
+            "items": [{"id": "e"}], "nextPageToken": "more",
+        }
+        client = make_client(service)
+        events = client.list_events("primary", max_results=250)
+        assert len(events) == MAX_PAGES
+        assert service.events.return_value.list.call_count == MAX_PAGES
 
     def test_http_error_becomes_calendar_client_error(self):
         service = MagicMock()

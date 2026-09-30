@@ -38,10 +38,9 @@ class ContactsConnector(Connector):
                     "Returns a list of contacts as {resource_name, display_name, given_name, "
                     "family_name, emails [{value, type}], phones [{value, type}], organization, "
                     "job_title, notes, photo_url, source, source_types}, where source is "
-                    "'personal', 'directory', or 'both' if the same person is both a saved "
-                    "contact and a colleague, and notes may be redacted by the user's privacy "
-                    "settings. Only the first page comes back, up to max_results; 'source' "
-                    "filters after that page is fetched, so a narrow source can return fewer. "
+                    "'personal', 'directory', 'both' (a saved contact who is also a colleague) "
+                    "or 'other', and notes may be redacted by the user's privacy "
+                    "settings. Reads up to max_results contacts across pages; 'source' is applied before counting. "
                     "Use contacts_search instead to find a contact by name or email. "
                     "Auto-approved."
                 ),
@@ -49,9 +48,10 @@ class ContactsConnector(Connector):
                     ToolParam("max_results", "int", required=False, default=50,
                               description="Most contacts to fetch. Default 50, capped at 1000."),
                     ToolParam("source", "str", required=False, default="both",
-                              description="Which contacts to return: 'personal' (saved contacts "
-                                           "only), 'directory' (Workspace directory only), or "
-                                           "'both' (default). Anything else is an error."),
+                              description="Which contacts to return: 'personal' (contacts with a "
+                                           "saved-contact source), 'directory' (contacts with a "
+                                           "Workspace directory source; a contact can match both), "
+                                           "or 'both' (default, no filtering). Anything else is an error."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -59,12 +59,12 @@ class ContactsConnector(Connector):
             ToolSpec(
                 name="contacts_search",
                 description=(
-                    "Search contacts by name or email address. Use 'source' to search only "
-                    "personally-saved contacts, only Workspace directory contacts, or both "
-                    "(default). Note: 'directory' search only finds directory profiles you "
+                    "Search contacts by name or email address. The default 'both' searches "
+                    "saved contacts only; only 'directory' scans Workspace directory contacts. Note: 'directory' search only finds directory profiles you "
                     "already have some contact history with; there is no full company-directory "
                     "search under this app's permissions. Returns a list of contacts in the "
-                    "same shape contacts_list returns, at most max_results; notes may be "
+                    "same shape contacts_list returns (source is 'personal', 'directory', "
+                    "'both' or 'other'), at most max_results; notes may be "
                     "redacted by the user's privacy settings. Use contacts_list instead to "
                     "browse without a query, and get a contact's full record with "
                     "contacts_get. Auto-approved."
@@ -75,11 +75,13 @@ class ContactsConnector(Connector):
                                            "addresses (case-insensitive substring match for "
                                            "'directory')."),
                     ToolParam("max_results", "int", required=False, default=20,
-                              description="Most contacts to return. Default 20, capped at 1000."),
+                              description="Most contacts to return. Default 20, capped at 30 for "
+                                           "saved contacts, up to 1000 for directory."),
                     ToolParam("source", "str", required=False, default="both",
-                              description="Which contacts to search: 'personal' (saved contacts "
-                                           "only), 'directory' (Workspace directory only), or "
-                                           "'both' (default). Anything else is an error."),
+                              description="Which contacts to search: 'personal' (contacts with a "
+                                           "saved-contact source), 'directory' (contacts with a "
+                                           "Workspace directory source; a contact can match both), "
+                                           "or 'both' (default, saved contacts only). Anything else is an error."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -131,14 +133,14 @@ class ContactsConnector(Connector):
                               description="JSON array of {value, type} objects, e.g. "
                                            "'[{\"value\": \"a@b.com\", \"type\": \"work\"}]'. "
                                            "Replaces all the contact's emails, so include the "
-                                           "ones to keep. Empty (or invalid JSON) leaves them "
-                                           "unchanged."),
+                                           "ones to keep. Empty leaves them unchanged; "
+                                           "'[]' clears them."),
                     ToolParam("phones", "str", required=False, default="",
                               description="JSON array of {value, type} objects, e.g. "
                                            "'[{\"value\": \"+15551234567\", \"type\": \"mobile\"}]'. "
                                            "Replaces all the contact's phones, so include the "
-                                           "ones to keep. Empty (or invalid JSON) leaves them "
-                                           "unchanged."),
+                                           "ones to keep. Empty leaves them unchanged; "
+                                           "'[]' clears them."),
                     ToolParam("organization", "str", required=False, default="",
                               description="New company name. Empty leaves it unchanged."),
                     ToolParam("job_title", "str", required=False, default="",
@@ -167,11 +169,11 @@ class ContactsConnector(Connector):
                     ToolParam("emails", "str", required=False, default="",
                               description="JSON array of {value, type} objects, e.g. "
                                            "'[{\"value\": \"a@b.com\", \"type\": \"work\"}]'. "
-                                           "Empty (or invalid JSON) means no emails."),
+                                           "Empty means no emails."),
                     ToolParam("phones", "str", required=False, default="",
                               description="JSON array of {value, type} objects, e.g. "
                                            "'[{\"value\": \"+15551234567\", \"type\": \"mobile\"}]'. "
-                                           "Empty (or invalid JSON) means no phones."),
+                                           "Empty means no phones."),
                     ToolParam("organization", "str", required=False, default="",
                               description="Company name. Empty means none."),
                     ToolParam("job_title", "str", required=False, default="",
@@ -280,8 +282,8 @@ class ContactsConnector(Connector):
         job_title: str = "",
         notes: str = "",
     ) -> Any:
-        emails_list: list[dict] | None = _parse_json_list(emails)
-        phones_list: list[dict] | None = _parse_json_list(phones)
+        emails_list: list[dict] | None = _parse_json_list(emails, "emails")
+        phones_list: list[dict] | None = _parse_json_list(phones, "phones")
 
         existing = await self._fetch(self._contacts.get_contact, resource_name)
         contact_name = existing.display_name or resource_name
@@ -298,8 +300,8 @@ class ContactsConnector(Connector):
 
         old_emails = ", ".join(e.value for e in existing.emails) or "(none)"
         old_phones = ", ".join(p.value for p in existing.phones) or "(none)"
-        new_emails = ", ".join(e.get("value", "") for e in emails_list) if emails_list else ""
-        new_phones = ", ".join(p.get("value", "") for p in phones_list) if phones_list else ""
+        new_emails = "(cleared)" if emails_list == [] else ", ".join(e["value"] for e in emails_list or [])
+        new_phones = "(cleared)" if phones_list == [] else ", ".join(p["value"] for p in phones_list or [])
 
         preview = {
             "Name": _diff_or_value(display_name, contact_name),
@@ -361,8 +363,8 @@ class ContactsConnector(Connector):
         job_title: str = "",
         notes: str = "",
     ) -> Any:
-        emails_list = _parse_json_list(emails)
-        phones_list = _parse_json_list(phones)
+        emails_list = _parse_json_list(emails, "emails")
+        phones_list = _parse_json_list(phones, "phones")
 
         preview = {"Name": display_name}
         if emails_list:
@@ -480,14 +482,27 @@ class ContactsConnector(Connector):
             logger.warning("Audit log write failed: %s", exc)
 
 
-def _parse_json_list(value: str) -> list[dict] | None:
+def _parse_json_list(value: str, field: str) -> list[dict] | None:
+    """Parse an emails/phones argument. Empty means "not given" (None); anything
+    else must be a JSON list of objects with a non-empty string ``value``."""
     if not value or not value.strip():
         return None
+    message = (
+        f"{field} must be a JSON list such as "
+        "[{\"value\": \"a@b.com\", \"type\": \"work\"}]"
+    )
     try:
         parsed = json.loads(value)
-        return parsed if isinstance(parsed, list) else None
-    except (json.JSONDecodeError, ValueError):
-        return None
+    except ValueError as exc:
+        raise ValueError(message) from exc
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, dict)
+        and isinstance(item.get("value"), str)
+        and item["value"].strip()
+        for item in parsed
+    ):
+        raise ValueError(message)
+    return parsed
 
 
 def _redact_notes(contact_dict: dict[str, Any]) -> dict[str, Any]:

@@ -66,7 +66,7 @@ class JiraConnector(Connector):
                     "Search Jira issues using JQL. Returns summary info for matching issues, "
                     "as a list of {key, summary, status, issue_type, priority, assignee, "
                     "reporter, labels, created, updated, url} with description left empty, "
-                    "only the first page, at most max_results (default 20, capped at 100), "
+                    "at most max_results (default 20, capped at 500), "
                     "in the order the JQL gives. Use jira_get_issue instead for one issue's "
                     "description and comments. Auto-approved."
                 ),
@@ -75,7 +75,7 @@ class JiraConnector(Connector):
                               description="A JQL query, e.g. \"project = MYPROJ AND status = 'In Progress' "
                                           "ORDER BY updated DESC\". Must not be empty."),
                     ToolParam("max_results", "int", required=False, default=20,
-                              description="Maximum number of issues to return. Default 20, capped at 100."),
+                              description="Maximum number of issues to return. Default 20, capped at 500."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,

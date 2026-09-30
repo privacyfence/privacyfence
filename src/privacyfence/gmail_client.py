@@ -37,6 +37,9 @@ from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
+# Page cap for list calls so a runaway nextPageToken chain cannot loop forever.
+MAX_PAGES = 10
+
 # gmail.modify: reading and modifying messages/labels, creating drafts, and
 # reading send-as aliases (settings.sendAs.list, for draft signatures).
 # gmail.settings.basic: required separately for filter create/update/delete —
@@ -531,18 +534,12 @@ class GmailClient:
         """
         max_results = self._clamp_max_results(max_results)
         service = self._get_service()
-        try:
-            response = (
-                service.users()
-                .messages()
-                .list(userId="me", q=query or "", maxResults=max_results)
-                .execute()
-            )
-        except HttpError as exc:
-            raise GmailClientError(f"list_messages failed: {exc}") from exc
+        stubs = self._collect_pages(
+            service.users().messages(), "messages", query, max_results, "list_messages"
+        )
 
         summaries: list[dict[str, str]] = []
-        for stub in response.get("messages", []):
+        for stub in stubs:
             try:
                 meta = (
                     service.users()
@@ -573,6 +570,34 @@ class GmailClient:
         )
         return summaries
 
+    @staticmethod
+    def _collect_pages(
+        resource: Any, key: str, query: str, max_results: int, op: str
+    ) -> list[dict[str, Any]]:
+        """Follow ``nextPageToken`` until ``max_results`` stubs or ``MAX_PAGES`` requests."""
+        stubs: list[dict[str, Any]] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(stubs)
+            if remaining <= 0:
+                break
+            kwargs: dict[str, Any] = {
+                "userId": "me",
+                "q": query or "",
+                "maxResults": GmailClient._clamp_max_results(remaining),
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                response = resource.list(**kwargs).execute()
+            except HttpError as exc:
+                raise GmailClientError(f"{op} failed: {exc}") from exc
+            stubs.extend(response.get(key, []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        return stubs[:max_results]
+
     def get_message(self, message_id: str) -> GmailMessage:
         """Fetch a single full message and normalize it."""
         if not message_id:
@@ -597,18 +622,11 @@ class GmailClient:
         """List thread summaries matching a Gmail search query."""
         max_results = self._clamp_max_results(max_results)
         service = self._get_service()
-        try:
-            response = (
-                service.users()
-                .threads()
-                .list(userId="me", q=query or "", maxResults=max_results)
-                .execute()
-            )
-        except HttpError as exc:
-            raise GmailClientError(f"list_threads failed: {exc}") from exc
-
+        stubs = self._collect_pages(
+            service.users().threads(), "threads", query, max_results, "list_threads"
+        )
         summaries: list[dict[str, str]] = []
-        for stub in response.get("threads", []):
+        for stub in stubs:
             summaries.append(
                 {
                     "id": stub.get("id", ""),
@@ -1399,12 +1417,10 @@ class GmailClient:
         """Replace a filter's criteria/action.
 
         The Gmail API has no filters.update/patch endpoint -- filters only
-        support list/get/create/delete -- so this validates and builds the
-        new criteria/action first, deletes the old filter, then creates a
-        replacement, which is assigned a new id. Validating first keeps the
-        common failure mode (caller passed no criteria/action) from deleting
-        the original filter before discovering there's nothing to replace it
-        with.
+        support list/get/create/delete -- so this validates the input, reads
+        the old filter, returns it unchanged when nothing differs, otherwise
+        creates the replacement (new id) and only then deletes the old
+        filter, removing the replacement again if that delete fails.
         """
         if not filter_id:
             raise GmailClientError("update_filter requires a non-empty filter_id")
@@ -1414,33 +1430,61 @@ class GmailClient:
                 "update_filter requires at least one criteria field "
                 "(from_address, to_address, subject, query, or has_attachment)"
             )
+        if not (
+            add_label_names.strip() or archive or mark_as_read or star or forward_to
+        ):
+            raise GmailClientError(
+                "update_filter requires at least one action "
+                "(add_label_names, archive, mark_as_read, star, or forward_to)"
+            )
+        service = self._get_service()
+        filters = service.users().settings().filters()
+        try:
+            old = filters.get(userId="me", id=filter_id).execute()
+        except HttpError as exc:
+            raise GmailClientError(
+                f"update_filter({filter_id}) failed to read the existing filter: {exc}"
+            ) from exc
+        # Compare before resolving label names: resolution can create labels.
+        if self._filter_unchanged(
+            old, criteria, add_label_names, archive, mark_as_read, star, forward_to
+        ):
+            logger.info("update_filter: %s unchanged, nothing written", filter_id)
+            return {
+                "old_id": filter_id,
+                "id": filter_id,
+                "criteria": old.get("criteria", {}),
+                "action": old.get("action", {}),
+            }
         action = self._build_filter_action(add_label_names, archive, mark_as_read, star, forward_to)
         if not action:
             raise GmailClientError(
                 "update_filter requires at least one action "
                 "(add_label_names, archive, mark_as_read, star, or forward_to)"
             )
-        service = self._get_service()
         try:
-            service.users().settings().filters().delete(userId="me", id=filter_id).execute()
+            result = filters.create(
+                userId="me", body={"criteria": criteria, "action": action}
+            ).execute()
         except HttpError as exc:
             raise GmailClientError(
-                f"update_filter({filter_id}) failed to delete existing filter: {exc}"
-            ) from exc
-        try:
-            result = (
-                service.users()
-                .settings()
-                .filters()
-                .create(userId="me", body={"criteria": criteria, "action": action})
-                .execute()
-            )
-        except HttpError as exc:
-            raise GmailClientError(
-                f"update_filter({filter_id}) deleted the old filter but failed to create its "
-                f"replacement: {exc}. The original filter is gone -- recreate it manually."
+                "Could not create the replacement filter; the original filter is unchanged."
             ) from exc
         new_id = result.get("id", "")
+        try:
+            filters.delete(userId="me", id=filter_id).execute()
+        except HttpError as exc:
+            try:
+                filters.delete(userId="me", id=new_id).execute()
+            except HttpError:
+                raise GmailClientError(
+                    f"Could not delete the old filter {filter_id} and could not remove the "
+                    f"new filter {new_id}; both now exist, delete one in Gmail."
+                ) from exc
+            raise GmailClientError(
+                f"Could not delete the old filter {filter_id}; the new filter {new_id} "
+                "was removed again, so the original is unchanged."
+            ) from exc
         logger.info("update_filter: old_id=%s new_id=%s", filter_id, new_id)
         return {
             "old_id": filter_id,
@@ -1448,6 +1492,33 @@ class GmailClient:
             "criteria": result.get("criteria", criteria),
             "action": result.get("action", action),
         }
+
+    def _filter_unchanged(
+        self,
+        old: dict,
+        criteria: dict,
+        add_label_names: str,
+        archive: bool,
+        mark_as_read: bool,
+        star: bool,
+        forward_to: str,
+    ) -> bool:
+        """True when the requested filter equals ``old``; never writes."""
+        if (old.get("criteria") or {}) != criteria:
+            return False
+        add_ids: list[str] = ["STARRED"] if star else []
+        for name in [n.strip() for n in add_label_names.split(",") if n.strip()]:
+            label_id = self._get_label_id(name)
+            if not label_id:
+                return False  # a label that does not exist yet cannot match
+            add_ids.append(label_id)
+        remove_ids = (["INBOX"] if archive else []) + (["UNREAD"] if mark_as_read else [])
+        old_action = old.get("action") or {}
+        return (
+            sorted(set(add_ids)) == sorted(set(old_action.get("addLabelIds", [])))
+            and sorted(remove_ids) == sorted(old_action.get("removeLabelIds", []))
+            and (forward_to or "") == (old_action.get("forward") or "")
+        )
 
     def _get_or_create_label(self, label_name: str) -> str:
         """Return an existing label id, or create the label and return its new id."""

@@ -358,15 +358,29 @@ class TestSearchIssues:
 
     def test_maps_issues(self):
         client = make_client()
-        client._client.jql.return_value = {"issues": [{"key": "ENG-1", "fields": {"summary": "x"}}]}
+        client._client.enhanced_jql.return_value = {"issues": [{"key": "ENG-1", "fields": {"summary": "x"}}], "isLast": True}
         issues = client.search_issues("project = ENG")
         assert issues[0].key == "ENG-1"
 
     def test_http_error_becomes_jira_client_error(self):
         client = make_client()
-        client._client.jql.side_effect = RuntimeError("boom")
+        client._client.enhanced_jql.side_effect = RuntimeError("boom")
         with pytest.raises(JiraClientError, match="search_issues failed"):
             client.search_issues("project = ENG")
+
+    def test_pages_with_next_page_token_and_truncates(self):
+        client = make_client()
+        client._client.enhanced_jql.side_effect = [
+            {"issues": [{"key": f"ENG-{i}", "fields": {"summary": "x"}} for i in range(1, 4)],
+             "nextPageToken": "tok2", "isLast": False},
+            {"issues": [{"key": f"ENG-{i}", "fields": {"summary": "x"}} for i in range(4, 7)],
+             "isLast": True},
+        ]
+        issues = client.search_issues("project = ENG", max_results=5)
+        assert [i.key for i in issues] == [f"ENG-{i}" for i in range(1, 6)]
+        calls = client._client.enhanced_jql.call_args_list
+        assert calls[0].kwargs == {"nextPageToken": None, "limit": 5}
+        assert calls[1].kwargs == {"nextPageToken": "tok2", "limit": 2}
 
 
 class TestGetIssue:

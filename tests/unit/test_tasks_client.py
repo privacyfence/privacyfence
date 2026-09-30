@@ -24,6 +24,7 @@ import sys
 
 import pytest
 
+from privacyfence import tasks_client
 from privacyfence.tasks_client import SCOPES, Task, TaskList, TasksClient, TasksClientError
 from googleapiclient.errors import HttpError
 
@@ -291,7 +292,53 @@ class TestListTasks:
         service.tasks.return_value.list.return_value.execute.return_value = {"items": []}
         client = make_client(service)
         client.list_tasks("list1", show_completed=True)
-        assert service.tasks.return_value.list.call_args.kwargs["showCompleted"] is True
+        kwargs = service.tasks.return_value.list.call_args.kwargs
+        assert kwargs["showCompleted"] is True
+        assert kwargs["showHidden"] is True
+        assert kwargs["maxResults"] == 100
+
+    def test_show_hidden_follows_show_completed_false(self):
+        service = MagicMock()
+        service.tasks.return_value.list.return_value.execute.return_value = {"items": []}
+        client = make_client(service)
+        client.list_tasks("list1")
+        kwargs = service.tasks.return_value.list.call_args.kwargs
+        assert kwargs["showCompleted"] is False
+        assert kwargs["showHidden"] is False
+
+    def test_follows_next_page_token_into_one_list(self):
+        service = MagicMock()
+        service.tasks.return_value.list.return_value.execute.side_effect = [
+            {"items": [{"id": "t1"}], "nextPageToken": "tok"},
+            {"items": [{"id": "t2"}]},
+        ]
+        client = make_client(service)
+        tasks = client.list_tasks("list1")
+        assert [t.id for t in tasks] == ["t1", "t2"]
+        calls = service.tasks.return_value.list.call_args_list
+        assert "pageToken" not in calls[0].kwargs
+        assert calls[1].kwargs["pageToken"] == "tok"
+        assert calls[1].kwargs["maxResults"] == 99
+
+    def test_truncates_to_max_results(self):
+        service = MagicMock()
+        service.tasks.return_value.list.return_value.execute.return_value = {
+            "items": [{"id": f"t{i}"} for i in range(5)], "nextPageToken": "tok",
+        }
+        client = make_client(service)
+        tasks = client.list_tasks("list1", max_results=3)
+        assert len(tasks) == 3
+        assert service.tasks.return_value.list.call_args.kwargs["maxResults"] == 3
+        assert service.tasks.return_value.list.call_count == 1
+
+    def test_page_budget_is_bounded(self):
+        service = MagicMock()
+        service.tasks.return_value.list.return_value.execute.return_value = {
+            "items": [{"id": "t"}], "nextPageToken": "tok",
+        }
+        client = make_client(service)
+        client.list_tasks("list1", max_results=1000)
+        assert service.tasks.return_value.list.call_count == tasks_client.MAX_PAGES
 
     def test_maps_response_with_list_id_attached(self):
         service = MagicMock()
@@ -360,56 +407,65 @@ class TestCreateTask:
 # ---------------------------------------------------------------------------- #
 
 class TestUpdateTask:
-    def test_unspecified_fields_preserved_from_existing_task(self):
+    def _patch(self, service):
+        return service.tasks.return_value.patch
+
+    def test_patch_body_has_only_changed_keys(self):
         service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {
-            "id": "t1", "title": "Old title", "notes": "old notes", "due": "2024-01-01",
-        }
-        service.tasks.return_value.update.return_value.execute.return_value = {"id": "t1", "title": "New title"}
+        self._patch(service).return_value.execute.return_value = {"id": "t1", "title": "New title"}
         client = make_client(service)
 
         client.update_task("l1", "t1", title="New title")
 
-        body = service.tasks.return_value.update.call_args.kwargs["body"]
-        assert body["title"] == "New title"
-        assert body["notes"] == "old notes"
-        assert body["due"] == "2024-01-01"
+        kwargs = self._patch(service).call_args.kwargs
+        assert kwargs == {"tasklist": "l1", "task": "t1", "body": {"title": "New title"}}
+        service.tasks.return_value.get.assert_not_called()
+        service.tasks.return_value.update.assert_not_called()
 
-    def test_due_can_be_explicitly_cleared_by_passing_none_is_not_possible_uses_existing(self):
-        # due=None (the default) means "don't touch due" -> falls back to
-        # existing.due if present.
+    def test_all_fields_sent_when_given(self):
         service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {"id": "t1", "title": "T", "due": "2024-06-01"}
-        service.tasks.return_value.update.return_value.execute.return_value = {"id": "t1"}
+        self._patch(service).return_value.execute.return_value = {"id": "t1"}
         client = make_client(service)
 
-        client.update_task("l1", "t1", title="T2")
+        client.update_task("l1", "t1", title="T", notes="n", due="2024-01-01T00:00:00Z")
 
-        body = service.tasks.return_value.update.call_args.kwargs["body"]
-        assert body["due"] == "2024-06-01"
+        assert self._patch(service).call_args.kwargs["body"] == {
+            "title": "T", "notes": "n", "due": "2024-01-01T00:00:00Z",
+        }
 
-    def test_no_due_on_existing_and_none_given_omits_due(self):
+    def test_clear_notes_sends_null(self):
         service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {"id": "t1", "title": "T"}
-        service.tasks.return_value.update.return_value.execute.return_value = {"id": "t1"}
+        self._patch(service).return_value.execute.return_value = {"id": "t1"}
         client = make_client(service)
 
-        client.update_task("l1", "t1", title="T2")
+        client.update_task("l1", "t1", clear_notes=True)
 
-        body = service.tasks.return_value.update.call_args.kwargs["body"]
-        assert "due" not in body
+        assert self._patch(service).call_args.kwargs["body"] == {"notes": None}
 
-    def test_get_http_error_propagates_as_get_task_error(self):
+    def test_clear_due_sends_null(self):
         service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.side_effect = http_error(404)
+        self._patch(service).return_value.execute.return_value = {"id": "t1"}
         client = make_client(service)
-        with pytest.raises(TasksClientError, match="get_task"):
-            client.update_task("l1", "t1", title="x")
+
+        client.update_task("l1", "t1", clear_due=True)
+
+        assert self._patch(service).call_args.kwargs["body"] == {"due": None}
+
+    def test_explicit_value_wins_over_clear_flag(self):
+        service = MagicMock()
+        self._patch(service).return_value.execute.return_value = {"id": "t1"}
+        client = make_client(service)
+
+        client.update_task("l1", "t1", notes="n", due="2024-01-01T00:00:00Z",
+                           clear_notes=True, clear_due=True)
+
+        assert self._patch(service).call_args.kwargs["body"] == {
+            "notes": "n", "due": "2024-01-01T00:00:00Z",
+        }
 
     def test_update_http_error_becomes_tasks_client_error(self):
         service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {"id": "t1", "title": "T"}
-        service.tasks.return_value.update.return_value.execute.side_effect = http_error(400)
+        self._patch(service).return_value.execute.side_effect = http_error(400)
         client = make_client(service)
         with pytest.raises(TasksClientError, match="update_task"):
             client.update_task("l1", "t1", title="x")
@@ -459,51 +515,27 @@ class TestMoveTask:
         with pytest.raises(TasksClientError, match="requires source_list_id"):
             client.move_task("src", "t1", "")
 
-    def test_inserts_into_destination_then_deletes_from_source(self):
+    def test_calls_native_move_and_parses_under_destination(self):
         service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {
-            "id": "t1", "title": "T", "notes": "n", "due": "2024-01-01",
-        }
-        service.tasks.return_value.insert.return_value.execute.return_value = {"id": "t2", "title": "T"}
+        service.tasks.return_value.move.return_value.execute.return_value = {"id": "t1", "title": "T"}
         client = make_client(service)
 
         result = client.move_task("src", "t1", "dest")
 
-        insert_kwargs = service.tasks.return_value.insert.call_args.kwargs
-        assert insert_kwargs["tasklist"] == "dest"
-        assert insert_kwargs["body"] == {"title": "T", "notes": "n", "due": "2024-01-01"}
-        delete_kwargs = service.tasks.return_value.delete.call_args.kwargs
-        assert delete_kwargs == {"tasklist": "src", "task": "t1"}
+        assert service.tasks.return_value.move.call_args.kwargs == {
+            "tasklist": "src", "task": "t1", "destinationTasklist": "dest",
+        }
+        service.tasks.return_value.insert.assert_not_called()
+        service.tasks.return_value.delete.assert_not_called()
+        assert result.id == "t1"
         assert result.task_list_id == "dest"
 
-    def test_notes_and_due_omitted_from_new_body_when_absent(self):
+    def test_http_error_becomes_tasks_client_error(self):
         service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {"id": "t1", "title": "T"}
-        service.tasks.return_value.insert.return_value.execute.return_value = {"id": "t2", "title": "T"}
+        service.tasks.return_value.move.return_value.execute.side_effect = http_error(400)
         client = make_client(service)
 
-        client.move_task("src", "t1", "dest")
-
-        assert service.tasks.return_value.insert.call_args.kwargs["body"] == {"title": "T"}
-
-    def test_insert_failure_becomes_tasks_client_error_and_skips_delete(self):
-        service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {"id": "t1", "title": "T"}
-        service.tasks.return_value.insert.return_value.execute.side_effect = http_error(400)
-        client = make_client(service)
-
-        with pytest.raises(TasksClientError, match="move_task insert"):
-            client.move_task("src", "t1", "dest")
-        service.tasks.return_value.delete.assert_not_called()
-
-    def test_delete_failure_becomes_tasks_client_error(self):
-        service = MagicMock()
-        service.tasks.return_value.get.return_value.execute.return_value = {"id": "t1", "title": "T"}
-        service.tasks.return_value.insert.return_value.execute.return_value = {"id": "t2", "title": "T"}
-        service.tasks.return_value.delete.return_value.execute.side_effect = http_error(400)
-        client = make_client(service)
-
-        with pytest.raises(TasksClientError, match="move_task delete"):
+        with pytest.raises(TasksClientError, match="move_task"):
             client.move_task("src", "t1", "dest")
 
 

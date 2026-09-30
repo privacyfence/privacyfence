@@ -782,7 +782,7 @@ class TestSearch:
 
         client.search("Acme Corp")
 
-        sf.search.assert_called_once_with("FIND {Acme Corp} IN ALL FIELDS")
+        sf.search.assert_called_once_with("FIND {Acme Corp} IN ALL FIELDS LIMIT 20")
 
     def test_scoped_search_builds_returning_clause_with_limit(self):
         sf = MagicMock()
@@ -815,7 +815,7 @@ class TestSearch:
 
         client.search("Acme (West)")
 
-        sf.search.assert_called_once_with(r"FIND {Acme \(West\)} IN ALL FIELDS")
+        sf.search.assert_called_once_with(r"FIND {Acme \(West\)} IN ALL FIELDS LIMIT 20")
 
     def test_max_results_clamped_to_reasonable_bounds(self):
         sf = MagicMock()
@@ -830,8 +830,8 @@ class TestSearch:
         sf = MagicMock()
         sf.search.return_value = {
             "searchRecords": [
-                {"attributes": {"type": "Opportunity", "url": "/x"}, "Id": "006x", "Name": "Big Deal"},
-                {"attributes": {"type": "Contact", "url": "/y"}, "Id": "003y", "Name": "Jane Doe"},
+                {"attributes": {"type": "Opportunity", "url": "/x"}, "Id": "006x"},
+                {"attributes": {"type": "Contact", "url": "/y"}, "Id": "003y"},
             ]
         }
         client = with_fake_sf(make_client(), sf)
@@ -839,8 +839,8 @@ class TestSearch:
         records = client.search("Acme")
 
         assert records == [
-            SalesforceRecord(object_type="Opportunity", id="006x", fields={"Id": "006x", "Name": "Big Deal"}),
-            SalesforceRecord(object_type="Contact", id="003y", fields={"Id": "003y", "Name": "Jane Doe"}),
+            SalesforceRecord(object_type="Opportunity", id="006x", fields={"Id": "006x"}),
+            SalesforceRecord(object_type="Contact", id="003y", fields={"Id": "003y"}),
         ]
 
     def test_missing_search_records_key_yields_empty_list(self):

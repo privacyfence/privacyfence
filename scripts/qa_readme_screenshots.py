@@ -219,7 +219,7 @@ def _demo_slack_connector():
         for i, (user, ts, text) in enumerate(_DEMO_SLACK_REPLIES, 1)
     ]
     client = SimpleNamespace(
-        get_thread_replies=lambda channel_id, thread_ts: (replies, False),
+        get_thread_replies=lambda channel_id, thread_ts: (replies, False, ""),
         resolve_is_group_dm=lambda channel_id: False,
         resolve_is_self_dm=lambda channel_id: False,
     )
