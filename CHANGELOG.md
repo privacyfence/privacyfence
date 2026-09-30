@@ -56,6 +56,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Contacts.** `contacts_list` now applies `source` while paging, so a narrow source no longer drops matches; `contacts_search` no longer falls back to a full scan when a search simply finds nothing (and its fallback no longer returns directory-only contacts for `source="personal"`); and invalid `emails`/`phones` JSON is now rejected with an error instead of being silently ignored.
 - **Apps Script and Telegram.** `apps_script_list_projects` and `apps_script_get_execution_log` now read up to `max_results` items across pages, `telegram_search_messages` results include `chat_id` (the value `telegram_get_messages` takes), and `telegram_list_chats` results include each chat's `username`.
 - **Slack.** `slack_list_dms` and `slack_list_group_chats` now apply the participant filter while paging, so `max_results` bounds the matches returned instead of the conversations searched, and `slack_search_messages` with a participant and a query reads up to two history pages per conversation, so a match just past the newest page is found.
+- **Slack.** `slack_get_channel_history` and `slack_get_thread_replies` now take a `cursor` and return `next_cursor`, so a client can page past the first result instead of being told to "use a larger limit".
 
 ## [5.3.0] — 2026-09-30
 
