@@ -13,7 +13,8 @@ it. The search could sit behind an approval card, or run without one.
 ## Decision
 
 Both tools are auto-approved. They search people by name and return display names and account ids
-only, never an email address. That is the same sensitivity as `jira_search_issues` returning
+only, never an email address (an email-shaped display name, as on Jira Service Management
+customer accounts, is replaced by `Customer account <last 4 of the id>`). That is the same sensitivity as `jira_search_issues` returning
 assignee names without a card. The two refresh-cache tools are auto-approved for the same reason.
 
 No privacy-filter category is added. Mention names in a body sit inside content the human approves
