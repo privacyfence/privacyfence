@@ -172,7 +172,7 @@ class AppsScriptConnector(Connector):
                     "(status, duration, which function ran) -- not a live "
                     "console.log transcript. Returns a list of {function_name, status, "
                     "start_time, duration, process_type}, where status is for example "
-                    "COMPLETED, FAILED, RUNNING or TIMED_OUT and duration is like '1.234s'; "
+                    "COMPLETED, FAILED, RUNNING or TIMED_OUT and duration is like '1.234s'. "
                     "Reads up to max_results items across pages. Get the script id from "
                     "apps_script_list_projects. Requires user approval."
                 ),
