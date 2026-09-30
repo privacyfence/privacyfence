@@ -114,6 +114,13 @@ _FANOUT_CONCURRENCY = 5
 # method's own docstring.
 _SEARCH_BY_PARTICIPANT_CONVERSATION_CAP = 10
 
+# History pages _search_by_participant reads per conversation when a text
+# query is given (the query is applied client-side, so one page of the
+# newest messages may hold no match). Together with the conversation cap
+# this bounds one search at 10 x 2 = 20 conversations.history calls; slack-setup.md's
+# non-Marketplace apps get 1 call/min, so the cap is kept small.
+_SEARCH_HISTORY_PAGE_CAP = 2
+
 # Defensive cap on how many pages _conversation_ids_for_user walks. No real
 # Slack account is a member of tens of thousands of conversations, so this
 # never binds in practice -- it exists so a malformed or misbehaving
@@ -579,14 +586,21 @@ class SlackClient:
         cursor: str | None = None
         try:
             while len(dms) < max_results:
-                page_size = min(200, max_results - len(dms))
+                # Full pages when filtering: a page of raw DMs doesn't map
+                # 1:1 to matches (same reasoning as list_channels).
+                page_size = 200 if participant else min(200, max_results - len(dms))
                 response = self._client.conversations_list(
                     types="im",
                     limit=page_size,
                     cursor=cursor,
                 )
-                for raw in response.get("channels", []):
-                    dms.append(self._parse_dm(raw))
+                page = [self._parse_dm(raw) for raw in response.get("channels", [])]
+                if participant:
+                    page = [
+                        d for d in page
+                        if self._matches_participant(participant, [d.user_id], [d.user_name])
+                    ]
+                dms.extend(page)
                 cursor = (response.get("response_metadata") or {}).get("next_cursor")
                 if not cursor:
                     break
@@ -594,12 +608,6 @@ class SlackClient:
             raise SlackClientError(
                 f"list_dms failed: {self._describe_error(exc)}"
             ) from exc
-
-        if participant:
-            dms = [
-                d for d in dms
-                if self._matches_participant(participant, [d.user_id], [d.user_name])
-            ]
 
         dms = dms[:max_results]
         logger.info("list_dms returned %d DM(s)", len(dms))
@@ -627,17 +635,33 @@ class SlackClient:
         as before this existed.
         """
         max_results = self._clamp(max_results, default=100, hi=1000)
-        raw_chats: list[dict[str, Any]] = []
+        allowed_ids = self._participant_conversation_ids(participant, types="mpim") if participant else None
+        allowed = set(allowed_ids) if allowed_ids is not None else None
+        needles = [p.strip() for p in participant.split(",") if p.strip()] if participant else []
+
+        chats: list[SlackGroupChat] = []
         cursor: str | None = None
         try:
-            while len(raw_chats) < max_results:
-                page_size = min(200, max_results - len(raw_chats))
+            while len(chats) < max_results:
+                page_size = 200 if participant else min(200, max_results - len(chats))
                 response = self._client.conversations_list(
                     types="mpim",
                     limit=page_size,
                     cursor=cursor,
                 )
-                raw_chats.extend(response.get("channels", []))
+                page_raw = response.get("channels", [])
+                if allowed is not None:
+                    page_raw = [raw for raw in page_raw if raw.get("id", "") in allowed]
+                page_chats = _map_concurrent(page_raw, self._parse_group_chat)
+                if participant and allowed is None:
+                    page_chats = [
+                        c for c in page_chats
+                        if all(
+                            self._matches_participant(n, c.member_ids, c.member_names)
+                            for n in needles
+                        )
+                    ]
+                chats.extend(page_chats)
                 cursor = (response.get("response_metadata") or {}).get("next_cursor")
                 if not cursor:
                     break
@@ -646,22 +670,7 @@ class SlackClient:
                 f"list_group_chats failed: {self._describe_error(exc)}"
             ) from exc
 
-        raw_chats = raw_chats[:max_results]
-
-        allowed_ids = self._participant_conversation_ids(participant, types="mpim") if participant else None
-        if allowed_ids is not None:
-            allowed = set(allowed_ids)
-            raw_chats = [raw for raw in raw_chats if raw.get("id", "") in allowed]
-
-        chats = _map_concurrent(raw_chats, self._parse_group_chat)
-
-        if participant and allowed_ids is None:
-            needles = [p.strip() for p in participant.split(",") if p.strip()]
-            chats = [
-                c for c in chats
-                if all(self._matches_participant(n, c.member_ids, c.member_names) for n in needles)
-            ]
-
+        chats = chats[:max_results]
         logger.info("list_group_chats returned %d group chat(s)", len(chats))
         return chats
 
@@ -880,19 +889,29 @@ class SlackClient:
         if days > 0:
             oldest = str((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
 
-        per_channel = _map_concurrent(
-            channel_ids,
-            lambda channel_id: self.get_channel_history(channel_id, limit=count, oldest=oldest),
-        )
-        # has_more is discarded here -- a participant search already reports
-        # its own aggregate "matched N conversations" / count cap, so a
-        # per-conversation has_more wouldn't have anywhere sensible to
-        # surface at this level.
-        messages: list[SlackMessage] = [m for msgs, _has_more in per_channel for m in msgs]
+        needle = query.lower()
 
-        if query:
-            needle = query.lower()
-            messages = [m for m in messages if needle in (m.text or "").lower()]
+        def read_conversation(channel_id: str) -> list[SlackMessage]:
+            # has_more is only used to stop paging -- a participant search
+            # already reports its own aggregate "matched N conversations" /
+            # count cap, so it has nowhere sensible to surface per-conversation.
+            found: list[SlackMessage] = []
+            latest: str | None = None
+            for _ in range(_SEARCH_HISTORY_PAGE_CAP if query else 1):
+                page, has_more = self.get_channel_history(
+                    channel_id, limit=count, oldest=oldest, latest=latest
+                )
+                found.extend(
+                    m for m in page if not query or needle in (m.text or "").lower()
+                )
+                if not has_more or not page or len(found) >= count:
+                    break
+                latest = page[-1].id
+            return found
+
+        messages: list[SlackMessage] = [
+            m for msgs in _map_concurrent(channel_ids, read_conversation) for m in msgs
+        ]
 
         messages.sort(
             key=lambda m: m.timestamp or datetime.min.replace(tzinfo=timezone.utc),
