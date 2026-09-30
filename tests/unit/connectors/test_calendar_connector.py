@@ -31,7 +31,11 @@ from privacyfence.calendar_client import (
 from privacyfence.connectors import calendar as calendar_module
 from privacyfence.connectors.calendar import CalendarConnector, _day_of_week
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "calendar"
 
@@ -101,6 +105,34 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Calendar tool"):
             await connector.call("calendar_does_not_exist", {})
+
+
+CALENDAR_SIBLINGS: dict[str, tuple[str, ...]] = {
+    "calendar_list_calendars": ("calendar_list_events",),
+    "calendar_list_events": ("calendar_get_event_details", "calendar_list_calendars"),
+    "calendar_get_event_details": ("calendar_list_events",),
+    "calendar_get_free_busy": ("calendar_list_events",),
+    "calendar_create_event": (
+        "calendar_create_out_of_office", "calendar_list_rooms", "calendar_list_colors",
+    ),
+    "calendar_update_event": ("calendar_set_event_color", "calendar_set_event_visibility"),
+    "calendar_delete_event": ("calendar_update_event",),
+    "calendar_create_out_of_office": ("calendar_create_event",),
+    "calendar_set_working_location": ("calendar_create_out_of_office",),
+    "calendar_get_event_visibility": ("calendar_set_event_visibility",),
+    "calendar_set_event_visibility": ("calendar_get_event_visibility",),
+    "calendar_set_event_color": ("calendar_list_colors",),
+    "calendar_list_rooms": ("calendar_create_event",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(CalendarConnector(MagicMock()), CALENDAR_SIBLINGS)
 
 
 class TestAutoTools:
