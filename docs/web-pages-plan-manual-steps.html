@@ -1,0 +1,161 @@
+<title>Web Pages Verification</title>
+<meta name="description" content="Step-by-step checks for the PrivacyFence Web pages connector: before and after implementation.">
+<style>
+/* Layout: one reading column; each manual item is a checklist panel with a progress count. */
+:root {
+  --bg: #f6f8fb; --surface: #ffffff; --soft: #eef3f8; --ink: #14212b; --ink-soft: #43535f;
+  --line: #dbe3e9; --accent: #167a70; --accent-soft: #e1f2ef; --warn: #8a5a00; --warn-soft: #fbf1dc;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f171d; --surface: #16222b; --soft: #1c2b36; --ink: #e6eef3; --ink-soft: #a9b8c2;
+  --line: #2a3a46; --accent: #4cc2b3; --accent-soft: #173a36; --warn: #f0c26a; --warn-soft: #3a2e14; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f171d; --surface: #16222b; --soft: #1c2b36; --ink: #e6eef3; --ink-soft: #a9b8c2;
+  --line: #2a3a46; --accent: #4cc2b3; --accent-soft: #173a36; --warn: #f0c26a; --warn-soft: #3a2e14; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font: 16px/1.55 var(--font-sans); }
+.wrap { max-width: 72ch; margin: 0 auto; padding-inline: 16px; padding-block: 32px 64px; display: grid; gap: 28px; }
+header { display: grid; gap: 8px; }
+.eyebrow { font: 600 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: clamp(28px, 4vw, 38px); line-height: 1.15; margin: 0; text-wrap: balance; }
+h2 { font-size: 22px; margin: 8px 0 0; text-wrap: balance; }
+h3 { font-size: 18px; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--ink-soft); }
+code, pre { font-family: var(--font-mono); font-size: 13.5px; }
+code { background: var(--soft); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
+pre { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 6px 0 0; overflow-x: auto; white-space: pre; }
+a { color: var(--accent); }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 12px; }
+.item-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; justify-content: space-between; }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; font: 500 13px/1.4 var(--font-mono); color: var(--ink-soft); }
+.pill { background: var(--accent-soft); color: var(--ink); border-radius: 999px; padding: 2px 10px; font-variant-numeric: tabular-nums; }
+ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: grid; gap: 10px; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; }
+ol.steps > li > input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--accent); }
+ol.steps > li > div { min-width: 0; display: grid; gap: 4px; }
+ol.steps > li > div::before { content: counter(s) ". "; font-weight: 600; color: var(--ink-soft); }
+ol.steps > li > div > :first-child { display: inline; }
+.see { color: var(--ink-soft); font-size: 14.5px; }
+.done-when, .report { background: var(--soft); border-radius: 8px; padding: 10px 12px; font-size: 15px; }
+.note { background: var(--warn-soft); color: var(--ink); border-radius: 8px; padding: 10px 12px; font-size: 15px; }
+.empty { color: var(--ink-soft); background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 16px 18px; }
+li.checked > div { color: var(--ink-soft); }
+button.reset { justify-self: start; font: inherit; font-size: 14px; background: transparent; color: var(--accent); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button.reset:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">PrivacyFence · plan/web-pages</span>
+    <h1>Web pages: the steps only you can do</h1>
+    <p class="lede">The Web pages connector publishes a single-file HTML page over SFTP to a web server you run and hands the AI client its link. Workers build and test it against an in-process SFTP server; these checks prove it against a real Ubuntu server and real AI clients. Ticks are remembered in this browser.</p>
+  </header>
+
+  <section>
+    <h2>Before implementation</h2>
+    <p class="empty">Nothing to do. You can run <code>/implement</code> on the plan straight away.</p>
+  </section>
+
+  <section style="display:grid;gap:18px">
+    <h2>After implementation</h2>
+    <p class="lede">Do these once the orchestrator has opened the pull request from <code>feature/web-pages</code>. The PR lists both as unchecked items. The setup guide is written in the last phase, so it exists only on the feature branch until the PR merges: <a href="https://github.com/privacyfence/privacyfence/blob/feature/web-pages/docs/web-pages-setup.md">docs/web-pages-setup.md on feature/web-pages</a>.</p>
+
+    <article class="item" data-item="ma1">
+      <div class="item-head">
+        <h3>1. Organization deployment, claude.ai and Claude Code</h3>
+        <div class="meta"><span>about 60 min</span><span class="pill" data-count></span></div>
+      </div>
+      <p class="see">Needs a test organization deployment you can restart, an Ubuntu 24.04 machine for the pages (it may be the same host), and DNS for a second hostname such as <code>pages.acme.example.com</code>. Use a test deployment, not production.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><div><p>Point a DNS record for the pages hostname at the web server machine.</p><p class="see">You should see it resolve with <code>dig +short pages.acme.example.com</code>. Use a different hostname from PrivacyFence's own.</p></div></li>
+        <li><input type="checkbox" id="ma1-2"><div><p>On the web server, create the SFTP-only account and the folder:</p><pre>sudo useradd --system --create-home --home-dir /var/lib/pf-pages --shell /usr/sbin/nologin pf-pages
+sudo install -d -o pf-pages -g pf-pages -m 755 /srv/pages</pre></div></li>
+        <li><input type="checkbox" id="ma1-3"><div><p>Create <code>/etc/ssh/sshd_config.d/pf-pages.conf</code> with this content, then run <code>sudo systemctl reload ssh</code>:</p><pre>Match User pf-pages
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    X11Forwarding no
+    PermitTTY no</pre></div></li>
+        <li><input type="checkbox" id="ma1-4"><div><p>Add the site to Caddy (<code>/etc/caddy/Caddyfile</code>) and run <code>sudo systemctl reload caddy</code>. The nginx version is in the setup guide.</p><pre>pages.acme.example.com {
+    root * /srv/pages
+    file_server
+    header {
+        Content-Security-Policy "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Robots-Tag "noindex, nofollow"
+        Cache-Control no-cache
+    }
+}</pre><p class="see">Check with <code>curl -sI https://pages.acme.example.com/</code>: a 404 that carries the <code>content-security-policy: sandbox …</code> header, and no directory listing.</p></div></li>
+        <li><input type="checkbox" id="ma1-5"><div><p>Print the web server's host key and keep the line for the next step: <code>cat /etc/ssh/ssh_host_ed25519_key.pub</code></p><p class="see">One line starting <code>ssh-ed25519 AAAA</code>. It is public; it is not a secret.</p></div></li>
+        <li><input type="checkbox" id="ma1-6"><div><p>On the PrivacyFence server, install the feature branch into the venv:</p><pre>sudo /opt/privacyfence/venv/bin/pip install "git+https://github.com/privacyfence/privacyfence@feature/web-pages"</pre></div></li>
+        <li><input type="checkbox" id="ma1-7"><div><p>Add the Web pages section to your bundle with <code>--merge</code>, then copy it into place as in <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md#changing-a-bundle-later">Changing a bundle later</a>:</p><pre>python3 build_org_bundle.py --merge -o org_config.json --sign-key ~/secure/org-signing-key.pem \
+  --pages-sftp-host pages.acme.example.com --pages-sftp-user pf-pages \
+  --pages-sftp-host-key "ssh-ed25519 AAAA…(line from step 5)" \
+  --pages-remote-dir /srv/pages --pages-public-base-url https://pages.acme.example.com</pre><p class="see">Take <code>build_org_bundle.py</code> from the feature branch's <code>scripts/</code>. Restart with <code>sudo systemctl restart privacyfence-org</code>.</p></div></li>
+        <li><input type="checkbox" id="ma1-8"><div><p>Get PrivacyFence's public key, from both places, and check they match:</p><pre>sudo -u privacyfence-org -H /opt/privacyfence/venv/bin/privacyfence-app --pages-public-key
+journalctl -u privacyfence-org -b | grep "Web pages: publishing over SFTP"</pre><p class="see">Both show the same <code>ssh-ed25519 … privacyfence-pages</code> line.</p></div></li>
+        <li><input type="checkbox" id="ma1-9"><div><p>On the web server, authorize that key for <code>pf-pages</code>:</p><pre>sudo install -d -o pf-pages -g pf-pages -m 700 /var/lib/pf-pages/.ssh
+echo 'restrict ssh-ed25519 AAAA… privacyfence-pages' | sudo tee /var/lib/pf-pages/.ssh/authorized_keys
+sudo chown pf-pages:pf-pages /var/lib/pf-pages/.ssh/authorized_keys
+sudo chmod 600 /var/lib/pf-pages/.ssh/authorized_keys</pre></div></li>
+        <li><input type="checkbox" id="ma1-10"><div><p>In <a href="https://claude.ai/settings/connectors">claude.ai → Settings → Connectors</a>, reconnect PrivacyFence so the new tools load. Start a chat, ask Claude for a small HTML artifact, then ask: “Publish this page with PrivacyFence Web pages.”</p><p class="see">The approval card shows Page, Address (with <code>&lt;new id&gt;</code>), Action, Size, Scripts and “Anyone with the link”, and the page's text. Approve. Claude answers with a link; open it in a private window.</p></div></li>
+        <li><input type="checkbox" id="ma1-11"><div><p>Ask Claude to change the page and publish it again.</p><p class="see">The card says “Replace the page first published …”; the link stays the same and shows the new version after a reload.</p></div></li>
+        <li><input type="checkbox" id="ma1-12"><div><p>Ask Claude to publish a page containing a made-up IBAN such as <code>DE89 3704 0044 0532 0130 00</code>.</p><p class="see">After you approve, a second “Are you sure?” confirmation appears for the detected personal data. Deny it; nothing is published.</p></div></li>
+        <li><input type="checkbox" id="ma1-13"><div><p>In Claude Code connected to the same deployment, ask it to write a page over 150 KB and publish it.</p><p class="see">It uses <code>privacyfence_create_upload_slot</code>, a <code>PUT</code>, then <code>pages_publish_html</code> with <code>upload_id</code>. Approve; the link works.</p></div></li>
+        <li><input type="checkbox" id="ma1-14"><div><p>Ask either client to list your pages, then to take one down.</p><p class="see">The list shows only your pages. Taking one down shows a card, and afterwards its link returns 404.</p></div></li>
+        <li><input type="checkbox" id="ma1-15"><div><p>Rebuild the bundle with a wrong <code>--pages-sftp-host-key</code> (any other server's key), restart, and ask for a publish. Then put the right key back and restart.</p><p class="see">After approval the client reports that the server presented a host key that does not match, and nothing appears in <code>/srv/pages</code>.</p></div></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> paste into the PR one line, for example <code>ma1 org end-to-end: PASS (claude.ai, Claude Code, PII confirmation, wrong host key)</code>, or FAIL with the step number and what you saw.</p>
+    </article>
+
+    <article class="item" data-item="ma2">
+      <div class="item-head">
+        <h3>2. Desktop install and Claude Desktop</h3>
+        <div class="meta"><span>about 30 min</span><span class="pill" data-count></span></div>
+      </div>
+      <p class="see">Uses the same web server as item 1. A separate <code>authorized_keys</code> line is needed, because a desktop install has its own key.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma2-1"><div><p>Open the green <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml">build.yml run</a> the last phase dispatched on <code>feature/web-pages</code> (its URL is in the PR) and download your platform's installer from its artifacts.</p></div></li>
+        <li><input type="checkbox" id="ma2-2"><div><p>Install it on a test machine, not one with your everyday PrivacyFence.</p><p class="see">PrivacyFence starts and its companion icon appears.</p></div></li>
+        <li><input type="checkbox" id="ma2-3"><div><p>Open PrivacyFence Settings → Connectors.</p><p class="see">A <strong>Web pages</strong> row shows “Not configured” and a “Set up…” link.</p></div></li>
+        <li><input type="checkbox" id="ma2-4"><div><p>Click <strong>Set up…</strong> and fill Server, Port, Account, Server's host key, Folder on the server and Public address, using the values from item 1.</p></div></li>
+        <li><input type="checkbox" id="ma2-5"><div><p>Copy the line under “PrivacyFence's public key” and append it, prefixed with <code>restrict </code>, to <code>/var/lib/pf-pages/.ssh/authorized_keys</code> on the web server.</p></div></li>
+        <li><input type="checkbox" id="ma2-6"><div><p>Click <strong>Save</strong> and complete the passkey or sign-in check it asks for.</p><p class="see">The row changes to Connected and its link to “Change…”.</p></div></li>
+        <li><input type="checkbox" id="ma2-7"><div><p>In Claude Desktop, ask for a small HTML page and to publish it with PrivacyFence Web pages. Approve the card and open the link.</p></div></li>
+        <li><input type="checkbox" id="ma2-8"><div><p>Ask Claude to take the page down and approve.</p><p class="see">The link returns 404.</p></div></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> paste into the PR <code>ma2 desktop end-to-end: PASS (&lt;platform&gt;)</code>, or FAIL with the step number and what you saw.</p>
+    </article>
+
+    <button class="reset" type="button" id="reset">Clear all ticks</button>
+  </section>
+</div>
+
+<script>
+(function () {
+  var KEY = "pf-web-pages-manual-steps";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+  function refresh() {
+    document.querySelectorAll("[data-item]").forEach(function (item) {
+      var boxes = item.querySelectorAll('input[type="checkbox"]');
+      var done = 0;
+      boxes.forEach(function (b) { if (b.checked) done++; b.closest("li").classList.toggle("checked", b.checked); });
+      item.querySelector("[data-count]").textContent = done + " / " + boxes.length + " done";
+    });
+  }
+  document.querySelectorAll('input[type="checkbox"]').forEach(function (b) {
+    b.checked = !!state[b.id];
+    b.addEventListener("change", function () { state[b.id] = b.checked; save(); refresh(); });
+  });
+  document.getElementById("reset").addEventListener("click", function () {
+    state = {}; save();
+    document.querySelectorAll('input[type="checkbox"]').forEach(function (b) { b.checked = false; });
+    refresh();
+  });
+  refresh();
+})();
+</script>
