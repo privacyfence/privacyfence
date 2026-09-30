@@ -43,10 +43,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- **Tasks:** `tasks_list_tasks` reads up to 100 tasks across pages and, with `show_completed`, includes tasks completed in Google's own Tasks, Gmail and Calendar apps. `tasks_update_task` can now remove notes or the due date (`clear_notes`, `clear_due`), and `tasks_move_task` moves the task natively, so it keeps its id, status and subtasks.
-
 ### Changed
 
 - Every connector tool now describes each of its parameters, says what it returns (fields, limits and paging), and names the related tool to use instead, so AI clients choose and call the right tool more often.
@@ -55,6 +51,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Gmail.** Reading a message or thread no longer fails when it has attachments, `gmail_list_messages` and `gmail_list_threads` now read up to `max_results` across pages, and `gmail_update_filter` creates the replacement filter before deleting the old one (and leaves the original in place if either step fails).
 - **Drive.** `drive_list_files`, `drive_list_folder` and `drive_list_shared_drives` now read up to `max_results` items across pages instead of only the first page.
+- **Tasks:** `tasks_list_tasks` reads up to 100 tasks across pages and, with `show_completed`, includes tasks completed in Google's own Tasks, Gmail and Calendar apps. `tasks_update_task` can now remove notes or the due date (`clear_notes`, `clear_due`), and `tasks_move_task` moves the task natively, so it keeps its id, status and subtasks.
 
 ## [5.3.0] — 2026-09-30
 
