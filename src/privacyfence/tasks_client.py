@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/tasks"]
 
+# Hard budget of list requests per call, so a runaway continuation chain ends.
+MAX_PAGES = 10
+_PAGE_MAX = 100
+
 
 class TasksClientError(Exception):
     """Raised for unrecoverable Tasks client problems (auth, config, API)."""
@@ -189,16 +193,38 @@ class TasksClient:
             raise TasksClientError(f"get_task_list({task_list_id}) failed: {exc}") from exc
         return TaskList(id=raw.get("id", ""), title=raw.get("title", ""), updated=raw.get("updated", ""))
 
-    def list_tasks(self, task_list_id: str, show_completed: bool = False) -> list[Task]:
-        """List tasks in a task list."""
+    def list_tasks(
+        self, task_list_id: str, show_completed: bool = False, max_results: int = 100
+    ) -> list[Task]:
+        """List tasks in a task list, following pages up to ``max_results``."""
         if not task_list_id:
             raise TasksClientError("list_tasks requires a task_list_id")
-        kwargs: dict[str, Any] = {"tasklist": task_list_id, "showCompleted": show_completed}
-        try:
-            result = self._get_service().tasks().list(**kwargs).execute()
-        except HttpError as exc:
-            raise TasksClientError(f"list_tasks({task_list_id}) failed: {exc}") from exc
-        tasks = [self._parse_task(raw, task_list_id) for raw in result.get("items", [])]
+        service = self._get_service()
+        tasks: list[Task] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(tasks)
+            if remaining <= 0:
+                break
+            kwargs: dict[str, Any] = {
+                "tasklist": task_list_id,
+                "showCompleted": show_completed,
+                # Tasks completed in Google's own apps are "hidden"; include
+                # them whenever completed tasks are requested.
+                "showHidden": show_completed,
+                "maxResults": min(remaining, _PAGE_MAX),
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                result = service.tasks().list(**kwargs).execute()
+            except HttpError as exc:
+                raise TasksClientError(f"list_tasks({task_list_id}) failed: {exc}") from exc
+            tasks.extend(self._parse_task(raw, task_list_id) for raw in result.get("items", []))
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
+        tasks = tasks[:max_results]
         logger.info("list_tasks %s returned %d task(s)", task_list_id, len(tasks))
         return tasks
 
@@ -242,23 +268,30 @@ class TasksClient:
         title: str | None = None,
         notes: str | None = None,
         due: str | None = None,
+        clear_notes: bool = False,
+        clear_due: bool = False,
     ) -> Task:
-        """Update fields on an existing task."""
-        existing = self.get_task(task_list_id, task_id)
-        raw = {
-            "id": task_id,
-            "title": title if title is not None else existing.title,
-            "notes": notes if notes is not None else existing.notes,
-        }
+        """Update fields on an existing task (PATCH: only the given keys change).
+
+        ``clear_notes`` / ``clear_due`` send JSON null; an explicit ``notes`` /
+        ``due`` value wins over the matching clear flag.
+        """
+        body: dict[str, Any] = {}
+        if title is not None:
+            body["title"] = title
+        if notes is not None:
+            body["notes"] = notes
+        elif clear_notes:
+            body["notes"] = None
         if due is not None:
-            raw["due"] = due
-        elif existing.due:
-            raw["due"] = existing.due
+            body["due"] = due
+        elif clear_due:
+            body["due"] = None
         try:
             result = (
                 self._get_service()
                 .tasks()
-                .update(tasklist=task_list_id, task=task_id, body=raw)
+                .patch(tasklist=task_list_id, task=task_id, body=body)
                 .execute()
             )
         except HttpError as exc:
@@ -301,29 +334,22 @@ class TasksClient:
         """Move a task from one list to another."""
         if not source_list_id or not task_id or not destination_list_id:
             raise TasksClientError("move_task requires source_list_id, task_id, destination_list_id")
-        # Get existing task data
-        existing = self.get_task(source_list_id, task_id)
-        body: dict[str, Any] = {"title": existing.title}
-        if existing.notes:
-            body["notes"] = existing.notes
-        if existing.due:
-            body["due"] = existing.due
-        # Create in destination
         try:
-            new_raw = (
+            raw = (
                 self._get_service()
                 .tasks()
-                .insert(tasklist=destination_list_id, body=body)
+                .move(
+                    tasklist=source_list_id,
+                    task=task_id,
+                    destinationTasklist=destination_list_id,
+                )
                 .execute()
             )
         except HttpError as exc:
-            raise TasksClientError(f"move_task insert({destination_list_id}) failed: {exc}") from exc
-        # Delete from source
-        try:
-            self._get_service().tasks().delete(tasklist=source_list_id, task=task_id).execute()
-        except HttpError as exc:
-            raise TasksClientError(f"move_task delete({source_list_id}, {task_id}) failed: {exc}") from exc
-        return self._parse_task(new_raw, destination_list_id)
+            raise TasksClientError(
+                f"move_task({source_list_id}, {task_id}) failed: {exc}"
+            ) from exc
+        return self._parse_task(raw, destination_list_id)
 
     # ------------------------------------------------------------------ #
     # Parsing helpers

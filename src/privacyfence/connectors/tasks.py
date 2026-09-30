@@ -64,8 +64,8 @@ class TasksConnector(Connector):
                     "List tasks in a task list. "
                     "Returns a list of tasks as {id, task_list_id, title, notes, due, "
                     "status ('needsAction' or 'completed'), completed, updated, position, parent, "
-                    "deleted}, only the first page the Tasks API sends (up to 20 tasks), in the "
-                    "API's order; notes may be redacted by the user's privacy settings. "
+                    "deleted}, in the API's order. Reads up to 100 tasks across pages; "
+                    "notes may be redacted by the user's privacy settings. "
                     "Use tasks_get_task instead when you already have a task's id. "
                     "Auto-approved."
                 ),
@@ -74,9 +74,8 @@ class TasksConnector(Connector):
                               description="Id of the task list, from tasks_list_task_lists (its id field, not its title)."),
                     ToolParam("show_completed", "bool", required=False, default=False,
                               description=(
-                                  "Include tasks completed through the API. Default false: only tasks "
-                                  "still to do. Tasks completed in Google's own Tasks, Gmail or "
-                                  "Calendar apps are hidden and are not returned either way."
+                                  "Include completed tasks, including ones completed in Google's own "
+                                  "Tasks, Gmail or Calendar apps. Default false: only tasks still to do."
                               )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -130,7 +129,7 @@ class TasksConnector(Connector):
                 description=(
                     "Update a task's title, notes, or due date. "
                     "Only the fields you pass non-empty change: an empty value leaves that field as "
-                    "it is, so this tool cannot clear notes or a due date. "
+                    "it is; to remove notes or the due date, set clear_notes or clear_due. "
                     "Returns the updated task in the same shape tasks_get_task returns. "
                     "Use tasks_complete_task or tasks_uncomplete_task to change whether it is done. "
                     "Requires user approval."
@@ -149,6 +148,10 @@ class TasksConnector(Connector):
                                   "New due date as an RFC 3339 timestamp, e.g. '2026-10-15T00:00:00Z'; "
                                   "only the date is kept. Empty leaves the due date unchanged."
                               )),
+                    ToolParam("clear_notes", "bool", required=False, default=False,
+                              description="Set true to remove the notes; ignored when notes is also given."),
+                    ToolParam("clear_due", "bool", required=False, default=False,
+                              description="Set true to remove the due date; ignored when due is also given."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -190,11 +193,9 @@ class TasksConnector(Connector):
                 name="tasks_move_task",
                 description=(
                     "Move a task from one list to another. "
-                    "Google Tasks cannot move a task between lists, so this copies its title, notes "
-                    "and due date into the destination list and then deletes the original: the task "
-                    "gets a new id, comes back not completed, and its subtasks and position are not "
-                    "copied. "
-                    "Returns the new task in the same shape tasks_get_task returns. "
+                    "The task keeps its id, status and subtasks. Recurring tasks cannot be moved "
+                    "between lists. "
+                    "Returns the moved task in the same shape tasks_get_task returns. "
                     "Get both list ids from tasks_list_task_lists. "
                     "Requires user approval."
                 ),
@@ -214,7 +215,7 @@ class TasksConnector(Connector):
         if tool == "tasks_list_task_lists":
             return await self._run("tasks_list_task_lists", "List Task Lists", "List all task lists", self._tasks.list_task_lists)
         if tool == "tasks_list_tasks":
-            return await self._run("tasks_list_tasks", "List Tasks", f"List tasks in {args.get('task_list_id', '')}", self._tasks.list_tasks, args.get("task_list_id", ""), bool(args.get("show_completed", False)))
+            return await self._run("tasks_list_tasks", "List Tasks", f"List tasks in {args.get('task_list_id', '')}", self._tasks.list_tasks, args.get("task_list_id", ""), bool(args.get("show_completed", False)), 100)
         if tool == "tasks_get_task":
             return await self._run("tasks_get_task", "Get Task", f"Get task {args.get('task_id', '')}", self._tasks.get_task, args.get("task_list_id", ""), args.get("task_id", ""))
         if tool == "tasks_create_task":
@@ -277,7 +278,8 @@ class TasksConnector(Connector):
         return self._serialize(result)
 
     async def _update_task(
-        self, task_list_id: str, task_id: str, title: str = "", notes: str = "", due: str = ""
+        self, task_list_id: str, task_id: str, title: str = "", notes: str = "", due: str = "",
+        clear_notes: bool = False, clear_due: bool = False,
     ) -> Any:
         existing = await self._fetch(self._tasks.get_task, task_list_id, task_id)
         # "Task" always appears (identifying context, like calendar_update_
@@ -294,6 +296,9 @@ class TasksConnector(Connector):
         if due and due != existing.due:
             preview["Due"] = f"{existing.due or '(none)'} → {due}"
             changed_field_names.append("Due")
+        elif clear_due and not due:
+            preview["Due"] = f"{existing.due or '(none)'} → (cleared)"
+            changed_field_names.append("Due")
         # v2's right pane: a label-styled "Notes" heading above the body,
         # same treatment jira_get_issue's Description/jira_create_issue's
         # Description already get -- only when notes are actually changing
@@ -305,6 +310,9 @@ class TasksConnector(Connector):
             blocks.append({"type": "text", "text": notes})
         if notes and notes != existing.notes:
             details_text = notes
+        elif clear_notes and not notes:
+            changed_field_names.append("Notes")
+            details_text = "Notes will be removed (cleared)."
         else:
             changed_fields = ", ".join(changed_field_names) or "no fields"
             details_text = f"{changed_fields} will be updated; notes unchanged."
@@ -325,6 +333,7 @@ class TasksConnector(Connector):
         result = await self._fetch(
             self._tasks.update_task, task_list_id, task_id,
             title or None, notes or None, due or None,
+            bool(clear_notes), bool(clear_due),
         )
         return self._serialize(result)
 

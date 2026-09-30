@@ -152,7 +152,7 @@ class TestListAndGet:
 
         result = await connector.call("tasks_list_tasks", {"task_list_id": "list1", "show_completed": True})
 
-        client.list_tasks.assert_called_once_with("list1", True)
+        client.list_tasks.assert_called_once_with("list1", True, 100)
         assert result == [make_task().__dict__]
 
     async def test_get_task_serializes_single_dataclass(self):
@@ -307,7 +307,7 @@ class TestCreateAndUpdate:
 
         await connector.call("tasks_update_task", {"task_list_id": "list1", "task_id": "t1"})
 
-        client.update_task.assert_called_once_with("list1", "t1", None, None, None)
+        client.update_task.assert_called_once_with("list1", "t1", None, None, None, False, False)
         kwargs = gated_call_spy[0]
         assert kwargs["gate"] == "popup"
         # Nothing changing -- Task stays the plain current title, no Due
@@ -334,7 +334,21 @@ class TestCreateAndUpdate:
         assert kwargs["preview_blocks"] == [
             {"type": "heading", "label": "Notes"}, {"type": "text", "text": "n"},
         ]
-        client.update_task.assert_called_once_with("list1", "t1", "New title", "n", "d")
+        client.update_task.assert_called_once_with("list1", "t1", "New title", "n", "d", False, False)
+
+    async def test_update_task_clear_notes_reaches_client_and_preview(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_task.return_value = make_task(notes="old", due="2024-01-01T00:00:00Z")
+        client.update_task.return_value = make_task()
+
+        await connector.call("tasks_update_task", {
+            "task_list_id": "list1", "task_id": "t1", "clear_notes": True, "clear_due": True,
+        })
+
+        client.update_task.assert_called_once_with("list1", "t1", None, None, None, True, True)
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Due"] == "2024-01-01T00:00:00Z → (cleared)"
+        assert "(cleared)" in kwargs["details_text"]
 
 
 class TestCompleteUncompleteMove:
