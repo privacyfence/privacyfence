@@ -500,6 +500,33 @@ class TestGmailPrivacyFilter:
 
         assert gated_call_spy[0]["filtered_data"]["attachments"] == []
 
+    async def test_get_message_attachments_are_json_dicts(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_message.return_value = GmailMessage(
+            id="m1", thread_id="t1", subject="s", sender="a@b.com",
+            attachments=[Attachment(name="r.pdf", mime_type="application/pdf", size=10, attachment_id="att-1")],
+        )
+
+        await connector.call("gmail_get_message", {"message_id": "m1"})
+
+        data = gated_call_spy[0]["filtered_data"]
+        assert data["attachments"] == [{"name": "r.pdf", "mime_type": "application/pdf", "size": 10}]
+        assert "Attachment(" not in json.dumps(data)
+
+    async def test_get_thread_attachments_are_json_dicts(self, gated_call_spy):
+        connector, client = make_connector()
+        m1 = GmailMessage(
+            id="m1", thread_id="t1", subject="s", sender="a@b.com",
+            attachments=[Attachment(name="r.pdf", mime_type="application/pdf", size=10, attachment_id="att-1")],
+        )
+        client.get_thread.return_value = GmailThread(id="t1", subject="s", messages=[m1])
+
+        await connector.call("gmail_get_thread", {"thread_id": "t1"})
+
+        data = gated_call_spy[0]["filtered_data"]
+        assert data["messages"][0]["attachments"] == [{"name": "r.pdf", "mime_type": "application/pdf", "size": 10}]
+        assert "Attachment(" not in json.dumps(data)
+
     async def test_thread_history_and_body_are_independent_categories(self, gated_call_spy):
         # gmail_get_thread's assembled body text uses "thread_history", not
         # "body" -- blocking one must not affect the other, and must not
@@ -1355,7 +1382,7 @@ class TestWriteToolsGateAndPreview:
         assert kwargs["gate"] == "popup"
         assert kwargs["preview"]["Filter ID"] == "f1"
         assert kwargs["preview"]["Criteria"] == "subject: Invoices"
-        assert "deletes the existing filter" in kwargs["details_text"]
+        assert "creates the new filter first, then deletes the old one" in kwargs["details_text"]
         assert kwargs["args"]["filter_id"] == "f1"
         client.update_filter.assert_called_once_with(
             "f1", "", "", "Invoices", "", False, "Receipts", False, False, False, ""
