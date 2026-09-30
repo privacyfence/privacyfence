@@ -58,6 +58,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Slack.** `slack_list_dms` and `slack_list_group_chats` now apply the participant filter while paging, so `max_results` bounds the matches returned instead of the conversations searched, and `slack_search_messages` with a participant and a query reads up to two history pages per conversation, so a match just past the newest page is found.
 - **Jira and Salesforce.** `jira_search_issues` now reads up to `max_results` (up to 500) across pages instead of only the first page, and `salesforce_search` without `object_types` now honours `max_results`; its description now says which fields each shape returns.
 - **Confluence.** `confluence_list_spaces`, `confluence_list_pages` and attachment lookups now read across pages (up to 1000 spaces or pages, 500 attachments, so `confluence_download_attachment` finds attachments past the 50th), `confluence_search` no longer breaks on queries containing double quotes or backslashes, and `confluence_update_page` accepts a new title, a new body or both, keeping whatever you omit, so an empty body can no longer clear a page.
+- **Slack.** `slack_get_channel_history` and `slack_get_thread_replies` now take a `cursor` and return `next_cursor`, so a client can page past the first result instead of being told to "use a larger limit".
 
 ## [5.3.0] — 2026-09-30
 

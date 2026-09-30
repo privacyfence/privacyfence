@@ -680,10 +680,13 @@ class SlackClient:
         limit: int = 50,
         oldest: str = None,
         latest: str = None,
-    ) -> tuple[list[SlackMessage], bool]:
+        cursor: str = "",
+    ) -> tuple[list[SlackMessage], bool, str]:
         """Fetch recent messages in a channel via ``conversations.history``.
 
-        Returns ``(messages, has_more)`` -- ``has_more`` is Slack's own
+        Returns ``(messages, has_more, next_cursor)`` -- ``next_cursor`` is
+        Slack's ``response_metadata.next_cursor`` (empty when there is none),
+        to be passed back as ``cursor`` for the next page. ``has_more`` is Slack's own
         pagination signal, not a comparison of ``len(messages)`` against
         ``limit``: a 3-message channel legitimately returns 3 messages with
         ``has_more=False``, while a workspace where the Slack app is
@@ -703,6 +706,8 @@ class SlackClient:
             kwargs["oldest"] = oldest
         if latest:
             kwargs["latest"] = latest
+        if cursor:
+            kwargs["cursor"] = cursor
 
         try:
             response = self._client.conversations_history(**kwargs)
@@ -717,18 +722,19 @@ class SlackClient:
             for raw in response.get("messages", [])
         ]
         has_more = bool(response.get("has_more", False))
+        next_cursor = (response.get("response_metadata") or {}).get("next_cursor") or ""
         logger.info(
             "get_channel_history %s returned %d message(s), has_more=%s",
             channel_id, len(messages), has_more,
         )
-        return messages, has_more
+        return messages, has_more, next_cursor
 
     def get_thread_replies(
-        self, channel_id: str, thread_ts: str
-    ) -> tuple[list[SlackMessage], bool]:
+        self, channel_id: str, thread_ts: str, cursor: str = ""
+    ) -> tuple[list[SlackMessage], bool, str]:
         """Fetch all replies in a thread via ``conversations.replies``.
 
-        Returns ``(messages, has_more)`` -- see ``get_channel_history``'s
+        Returns ``(messages, has_more, next_cursor)`` -- see ``get_channel_history``'s
         docstring for what ``has_more`` means and why it isn't derived from
         a message count.
         """
@@ -737,10 +743,11 @@ class SlackClient:
                 "get_thread_replies requires a channel_id and thread_ts"
             )
         channel_name = self.resolve_channel_name(channel_id)
+        kwargs: dict[str, Any] = {"channel": channel_id, "ts": thread_ts}
+        if cursor:
+            kwargs["cursor"] = cursor
         try:
-            response = self._client.conversations_replies(
-                channel=channel_id, ts=thread_ts
-            )
+            response = self._client.conversations_replies(**kwargs)
         except SlackApiError as exc:
             raise SlackClientError(
                 f"get_thread_replies({channel_id}, {thread_ts}) failed: "
@@ -752,11 +759,12 @@ class SlackClient:
             for raw in response.get("messages", [])
         ]
         has_more = bool(response.get("has_more", False))
+        next_cursor = (response.get("response_metadata") or {}).get("next_cursor") or ""
         logger.info(
             "get_thread_replies %s/%s returned %d message(s), has_more=%s",
             channel_id, thread_ts, len(messages), has_more,
         )
-        return messages, has_more
+        return messages, has_more, next_cursor
 
     def get_message(self, channel_id: str, ts: str) -> SlackMessage | None:
         """Fetch a single message by timestamp via one ``conversations.history``
@@ -898,7 +906,7 @@ class SlackClient:
             found: list[SlackMessage] = []
             latest: str | None = None
             for _ in range(_SEARCH_HISTORY_PAGE_CAP if query else 1):
-                page, has_more = self.get_channel_history(
+                page, has_more, _next_cursor = self.get_channel_history(
                     channel_id, limit=count, oldest=oldest, latest=latest
                 )
                 found.extend(

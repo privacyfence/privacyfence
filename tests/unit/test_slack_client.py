@@ -1382,7 +1382,7 @@ class TestGetChannelHistory:
             "messages": [{"text": "hi", "ts": "1"}], "has_more": True,
         }
         client = make_client(web_client)
-        messages, has_more = client.get_channel_history("C1")
+        messages, has_more, _nc = client.get_channel_history("C1")
         assert len(messages) == 1
         assert has_more is True
 
@@ -1391,8 +1391,58 @@ class TestGetChannelHistory:
         web_client.conversations_info.return_value = {"channel": {"name": "general"}}
         web_client.conversations_history.return_value = {"messages": []}
         client = make_client(web_client)
-        _messages, has_more = client.get_channel_history("C1")
+        _messages, has_more, _nc = client.get_channel_history("C1")
         assert has_more is False
+
+
+class TestGetChannelHistoryCursor:
+    def _client(self, response):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"name": "general"}}
+        web_client.conversations_history.return_value = response
+        return web_client, make_client(web_client)
+
+    def test_cursor_sent_only_when_given(self):
+        web_client, client = self._client({"messages": []})
+        client.get_channel_history("C1")
+        assert "cursor" not in web_client.conversations_history.call_args.kwargs
+        client.get_channel_history("C1", cursor="abc")
+        assert web_client.conversations_history.call_args.kwargs["cursor"] == "abc"
+
+    def test_next_cursor_returned(self):
+        _wc, client = self._client({
+            "messages": [], "has_more": True, "response_metadata": {"next_cursor": "nxt"},
+        })
+        assert client.get_channel_history("C1")[2] == "nxt"
+
+    def test_next_cursor_empty_when_absent_or_null(self):
+        _wc, client = self._client({"messages": [], "response_metadata": None})
+        assert client.get_channel_history("C1")[2] == ""
+
+
+class TestGetThreadRepliesCursor:
+    def _client(self, response):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"name": "general"}}
+        web_client.conversations_replies.return_value = response
+        return web_client, make_client(web_client)
+
+    def test_cursor_sent_only_when_given(self):
+        web_client, client = self._client({"messages": []})
+        client.get_thread_replies("C1", "1.0")
+        assert "cursor" not in web_client.conversations_replies.call_args.kwargs
+        client.get_thread_replies("C1", "1.0", cursor="abc")
+        assert web_client.conversations_replies.call_args.kwargs["cursor"] == "abc"
+
+    def test_next_cursor_returned(self):
+        _wc, client = self._client({
+            "messages": [], "has_more": True, "response_metadata": {"next_cursor": "nxt"},
+        })
+        assert client.get_thread_replies("C1", "1.0")[2] == "nxt"
+
+    def test_next_cursor_empty_when_absent(self):
+        _wc, client = self._client({"messages": []})
+        assert client.get_thread_replies("C1", "1.0")[2] == ""
 
 
 class TestGetThreadReplies:
@@ -1408,7 +1458,7 @@ class TestGetThreadReplies:
         web_client.conversations_info.return_value = {"channel": {"name": "general"}}
         web_client.conversations_replies.return_value = {"messages": [{"text": "reply", "ts": "1"}]}
         client = make_client(web_client)
-        replies, has_more = client.get_thread_replies("C1", "1.0")
+        replies, has_more, _nc = client.get_thread_replies("C1", "1.0")
         assert replies[0].text == "reply"
         assert has_more is False
 
@@ -1419,7 +1469,7 @@ class TestGetThreadReplies:
             "messages": [{"text": "reply", "ts": "1"}], "has_more": True,
         }
         client = make_client(web_client)
-        _replies, has_more = client.get_thread_replies("C1", "1.0")
+        _replies, has_more, _nc = client.get_thread_replies("C1", "1.0")
         assert has_more is True
 
 

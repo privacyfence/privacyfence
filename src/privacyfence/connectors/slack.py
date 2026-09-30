@@ -52,19 +52,25 @@ def _apply_message_privacy(dicts: list[dict[str, Any]], content_category: str) -
     return dicts
 
 
-def _message_page_result(filtered: list[dict[str, Any]], has_more: bool) -> dict[str, Any]:
+_CURSOR_DESCRIPTION = (
+    "Opaque cursor from a previous result's next_cursor; empty starts at the newest messages."
+)
+
+
+def _message_page_result(
+    filtered: list[dict[str, Any]], has_more: bool, next_cursor: str
+) -> dict[str, Any]:
     """The value slack_get_channel_history/slack_get_thread_replies actually
-    return to Claude for one page of messages -- {messages, has_more} always,
-    plus note when has_more is true. Slack's own pagination signal
+    return to Claude for one page of messages -- {messages, has_more,
+    next_cursor} always, plus note when has_more is true. Slack's own pagination signal
     (SlackClient.get_channel_history's has_more, not a message-count
     comparison), not surfacing it left Claude reasoning as though a
     truncated read were the whole conversation."""
-    result: dict[str, Any] = {"messages": filtered, "has_more": has_more}
+    result: dict[str, Any] = {
+        "messages": filtered, "has_more": has_more, "next_cursor": next_cursor,
+    }
     if has_more:
-        result["note"] = (
-            "More messages exist beyond what's returned here -- call again with a larger "
-            "limit, or narrow the time range, before treating this as the complete history."
-        )
+        result["note"] = "More messages exist; call again with cursor=<next_cursor>."
     return result
 
 
@@ -240,11 +246,11 @@ class SlackConnector(Connector):
                 name="slack_get_channel_history",
                 description=(
                     "Fetch recent messages in a Slack channel. Returns "
-                    "{messages: [...], has_more: bool}, plus a note when has_more is true -- "
-                    "more messages exist than were returned (a small/inactive channel, or a "
-                    "Slack-imposed cap; see docs/slack-setup.md) -- call again with a larger "
-                    "limit, or narrow the time range, to see the rest instead of assuming this "
-                    "is everything. Each message is {ts, channel_id, channel_name, user_id, "
+                    "{messages: [...], has_more: bool, next_cursor: str}, plus a note when "
+                    "has_more is true -- more messages exist than were returned (a "
+                    "Slack-imposed cap can make a page smaller than limit; see "
+                    "docs/slack-setup.md) -- call again with cursor=next_cursor to read the "
+                    "next page instead of assuming this is everything. Each message is {ts, channel_id, channel_name, user_id, "
                     "user_name, text, thread_ts, reply_count}, newest first, one page of up "
                     "to limit messages (default 50, capped at 1000); text and names may be "
                     "redacted by the user's privacy settings. Use slack_get_thread_replies "
@@ -257,6 +263,7 @@ class SlackConnector(Connector):
                         "limit", "int", required=False, default=50,
                         description="Maximum messages to fetch, newest first. Default 50, capped at 1000.",
                     ),
+                    ToolParam("cursor", "str", required=False, default="", description=_CURSOR_DESCRIPTION),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -265,8 +272,10 @@ class SlackConnector(Connector):
                 name="slack_get_thread_replies",
                 description=(
                     "Fetch all replies in a Slack thread. Returns {messages: [...], has_more: "
-                    "bool}, plus a note when has_more is true -- more replies exist than were "
-                    "returned (see slack_get_channel_history's own note on why). Each message "
+                    "bool, next_cursor: str}, plus a note when has_more is true -- more "
+                    "replies exist than were returned; call again with cursor=next_cursor to "
+                    "read the next page (see slack_get_channel_history's own note on why the "
+                    "page can be short). Each message "
                     "is {ts, channel_id, channel_name, user_id, user_name, text, thread_ts, "
                     "reply_count}, the parent message included, in Slack's order; text and "
                     "names may be redacted by the user's privacy settings. Use "
@@ -283,6 +292,7 @@ class SlackConnector(Connector):
                             "from slack_get_channel_history or slack_resolve_permalink."
                         ),
                     ),
+                    ToolParam("cursor", "str", required=False, default="", description=_CURSOR_DESCRIPTION),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -525,8 +535,12 @@ class SlackConnector(Connector):
     # Review gate (reads)
     # ------------------------------------------------------------------ #
 
-    async def _get_channel_history(self, channel_id: str, limit: int = 50) -> Any:
-        messages, has_more = await self._fetch(self._slack.get_channel_history, channel_id, limit)
+    async def _get_channel_history(
+        self, channel_id: str, limit: int = 50, cursor: str = ""
+    ) -> Any:
+        messages, has_more, next_cursor = await self._fetch(
+            self._slack.get_channel_history, channel_id, limit, cursor=cursor
+        )
         n = len(messages)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
@@ -561,7 +575,7 @@ class SlackConnector(Connector):
             summary=f"{n} message{'s' if n != 1 else ''} from {channel_display}",
             sender=channel_id,
             raw_data=messages,
-            filtered_data=_message_page_result(filtered, has_more),
+            filtered_data=_message_page_result(filtered, has_more, next_cursor),
             gate="review",
             preview=preview,
             new_info=new_info,
@@ -577,8 +591,12 @@ class SlackConnector(Connector):
             args={"channel_id": channel_id, "is_group_dm": is_group_dm, "is_self_dm": is_self_dm},
         )
 
-    async def _get_thread_replies(self, channel_id: str, thread_ts: str) -> Any:
-        messages, has_more = await self._fetch(self._slack.get_thread_replies, channel_id, thread_ts)
+    async def _get_thread_replies(
+        self, channel_id: str, thread_ts: str, cursor: str = ""
+    ) -> Any:
+        messages, has_more, next_cursor = await self._fetch(
+            self._slack.get_thread_replies, channel_id, thread_ts, cursor=cursor
+        )
         n = len(messages)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
@@ -613,7 +631,7 @@ class SlackConnector(Connector):
             summary=f"{n} repl{'ies' if n != 1 else 'y'} in {channel_display}",
             sender=channel_id,
             raw_data=messages,
-            filtered_data=_message_page_result(filtered, has_more),
+            filtered_data=_message_page_result(filtered, has_more, next_cursor),
             gate="review",
             preview=preview,
             new_info=new_info,
