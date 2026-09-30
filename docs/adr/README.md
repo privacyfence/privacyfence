@@ -221,3 +221,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0113](0113-process-docs-live-in-docs-not-in-claude-md.md) | Project process documentation lives in `docs/` and `CONTRIBUTING.md`, not in `CLAUDE.md` | Accepted |
 | [0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md) | The Glama listing runs a credential-free tool catalog, not a hosted PrivacyFence | Accepted |
 | [0115](0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md) | Tool definitions carry their parameter, return and routing guidance in prose, and a test enforces it | Accepted |
+| [0116](0116-list-tools-page-inside-the-client-and-keep-their-return-shape.md) | List and search tools page inside the client up to `max_results` and keep their bare-list return shape | Accepted |
