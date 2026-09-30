@@ -173,24 +173,50 @@ class SalesforceConnector(Connector):
         return [
             ToolSpec(
                 name="salesforce_list_reports",
-                description="List Salesforce reports accessible to the user. Auto-approved.",
-                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                description=(
+                    "List Salesforce reports accessible to the user. Returns a list of {id, "
+                    "name, report_type, folder_name, description}, ordered by name, at most 200 "
+                    "(no paging). report_type is the report's developer name. Pass an id as "
+                    "report_id to salesforce_run_report. Auto-approved."
+                ),
+                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),],
                 read_only=True,
             ),
             ToolSpec(
                 name="salesforce_get_record",
-                description="Fetch a Salesforce record by object type and id. Requires user approval.",
+                description=(
+                    "Fetch a Salesforce record by object type and id. Returns {object_type, "
+                    "id, fields}, where fields maps every field name the object returns to "
+                    "its value. Use salesforce_search instead when you only have a name and "
+                    "need the id. Requires user approval."
+                ),
                 params=[
-                    ToolParam("object_type", "str", description="e.g. Account, Contact, Opportunity"),
-                    ToolParam("record_id", "str"),
+                    ToolParam("object_type", "str",
+                              description="API name of the Salesforce object, e.g. 'Account', 'Contact', "
+                                          "'Opportunity' or a custom object like 'Invoice__c'."),
+                    ToolParam("record_id", "str",
+                              description="The record's 15- or 18-character Salesforce id, e.g. "
+                                          "'0015g00000XyZabAAB', from salesforce_search (its id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
             ),
             ToolSpec(
                 name="salesforce_run_report",
-                description="Run a Salesforce report by id and return the results. Requires user approval.",
-                params=[ToolParam("report_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                description=(
+                    "Run a Salesforce report by id and return the results. Returns "
+                    "Salesforce's Analytics API report result as-is: reportMetadata, "
+                    "reportExtendedMetadata, groupingsDown/groupingsAcross and a factMap "
+                    "holding each group's rows and aggregates. It runs the report as saved, "
+                    "with no filter changes. Get report_id from salesforce_list_reports. "
+                    "Requires user approval."
+                ),
+                params=[
+                    ToolParam("report_id", "str",
+                              description="Salesforce id of the report (starts with '00O'), from "
+                                          "salesforce_list_reports (its id field)."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
@@ -198,12 +224,16 @@ class SalesforceConnector(Connector):
                 description=(
                     "Search Salesforce by name or id across one or more object types — "
                     "the same mechanism as the search bar at the top of the Salesforce "
-                    "UI. Returns lightweight Id/Name matches per object type; call "
+                    "UI. Returns lightweight Id/Name matches per object type, as a list of "
+                    "{object_type, id, fields: {Id, Name}}, at most max_results (default 20, "
+                    "capped at 200) per object type when object_types is set; call "
                     "salesforce_get_record for full field details on a match. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("search_term", "str", description="Name, partial name, or id to search for"),
+                    ToolParam("search_term", "str",
+                              description="Name, partial name, or id to search for, e.g. 'Acme'. "
+                                          "Must not be empty."),
                     ToolParam(
                         "object_types", "str", required=False, default="",
                         description=(
@@ -220,7 +250,9 @@ class SalesforceConnector(Connector):
                             "every object has an AccountId field."
                         ),
                     ),
-                    ToolParam("max_results", "int", required=False, default=20),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Maximum matches per object type. Default 20, capped at 200. "
+                                          "Applied only when object_types is set."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
