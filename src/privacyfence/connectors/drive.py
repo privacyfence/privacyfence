@@ -62,6 +62,19 @@ _EXTRACT_FULL_FETCH_MAX_BYTES = 20_000_000
 _EXTRACTED_TEXT_MAX_CHARS = 100_000
 
 
+# Parameter descriptions shared by many tools (kept in one place so they stay in step).
+_FILE_ID_SOURCES = "drive_list_files, drive_list_folder or a Drive URL (the id is the long token after /d/ or /folders/)"
+_FILE_ID_HELP = "Id of the Drive file, from " + _FILE_ID_SOURCES + "."
+_SPREADSHEET_ID_HELP = (
+    "Id of the spreadsheet (a Drive file id), from drive_list_files, drive_sheets_create or "
+    "a spreadsheet URL (the token after /d/); not a tab name."
+)
+_SHEET_ID_HELP = (
+    "Numeric id of the tab (its sheet_id), from drive_sheets_get_metadata; not the tab's "
+    "title and not the spreadsheet_id."
+)
+
+
 def _truncate_to_json_chars(text: str, max_chars: int) -> tuple[str, bool]:
     """The longest prefix of ``text`` whose JSON string encoding (quotes
     excluded) is at most ``max_chars`` long, and whether it was cut."""
@@ -167,7 +180,13 @@ class DriveConnector(Connector):
                 name="drive_list_files",
                 description=(
                     "Search Google Drive and return matching file metadata "
-                    "(id, name, mime_type, owners, sharing status). Auto-approved."
+                    "(id, name, mime_type, owners, sharing status). Returns a list of {id, name, "
+                    "mime_type, size, created_time, modified_time, owners, shared, web_view_link, "
+                    "parent_ids, drive_id, thumbnail_link}, only the first page: at most "
+                    "max_results files (default 20, capped at 1000), in the order the Drive API "
+                    "gives for the query; fields may be redacted by the user's privacy settings. "
+                    "Use drive_list_folder to list one folder's children, or "
+                    "drive_get_file_metadata when you already have a file's id. Auto-approved."
                 ),
                 params=[
                     ToolParam("query", "str", description=(
@@ -175,7 +194,10 @@ class DriveConnector(Connector):
                         "string, e.g. \"name contains 'Foo'\" or \"fullText contains 'Foo'\". "
                         "See https://developers.google.com/drive/api/guides/search-files"
                     )),
-                    ToolParam("max_results", "int", required=False, default=20),
+                    ToolParam("max_results", "int", required=False, default=20, description=(
+                        "Most files to return. Default 20, capped at 1000; only the first page "
+                        "is returned, so a larger result set is cut off."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -184,28 +206,59 @@ class DriveConnector(Connector):
                 name="drive_get_file_metadata",
                 description=(
                     "Fetch metadata for a single Drive file by id "
-                    "(name, owners, times, sharing status). Auto-approved."
+                    "(name, owners, times, sharing status). Returns one file in the same shape "
+                    "drive_list_files lists ({id, name, mime_type, size, created_time, "
+                    "modified_time, owners, shared, web_view_link, parent_ids, drive_id, "
+                    "thumbnail_link}), or only {id} if the user's privacy settings hide file "
+                    "metadata. Use drive_get_file_content to read the file's text. "
+                    "Auto-approved."
                 ),
-                params=[ToolParam("file_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("file_id", "str", description=_FILE_ID_HELP),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
                 name="drive_list_folder",
-                description="List the direct children of a Drive folder by id. Auto-approved.",
+                description=(
+                    "List the direct children of a Drive folder by id. Returns a list of files in "
+                    "the same shape drive_list_files returns, only the first page: at most "
+                    "max_results children (default 50, capped at 1000), excluding trashed files, "
+                    "in the order the Drive API gives. Use drive_list_files to search by name or "
+                    "content instead of browsing one folder. Auto-approved."
+                ),
                 params=[
-                    ToolParam("folder_id", "str"),
-                    ToolParam("max_results", "int", required=False, default=50),
+                    ToolParam("folder_id", "str", description=(
+                        "Id of the folder whose children to list, from drive_list_files, another "
+                        "file's parent_ids, or drive_list_shared_drives (a shared drive's id "
+                        "lists its top level)."
+                    )),
+                    ToolParam("max_results", "int", required=False, default=50, description=(
+                        "Most children to return. Default 50, capped at 1000; only the first "
+                        "page is returned."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
             ),
             ToolSpec(
                 name="drive_create_blank_file",
-                description="Create a new blank Drive file. Auto-approved.",
+                description=(
+                    "Create a new blank Drive file. Returns {id, name, mime_type} of the new, "
+                    "empty file. Fill it with drive_write_doc_content (a Google Doc), "
+                    "drive_write_file_content (a text file) or drive_upload_file (any file with "
+                    "content); use drive_sheets_create for a spreadsheet. Auto-approved."
+                ),
                 params=[
-                    ToolParam("name", "str"),
-                    ToolParam("mime_type", "str"),
-                    ToolParam("parent_folder_id", "str", required=False, default=""),
+                    ToolParam("name", "str", description="Name of the new file, as shown in Drive."),
+                    ToolParam("mime_type", "str", description=(
+                        "MIME type of the file to create, e.g. 'application/vnd.google-apps.document' "
+                        "for a Google Doc or 'text/plain' for a text file."
+                    )),
+                    ToolParam("parent_folder_id", "str", required=False, default="", description=(
+                        "Id of the folder to create it in. Empty creates it in My Drive's root."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -222,18 +275,31 @@ class DriveConnector(Connector):
                     "comes back as CSV, Slides as plain text. A PDF, .docx, .pptx or .xlsx comes "
                     "back as its extracted text (a scanned PDF has none), with 'truncated': true "
                     "when cut to fit; a .zip as its list of entries. Other files, such as images, "
-                    "only get a placeholder: use drive_download_file for those. Requires user "
-                    "approval."
+                    "only get a placeholder: use drive_download_file for those. Returns "
+                    "{file_id, content}, plus truncated, highlights and text_colors when they "
+                    "apply; content may be redacted by the user's privacy settings. Requires "
+                    "user approval."
                 ),
-                params=[ToolParam("file_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("file_id", "str", description=_FILE_ID_HELP),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
                 name="drive_write_file_content",
-                description="Write content to an existing Drive file. Requires user approval.",
+                description=(
+                    "Write content to an existing Drive file. Replaces the file's whole content "
+                    "with content, written as UTF-8 text. Returns {file_id, modified_time}. Use "
+                    "drive_write_doc_content instead for a formatted Google Doc, or "
+                    "drive_upload_file for a binary file or a new one. Requires user approval."
+                ),
                 params=[
-                    ToolParam("file_id", "str"),
-                    ToolParam("content", "str"),
+                    ToolParam("file_id", "str", description=_FILE_ID_HELP),
+                    ToolParam("content", "str", description=(
+                        "The full new content of the file, as plain text. It replaces everything "
+                        "already in the file."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -243,45 +309,67 @@ class DriveConnector(Connector):
                     "Upload any file (e.g. a PDF or image) to Drive as a new file — "
                     "use this instead of drive_write_file_content for any binary "
                     "file, since that tool only writes UTF-8 text. Provide exactly "
-                    "one of local_path (a path on the user's computer — where "
-                    "Claude Desktop runs: absolute, or starting with ~/. Claude's "
-                    "own working or outputs directory is fine), content_base64 "
-                    "(base64-encoded file bytes, decoded by PrivacyFence itself — "
-                    "use this when you only have the file's bytes and not a local "
-                    "path; 'name' is then required), or upload_id (the id "
+                    "one of local_path (a path on the user's computer, absolute or "
+                    "starting with ~/), content_base64 (base64-encoded file bytes; "
+                    "'name' is then required), or upload_id (the id "
                     "privacyfence_create_upload_slot returned after you PUT the "
                     "file's bytes to its upload_url — use this if local_path fails "
-                    "with an error about PrivacyFence being unable to read files in "
-                    "your home folder directly, e.g. no PrivacyFence extension is "
-                    "installed). On an organization-managed install, local_path is "
-                    "read from wherever PrivacyFence's own server runs, not the "
-                    "user's machine — prefer content_base64 or upload_id there. "
+                    "because PrivacyFence cannot read files in your home folder). "
+                    "On an organization-managed install, local_path is read from "
+                    "the server, not the user's machine: prefer content_base64 or "
+                    "upload_id there. Returns {id, name, mime_type, size_bytes}. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("local_path", "str", required=False, default=""),
-                    ToolParam("content_base64", "str", required=False, default=""),
-                    ToolParam("upload_id", "str", required=False, default=""),
-                    ToolParam("name", "str", required=False, default=""),
-                    ToolParam("parent_folder_id", "str", required=False, default=""),
+                    ToolParam("local_path", "str", required=False, default="", description=(
+                        "Path of the file to upload, absolute or starting with ~/. Give exactly "
+                        "one of local_path, content_base64 and upload_id; empty otherwise."
+                    )),
+                    ToolParam("content_base64", "str", required=False, default="", description=(
+                        "The file's bytes, base64-encoded. Requires name. Give exactly one of "
+                        "local_path, content_base64 and upload_id; empty otherwise."
+                    )),
+                    ToolParam("upload_id", "str", required=False, default="", description=(
+                        "Id returned by privacyfence_create_upload_slot after you PUT the bytes "
+                        "to its upload_url. Give exactly one of local_path, content_base64 and "
+                        "upload_id; empty otherwise."
+                    )),
+                    ToolParam("name", "str", required=False, default="", description=(
+                        "Name for the new Drive file. Required with content_base64; otherwise "
+                        "empty uses the local file's own name."
+                    )),
+                    ToolParam("parent_folder_id", "str", required=False, default="", description=(
+                        "Id of the folder to upload into. Empty uploads to My Drive's root."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="drive_move_file",
-                description="Move a Drive file to a different folder. Requires user approval.",
+                description=(
+                    "Move a Drive file to a different folder. The file leaves every folder it is "
+                    "in now. Returns {file_id, new_parent}. Get the destination's id from "
+                    "drive_list_folder. Requires user approval."
+                ),
                 params=[
-                    ToolParam("file_id", "str"),
-                    ToolParam("destination_folder_id", "str"),
+                    ToolParam("file_id", "str", description="Id of the file or folder to move, from " + _FILE_ID_SOURCES + "."),
+                    ToolParam("destination_folder_id", "str", description=(
+                        "Id of the folder to move it into, from drive_list_folder or "
+                        "drive_list_files."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="drive_add_comment",
-                description="Add a comment to a Drive file. Requires user approval.",
+                description=(
+                    "Add a comment to a Drive file. Returns {file_id, comment_id, content}, "
+                    "where comment_id is the new comment's id. The comment is posted as the "
+                    "user and is not anchored to any text. Requires user approval."
+                ),
                 params=[
-                    ToolParam("file_id", "str"),
-                    ToolParam("comment", "str"),
+                    ToolParam("file_id", "str", description=_FILE_ID_HELP),
+                    ToolParam("comment", "str", description="Text of the comment to post on the file."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -289,10 +377,16 @@ class DriveConnector(Connector):
                 name="drive_list_shared_drives",
                 description=(
                     "List all Google Workspace Shared Drives the user can access "
-                    "(returns id and name for each). Auto-approved."
+                    "(returns id and name for each). Returns a list of {id, name}, only the "
+                    "first page: at most max_results drives (default 50, capped at 1000). "
+                    "Pass a drive's id as folder_id to drive_list_folder to browse it. "
+                    "Auto-approved."
                 ),
                 params=[
-                    ToolParam("max_results", "int", required=False, default=50),
+                    ToolParam("max_results", "int", required=False, default=50, description=(
+                        "Most shared drives to return. Default 50, capped at 1000; only the "
+                        "first page is returned."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -316,11 +410,16 @@ class DriveConnector(Connector):
                     "shouldn't touch the rest of the document. "
                     "Use this instead of drive_write_file_content when the target "
                     "is a Google Doc and you want formatted output. "
-                    "Requires user approval."
+                    "Returns {file_id}. Requires user approval."
                 ),
                 params=[
-                    ToolParam("file_id", "str"),
-                    ToolParam("markdown", "str"),
+                    ToolParam("file_id", "str", description=(
+                        "Id of the Google Doc to overwrite, from " + _FILE_ID_SOURCES + "."
+                    )),
+                    ToolParam("markdown", "str", description=(
+                        "Markdown for the document's new content, in the syntax listed above. "
+                        "Replaces everything already in the Doc."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -340,16 +439,29 @@ class DriveConnector(Connector):
                     "replace_all=true to replace every occurrence instead. "
                     "replace_markdown supports the same Markdown syntax as "
                     "drive_write_doc_content, including GFM pipe tables. "
+                    "Returns {file_id, occurrences_replaced}. Use "
+                    "drive_docs_format_content to change formatting without changing the text. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("file_id", "str"),
-                    ToolParam("find_text", "str", description="Exact plain-text substring to locate"),
+                    ToolParam("file_id", "str", description=(
+                        "Id of the Google Doc to edit, from " + _FILE_ID_SOURCES + "."
+                    )),
+                    ToolParam("find_text", "str", description=(
+                        "Exact plain-text substring to locate, as typed in the document with no "
+                        "Markdown markers. Must match exactly one place unless replace_all is true."
+                    )),
                     ToolParam(
                         "replace_markdown", "str",
-                        description="Markdown to insert in its place",
+                        description=(
+                            "Markdown to insert in place of the match, in the syntax "
+                            "drive_write_doc_content accepts. Empty deletes the matched text."
+                        ),
                     ),
-                    ToolParam("replace_all", "bool", required=False, default=False),
+                    ToolParam("replace_all", "bool", required=False, default=False, description=(
+                        "Default false: find_text must match exactly one place or the call "
+                        "fails. True replaces every occurrence."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -362,11 +474,18 @@ class DriveConnector(Connector):
                     "Every formatting parameter is opt-in — its default means "
                     "'leave that aspect unchanged', so a call that only sets "
                     "highlight_color never touches bold/italic already on the "
-                    "matched text. Requires user approval."
+                    "matched text. Returns {file_id, occurrences_formatted}. Use "
+                    "drive_docs_edit_content to change the text itself. Requires user "
+                    "approval."
                 ),
                 params=[
-                    ToolParam("file_id", "str"),
-                    ToolParam("find_text", "str", description="Exact plain-text substring to locate"),
+                    ToolParam("file_id", "str", description=(
+                        "Id of the Google Doc to format, from " + _FILE_ID_SOURCES + "."
+                    )),
+                    ToolParam("find_text", "str", description=(
+                        "Exact plain-text substring to format, as typed in the document with no "
+                        "Markdown markers. Must match exactly one place unless replace_all is true."
+                    )),
                     ToolParam("bold", "str", required=False, default="",
                               description="'true' or 'false'; omit to leave unchanged"),
                     ToolParam("italic", "str", required=False, default="",
@@ -375,7 +494,10 @@ class DriveConnector(Connector):
                               description="hex color e.g. '#fff59d'; omit to leave unchanged"),
                     ToolParam("text_color", "str", required=False, default="",
                               description="hex color e.g. '#000000'; omit to leave unchanged"),
-                    ToolParam("replace_all", "bool", required=False, default=False),
+                    ToolParam("replace_all", "bool", required=False, default=False, description=(
+                        "Default false: find_text must match exactly one place or the call "
+                        "fails. True formats every occurrence."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -383,22 +505,19 @@ class DriveConnector(Connector):
                 name="drive_download_file",
                 description=(
                     "Download a Drive file. Google Workspace documents are exported "
-                    "as text/CSV. On a local install: saved to destination_dir, and "
-                    "the saved file path is returned -- destination_dir is required, "
-                    "there is no default, so choose deliberately: pass ~/Downloads "
-                    "(or another path the user asked for) when this file is a "
-                    "deliverable the user should find afterward, or your own "
-                    "working/scratch directory when you're only downloading it to "
-                    "read or process it yourself. On an organization-managed "
-                    "install: destination_dir is ignored (there is no local "
-                    "filesystem you and the human share) -- a small file's bytes "
-                    "come back directly in this tool's result so you can read or "
-                    "hand it to the human yourself; a larger file comes back as a "
-                    "one-time link the human opens in their own signed-in browser "
-                    "tab instead. Requires user approval."
+                    "as text/CSV. On a local install: saved to destination_dir, and it "
+                    "Returns {path, name, size_bytes, truncated} -- destination_dir "
+                    "is required, there is no default, so choose deliberately: pass "
+                    "~/Downloads (or a path the user asked for) for a deliverable, or "
+                    "your own scratch directory to just read or process it. On an "
+                    "organization-managed install: destination_dir is ignored -- a "
+                    "small file's bytes come back directly in the result, a larger "
+                    "file as a one-time link the human opens in their own browser. "
+                    "Use drive_get_file_content instead to read a file's text. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("file_id", "str"),
+                    ToolParam("file_id", "str", description=_FILE_ID_HELP),
                     ToolParam(
                         "destination_dir",
                         "str",
@@ -421,10 +540,12 @@ class DriveConnector(Connector):
                 name="drive_sheets_create",
                 description=(
                     "Create a new Google Sheets spreadsheet, optionally with "
-                    "named tabs. Auto-approved."
+                    "named tabs. Returns {id, name, web_view_link}; id is the spreadsheet_id "
+                    "the other drive_sheets_* tools take. Use drive_sheets_add_sheet to add a "
+                    "tab to a spreadsheet that already exists. Auto-approved."
                 ),
                 params=[
-                    ToolParam("name", "str"),
+                    ToolParam("name", "str", description="Title of the new spreadsheet, as shown in Drive."),
                     ToolParam(
                         "sheet_titles", "str", required=False, default="",
                         description=(
@@ -432,7 +553,10 @@ class DriveConnector(Connector):
                             "Defaults to a single 'Sheet1' tab if omitted."
                         ),
                     ),
-                    ToolParam("parent_folder_id", "str", required=False, default=""),
+                    ToolParam("parent_folder_id", "str", required=False, default="", description=(
+                        "Id of the folder to move the new spreadsheet into. Empty leaves it in "
+                        "My Drive's root."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -440,9 +564,15 @@ class DriveConnector(Connector):
                 name="drive_sheets_get_metadata",
                 description=(
                     "List the tabs in a spreadsheet (id, title, index, row/column "
-                    "count). Auto-approved."
+                    "count). Returns a list of {sheet_id, title, index, row_count, "
+                    "column_count, hidden}, one per tab. Use drive_sheets_get_values to read "
+                    "a tab's cells; sheet_id is the tab id other drive_sheets_* tools take. "
+                    "Auto-approved."
                 ),
-                params=[ToolParam("spreadsheet_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
@@ -451,13 +581,21 @@ class DriveConnector(Connector):
                     "Read a range of cells from a spreadsheet: display values by "
                     "default, or the underlying values, or formulas instead of "
                     "computed results, and optionally cell formatting alongside "
-                    "them. Requires user approval."
+                    "them. Returns the cells as a list of rows (each a list of values; the "
+                    "Sheets API leaves out trailing empty cells), or {values, formatting} "
+                    "with per-cell formatting dicts when include_formatting is true; values "
+                    "may be redacted by the user's privacy settings. Use "
+                    "drive_sheets_get_metadata to list the tab names and sizes first. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("spreadsheet_id", "str"),
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
                     ToolParam(
                         "range_a1", "str",
-                        description="A1 notation range, e.g. 'Sheet1!A1:C10'",
+                        description=(
+                            "Range in A1 notation including the tab name, e.g. "
+                            "'Sheet1!A1:C10' or 'Sheet1!A:A'."
+                        ),
                     ),
                     ToolParam(
                         "value_render_option", "str", required=False, default="FORMATTED_VALUE",
@@ -471,7 +609,7 @@ class DriveConnector(Connector):
                     ToolParam(
                         "include_formatting", "bool", required=False, default=False,
                         description=(
-                            "Also fetch per-cell formatting for the range (bold/italic/"
+                            "Default false: values only. True also fetches per-cell formatting (bold/italic/"
                             "text color/background color/number format/horizontal/vertical "
                             "alignment/text wrap -- the same aspects drive_sheets_format_range can set)."
                         ),
@@ -487,19 +625,25 @@ class DriveConnector(Connector):
                     "spreadsheet. A cell string starting with '=' is evaluated as "
                     "a formula, exactly as if typed into the Sheets UI — there is "
                     "no separate tool for formulas. Writing an empty row/column "
-                    "clears those cells. Requires user approval."
+                    "clears those cells. Returns {spreadsheet_id, updated_range, "
+                    "updated_cells}. Use drive_sheets_format_range to change how cells look, "
+                    "not their values. Requires user approval."
                 ),
                 params=[
-                    ToolParam("spreadsheet_id", "str"),
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
                     ToolParam(
                         "range_a1", "str",
-                        description="A1 notation range, e.g. 'Sheet1!A1:C10'",
+                        description=(
+                            "Range to write, in A1 notation including the tab name, e.g. "
+                            "'Sheet1!A1:C10'. The values fill it from its top-left cell."
+                        ),
                     ),
                     ToolParam(
                         "values", "str",
                         description=(
                             'JSON 2D array of rows, e.g. [["Name","Total"],'
-                            '["Alice","=B2*2"]]'
+                            '["Alice","=B2*2"]]. Each inner array is one row; a string starting '
+                            "with '=' is written as a formula."
                         ),
                     ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -507,12 +651,23 @@ class DriveConnector(Connector):
             ),
             ToolSpec(
                 name="drive_sheets_add_sheet",
-                description="Add a new tab to an existing spreadsheet. Requires user approval.",
+                description=(
+                    "Add a new tab to an existing spreadsheet. Returns {sheet_id, title, index} "
+                    "of the new tab. Use drive_sheets_create for a new spreadsheet, and "
+                    "drive_sheets_get_metadata to see the tabs that exist. Requires user "
+                    "approval."
+                ),
                 params=[
-                    ToolParam("spreadsheet_id", "str"),
-                    ToolParam("title", "str"),
-                    ToolParam("rows", "int", required=False, default=1000),
-                    ToolParam("cols", "int", required=False, default=26),
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
+                    ToolParam("title", "str", description=(
+                        "Name of the new tab. Must not be empty or already used by another tab."
+                    )),
+                    ToolParam("rows", "int", required=False, default=1000, description=(
+                        "Number of rows the new tab starts with. Default 1000, at least 1."
+                    )),
+                    ToolParam("cols", "int", required=False, default=26, description=(
+                        "Number of columns the new tab starts with. Default 26, at least 1."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -522,12 +677,16 @@ class DriveConnector(Connector):
                     "Rename an existing tab in a spreadsheet. There is no delete-sheet "
                     "tool — to mark a tab for removal, rename it (e.g. to "
                     "'TO BE DELETED - <original title>') and the user can delete it "
-                    "by hand in the Sheets UI. Requires user approval."
+                    "by hand in the Sheets UI. Returns {spreadsheet_id, sheet_id, title} with "
+                    "the new title. Get sheet_id from drive_sheets_get_metadata. Requires user "
+                    "approval."
                 ),
                 params=[
-                    ToolParam("spreadsheet_id", "str"),
-                    ToolParam("sheet_id", "int", description="Numeric tab id, from drive_sheets_get_metadata"),
-                    ToolParam("new_title", "str"),
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
+                    ToolParam("sheet_id", "int", description=_SHEET_ID_HELP),
+                    ToolParam("new_title", "str", description=(
+                        "New name for the tab. Must not be empty or already used by another tab."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -540,11 +699,12 @@ class DriveConnector(Connector):
                     "Every parameter is opt-in — its default means 'leave that "
                     "aspect unchanged', so a call that only sets a background "
                     "color never touches unrelated formatting already on the "
-                    "range. Requires user approval."
+                    "range. Returns {spreadsheet_id, sheet_id, requests_applied}. Use "
+                    "drive_sheets_write_range to change cell values. Requires user approval."
                 ),
                 params=[
-                    ToolParam("spreadsheet_id", "str"),
-                    ToolParam("sheet_id", "int", description="Numeric tab id, from drive_sheets_get_metadata"),
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
+                    ToolParam("sheet_id", "int", description=_SHEET_ID_HELP),
                     ToolParam(
                         "range_a1", "str",
                         description=(
@@ -590,14 +750,21 @@ class DriveConnector(Connector):
                     "existing content after the insertion point. Values/"
                     "formulas are untouched, only their position shifts; "
                     "formulas referencing shifted cells are adjusted "
-                    "automatically. Requires user approval."
+                    "automatically. Returns {spreadsheet_id, sheet_id, dimension, inserted}. "
+                    "Use drive_sheets_delete_dimensions to remove them. Requires user "
+                    "approval."
                 ),
                 params=[
-                    ToolParam("spreadsheet_id", "str"),
-                    ToolParam("sheet_id", "int", description="Numeric tab id, from drive_sheets_get_metadata"),
-                    ToolParam("dimension", "str", description="'ROWS' or 'COLUMNS'"),
-                    ToolParam("start_index", "int", description="0-based index to insert before"),
-                    ToolParam("count", "int", required=False, default=1),
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
+                    ToolParam("sheet_id", "int", description=_SHEET_ID_HELP),
+                    ToolParam("dimension", "str", description="What to insert: 'ROWS' or 'COLUMNS'."),
+                    ToolParam("start_index", "int", description=(
+                        "0-based index of the row or column to insert before (0 inserts at the "
+                        "very top or left)."
+                    )),
+                    ToolParam("count", "int", required=False, default=1, description=(
+                        "How many rows or columns to insert. Default 1."
+                    )),
                     ToolParam(
                         "inherit_from_before", "bool", required=False, default=True,
                         description="Copy formatting from the row/column before the insertion point (Sheets UI default)",
@@ -612,14 +779,21 @@ class DriveConnector(Connector):
                     "values, formulas, and formatting they contain. This is "
                     "destructive — deleted cell content is not recoverable "
                     "through PrivacyFence. Remaining rows/columns shift to "
-                    "close the gap. Requires user approval."
+                    "close the gap. Returns {spreadsheet_id, sheet_id, dimension, deleted}. "
+                    "Use drive_sheets_insert_dimensions to add blank ones. Requires user "
+                    "approval."
                 ),
                 params=[
-                    ToolParam("spreadsheet_id", "str"),
-                    ToolParam("sheet_id", "int", description="Numeric tab id, from drive_sheets_get_metadata"),
-                    ToolParam("dimension", "str", description="'ROWS' or 'COLUMNS'"),
-                    ToolParam("start_index", "int", description="0-based, inclusive of the first row/column removed"),
-                    ToolParam("count", "int", required=False, default=1),
+                    ToolParam("spreadsheet_id", "str", description=_SPREADSHEET_ID_HELP),
+                    ToolParam("sheet_id", "int", description=_SHEET_ID_HELP),
+                    ToolParam("dimension", "str", description="What to delete: 'ROWS' or 'COLUMNS'."),
+                    ToolParam("start_index", "int", description=(
+                        "0-based index of the first row or column to delete (row 1 or column A "
+                        "is 0)."
+                    )),
+                    ToolParam("count", "int", required=False, default=1, description=(
+                        "How many rows or columns to delete, starting at start_index. Default 1."
+                    )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 destructive=True,

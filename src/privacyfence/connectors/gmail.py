@@ -79,6 +79,72 @@ def _parse_attachment_paths(value: str) -> list[str]:
     return parsed
 
 
+_QUERY_DESCRIPTION = (
+    "Gmail search syntax, as typed in Gmail's search box, e.g. 'from:alice is:unread'. "
+    "Empty matches every message."
+)
+_MAX_RESULTS_DESCRIPTION = (
+    "Maximum number of results to return. Default 10; capped at 100, and a value "
+    "below 1 is treated as 1."
+)
+_MESSAGE_ID_DESCRIPTION = (
+    "Id of the Gmail message, from gmail_list_messages (its id field)."
+)
+_REPLY_MESSAGE_ID_DESCRIPTION = (
+    "Id of the message to reply to, from gmail_list_messages (its id field). "
+    "The draft goes in that message's thread."
+)
+
+
+def _recipients_description(role: str, *, required: bool = False) -> str:
+    """The shared wording of a to/cc/bcc parameter: what the handler splits on."""
+    empty = "" if required else " Empty means none."
+    return (
+        f"{role} address(es): one, or several separated by commas. Each may be a bare "
+        f"address or 'Name <name@example.com>'; a display name must not contain a comma.{empty}"
+    )
+
+
+def _filter_params() -> list[ToolParam]:
+    """The criteria and action ToolParams shared by gmail_create_filter and
+    gmail_update_filter, in the order both tools list them."""
+    return [
+        ToolParam("from_address", "str", required=False, default="",
+                  description="Match messages from this sender address. Empty means no sender criterion."),
+        ToolParam("to_address", "str", required=False, default="",
+                  description="Match messages sent to this address. Empty means no recipient criterion."),
+        ToolParam("subject", "str", required=False, default="",
+                  description="Match messages whose subject contains this text. Empty means no subject criterion."),
+        ToolParam(
+            "query", "str", required=False, default="",
+            description=(
+                "Gmail search syntax, e.g. 'from:alice has:attachment'; matches the filter's "
+                "'Has the words' field. Empty means no search criterion."
+            ),
+        ),
+        ToolParam("has_attachment", "bool", required=False, default=False,
+                  description="Match only messages that have an attachment. Default false: attachments not required."),
+        ToolParam(
+            "add_label_names", "str", required=False, default="",
+            description=(
+                "Comma-separated label names to apply, e.g. 'Work,Work/Projects'; a name that "
+                "does not exist yet is created. Empty means no label is applied."
+            ),
+        ),
+        ToolParam("archive", "bool", required=False, default=False,
+                  description="Skip the Inbox: matching messages are archived on arrival. Default false."),
+        ToolParam("mark_as_read", "bool", required=False, default=False,
+                  description="Mark matching messages as read on arrival. Default false."),
+        ToolParam("star", "bool", required=False, default=False,
+                  description="Star matching messages on arrival. Default false."),
+        ToolParam("forward_to", "str", required=False, default="",
+                  description=(
+                      "Address to forward matching messages to; Gmail only accepts an address "
+                      "the user has verified as a forwarding address. Empty means no forwarding."
+                  )),
+    ]
+
+
 def _body_params() -> list[ToolParam]:
     """The body/body_markdown ToolParam pair shared by all 6 draft tools."""
     return [
@@ -260,11 +326,18 @@ class GmailConnector(Connector):
                 description=(
                     "Search Gmail and return matching message summaries "
                     "(id, thread_id, subject, sender, date). "
+                    "Returns a list of {id, thread_id, subject, sender, date}, up to max_results "
+                    "(default 10, capped at 100), only the first page and in the order Gmail "
+                    "returns them; subject, sender and date may be redacted by the user's privacy "
+                    "settings. "
+                    "Use gmail_list_threads instead to search by conversation, and gmail_get_message "
+                    "to read a message once you have its id. "
                     "Auto-approved — no body content is returned."
                 ),
                 params=[
-                    ToolParam("query", "str"),
-                    ToolParam("max_results", "int", required=False, default=10),
+                    ToolParam("query", "str", description=_QUERY_DESCRIPTION),
+                    ToolParam("max_results", "int", required=False, default=10,
+                              description=_MAX_RESULTS_DESCRIPTION),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -273,13 +346,19 @@ class GmailConnector(Connector):
                 name="gmail_list_threads",
                 description=(
                     "Search Gmail and return matching thread summaries "
-                    "(id, snippet). Auto-approved — snippet is a short excerpt of the "
+                    "(id, snippet). "
+                    "Returns a list of {id, snippet}, up to max_results (default 10, capped at 100), "
+                    "only the first page and in the order Gmail returns them. "
+                    "Use gmail_list_messages instead when you need each message's subject, sender "
+                    "or date, and gmail_get_thread to read a whole thread once you have its id. "
+                    "Auto-approved — snippet is a short excerpt of the "
                     "last message's body, subject to the same 'body' privacy category "
                     "as gmail_get_message."
                 ),
                 params=[
-                    ToolParam("query", "str"),
-                    ToolParam("max_results", "int", required=False, default=10),
+                    ToolParam("query", "str", description=_QUERY_DESCRIPTION),
+                    ToolParam("max_results", "int", required=False, default=10,
+                              description=_MAX_RESULTS_DESCRIPTION),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -288,10 +367,17 @@ class GmailConnector(Connector):
                 name="gmail_get_message",
                 description=(
                     "Fetch a single Gmail message by id, including body, metadata, "
-                    "and attachment list. Requires user approval."
+                    "and attachment list. "
+                    "Returns {id, thread_id, subject, sender, recipients, date, body_text, "
+                    "attachments (name, mime_type, size and attachment_id of each), labels}, plus "
+                    "body_html when include_html is true; body, subject, sender, recipients and date "
+                    "may be redacted by the user's privacy settings. "
+                    "Get the id from gmail_list_messages. "
+                    "Use gmail_get_thread instead to read the whole conversation. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("message_id", "str"),
+                    ToolParam("message_id", "str", description=_MESSAGE_ID_DESCRIPTION),
                     ToolParam(
                         "include_html", "bool", required=False, default=False,
                         description=(
@@ -310,20 +396,41 @@ class GmailConnector(Connector):
                 name="gmail_get_thread",
                 description=(
                     "Fetch a full Gmail thread by id, including all messages. "
+                    "Returns {id, subject, messages}, where each message is {id, subject, sender, "
+                    "date, body_text, attachments} in the order Gmail returns them (oldest first); "
+                    "recipients and labels are not included, and bodies fall under the "
+                    "'thread_history' privacy category and may be redacted. "
+                    "Get the id from gmail_list_threads, or from the thread_id field of "
+                    "gmail_list_messages. "
+                    "Use gmail_get_message instead to read one message with its recipients and labels. "
                     "Requires user approval."
                 ),
-                params=[ToolParam("thread_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("thread_id", "str",
+                              description=(
+                                  "Id of the Gmail thread, from gmail_list_threads (its id field) "
+                                  "or gmail_list_messages (its thread_id field)."
+                              )),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
                 name="gmail_list_message_attachments",
                 description=(
                     "List attachment names, MIME types, and sizes for a Gmail "
-                    "message. Auto-approved — metadata only, no attachment "
+                    "message. "
+                    "Returns {message_id, attachments: [{name, mime_type, size}]} with size in "
+                    "bytes; attachments is empty when the message has none or the user's privacy "
+                    "settings hide them. "
+                    "Auto-approved — metadata only, no attachment "
                     "content is returned. Use gmail_download_attachment to "
                     "fetch the actual file."
                 ),
-                params=[ToolParam("message_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("message_id", "str", description=_MESSAGE_ID_DESCRIPTION),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
@@ -331,24 +438,26 @@ class GmailConnector(Connector):
                 description=(
                     "Download a Gmail attachment's content. Identify the "
                     "attachment by the name returned from "
-                    "gmail_list_message_attachments. On a local install: saved "
-                    "to destination_dir, and the saved file path is returned -- "
-                    "destination_dir is required, there is no default, so choose "
-                    "deliberately: pass ~/Downloads (or another path the user "
-                    "asked for) when this attachment is a deliverable the user "
-                    "should find afterward, or your own working/scratch "
-                    "directory when you're only downloading it to read or "
-                    "process it yourself. On an organization-managed install: "
-                    "destination_dir is ignored (there is no local filesystem "
-                    "you and the human share) -- a small attachment's bytes "
-                    "come back directly in this tool's result so you can read "
-                    "or hand it to the human yourself; a larger one comes back "
-                    "as a one-time link the human opens in their own signed-in "
-                    "browser tab instead. Requires user approval."
+                    "gmail_list_message_attachments. "
+                    "Local install: saved to destination_dir (required, no default): pass "
+                    "~/Downloads, or a path the user asked for, if they should find the file "
+                    "afterward, or your own scratch directory if it is only for you to read. "
+                    "Organization-managed install: destination_dir is ignored; a small attachment "
+                    "comes back inline in the result, a larger one as a one-time link the human "
+                    "opens in their own signed-in browser. "
+                    "Returns {path, name, size_bytes} for a file saved on a local install (a save "
+                    "through the file bridge returns {path, delivery} instead), the file content "
+                    "inline, or {delivery: 'link', name, size_bytes, download_url, expires_at, "
+                    "note}. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("message_id", "str"),
-                    ToolParam("attachment_name", "str"),
+                    ToolParam("message_id", "str", description=_MESSAGE_ID_DESCRIPTION),
+                    ToolParam("attachment_name", "str",
+                              description=(
+                                  "File name of the attachment, exactly as gmail_list_message_attachments "
+                                  "returns it in its name field; a name that matches none fails."
+                              )),
                     ToolParam(
                         "destination_dir",
                         "str",
@@ -369,13 +478,22 @@ class GmailConnector(Connector):
             ),
             ToolSpec(
                 name="gmail_create_draft",
-                description="Create a Gmail draft. Requires user approval.",
+                description=(
+                    "Create a Gmail draft. "
+                    "Returns {draft_id, to, subject}; the draft is only saved, never sent. "
+                    "Use gmail_create_draft_with_attachments instead when there is something to "
+                    "attach, and gmail_reply_draft to answer an existing message so the draft "
+                    "threads with it. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("to", "str"),
-                    ToolParam("subject", "str"),
+                    ToolParam("to", "str", description=_recipients_description("Recipient", required=True)),
+                    ToolParam("subject", "str", description="Subject line of the new draft."),
                     *_body_params(),
-                    ToolParam("cc", "str", required=False, default=""),
-                    ToolParam("bcc", "str", required=False, default=""),
+                    ToolParam("cc", "str", required=False, default="",
+                              description=_recipients_description("Cc recipient")),
+                    ToolParam("bcc", "str", required=False, default="",
+                              description=_recipients_description("Bcc recipient")),
                     *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -386,13 +504,20 @@ class GmailConnector(Connector):
                     "Create a Gmail draft replying to a single message, staying in the "
                     "same thread (sets threadId plus In-Reply-To/References so it "
                     "actually threads, unlike gmail_create_draft). Addressed only to the "
-                    "original sender. Requires user approval."
+                    "original sender. "
+                    "Returns {draft_id, thread_id, to, cc, subject}; the subject is the original's "
+                    "with 'Re: ' added if missing, and cc holds only the addresses you passed. "
+                    "Use gmail_reply_all_draft instead to include the other participants, and "
+                    "gmail_reply_draft_with_attachments when there is something to attach. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("message_id", "str"),
+                    ToolParam("message_id", "str", description=_REPLY_MESSAGE_ID_DESCRIPTION),
                     *_body_params(),
-                    ToolParam("cc", "str", required=False, default=""),
-                    ToolParam("bcc", "str", required=False, default=""),
+                    ToolParam("cc", "str", required=False, default="",
+                              description=_recipients_description("Extra Cc recipient")),
+                    ToolParam("bcc", "str", required=False, default="",
+                              description=_recipients_description("Bcc recipient")),
                     *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -402,13 +527,21 @@ class GmailConnector(Connector):
                 description=(
                     "Create a Gmail draft replying to all participants of a message "
                     "(original sender plus To/Cc recipients, excluding yourself), "
-                    "staying in the same thread. Requires user approval."
+                    "staying in the same thread. "
+                    "Returns {draft_id, thread_id, to, cc, subject}: to is the original sender, cc "
+                    "the other participants plus any address you passed, and the subject is the "
+                    "original's with 'Re: ' added if missing. "
+                    "Use gmail_reply_draft instead to answer only the sender, and "
+                    "gmail_reply_all_draft_with_attachments when there is something to attach. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("message_id", "str"),
+                    ToolParam("message_id", "str", description=_REPLY_MESSAGE_ID_DESCRIPTION),
                     *_body_params(),
-                    ToolParam("cc", "str", required=False, default=""),
-                    ToolParam("bcc", "str", required=False, default=""),
+                    ToolParam("cc", "str", required=False, default="",
+                              description=_recipients_description("Extra Cc recipient")),
+                    ToolParam("bcc", "str", required=False, default="",
+                              description=_recipients_description("Bcc recipient")),
                     *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -420,15 +553,19 @@ class GmailConnector(Connector):
                     "Parallel to gmail_create_draft -- use this variant only when "
                     "there is something to attach; use gmail_create_draft when "
                     "there isn't, so a draft doesn't need this tool's extra "
-                    "attachments argument for nothing. Requires user approval."
+                    "attachments argument for nothing. "
+                    "Returns {draft_id, to, subject}; the draft is only saved, never sent. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("to", "str"),
-                    ToolParam("subject", "str"),
+                    ToolParam("to", "str", description=_recipients_description("Recipient", required=True)),
+                    ToolParam("subject", "str", description="Subject line of the new draft."),
                     *_body_params(),
                     _attachments_param(),
-                    ToolParam("cc", "str", required=False, default=""),
-                    ToolParam("bcc", "str", required=False, default=""),
+                    ToolParam("cc", "str", required=False, default="",
+                              description=_recipients_description("Cc recipient")),
+                    ToolParam("bcc", "str", required=False, default="",
+                              description=_recipients_description("Bcc recipient")),
                     *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -440,14 +577,18 @@ class GmailConnector(Connector):
                     "the same thread, with one or more local-file attachments. "
                     "Parallel to gmail_reply_draft -- use this variant only when "
                     "there is something to attach. Addressed only to the original "
-                    "sender. Requires user approval."
+                    "sender. "
+                    "Returns {draft_id, thread_id, to, cc, subject}, as gmail_reply_draft does. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("message_id", "str"),
+                    ToolParam("message_id", "str", description=_REPLY_MESSAGE_ID_DESCRIPTION),
                     *_body_params(),
                     _attachments_param(),
-                    ToolParam("cc", "str", required=False, default=""),
-                    ToolParam("bcc", "str", required=False, default=""),
+                    ToolParam("cc", "str", required=False, default="",
+                              description=_recipients_description("Extra Cc recipient")),
+                    ToolParam("bcc", "str", required=False, default="",
+                              description=_recipients_description("Bcc recipient")),
                     *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -459,34 +600,61 @@ class GmailConnector(Connector):
                     "(original sender plus To/Cc recipients, excluding yourself), "
                     "staying in the same thread, with one or more local-file "
                     "attachments. Parallel to gmail_reply_all_draft -- use this "
-                    "variant only when there is something to attach. Requires user "
-                    "approval."
+                    "variant only when there is something to attach. "
+                    "Returns {draft_id, thread_id, to, cc, subject}, as gmail_reply_all_draft does. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("message_id", "str"),
+                    ToolParam("message_id", "str", description=_REPLY_MESSAGE_ID_DESCRIPTION),
                     *_body_params(),
                     _attachments_param(),
-                    ToolParam("cc", "str", required=False, default=""),
-                    ToolParam("bcc", "str", required=False, default=""),
+                    ToolParam("cc", "str", required=False, default="",
+                              description=_recipients_description("Extra Cc recipient")),
+                    ToolParam("bcc", "str", required=False, default="",
+                              description=_recipients_description("Bcc recipient")),
                     *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="gmail_add_label",
-                description="Add a label to a Gmail message. Requires user approval.",
+                description=(
+                    "Add a label to a Gmail message. "
+                    "Returns {message_id, label_added}. A label that does not exist yet is "
+                    "created first. "
+                    "Use gmail_list_labels to see the existing label names, gmail_create_label to "
+                    "create a label without applying it (it fails if the name exists), and "
+                    "gmail_remove_label to take one off. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("message_id", "str"),
-                    ToolParam("label_name", "str"),
+                    ToolParam("message_id", "str", description=_MESSAGE_ID_DESCRIPTION),
+                    ToolParam("label_name", "str",
+                              description=(
+                                  "Name of the label to add, as gmail_list_labels returns it in its "
+                                  "name field (nested labels look like 'Work/Projects'). A name that "
+                                  "does not exist yet is created."
+                              )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="gmail_remove_label",
-                description="Remove a label from a Gmail message. Requires user approval.",
+                description=(
+                    "Remove a label from a Gmail message. "
+                    "Returns {message_id, label_removed}, with a note of 'label not found' added "
+                    "(and nothing changed) when no label has that name. "
+                    "Use gmail_list_labels to see the label names, and gmail_add_label to put "
+                    "one back. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("message_id", "str"),
-                    ToolParam("label_name", "str"),
+                    ToolParam("message_id", "str", description=_MESSAGE_ID_DESCRIPTION),
+                    ToolParam("label_name", "str",
+                              description=(
+                                  "Name of the label to remove, as gmail_list_labels returns it in its "
+                                  "name field (nested labels look like 'Work/Projects')."
+                              )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -494,14 +662,23 @@ class GmailConnector(Connector):
                 name="gmail_archive_message",
                 description=(
                     "Archive a Gmail message by removing it from the Inbox. "
-                    "The message is not deleted and remains searchable. Requires user approval."
+                    "The message is not deleted and remains searchable. "
+                    "Returns {message_id, archived: true}. "
+                    "Requires user approval."
                 ),
-                params=[ToolParam("message_id", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("message_id", "str", description=_MESSAGE_ID_DESCRIPTION),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
             ),
             ToolSpec(
                 name="gmail_list_filters",
                 description=(
                     "List all Gmail filters with their criteria and actions. "
+                    "Returns a list of {id, criteria, action} in Gmail's own filter format (criteria "
+                    "keys such as from, to, subject, query, hasAttachment; action keys such as "
+                    "addLabelIds, removeLabelIds, forward); label ids are not translated to names. "
+                    "Get a filter_id here for gmail_update_filter. "
                     "Auto-approved -- filter rules only, no message content is returned."
                 ),
                 params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
@@ -512,6 +689,8 @@ class GmailConnector(Connector):
                 description=(
                     "List all Gmail labels (system and user-created). Nested labels "
                     "have a '/' in their name (e.g. 'Work/Projects'). "
+                    "Returns a list of {id, name, type}, where type is 'system' or 'user'. "
+                    "Use the name with gmail_add_label and gmail_remove_label. "
                     "Auto-approved -- label metadata only."
                 ),
                 params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
@@ -523,27 +702,12 @@ class GmailConnector(Connector):
                     "Create a Gmail filter. Provide at least one criteria field "
                     "(from_address, to_address, subject, query, has_attachment) and "
                     "at least one action (add_label_names, archive, mark_as_read, "
-                    "star, forward_to). Requires user approval."
+                    "star, forward_to). "
+                    "Returns {id, criteria, action} for the new filter. "
+                    "Use gmail_update_filter instead to change an existing filter. "
+                    "Requires user approval."
                 ),
-                params=[
-                    ToolParam("from_address", "str", required=False, default=""),
-                    ToolParam("to_address", "str", required=False, default=""),
-                    ToolParam("subject", "str", required=False, default=""),
-                    ToolParam(
-                        "query", "str", required=False, default="",
-                        description="Gmail search syntax; matches the filter's 'Has the words' field",
-                    ),
-                    ToolParam("has_attachment", "bool", required=False, default=False),
-                    ToolParam(
-                        "add_label_names", "str", required=False, default="",
-                        description="Comma-separated label names to apply; created if missing",
-                    ),
-                    ToolParam("archive", "bool", required=False, default=False, description="Skip the Inbox"),
-                    ToolParam("mark_as_read", "bool", required=False, default=False),
-                    ToolParam("star", "bool", required=False, default=False),
-                    ToolParam("forward_to", "str", required=False, default=""),
-                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
-                ],
+                params=[*_filter_params(), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
             ),
             ToolSpec(
                 name="gmail_update_filter",
@@ -552,20 +716,19 @@ class GmailConnector(Connector):
                     "identified by filter_id (from gmail_list_filters). Gmail's API "
                     "has no native filter update, so this deletes the filter and "
                     "creates a new one with the given fields, which gets a new id. "
+                    "Returns {old_id, id, criteria, action}; the fields you leave empty are not "
+                    "kept from the old filter, and if creating the new one fails the old one is "
+                    "already gone. "
+                    "Use gmail_create_filter instead to add a filter without replacing one. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("filter_id", "str"),
-                    ToolParam("from_address", "str", required=False, default=""),
-                    ToolParam("to_address", "str", required=False, default=""),
-                    ToolParam("subject", "str", required=False, default=""),
-                    ToolParam("query", "str", required=False, default=""),
-                    ToolParam("has_attachment", "bool", required=False, default=False),
-                    ToolParam("add_label_names", "str", required=False, default=""),
-                    ToolParam("archive", "bool", required=False, default=False),
-                    ToolParam("mark_as_read", "bool", required=False, default=False),
-                    ToolParam("star", "bool", required=False, default=False),
-                    ToolParam("forward_to", "str", required=False, default=""),
+                    ToolParam("filter_id", "str",
+                              description=(
+                                  "Id of the filter to replace, from gmail_list_filters (its id "
+                                  "field); the replacement gets a new id."
+                              )),
+                    *_filter_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -575,9 +738,19 @@ class GmailConnector(Connector):
                     "Create a Gmail label. Use '/' to create nested labels (e.g. "
                     "'Work/Projects' creates 'Projects' nested under 'Work', "
                     "creating 'Work' first if it doesn't already exist). Fails if "
-                    "the exact label name already exists. Requires user approval."
+                    "the exact label name already exists. "
+                    "Returns {id, name, type} of the new label. "
+                    "Use gmail_list_labels to check which labels exist first. "
+                    "Requires user approval."
                 ),
-                params=[ToolParam("label_name", "str"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("label_name", "str",
+                              description=(
+                                  "Name for the new label; use '/' to nest it, e.g. 'Work/Projects'. "
+                                  "Must not already exist."
+                              )),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
             ),
         ]
 

@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Every connector tool now describes each of its parameters, says what it returns (fields, limits and paging), and names the related tool to use instead, so AI clients choose and call the right tool more often.
+
 ## [5.3.0] — 2026-09-30
 
 ### Added

@@ -56,10 +56,15 @@ class ConfluenceConnector(Connector):
                 name="confluence_list_spaces",
                 description=(
                     "List Confluence spaces the user has access to "
-                    "(key, name, type, description). Auto-approved."
+                    "(key, name, type, description). Returns a list of {key, name, "
+                    "space_type, description, url}, at most max_results (default 50, "
+                    "capped at 250), only the first page the API sends. Use "
+                    "confluence_list_pages to list the pages in one of them. "
+                    "Auto-approved."
                 ),
                 params=[
-                    ToolParam("max_results", "int", required=False, default=50),
+                    ToolParam("max_results", "int", required=False, default=50,
+                              description="Maximum number of spaces to return. Default 50, capped at 250."),
                     ToolParam("space_type", "str", required=False, default="",
                               description="Filter to 'global' or 'personal'; "
                                            "omit/empty to return all types"),
@@ -71,11 +76,21 @@ class ConfluenceConnector(Connector):
                 name="confluence_search",
                 description=(
                     "Full-text search across Confluence content. "
-                    "Returns matching pages/blog posts with excerpts. Auto-approved."
+                    "Returns matching pages/blog posts with excerpts, as a list of "
+                    "{id, title, content_type, space_key, space_name, excerpt, url}, most "
+                    "recently modified first, at most max_results (default 20, capped at "
+                    "100); excerpts may be redacted by the user's privacy settings. It "
+                    "sends the query as the CQL text ~ \"<query>\" (no operators); use "
+                    "confluence_cql_search to filter by space, type, label or date. Get "
+                    "the page with confluence_get_page. Auto-approved."
                 ),
                 params=[
-                    ToolParam("query", "str", description="Plain-text search terms"),
-                    ToolParam("max_results", "int", required=False, default=20),
+                    ToolParam("query", "str",
+                              description="Plain-text words to find in page and blog post text, "
+                                          "e.g. 'quarterly roadmap'. Not CQL: it is wrapped in a "
+                                          "text-contains clause, so avoid double quotes."),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Maximum number of results to return. Default 20, capped at 100."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -84,11 +99,20 @@ class ConfluenceConnector(Connector):
                 name="confluence_cql_search",
                 description=(
                     "Search Confluence using CQL (Confluence Query Language). "
-                    "Auto-approved."
+                    "Sends your CQL exactly as written, so it can filter by space, content "
+                    "type, label, creator or date, which confluence_search cannot. Returns "
+                    "a list of {id, title, content_type, space_key, space_name, excerpt, "
+                    "url} in the order your CQL gives (add 'order by lastmodified desc' "
+                    "for newest first), at most max_results (default 20, capped at 100); "
+                    "excerpts may be redacted by the user's privacy settings. Use "
+                    "confluence_search instead for plain keywords. Auto-approved."
                 ),
                 params=[
-                    ToolParam("cql", "str", description="e.g. 'space = MYSPACE AND type = page'"),
-                    ToolParam("max_results", "int", required=False, default=20),
+                    ToolParam("cql", "str",
+                              description="A CQL query, e.g. \"space = MYSPACE AND type = page AND "
+                                          "title ~ 'roadmap' order by lastmodified desc\"."),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Maximum number of results to return. Default 20, capped at 100."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -97,11 +121,19 @@ class ConfluenceConnector(Connector):
                 name="confluence_list_pages",
                 description=(
                     "List pages in a Confluence space (title, id, version). "
-                    "Auto-approved."
+                    "Returns a list of {id, title, space_key, space_name, version, author, "
+                    "created, updated, url} without page bodies, at most max_results "
+                    "(default 20, capped at 200), only the first page the API sends, in the "
+                    "API's order. author is an opaque Atlassian account id, not a name. Use "
+                    "confluence_search instead to find pages by words, and "
+                    "confluence_get_page to read one. Auto-approved."
                 ),
                 params=[
-                    ToolParam("space_key", "str"),
-                    ToolParam("max_results", "int", required=False, default=20),
+                    ToolParam("space_key", "str",
+                              description="Key of the space, e.g. 'ENG' (not its numeric id or display "
+                                          "name), from confluence_list_spaces (its key field)."),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Maximum number of pages to return. Default 20, capped at 200."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -111,11 +143,15 @@ class ConfluenceConnector(Connector):
                 description=(
                     "List attachment names, media types, and sizes for a "
                     "Confluence page. Auto-approved -- metadata only, no "
-                    "attachment content is returned. Use "
+                    "attachment content is returned. Returns {page_id, attachments: a list "
+                    "of {name, media_type, size in bytes}}, at most 50 attachments; names may "
+                    "be redacted by the user's privacy settings. Use "
                     "confluence_download_attachment to fetch the actual file."
                 ),
                 params=[
-                    ToolParam("page_id", "str"),
+                    ToolParam("page_id", "str",
+                              description="Numeric id of the page, from confluence_list_pages, "
+                                          "confluence_search or confluence_get_page (the id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -126,24 +162,23 @@ class ConfluenceConnector(Connector):
                     "Download a Confluence page attachment's content. "
                     "Identify the attachment by the name returned from "
                     "confluence_list_attachments. On a local install: saved "
-                    "to destination_dir, and the saved file path is returned "
-                    "-- destination_dir is required, there is no default, so "
-                    "choose deliberately: pass ~/Downloads (or another path "
-                    "the user asked for) when this attachment is a "
-                    "deliverable the user should find afterward, or your own "
-                    "working/scratch directory when you're only downloading "
-                    "it to read or process it yourself. On an organization-"
-                    "managed install: destination_dir is ignored (there is no "
-                    "local filesystem you and the human share) -- a small "
-                    "attachment's bytes come back directly in this tool's "
-                    "result so you can read or hand it to the human "
-                    "yourself; a larger one comes back as a one-time link "
-                    "the human opens in their own signed-in browser tab "
-                    "instead. Requires user approval."
+                    "to destination_dir, which is required (no default): pass "
+                    "~/Downloads (or a path the user asked for) for a "
+                    "deliverable, or your own scratch directory to just read or "
+                    "process it. On an organization-managed install: "
+                    "destination_dir is ignored -- a small attachment's bytes come "
+                    "back directly in the result, a larger one as a one-time link "
+                    "the human opens in their own browser. Returns {path, name, "
+                    "size_bytes} on a local install, or the inline or link delivery "
+                    "result on an organization-managed one. Requires user approval."
                 ),
                 params=[
-                    ToolParam("page_id", "str"),
-                    ToolParam("attachment_name", "str"),
+                    ToolParam("page_id", "str",
+                              description="Numeric id of the page the attachment is on, from "
+                                          "confluence_list_pages or confluence_search."),
+                    ToolParam("attachment_name", "str",
+                              description="Exact file name of the attachment, as confluence_list_attachments "
+                                          "returns it in its name field."),
                     ToolParam(
                         "destination_dir",
                         "str",
@@ -166,10 +201,16 @@ class ConfluenceConnector(Connector):
                 name="confluence_get_page",
                 description=(
                     "Fetch the full content of a Confluence page by page ID. "
-                    "Returns the page body as HTML storage format. Requires user approval."
+                    "Returns the page body as HTML storage format, inside one page object "
+                    "{id, title, space_key, space_name, version, author, created, updated, "
+                    "body, url}; author is an opaque Atlassian account id. Use "
+                    "confluence_get_page_by_title when you know the space and title but not "
+                    "the id. Requires user approval."
                 ),
                 params=[
-                    ToolParam("page_id", "str"),
+                    ToolParam("page_id", "str",
+                              description="Numeric id of the page, from confluence_list_pages, "
+                                          "confluence_search or confluence_cql_search (the id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -178,11 +219,18 @@ class ConfluenceConnector(Connector):
                 name="confluence_get_page_by_title",
                 description=(
                     "Fetch a Confluence page by space key and exact title. "
+                    "Returns one page in the same shape confluence_get_page returns, body "
+                    "included; errors when no page has that title in the space. Use "
+                    "confluence_get_page instead when you already have the page id. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("space_key", "str"),
-                    ToolParam("title", "str"),
+                    ToolParam("space_key", "str",
+                              description="Key of the space the page is in, e.g. 'ENG', from "
+                                          "confluence_list_spaces (its key field)."),
+                    ToolParam("title", "str",
+                              description="Exact title of the page, as shown in Confluence (not a "
+                                          "partial match)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -191,14 +239,22 @@ class ConfluenceConnector(Connector):
                 name="confluence_create_page",
                 description=(
                     "Create a new Confluence page in the given space. "
-                    "Body is HTML storage format. Requires user approval."
+                    "Body is HTML storage format. Returns the created page, with its new id, "
+                    "in the same shape confluence_get_page returns. Use "
+                    "confluence_update_page instead to change a page that already exists. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("space_key", "str"),
-                    ToolParam("title", "str"),
-                    ToolParam("body", "str", description="HTML storage format body"),
+                    ToolParam("space_key", "str",
+                              description="Key of the space to create the page in, e.g. 'ENG', from "
+                                          "confluence_list_spaces (its key field)."),
+                    ToolParam("title", "str", description="Title of the new page, as shown in Confluence."),
+                    ToolParam("body", "str",
+                              description="Page body in Confluence storage format (XHTML-based HTML), "
+                                          "e.g. '<p>Hello</p>'."),
                     ToolParam("parent_id", "str", required=False, default="",
-                              description="Optional parent page ID"),
+                              description="Id of the page to nest the new page under, from "
+                                          "confluence_list_pages. Empty creates it at the top level of the space."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -206,12 +262,22 @@ class ConfluenceConnector(Connector):
                 name="confluence_update_page",
                 description=(
                     "Update the title and/or body of an existing Confluence page. "
-                    "Body is HTML storage format. Requires user approval."
+                    "Body is HTML storage format. Both title and body replace the current "
+                    "ones, so pass the current title to keep it. Returns the updated page, "
+                    "with its new version number, in the same shape confluence_get_page "
+                    "returns. Call confluence_get_page first to read the current content. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("page_id", "str"),
-                    ToolParam("title", "str"),
-                    ToolParam("body", "str", description="New HTML storage format body"),
+                    ToolParam("page_id", "str",
+                              description="Numeric id of the page to update, from confluence_list_pages "
+                                          "or confluence_search (the id field)."),
+                    ToolParam("title", "str",
+                              description="Title for the page after the update. Required and not "
+                                          "empty: pass the current title to keep it."),
+                    ToolParam("body", "str",
+                              description="New body in Confluence storage format (XHTML-based HTML), "
+                                          "replacing the whole current body."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),

@@ -31,9 +31,20 @@ class TelegramConnector(Connector):
         return [
             ToolSpec(
                 name="telegram_list_chats",
-                description="List Telegram chats (id, name, type, unread count). Auto-approved.",
+                description=(
+                    "List Telegram chats (id, name, type, unread count). Returns a list of "
+                    "{id, name, type, unread_count, is_self}, most recently active first, "
+                    "up to limit (default 50, capped at 200); type is 'user', 'group', "
+                    "'channel' or 'bot', and is_self marks Saved Messages. Pass an id as "
+                    "chat_id to telegram_get_messages or telegram_send_message; call "
+                    "telegram_refresh_chat_cache first if a new chat is missing or shows "
+                    "no name. Auto-approved."
+                ),
                 params=[
-                    ToolParam("limit", "int", required=False, default=50),
+                    ToolParam(
+                        "limit", "int", required=False, default=50,
+                        description="Maximum chats to return, most recently active first. Default 50, capped at 200.",
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -42,11 +53,24 @@ class TelegramConnector(Connector):
                 name="telegram_get_messages",
                 description=(
                     "Fetch recent messages from a Telegram chat by chat id. "
-                    "Requires user approval."
+                    "Returns a list of {id, sender_name, text, date} (date is ISO 8601), "
+                    "newest first, up to limit messages (default 50, capped at 200); "
+                    "media messages carry only their text or caption, if any. Use "
+                    "telegram_search_messages to find messages by keyword across all "
+                    "chats; get chat_id from telegram_list_chats. Requires user approval."
                 ),
                 params=[
-                    ToolParam("chat_id", "int"),
-                    ToolParam("limit", "int", required=False, default=50),
+                    ToolParam(
+                        "chat_id", "int",
+                        description=(
+                            "Numeric id of the chat, from the id field of telegram_list_chats. "
+                            "A chat name or @username is not accepted."
+                        ),
+                    ),
+                    ToolParam(
+                        "limit", "int", required=False, default=50,
+                        description="Maximum messages to fetch, newest first. Default 50, capped at 200.",
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -55,11 +79,21 @@ class TelegramConnector(Connector):
                 name="telegram_search_messages",
                 description=(
                     "Search messages across Telegram chats by keyword. "
-                    "Requires user approval."
+                    "Returns a list of {id, chat_name, sender_name, text, date} (date is "
+                    "ISO 8601), newest first, up to limit messages (default 30, capped at "
+                    "100); id is the message id, and the chat's numeric id is not "
+                    "included. Use telegram_get_messages to read one chat's recent "
+                    "messages in full. Requires user approval."
                 ),
                 params=[
-                    ToolParam("query", "str"),
-                    ToolParam("limit", "int", required=False, default=30),
+                    ToolParam(
+                        "query", "str",
+                        description="Keyword or phrase to search for in message text, across all chats.",
+                    ),
+                    ToolParam(
+                        "limit", "int", required=False, default=30,
+                        description="Maximum messages to return, newest first. Default 30, capped at 100.",
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -72,7 +106,8 @@ class TelegramConnector(Connector):
                     "to in search results and chat history without a per-message lookup. "
                     "Refreshes automatically about once a week; call this after a new chat "
                     "starts so it resolves by name right away. Auto-approved -- refreshes "
-                    "name lookups only, reads no message content."
+                    "name lookups only, reads no message content. Returns "
+                    "{cached_chats: <count>}."
                 ),
                 params=[
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -81,10 +116,20 @@ class TelegramConnector(Connector):
             ),
             ToolSpec(
                 name="telegram_send_message",
-                description="Send a message to a Telegram chat or user by chat id. Requires user approval.",
+                description=(
+                    "Send a message to a Telegram chat or user by chat id. Returns "
+                    "{chat_id, chat_name, msg_id, text} of the sent message. Get chat_id "
+                    "from telegram_list_chats. Requires user approval."
+                ),
                 params=[
-                    ToolParam("chat_id", "int"),
-                    ToolParam("text", "str"),
+                    ToolParam(
+                        "chat_id", "int",
+                        description=(
+                            "Numeric id of the chat or user to send to, from the id field of "
+                            "telegram_list_chats. A name or @username is not accepted."
+                        ),
+                    ),
+                    ToolParam("text", "str", description="Message text to send. Must not be empty."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),

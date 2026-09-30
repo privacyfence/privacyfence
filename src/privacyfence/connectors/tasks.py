@@ -49,79 +49,162 @@ class TasksConnector(Connector):
         return [
             ToolSpec(
                 name="tasks_list_task_lists",
-                description="List all Google Task lists. Auto-approved.",
-                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                description=(
+                    "List all Google Task lists. "
+                    "Returns a list of {id, title, updated}. "
+                    "Pass an id as task_list_id to tasks_list_tasks and the other task tools. "
+                    "Auto-approved."
+                ),
+                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),],
                 read_only=True,
             ),
             ToolSpec(
                 name="tasks_list_tasks",
-                description="List tasks in a task list. Auto-approved.",
+                description=(
+                    "List tasks in a task list. "
+                    "Returns a list of tasks as {id, task_list_id, title, notes, due, "
+                    "status ('needsAction' or 'completed'), completed, updated, position, parent, "
+                    "deleted}, only the first page the Tasks API sends (up to 20 tasks), in the "
+                    "API's order; notes may be redacted by the user's privacy settings. "
+                    "Use tasks_get_task instead when you already have a task's id. "
+                    "Auto-approved."
+                ),
                 params=[
-                    ToolParam("task_list_id", "str"),
-                    ToolParam("show_completed", "bool", required=False, default=False),
+                    ToolParam("task_list_id", "str",
+                              description="Id of the task list, from tasks_list_task_lists (its id field, not its title)."),
+                    ToolParam("show_completed", "bool", required=False, default=False,
+                              description=(
+                                  "Include tasks completed through the API. Default false: only tasks "
+                                  "still to do. Tasks completed in Google's own Tasks, Gmail or "
+                                  "Calendar apps are hidden and are not returned either way."
+                              )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
             ),
             ToolSpec(
                 name="tasks_get_task",
-                description="Fetch a single task by id. Auto-approved.",
+                description=(
+                    "Fetch a single task by id. "
+                    "Returns one task in the same shape tasks_list_tasks lists; deleted is true for "
+                    "a task deleted but not yet purged, and notes may be redacted by the user's "
+                    "privacy settings. "
+                    "Get the id from tasks_list_tasks. "
+                    "Auto-approved."
+                ),
                 params=[
-                    ToolParam("task_list_id", "str"),
-                    ToolParam("task_id", "str"),
+                    ToolParam("task_list_id", "str",
+                              description="Id of the task list, from tasks_list_task_lists (its id field, not its title)."),
+                    ToolParam("task_id", "str",
+                              description="Id of the task, from tasks_list_tasks (its id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
             ),
             ToolSpec(
                 name="tasks_create_task",
-                description="Create a new task. Requires user approval.",
+                description=(
+                    "Create a new task. "
+                    "Returns the created task, with its new id, in the same shape tasks_get_task "
+                    "returns. "
+                    "Get task_list_id from tasks_list_task_lists. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("task_list_id", "str"),
-                    ToolParam("title", "str"),
-                    ToolParam("notes", "str", required=False, default=""),
+                    ToolParam("task_list_id", "str",
+                              description="Id of the task list, from tasks_list_task_lists (its id field, not its title)."),
+                    ToolParam("title", "str",
+                              description="Title of the new task, as shown in Google Tasks. Must not be empty."),
+                    ToolParam("notes", "str", required=False, default="",
+                              description="Free-text notes for the task (its description). Empty means no notes."),
                     ToolParam("due", "str", required=False, default="",
-                              description="Due date in RFC 3339 format"),
+                              description=(
+                                  "Due date as an RFC 3339 timestamp, e.g. '2026-10-15T00:00:00Z'; "
+                                  "Google Tasks keeps only the date. Empty means no due date."
+                              )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="tasks_update_task",
-                description="Update a task's title, notes, or due date. Requires user approval.",
+                description=(
+                    "Update a task's title, notes, or due date. "
+                    "Only the fields you pass non-empty change: an empty value leaves that field as "
+                    "it is, so this tool cannot clear notes or a due date. "
+                    "Returns the updated task in the same shape tasks_get_task returns. "
+                    "Use tasks_complete_task or tasks_uncomplete_task to change whether it is done. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("task_list_id", "str"),
-                    ToolParam("task_id", "str"),
-                    ToolParam("title", "str", required=False, default=""),
-                    ToolParam("notes", "str", required=False, default=""),
-                    ToolParam("due", "str", required=False, default=""),
+                    ToolParam("task_list_id", "str",
+                              description="Id of the task list, from tasks_list_task_lists (its id field, not its title)."),
+                    ToolParam("task_id", "str",
+                              description="Id of the task, from tasks_list_tasks (its id field)."),
+                    ToolParam("title", "str", required=False, default="",
+                              description="New title for the task. Empty leaves the title unchanged."),
+                    ToolParam("notes", "str", required=False, default="",
+                              description="New notes, replacing the current ones. Empty leaves the notes unchanged."),
+                    ToolParam("due", "str", required=False, default="",
+                              description=(
+                                  "New due date as an RFC 3339 timestamp, e.g. '2026-10-15T00:00:00Z'; "
+                                  "only the date is kept. Empty leaves the due date unchanged."
+                              )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="tasks_complete_task",
-                description="Mark a task as completed. Requires user approval.",
+                description=(
+                    "Mark a task as completed. "
+                    "Returns the updated task in the same shape tasks_get_task returns, with status "
+                    "'completed' and the completion time in completed. "
+                    "Use tasks_uncomplete_task to undo it. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("task_list_id", "str"),
-                    ToolParam("task_id", "str"),
+                    ToolParam("task_list_id", "str",
+                              description="Id of the task list, from tasks_list_task_lists (its id field, not its title)."),
+                    ToolParam("task_id", "str",
+                              description="Id of the task, from tasks_list_tasks (its id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="tasks_uncomplete_task",
-                description="Mark a task as not completed. Requires user approval.",
+                description=(
+                    "Mark a task as not completed. "
+                    "Returns the updated task in the same shape tasks_get_task returns, with status "
+                    "'needsAction' and completed cleared. "
+                    "Use tasks_complete_task for the opposite. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("task_list_id", "str"),
-                    ToolParam("task_id", "str"),
+                    ToolParam("task_list_id", "str",
+                              description="Id of the task list, from tasks_list_task_lists (its id field, not its title)."),
+                    ToolParam("task_id", "str",
+                              description="Id of the task, from tasks_list_tasks (its id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="tasks_move_task",
-                description="Move a task from one list to another. Requires user approval.",
+                description=(
+                    "Move a task from one list to another. "
+                    "Google Tasks cannot move a task between lists, so this copies its title, notes "
+                    "and due date into the destination list and then deletes the original: the task "
+                    "gets a new id, comes back not completed, and its subtasks and position are not "
+                    "copied. "
+                    "Returns the new task in the same shape tasks_get_task returns. "
+                    "Get both list ids from tasks_list_task_lists. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("source_list_id", "str"),
-                    ToolParam("task_id", "str"),
-                    ToolParam("destination_list_id", "str"),
+                    ToolParam("source_list_id", "str",
+                              description="Id of the list the task is in now, from tasks_list_task_lists."),
+                    ToolParam("task_id", "str",
+                              description="Id of the task to move, from tasks_list_tasks on the source list."),
+                    ToolParam("destination_list_id", "str",
+                              description="Id of the list to move the task to, from tasks_list_task_lists."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
