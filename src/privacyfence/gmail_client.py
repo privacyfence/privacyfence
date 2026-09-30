@@ -37,13 +37,14 @@ from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
+# Page cap for list calls so a runaway nextPageToken chain cannot loop forever.
+MAX_PAGES = 10
+
 # gmail.modify: reading and modifying messages/labels, creating drafts, and
 # reading send-as aliases (settings.sendAs.list, for draft signatures).
 # gmail.settings.basic: required separately for filter create/update/delete —
 # gmail.modify covers filters.list but the settings-mutation endpoints reject
 # it with a 403 insufficientPermissions unless this scope is also granted.
-MAX_PAGES = 10
-
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.settings.basic",

@@ -43,9 +43,10 @@ from .google_http import authorized_http
 from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
-MAX_PAGES = 10
-
 logger = logging.getLogger(__name__)
+
+# Page cap for list calls so a runaway nextPageToken chain cannot loop forever.
+MAX_PAGES = 10
 
 SCOPES = [
     "https://www.googleapis.com/auth/script.projects",      # read/write project source
