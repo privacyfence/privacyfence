@@ -17,7 +17,7 @@ Optional config keys (needed to refresh an expired access token — see
 
 Account ids in issue descriptions and comments (ADF mentions) are resolved to
 names through the ``AtlassianUserDirectory`` shared with the Confluence client
-(ADR 0115); a mention renders as ``@[Name](accountId)``.
+(ADR 0116); a mention renders as ``@[Name](accountId)``.
 """
 
 from __future__ import annotations

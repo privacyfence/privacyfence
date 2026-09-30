@@ -1,7 +1,7 @@
 """Account-id -> display-name directory shared by the Jira and Confluence clients.
 
 Names are looked up lazily, only for the ids that actually appear in a read, through Jira's user
-API (ADR 0115), and remembered in a small cache that can be persisted to disk. This module also
+API (ADR 0116), and remembered in a small cache that can be persisted to disk. This module also
 holds the ``@[Name](accountId)`` mention markup helpers used on reads and writes, and the
 storage-format helpers Confluence needs.
 """

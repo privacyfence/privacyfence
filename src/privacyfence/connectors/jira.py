@@ -499,7 +499,7 @@ class JiraConnector(Connector):
     async def _resolve_write_accounts(self, text: str, extra_ids: list[str]) -> dict[str, str]:
         """Directory names for every account id a write mentions or assigns.
 
-        The approver is shown these names, never the agent's labels (ADR 0116);
+        The approver is shown these names, never the agent's labels (ADR 0117);
         an id that cannot be resolved is refused before the approval card.
         """
         ids = list(dict.fromkeys(markup_mention_ids(text) + [i for i in extra_ids if i]))

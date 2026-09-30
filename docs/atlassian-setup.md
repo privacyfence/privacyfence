@@ -58,6 +58,21 @@ content details; `write:content:confluence` is needed with `write:page:confluenc
 (`confluence_download_attachment`) attachments. PrivacyFence requests no delete scope: no connector
 can delete Jira or Confluence content.
 
+## Names and mentions
+
+Jira's user API (`read:jira-user`) resolves account ids to names for both products, so no extra
+scope is needed. PrivacyFence looks each person up once and keeps the name per user in
+`atlassian_user_cache.json` for 7 days. `jira_refresh_user_cache` and
+`confluence_refresh_user_cache` fetch the cached names again.
+
+Jira and Confluence then show @mentioned people, and Confluence page authors, by name. The agent
+mentions someone with `@[Name]` followed by the account id in parentheses and finds the id with `jira_find_users` or
+`confluence_find_users`. The approval card names each mentioned or assigned person with
+Atlassian's own name.
+
+A Confluence-only site (no Jira product) cannot look names up: it shows raw account ids and cannot
+use mention markup.
+
 ## Build and distribute the bundle
 
 `scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
@@ -109,6 +124,9 @@ Switch Jira back to the classic scopes listed above, then have users **Reconnect
 **`confluence_list_attachments` or `confluence_download_attachment` fail with 401** — the
 `read:attachment:confluence` scope is missing from the app, or the user's token predates it. Add
 the scope if needed, then have the user **Reconnect…**.
+
+**Mentions show raw account ids, or a write fails with "Unknown Atlassian account id"** — the site
+has no Jira product, or the "Browse users and groups" global permission was removed for the user.
 
 **403 on specific projects or spaces** — the user's Atlassian account has no access to that project
 or space. Check permissions in Jira or Confluence.
