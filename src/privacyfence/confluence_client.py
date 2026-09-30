@@ -15,23 +15,42 @@ Optional config keys (needed to refresh an expired access token — see
 ``_try_refresh`` below):
   client_id / client_secret – the organization's Atlassian OAuth app
   refresh_token             – from the same OAuth grant as access_token
+
+Account ids (page authors, storage-format mentions) are resolved to display
+names through the user directory shared with the Jira client, which looks
+them up lazily via Jira's user API (ADR 0115). Those calls retry a token
+refresh only on 401, not on the 403/404 that ``_request`` also treats as
+stale: a Confluence-only site answers Jira's API with them, and refreshing
+would rotate the shared refresh token for nothing.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
 from atlassian import Confluence
 
+from . import atlassian_users
 from .atlassian_oauth import (
     AtlassianOAuthError,
+    is_unauthorized,
     load_token_file,
     refresh as atlassian_refresh,
     save_token_file,
+)
+from .atlassian_users import (
+    _NEGATIVE_LOOKUP_TTL,
+    FIND_USERS_MAX_RESULTS,
+    AtlassianUser,
+    AtlassianUserDirectory,
+    AtlassianUsersError,
+    storage_mention_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,6 +130,8 @@ class ConfluencePage:
     updated: str = ""
     body: str = ""
     url: str = ""
+    author_name: str = ""
+    mentions: dict[str, str] = field(default_factory=dict)
 
     def short_summary(self) -> str:
         title = self.title[:60] + "…" if len(self.title) > 60 else self.title
@@ -163,7 +184,12 @@ class ConfluenceClient:
     launch doesn't need a fresh sign-in.
     """
 
-    def __init__(self, config: dict[str, Any], token_file: str | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        token_file: str | None = None,
+        user_directory: AtlassianUserDirectory | None = None,
+    ) -> None:
         self._config = dict(config)
         self._token_file = token_file
         access_token = self._config.get("access_token", "")
@@ -193,6 +219,8 @@ class ConfluenceClient:
             self._client = Confluence(url=api_url, session=self._session, cloud=True)
         except Exception as exc:
             raise ConfluenceClientError(f"Failed to initialise Confluence client: {exc}") from exc
+        self._users = user_directory or AtlassianUserDirectory(cloud_id=cloud_id)
+        self._jira_api_denied_at: datetime | None = None
 
     # ------------------------------------------------------------------ #
     # Token refresh
@@ -261,6 +289,71 @@ class ConfluenceClient:
             return self._base_url
         except Exception as exc:
             raise ConfluenceClientError(f"Confluence connection check failed: {exc}") from exc
+
+    # ------------------------------------------------------------------ #
+    # Users
+    # ------------------------------------------------------------------ #
+
+    def _request_jira_api(self, fn, *args: Any) -> Any:
+        """Call a Jira user-API helper with one refresh-and-retry, on 401 only.
+
+        The gateway may also answer a token without Jira access with 401. When
+        the retry after a successful refresh fails with 401 again, further 401s
+        re-raise without refreshing for ``_NEGATIVE_LOOKUP_TTL``, so the shared
+        refresh token rotates at most once an hour.
+        """
+        try:
+            return fn(*args)
+        except Exception as exc:
+            if not is_unauthorized(exc):
+                raise
+            denied_at = self._jira_api_denied_at
+            if denied_at is not None and datetime.now(timezone.utc) - denied_at < _NEGATIVE_LOOKUP_TTL:
+                raise
+            if not self._try_refresh():
+                raise
+            try:
+                return fn(*args)
+            except Exception as retry_exc:
+                if is_unauthorized(retry_exc):
+                    self._jira_api_denied_at = datetime.now(timezone.utc)
+                raise
+
+    def _fetch_users_bulk(self, account_ids: list[str]) -> list[AtlassianUser]:
+        return self._request_jira_api(
+            atlassian_users.fetch_users_bulk,
+            self._session,
+            self._config.get("cloud_id", ""),
+            account_ids,
+        )
+
+    def resolve_user_names(self, account_ids: list[str]) -> dict[str, str]:
+        """Map account ids to display names; never raises."""
+        return self._users.resolve(account_ids, self._fetch_users_bulk)
+
+    def find_users(self, query: str, max_results: int = 10) -> list[AtlassianUser]:
+        if not query or not query.strip():
+            raise ConfluenceClientError("find_users requires a non-empty query")
+        max_results = max(1, min(max_results, FIND_USERS_MAX_RESULTS))
+        try:
+            users = self._request_jira_api(
+                atlassian_users.search_users,
+                self._session,
+                self._config.get("cloud_id", ""),
+                query,
+                max_results,
+            )
+        except Exception as exc:
+            raise ConfluenceClientError(f"find_users failed: {exc}") from exc
+        self._users.remember(users)
+        logger.info("find_users query=%r returned %d user(s)", query, len(users))
+        return users
+
+    def refresh_user_cache(self) -> int:
+        try:
+            return self._users.refresh(self._fetch_users_bulk)
+        except AtlassianUsersError as exc:
+            raise ConfluenceClientError(str(exc)) from exc
 
     # ------------------------------------------------------------------ #
     # Spaces
@@ -365,7 +458,9 @@ class ConfluenceClient:
             results = (raw or {}).get("results") or []
         except Exception as exc:
             raise ConfluenceClientError(f"list_pages_in_space({space_key!r}) failed: {exc}") from exc
-        pages = [self._parse_page_v2(p, space_key=space_key) for p in results]
+        author_ids = [p["authorId"] for p in results if p.get("authorId")]
+        names = self.resolve_user_names(author_ids) if author_ids else None
+        pages = [self._parse_page_v2(p, space_key=space_key, names=names) for p in results]
         logger.info("list_pages_in_space %s returned %d page(s)", space_key, len(pages))
         return pages
 
@@ -378,7 +473,7 @@ class ConfluenceClient:
             )
         except Exception as exc:
             raise ConfluenceClientError(f"get_page({page_id!r}) failed: {exc}") from exc
-        page = self._parse_page_v2(raw, include_body=True)
+        page = self._parse_page_v2(raw, include_body=True, names=self._names_for_page(raw))
         logger.info("get_page %s: %s", page_id, page.short_summary())
         return page
 
@@ -397,7 +492,9 @@ class ConfluenceClient:
             raise ConfluenceClientError(f"get_page_by_title({space_key!r}, {title!r}) failed: {exc}") from exc
         if not results:
             raise ConfluenceClientError(f"Page not found: {title!r} in space {space_key!r}")
-        return self._parse_page_v2(results[0], include_body=True, space_key=space_key)
+        return self._parse_page_v2(
+            results[0], include_body=True, space_key=space_key, names=self._names_for_page(results[0]),
+        )
 
     def create_page(
         self,
@@ -561,15 +658,26 @@ class ConfluenceClient:
             url=f"{self._base_url}/wiki/spaces/{raw.get('key', '')}",
         )
 
+    def _names_for_page(self, raw: dict[str, Any]) -> dict[str, str] | None:
+        """Resolve the author and every storage mention of a raw page, in one call."""
+        body = ((raw.get("body") or {}).get("storage") or {}).get("value", "")
+        ids = [i for i in [raw.get("authorId", "")] + storage_mention_ids(body) if i]
+        return self.resolve_user_names(ids) if ids else None
+
     def _parse_page_v2(
-        self, raw: dict[str, Any], include_body: bool = False, space_key: str = "",
+        self,
+        raw: dict[str, Any],
+        include_body: bool = False,
+        space_key: str = "",
+        names: Mapping[str, str] | None = None,
     ) -> ConfluencePage:
         """Parse a Confluence v2 page resource (``api/v2/pages/...`` shape).
 
         Unlike the old v1 ``history.lastUpdated.by.displayName``, v2 only
-        gives back an ``authorId`` (an opaque account id) — resolving it to a
-        display name would need a separate Users API call per page, so
-        ``author`` is best-effort here rather than a human-readable name.
+        gives back an ``authorId`` (an opaque account id). ``author`` stays that
+        opaque id (the ``i_am_author`` rule reads it); ``author_name`` carries
+        the name from the shared user directory when one is available.
+        ``mentions`` maps each resolved storage-format mention id to its name.
         """
         version = raw.get("version") or {}
         page_id = raw.get("id", "")
@@ -578,17 +686,20 @@ class ConfluenceClient:
         if include_body:
             body_raw = (raw.get("body") or {}).get("storage") or {}
             body = body_raw.get("value", "")
+        author = raw.get("authorId", "")
         return ConfluencePage(
             id=page_id,
             title=raw.get("title", ""),
             space_key=space_key,
             space_name="",
             version=int(version.get("number", 0)),
-            author=raw.get("authorId", ""),
+            author=author,
             created=raw.get("createdAt", ""),
             updated=version.get("createdAt", ""),
             body=body,
             url=f"{self._base_url}/wiki{raw.get('_links', {}).get('webui', '')}",
+            author_name=(names or {}).get(author, ""),
+            mentions={i: names[i] for i in storage_mention_ids(body) if names and i in names},
         )
 
     def _parse_search_result(self, raw: dict[str, Any]) -> ConfluenceSearchResult:
