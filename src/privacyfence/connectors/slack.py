@@ -89,11 +89,21 @@ class SlackConnector(Connector):
                     "List Slack channels visible to the user "
                     "(id, name, privacy, topic, purpose, member count). Optionally "
                     "filter to channels a specific participant belongs to. "
-                    "Auto-approved."
+                    "Returns a list of {id, name, is_private, topic, purpose, member_count}, "
+                    "in Slack's order, up to max_results (default 100, capped at 1000); "
+                    "names and topics may be redacted by the user's privacy settings. "
+                    "Use slack_list_dms for 1:1 conversations or slack_list_group_chats "
+                    "for group DMs. Auto-approved."
                 ),
                 params=[
-                    ToolParam("exclude_archived", "bool", required=False, default=True),
-                    ToolParam("max_results", "int", required=False, default=100),
+                    ToolParam(
+                        "exclude_archived", "bool", required=False, default=True,
+                        description="Skip archived channels. Default true; pass false to include archived channels too.",
+                    ),
+                    ToolParam(
+                        "max_results", "int", required=False, default=100,
+                        description="Maximum channels to return. Default 100, capped at 1000.",
+                    ),
                     ToolParam(
                         "participant", "str", required=False, default="",
                         description=(
@@ -112,10 +122,18 @@ class SlackConnector(Connector):
                     "List 1:1 direct-message conversations visible to the user "
                     "(id, other participant). Optionally filter to the DM with a "
                     "specific participant (user id, handle, or display name). "
-                    "Auto-approved."
+                    "Returns a list of {id, user_id, user_name}, up to max_results "
+                    "(default 100, capped at 1000); the participant filter runs on those "
+                    "first max_results DMs, so raise max_results when a DM is missing. "
+                    "Names may be redacted by the user's privacy settings. Use "
+                    "slack_list_channels for channels or slack_list_group_chats for group "
+                    "DMs. Auto-approved."
                 ),
                 params=[
-                    ToolParam("max_results", "int", required=False, default=100),
+                    ToolParam(
+                        "max_results", "int", required=False, default=100,
+                        description="Maximum DMs to read and return. Default 100, capped at 1000.",
+                    ),
                     ToolParam(
                         "participant", "str", required=False, default="",
                         description="Filter to the DM with this participant (user id, handle, or name); empty returns all",
@@ -130,10 +148,19 @@ class SlackConnector(Connector):
                     "List group-DM conversations visible to the user "
                     "(id, name, participants). Optionally filter to group chats "
                     "containing a specific participant (user id, handle, or "
-                    "display name). Auto-approved."
+                    "display name). Returns a list of {id, name, member_ids, member_names}, "
+                    "up to max_results (default 100, capped at 1000); the participant "
+                    "filter runs on those first max_results chats, so raise max_results "
+                    "when a chat is missing. Member ids and names may be redacted by the "
+                    "user's privacy settings. Use slack_list_dms for 1:1 conversations, or "
+                    "slack_create_group_chat to open a group DM that does not exist yet. "
+                    "Auto-approved."
                 ),
                 params=[
-                    ToolParam("max_results", "int", required=False, default=100),
+                    ToolParam(
+                        "max_results", "int", required=False, default=100,
+                        description="Maximum group chats to read and return. Default 100, capped at 1000.",
+                    ),
                     ToolParam(
                         "participant", "str", required=False, default="",
                         description=(
@@ -153,13 +180,17 @@ class SlackConnector(Connector):
                     "into the channel id, timestamp, and (if the link points at a "
                     "threaded reply) thread root timestamp needed by "
                     "slack_get_channel_history/slack_get_thread_replies. Reads no "
-                    "message content -- just decodes the link. Auto-approved."
+                    "message content -- just decodes the link. Returns {channel_id, "
+                    "channel_name, ts, thread_ts}; thread_ts is empty unless the link "
+                    "points at a threaded reply. Pass channel_id and thread_ts (or ts "
+                    "when thread_ts is empty) to slack_get_thread_replies. "
+                    "Auto-approved."
                 ),
                 params=[
                     ToolParam(
                         "url", "str",
                         description=(
-                            "A Slack message permalink, e.g. "
+                            "A Slack message permalink, from a message's \"Copy link\", e.g. "
                             "https://workspace.slack.com/archives/C0123/p1700000000123456"
                         ),
                     ),
@@ -175,7 +206,7 @@ class SlackConnector(Connector):
                     "channel history, thread replies, and search results without a "
                     "per-message users.info call. Refreshes automatically about once a "
                     "week; call this when a teammate who joined recently isn't resolving "
-                    "correctly yet. Auto-approved -- refreshes name/email lookups only, "
+                    "correctly yet. Returns {cached_users: <count>}. Auto-approved -- refreshes name/email lookups only, "
                     "reads no message content."
                 ),
                 params=[
@@ -194,7 +225,9 @@ class SlackConnector(Connector):
                     "created so it resolves by name right away. On a workspace with a "
                     "lot of channels, one call may not finish the whole sync -- check "
                     "the result's has_more flag and, if true, call this tool again "
-                    "(same args) to continue from where it left off. Auto-approved -- "
+                    "(same args) to continue from where it left off. Returns "
+                    "{cached_channels: <count>, has_more: bool}, plus a note when has_more "
+                    "is true. Auto-approved -- "
                     "refreshes name lookups only, reads no message content."
                 ),
                 params=[
@@ -210,11 +243,19 @@ class SlackConnector(Connector):
                     "more messages exist than were returned (a small/inactive channel, or a "
                     "Slack-imposed cap; see docs/slack-setup.md) -- call again with a larger "
                     "limit, or narrow the time range, to see the rest instead of assuming this "
-                    "is everything. Requires user approval."
+                    "is everything. Each message is {ts, channel_id, channel_name, user_id, "
+                    "user_name, text, thread_ts, reply_count}, newest first, one page of up "
+                    "to limit messages (default 50, capped at 1000); text and names may be "
+                    "redacted by the user's privacy settings. Use slack_get_thread_replies "
+                    "for a thread's replies, or slack_search_messages to find messages by "
+                    "text or person. Requires user approval."
                 ),
                 params=[
-                    ToolParam("channel_id", "str"),
-                    ToolParam("limit", "int", required=False, default=50),
+                    ToolParam("channel_id", "str", description="Id of the channel or conversation, from the id field of slack_list_channels, slack_list_dms or slack_list_group_chats, or from slack_resolve_permalink. A name is not accepted."),
+                    ToolParam(
+                        "limit", "int", required=False, default=50,
+                        description="Maximum messages to fetch, newest first. Default 50, capped at 1000.",
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -224,12 +265,23 @@ class SlackConnector(Connector):
                 description=(
                     "Fetch all replies in a Slack thread. Returns {messages: [...], has_more: "
                     "bool}, plus a note when has_more is true -- more replies exist than were "
-                    "returned (see slack_get_channel_history's own note on why). Requires user "
-                    "approval."
+                    "returned (see slack_get_channel_history's own note on why). Each message "
+                    "is {ts, channel_id, channel_name, user_id, user_name, text, thread_ts, "
+                    "reply_count}, the parent message included, in Slack's order; text and "
+                    "names may be redacted by the user's privacy settings. Use "
+                    "slack_get_channel_history for the channel's top-level messages; get "
+                    "thread_ts from a permalink with slack_resolve_permalink. Requires "
+                    "user approval."
                 ),
                 params=[
-                    ToolParam("channel_id", "str"),
-                    ToolParam("thread_ts", "str"),
+                    ToolParam("channel_id", "str", description="Id of the channel or conversation, from the id field of slack_list_channels, slack_list_dms or slack_list_group_chats, or from slack_resolve_permalink. A name is not accepted."),
+                    ToolParam(
+                        "thread_ts", "str",
+                        description=(
+                            "Timestamp (ts) of the thread's parent message, e.g. '1700000000.123456', "
+                            "from slack_get_channel_history or slack_resolve_permalink."
+                        ),
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -242,16 +294,30 @@ class SlackConnector(Connector):
                     "text-only query when looking for messages from or with someone "
                     "-- e.g. 'Bob wrote me' is participant='Bob'; 'Bob in a chat with "
                     "Jane' is participant='Bob,Jane' -- it reads the matching DM/group-"
-                    "chat conversation(s) directly instead of relying on Slack's search "
-                    "index, which is more reliable for participant-based lookups. "
-                    "Combine with query to also filter those conversations' text. "
-                    "Defaults to the last 90 days (about 3 months) so results on a "
-                    "workspace with long history aren't dominated by old, no-longer-"
-                    "relevant matches; widen or disable via days. Requires user approval."
+                    "chat conversation(s) directly instead of Slack's search index, "
+                    "which is more reliable. Combine with query to also filter their "
+                    "text. Defaults to the last 90 days so old matches do not dominate; "
+                    "widen or disable via days. Returns a list of {ts, "
+                    "channel_id, channel_name, user_id, user_name, text, thread_ts, "
+                    "reply_count}, up to count (default 20, capped at 100); a participant "
+                    "search reads at most 10 matching conversations, newest first. Text "
+                    "and names may be redacted by the user's privacy settings. Use "
+                    "slack_get_channel_history to read a known channel in order. Requires "
+                    "user approval."
                 ),
                 params=[
-                    ToolParam("query", "str", required=False, default=""),
-                    ToolParam("count", "int", required=False, default=20),
+                    ToolParam(
+                        "query", "str", required=False, default="",
+                        description=(
+                            "Text to search for, in Slack search syntax. With participant it is "
+                            "a case-insensitive substring filter instead. At least one of query "
+                            "and participant is required; empty means no text filter."
+                        ),
+                    ),
+                    ToolParam(
+                        "count", "int", required=False, default=20,
+                        description="Maximum messages to return. Default 20, capped at 100.",
+                    ),
                     ToolParam(
                         "participant", "str", required=False, default="",
                         description=(
@@ -278,7 +344,9 @@ class SlackConnector(Connector):
                     "participants and return its channel id, ready for slack_send_message. "
                     "Participants must already have a Slack user id (from slack_list_dms, "
                     "slack_list_group_chats, or a message's user_id) -- this does not resolve "
-                    "email addresses or handles. Requires user approval."
+                    "email addresses or handles. Returns {id, name, member_ids, member_names}; "
+                    "member ids and names may be redacted by the user's privacy settings. "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam(
@@ -294,13 +362,33 @@ class SlackConnector(Connector):
                     "Send a message to a Slack channel or DM. Requires user approval. "
                     "Set mark_unread=true to leave the message unread after sending "
                     "(useful when sending a DM to yourself as a note; requires the "
-                    "im:write scope on the user token for DMs)."
+                    "im:write scope on the user token for DMs). Returns {channel_id, ts, "
+                    "text} of the sent message; channel_id is the resolved conversation "
+                    "id, which for a DM is the D... id even if you passed a user id. Use "
+                    "slack_create_group_chat first to message a new group of people."
                 ),
                 params=[
-                    ToolParam("channel_id", "str"),
-                    ToolParam("text", "str"),
-                    ToolParam("thread_ts", "str", required=False, default=""),
-                    ToolParam("mark_unread", "bool", required=False, default=False),
+                    ToolParam(
+                        "channel_id", "str",
+                        description=(
+                            "Id of the channel, DM or group DM to post in, from the id field of "
+                            "slack_list_channels, slack_list_dms or slack_list_group_chats. A "
+                            "user id also works for a DM. A name is not accepted."
+                        ),
+                    ),
+                    ToolParam("text", "str", description="Message text to send, in Slack mrkdwn. Must not be empty."),
+                    ToolParam(
+                        "thread_ts", "str", required=False, default="",
+                        description=(
+                            "Timestamp (ts) of the parent message to reply to in its thread, from "
+                            "slack_get_channel_history or slack_resolve_permalink. Empty posts a "
+                            "new top-level message."
+                        ),
+                    ),
+                    ToolParam(
+                        "mark_unread", "bool", required=False, default=False,
+                        description="Leave the sent message unread for you. Default false.",
+                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
