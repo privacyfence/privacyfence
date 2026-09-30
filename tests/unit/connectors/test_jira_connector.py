@@ -353,7 +353,7 @@ class TestCreateIssue:
         result = await connector.call("jira_create_issue", {"project_key": "ENG", "summary": "New bug"})
 
         assert result["key"] == "ENG-100"
-        client.create_issue.assert_called_once_with("ENG", "New bug", "Task", "", "")
+        client.create_issue.assert_called_once_with("ENG", "New bug", "Task", "", "", "", None, {})
 
     async def test_description_renders_as_a_labeled_heading_block(self, gated_call_spy):
         # v2's right pane: a label-styled "Description" heading above the
@@ -395,7 +395,121 @@ class TestAddComment:
         assert kwargs["gate"] == "popup"
         assert kwargs["details_text"] == "On it"
         assert result["id"] == "c2"
-        client.add_comment.assert_called_once_with("ENG-42", "On it")
+        client.add_comment.assert_called_once_with("ENG-42", "On it", {})
+
+
+ACC = "557058:aaaaaaaa-bbbb"
+ACC2 = "557058:cccccccc-dddd"
+
+
+class TestWriteMentions:
+    async def test_comment_shows_directory_name_not_agent_label(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Real Name"}
+        client.add_comment.return_value = JiraComment(id="c3", author="me", body="x")
+        body = f"hi @[Fake Name]({ACC})"
+
+        await connector.call("jira_add_comment", {"issue_key": "ENG-42", "body": body})
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Mentions"] == "Real Name"
+        assert kwargs["details_text"] == "hi @Real Name"
+        assert kwargs["summary"] == "Comment on ENG-42: hi @Real Name"
+        assert "Fake Name" not in str(
+            [kwargs["summary"], kwargs["details_text"], kwargs["preview"]]
+        )
+        assert kwargs["raw_data"]["body"] == body
+        client.resolve_user_names.assert_called_once_with([ACC])
+        client.add_comment.assert_called_once_with("ENG-42", body, {ACC: "Real Name"})
+
+    async def test_unresolvable_id_refused_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {}
+
+        with pytest.raises(ValueError, match="Unknown Atlassian account id"):
+            await connector.call(
+                "jira_add_comment", {"issue_key": "ENG-42", "body": f"@[X]({ACC})"},
+            )
+        assert gated_call_spy == []
+        client.add_comment.assert_not_called()
+
+    async def test_no_mentions_makes_no_lookup(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.add_comment.return_value = JiraComment(id="c3", author="me", body="x")
+
+        await connector.call("jira_add_comment", {"issue_key": "ENG-42", "body": "plain"})
+
+        client.resolve_user_names.assert_not_called()
+        assert "Mentions" not in gated_call_spy[0]["preview"]
+
+    async def test_create_with_assignee_and_mention(self, gated_call_spy):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {ACC: "Real Name", ACC2: "Bob Real"}
+        client.create_issue.return_value = make_issue(key="ENG-100")
+
+        await connector.call("jira_create_issue", {
+            "project_key": "ENG", "summary": "S", "description": f"cc @[Fake]({ACC})",
+            "assignee_account_id": ACC2,
+        })
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Assignee"] == "Bob Real"
+        assert kwargs["preview"]["Mentions"] == "Real Name"
+        assert kwargs["args"]["assignee_account_id"] == ACC2
+        assert kwargs["details_text"] == "cc @Real Name"
+        assert kwargs["preview_blocks"][1]["text"] == "cc @Real Name"
+        assert "Fake" not in str([kwargs["details_text"], kwargs["preview"], kwargs["summary"]])
+        client.create_issue.assert_called_once_with(
+            "ENG", "S", "Task", f"cc @[Fake]({ACC})", "", ACC2, None,
+            {ACC: "Real Name", ACC2: "Bob Real"},
+        )
+
+    async def test_create_unresolvable_assignee_refused(self, gated_call_spy):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {}
+
+        with pytest.raises(ValueError, match="jira_find_users"):
+            await connector.call("jira_create_issue", {
+                "project_key": "ENG", "summary": "S", "assignee_account_id": ACC,
+            })
+        assert gated_call_spy == []
+
+    async def test_update_assignee_only_and_description_mentions(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.update_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Real Name"}
+
+        await connector.call(
+            "jira_update_issue", {"issue_key": "ENG-42", "assignee_account_id": ACC},
+        )
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Assignee"] == "→ Real Name"
+        assert kwargs["raw_data"]["fields"] == {"assignee": {"accountId": ACC}}
+        client.update_issue.assert_called_once_with("ENG-42", {"assignee": {"accountId": ACC}})
+
+        await connector.call(
+            "jira_update_issue", {"issue_key": "ENG-42", "description": f"ping @[Fake]({ACC})"},
+        )
+        kwargs = gated_call_spy[1]
+        assert kwargs["preview"]["Mentions"] == "Real Name"
+        assert kwargs["details_text"] == "ping @Real Name"
+        node = kwargs["raw_data"]["fields"]["description"]["content"][0]["content"][1]
+        assert node == {"type": "mention", "attrs": {"id": ACC, "text": "@Real Name"}}
+
+    async def test_update_unresolvable_assignee_refused(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {}
+
+        with pytest.raises(ValueError, match="Unknown Atlassian account id"):
+            await connector.call(
+                "jira_update_issue", {"issue_key": "ENG-42", "assignee_account_id": ACC},
+            )
+        assert gated_call_spy == []
 
 
 class TestUpdateIssue:
