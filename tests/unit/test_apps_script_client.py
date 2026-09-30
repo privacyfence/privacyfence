@@ -242,6 +242,25 @@ class TestListProjects:
 
         assert drive_service.files.return_value.list.call_args.kwargs["pageSize"] == 1
 
+    def test_follows_next_page_token_and_truncates(self):
+        drive_service = MagicMock()
+        list_call = drive_service.files.return_value.list
+        list_call.return_value.execute.side_effect = [
+            {"files": [{"id": "a"}, {"id": "b"}], "nextPageToken": "t2"},
+            {"files": [{"id": "c"}, {"id": "d"}]},
+        ]
+        client = make_client(MagicMock(), drive_service)
+
+        result = client.list_projects(max_results=3)
+
+        assert [p.id for p in result] == ["a", "b", "c"]
+        first, second = list_call.call_args_list
+        assert first.kwargs["pageSize"] == 3
+        assert "pageToken" not in first.kwargs
+        assert "nextPageToken" in first.kwargs["fields"]
+        assert second.kwargs["pageSize"] == 1
+        assert second.kwargs["pageToken"] == "t2"
+
     def test_http_error_becomes_apps_script_client_error(self):
         drive_service = MagicMock()
         drive_service.files.return_value.list.return_value.execute.side_effect = http_error(500)
@@ -387,6 +406,24 @@ class TestGetExecutionLog:
         assert (
             service.processes.return_value.listScriptProcesses.call_args.kwargs["pageSize"] == 50
         )
+
+    def test_follows_next_page_token_and_truncates(self):
+        service = MagicMock()
+        call = service.processes.return_value.listScriptProcesses
+        call.return_value.execute.side_effect = [
+            {"processes": [{"functionName": "a"}, {"functionName": "b"}], "nextPageToken": "t2"},
+            {"processes": [{"functionName": "c"}, {"functionName": "d"}]},
+        ]
+        client = make_client(service)
+
+        result = client.get_execution_log("s1", max_results=3)
+
+        assert [e.function_name for e in result] == ["a", "b", "c"]
+        first, second = call.call_args_list
+        assert first.kwargs["pageSize"] == 3
+        assert "pageToken" not in first.kwargs
+        assert second.kwargs["pageSize"] == 1
+        assert second.kwargs["pageToken"] == "t2"
 
     def test_http_error_becomes_apps_script_client_error(self):
         service = MagicMock()

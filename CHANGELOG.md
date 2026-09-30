@@ -54,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Tasks:** `tasks_list_tasks` reads up to 100 tasks across pages and, with `show_completed`, includes tasks completed in Google's own Tasks, Gmail and Calendar apps. `tasks_update_task` can now remove notes or the due date (`clear_notes`, `clear_due`), and `tasks_move_task` moves the task natively, so it keeps its id, status and subtasks.
 - **Calendar.** `calendar_list_events` now reads up to `max_results` events across pages and an empty `time_min` means now instead of the oldest events first; time arguments that are not RFC 3339 date-times, an end time not after the start, and a bad working-location date or location are rejected before approval is requested; `calendar_get_event_details` no longer advertises attachments it does not return.
 - **Contacts.** `contacts_list` now applies `source` while paging, so a narrow source no longer drops matches; `contacts_search` no longer falls back to a full scan when a search simply finds nothing (and its fallback no longer returns directory-only contacts for `source="personal"`); and invalid `emails`/`phones` JSON is now rejected with an error instead of being silently ignored.
+- **Apps Script and Telegram.** `apps_script_list_projects` and `apps_script_get_execution_log` now read up to `max_results` items across pages, `telegram_search_messages` results include `chat_id` (the value `telegram_get_messages` takes), and `telegram_list_chats` results include each chat's `username`.
 
 ## [5.3.0] — 2026-09-30
 
