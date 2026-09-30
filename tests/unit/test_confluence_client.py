@@ -15,6 +15,7 @@ import pytest
 from privacyfence import confluence_client as confluence_client_module
 from privacyfence.atlassian_oauth import AtlassianOAuthError
 from privacyfence.confluence_client import (
+    MAX_PAGES,
     ConfluenceAttachment,
     ConfluenceClient,
     ConfluenceClientError,
@@ -355,6 +356,40 @@ class TestListSpaces:
             client.list_spaces()
 
 
+class TestListSpacesPaging:
+    def test_follows_cursor_to_second_page(self):
+        client = make_client()
+        client._client.get.side_effect = [
+            {"results": [{"key": "A"}], "_links": {"next": "/wiki/api/v2/spaces?limit=1&cursor=abc%3D"}},
+            {"results": [{"key": "B"}]},
+        ]
+        spaces = client.list_spaces(max_results=2)
+        assert [s.key for s in spaces] == ["A", "B"]
+        calls = client._client.get.call_args_list
+        assert "cursor" not in calls[0].kwargs["params"]
+        assert calls[1].kwargs["params"]["cursor"] == "abc="
+        assert calls[1].kwargs["params"]["limit"] == 1
+
+    def test_page_size_capped_at_250_and_max_results_at_1000(self):
+        client = make_client()
+        client._client.get.return_value = {"results": []}
+        client.list_spaces(max_results=5000)
+        assert client._client.get.call_args.kwargs["params"]["limit"] == 250
+
+    def test_truncates_to_max_results(self):
+        client = make_client()
+        client._client.get.return_value = {"results": [{"key": "A"}, {"key": "B"}, {"key": "C"}]}
+        assert len(client.list_spaces(max_results=2)) == 2
+
+    def test_page_budget_bounds_requests(self):
+        client = make_client()
+        client._client.get.return_value = {
+            "results": [{"key": "A"}], "_links": {"next": "/x?cursor=more"},
+        }
+        client.list_spaces(max_results=1000)
+        assert client._client.get.call_count == MAX_PAGES
+
+
 class TestSearch:
     def test_requires_query(self):
         client = make_client()
@@ -367,6 +402,13 @@ class TestSearch:
         client.search("budget")
         cql = client._client.cql.call_args.args[0]
         assert 'text ~ "budget"' in cql
+
+    def test_escapes_backslash_and_double_quote(self):
+        client = make_client()
+        client._client.cql.return_value = {"results": []}
+        client.search('say "hi" \\ there')
+        cql = client._client.cql.call_args.args[0]
+        assert cql == 'text ~ "say \\"hi\\" \\\\ there" order by lastmodified desc'
 
     def test_maps_results(self):
         client = make_client()
@@ -414,6 +456,25 @@ class TestListPagesInSpace:
         assert pages[0].title == "Page"
         assert pages[0].space_key == "ENG"
         assert client._client.get.call_args_list[1].args[0] == "api/v2/spaces/999/pages"
+
+    def test_follows_cursor_to_second_page(self):
+        client = make_client()
+        client._client.get.side_effect = [
+            {"results": [{"id": "999", "key": "ENG"}]},
+            {"results": [{"id": "1", "title": "One"}], "_links": {"next": "/wiki/api/v2/spaces/999/pages?cursor=c2"}},
+            {"results": [{"id": "2", "title": "Two"}]},
+        ]
+        pages = client.list_pages_in_space("ENG", max_results=2)
+        assert [p.title for p in pages] == ["One", "Two"]
+        calls = client._client.get.call_args_list
+        assert calls[2].args[0] == "api/v2/spaces/999/pages"
+        assert calls[2].kwargs["params"] == {"limit": 1, "cursor": "c2"}
+
+    def test_max_results_clamp_is_1000_with_200_page_size(self):
+        client = make_client()
+        client._client.get.side_effect = [{"results": [{"id": "999"}]}, {"results": []}]
+        client.list_pages_in_space("ENG", max_results=5000)
+        assert client._client.get.call_args_list[1].kwargs["params"]["limit"] == 200
 
     def test_space_not_found_raises_confluence_client_error(self):
         client = make_client()
@@ -589,6 +650,27 @@ class TestListAttachments:
             ),
         ]
         assert client._client.get.call_args.args[0] == "api/v2/pages/1/attachments"
+
+    def test_follows_cursor_and_finds_attachments_past_the_50th(self):
+        client = make_client()
+        first = [{"id": f"a{i}", "title": f"f{i}"} for i in range(50)]
+        second = [{"id": f"a{i}", "title": f"f{i}"} for i in range(50, 60)]
+        client._client.get.side_effect = [
+            {"results": first, "_links": {"next": "/wiki/api/v2/pages/1/attachments?cursor=n2"}},
+            {"results": second},
+        ]
+        attachments = client.list_attachments("1")
+        assert len(attachments) == 60
+        assert attachments[55].name == "f55"
+        calls = client._client.get.call_args_list
+        assert calls[0].kwargs["params"]["limit"] == 250
+        assert calls[1].kwargs["params"]["cursor"] == "n2"
+
+    def test_collects_at_most_500(self):
+        client = make_client()
+        client._client.get.return_value = {"results": [{"id": str(i)} for i in range(250)],
+                                           "_links": {"next": "/x?cursor=n"}}
+        assert len(client.list_attachments("1")) == 500
 
     def test_missing_size_defaults_to_zero(self):
         client = make_client()
