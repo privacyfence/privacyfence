@@ -80,19 +80,35 @@ def gated_call_spy(monkeypatch):
 
 class TestParseJsonList:
     def test_valid_json_list(self):
-        assert _parse_json_list('[{"value": "a@b.com", "type": "work"}]') == [{"value": "a@b.com", "type": "work"}]
+        assert _parse_json_list('[{"value": "a@b.com", "type": "work"}]', "emails") == [
+            {"value": "a@b.com", "type": "work"}]
 
     def test_empty_string_returns_none(self):
-        assert _parse_json_list("") is None
+        assert _parse_json_list("", "emails") is None
 
     def test_whitespace_only_returns_none(self):
-        assert _parse_json_list("   ") is None
+        assert _parse_json_list("   ", "emails") is None
 
-    def test_invalid_json_returns_none(self):
-        assert _parse_json_list("not json") is None
+    def test_empty_list_is_kept_to_clear(self):
+        assert _parse_json_list("[]", "phones") == []
 
-    def test_valid_json_but_not_a_list_returns_none(self):
-        assert _parse_json_list('{"value": "a@b.com"}') is None
+    def test_invalid_json_raises(self):
+        with pytest.raises(ValueError, match="emails must be a JSON list"):
+            _parse_json_list("not json", "emails")
+
+    def test_valid_json_but_not_a_list_raises(self):
+        with pytest.raises(ValueError, match="phones must be a JSON list"):
+            _parse_json_list('{"value": "a@b.com"}', "phones")
+
+    def test_list_of_non_objects_raises(self):
+        with pytest.raises(ValueError, match="emails must be a JSON list"):
+            _parse_json_list('["a@b.com"]', "emails")
+
+    def test_item_without_string_value_raises(self):
+        with pytest.raises(ValueError):
+            _parse_json_list('[{"type": "work"}]', "emails")
+        with pytest.raises(ValueError):
+            _parse_json_list('[{"value": ""}]', "emails")
 
 
 class TestDispatch:
@@ -286,18 +302,35 @@ class TestContactsUpdate:
             None, None, None,
         )
 
-    async def test_invalid_json_emails_falls_back_to_current_value_not_a_bogus_diff(self, gated_call_spy):
+    async def test_invalid_json_emails_rejected_before_gate_and_client(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_contact.return_value = make_contact()
+
+        with pytest.raises(ValueError, match="emails must be a JSON list"):
+            await connector.call("contacts_update", {"resource_name": "people/c1", "emails": "not valid json"})
+
+        assert gated_call_spy == []
+        client.update_contact.assert_not_called()
+
+    async def test_list_of_strings_rejected_for_phones(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_contact.return_value = make_contact()
+
+        with pytest.raises(ValueError, match="phones must be a JSON list"):
+            await connector.call("contacts_update", {"resource_name": "people/c1", "phones": '["+1555"]'})
+
+        assert gated_call_spy == []
+        client.update_contact.assert_not_called()
+
+    async def test_empty_list_shows_cleared_in_preview(self, gated_call_spy):
         connector, client = make_connector()
         client.get_contact.return_value = make_contact()
         client.update_contact.return_value = make_contact()
 
-        await connector.call("contacts_update", {"resource_name": "people/c1", "emails": "not valid json"})
+        await connector.call("contacts_update", {"resource_name": "people/c1", "emails": "[]"})
 
-        kwargs = gated_call_spy[0]
-        # Emails always appears -- invalid JSON is dropped (same as before),
-        # so it shows the current value plainly, not a diff against nothing.
-        assert kwargs["preview"]["Emails"] == "bob@example.com"
-        client.update_contact.assert_called_once_with("people/c1", None, None, None, None, None, None)
+        assert gated_call_spy[0]["preview"]["Emails"] == "bob@example.com → (cleared)"
+        assert client.update_contact.call_args.args[2] == []
 
     async def test_lookup_failure_becomes_runtime_error(self, gated_call_spy):
         # Unlike the old display-name-only lookup, this call now needs the
@@ -365,15 +398,14 @@ class TestContactsCreate:
             None, None, None,
         )
 
-    async def test_invalid_json_emails_are_dropped_not_shown_and_passed_as_none(self, gated_call_spy):
+    async def test_invalid_json_emails_rejected_before_gate_and_client(self, gated_call_spy):
         connector, client = make_connector()
-        client.create_contact.return_value = make_contact()
 
-        await connector.call("contacts_create", {"display_name": "New Person", "emails": "not valid json"})
+        with pytest.raises(ValueError, match="emails must be a JSON list"):
+            await connector.call("contacts_create", {"display_name": "New Person", "emails": "not valid json"})
 
-        kwargs = gated_call_spy[0]
-        assert "Emails" not in kwargs["preview"]
-        client.create_contact.assert_called_once_with("New Person", None, None, None, None, None)
+        assert gated_call_spy == []
+        client.create_contact.assert_not_called()
 
     async def test_result_converted_to_dict(self, gated_call_spy):
         connector, client = make_connector()

@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/contacts"]
 
+MAX_PAGES = 10
+_SEARCH_PAGE_MAX = 30
+
 
 class ContactsClientError(Exception):
     """Raised for unrecoverable Contacts client problems (auth, config, API)."""
@@ -138,6 +141,7 @@ class ContactsClient:
         # service per thread instead of one shared instance.
         self._local = threading.local()
         self._creds_lock = threading.Lock()
+        self._search_warmed = False
 
     # ------------------------------------------------------------------ #
     # Authentication
@@ -239,35 +243,47 @@ class ContactsClient:
         ``source`` filters the personal/directory-merged response after
         classifying each entry via its ``metadata.sources`` (see
         ``_classify_source``): "personal", "directory", or "both" (default).
-        Filtering happens client-side after fetching ``max_results`` raw
-        entries, so a narrow filter may return fewer than ``max_results``.
+        Filtering is applied per page, and paging continues (up to
+        ``MAX_PAGES`` requests) until ``max_results`` matches are found.
         """
         source = _normalize_source(source)
         max_results = max(1, min(int(max_results), 1000))
-        try:
-            result = (
-                self._get_service()
-                .people()
-                .connections()
-                .list(
-                    resourceName="people/me",
-                    pageSize=max_results,
-                    personFields=_PERSON_FIELDS,
-                    sources=[
-                        "READ_SOURCE_TYPE_CONTACT",
-                        "READ_SOURCE_TYPE_PROFILE",
-                        "READ_SOURCE_TYPE_DOMAIN_CONTACT",
-                    ],
+        service = self._get_service()
+        contacts: list[Contact] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(contacts)
+            kwargs: dict[str, Any] = {}
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                result = (
+                    service.people()
+                    .connections()
+                    .list(
+                        resourceName="people/me",
+                        pageSize=min(max(remaining, 1), 1000),
+                        personFields=_PERSON_FIELDS,
+                        sources=[
+                            "READ_SOURCE_TYPE_CONTACT",
+                            "READ_SOURCE_TYPE_PROFILE",
+                            "READ_SOURCE_TYPE_DOMAIN_CONTACT",
+                        ],
+                        **kwargs,
+                    )
+                    .execute()
                 )
-                .execute()
-            )
-        except HttpError as exc:
-            raise ContactsClientError(f"list_contacts failed: {exc}") from exc
-        contacts = [
-            _parse_person(p) for p in result.get("connections", [])
-        ]
-        if source != "both":
-            contacts = [c for c in contacts if _matches_source(c.source, source)]
+            except HttpError as exc:
+                raise ContactsClientError(f"list_contacts failed: {exc}") from exc
+            for p in result.get("connections", []):
+                contact = _parse_person(p)
+                if _matches_source(contact.source, source):
+                    contacts.append(contact)
+                    if len(contacts) >= max_results:
+                        break
+            page_token = result.get("nextPageToken")
+            if len(contacts) >= max_results or not page_token:
+                break
         logger.info("list_contacts source=%s returned %d contacts", source, len(contacts))
         return contacts
 
@@ -285,12 +301,12 @@ class ContactsClient:
         results: dict[str, Contact] = {}
 
         if source in ("personal", "both"):
-            for c in self._search_personal(query, max_results):
+            for c in self._search_personal(query, max_results, source):
                 results[c.resource_name] = c
 
         if source == "directory":
             q = query.lower()
-            for c in self.list_contacts(max_results=1000, source="directory"):
+            for c in self.list_contacts(max_results=1000, source=source):
                 if q in c.display_name.lower() or any(q in e.value.lower() for e in c.emails):
                     results[c.resource_name] = c
 
@@ -298,38 +314,42 @@ class ContactsClient:
         logger.info("search_contacts query=%r source=%s returned %d", query, source, len(ordered))
         return ordered
 
-    def _search_personal(self, query: str, max_results: int) -> list[Contact]:
+    def _search_personal(self, query: str, max_results: int, source: str = "both") -> list[Contact]:
         """Search CONTACT-sourced (personally-saved) contacts via searchContacts."""
         service = self._get_service()
+        if not self._search_warmed:
+            # searchContacts needs a warm-up request (empty query) before the
+            # first real search, or it can return stale/empty results.
+            self._search_warmed = True
+            try:
+                service.people().searchContacts(
+                    query="", readMask=_PERSON_FIELDS, pageSize=1,
+                ).execute()
+            except Exception as exc:  # warm-up result and errors are ignored
+                logger.debug("searchContacts warm-up failed: %s", exc)
         try:
             result = (
                 service.people()
                 .searchContacts(
                     query=query,
                     readMask=_PERSON_FIELDS,
-                    pageSize=max_results,
+                    pageSize=min(max_results, _SEARCH_PAGE_MAX),
                 )
                 .execute()
             )
-            contacts = [
+            return [
                 _parse_person(r.get("person", r))
                 for r in result.get("results", [])
             ]
         except HttpError as exc:
             logger.warning("searchContacts failed (%s); falling back to connections.list", exc)
-            contacts = []
 
-        if not contacts:
-            # Fallback: list all and filter client-side
-            all_contacts = self.list_contacts(max_results=1000)
-            q = query.lower()
-            contacts = [
-                c for c in all_contacts
-                if q in c.display_name.lower()
-                or any(q in e.value.lower() for e in c.emails)
-            ][:max_results]
-
-        return contacts
+        q = query.lower()
+        return [
+            c for c in self.list_contacts(max_results=1000, source=source)
+            if q in c.display_name.lower()
+            or any(q in e.value.lower() for e in c.emails)
+        ][:max_results]
 
     def get_contact(self, resource_name: str, source: str = "both") -> Contact:
         """Fetch a single contact by resource name.
