@@ -175,3 +175,71 @@ def test_robots_and_sitemap_are_generated_not_hand_written():
     # silently overwritten, or worse, published instead.
     assert not (WEBSITE / "robots.txt").exists()
     assert not (WEBSITE / "sitemap.xml").exists()
+
+
+# ---- Second-level pages: BreadcrumbList, cross-links --------------------------------------------
+
+SECOND_LEVEL = [
+    path for path in build_site.PAGES if re.fullmatch(r"/(?:ai-agents|compare|connectors)/[a-z0-9-]+/", path)
+]
+CONNECTOR_PAGES = [path for path in SECOND_LEVEL if path.startswith("/connectors/")]
+
+
+def _json_ld(page: str) -> list[dict]:
+    nodes = []
+    for raw in re.findall(r'<script type="application/ld\+json">(.*?)</script>', page, flags=re.S):
+        data = json.loads(raw)
+        nodes.extend(data.get("@graph", [data]))
+    return nodes
+
+
+def _canonical(page: str) -> str:
+    return re.search(r'<link rel="canonical" href="([^"]+)"', page)[1]
+
+
+def test_there_are_twelve_second_level_pages():
+    assert len(SECOND_LEVEL) == 12
+
+
+@pytest.mark.parametrize("path", SECOND_LEVEL)
+def test_every_second_level_page_has_a_breadcrumb_ending_at_its_canonical_url(path):
+    page = PAGES[path]
+    crumbs = [n for n in _json_ld(page) if n.get("@type") == "BreadcrumbList"]
+    assert len(crumbs) == 1
+    items = crumbs[0]["itemListElement"]
+    assert [i["position"] for i in items] == [1, 2, 3]
+    assert items[0]["item"] == f"{APEX}/"
+    assert items[1]["item"] == f"{APEX}/{path.split('/')[1]}/"
+    assert items[-1]["item"] == _canonical(page)
+    assert all(i["name"] for i in items)
+
+
+@pytest.mark.parametrize("path", [p for p in build_site.PAGES if p not in SECOND_LEVEL])
+def test_no_other_hand_written_page_gets_a_generated_breadcrumb(path):
+    assert not [n for n in _json_ld(PAGES[path]) if n.get("@type") == "BreadcrumbList"]
+
+
+@pytest.mark.parametrize("path", ["/", "/download/"])
+def test_same_as_lists_the_glama_listing(path):
+    app = next(n for n in _json_ld(PAGES[path]) if n.get("@type") == "SoftwareApplication")
+    assert "https://glama.ai/mcp/servers/privacyfence/privacyfence" in app["sameAs"]
+
+
+def _main_links(page: str) -> set[str]:
+    main = re.search(r"<main.*?</main>", page, flags=re.S)[0]
+    return {re.sub(r"#.*", "", h) for h in re.findall(r'href="(/[^"]*)"', main)}
+
+
+@pytest.mark.parametrize("path", CONNECTOR_PAGES)
+def test_a_connector_page_links_the_other_connectors_from_its_content(path):
+    links = _main_links(PAGES[path])
+    assert (set(CONNECTOR_PAGES) - {path}) | {"/connectors/"} <= links
+    assert path not in links, "the block leaves out the page it is on"
+
+
+def test_content_links_into_the_weakly_linked_pages():
+    """Header and footer excluded: every connector page and the FAQ get at least three links from
+    the content of other pages."""
+    for target in [*CONNECTOR_PAGES, "/faq/"]:
+        linking = [p for p, page in PAGES.items() if p != target and target in _main_links(page)]
+        assert len(linking) >= 3, f"{target} is linked from the content of only {linking}"
