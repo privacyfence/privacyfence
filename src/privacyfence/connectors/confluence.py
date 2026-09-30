@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .. import local_files
-from ..atlassian_users import storage_mentions_to_text
+from ..atlassian_users import (
+    markup_mention_ids,
+    markup_to_storage,
+    storage_mention_ids,
+    storage_mentions_to_text,
+)
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..confluence_client import ConfluenceClient, ConfluenceClientError, resolve_attachment_destination
 from ..connector import Connector, ToolParam, ToolSpec
@@ -225,7 +230,7 @@ class ConfluenceConnector(Connector):
                 params=[
                     ToolParam("space_key", "str"),
                     ToolParam("title", "str"),
-                    ToolParam("body", "str", description="HTML storage format body"),
+                    ToolParam("body", "str", description="HTML storage format body. Mention someone with @[Name](accountId) -- find the id with confluence_find_users."),
                     ToolParam("parent_id", "str", required=False, default="",
                               description="Optional parent page ID"),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -240,7 +245,7 @@ class ConfluenceConnector(Connector):
                 params=[
                     ToolParam("page_id", "str"),
                     ToolParam("title", "str"),
-                    ToolParam("body", "str", description="New HTML storage format body"),
+                    ToolParam("body", "str", description="New HTML storage format body. Mention someone with @[Name](accountId) -- find the id with confluence_find_users."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -632,7 +637,10 @@ class ConfluenceConnector(Connector):
         preview = {"Space": space_key, "Title": title}
         if parent_id:
             preview["Parent page ID"] = parent_id
-        raw = {"space_key": space_key, "title": title, "parent_id": parent_id, "body": body}
+        storage_body, mentions = await self._prepare_body(body)
+        if mentions:
+            preview["Mentions"] = mentions
+        raw = {"space_key": space_key, "title": title, "parent_id": parent_id, "body": storage_body}
         await gated_call(
             connector=self.name,
             tool="confluence_create_page",
@@ -643,11 +651,13 @@ class ConfluenceConnector(Connector):
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=body,
+            details_text=storage_body,
             my_email=self.my_email,
             args={"space_key": space_key, "title": title, "parent_id": parent_id},
         )
-        page = await self._fetch(self._confluence.create_page, space_key, title, body, parent_id)
+        page = await self._fetch(
+            self._confluence.create_page, space_key, title, storage_body, parent_id,
+        )
         return asdict(page)
 
     async def _update_page(self, page_id: str, title: str, body: str) -> Any:
@@ -657,26 +667,49 @@ class ConfluenceConnector(Connector):
             "Space": current.space_key or "(unknown)",
             "Title": f"{current.title} → {title}" if title != current.title else title,
         }
+        storage_body, mentions = await self._prepare_body(body)
+        if mentions:
+            preview["Mentions"] = mentions
         await gated_call(
             connector=self.name,
             tool="confluence_update_page",
             tool_name="Update Confluence Page",
             summary=f"Update \"{title}\"",
             sender=f"page={page_id}",
-            raw_data={"page_id": page_id, "space_key": current.space_key, "title": title, "body": body},
+            raw_data={"page_id": page_id, "space_key": current.space_key, "title": title, "body": storage_body},
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=body,
+            details_text=storage_body,
             my_email=self.my_email,
             args={"page_id": page_id, "space_key": current.space_key, "title": title},
         )
-        page = await self._fetch(self._confluence.update_page, page_id, title, body)
+        page = await self._fetch(self._confluence.update_page, page_id, title, storage_body)
         return asdict(page)
 
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    async def _prepare_body(self, body: str) -> tuple[str, str]:
+        """Turn @[Name](accountId) markup into storage mentions and name every
+        mentioned account for the approver. Returns (storage_body, mentions_row)
+        with an empty row when the body mentions nobody. Markup ids Atlassian
+        cannot resolve are refused; raw <ri:user> ids already in the body are
+        listed as unknown but not refused."""
+        markup_ids = markup_mention_ids(body)
+        ids = list(dict.fromkeys([*markup_ids, *storage_mention_ids(body)]))
+        names: dict[str, str] = {}
+        if ids:
+            names = await self._fetch(self._confluence.resolve_user_names, ids)
+        missing = [i for i in markup_ids if i not in names]
+        if missing:
+            raise ValueError(
+                f"Unknown Atlassian account id(s): {', '.join(missing)}. "
+                "Look the person up with confluence_find_users and use their account_id."
+            )
+        mentions = ", ".join(names.get(i) or f"unknown account {i}" for i in ids)
+        return markup_to_storage(body), mentions
 
     async def _fetch(self, func, *args) -> Any:
         try:
