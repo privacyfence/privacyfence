@@ -462,6 +462,22 @@ class TestWriteMentions:
         client.resolve_user_names.assert_called_once_with([ACC])
         client.add_comment.assert_called_once_with("ENG-42", body, {ACC: "Real Name"})
 
+    async def test_blank_named_account_refused_before_gate(self, gated_call_spy):
+        from privacyfence.atlassian_users import AtlassianUser, AtlassianUserDirectory
+
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        directory = AtlassianUserDirectory()
+        client.resolve_user_names.side_effect = lambda ids: directory.resolve(
+            ids, lambda chunk: [AtlassianUser(i, "  ") for i in chunk])
+
+        with pytest.raises(ValueError, match="Unknown Atlassian account id"):
+            await connector.call(
+                "jira_add_comment", {"issue_key": "ENG-42", "body": f"@[X]({ACC})"},
+            )
+        assert gated_call_spy == []
+        client.add_comment.assert_not_called()
+
     async def test_unresolvable_id_refused_before_gate(self, gated_call_spy):
         connector, client = make_connector()
         client.get_issue.return_value = make_issue()

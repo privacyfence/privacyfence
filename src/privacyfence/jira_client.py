@@ -272,7 +272,9 @@ class JiraClient:
                 max_results,
             )
         except Exception as exc:
-            raise JiraClientError(f"find_users failed: {exc}") from exc
+            raise JiraClientError(
+                f"find_users failed: {atlassian_users.redact_query(exc, query)}"
+            ) from exc
         self._users.remember(users)
         return users
 
