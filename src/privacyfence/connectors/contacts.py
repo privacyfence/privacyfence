@@ -35,15 +35,23 @@ class ContactsConnector(Connector):
                     "List contacts from the user's Google address book. Google blends "
                     "personally-saved contacts together with Workspace directory profiles "
                     "(colleagues) by default; use 'source' to split them apart. "
-                    "Returns display name, emails, phones, organization, job title, and a "
-                    "'source' field ('personal', 'directory', or 'both' if the same person "
-                    "is both a saved contact and a colleague). Auto-approved."
+                    "Returns a list of contacts as {resource_name, display_name, given_name, "
+                    "family_name, emails [{value, type}], phones [{value, type}], organization, "
+                    "job_title, notes, photo_url, source, source_types}, where source is "
+                    "'personal', 'directory', or 'both' if the same person is both a saved "
+                    "contact and a colleague, and notes may be redacted by the user's privacy "
+                    "settings. Only the first page comes back, up to max_results; 'source' "
+                    "filters after that page is fetched, so a narrow source can return fewer. "
+                    "Use contacts_search instead to find a contact by name or email. "
+                    "Auto-approved."
                 ),
                 params=[
-                    ToolParam("max_results", "int", required=False, default=50),
+                    ToolParam("max_results", "int", required=False, default=50,
+                              description="Most contacts to fetch. Default 50, capped at 1000."),
                     ToolParam("source", "str", required=False, default="both",
-                              description="'personal' (saved contacts only), 'directory' "
-                                           "(Workspace directory only), or 'both' (default)."),
+                              description="Which contacts to return: 'personal' (saved contacts "
+                                           "only), 'directory' (Workspace directory only), or "
+                                           "'both' (default). Anything else is an error."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -55,13 +63,23 @@ class ContactsConnector(Connector):
                     "personally-saved contacts, only Workspace directory contacts, or both "
                     "(default). Note: 'directory' search only finds directory profiles you "
                     "already have some contact history with; there is no full company-directory "
-                    "search under this app's permissions. Auto-approved."
+                    "search under this app's permissions. Returns a list of contacts in the "
+                    "same shape contacts_list returns, at most max_results; notes may be "
+                    "redacted by the user's privacy settings. Use contacts_list instead to "
+                    "browse without a query, and get a contact's full record with "
+                    "contacts_get. Auto-approved."
                 ),
                 params=[
-                    ToolParam("query", "str"),
-                    ToolParam("max_results", "int", required=False, default=20),
+                    ToolParam("query", "str",
+                              description="Text to look for in contacts' names and email "
+                                           "addresses (case-insensitive substring match for "
+                                           "'directory')."),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Most contacts to return. Default 20, capped at 1000."),
                     ToolParam("source", "str", required=False, default="both",
-                              description="'personal', 'directory', or 'both' (default)."),
+                              description="Which contacts to search: 'personal' (saved contacts "
+                                           "only), 'directory' (Workspace directory only), or "
+                                           "'both' (default). Anything else is an error."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -72,12 +90,19 @@ class ContactsConnector(Connector):
                     "Fetch a single contact by resource name (e.g. 'people/c12345'). "
                     "'source' asserts the expected kind of contact ('personal', 'directory', "
                     "or 'both'/default); the call fails if the resource doesn't match. "
-                    "Auto-approved."
+                    "Returns one contact in the same shape contacts_list returns; notes may be "
+                    "redacted by the user's privacy settings. Get the resource name from "
+                    "contacts_search or contacts_list. Auto-approved."
                 ),
                 params=[
-                    ToolParam("resource_name", "str"),
+                    ToolParam("resource_name", "str",
+                              description="Resource name of the contact ('people/c12345'), "
+                                           "from contacts_search or contacts_list (the "
+                                           "resource_name field)."),
                     ToolParam("source", "str", required=False, default="both",
-                              description="'personal', 'directory', or 'both' (default)."),
+                              description="Kind of contact you expect: 'personal', 'directory', "
+                                           "or 'both' (default, accepts either). The call "
+                                           "fails if the contact is not of that kind."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -88,18 +113,39 @@ class ContactsConnector(Connector):
                     "Update a contact's fields. Provide only the fields you want to change. "
                     "Requires user approval. "
                     "emails and phones are JSON strings, e.g. "
-                    "'[{\"value\": \"a@b.com\", \"type\": \"work\"}]'."
+                    "'[{\"value\": \"a@b.com\", \"type\": \"work\"}]'. "
+                    "An empty value leaves that field as it is, except that emails and phones "
+                    "passed as '[]' clear the list. Returns the updated contact in the same "
+                    "shape contacts_get returns. Get the resource name from contacts_search, "
+                    "and read the current values with contacts_get first."
                 ),
                 params=[
-                    ToolParam("resource_name", "str"),
-                    ToolParam("display_name", "str", required=False, default=""),
+                    ToolParam("resource_name", "str",
+                              description="Resource name of the contact to update "
+                                           "('people/c12345'), from contacts_search or "
+                                           "contacts_list."),
+                    ToolParam("display_name", "str", required=False, default="",
+                              description="New full name, split on spaces into given and family "
+                                           "name. Empty leaves the name unchanged."),
                     ToolParam("emails", "str", required=False, default="",
-                              description="JSON array of {value, type} dicts"),
+                              description="JSON array of {value, type} objects, e.g. "
+                                           "'[{\"value\": \"a@b.com\", \"type\": \"work\"}]'. "
+                                           "Replaces all the contact's emails, so include the "
+                                           "ones to keep. Empty (or invalid JSON) leaves them "
+                                           "unchanged."),
                     ToolParam("phones", "str", required=False, default="",
-                              description="JSON array of {value, type} dicts"),
-                    ToolParam("organization", "str", required=False, default=""),
-                    ToolParam("job_title", "str", required=False, default=""),
-                    ToolParam("notes", "str", required=False, default=""),
+                              description="JSON array of {value, type} objects, e.g. "
+                                           "'[{\"value\": \"+15551234567\", \"type\": \"mobile\"}]'. "
+                                           "Replaces all the contact's phones, so include the "
+                                           "ones to keep. Empty (or invalid JSON) leaves them "
+                                           "unchanged."),
+                    ToolParam("organization", "str", required=False, default="",
+                              description="New company name. Empty leaves it unchanged."),
+                    ToolParam("job_title", "str", required=False, default="",
+                              description="New job title. Empty leaves it unchanged."),
+                    ToolParam("notes", "str", required=False, default="",
+                              description="New notes, replacing the current ones. Empty leaves "
+                                           "the notes unchanged."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -110,17 +156,29 @@ class ContactsConnector(Connector):
                     "Requires user approval. "
                     "emails and phones are JSON strings, e.g. "
                     "'[{\"value\": \"a@b.com\", \"type\": \"work\"}]'. "
-                    "Contact deletion is not supported."
+                    "Contact deletion is not supported. Returns the created contact, with its "
+                    "new resource_name, in the same shape contacts_get returns. Search with "
+                    "contacts_search first to avoid creating a duplicate."
                 ),
                 params=[
-                    ToolParam("display_name", "str"),
+                    ToolParam("display_name", "str",
+                              description="Full name of the new contact, split on spaces into "
+                                           "given and family name."),
                     ToolParam("emails", "str", required=False, default="",
-                              description="JSON array of {value, type} dicts"),
+                              description="JSON array of {value, type} objects, e.g. "
+                                           "'[{\"value\": \"a@b.com\", \"type\": \"work\"}]'. "
+                                           "Empty (or invalid JSON) means no emails."),
                     ToolParam("phones", "str", required=False, default="",
-                              description="JSON array of {value, type} dicts"),
-                    ToolParam("organization", "str", required=False, default=""),
-                    ToolParam("job_title", "str", required=False, default=""),
-                    ToolParam("notes", "str", required=False, default=""),
+                              description="JSON array of {value, type} objects, e.g. "
+                                           "'[{\"value\": \"+15551234567\", \"type\": \"mobile\"}]'. "
+                                           "Empty (or invalid JSON) means no phones."),
+                    ToolParam("organization", "str", required=False, default="",
+                              description="Company name. Empty means none."),
+                    ToolParam("job_title", "str", required=False, default="",
+                              description="Job title. Empty means none."),
+                    ToolParam("notes", "str", required=False, default="",
+                              description="Free-text notes about the contact. Empty means "
+                                           "no notes."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -128,20 +186,36 @@ class ContactsConnector(Connector):
                 name="contacts_add_label",
                 description=(
                     "Add a label to a contact, creating the label if it doesn't already exist. "
+                    "Returns {resource_name, label_added}. Labels are matched by name without "
+                    "regard to case. Use contacts_remove_label to take a label off again. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("resource_name", "str"),
-                    ToolParam("label_name", "str"),
+                    ToolParam("resource_name", "str",
+                              description="Resource name of the contact ('people/c12345'), "
+                                           "from contacts_search or contacts_list."),
+                    ToolParam("label_name", "str",
+                              description="Name of the label (contact group) to add, for "
+                                           "example 'Clients'. An unknown name creates a new label."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="contacts_remove_label",
-                description="Remove a label from a contact. Requires user approval.",
+                description=(
+                    "Remove a label from a contact. Returns {resource_name, label_removed}, "
+                    "with a note of 'label not found' if no label has that name (nothing "
+                    "changes then). Use contacts_add_label to put a label on a contact. "
+                    "Requires user approval."
+                ),
                 params=[
-                    ToolParam("resource_name", "str"),
-                    ToolParam("label_name", "str"),
+                    ToolParam("resource_name", "str",
+                              description="Resource name of the contact ('people/c12345'), "
+                                           "from contacts_search or contacts_list."),
+                    ToolParam("label_name", "str",
+                              description="Name of the label (contact group) to remove, "
+                                           "matched without regard to case. The label itself "
+                                           "is not deleted."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),

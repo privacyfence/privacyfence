@@ -34,7 +34,11 @@ from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import apps_script as apps_script_module
 from privacyfence.connectors.apps_script import AppsScriptConnector
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 
 
@@ -87,6 +91,23 @@ class TestDispatch:
         connector, client = make_connector()
         assert connector.name == "apps_script"
         assert connector.client is client
+
+
+APPS_SCRIPT_SIBLINGS = {
+    "apps_script_list_projects": ("apps_script_get_content",),
+    "apps_script_get_content": ("apps_script_write_content",),
+    "apps_script_write_content": ("apps_script_get_content",),
+    "apps_script_get_execution_log": ("apps_script_list_projects",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(AppsScriptConnector(MagicMock()), APPS_SCRIPT_SIBLINGS)
 
 
 class TestListProjects:
