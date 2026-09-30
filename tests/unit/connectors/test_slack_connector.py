@@ -24,7 +24,11 @@ from privacyfence.slack_client import (
     SlackMessage,
 )
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "slack"
 
@@ -85,6 +89,28 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Slack tool"):
             await connector.call("slack_does_not_exist", {})
+
+
+SLACK_SIBLINGS = {
+    "slack_list_channels": ("slack_list_dms", "slack_list_group_chats"),
+    "slack_list_dms": ("slack_list_channels", "slack_list_group_chats"),
+    "slack_list_group_chats": ("slack_list_dms", "slack_create_group_chat"),
+    "slack_get_channel_history": ("slack_get_thread_replies", "slack_search_messages"),
+    "slack_get_thread_replies": ("slack_get_channel_history", "slack_resolve_permalink"),
+    "slack_search_messages": ("slack_get_channel_history",),
+    "slack_resolve_permalink": ("slack_get_thread_replies",),
+    "slack_create_group_chat": ("slack_send_message",),
+    "slack_send_message": ("slack_create_group_chat",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(SlackConnector(MagicMock()), SLACK_SIBLINGS)
 
 
 class TestListChannels:

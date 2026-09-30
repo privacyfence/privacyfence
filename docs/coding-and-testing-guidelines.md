@@ -301,7 +301,9 @@ layout rules — see [`testing-policy.md`](testing-policy.md#the-shared-design-s
 - `tests/helpers.py` provides `make_ctx` (a `ReviewContext` with sane defaults),
   `build_stub_args` (a minimal-but-plausible args dict from a `ToolSpec`),
   `assert_all_tools_leave_an_audit_trail`, `assert_no_placeholder_fields` (fails loudly the
-  moment a `_parse_*` field mapping silently degrades to a fallback value), and `policy_rules`.
+  moment a `_parse_*` field mapping silently degrades to a fallback value), `policy_rules`, and
+  `assert_tool_definitions_complete` (every tool's parameters described, a `Returns` sentence, the
+  approval wording its gate implies, and the related tools named).
   Check there before writing a new stub-args builder, a new per-connector audit-trail sweep, or a
   new placeholder-field check — duplicating these tends to drift out of sync with the real
   `Connector`/`ToolSpec` shape over time.
@@ -323,6 +325,8 @@ A new connector's test module should include, at minimum:
    `assert_no_placeholder_fields` — see `TestFieldCompleteness` in
    `tests/unit/connectors/test_confluence_connector.py` for the pattern this catches (a `_parse_*`
    field mapping silently degrading to a fallback value).
+6. `TestToolDefinitions`, calling `assert_tool_definitions_complete` with the connector's
+   sibling map.
 
 Its client's test module (`tests/unit/test_<name>_client.py`) also carries a
 `TestLiveFixtureParsing` class that replays the committed fixture — see
@@ -476,6 +480,7 @@ runtime or in review, so work through them deliberately.
 | API client with its own `<Name>ClientError` ([§1.4](#14-error-handling)); token writes through `secure_files` | `src/privacyfence/<name>_client.py` | **enforced** for token writes once added to `TOKEN_WRITE_SITES` in `tests/unit/test_systemic_gate_invariants.py` |
 | `Connector` subclass: `tool_specs()`, dispatch, `gated_call` or `_auto_audit` per tool, a required `reason` `ToolParam` on every gated tool | `src/privacyfence/connectors/<name>.py` | **enforced**: `test_systemic_gate_invariants.py` (`reason` param, `pii_scan_text` on review-gated reads) |
 | Google services are built with `google_http.authorized_http(creds)`, never `credentials=` (one retry of a dropped GET, ADR 0105) | `src/privacyfence/<name>_client.py` | **enforced**: `tests/unit/test_google_http.py` (source scan) |
+| Every tool description keeps a one-sentence summary first, then a `Returns` sentence, the related tool to use instead, and the approval wording its gate implies; every parameter but `reason` has a description saying its format, where the value comes from and what empty means. Fixed choices are listed in the text, not as a JSON Schema `enum`, because some connectors accept aliases a strict client would reject ([ADR 0115](adr/0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md)) | `src/privacyfence/connectors/<name>.py`'s `tool_specs()` | **enforced**: `tests/helpers.py`'s `assert_tool_definitions_complete`, run for every connector by `tests/unit/web/test_tool_schema_portability.py`, and with the sibling map by each connector's `TestToolDefinitions` |
 | Tests per [§2.6](#26-new-connector-checklist) | `tests/unit/connectors/test_<name>_connector.py`, `tests/unit/test_<name>_client.py` | review |
 | Add the class to `CONNECTOR_CLASSES` | `tests/unit/connectors/test_readme_manifest_alignment.py` and `tests/unit/test_systemic_gate_invariants.py` (two separate copies) | nothing — a connector missing here is silently skipped by every check built on these lists |
 

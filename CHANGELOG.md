@@ -47,6 +47,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Jira and Confluence show people by name, and the agent can @mention them.** @mentioned people and Confluence page authors appear by name instead of as account ids, through a shared cache that looks each person up once a week at most. New `jira_find_users`, `confluence_find_users`, `jira_refresh_user_cache` and `confluence_refresh_user_cache` tools find people and refresh their names. The agent can @mention people in Jira comments and descriptions and in Confluence pages, and assign Jira issues, and the approval card names each person.
 
+### Changed
+
+- Every connector tool now describes each of its parameters, says what it returns (fields, limits and paging), and names the related tool to use instead, so AI clients choose and call the right tool more often.
+
 ## [5.3.0] — 2026-09-30
 
 ### Added

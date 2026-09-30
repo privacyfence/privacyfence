@@ -220,6 +220,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) | Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release | Accepted |
 | [0113](0113-process-docs-live-in-docs-not-in-claude-md.md) | Project process documentation lives in `docs/` and `CONTRIBUTING.md`, not in `CLAUDE.md` | Accepted |
 | [0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md) | The Glama listing runs a credential-free tool catalog, not a hosted PrivacyFence | Accepted |
+| [0115](0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md) | Tool definitions carry their parameter, return and routing guidance in prose, and a test enforces it | Accepted |
 | [0116](0116-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted |
 | [0117](0117-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
 | [0118](0118-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |

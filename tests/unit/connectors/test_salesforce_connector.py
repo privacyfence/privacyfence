@@ -29,7 +29,11 @@ from privacyfence.salesforce_client import (
     SalesforceReport,
 )
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 
 def make_connector(my_email="me@example.com"):
@@ -71,6 +75,23 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Salesforce tool"):
             await connector.call("salesforce_does_not_exist", {})
+
+
+SALESFORCE_SIBLINGS: dict[str, tuple[str, ...]] = {
+    "salesforce_list_reports": ("salesforce_run_report",),
+    "salesforce_run_report": ("salesforce_list_reports",),
+    "salesforce_search": ("salesforce_get_record",),
+    "salesforce_get_record": ("salesforce_search",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(SalesforceConnector(MagicMock()), SALESFORCE_SIBLINGS)
 
 
 class TestListReports:

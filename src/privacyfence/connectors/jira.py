@@ -47,18 +47,36 @@ class JiraConnector(Connector):
         return [
             ToolSpec(
                 name="jira_list_projects",
-                description="List Jira projects accessible to the user (key, name, type, lead). Auto-approved.",
-                params=[ToolParam("max_results", "int", required=False, default=50), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                description=(
+                    "List Jira projects accessible to the user (key, name, type, lead). "
+                    "Returns a list of {key, name, project_type, description, lead}, at most "
+                    "max_results (default 50, capped at 500), in the API's order. Use the "
+                    "key as project_key in jira_create_issue, or in a JQL query for "
+                    "jira_search_issues. Auto-approved."
+                ),
+                params=[
+                    ToolParam("max_results", "int", required=False, default=50,
+                              description="Maximum number of projects to return. Default 50, capped at 500."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
                 name="jira_search_issues",
                 description=(
-                    "Search Jira issues using JQL. Returns summary info for matching issues. Auto-approved."
+                    "Search Jira issues using JQL. Returns summary info for matching issues, "
+                    "as a list of {key, summary, status, issue_type, priority, assignee, "
+                    "reporter, labels, created, updated, url} with description left empty, "
+                    "only the first page, at most max_results (default 20, capped at 100), "
+                    "in the order the JQL gives. Use jira_get_issue instead for one issue's "
+                    "description and comments. Auto-approved."
                 ),
                 params=[
-                    ToolParam("jql", "str", description="e.g. 'project = MYPROJ AND status = Open'"),
-                    ToolParam("max_results", "int", required=False, default=20),
+                    ToolParam("jql", "str",
+                              description="A JQL query, e.g. \"project = MYPROJ AND status = 'In Progress' "
+                                          "ORDER BY updated DESC\". Must not be empty."),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Maximum number of issues to return. Default 20, capped at 100."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -67,10 +85,18 @@ class JiraConnector(Connector):
                 name="jira_get_issue",
                 description=(
                     "Fetch full details of a Jira issue by key (e.g. PROJ-123), "
-                    "including description and comments. Requires user approval. "
-                    "Mentions appear as @[Name](accountId)."
+                    "including description and comments. Returns the issue as {key, summary, "
+                    "status, issue_type, priority, assignee, reporter, description, labels, "
+                    "created, updated, url, comments: a list of {id, author, body, created, "
+                    "updated}}. Use jira_search_issues instead to find issues without "
+                    "reading them in full. Mentions appear as @[Name](accountId). Requires user approval."
                 ),
-                params=[ToolParam("issue_key", "str", description="e.g. PROJ-123"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("issue_key", "str",
+                              description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
+                                          "(its key field)."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
@@ -78,22 +104,34 @@ class JiraConnector(Connector):
                 description=(
                     "List the status transitions available for a Jira issue right now (name and "
                     "target status), given its current workflow state. Use before "
-                    "jira_transition_issue to see what transition names are valid. Auto-approved."
+                    "jira_transition_issue to see what transition names are valid. Returns a "
+                    "list of {id, name, to_status}; pass a name to jira_transition_issue. "
+                    "Auto-approved."
                 ),
-                params=[ToolParam("issue_key", "str", description="e.g. PROJ-123"), ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                params=[
+                    ToolParam("issue_key", "str",
+                              description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
+                                          "(its key field)."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
                 read_only=True,
             ),
             ToolSpec(
                 name="jira_find_users",
                 description=(
                     "Find Atlassian users by name or email and return their account ids. "
+                    "Returns a list of {account_id, display_name, active, account_type}, "
+                    "at most max_results entries; email addresses are never returned. "
                     "Auto-approved -- mention someone in a comment or description by writing "
                     "@[Name](accountId), or assign an issue with assignee_account_id. "
-                    "Email addresses are never returned."
+                    "Use jira_search_issues instead to find issues, not people."
                 ),
                 params=[
-                    ToolParam("query", "str", description="Part of a person's name or email address"),
-                    ToolParam("max_results", "int", required=False, default=10),
+                    ToolParam("query", "str",
+                              description="Part of a person's name or email address, e.g. 'jane' or "
+                                          "'jane@example.com'. Must not be empty."),
+                    ToolParam("max_results", "int", required=False, default=10,
+                              description="Most users to return, 1 to 50. Defaults to 10."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -103,33 +141,54 @@ class JiraConnector(Connector):
                 description=(
                     "Re-fetch the names of every Atlassian account id PrivacyFence has cached. "
                     "Auto-approved -- use this when a renamed or newly added person shows up "
-                    "wrong; cached names otherwise refresh on their own after 7 days."
+                    "wrong; cached names otherwise refresh on their own after 7 days. "
+                    "Returns {cached_users: n}, the number of account ids re-fetched. Use "
+                    "jira_find_users instead to look up someone by name."
                 ),
                 params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
                 read_only=True,
             ),
             ToolSpec(
                 name="jira_create_issue",
-                description="Create a new Jira issue. Requires user approval.",
+                description=(
+                    "Create a new Jira issue. Returns the created issue, with its new key, in "
+                    "the same shape jira_get_issue returns minus comments. Get project_key "
+                    "from jira_list_projects. Requires user approval."
+                ),
                 params=[
-                    ToolParam("project_key", "str", description="e.g. MYPROJ"),
-                    ToolParam("summary", "str"),
+                    ToolParam("project_key", "str",
+                              description="Key of the project to create the issue in, e.g. MYPROJ, "
+                                          "from jira_list_projects (its key field)."),
+                    ToolParam("summary", "str", description="One-line title of the issue. Must not be empty."),
                     ToolParam("issue_type", "str", required=False, default="Task",
-                              description="e.g. Task, Bug, Story"),
-                    ToolParam("description", "str", required=False, default=""),
+                              description="Name of the issue type, e.g. 'Task', 'Bug' or 'Story'; it "
+                                          "must exist in the project. Default 'Task'."),
+                    ToolParam("description", "str", required=False, default="",
+                              description="Plain-text description of the issue. Empty means no description."),
                     ToolParam("priority", "str", required=False, default="",
-                              description="e.g. High, Medium, Low"),
+                              description="Name of the priority, e.g. 'High', 'Medium' or 'Low'. Empty "
+                                          "uses the project's default priority."),
                     ToolParam("assignee_account_id", "str", required=False, default="",
-                              description="Atlassian account id to assign the issue to -- find it with jira_find_users"),
+                              description="Atlassian account id to assign the issue to, from "
+                                          "jira_find_users (its account_id field). Empty assigns "
+                                          "nobody."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="jira_add_comment",
-                description="Add a comment to an existing Jira issue. Requires user approval.",
+                description=(
+                    "Add a comment to an existing Jira issue. Returns the new comment as {id, "
+                    "author, body, created, updated}. Use jira_update_issue instead to change "
+                    "the issue's own fields. Requires user approval."
+                ),
                 params=[
-                    ToolParam("issue_key", "str", description="e.g. PROJ-123"),
-                    ToolParam("body", "str", description="Comment text (plain text). Mention someone with @[Name](accountId) -- find the id with jira_find_users."),
+                    ToolParam("issue_key", "str",
+                              description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
+                                          "(its key field)."),
+                    ToolParam("body", "str",
+                              description="Comment text, plain text (not Jira markup). Must not be empty. Mention "
+                                          "someone with @[Name](accountId), the id from jira_find_users."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -137,21 +196,33 @@ class JiraConnector(Connector):
                 name="jira_update_issue",
                 description=(
                     "Update fields on an existing Jira issue (summary, description, priority, "
-                    "and/or custom fields). Requires user approval. "
-                    "Pass assignee_account_id to reassign it."
+                    "and/or custom fields). Only the fields you pass non-empty change, and at "
+                    "least one is required. Returns the updated issue in the same shape "
+                    "jira_get_issue returns minus comments. Use jira_transition_issue instead "
+                    "to change its status. Pass assignee_account_id to reassign it. Requires user approval."
                 ),
                 params=[
-                    ToolParam("issue_key", "str"),
-                    ToolParam("summary", "str", required=False, default=""),
-                    ToolParam("description", "str", required=False, default=""),
-                    ToolParam("priority", "str", required=False, default=""),
+                    ToolParam("issue_key", "str",
+                              description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
+                                          "(its key field)."),
+                    ToolParam("summary", "str", required=False, default="",
+                              description="New one-line summary. Empty leaves the summary unchanged."),
+                    ToolParam("description", "str", required=False, default="",
+                              description="New plain-text description, replacing the current one. Empty "
+                                          "leaves the description unchanged."),
+                    ToolParam("priority", "str", required=False, default="",
+                              description="New priority name, e.g. 'High', 'Medium' or 'Low'. Empty "
+                                          "leaves the priority unchanged."),
                     ToolParam("assignee_account_id", "str", required=False, default="",
-                              description="Atlassian account id to assign the issue to -- find it with jira_find_users"),
+                              description="Atlassian account id to assign the issue to, from "
+                                          "jira_find_users (its account_id field). Empty leaves the "
+                                          "assignee unchanged or unset."),
                     ToolParam("custom_fields", "str", required=False, default="",
                               description=(
                                   "JSON object mapping Jira Cloud custom field display names "
                                   "(as seen in the Jira UI, not their customfield_NNNNN id) to "
-                                  "new values, e.g. {\"Story Points\": 5, \"Sprint\": \"Sprint 12\"}"
+                                  "new values, e.g. {\"Story Points\": 5, \"Sprint\": \"Sprint 12\"}. "
+                                  "Empty changes no custom fields."
                               )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -161,11 +232,17 @@ class JiraConnector(Connector):
                 description=(
                     "Move a Jira issue to a new status by transition name (e.g. \"Done\", "
                     "\"In Progress\") — call jira_get_transitions first to see what's valid from "
-                    "the issue's current status. Requires user approval."
+                    "the issue's current status. Returns the issue after the move, in the same "
+                    "shape jira_get_issue returns minus comments; errors, listing the valid "
+                    "names, if the name is not available. Requires user approval."
                 ),
                 params=[
-                    ToolParam("issue_key", "str", description="e.g. PROJ-123"),
-                    ToolParam("transition_name", "str", description="e.g. Done, In Progress"),
+                    ToolParam("issue_key", "str",
+                              description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
+                                          "(its key field)."),
+                    ToolParam("transition_name", "str",
+                              description="Name of the transition to apply, e.g. 'Done' or 'In Progress', "
+                                          "as jira_get_transitions returns it in name (case-insensitive)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),

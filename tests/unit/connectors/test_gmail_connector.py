@@ -42,7 +42,11 @@ from privacyfence.gmail_client import (
 )
 from privacyfence.privacy_filter import init_privacy_filter
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "gmail"
 
@@ -85,6 +89,36 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Gmail tool"):
             await connector.call("gmail_does_not_exist", {})
+
+
+GMAIL_SIBLINGS: dict[str, tuple[str, ...]] = {
+    "gmail_list_messages": ("gmail_list_threads", "gmail_get_message"),
+    "gmail_list_threads": ("gmail_list_messages", "gmail_get_thread"),
+    "gmail_get_message": ("gmail_get_thread",),
+    "gmail_get_thread": ("gmail_get_message",),
+    "gmail_list_message_attachments": ("gmail_download_attachment",),
+    "gmail_download_attachment": ("gmail_list_message_attachments",),
+    "gmail_create_draft": ("gmail_create_draft_with_attachments", "gmail_reply_draft"),
+    "gmail_create_draft_with_attachments": ("gmail_create_draft",),
+    "gmail_reply_draft": ("gmail_reply_all_draft", "gmail_reply_draft_with_attachments"),
+    "gmail_reply_all_draft": ("gmail_reply_draft", "gmail_reply_all_draft_with_attachments"),
+    "gmail_reply_draft_with_attachments": ("gmail_reply_draft",),
+    "gmail_reply_all_draft_with_attachments": ("gmail_reply_all_draft",),
+    "gmail_add_label": ("gmail_list_labels", "gmail_create_label", "gmail_remove_label"),
+    "gmail_remove_label": ("gmail_list_labels", "gmail_add_label"),
+    "gmail_create_label": ("gmail_list_labels",),
+    "gmail_create_filter": ("gmail_update_filter",),
+    "gmail_update_filter": ("gmail_list_filters", "gmail_create_filter"),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(GmailConnector(MagicMock()), GMAIL_SIBLINGS)
 
 
 class TestAutoTools:

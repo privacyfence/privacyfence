@@ -26,7 +26,11 @@ from privacyfence.jira_client import (
     JiraTransition,
 )
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 
 def make_connector(my_email="me@example.com"):
@@ -77,6 +81,27 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Jira tool"):
             await connector.call("jira_does_not_exist", {})
+
+
+JIRA_SIBLINGS: dict[str, tuple[str, ...]] = {
+    "jira_list_projects": ("jira_search_issues",),
+    "jira_search_issues": ("jira_get_issue",),
+    "jira_get_issue": ("jira_search_issues",),
+    "jira_create_issue": ("jira_list_projects",),
+    "jira_update_issue": ("jira_transition_issue",),
+    "jira_add_comment": ("jira_update_issue",),
+    "jira_get_transitions": ("jira_transition_issue",),
+    "jira_transition_issue": ("jira_get_transitions",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(JiraConnector(MagicMock()), JIRA_SIBLINGS)
 
 
 class TestAutoTools:

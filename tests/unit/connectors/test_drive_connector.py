@@ -44,7 +44,11 @@ from privacyfence.drive_client import DriveClient, DriveClientError, DriveFile, 
 from privacyfence.local_files import LocalFileAccessError
 from privacyfence.privacy_filter import init_privacy_filter
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "drive"
 
@@ -114,6 +118,40 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Drive tool"):
             await connector.call("drive_does_not_exist", {})
+
+
+DRIVE_SIBLINGS = {
+    "drive_list_files": ("drive_list_folder", "drive_get_file_metadata"),
+    "drive_list_folder": ("drive_list_files",),
+    "drive_get_file_metadata": ("drive_get_file_content",),
+    "drive_get_file_content": ("drive_download_file",),
+    "drive_download_file": ("drive_get_file_content",),
+    "drive_create_blank_file": ("drive_sheets_create", "drive_write_doc_content", "drive_upload_file"),
+    "drive_write_file_content": ("drive_write_doc_content", "drive_upload_file"),
+    "drive_upload_file": ("drive_write_file_content",),
+    "drive_write_doc_content": ("drive_docs_edit_content",),
+    "drive_docs_edit_content": ("drive_write_doc_content", "drive_docs_format_content"),
+    "drive_docs_format_content": ("drive_docs_edit_content",),
+    "drive_move_file": ("drive_list_folder",),
+    "drive_list_shared_drives": ("drive_list_folder",),
+    "drive_sheets_create": ("drive_sheets_add_sheet",),
+    "drive_sheets_get_metadata": ("drive_sheets_get_values",),
+    "drive_sheets_get_values": ("drive_sheets_get_metadata",),
+    "drive_sheets_write_range": ("drive_sheets_format_range",),
+    "drive_sheets_add_sheet": ("drive_sheets_create", "drive_sheets_get_metadata"),
+    "drive_sheets_rename_sheet": ("drive_sheets_get_metadata",),
+    "drive_sheets_insert_dimensions": ("drive_sheets_delete_dimensions",),
+    "drive_sheets_delete_dimensions": ("drive_sheets_insert_dimensions",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(DriveConnector(MagicMock()), DRIVE_SIBLINGS)
 
 
 class TestAutoTools:
