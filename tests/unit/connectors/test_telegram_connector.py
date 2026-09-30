@@ -26,7 +26,11 @@ from privacyfence.telegram_client import (
     TelegramPrivacyFenceClient,
 )
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "telegram"
 
@@ -66,6 +70,23 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Telegram tool"):
             await connector.call("telegram_does_not_exist", {})
+
+
+TELEGRAM_SIBLINGS = {
+    "telegram_list_chats": ("telegram_get_messages", "telegram_refresh_chat_cache"),
+    "telegram_get_messages": ("telegram_search_messages", "telegram_list_chats"),
+    "telegram_search_messages": ("telegram_get_messages",),
+    "telegram_send_message": ("telegram_list_chats",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(TelegramConnector(MagicMock()), TELEGRAM_SIBLINGS)
 
 
 class TestListChats:
