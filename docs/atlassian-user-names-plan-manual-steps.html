@@ -1,0 +1,99 @@
+<title>Atlassian Mentions QA</title>
+<style>
+/* Layout: one narrow reading column; each item is a titled checklist block. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b2330; --muted: #5a6577;
+  --line: #d9dee6; --accent: #1f5fbf; --done: #2f7d4f;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --panel: #1a2029; --fg: #e4e8ef; --muted: #9aa5b6;
+    --line: #2c3542; --accent: #7fb0ff; --done: #6fcf97; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --panel: #1a2029; --fg: #e4e8ef; --muted: #9aa5b6;
+  --line: #2c3542; --accent: #7fb0ff; --done: #6fcf97; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--font-body); padding-inline: 16px; padding-block: 32px 48px; }
+main { max-width: 720px; margin: 0 auto; display: grid; gap: 28px; }
+h1 { font-size: 1.6rem; margin: 0; text-wrap: balance; }
+h2 { font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 8px 0 0; }
+h3 { font-size: 1.1rem; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 65ch; }
+section.item { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; display: grid; gap: 12px; }
+.meta { font-size: 0.85rem; color: var(--muted); }
+ol.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: s; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+ol.steps li > div { min-width: 0; }
+ol.steps input { margin-top: 5px; width: 18px; height: 18px; accent-color: var(--done); }
+ol.steps li.checked > div { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { display: block; font-size: 0.88rem; color: var(--muted); }
+code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.report { border-top: 1px solid var(--line); padding-top: 12px; font-size: 0.92rem; }
+.none { color: var(--muted); }
+</style>
+
+<main>
+  <header style="display:grid;gap:8px">
+    <h1>Atlassian mentions: checks on a real site</h1>
+    <p class="lede">These checks go with the <code>feature/atlassian-user-names</code> pull request. Nothing has to be done before implementation starts. When the PR is ready, do both checks below on the QA Atlassian site. Use the account already set up for connector QA (see <a href="https://github.com/privacyfence/privacyfence/blob/plan/atlassian-user-names/docs/connector-qa.md">connector-qa.md</a>).</p>
+  </header>
+
+  <h2>Before implementation</h2>
+  <p class="none">Nothing. Jira's user API needs only the <code>read:jira-user</code> scope, which every existing Atlassian token already has.</p>
+
+  <h2>After implementation</h2>
+
+  <section class="item" id="ma1">
+    <h3>1. Read an issue and a page that mention someone</h3>
+    <p class="meta">About 10 minutes · manifest id <code>ma1-verify-reads</code></p>
+    <ol class="steps">
+      <li><input type="checkbox" id="ma1-1"><div>Run PrivacyFence from the PR branch on your development machine (<a href="https://github.com/privacyfence/privacyfence/blob/plan/atlassian-user-names/docs/dev-vs-live-setup.md">dev-vs-live-setup.md</a>). Settings should show Jira and Confluence as connected.</div></li>
+      <li><input type="checkbox" id="ma1-2"><div>On the QA Jira site, open a <code>PFQA</code> issue whose summary contains <code>[QATEST]</code>. Add a comment that mentions a second QA account (type <code>@</code> and pick them). Note that person's name.</div></li>
+      <li><input type="checkbox" id="ma1-3"><div>Ask your AI client to call <code>jira_get_issue</code> on that issue. On the approval card, the Comments table should show <code>@&lt;their name&gt;</code>. Approve it.</div></li>
+      <li><input type="checkbox" id="ma1-4"><div>In the tool result, the comment body should contain <code>@[&lt;their name&gt;](&lt;account id&gt;)</code>.</div></li>
+      <li><input type="checkbox" id="ma1-5"><div>On the QA Confluence space, edit a <code>[QATEST]</code> page and add an @mention of the same person. Publish it.</div></li>
+      <li><input type="checkbox" id="ma1-6"><div>Ask the client to call <code>confluence_get_page</code> on that page. The approval card should show the author's name (not a long id) and <code>@&lt;their name&gt;</code> in the page body. Approve it. The result should have <code>author_name</code> as a name, <code>author</code> still as the account id, and a <code>mentions</code> entry for the person.</div></li>
+      <li><input type="checkbox" id="ma1-7"><div>Ask the client to call <code>jira_find_users</code> with part of that person's name. Their <code>account_id</code> should be listed, and no email address.</div></li>
+    </ol>
+    <p class="report">Report back in the PR: <code>ma1: pass</code>, or <code>ma1: fail at step N</code> with what you saw instead. Leave out real names.</p>
+  </section>
+
+  <section class="item" id="ma2">
+    <h3>2. Write a mention and check the notification</h3>
+    <p class="meta">About 10 minutes · manifest id <code>ma2-verify-mention-writes</code></p>
+    <ol class="steps">
+      <li><input type="checkbox" id="ma2-1"><div>Ask the client to post a comment on the same <code>PFQA</code> issue that mentions the second QA account. The client should look them up with <code>jira_find_users</code> and write <code>@[Name](accountId)</code>.</div></li>
+      <li><input type="checkbox" id="ma2-2"><div>On the approval card, the <strong>Mentions</strong> row should show the person's real name, as Jira holds it. Approve it.</div></li>
+      <li><input type="checkbox" id="ma2-3"><div>Open the issue in Jira. The comment should show a real mention chip, not the literal <code>@[…](…)</code> text.</div></li>
+      <li><input type="checkbox" id="ma2-4"><div>Sign in as the second QA account, or check its mailbox. It should have a "mentioned you" notification for that comment.</div></li>
+      <li><input type="checkbox" id="ma2-5"><div>Ask the client to create a page in the QA space whose body mentions the same person. The approval card should have a <strong>Mentions</strong> row with their name. Approve it, open the page, and check that the mention chip is there and the person was notified.</div></li>
+      <li><input type="checkbox" id="ma2-6"><div>Negative check: ask the client to comment with a made-up id, such as <code>@[Someone](5b10ac8d82e05b22cc7d4ef0)</code>. The call should fail with <em>Unknown Atlassian account id(s)</em>, and no approval card should appear.</div></li>
+    </ol>
+    <p class="report">Report back in the PR: <code>ma2: pass</code>, or <code>ma2: fail at step N</code> with what you saw instead. Delete the test page afterwards by hand if you wish; PrivacyFence cannot delete Confluence content.</p>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY = "atlassian-mentions-qa-v1";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  document.querySelectorAll('ol.steps input[type="checkbox"]').forEach(function (box) {
+    var li = box.closest("li");
+    box.checked = !!state[box.id];
+    li.classList.toggle("checked", box.checked);
+    box.addEventListener("change", function () {
+      state[box.id] = box.checked;
+      li.classList.toggle("checked", box.checked);
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    });
+  });
+})();
+</script>
