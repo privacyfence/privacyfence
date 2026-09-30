@@ -416,7 +416,7 @@ class SalesforceClient:
                 clauses.append(clause)
             sosl = f"FIND {{{escaped_term}}} IN ALL FIELDS RETURNING {', '.join(clauses)}"
         else:
-            sosl = f"FIND {{{escaped_term}}} IN ALL FIELDS"
+            sosl = f"FIND {{{escaped_term}}} IN ALL FIELDS LIMIT {max_results}"
 
         def _run(sf):
             return sf.search(sosl)
