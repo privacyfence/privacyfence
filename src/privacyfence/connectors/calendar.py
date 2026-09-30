@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import date as _date
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +14,7 @@ from ..calendar_client import (
     VALID_EVENT_SCOPES,
     VALID_SEND_UPDATES,
     VALID_VISIBILITIES,
+    WORKING_LOCATION_TYPES,
     CalendarClient,
     CalendarClientError,
     normalize_event_color,
@@ -73,6 +75,39 @@ def _normalize_color_arg(color: str) -> str:
         return normalize_event_color(color)
     except CalendarClientError as exc:
         raise ValueError(str(exc)) from exc
+
+
+def _parse_rfc3339(name: str, value: str, *, need_offset: bool) -> datetime:
+    example = "2026-10-15T09:00:00+02:00"
+    error = ValueError(f"{name} must be an RFC 3339 date-time such as {example}")
+    if len(value) == 10:
+        raise error
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        raise error from None
+    if need_offset and parsed.tzinfo is None:
+        raise error
+    return parsed
+
+
+def _require_rfc3339(name: str, value: str, *, need_offset: bool) -> None:
+    """Reject a time argument that is not an RFC 3339 date-time (date-only
+    values and, when ``need_offset``, values without an offset included)
+    before gating, so a doomed call never costs an approval decision."""
+    _parse_rfc3339(name, value, need_offset=need_offset)
+
+
+def _require_end_after_start(start_time: str, end_time: str) -> None:
+    """A naive value is compared as UTC."""
+    start = _parse_rfc3339("start_time", start_time, need_offset=False)
+    end = _parse_rfc3339("end_time", end_time, need_offset=False)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    if end <= start:
+        raise ValueError("end_time must be after start_time")
 
 
 _SCOPE_LABELS = {
@@ -169,8 +204,8 @@ class CalendarConnector(Connector):
                     "List events from a calendar (id, title, start_time, end_time, all_day, status). "
                     "No attendees, description, or links returned. Returns a list of {id, title, "
                     "start_time, end_time, day_of_week, all_day, status}, recurring events expanded "
-                    "into single occurrences and sorted by start time, from one page only: no "
-                    "paging, so narrow time_min/time_max to see more. Use calendar_get_event_details "
+                    "into single occurrences and sorted by start time. Reads up to max_results "
+                    "events across pages. Use calendar_get_event_details "
                     "to read one event's attendees and description, or calendar_list_calendars to "
                     "find calendar_id. Auto-approved."
                 ),
@@ -185,8 +220,7 @@ class CalendarConnector(Connector):
                               description="Only events ending after this time, as an RFC 3339 timestamp "
                                           "with an offset, e.g. '2026-10-15T00:00:00Z' or "
                                           "'2026-10-15T09:00:00+02:00'; a bare date is not accepted. "
-                                          "Empty means no lower bound, so the oldest events come first: "
-                                          "pass it to get upcoming ones."),
+                                          "Empty means now."),
                     ToolParam("time_max", "str", required=False, default="",
                               description="Only events starting before this time, same RFC 3339 format "
                                           "as time_min. Empty means no upper bound."),
@@ -223,11 +257,8 @@ class CalendarConnector(Connector):
             ToolSpec(
                 name="calendar_get_event_details",
                 description=(
-                    "Fetch full details of a calendar event including attendees, description, "
-                    "conferencing links, and file attachments (e.g. the \"Notes by Gemini\" and "
-                    "transcript docs Google Meet attaches after a meeting ends). Each attachment's "
-                    "file_id can be passed to drive_get_file_content to read its content. "
-                    "Returns {id, calendar_id, title, description, start_time, end_time, day_of_week, "
+                    "Fetch full details of a calendar event including attendees, description "
+                    "and location. Returns {id, calendar_id, title, description, start_time, end_time, day_of_week, "
                     "all_day, organizer_email, attendees: [{email, display_name, response_status, "
                     "organizer}], location, status, html_link}; conferencing links and attachments "
                     "are not included. Use calendar_list_events instead to find events. "
@@ -564,6 +595,12 @@ class CalendarConnector(Connector):
         time_max: str = "",
         query: str = "",
     ) -> Any:
+        if time_min:
+            _require_rfc3339("time_min", time_min, need_offset=True)
+        if time_max:
+            _require_rfc3339("time_max", time_max, need_offset=True)
+        if not time_min:
+            time_min = datetime.now(timezone.utc).isoformat()
         t0 = time.time()
         events = await self._fetch(
             self._calendar.list_events, calendar_id, max_results, time_min, time_max, query
@@ -585,6 +622,8 @@ class CalendarConnector(Connector):
         return result
 
     async def _get_free_busy(self, emails: str, time_min: str, time_max: str) -> Any:
+        _require_rfc3339("time_min", time_min, need_offset=True)
+        _require_rfc3339("time_max", time_max, need_offset=True)
         t0 = time.time()
         email_list = [e.strip() for e in emails.split(",") if e.strip()]
         data = await self._fetch(
@@ -732,6 +771,9 @@ class CalendarConnector(Connector):
         color: str = "",
         recurrence: str = "",
     ) -> Any:
+        _require_rfc3339("start_time", start_time, need_offset=False)
+        _require_rfc3339("end_time", end_time, need_offset=False)
+        _require_end_after_start(start_time, end_time)
         color_id = _normalize_color_arg(color)
         attendee_list = [e.strip() for e in attendees.split(",") if e.strip()] if attendees else []
         room_list = [r.strip() for r in rooms.split(",") if r.strip()] if rooms else []
@@ -803,6 +845,10 @@ class CalendarConnector(Connector):
         scope: str = "this",
         send_updates: str = "",
     ) -> Any:
+        if start_time:
+            _require_rfc3339("start_time", start_time, need_offset=False)
+        if end_time:
+            _require_rfc3339("end_time", end_time, need_offset=False)
         color_id = _normalize_color_arg(color)
         scope = _normalize_scope_arg(scope)
         send_updates = _normalize_send_updates_arg(send_updates)
@@ -941,6 +987,9 @@ class CalendarConnector(Connector):
         title: str = "Out of Office",
         decline_message: str = "",
     ) -> Any:
+        _require_rfc3339("start_time", start_time, need_offset=False)
+        _require_rfc3339("end_time", end_time, need_offset=False)
+        _require_end_after_start(start_time, end_time)
         preview = {
             "Title": title,
             "Time": f"{start_time} – {end_time}",
@@ -977,6 +1026,14 @@ class CalendarConnector(Connector):
         building_id: str = "",
         label: str = "",
     ) -> Any:
+        try:
+            _date.fromisoformat(date)
+        except (ValueError, TypeError):
+            raise ValueError("date must be a day as YYYY-MM-DD, e.g. 2026-07-10") from None
+        if location not in WORKING_LOCATION_TYPES:
+            raise ValueError(
+                f"location must be one of {sorted(WORKING_LOCATION_TYPES)}, got {location!r}"
+            )
         location_display = {"office": "Office", "home": "Home"}.get(location, location)
         preview = {"Date": date, "Location": location_display}
         if building_id:

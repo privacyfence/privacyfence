@@ -51,6 +51,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Gmail.** Reading a message or thread no longer fails when it has attachments, `gmail_list_messages` and `gmail_list_threads` now read up to `max_results` across pages, and `gmail_update_filter` creates the replacement filter before deleting the old one (and leaves the original in place if either step fails).
 - **Drive.** `drive_list_files`, `drive_list_folder` and `drive_list_shared_drives` now read up to `max_results` items across pages instead of only the first page.
+- **Calendar.** `calendar_list_events` now reads up to `max_results` events across pages and an empty `time_min` means now instead of the oldest events first; time arguments that are not RFC 3339 date-times, an end time not after the start, and a bad working-location date or location are rejected before approval is requested; `calendar_get_event_details` no longer advertises attachments it does not return.
 
 ## [5.3.0] — 2026-09-30
 

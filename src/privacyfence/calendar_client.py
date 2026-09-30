@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
+# Hard budget of events.list requests per list_events call.
+MAX_PAGES = 10
+
+# calendar_set_working_location's accepted ``location`` values, mapped to the
+# Calendar API's workingLocationProperties.type.
+WORKING_LOCATION_TYPES = {"office": "officeLocation", "home": "homeOffice"}
+
 # Values the Calendar API accepts for Event.visibility. "confidential" is a
 # legacy synonym for "private" that the API still accepts on write.
 VALID_VISIBILITIES = {"default", "public", "private", "confidential"}
@@ -444,7 +451,6 @@ class CalendarClient:
         max_results = max(1, min(int(max_results), 250))
         kwargs: dict[str, Any] = {
             "calendarId": calendar_id,
-            "maxResults": max_results,
             "singleEvents": True,
             "orderBy": "startTime",
         }
@@ -454,11 +460,22 @@ class CalendarClient:
             kwargs["timeMax"] = time_max
         if query:
             kwargs["q"] = query
-        try:
-            result = self._get_service().events().list(**kwargs).execute()
-        except HttpError as exc:
-            raise CalendarClientError(f"list_events({calendar_id}) failed: {exc}") from exc
-        events = [self._parse_event(raw, calendar_id) for raw in result.get("items", [])]
+        service = self._get_service()
+        events: list[CalendarEvent] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            kwargs["maxResults"] = min(max_results - len(events), 250)
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                result = service.events().list(**kwargs).execute()
+            except HttpError as exc:
+                raise CalendarClientError(f"list_events({calendar_id}) failed: {exc}") from exc
+            events.extend(self._parse_event(raw, calendar_id) for raw in result.get("items", []))
+            page_token = result.get("nextPageToken")
+            if len(events) >= max_results or not page_token:
+                break
+        events = events[:max_results]
         logger.info("list_events %s returned %d event(s)", calendar_id, len(events))
         return events
 
@@ -1114,7 +1131,7 @@ class CalendarClient:
         Calendar requires ``visibility="public"`` + ``transparency="transparent"``
         on them (Calendar API constraints, not this client's choice).
         """
-        location_key = {"office": "officeLocation", "home": "homeOffice"}.get(location)
+        location_key = WORKING_LOCATION_TYPES.get(location)
         if location_key is None:
             raise CalendarClientError(
                 f"set_working_location: location must be 'office' or 'home', got {location!r}"

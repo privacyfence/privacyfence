@@ -165,7 +165,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `calendar_list_colors` | read | `auto` | List Calendar's fixed event color palette: each color's id, name (e.g. "Tomato", "Sage"), and hex background/foreground. |
 | `calendar_list_events` | read | `auto` | List events from a calendar (id, title, start_time, end_time, all_day, status). |
 | `calendar_list_rooms` | read | `auto` | List meeting rooms and resource calendars from the organization's room directory. |
-| `calendar_get_event_details` | read | `review` | Fetch full details of a calendar event including attendees, description, conferencing links, and file attachments (e.g. the "Notes by Gemini" and transcript docs Google Meet attaches after a meeting ends). |
+| `calendar_get_event_details` | read | `review` | Fetch full details of a calendar event including attendees, description and location. |
 | `calendar_create_event` | write | `popup` | Create a new calendar event. |
 | `calendar_create_out_of_office` | write | `popup` | Create an out-of-office event on the primary calendar. |
 | `calendar_delete_event` | write | `popup` | Delete a calendar event. |
