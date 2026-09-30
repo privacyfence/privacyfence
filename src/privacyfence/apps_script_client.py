@@ -43,6 +43,8 @@ from .google_http import authorized_http
 from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
+MAX_PAGES = 10
+
 logger = logging.getLogger(__name__)
 
 SCOPES = [
@@ -213,27 +215,36 @@ class AppsScriptClient:
         """
         max_results = max(1, min(max_results, 1000))
         service = self._get_drive_service()
-        try:
-            response = (
-                service.files()
-                .list(
-                    q="mimeType='application/vnd.google-apps.script' and trashed=false",
-                    pageSize=max_results,
-                    fields="files(id,name,createdTime,modifiedTime)",
+        projects: list[ScriptProject] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(projects)
+            if remaining <= 0:
+                break
+            kwargs: dict = {
+                "q": "mimeType='application/vnd.google-apps.script' and trashed=false",
+                "pageSize": min(remaining, 1000),
+                "fields": "nextPageToken, files(id,name,createdTime,modifiedTime)",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                response = service.files().list(**kwargs).execute()
+            except HttpError as exc:
+                raise AppsScriptClientError(f"list_projects failed: {exc}") from exc
+            projects.extend(
+                ScriptProject(
+                    id=raw.get("id", ""),
+                    name=raw.get("name", ""),
+                    created_time=raw.get("createdTime", ""),
+                    modified_time=raw.get("modifiedTime", ""),
                 )
-                .execute()
+                for raw in response.get("files", [])
             )
-        except HttpError as exc:
-            raise AppsScriptClientError(f"list_projects failed: {exc}") from exc
-        projects = [
-            ScriptProject(
-                id=raw.get("id", ""),
-                name=raw.get("name", ""),
-                created_time=raw.get("createdTime", ""),
-                modified_time=raw.get("modifiedTime", ""),
-            )
-            for raw in response.get("files", [])
-        ]
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        projects = projects[:max_results]
         logger.info("list_projects returned %d project(s)", len(projects))
         return projects
 
@@ -281,24 +292,33 @@ class AppsScriptClient:
             raise AppsScriptClientError("get_execution_log requires a non-empty script_id")
         max_results = max(1, min(max_results, 50))
         service = self._get_service()
-        try:
-            result = (
-                service.processes()
-                .listScriptProcesses(scriptId=script_id, pageSize=max_results)
-                .execute()
+        executions: list[ScriptExecution] = []
+        page_token: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(executions)
+            if remaining <= 0:
+                break
+            kwargs: dict = {"scriptId": script_id, "pageSize": min(remaining, 50)}
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                result = service.processes().listScriptProcesses(**kwargs).execute()
+            except HttpError as exc:
+                raise AppsScriptClientError(f"get_execution_log({script_id}) failed: {exc}") from exc
+            executions.extend(
+                ScriptExecution(
+                    function_name=p.get("functionName", "") or "(unknown)",
+                    status=p.get("processStatus", "") or "(unknown)",
+                    start_time=p.get("startTime", ""),
+                    duration=p.get("duration", "") or "(unknown)",
+                    process_type=p.get("processType", ""),
+                )
+                for p in result.get("processes", [])
             )
-        except HttpError as exc:
-            raise AppsScriptClientError(f"get_execution_log({script_id}) failed: {exc}") from exc
-        executions = [
-            ScriptExecution(
-                function_name=p.get("functionName", "") or "(unknown)",
-                status=p.get("processStatus", "") or "(unknown)",
-                start_time=p.get("startTime", ""),
-                duration=p.get("duration", "") or "(unknown)",
-                process_type=p.get("processType", ""),
-            )
-            for p in result.get("processes", [])
-        ]
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
+        executions = executions[:max_results]
         logger.info("get_execution_log %s: %d execution(s)", script_id, len(executions))
         return executions
 
