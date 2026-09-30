@@ -18,7 +18,7 @@ Optional config keys (needed to refresh an expired access token — see
 
 Account ids (page authors, storage-format mentions) are resolved to display
 names through the user directory shared with the Jira client, which looks
-them up lazily via Jira's user API (ADR 0115). Those calls retry a token
+them up lazily via Jira's user API (ADR 0116). Those calls retry a token
 refresh only on 401, not on the 403/404 that ``_request`` also treats as
 stale: a Confluence-only site answers Jira's API with them, and refreshing
 would rotate the shared refresh token for nothing.

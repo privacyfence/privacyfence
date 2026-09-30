@@ -604,6 +604,9 @@ For each representative read, list, search, create, update, send or upload tool:
   `i_am_assignee`, independently of the project rule.
 - `jira_transition_issue` with a transition name that is not available fails with an error listing
   the available transitions.
+- **Mentions.** Reading an issue whose description or a comment @mentions someone shows their name, not a bare
+  account id. `jira_find_users` finds a person by name and returns no
+  email.
 
 ### Confluence checks
 
@@ -613,6 +616,8 @@ For each representative read, list, search, create, update, send or upload tool:
   the space rule.
 - `confluence_download_attachment` prompts for review and saves a file whose size matches
   `confluence_list_attachments`.
+- **Mentions.** Reading a page that @mentions someone, or that has an author, shows their name.
+  `confluence_find_users` finds a person by name and returns no email.
 
 ### Approval UI checks
 
