@@ -54,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Tasks:** `tasks_list_tasks` reads up to 100 tasks across pages and, with `show_completed`, includes tasks completed in Google's own Tasks, Gmail and Calendar apps. `tasks_update_task` can now remove notes or the due date (`clear_notes`, `clear_due`), and `tasks_move_task` moves the task natively, so it keeps its id, status and subtasks.
 - **Calendar.** `calendar_list_events` now reads up to `max_results` events across pages and an empty `time_min` means now instead of the oldest events first; time arguments that are not RFC 3339 date-times, an end time not after the start, and a bad working-location date or location are rejected before approval is requested; `calendar_get_event_details` no longer advertises attachments it does not return.
 - **Contacts.** `contacts_list` now applies `source` while paging, so a narrow source no longer drops matches; `contacts_search` no longer falls back to a full scan when a search simply finds nothing (and its fallback no longer returns directory-only contacts for `source="personal"`); and invalid `emails`/`phones` JSON is now rejected with an error instead of being silently ignored.
+- **Jira and Salesforce.** `jira_search_issues` now reads up to `max_results` (up to 500) across pages instead of only the first page, and `salesforce_search` without `object_types` now honours `max_results`; its description now says which fields each shape returns.
 
 ## [5.3.0] — 2026-09-30
 

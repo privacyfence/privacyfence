@@ -35,6 +35,8 @@ from .atlassian_oauth import (
 
 logger = logging.getLogger(__name__)
 
+MAX_PAGES = 10
+
 
 class JiraClientError(Exception):
     """Raised for unrecoverable Jira client problems (auth, config, API)."""
@@ -225,12 +227,25 @@ class JiraClient:
     def search_issues(self, jql: str, max_results: int = 20) -> list[JiraIssue]:
         if not jql:
             raise JiraClientError("search_issues requires a non-empty JQL query")
-        max_results = max(1, min(max_results, 100))
+        max_results = max(1, min(max_results, 500))
+        raw_issues: list[Any] = []
+        page_token: str | None = None
         try:
-            result = self._request(self._client.jql, jql, limit=max_results)
+            for _ in range(MAX_PAGES):
+                remaining = max_results - len(raw_issues)
+                result = self._request(
+                    self._client.enhanced_jql,
+                    jql,
+                    nextPageToken=page_token,
+                    limit=min(remaining, 100),
+                )
+                raw_issues.extend(result.get("issues") or [])
+                page_token = result.get("nextPageToken")
+                if result.get("isLast", True) or not page_token or len(raw_issues) >= max_results:
+                    break
         except Exception as exc:
             raise JiraClientError(f"search_issues failed: {exc}") from exc
-        issues = [self._parse_issue(i) for i in (result.get("issues") or [])]
+        issues = [self._parse_issue(i) for i in raw_issues[:max_results]]
         logger.info("search_issues jql=%r returned %d issue(s)", jql, len(issues))
         return issues
 
