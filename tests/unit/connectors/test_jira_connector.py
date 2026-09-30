@@ -9,10 +9,12 @@ expect -- no equivalent bug here.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence import atlassian_users as au
 from privacyfence.atlassian_users import AtlassianUser
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import jira as jira_module
@@ -165,6 +167,18 @@ class TestFindUsers:
         entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
         assert '"tool": "jira_find_users"' in entries[-1]
         assert '"decision": "auto_accepted"' in entries[-1]
+
+    async def test_customer_account_email_name_is_masked(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.find_users.return_value = [
+            au.parse_user({"accountId": "acc-cust-0001", "displayName": "jo@example.com",
+                           "accountType": "customer"})]
+
+        result = await connector.call("jira_find_users", {"query": "jo"})
+
+        assert "@" not in json.dumps(result)
+        assert result[0]["display_name"] == "Customer account 0001"
 
     async def test_client_error_becomes_runtime_error(self):
         connector, client = make_connector()

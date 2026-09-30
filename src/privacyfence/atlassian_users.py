@@ -41,6 +41,9 @@ _STORAGE_MENTION_RE = re.compile(
     re.S,
 )
 UNKNOWN_USER_LABEL = "unknown user"
+CUSTOMER_ACCOUNT_LABEL = "Customer account"
+# Deliberately loose: a false positive only relabels a name, a false negative leaks an address.
+_EMAIL_RE = re.compile(r"[\w.+%'-]+@[\w-]+(?:\.[\w-]+)+")
 
 
 class AtlassianUsersError(Exception):
@@ -53,6 +56,17 @@ class AtlassianUser:
     display_name: str
     active: bool = True
     account_type: str = ""  # Atlassian's accountType: "atlassian", "app" or "customer"
+
+    def __post_init__(self) -> None:
+        # Every record (API response, cache file, remember()) is built here, so an email-shaped
+        # name, typical of Jira Service Management customer accounts, can reach no output (ADR 0118).
+        self.display_name = mask_emails(self.display_name, self.account_id)
+
+
+def mask_emails(name: str, account_id: str) -> str:
+    """Replace any email-shaped text with ``Customer account <last 4 of the id>``."""
+    label = f"{CUSTOMER_ACCOUNT_LABEL} {account_id[-4:]}"
+    return _EMAIL_RE.sub(label, name)
 
 
 def jira_api_base(cloud_id: str) -> str:

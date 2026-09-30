@@ -69,6 +69,47 @@ class TestParseUser:
         assert "j@x.com" not in repr(user)
 
 
+CUSTOMER_RAW = {"accountId": ID_A, "displayName": "jo.doe+x@Example.co.uk", "accountType": "customer"}
+MASKED = f"Customer account {ID_A[-4:]}"
+
+
+class TestEmailMasking:
+    def test_parse_user_masks_customer_email(self):
+        assert au.parse_user(CUSTOMER_RAW).display_name == MASKED
+
+    def test_masks_substring(self):
+        user = au.parse_user({"accountId": ID_A, "displayName": "Jo (o'neil@x.com) Doe"})
+        assert user.display_name == f"Jo ({MASKED}) Doe"
+
+    @pytest.mark.parametrize("name", ["Jane Doe", "Jane O'Neil", "Jane @ Acme", "@jane", "a@b"])
+    def test_ordinary_names_untouched(self, name):
+        assert au.parse_user({"accountId": ID_A, "displayName": name}).display_name == name
+
+    def test_search_users_masks(self):
+        users = au.search_users(_session([CUSTOMER_RAW]), CLOUD, "jo", 5)
+        assert [u.display_name for u in users] == [MASKED]
+
+    def test_fetch_users_bulk_masks(self):
+        users = au.fetch_users_bulk(_session({"values": [CUSTOMER_RAW], "isLast": True}), CLOUD, [ID_A])
+        assert [u.display_name for u in users] == [MASKED]
+
+    def test_cache_file_has_no_address(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        names = AtlassianUserDirectory(str(path), CLOUD).resolve(
+            [ID_A], MagicMock(return_value=[au.parse_user(CUSTOMER_RAW)]))
+        assert names == {ID_A: MASKED}
+        assert "@" not in path.read_text()
+
+    def test_stale_cache_masked_on_load(self, tmp_path: Path):
+        path = tmp_path / "users.json"
+        path.write_text(json.dumps({"cloud_id": CLOUD, "users": {ID_A: {
+            "account_id": ID_A, "display_name": "jo@example.com", "active": True,
+            "account_type": "customer", "fetched_at": "2026-01-01T00:00:00+00:00"}}}))
+        with freeze_time("2026-01-02 00:00:00"):
+            names = AtlassianUserDirectory(str(path), CLOUD).resolve([ID_A], MagicMock())
+        assert names == {ID_A: MASKED}
+
+
 class TestFetchUsersBulk:
     def test_params_and_parse(self):
         session = _session({"values": [{"accountId": ID_A, "displayName": "A"}], "isLast": True})
