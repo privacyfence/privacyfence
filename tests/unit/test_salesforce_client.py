@@ -26,6 +26,8 @@ import requests
 
 from privacyfence.oauth_loopback import OAuthLoopbackError
 from privacyfence.salesforce_client import (
+    MAX_REPORT_FILTERS,
+    ReportFilter,
     SalesforceClient,
     SalesforceClientError,
     SalesforceRecord,
@@ -36,6 +38,7 @@ from privacyfence.salesforce_client import (
     _validate_salesforce_id,
     authorize_interactive,
     build_authorize_url,
+    build_report_metadata,
     exchange_code,
     load_token_file,
 )
@@ -520,7 +523,7 @@ class TestRunReport:
         with pytest.raises(SalesforceClientError, match="requires a report_id"):
             client.run_report("")
 
-    def test_calls_restful_analytics_endpoint(self):
+    def test_plain_run_is_a_get_with_include_details(self):
         sf = MagicMock()
         sf.restful.return_value = {"factMap": {}}
         client = with_fake_sf(make_client(), sf)
@@ -528,9 +531,162 @@ class TestRunReport:
         result = client.run_report("report-1")
 
         assert result == {"factMap": {}}
-        sf.restful.assert_called_once_with(
-            "analytics/reports/report-1", method="POST", json={"reportMetadata": {}},
+        sf.restful.assert_called_once_with("analytics/reports/report-1", params={"includeDetails": "true"})
+
+    def test_summary_only_sends_include_details_false(self):
+        sf = MagicMock()
+        sf.restful.return_value = {"factMap": {}}
+        client = with_fake_sf(make_client(), sf)
+
+        client.run_report("report-1", summary_only=True)
+
+        sf.restful.assert_called_once_with("analytics/reports/report-1", params={"includeDetails": "false"})
+
+    def test_overrides_describe_then_post(self):
+        saved = {"detailColumns": ["A", "B"], "reportFilters": []}
+        sf = MagicMock()
+        sf.restful.side_effect = [{"reportMetadata": saved}, {"factMap": {}}]
+        client = with_fake_sf(make_client(), sf)
+        flt = ReportFilter("A", "equals", ["x"])
+
+        result = client.run_report("report-1", columns=["B"], filters=[flt])
+
+        assert result == {"factMap": {}}
+        built = build_report_metadata(saved, ["B"], [flt])
+        assert sf.restful.call_args_list == [
+            (("analytics/reports/report-1/describe",), {}),
+            (
+                ("analytics/reports/report-1",),
+                {"params": {"includeDetails": "true"}, "method": "POST", "json": {"reportMetadata": built}},
+            ),
+        ]
+
+    def test_non_dict_describe_is_treated_as_empty(self):
+        sf = MagicMock()
+        sf.restful.side_effect = [None, {"factMap": {}}]
+        client = with_fake_sf(make_client(), sf)
+
+        client.run_report("report-1", filters=[ReportFilter("A", "equals", ["x"])])
+
+        posted = sf.restful.call_args_list[1].kwargs["json"]["reportMetadata"]
+        assert posted == {
+            "reportFilters": [{"column": "A", "operator": "equals", "value": "x"}],
+            "reportBooleanFilter": "1",
+        }
+
+    def test_build_error_propagates_as_client_error(self):
+        sf = MagicMock()
+        sf.restful.return_value = {"reportMetadata": {"detailColumns": ["A"]}}
+        client = with_fake_sf(make_client(), sf)
+
+        with pytest.raises(SalesforceClientError, match="not one of this report's columns: A"):
+            client.run_report("report-1", columns=["Z"])
+
+        sf.restful.assert_called_once_with("analytics/reports/report-1/describe")
+
+
+def _ids(n: int) -> list[str]:
+    return [f"006{i:015d}" for i in range(n)]
+
+
+class TestBuildReportMetadata:
+    SAVED = {
+        "detailColumns": ["A", "B", "C"],
+        "reportFilters": [
+            {"column": "X", "operator": "equals", "value": "1"},
+            {"column": "Y", "operator": "equals", "value": "2"},
+        ],
+    }
+
+    def test_column_subset_and_order(self):
+        built = build_report_metadata(self.SAVED, [" C ", "A"], None)
+        assert built["detailColumns"] == ["C", "A"]
+
+    def test_unknown_column_lists_saved_columns(self):
+        with pytest.raises(SalesforceClientError, match="'Z' is not one of this report's columns: A, B, C"):
+            build_report_metadata(self.SAVED, ["Z"], None)
+
+    def test_saved_without_columns_rejects_any_column(self):
+        with pytest.raises(SalesforceClientError, match="not one of this report's columns"):
+            build_report_metadata({}, ["A"], None)
+
+    def test_duplicate_column(self):
+        with pytest.raises(SalesforceClientError, match="'A' is listed twice"):
+            build_report_metadata(self.SAVED, ["A", "A"], None)
+
+    def test_saved_metadata_not_mutated(self):
+        import copy
+        before = copy.deepcopy(self.SAVED)
+        build_report_metadata(self.SAVED, ["A"], [ReportFilter("A", "equals", ["x"])])
+        assert self.SAVED == before
+
+    def test_twenty_ids_split_into_two_filters(self):
+        built = build_report_metadata(self.SAVED, None, [ReportFilter("A", "equals", _ids(20))])
+        assert len(_ids(20)[0]) == 18
+        added = built["reportFilters"][2:]
+        assert len(added) == 2
+        assert [len(f["value"].split(",")) for f in added] == [10, 10]
+        assert built["reportBooleanFilter"] == "1 AND 2 AND (3 OR 4)"
+
+    def test_saved_logic_is_wrapped(self):
+        saved = {**self.SAVED, "reportBooleanFilter": "1 OR 2"}
+        built = build_report_metadata(saved, None, [ReportFilter("A", "equals", ["x"])])
+        assert built["reportBooleanFilter"] == "(1 OR 2) AND 3"
+
+    def test_no_saved_filters_single_value(self):
+        built = build_report_metadata({"detailColumns": ["A"]}, None, [ReportFilter("A", "equals", ["x"])])
+        assert built["reportBooleanFilter"] == "1"
+        assert built["reportFilters"] == [{"column": "A", "operator": "equals", "value": "x"}]
+
+    def test_negative_operator_chunks_joined_with_and(self):
+        built = build_report_metadata({}, None, [ReportFilter("A", "notEqual", _ids(12))])
+        assert built["reportBooleanFilter"] == "(1 AND 2)"
+
+    def test_chunks_split_on_character_length(self):
+        values = ["v" * 100, "w" * 100, "x" * 100]
+        built = build_report_metadata({}, None, [ReportFilter("A", "equals", values)])
+        assert [f["value"] for f in built["reportFilters"]] == [f"{values[0]},{values[1]}", values[2]]
+
+    def test_single_oversized_value_is_its_own_chunk(self):
+        built = build_report_metadata({}, None, [ReportFilter("A", "equals", ["v" * 300, "w"])])
+        assert [len(f["value"]) for f in built["reportFilters"]] == [300, 1]
+
+    def test_multiple_filters_become_separate_groups(self):
+        built = build_report_metadata(
+            {}, None, [ReportFilter("A", "equals", ["x"]), ReportFilter("B", "greaterThan", ["5"])],
         )
+        assert built["reportBooleanFilter"] == "1 AND 2"
+
+    def test_value_with_comma(self):
+        with pytest.raises(SalesforceClientError, match="contains a comma"):
+            build_report_metadata({}, None, [ReportFilter("A", "equals", ["a,b"])])
+
+    def test_unknown_operator(self):
+        with pytest.raises(SalesforceClientError, match="Unknown report filter operator 'like'; use one of: "):
+            build_report_metadata({}, None, [ReportFilter("A", "like", ["a"])])
+
+    def test_bad_column(self):
+        with pytest.raises(SalesforceClientError, match="Invalid report filter column"):
+            build_report_metadata({}, None, [ReportFilter("A; DROP", "equals", ["a"])])
+
+    def test_empty_values(self):
+        with pytest.raises(SalesforceClientError, match="has no values"):
+            build_report_metadata({}, None, [ReportFilter("A", "equals", ["", "  "])])
+
+    def test_multi_value_less_than(self):
+        with pytest.raises(SalesforceClientError, match="takes exactly one value"):
+            build_report_metadata({}, None, [ReportFilter("A", "lessThan", ["1", "2"])])
+
+    def test_too_many_filters(self):
+        filters = [ReportFilter("A", "equals", ["x"])] * (MAX_REPORT_FILTERS + 1)
+        with pytest.raises(SalesforceClientError, match="21 filters; Salesforce allows at most 20"):
+            build_report_metadata({}, None, filters)
+
+    def test_boolean_filter_untouched_when_only_columns(self):
+        saved = {**self.SAVED, "reportBooleanFilter": "1 OR 2"}
+        built = build_report_metadata(saved, ["A"], None)
+        assert built["reportBooleanFilter"] == "1 OR 2"
+        assert built["reportFilters"] == saved["reportFilters"]
 
 
 # ---------------------------------------------------------------------------- #

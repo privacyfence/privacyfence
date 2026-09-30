@@ -916,6 +916,123 @@ class TestCheckSalesforce:
         assert get_record.raw is None
 
 
+    @staticmethod
+    def _report_result(columns, cells_per_row, with_rows=True):
+        rows = [{"dataCells": [{"label": v, "value": v} for v in cells]} for cells in cells_per_row]
+        group = {"aggregates": []}
+        if with_rows:
+            group["rows"] = rows
+        return {"reportMetadata": {"detailColumns": columns}, "factMap": {"T!T": group}}
+
+    def _report_sf(self, describe=None, narrowed=None, summary=None, full=None):
+        sf = MagicMock()
+        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+        full = full or self._report_result(["NAME", "CITY"], [["Acme", "Zurich"], ["Beta", "Bern"]])
+        describe = describe or {"reportMetadata": {
+            "detailColumns": ["NAME", "CITY"],
+            "reportFilters": [{"column": "X", "operator": "equals", "value": "1"},
+                              {"column": "Y", "operator": "equals", "value": "2"}],
+        }}
+        narrowed = narrowed or self._report_result(["NAME"], [["Acme"]])
+        summary = summary or self._report_result(["NAME", "CITY"], [], with_rows=False)
+        self.posted = None
+
+        def restful(path, params=None, method="GET", **kwargs):
+            if path.endswith("/describe"):
+                return describe
+            if method == "POST":
+                self.posted = kwargs["json"]["reportMetadata"]
+                return narrowed
+            return summary if params == {"includeDetails": "false"} else full
+
+        sf.restful.side_effect = restful
+        return sf
+
+    def _run_report_result(self, monkeypatch, sf):
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
+        results = recorder.check_salesforce(record=True, manifest={"salesforce": {"seed_record_id": "001a"}})
+        return next(r for r in results if r.method == "run_report")
+
+    def test_run_report_check_passes_on_honoured_overrides(self, monkeypatch):
+        sf = self._report_sf()
+
+        res = self._run_report_result(monkeypatch, sf)
+
+        assert res.ok, res.note
+        assert res.raw is None and res.fixture_relpath == ""
+        assert "OR" in self.posted["reportBooleanFilter"]
+        assert self.posted["detailColumns"] == ["NAME"]
+        assert len(self.posted["reportFilters"]) == 4
+
+    def test_run_report_check_fails_without_rows(self, monkeypatch):
+        sf = self._report_sf(full=self._report_result(["NAME"], [], with_rows=False))
+
+        res = self._run_report_result(monkeypatch, sf)
+
+        assert not res.ok
+        assert "includeDetails not honoured" in res.note
+
+    def test_run_report_check_degrades_on_mock_responses(self, monkeypatch):
+        sf = MagicMock()
+        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+
+        res = self._run_report_result(monkeypatch, sf)
+
+        assert not res.ok
+
+    def test_run_report_check_needs_a_plain_text_column(self, monkeypatch):
+        full = self._report_result(["NAME"], [["Acme"]])
+        full["factMap"]["T!T"]["rows"][0]["dataCells"][0]["value"] = "001ID"  # lookup: value != label
+        res = self._run_report_result(monkeypatch, self._report_sf(full=full))
+        assert not res.ok and res.note == "no string column to filter on"
+
+    def test_run_report_check_rows_without_cells(self, monkeypatch):
+        full = self._report_result(["NAME"], [["Acme"]])
+        full["factMap"]["T!T"]["rows"] = [{}]
+        res = self._run_report_result(monkeypatch, self._report_sf(full=full))
+        assert not res.ok and res.note == "no string column to filter on"
+
+    def test_run_report_check_fails_when_columns_not_honoured(self, monkeypatch):
+        narrowed = self._report_result(["NAME", "CITY"], [["Acme", "Zurich"]])
+        res = self._run_report_result(monkeypatch, self._report_sf(narrowed=narrowed))
+        assert not res.ok and "columns override not honoured" in res.note
+
+    def test_run_report_check_fails_when_filter_returns_nothing(self, monkeypatch):
+        narrowed = self._report_result(["NAME"], [], with_rows=False)
+        res = self._run_report_result(monkeypatch, self._report_sf(narrowed=narrowed))
+        assert not res.ok and res.note == "split ID filter returned no rows"
+
+    def test_run_report_check_fails_on_unexpected_row_content(self, monkeypatch):
+        narrowed = self._report_result(["NAME"], [["Other"]])
+        res = self._run_report_result(monkeypatch, self._report_sf(narrowed=narrowed))
+        assert not res.ok and "unexpected row content" in res.note
+
+    def test_run_report_check_fails_when_summary_returns_rows(self, monkeypatch):
+        summary = self._report_result(["NAME"], [["Acme"]])
+        res = self._run_report_result(monkeypatch, self._report_sf(summary=summary))
+        assert not res.ok and res.note == "summary_only still returned detail rows"
+
+    def test_run_report_check_reports_salesforce_error(self, monkeypatch):
+        sf = self._report_sf()
+        real = sf.restful.side_effect
+
+        def boom(path, params=None, method="GET", **kwargs):
+            if method == "POST":
+                raise RuntimeError("INVALID_FILTER_VALUE")
+            return real(path, params=params, method=method, **kwargs)
+
+        sf.restful.side_effect = boom
+        res = self._run_report_result(monkeypatch, sf)
+        assert not res.ok and "INVALID_FILTER_VALUE" in res.note
+
+    def test_run_report_check_skipped_when_report_not_listed(self, monkeypatch):
+        sf = MagicMock()
+        sf.query.return_value = {"records": []}
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
+        results = recorder.check_salesforce(record=False, manifest={"salesforce": {"seed_record_id": "001a"}})
+        assert not any(r.method == "run_report" for r in results)
+
+
 class TestCheckGmail:
     def _service(self, raw_message: dict):
         return _offline_google_service("gmail", "v1", raw_message)

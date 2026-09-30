@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import asdict
@@ -11,7 +12,7 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
-from ..salesforce_client import SalesforceClient, SalesforceClientError
+from ..salesforce_client import ReportFilter, SalesforceClient, SalesforceClientError
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,47 @@ def _format_report_details(result_dict: dict) -> str:
         )
 
 
+_FILTERS_SHAPE_ERROR = (
+    'filters: must be a JSON array of {"column", "operator", "value"} objects, '
+    "value a string or a list of strings"
+)
+
+
+def _parse_report_filters(raw: str) -> list[ReportFilter]:
+    """Parse salesforce_run_report's ``filters`` argument (a JSON array in a
+    string, since ToolParam has no list type) into ReportFilters."""
+    if not raw or not raw.strip():
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"filters: invalid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise ValueError(_FILTERS_SHAPE_ERROR)
+    parsed = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError(_FILTERS_SHAPE_ERROR)
+        column, operator, value = item.get("column"), item.get("operator"), item.get("value")
+        if not isinstance(column, str) or not column.strip() or not isinstance(operator, str):
+            raise ValueError(_FILTERS_SHAPE_ERROR)
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+            values = list(value)
+        else:
+            raise ValueError(_FILTERS_SHAPE_ERROR)
+        parsed.append(ReportFilter(column=column, operator=operator, values=values))
+    return parsed
+
+
+def _filter_value_summary(values: list[str]) -> str:
+    """One value if short, else a count -- keeps a long ID list off the card."""
+    if len(values) == 1 and len(values[0]) <= 40:
+        return values[0]
+    return f"{len(values)} value(s)"
+
+
 class SalesforceConnector(Connector):
     def __init__(self, client: SalesforceClient) -> None:
         self._sf = client
@@ -207,14 +249,35 @@ class SalesforceConnector(Connector):
                     "Run a Salesforce report by id and return the results. Returns "
                     "Salesforce's Analytics API report result as-is: reportMetadata, "
                     "reportExtendedMetadata, groupingsDown/groupingsAcross and a factMap "
-                    "holding each group's rows and aggregates. It runs the report as saved, "
-                    "with no filter changes. Get report_id from salesforce_list_reports. "
-                    "Requires user approval."
+                    "holding each group's rows and aggregates. By default it runs the report as "
+                    "saved; columns, filters and summary_only narrow this one run without "
+                    "changing the saved report. Salesforce returns at most 2,000 detail rows: "
+                    "allData false in the result means rows were cut off, so narrow the run "
+                    "with filters. Get report_id from salesforce_list_reports. Requires user "
+                    "approval."
                 ),
                 params=[
                     ToolParam("report_id", "str",
                               description="Salesforce id of the report (starts with '00O'), from "
                                           "salesforce_list_reports (its id field)."),
+                    ToolParam("columns", "str", required=False, default="",
+                              description="Comma-separated report column API names to return, a subset of the "
+                                          "report's own reportMetadata.detailColumns, e.g. "
+                                          "'OPPORTUNITY.NAME,AMOUNT'. Leave empty for all of the report's "
+                                          "columns. Columns outside the saved report are rejected."),
+                    ToolParam("filters", "str", required=False, default="",
+                              description='JSON array of extra row filters for this run only, ANDed onto the '
+                                          'report\'s saved filters, e.g. [{"column": "Opportunity.Opp_Id__c", '
+                                          '"operator": "equals", "value": ["006A...", "006B..."]}]. value is a '
+                                          'string or a list of strings (a list matches any of them; it is split '
+                                          'across several filters automatically). operator is one of equals, '
+                                          'notEqual, lessThan, greaterThan, lessOrEqual, greaterOrEqual, '
+                                          'contains, notContain, startsWith, includes, excludes, within. Leave '
+                                          'empty for none.'),
+                    ToolParam("summary_only", "bool", required=False, default=False,
+                              description="True to return only groupings and aggregates (totals), with no "
+                                          "detail rows: the smallest response. Default false returns detail "
+                                          "rows too."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -334,8 +397,18 @@ class SalesforceConnector(Connector):
             args={"object_type": object_type, "record_id": record_id},
         )
 
-    async def _run_report(self, report_id: str) -> Any:
-        result = await self._fetch(self._sf.run_report, report_id)
+    async def _run_report(
+        self, report_id: str, columns: str = "", filters: str = "", summary_only: bool = False,
+    ) -> Any:
+        # Parse before fetching or gating: a malformed call shouldn't cost
+        # the user an approval decision (same as _search).
+        filter_list = _parse_report_filters(filters)
+        column_list = [c.strip() for c in columns.split(",") if c.strip()]
+        if summary_only and column_list:
+            raise ValueError("salesforce_run_report: columns has no effect with summary_only")
+        result = await self._fetch(
+            self._sf.run_report, report_id, column_list or None, filter_list or None, summary_only,
+        )
         result_dict = asdict(result) if hasattr(result, "__dataclass_fields__") else result
         # Salesforce's report-run response nests the report's name under
         # reportMetadata.name, not at the top level -- report_dict.get("name")
@@ -355,8 +428,33 @@ class SalesforceConnector(Connector):
             "Report": str(report_name),
             "Report ID": report_id,
         }
-        new_info = {"Report data": "All report rows/aggregates"}
+        if column_list:
+            preview["Columns"] = ", ".join(column_list)
+        if filter_list:
+            preview["Filters"] = "; ".join(
+                f"{f.column} {f.operator} {_filter_value_summary(f.values)}" for f in filter_list
+            )
+        if summary_only:
+            preview["Mode"] = "Totals only (no rows)"
+        if summary_only:
+            report_data = "Report groupings and totals (no rows)"
+        elif column_list:
+            report_data = "Report rows (selected columns) and totals"
+        elif filter_list:
+            report_data = "Report rows matching the filters and totals"
+        else:
+            report_data = "All report rows/aggregates"
+        new_info = {"Report data": report_data}
         details = _format_report_details(result_dict)
+        # Salesforce cuts detail rows off at 2,000 and says so with allData
+        # false; tell the reviewer here, and the AI client via the result
+        # itself (which carries allData).
+        if isinstance(result_dict, dict) and result_dict.get("allData") is False:
+            details = (
+                "Salesforce returned only the first 2,000 detail rows; the report has more. "
+                "Narrow it with filters.\n\n" + details
+            )
+            new_info["Rows"] = "Cut off at Salesforce's 2,000-row limit"
         return await gated_call(
             connector=self.name,
             tool="salesforce_run_report",
@@ -380,7 +478,10 @@ class SalesforceConnector(Connector):
             preview_tables=_report_tables(result_dict),
             table_only=True,
             my_email=self.my_email,
-            args={"report_id": report_id},
+            args={
+                "report_id": report_id, "columns": columns, "filters": filters,
+                "summary_only": summary_only,
+            },
         )
 
     async def _search(

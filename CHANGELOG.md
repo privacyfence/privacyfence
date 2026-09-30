@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Narrower Salesforce report runs.** salesforce_run_report can return only some of a report's columns, add filters for one run (such as a list of opportunity IDs), or return totals only, without changing the saved report. It now asks Salesforce for detail rows explicitly, and says when Salesforce cut a report off at 2,000 rows.
+
 ### Changed
 
 - Every connector tool now describes each of its parameters, says what it returns (fields, limits and paging), and names the related tool to use instead, so AI clients choose and call the right tool more often.

@@ -229,7 +229,7 @@ if it reports `database is locked`.
 
 - [ ] Create two or three Account records named like `PrivacyFence QA — Acme Test Co [QATEST]` and
       `PrivacyFence QA — Globex Test Co [QATEST]`.
-- [ ] Create a report on Accounts named exactly `PrivacyFence QA Report`.
+- [ ] Create a **tabular** report on Accounts named exactly `PrivacyFence QA Report`, with the Account Name and at least one plain text column (for example Billing City).
 - [ ] Set `salesforce.report_name` (default `PrivacyFence QA Report`), `salesforce.object_type`
       (default `Account`) and `salesforce.seed_record_name` (default
       `PrivacyFence QA — Acme Test Co [QATEST]`). Optionally set `salesforce.report_id` (blank to
@@ -595,6 +595,7 @@ For each representative read, list, search, create, update, send or upload tool:
 - **Search scope.** `salesforce_search` scoped to `object_types="Account"` matches
   `approved_object_types`; an unscoped search never does. `account_id` without `object_types` is
   rejected before any card appears.
+- **Report overrides.** `salesforce_run_report` with `columns`, `filters` or `summary_only` narrows that run only. The approved-report rule still reads it without a card, and `--check`'s `run_report` row covers the three live.
 
 ### Jira checks
 

@@ -15,6 +15,7 @@ connectors/salesforce.py:
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,6 +24,7 @@ from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import salesforce as salesforce_module
 from privacyfence.connectors.salesforce import SalesforceConnector
 from privacyfence.salesforce_client import (
+    ReportFilter,
     SalesforceClient,
     SalesforceClientError,
     SalesforceRecord,
@@ -276,9 +278,136 @@ class TestRunReport:
         kwargs = gated_call_spy[0]
         assert kwargs["gate"] == "review"
         assert kwargs["preview"]["Report ID"] == "00O1"
-        assert kwargs["args"] == {"report_id": "00O1"}
+        assert kwargs["args"] == {"report_id": "00O1", "columns": "", "filters": "", "summary_only": False}
         assert kwargs["sender"] == "Salesforce"
+        assert kwargs["new_info"] == {"Report data": "All report rows/aggregates"}
+        assert "Columns" not in kwargs["preview"] and "Filters" not in kwargs["preview"]
+        assert "Mode" not in kwargs["preview"]
         assert result == client.run_report.return_value
+        client.run_report.assert_called_once_with("00O1", None, None, False)
+
+    async def test_columns_and_filters_passed_to_client_and_shown_in_preview(self, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report.return_value = {"reportMetadata": {"name": "R"}}
+        ids = [f"006{i:015d}" for i in range(20)]
+        filters = json.dumps([
+            {"column": "Opportunity.Opp_Id__c", "operator": "equals", "value": ids},
+            {"column": "STAGE", "operator": "notEqual", "value": "Closed Lost"},
+        ])
+
+        await connector.call("salesforce_run_report", {
+            "report_id": "00O1", "columns": " OPPORTUNITY.NAME , AMOUNT,", "filters": filters,
+        })
+
+        client.run_report.assert_called_once_with(
+            "00O1", ["OPPORTUNITY.NAME", "AMOUNT"],
+            [
+                ReportFilter("Opportunity.Opp_Id__c", "equals", ids),
+                ReportFilter("STAGE", "notEqual", ["Closed Lost"]),
+            ],
+            False,
+        )
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Columns"] == "OPPORTUNITY.NAME, AMOUNT"
+        assert kwargs["preview"]["Filters"] == (
+            "Opportunity.Opp_Id__c equals 20 value(s); STAGE notEqual Closed Lost"
+        )
+        assert kwargs["new_info"]["Report data"] == "Report rows (selected columns) and totals"
+        assert kwargs["args"]["filters"] == filters
+
+    async def test_filters_only_new_info_and_long_single_value(self, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report.return_value = {"reportMetadata": {"name": "R"}}
+        filters = json.dumps([{"column": "NAME", "operator": "contains", "value": "x" * 41}])
+
+        await connector.call("salesforce_run_report", {"report_id": "00O1", "filters": filters})
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["new_info"]["Report data"] == "Report rows matching the filters and totals"
+        assert kwargs["preview"]["Filters"] == "NAME contains 1 value(s)"
+
+    async def test_summary_only_preview_and_new_info(self, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report.return_value = {"reportMetadata": {"name": "R"}}
+
+        await connector.call("salesforce_run_report", {"report_id": "00O1", "summary_only": True})
+
+        client.run_report.assert_called_once_with("00O1", None, None, True)
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Mode"] == "Totals only (no rows)"
+        assert kwargs["new_info"]["Report data"] == "Report groupings and totals (no rows)"
+
+    async def test_invalid_filters_json_rejected_before_fetch(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="filters: invalid JSON"):
+            await connector.call("salesforce_run_report", {"report_id": "00O1", "filters": "[{"})
+
+        client.run_report.assert_not_called()
+        assert gated_call_spy == []
+
+    @pytest.mark.parametrize("bad", [
+        '{"column": "A"}',
+        "[1]",
+        '[{"column": "", "operator": "equals", "value": "x"}]',
+        '[{"column": "A", "operator": 3, "value": "x"}]',
+        '[{"column": "A", "operator": "equals"}]',
+        '[{"column": "A", "operator": "equals", "value": []}]',
+        '[{"column": "A", "operator": "equals", "value": ["x", 2]}]',
+        '[{"column": "A", "operator": "equals", "value": 5}]',
+    ])
+    async def test_filters_wrong_shape_rejected_before_fetch(self, gated_call_spy, bad):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="filters: must be a JSON array"):
+            await connector.call("salesforce_run_report", {"report_id": "00O1", "filters": bad})
+
+        client.run_report.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_whitespace_filters_means_none(self, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report.return_value = {}
+
+        await connector.call("salesforce_run_report", {"report_id": "00O1", "filters": "  "})
+
+        client.run_report.assert_called_once_with("00O1", None, None, False)
+
+    async def test_columns_with_summary_only_rejected_before_fetch(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="columns has no effect with summary_only"):
+            await connector.call(
+                "salesforce_run_report", {"report_id": "00O1", "columns": "A", "summary_only": True},
+            )
+
+        client.run_report.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_all_data_false_is_surfaced(self, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report.return_value = {
+            "reportMetadata": {"name": "R"}, "allData": False, "factMap": {},
+        }
+
+        result = await connector.call("salesforce_run_report", {"report_id": "00O1"})
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["details_text"].startswith(
+            "Salesforce returned only the first 2,000 detail rows; the report has more. "
+            "Narrow it with filters.\n\n"
+        )
+        assert kwargs["new_info"]["Rows"] == "Cut off at Salesforce's 2,000-row limit"
+        assert result["allData"] is False
+        assert set(result) == {"reportMetadata", "allData", "factMap"}
+
+    async def test_all_data_true_adds_no_truncation_note(self, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report.return_value = {"reportMetadata": {"name": "R"}, "allData": True}
+
+        await connector.call("salesforce_run_report", {"report_id": "00O1"})
+
+        assert "Rows" not in gated_call_spy[0]["new_info"]
 
     async def test_client_error_becomes_runtime_error(self):
         connector, client = make_connector()

@@ -76,7 +76,7 @@ from privacyfence import daemon_main  # noqa: E402
 from privacyfence.app_credentials import telegram_app_credentials  # noqa: E402
 from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
-from privacyfence.salesforce_client import SalesforceClient, SalesforceClientError  # noqa: E402
+from privacyfence.salesforce_client import ReportFilter, SalesforceClient, SalesforceClientError  # noqa: E402
 from privacyfence.gmail_client import GmailClient, GmailClientError  # noqa: E402
 from privacyfence.drive_client import DriveClient, DriveClientError  # noqa: E402
 from privacyfence.calendar_client import CalendarClient, CalendarClientError  # noqa: E402
@@ -932,6 +932,76 @@ def _build_salesforce_client() -> SalesforceClient:
     return SalesforceClient(config=config, token_file=token_path)
 
 
+def _report_rows(result: Any) -> list | None:
+    """The tabular ``T!T`` group's rows of a report run, or None if the result
+    isn't shaped like one."""
+    if not isinstance(result, dict):
+        return None
+    fact_map = result.get("factMap")
+    group = fact_map.get("T!T") if isinstance(fact_map, dict) else None
+    rows = group.get("rows") if isinstance(group, dict) else None
+    return rows if isinstance(rows, list) else None
+
+
+def _first_plain_text_column(full: dict, rows: list) -> int | None:
+    """Index of the first column whose first-row cell is a plain text value:
+    a non-empty comma-free string whose value equals its label. Name and
+    lookup columns carry the record Id in ``value``, so filtering on it would
+    match nothing."""
+    cells = (rows[0] or {}).get("dataCells") if isinstance(rows[0], dict) else None
+    if not isinstance(cells, list):
+        return None
+    for i, cell in enumerate(cells):
+        value = cell.get("value") if isinstance(cell, dict) else None
+        if isinstance(value, str) and value and "," not in value and value == cell.get("label"):
+            return i
+    return None
+
+
+def _check_salesforce_run_report(client: SalesforceClient, report_id: str, label: str) -> CheckResult:
+    """Live proof that run_report brings detail rows and that columns, a
+    split ID filter and summary_only are each honoured. Records no fixture,
+    and never puts a cell value into a note."""
+
+    def result(ok: bool, note: str) -> CheckResult:
+        return CheckResult("salesforce", "run_report", label, ok, note)
+
+    try:
+        full = client.run_report(report_id)
+        rows = _report_rows(full)
+        if not rows:
+            return result(False, "no detail rows in the QA report run -- includeDetails not honoured, "
+                                 "or the report is not tabular")
+        cols = ((full.get("reportMetadata") or {}).get("detailColumns")) or []
+        i = _first_plain_text_column(full, rows)
+        if i is None or i >= len(cols):
+            return result(False, "no string column to filter on")
+        real_value = rows[0]["dataCells"][i]["value"]
+        values = [f"PFQA-NOMATCH-{n:05d}" for n in range(19)] + [real_value]
+        narrowed = client.run_report(
+            report_id, columns=[cols[i]], filters=[ReportFilter(cols[i], "equals", values)],
+        )
+        narrowed_rows = _report_rows(narrowed)
+        narrowed_cols = (narrowed.get("reportMetadata") or {}).get("detailColumns")
+        if narrowed_cols != [cols[i]]:
+            return result(False, "columns override not honoured -- detailColumns differ from the request")
+        if not narrowed_rows:
+            return result(False, "split ID filter returned no rows")
+        for row in narrowed_rows:
+            row_cells = row.get("dataCells") if isinstance(row, dict) else None
+            if (not isinstance(row_cells, list) or len(row_cells) != 1
+                    or not isinstance(row_cells[0], dict) or row_cells[0].get("value") != real_value):
+                return result(False, "filter or columns override not honoured -- unexpected row content")
+        summary = client.run_report(report_id, summary_only=True)
+        if _report_rows(summary):
+            return result(False, "summary_only still returned detail rows")
+    except SalesforceClientError as exc:
+        return result(False, str(exc))
+    except (AttributeError, KeyError, TypeError, IndexError):
+        return result(False, "unexpected report run response shape")
+    return result(True, "rows returned; columns, split ID filter and summary_only honoured")
+
+
 def check_salesforce(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("salesforce") or {}
     report_id = cfg.get("report_id", "")
@@ -969,6 +1039,10 @@ def check_salesforce(record: bool, manifest: dict[str, Any]) -> list[CheckResult
         )
     except SalesforceClientError as exc:
         results.append(CheckResult("salesforce", "list_reports", report_id or report_name, False, str(exc)))
+        match = None
+
+    if match is not None:
+        results.append(_check_salesforce_run_report(client, match.id, report_id or report_name))
 
     # get_record -- targeted at the seed record's id if the manifest has
     # it, otherwise resolved once via search() by its tagged Name.
