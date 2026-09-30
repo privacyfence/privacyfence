@@ -1014,3 +1014,90 @@ class TestEveryToolIsAudited:
         ]
 
         await assert_all_tools_leave_an_audit_trail(connector, confluence_module, monkeypatch, tmp_path)
+
+
+_JANE = "acc-jane-0001"
+_LINK = f'<ac:link><ri:user ri:account-id="{_JANE}" /></ac:link>'
+
+
+class TestWriteMentions:
+    @staticmethod
+    def _create_args(body):
+        return {"space_key": "ENG", "title": "T", "body": body}
+
+    @staticmethod
+    def _update_args(body):
+        return {"page_id": "p1", "title": "T", "body": body}
+
+    @pytest.mark.parametrize("tool,make_args,client_method", [
+        ("confluence_create_page", _create_args, "create_page"),
+        ("confluence_update_page", _update_args, "update_page"),
+    ])
+    async def test_markup_becomes_storage_with_directory_name_in_preview(
+        self, gated_call_spy, tool, make_args, client_method,
+    ):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(title="T")
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe"}
+        getattr(client, client_method).return_value = make_page()
+
+        await connector.call(tool, make_args(f"<p>Hi @[Janey]({_JANE})</p>"))
+
+        expected = f"<p>Hi {_LINK}</p>"
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Mentions"] == "Jane Doe"
+        assert kwargs["raw_data"]["body"] == expected
+        assert kwargs["details_text"] == expected
+        assert getattr(client, client_method).call_args.args[-2 if client_method == "create_page" else -1] == expected
+        client.resolve_user_names.assert_called_once_with([_JANE])
+
+    @pytest.mark.parametrize("tool,make_args", [
+        ("confluence_create_page", _create_args),
+        ("confluence_update_page", _update_args),
+    ])
+    async def test_unresolvable_markup_id_refused_before_gate(
+        self, gated_call_spy, tool, make_args,
+    ):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+        client.resolve_user_names.return_value = {}
+
+        with pytest.raises(ValueError, match="Unknown Atlassian account id"):
+            await connector.call(tool, make_args(f"@[Ghost]({_JANE})"))
+
+        assert gated_call_spy == []
+        client.create_page.assert_not_called()
+        client.update_page.assert_not_called()
+
+    @pytest.mark.parametrize("tool,make_args", [
+        ("confluence_create_page", _create_args),
+        ("confluence_update_page", _update_args),
+    ])
+    async def test_unresolvable_raw_storage_mention_listed_and_write_proceeds(
+        self, gated_call_spy, tool, make_args,
+    ):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+        client.resolve_user_names.return_value = {}
+        client.create_page.return_value = make_page()
+        client.update_page.return_value = make_page()
+
+        await connector.call(tool, make_args(f"<p>{_LINK}</p>"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == f"unknown account {_JANE}"
+        assert gated_call_spy[0]["details_text"] == f"<p>{_LINK}</p>"
+
+    @pytest.mark.parametrize("tool,make_args", [
+        ("confluence_create_page", _create_args),
+        ("confluence_update_page", _update_args),
+    ])
+    async def test_no_mentions_means_no_lookup_and_no_row(self, gated_call_spy, tool, make_args):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+        client.create_page.return_value = make_page()
+        client.update_page.return_value = make_page()
+
+        await connector.call(tool, make_args("<p>plain</p>"))
+
+        client.resolve_user_names.assert_not_called()
+        assert "Mentions" not in gated_call_spy[0]["preview"]
