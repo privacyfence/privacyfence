@@ -1,4 +1,4 @@
-# ADR 0117: An approver sees Atlassian's name for every mentioned or assigned account
+# ADR 0118: An approver sees Atlassian's name for every mentioned or assigned account
 
 ## Status
 
@@ -50,5 +50,5 @@ id) as `unrecognised user mention(s)`. Storage tags are found with an HTML token
 
 ## Related
 
-- [ADR 0116](0116-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md)
-- [ADR 0118](0118-atlassian-find-users-is-auto-approved-and-returns-no-email.md)
+- [ADR 0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md)
+- [ADR 0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md)

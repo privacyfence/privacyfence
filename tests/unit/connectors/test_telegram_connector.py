@@ -94,13 +94,13 @@ class TestListChats:
         init_audit_logger(str(tmp_path))
         connector, client = make_connector()
         client.list_chats.return_value = [
-            TelegramChat(id=100, name="Family Group", username="", chat_type="group", unread_count=3, is_self=False),
+            TelegramChat(id=100, name="Family Group", username="famgroup", chat_type="group", unread_count=3, is_self=False),
         ]
 
         result = await connector.call("telegram_list_chats", {"limit": 20})
 
         assert result == [{
-            "id": 100, "name": "Family Group", "type": "group", "unread_count": 3, "is_self": False,
+            "id": 100, "name": "Family Group", "username": "famgroup", "type": "group", "unread_count": 3, "is_self": False,
         }]
         client.list_chats.assert_called_once_with(20)
         entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
@@ -213,7 +213,7 @@ class TestSearchMessages:
         assert kwargs["args"] == {"query": "tomorrow"}
         client.search_messages.assert_called_once_with("tomorrow", 5)
         assert result[0] == {
-            "id": 1, "chat_name": "Family Group", "sender_name": "Alice",
+            "id": 1, "chat_id": 100, "chat_name": "Family Group", "sender_name": "Alice",
             "text": "see you tomorrow", "date": "2026-07-06T10:00:00Z",
         }
         assert kwargs["preview_tables"][0] == {

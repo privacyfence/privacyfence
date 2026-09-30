@@ -538,6 +538,23 @@ class TestDownloadAttachment:
         assert kwargs["preview_blocks"] == [{"type": "text", "text": kwargs["details_text"]}]
         client.download_attachment.assert_called_once_with("p1", "att-1", "report.pdf", "/tmp")
 
+    async def test_finds_attachment_past_the_50th(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+        client.list_attachments.return_value = [
+            self._attachment(name=f"f{i}.bin", media_type="application/octet-stream", attachment_id=f"a{i}")
+            for i in range(60)
+        ]
+        client.download_attachment.return_value = {"path": "/tmp/f55.bin", "name": "f55.bin", "size_bytes": 1}
+
+        await connector.call(
+            "confluence_download_attachment",
+            {"page_id": "p1", "attachment_name": "f55.bin", "destination_dir": "/tmp"},
+        )
+
+        client.list_attachments.assert_called_once_with("p1")
+        client.download_attachment.assert_called_once_with("p1", "a55", "f55.bin", "/tmp")
+
     async def test_unknown_attachment_name_raises_without_gating(self, gated_call_spy):
         connector, client = make_connector()
         client.get_page.return_value = make_page()
@@ -978,6 +995,37 @@ class TestUpdatePage:
         assert result["title"] == "Updated"
         client.update_page.assert_called_once_with("p1", "Updated", "<p>x</p>")
 
+    async def test_title_only_keeps_current_body(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(title="Old", body="<p>keep</p>")
+        client.update_page.return_value = make_page(title="New")
+
+        await connector.call("confluence_update_page", {"page_id": "p1", "title": "New"})
+
+        client.update_page.assert_called_once_with("p1", "New", "<p>keep</p>")
+        assert gated_call_spy[0]["details_text"] == "(unchanged)"
+
+    async def test_body_only_keeps_current_title(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(title="Old", body="<p>old</p>")
+        client.update_page.return_value = make_page(title="Old")
+
+        await connector.call("confluence_update_page", {"page_id": "p1", "body": "<p>new</p>"})
+
+        client.update_page.assert_called_once_with("p1", "Old", "<p>new</p>")
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Title"] == "Old"
+        assert kwargs["details_text"] == "<p>new</p>"
+
+    async def test_neither_title_nor_body_raises_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="Provide a new title, a new body, or both"):
+            await connector.call("confluence_update_page", {"page_id": "p1"})
+
+        assert gated_call_spy == []
+        client.update_page.assert_not_called()
+
     async def test_client_error_becomes_runtime_error(self):
         connector, client = make_connector()
         client.get_page.side_effect = ConfluenceClientError("locked")
@@ -1040,7 +1088,11 @@ class TestEveryToolIsAudited:
             ConfluenceAttachment(name="stub", media_type="application/octet-stream", size=1, attachment_id="att-x"),
         ]
 
-        await assert_all_tools_leave_an_audit_trail(connector, confluence_module, monkeypatch, tmp_path)
+        await assert_all_tools_leave_an_audit_trail(
+            connector, confluence_module, monkeypatch, tmp_path,
+            # title and body are optional now, but at least one is required.
+            arg_overrides={"confluence_update_page": {"title": "Updated"}},
+        )
 
 
 _JANE = "acc-jane-0001"
@@ -1128,6 +1180,19 @@ class TestWriteMentions:
 
         client.resolve_user_names.assert_not_called()
         assert "Mentions" not in gated_call_spy[0]["preview"]
+
+    async def test_omitted_body_keeps_current_body_verbatim_without_lookup_or_row(self, gated_call_spy):
+        connector, client = make_connector()
+        current = f"<p>@[literal]({_JANE}) stays text</p>"
+        client.get_page.return_value = make_page(title="T", body=current)
+        client.update_page.return_value = make_page()
+
+        await connector.call("confluence_update_page", {"page_id": "p1", "title": "New"})
+
+        client.resolve_user_names.assert_not_called()
+        assert "Mentions" not in gated_call_spy[0]["preview"]
+        assert gated_call_spy[0]["details_text"] == "(unchanged)"
+        assert client.update_page.call_args.args[-1] == current
 
     @pytest.mark.parametrize("raw", [
         f"<ac:link><ri:user ri:account-id='{_JANE}' /></ac:link>",

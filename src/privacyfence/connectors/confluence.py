@@ -65,13 +65,13 @@ class ConfluenceConnector(Connector):
                     "List Confluence spaces the user has access to "
                     "(key, name, type, description). Returns a list of {key, name, "
                     "space_type, description, url}, at most max_results (default 50, "
-                    "capped at 250), only the first page the API sends. Use "
+                    "capped at 1000). Use "
                     "confluence_list_pages to list the pages in one of them. "
                     "Auto-approved."
                 ),
                 params=[
                     ToolParam("max_results", "int", required=False, default=50,
-                              description="Maximum number of spaces to return. Default 50, capped at 250."),
+                              description="Maximum number of spaces to return. Default 50, capped at 1000."),
                     ToolParam("space_type", "str", required=False, default="",
                               description="Filter to 'global' or 'personal'; "
                                            "omit/empty to return all types"),
@@ -95,7 +95,7 @@ class ConfluenceConnector(Connector):
                     ToolParam("query", "str",
                               description="Plain-text words to find in page and blog post text, "
                                           "e.g. 'quarterly roadmap'. Not CQL: it is wrapped in a "
-                                          "text-contains clause, so avoid double quotes."),
+                                          "text-contains clause."),
                     ToolParam("max_results", "int", required=False, default=20,
                               description="Maximum number of results to return. Default 20, capped at 100."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -130,8 +130,7 @@ class ConfluenceConnector(Connector):
                     "List pages in a Confluence space (title, id, version). "
                     "Returns a list of {id, title, space_key, space_name, version, author, "
                     "created, updated, url} without page bodies, at most max_results "
-                    "(default 20, capped at 200), only the first page the API sends, in the "
-                    "API's order. author is an opaque Atlassian account id, not a name. Use "
+                    "(default 20, capped at 1000), in the API's order. author is an opaque Atlassian account id, not a name. Use "
                     "confluence_search instead to find pages by words, and "
                     "confluence_get_page to read one. Auto-approved."
                 ),
@@ -140,7 +139,7 @@ class ConfluenceConnector(Connector):
                               description="Key of the space, e.g. 'ENG' (not its numeric id or display "
                                           "name), from confluence_list_spaces (its key field)."),
                     ToolParam("max_results", "int", required=False, default=20,
-                              description="Maximum number of pages to return. Default 20, capped at 200."),
+                              description="Maximum number of pages to return. Default 20, capped at 1000."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -151,7 +150,7 @@ class ConfluenceConnector(Connector):
                     "List attachment names, media types, and sizes for a "
                     "Confluence page. Auto-approved -- metadata only, no "
                     "attachment content is returned. Returns {page_id, attachments: a list "
-                    "of {name, media_type, size in bytes}}, at most 50 attachments; names may "
+                    "of {name, media_type, size in bytes}}, at most 500 attachments; names may "
                     "be redacted by the user's privacy settings. Use "
                     "confluence_download_attachment to fetch the actual file."
                 ),
@@ -302,8 +301,9 @@ class ConfluenceConnector(Connector):
                 name="confluence_update_page",
                 description=(
                     "Update the title and/or body of an existing Confluence page. "
-                    "Body is HTML storage format. Both title and body replace the current "
-                    "ones, so pass the current title to keep it. Returns the updated page, "
+                    "Body is HTML storage format. Pass a new title, a new body, or both; "
+                    "an omitted one keeps its current value, so an empty body no longer "
+                    "clears the page. Returns the updated page, "
                     "with its new version number, in the same shape confluence_get_page "
                     "returns. Call confluence_get_page first to read the current content. "
                     "Requires user approval."
@@ -312,12 +312,13 @@ class ConfluenceConnector(Connector):
                     ToolParam("page_id", "str",
                               description="Numeric id of the page to update, from confluence_list_pages "
                                           "or confluence_search (the id field)."),
-                    ToolParam("title", "str",
-                              description="Title for the page after the update. Required and not "
-                                          "empty: pass the current title to keep it."),
-                    ToolParam("body", "str",
+                    ToolParam("title", "str", required=False, default="",
+                              description="New title for the page. Omit or leave empty to keep "
+                                          "the current title."),
+                    ToolParam("body", "str", required=False, default="",
                               description="New body in Confluence storage format (XHTML-based HTML), "
-                                          "replacing the whole current body. Mention someone with "
+                                          "replacing the whole current body. Omit or leave empty to "
+                                          "keep the current body. Mention someone with "
                                           "@[Name](accountId), the id from confluence_find_users."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -733,14 +734,22 @@ class ConfluenceConnector(Connector):
         )
         return asdict(page)
 
-    async def _update_page(self, page_id: str, title: str, body: str) -> Any:
+    async def _update_page(self, page_id: str, title: str = "", body: str = "") -> Any:
+        if not title and not body:
+            raise ValueError("Provide a new title, a new body, or both")
         current = await self._fetch(self._confluence.get_page, page_id)
+        body_omitted = not body
+        title = title or current.title
+        body = body or current.body
         preview = {
             "Page ID": page_id,
             "Space": current.space_key or "(unknown)",
             "Title": f"{current.title} → {title}" if title != current.title else title,
         }
-        storage_body, mentions = await self._prepare_body(body)
+        if body_omitted:
+            storage_body, mentions = body, ""
+        else:
+            storage_body, mentions = await self._prepare_body(body)
         if mentions:
             preview["Mentions"] = mentions
         await gated_call(
@@ -753,7 +762,7 @@ class ConfluenceConnector(Connector):
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=storage_body,
+            details_text="(unchanged)" if body_omitted else storage_body,
             my_email=self.my_email,
             args={"page_id": page_id, "space_key": current.space_key, "title": title},
         )

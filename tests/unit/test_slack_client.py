@@ -924,6 +924,22 @@ class TestListDMs:
         # users_info calls -- proves id matching doesn't depend on re-resolving names.
         assert [d.id for d in client.list_dms(participant="U2")] == ["D2"]
 
+    def test_participant_match_past_max_results_is_still_found(self):
+        # The filter runs per page before truncation: 100 non-matching DMs on
+        # page 1 must not hide the match on page 2 when max_results=100.
+        web_client = MagicMock()
+        page1 = {"channels": [{"id": f"D{i:04d}", "user": f"U{i:04d}"} for i in range(100)],
+                 "response_metadata": {"next_cursor": "page2"}}
+        page2 = {"channels": [{"id": "D0100", "user": "U9"}], "response_metadata": {}}
+        web_client.conversations_list.side_effect = [page1, page2]
+        web_client.users_info.side_effect = lambda user=None, **k: {"user": {"id": user, "name": user.lower()}}
+        client = make_client(web_client)
+
+        dms = client.list_dms(participant="U9", max_results=100)
+
+        assert [d.id for d in dms] == ["D0100"]
+        assert web_client.conversations_list.call_args_list[0].kwargs["limit"] == 200
+
     def test_api_error_becomes_slack_client_error(self):
         web_client = MagicMock()
         web_client.conversations_list.side_effect = slack_error("ratelimited")
@@ -1028,6 +1044,45 @@ class TestListGroupChats:
         # only the matching chat's membership is ever resolved -- G2 is
         # filtered out before it's parsed at all.
         web_client.conversations_members.assert_called_once_with(channel="G1", limit=1000, cursor=None)
+
+    def test_participant_match_past_max_results_is_found_via_fast_path(self):
+        web_client = MagicMock()
+        page1 = {"channels": [{"id": f"G{i:04d}", "name": f"g{i}"} for i in range(100)],
+                 "response_metadata": {"next_cursor": "page2"}}
+        page2 = {"channels": [{"id": "G0100", "name": "target"}], "response_metadata": {}}
+        web_client.conversations_list.side_effect = [page1, page2]
+        web_client.users_conversations.return_value = {"channels": ["G0100"], "response_metadata": {}}
+        web_client.conversations_members.return_value = {"members": ["U1"]}
+        web_client.users_info.return_value = {"user": {"id": "U1", "name": "u1"}}
+        client = make_client(web_client)
+
+        chats = client.list_group_chats(participant="U1", max_results=100)
+
+        assert [c.id for c in chats] == ["G0100"]
+        web_client.conversations_members.assert_called_once_with(channel="G0100", limit=1000, cursor=None)
+
+    def test_participant_match_past_max_results_is_found_via_fallback_walk(self):
+        web_client = MagicMock()
+        page1 = {"channels": [{"id": f"G{i:04d}", "name": f"g{i}"} for i in range(100)],
+                 "response_metadata": {"next_cursor": "page2"}}
+        page2 = {"channels": [{"id": "G0100", "name": "target"}], "response_metadata": {}}
+        web_client.conversations_list.side_effect = [page1, page2]
+        members_by_channel = {f"G{i:04d}": [] for i in range(100)}
+        members_by_channel["G0100"] = ["U1", "U2"]
+        web_client.conversations_members.side_effect = (
+            lambda channel=None, **k: {"members": members_by_channel[channel]}
+        )
+        names = {
+            "U1": {"user": {"id": "U1", "name": "bob", "real_name": "Bob Smith"}},
+            "U2": {"user": {"id": "U2", "name": "jane", "real_name": "Jane Doe"}},
+        }
+        web_client.users_info.side_effect = lambda user=None, **k: names[user]
+        client = make_client(web_client)
+
+        # Comma-separated keeps AND semantics on the fallback path too.
+        chats = client.list_group_chats(participant="bob,jane", max_results=100)
+
+        assert [c.id for c in chats] == ["G0100"]
 
     def test_unresolvable_members_reads_as_empty_not_raising(self):
         web_client = MagicMock()
@@ -1327,7 +1382,7 @@ class TestGetChannelHistory:
             "messages": [{"text": "hi", "ts": "1"}], "has_more": True,
         }
         client = make_client(web_client)
-        messages, has_more = client.get_channel_history("C1")
+        messages, has_more, _nc = client.get_channel_history("C1")
         assert len(messages) == 1
         assert has_more is True
 
@@ -1336,8 +1391,58 @@ class TestGetChannelHistory:
         web_client.conversations_info.return_value = {"channel": {"name": "general"}}
         web_client.conversations_history.return_value = {"messages": []}
         client = make_client(web_client)
-        _messages, has_more = client.get_channel_history("C1")
+        _messages, has_more, _nc = client.get_channel_history("C1")
         assert has_more is False
+
+
+class TestGetChannelHistoryCursor:
+    def _client(self, response):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"name": "general"}}
+        web_client.conversations_history.return_value = response
+        return web_client, make_client(web_client)
+
+    def test_cursor_sent_only_when_given(self):
+        web_client, client = self._client({"messages": []})
+        client.get_channel_history("C1")
+        assert "cursor" not in web_client.conversations_history.call_args.kwargs
+        client.get_channel_history("C1", cursor="abc")
+        assert web_client.conversations_history.call_args.kwargs["cursor"] == "abc"
+
+    def test_next_cursor_returned(self):
+        _wc, client = self._client({
+            "messages": [], "has_more": True, "response_metadata": {"next_cursor": "nxt"},
+        })
+        assert client.get_channel_history("C1")[2] == "nxt"
+
+    def test_next_cursor_empty_when_absent_or_null(self):
+        _wc, client = self._client({"messages": [], "response_metadata": None})
+        assert client.get_channel_history("C1")[2] == ""
+
+
+class TestGetThreadRepliesCursor:
+    def _client(self, response):
+        web_client = MagicMock()
+        web_client.conversations_info.return_value = {"channel": {"name": "general"}}
+        web_client.conversations_replies.return_value = response
+        return web_client, make_client(web_client)
+
+    def test_cursor_sent_only_when_given(self):
+        web_client, client = self._client({"messages": []})
+        client.get_thread_replies("C1", "1.0")
+        assert "cursor" not in web_client.conversations_replies.call_args.kwargs
+        client.get_thread_replies("C1", "1.0", cursor="abc")
+        assert web_client.conversations_replies.call_args.kwargs["cursor"] == "abc"
+
+    def test_next_cursor_returned(self):
+        _wc, client = self._client({
+            "messages": [], "has_more": True, "response_metadata": {"next_cursor": "nxt"},
+        })
+        assert client.get_thread_replies("C1", "1.0")[2] == "nxt"
+
+    def test_next_cursor_empty_when_absent(self):
+        _wc, client = self._client({"messages": []})
+        assert client.get_thread_replies("C1", "1.0")[2] == ""
 
 
 class TestGetThreadReplies:
@@ -1353,7 +1458,7 @@ class TestGetThreadReplies:
         web_client.conversations_info.return_value = {"channel": {"name": "general"}}
         web_client.conversations_replies.return_value = {"messages": [{"text": "reply", "ts": "1"}]}
         client = make_client(web_client)
-        replies, has_more = client.get_thread_replies("C1", "1.0")
+        replies, has_more, _nc = client.get_thread_replies("C1", "1.0")
         assert replies[0].text == "reply"
         assert has_more is False
 
@@ -1364,7 +1469,7 @@ class TestGetThreadReplies:
             "messages": [{"text": "reply", "ts": "1"}], "has_more": True,
         }
         client = make_client(web_client)
-        _replies, has_more = client.get_thread_replies("C1", "1.0")
+        _replies, has_more, _nc = client.get_thread_replies("C1", "1.0")
         assert has_more is True
 
 
@@ -1585,6 +1690,80 @@ class TestSearchMessages:
         results = client.search_messages(participant="bob", count=1)
 
         assert [m.text for m in results] == ["newer"]
+
+    def _dm_search_client(self, history, dm_ids=("D1",), group_ids=()):
+        web_client = MagicMock()
+        web_client.conversations_list.side_effect = lambda types=None, **k: {
+            "channels": (
+                [{"id": i, "user": "U1"} for i in dm_ids] if types == "im"
+                else [{"id": i, "name": i} for i in group_ids]
+            ),
+            "response_metadata": {},
+        }
+        web_client.users_conversations.side_effect = lambda user=None, types=None, **k: {
+            "channels": list(dm_ids) if types == "im" else list(group_ids),
+            "response_metadata": {},
+        }
+        web_client.conversations_members.return_value = {"members": ["U1"]}
+        web_client.users_info.return_value = {"user": {"id": "U1", "name": "bob"}}
+        web_client.conversations_info.return_value = {"channel": {"name": "x"}}
+        web_client.conversations_history.side_effect = history
+        return web_client, make_client(web_client)
+
+    def test_query_matching_only_an_older_page_is_found(self):
+        pages = [
+            {"messages": [{"user": "U1", "text": "lunch", "ts": "300"}], "has_more": True},
+            {"messages": [{"user": "U1", "text": "budget review", "ts": "200"}], "has_more": False},
+        ]
+        web_client, client = self._dm_search_client(pages)
+
+        results = client.search_messages(query="budget", participant="U1")
+
+        assert [m.text for m in results] == ["budget review"]
+        calls = web_client.conversations_history.call_args_list
+        assert len(calls) == 2
+        assert "latest" not in calls[0].kwargs
+        assert calls[1].kwargs["latest"] == "300"
+
+    def test_history_paging_stops_at_the_page_cap(self):
+        def page(**_kwargs):
+            n = web_client.conversations_history.call_count
+            return {"messages": [{"user": "U1", "text": "no", "ts": str(1000 - n)}], "has_more": True}
+
+        web_client, client = self._dm_search_client(page)
+
+        results = client.search_messages(query="budget", participant="U1")
+
+        assert results == []
+        assert web_client.conversations_history.call_count == 2  # _SEARCH_HISTORY_PAGE_CAP
+
+    def test_history_paging_stops_on_empty_page(self):
+        pages = [{"messages": [], "has_more": True}]
+        web_client, client = self._dm_search_client(pages)
+
+        client.search_messages(query="budget", participant="U1")
+
+        assert web_client.conversations_history.call_count == 1
+
+    def test_no_query_reads_a_single_history_page(self):
+        pages = [{"messages": [{"user": "U1", "text": "hi", "ts": "5"}], "has_more": True}]
+        web_client, client = self._dm_search_client(pages)
+
+        client.search_messages(participant="U1")
+
+        assert web_client.conversations_history.call_count == 1
+
+    def test_reads_at_most_ten_conversations(self):
+        ids = [f"G{i:02d}" for i in range(11)]
+        web_client, client = self._dm_search_client(
+            lambda **k: {"messages": [], "has_more": False}, dm_ids=(), group_ids=ids
+        )
+
+        client.search_messages(participant="U1")
+
+        read = {c.kwargs["channel"] for c in web_client.conversations_history.call_args_list}
+        assert len(read) == 10
+        assert "G10" not in read
 
 
 # ---------------------------------------------------------------------------- #

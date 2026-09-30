@@ -1,4 +1,4 @@
-# ADR 0116: Atlassian account ids resolve through a lazy cache that Jira and Confluence share
+# ADR 0117: Atlassian account ids resolve through a lazy cache that Jira and Confluence share
 
 ## Status
 
@@ -31,7 +31,7 @@ Confluence calls Jira's API with the token it already has and retries only on a 
 - **A weekly full-directory walk, like Slack's.** Rejected. On a large site it is many calls, and it
   would put the whole company's roster on disk. Slack's benefit from it, offline name matching for
   participant filters, is covered here by the live `*_find_users` tools
-  ([ADR 0118](0118-atlassian-find-users-is-auto-approved-and-returns-no-email.md)).
+  ([ADR 0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md)).
 - **A new `read:user:confluence` scope for Confluence.** Rejected. It would force every existing
   user to re-authenticate with Atlassian.
 
@@ -50,5 +50,5 @@ Confluence calls Jira's API with the token it already has and retries only on a 
 
 ## Related
 
-- [ADR 0117](0117-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md)
-- [ADR 0118](0118-atlassian-find-users-is-auto-approved-and-returns-no-email.md)
+- [ADR 0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md)
+- [ADR 0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md)

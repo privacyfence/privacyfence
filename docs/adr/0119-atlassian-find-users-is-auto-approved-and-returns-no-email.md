@@ -1,4 +1,4 @@
-# ADR 0118: `jira_find_users` and `confluence_find_users` are auto-approved and return no email
+# ADR 0119: `jira_find_users` and `confluence_find_users` are auto-approved and return no email
 
 ## Status
 
@@ -24,7 +24,7 @@ at the review gate.
 
 - **Review every lookup.** Rejected. A mention would cost two cards, one of which shows nothing the
   second does not, since the write card already names the person
-  ([ADR 0117](0117-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md)).
+  ([ADR 0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md)).
 - **Return emails so the agent can tell namesakes apart.** Rejected. An email is personal data the
   agent does not need to write a mention.
 
@@ -42,5 +42,5 @@ The `TestFindUsers` classes in `tests/unit/connectors/test_jira_connector.py` an
 
 ## Related
 
-- [ADR 0116](0116-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md)
-- [ADR 0117](0117-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md)
+- [ADR 0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md)
+- [ADR 0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md)

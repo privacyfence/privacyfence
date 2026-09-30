@@ -100,8 +100,8 @@ class AppsScriptConnector(Connector):
                     "List standalone Google Apps Script projects visible to "
                     "the user (id, name, last-modified time). Container-bound "
                     "scripts attached to a Sheet/Doc/Form are not returned. "
-                    "Returns a list of {id, name, created_time, modified_time}, only the first "
-                    "page, in Drive's order, up to max_results. Pass an id as script_id to "
+                    "Returns a list of {id, name, created_time, modified_time}, in Drive's "
+                    "order. Reads up to max_results items across pages. Pass an id as script_id to "
                     "apps_script_get_content and the other Apps Script tools. "
                     "Auto-approved."
                 ),
@@ -172,8 +172,8 @@ class AppsScriptConnector(Connector):
                     "(status, duration, which function ran) -- not a live "
                     "console.log transcript. Returns a list of {function_name, status, "
                     "start_time, duration, process_type}, where status is for example "
-                    "COMPLETED, FAILED, RUNNING or TIMED_OUT and duration is like '1.234s'; "
-                    "only the first page comes back, up to max_results. Get the script id from "
+                    "COMPLETED, FAILED, RUNNING or TIMED_OUT and duration is like '1.234s'. "
+                    "Reads up to max_results items across pages. Get the script id from "
                     "apps_script_list_projects. Requires user approval."
                 ),
                 params=[

@@ -96,6 +96,14 @@ _REPLY_MESSAGE_ID_DESCRIPTION = (
 )
 
 
+def _attachment_dicts(attachments: Any) -> list[dict[str, Any]]:
+    """Attachment metadata as JSON-safe dicts (never the Attachment objects)."""
+    return [
+        {"name": a.name, "mime_type": a.mime_type, "size": a.size}
+        for a in (attachments or [])
+    ]
+
+
 def _recipients_description(role: str, *, required: bool = False) -> str:
     """The shared wording of a to/cc/bcc parameter: what the handler splits on."""
     empty = "" if required else " Empty means none."
@@ -327,9 +335,10 @@ class GmailConnector(Connector):
                     "Search Gmail and return matching message summaries "
                     "(id, thread_id, subject, sender, date). "
                     "Returns a list of {id, thread_id, subject, sender, date}, up to max_results "
-                    "(default 10, capped at 100), only the first page and in the order Gmail "
-                    "returns them; subject, sender and date may be redacted by the user's privacy "
+                    "(default 10, capped at 100), reading up to max_results messages across pages, in "
+                    "the order Gmail returns them; subject, sender and date may be redacted by the user's privacy "
                     "settings. "
+                    "Messages whose metadata cannot be fetched are omitted. "
                     "Use gmail_list_threads instead to search by conversation, and gmail_get_message "
                     "to read a message once you have its id. "
                     "Auto-approved — no body content is returned."
@@ -348,7 +357,7 @@ class GmailConnector(Connector):
                     "Search Gmail and return matching thread summaries "
                     "(id, snippet). "
                     "Returns a list of {id, snippet}, up to max_results (default 10, capped at 100), "
-                    "only the first page and in the order Gmail returns them. "
+                    "reading up to max_results threads across pages, in the order Gmail returns them. "
                     "Use gmail_list_messages instead when you need each message's subject, sender "
                     "or date, and gmail_get_thread to read a whole thread once you have its id. "
                     "Auto-approved — snippet is a short excerpt of the "
@@ -369,7 +378,7 @@ class GmailConnector(Connector):
                     "Fetch a single Gmail message by id, including body, metadata, "
                     "and attachment list. "
                     "Returns {id, thread_id, subject, sender, recipients, date, body_text, "
-                    "attachments (name, mime_type, size and attachment_id of each), labels}, plus "
+                    "attachments (name, mime_type, and size of each), labels}, plus "
                     "body_html when include_html is true; body, subject, sender, recipients and date "
                     "may be redacted by the user's privacy settings. "
                     "Get the id from gmail_list_messages. "
@@ -714,11 +723,11 @@ class GmailConnector(Connector):
                 description=(
                     "Replace an existing Gmail filter's criteria and actions, "
                     "identified by filter_id (from gmail_list_filters). Gmail's API "
-                    "has no native filter update, so this deletes the filter and "
-                    "creates a new one with the given fields, which gets a new id. "
+                    "has no native filter update, so this creates a new filter with the given "
+                    "fields (which gets a new id) and then deletes the old one. "
                     "Returns {old_id, id, criteria, action}; the fields you leave empty are not "
-                    "kept from the old filter, and if creating the new one fails the old one is "
-                    "already gone. "
+                    "kept from the old filter. The replacement is created before the old filter is "
+                    "deleted, so a failure leaves the original in place. "
                     "Use gmail_create_filter instead to add a filter without replacing one. "
                     "Requires user approval."
                 ),
@@ -839,10 +848,7 @@ class GmailConnector(Connector):
         message = await self._fetch(self._gmail.get_message, message_id)
         attachments = apply_list(
             "privacy", "attachments",
-            [
-                {"name": att.name, "mime_type": att.mime_type, "size": att.size}
-                for att in (message.attachments or [])
-            ],
+            _attachment_dicts(message.attachments),
         )
         self._auto_audit(
             "gmail_list_message_attachments", "List Gmail Attachments",
@@ -878,7 +884,7 @@ class GmailConnector(Connector):
         subject = apply_text("privacy", "metadata", message.subject or "")
         raw_body = message.body_text or html_to_text(message.body_html) or ""
         body = apply_text("privacy", "body", raw_body)
-        attachments = apply_list("privacy", "attachments", message.attachments or [])
+        attachments = apply_list("privacy", "attachments", _attachment_dicts(message.attachments))
         labels = ", ".join(message.labels or []) if message.labels else ""
         # From/Date/Subject are known for free via gmail_list_messages; To
         # (recipients) and Labels are not returned by any auto tool, so they
@@ -998,7 +1004,7 @@ class GmailConnector(Connector):
             # example), distinct from the single-message "body" category
             # gmail_get_message uses.
             body = apply_text("privacy", "thread_history", raw_body)
-            attachments = apply_list("privacy", "attachments", getattr(m, "attachments", None) or [])
+            attachments = apply_list("privacy", "attachments", _attachment_dicts(getattr(m, "attachments", None)))
             lines.append(f"--- Message {i} ---")
             lines.append(f"From: {sender}")
             lines.append(f"Date: {date}")
@@ -1798,8 +1804,8 @@ class GmailConnector(Connector):
             ),
         }
         details = (
-            "Gmail has no filter-update API: this deletes the existing filter "
-            f"(id: {filter_id}) and creates a new one with the settings above. "
+            "Gmail has no filter-update API: this creates the new filter first, then "
+            f"deletes the old one (id: {filter_id}). "
             "The replacement filter will have a different id."
         )
         await gated_call(

@@ -484,6 +484,37 @@ class TestParseMessage:
 # ---------------------------------------------------------------------------- #
 
 class TestListMessages:
+    def test_pages_and_stops_at_max_pages(self):
+        service = MagicMock()
+        lst = service.users.return_value.messages.return_value.list
+        lst.return_value.execute.return_value = {"messages": [{"id": "1"}], "nextPageToken": "more"}
+        service.users.return_value.messages.return_value.get.return_value.execute.return_value = {
+            "id": "1", "threadId": "t", "payload": {"headers": []},
+        }
+        client = make_client(service)
+
+        result = client.list_messages("q", max_results=50)
+
+        assert len(result) == 10  # MAX_PAGES requests, one message each
+        assert lst.call_count == 10
+
+    def test_two_pages_are_combined(self):
+        service = MagicMock()
+        lst = service.users.return_value.messages.return_value.list
+        lst.return_value.execute.side_effect = [
+            {"messages": [{"id": "1"}], "nextPageToken": "p2"},
+            {"messages": [{"id": "2"}]},
+        ]
+        service.users.return_value.messages.return_value.get.side_effect = lambda **kw: MagicMock(
+            execute=MagicMock(return_value={"id": kw["id"], "threadId": "t", "payload": {"headers": []}})
+        )
+        client = make_client(service)
+
+        result = client.list_messages("q", max_results=5)
+
+        assert [m["id"] for m in result] == ["1", "2"]
+        assert lst.call_args_list[1].kwargs["pageToken"] == "p2"
+
     def test_builds_summaries_from_metadata(self):
         service = MagicMock()
         service.users.return_value.messages.return_value.list.return_value.execute.return_value = {
@@ -573,6 +604,23 @@ class TestGetMessage:
 
 
 class TestListThreads:
+    def test_pages_until_max_results(self):
+        service = MagicMock()
+        lst = service.users.return_value.threads.return_value.list
+        lst.return_value.execute.side_effect = [
+            {"threads": [{"id": "t1", "snippet": "a"}, {"id": "t2", "snippet": "b"}], "nextPageToken": "p2"},
+            {"threads": [{"id": "t3", "snippet": "c"}, {"id": "t4", "snippet": "d"}]},
+        ]
+        client = make_client(service)
+
+        result = client.list_threads("q", max_results=3)
+
+        assert [t["id"] for t in result] == ["t1", "t2", "t3"]
+        assert lst.call_args_list[0].kwargs == {"userId": "me", "q": "q", "maxResults": 3}
+        assert lst.call_args_list[1].kwargs == {
+            "userId": "me", "q": "q", "maxResults": 1, "pageToken": "p2"
+        }
+
     def test_builds_id_and_snippet_summaries(self):
         service = MagicMock()
         service.users.return_value.threads.return_value.list.return_value.execute.return_value = {
@@ -1977,66 +2025,129 @@ class TestCreateFilter:
 
 
 class TestUpdateFilter:
-    def test_deletes_old_and_creates_new(self):
+    OLD = {"id": "f1", "criteria": {"subject": "x"}, "action": {"addLabelIds": ["STARRED"]}}
+
+    @staticmethod
+    def _filters(service):
+        return service.users.return_value.settings.return_value.filters.return_value
+
+    def _service(self, old=None, new=None):
         service = MagicMock()
-        service.users.return_value.settings.return_value.filters.return_value.create.return_value.execute.return_value = {
+        filters = self._filters(service)
+        filters.get.return_value.execute.return_value = old or self.OLD
+        filters.create.return_value.execute.return_value = new or {
             "id": "f2", "criteria": {"subject": "y"}, "action": {"removeLabelIds": ["INBOX"]}
         }
+        return service
+
+    def test_creates_new_then_deletes_old(self):
+        service = self._service()
+        filters = self._filters(service)
+        order: list[str] = []
+        filters.create.side_effect = lambda **kw: (order.append("create"), filters.create.return_value)[1]
+        filters.delete.side_effect = lambda **kw: (order.append("delete"), filters.delete.return_value)[1]
         client = make_client(service)
 
         result = client.update_filter("f1", subject="y", archive=True)
 
+        assert order == ["create", "delete"]
         assert result == {
             "old_id": "f1", "id": "f2",
             "criteria": {"subject": "y"}, "action": {"removeLabelIds": ["INBOX"]},
         }
-        service.users.return_value.settings.return_value.filters.return_value.delete.assert_called_once_with(
-            userId="me", id="f1"
-        )
-        service.users.return_value.settings.return_value.filters.return_value.create.assert_called_once_with(
+        filters.delete.assert_called_once_with(userId="me", id="f1")
+        filters.create.assert_called_once_with(
             userId="me", body={"criteria": {"subject": "y"}, "action": {"removeLabelIds": ["INBOX"]}}
         )
+
+    def test_unchanged_filter_is_a_no_op(self):
+        service = self._service(
+            old={"id": "f1", "criteria": {"subject": "x"}, "action": {"removeLabelIds": ["INBOX"]}}
+        )
+        filters = self._filters(service)
+        client = make_client(service)
+
+        result = client.update_filter("f1", subject="x", archive=True)
+
+        assert result == {
+            "old_id": "f1", "id": "f1",
+            "criteria": {"subject": "x"}, "action": {"removeLabelIds": ["INBOX"]},
+        }
+        filters.create.assert_not_called()
+        filters.delete.assert_not_called()
+
+    def test_missing_label_counts_as_changed_and_is_created_only_then(self):
+        service = self._service()
+        service.users.return_value.labels.return_value.list.return_value.execute.return_value = {"labels": []}
+        client = make_client(service)
+
+        client.update_filter("f1", subject="x", add_label_names="New")
+
+        # The label is only created once the filter is known to differ (it does, here).
+        service.users.return_value.labels.return_value.create.assert_called_once()
+        self._filters(service).create.assert_called_once()
 
     def test_requires_filter_id(self):
         client = make_client(MagicMock())
         with pytest.raises(GmailClientError, match="non-empty filter_id"):
             client.update_filter("", subject="y", archive=True)
 
-    def test_validates_criteria_before_deleting_anything(self):
+    def test_validates_criteria_before_writing_anything(self):
         service = MagicMock()
         client = make_client(service)
 
         with pytest.raises(GmailClientError, match="at least one criteria field"):
             client.update_filter("f1", archive=True)
-        service.users.return_value.settings.return_value.filters.return_value.delete.assert_not_called()
+        self._filters(service).delete.assert_not_called()
+        self._filters(service).create.assert_not_called()
 
-    def test_validates_action_before_deleting_anything(self):
+    def test_validates_action_before_writing_anything(self):
         service = MagicMock()
         client = make_client(service)
 
         with pytest.raises(GmailClientError, match="at least one action"):
             client.update_filter("f1", subject="y")
-        service.users.return_value.settings.return_value.filters.return_value.delete.assert_not_called()
+        self._filters(service).delete.assert_not_called()
+        self._filters(service).create.assert_not_called()
 
-    def test_delete_http_error_becomes_gmail_client_error_and_skips_create(self):
-        service = MagicMock()
-        service.users.return_value.settings.return_value.filters.return_value.delete.return_value.execute.side_effect = http_error(404)
+    def test_get_http_error_writes_nothing(self):
+        service = self._service()
+        self._filters(service).get.return_value.execute.side_effect = http_error(404)
         client = make_client(service)
 
-        with pytest.raises(GmailClientError, match="failed to delete existing filter"):
+        with pytest.raises(GmailClientError, match="failed to read the existing filter"):
             client.update_filter("f1", subject="y", archive=True)
-        service.users.return_value.settings.return_value.filters.return_value.create.assert_not_called()
+        self._filters(service).create.assert_not_called()
+        self._filters(service).delete.assert_not_called()
 
-    def test_create_http_error_after_delete_reports_original_filter_is_gone(self):
-        service = MagicMock()
-        service.users.return_value.settings.return_value.filters.return_value.create.return_value.execute.side_effect = http_error(400)
+    def test_create_failure_leaves_old_filter(self):
+        service = self._service()
+        self._filters(service).create.return_value.execute.side_effect = http_error(400)
         client = make_client(service)
 
-        with pytest.raises(GmailClientError, match="original filter is gone"):
+        with pytest.raises(GmailClientError, match="original filter is unchanged"):
             client.update_filter("f1", subject="y", archive=True)
-        service.users.return_value.settings.return_value.filters.return_value.delete.assert_called_once_with(
-            userId="me", id="f1"
-        )
+        self._filters(service).delete.assert_not_called()
+
+    def test_delete_failure_rolls_back_new_filter(self):
+        service = self._service()
+        filters = self._filters(service)
+        filters.delete.return_value.execute.side_effect = [http_error(500), {}]
+        client = make_client(service)
+
+        with pytest.raises(GmailClientError) as exc:
+            client.update_filter("f1", subject="y", archive=True)
+        assert "old filter f1" in str(exc.value)
+        assert "new filter f2 was removed again" in str(exc.value)
+        assert [c.kwargs["id"] for c in filters.delete.call_args_list] == ["f1", "f2"]
+
+    def test_delete_and_rollback_failure_names_both_ids(self):
+        service = self._service()
+        self._filters(service).delete.return_value.execute.side_effect = http_error(500)
+        client = make_client(service)
+
+        with pytest.raises(GmailClientError, match="old filter f1 and could not remove the new filter f2"):
+            client.update_filter("f1", subject="y", archive=True)
 
 
 # ---------------------------------------------------------------------------- #

@@ -33,8 +33,9 @@ class TelegramConnector(Connector):
                 name="telegram_list_chats",
                 description=(
                     "List Telegram chats (id, name, type, unread count). Returns a list of "
-                    "{id, name, type, unread_count, is_self}, most recently active first, "
-                    "up to limit (default 50, capped at 200); type is 'user', 'group', "
+                    "{id, name, username, type, unread_count, is_self}, most recently active "
+                    "first, up to limit (default 50, capped at 200); username is the @handle "
+                    "without the @, empty if none; type is 'user', 'group', "
                     "'channel' or 'bot', and is_self marks Saved Messages. Pass an id as "
                     "chat_id to telegram_get_messages or telegram_send_message; call "
                     "telegram_refresh_chat_cache first if a new chat is missing or shows "
@@ -79,10 +80,10 @@ class TelegramConnector(Connector):
                 name="telegram_search_messages",
                 description=(
                     "Search messages across Telegram chats by keyword. "
-                    "Returns a list of {id, chat_name, sender_name, text, date} (date is "
-                    "ISO 8601), newest first, up to limit messages (default 30, capped at "
-                    "100); id is the message id, and the chat's numeric id is not "
-                    "included. Use telegram_get_messages to read one chat's recent "
+                    "Returns a list of {id, chat_id, chat_name, sender_name, text, date} "
+                    "(date is ISO 8601), newest first, up to limit messages (default 30, "
+                    "capped at 100); id is the message id and chat_id is the value "
+                    "telegram_get_messages takes. Use telegram_get_messages to read one chat's recent "
                     "messages in full. Requires user approval."
                 ),
                 params=[
@@ -162,6 +163,7 @@ class TelegramConnector(Connector):
             {
                 "id": c.id,
                 "name": c.name,
+                "username": c.username or "",
                 "type": c.chat_type,
                 "unread_count": c.unread_count,
                 "is_self": c.is_self,
@@ -276,6 +278,7 @@ class TelegramConnector(Connector):
         result = [
             {
                 "id": getattr(m, "id", ""),
+                "chat_id": getattr(m, "chat_id", 0),
                 "chat_name": getattr(m, "chat_name", ""),
                 "sender_name": getattr(m, "sender_name", ""),
                 "text": getattr(m, "text", ""),

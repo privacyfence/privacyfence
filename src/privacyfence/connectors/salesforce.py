@@ -287,9 +287,11 @@ class SalesforceConnector(Connector):
                 description=(
                     "Search Salesforce by name or id across one or more object types — "
                     "the same mechanism as the search bar at the top of the Salesforce "
-                    "UI. Returns lightweight Id/Name matches per object type, as a list of "
-                    "{object_type, id, fields: {Id, Name}}, at most max_results (default 20, "
-                    "capped at 200) per object type when object_types is set; call "
+                    "UI. Returns lightweight matches as a list of {object_type, id, fields}: "
+                    "fields is {Id, Name} when object_types is set (objects with no Name "
+                    "field, such as Case, fail that query) and only {Id} without it. At "
+                    "most max_results (default 20, capped at 200), per object type when "
+                    "object_types is set; call "
                     "salesforce_get_record for full field details on a match. "
                     "Requires user approval."
                 ),
@@ -314,8 +316,8 @@ class SalesforceConnector(Connector):
                         ),
                     ),
                     ToolParam("max_results", "int", required=False, default=20,
-                              description="Maximum matches per object type. Default 20, capped at 200. "
-                                          "Applied only when object_types is set."),
+                              description="Maximum matches (per object type when object_types is set). "
+                                          "Default 20, capped at 200."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,

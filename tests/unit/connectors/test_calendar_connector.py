@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import types
 import json
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -165,7 +166,12 @@ class TestAutoTools:
         # description or attendee list -- those require calendar_get_event_details.
         assert "description" not in result[0]
         assert "attendees" not in result[0]
-        client.list_events.assert_called_once_with("primary", 20, "", "", "")
+        # An empty time_min defaults to now, so the API never returns the
+        # oldest events first.
+        args = client.list_events.call_args.args
+        assert args[:2] == ("primary", 20)
+        assert datetime.fromisoformat(args[2]).tzinfo is not None
+        assert args[3:] == ("", "")
 
     async def test_get_free_busy_summarizes_by_source(self, tmp_path):
         init_audit_logger(str(tmp_path))
@@ -176,12 +182,12 @@ class TestAutoTools:
         ]
 
         result = await connector.call(
-            "calendar_get_free_busy", {"emails": "a@example.com, b@example.com", "time_min": "t0", "time_max": "t1"}
+            "calendar_get_free_busy", {"emails": "a@example.com, b@example.com", "time_min": "2026-10-15T09:00:00+02:00", "time_max": "2026-10-15T10:00:00+02:00"}
         )
 
         assert result == client.get_colleagues_schedule.return_value
         client.get_colleagues_schedule.assert_called_once_with(
-            ["a@example.com", "b@example.com"], "t0", "t1"
+            ["a@example.com", "b@example.com"], "2026-10-15T09:00:00+02:00", "2026-10-15T10:00:00+02:00"
         )
 
     async def test_list_rooms_filters_the_static_org_config_directory(self, tmp_path):
@@ -268,13 +274,13 @@ class TestFreeBusyFullDetailsToggle:
         assert connector.free_busy_full_details is True
         client.get_colleagues_schedule.return_value = [
             {"email": "a@example.com", "source": "events", "events": [
-                {"id": "e1", "title": "1:1: performance concerns", "start_time": "t0", "end_time": "t1",
+                {"id": "e1", "title": "1:1: performance concerns", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
                  "status": "confirmed", "all_day": False},
             ]},
         ]
 
         result = await connector.call(
-            "calendar_get_free_busy", {"emails": "a@example.com", "time_min": "t0", "time_max": "t1"}
+            "calendar_get_free_busy", {"emails": "a@example.com", "time_min": "2026-10-15T09:00:00+02:00", "time_max": "2026-10-15T10:00:00+02:00"}
         )
 
         assert result[0]["source"] == "events"
@@ -286,16 +292,16 @@ class TestFreeBusyFullDetailsToggle:
         connector.free_busy_full_details = False
         client.get_colleagues_schedule.return_value = [
             {"email": "a@example.com", "source": "events", "events": [
-                {"id": "e1", "title": "1:1: performance concerns", "start_time": "t0", "end_time": "t1",
+                {"id": "e1", "title": "1:1: performance concerns", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
                  "status": "confirmed", "all_day": False},
             ]},
         ]
 
         result = await connector.call(
-            "calendar_get_free_busy", {"emails": "a@example.com", "time_min": "t0", "time_max": "t1"}
+            "calendar_get_free_busy", {"emails": "a@example.com", "time_min": "2026-10-15T09:00:00+02:00", "time_max": "2026-10-15T10:00:00+02:00"}
         )
 
-        assert result == [{"email": "a@example.com", "source": "free_busy", "busy": [{"start": "t0", "end": "t1"}]}]
+        assert result == [{"email": "a@example.com", "source": "free_busy", "busy": [{"start": "2026-10-15T09:00:00+02:00", "end": "2026-10-15T10:00:00+02:00"}]}]
         assert "title" not in json.dumps(result)
 
     async def test_full_details_disabled_leaves_free_busy_source_unchanged(self, tmp_path):
@@ -303,14 +309,14 @@ class TestFreeBusyFullDetailsToggle:
         connector, client = make_connector()
         connector.free_busy_full_details = False
         client.get_colleagues_schedule.return_value = [
-            {"email": "b@example.com", "source": "free_busy", "busy": [{"start": "t0", "end": "t1"}]},
+            {"email": "b@example.com", "source": "free_busy", "busy": [{"start": "2026-10-15T09:00:00+02:00", "end": "2026-10-15T10:00:00+02:00"}]},
         ]
 
         result = await connector.call(
-            "calendar_get_free_busy", {"emails": "b@example.com", "time_min": "t0", "time_max": "t1"}
+            "calendar_get_free_busy", {"emails": "b@example.com", "time_min": "2026-10-15T09:00:00+02:00", "time_max": "2026-10-15T10:00:00+02:00"}
         )
 
-        assert result == [{"email": "b@example.com", "source": "free_busy", "busy": [{"start": "t0", "end": "t1"}]}]
+        assert result == [{"email": "b@example.com", "source": "free_busy", "busy": [{"start": "2026-10-15T09:00:00+02:00", "end": "2026-10-15T10:00:00+02:00"}]}]
 
     async def test_full_details_disabled_leaves_error_source_unchanged(self, tmp_path):
         init_audit_logger(str(tmp_path))
@@ -321,7 +327,7 @@ class TestFreeBusyFullDetailsToggle:
         ]
 
         result = await connector.call(
-            "calendar_get_free_busy", {"emails": "c@example.com", "time_min": "t0", "time_max": "t1"}
+            "calendar_get_free_busy", {"emails": "c@example.com", "time_min": "2026-10-15T09:00:00+02:00", "time_max": "2026-10-15T10:00:00+02:00"}
         )
 
         assert result == [{"email": "c@example.com", "source": "error", "error": "no access"}]
@@ -462,11 +468,11 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1")
 
         await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
         })
 
         kwargs = gated_call_spy[0]
-        assert kwargs["preview"] == {"Title": "Sync", "Time": "t0 – t1", "Calendar": "primary"}
+        assert kwargs["preview"] == {"Title": "Sync", "Time": "2026-10-15T09:00:00+02:00 – 2026-10-15T10:00:00+02:00", "Calendar": "primary"}
         assert kwargs["gate"] == "popup"
 
     async def test_preview_includes_optional_fields_when_present(self, gated_call_spy):
@@ -474,7 +480,7 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1")
 
         await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
             "location": "HQ", "add_google_meet": True, "rooms": "room1@example.com",
             "attendees": "bob@example.com, eve@external.com",
         })
@@ -498,7 +504,7 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1")
 
         await connector.call("calendar_create_event", {
-            "calendar_id": "c_abc@group.calendar.google.com", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "c_abc@group.calendar.google.com", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
         })
 
         assert gated_call_spy[0]["preview"]["Calendar"] == "Team Offsite"
@@ -508,14 +514,14 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1", conference_link="", hangout_link="")
 
         result = await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
         })
 
         assert "conference_link" not in result
 
         client.create_event.return_value = make_event(id="new2", conference_link="https://meet/xyz")
         result2 = await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync2", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync2", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
         })
         assert result2["conference_link"] == "https://meet/xyz"
 
@@ -524,14 +530,14 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1")
 
         await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
             "color": "Tomato",
         })
 
         assert gated_call_spy[0]["preview"]["Color"] == "Tomato"
         assert gated_call_spy[0]["raw_data"]["color"] == "11"
         client.create_event.assert_called_once_with(
-            "primary", "Sync", "t0", "t1", "", None, "", False, None, "11", "",
+            "primary", "Sync", "2026-10-15T09:00:00+02:00", "2026-10-15T10:00:00+02:00", "", None, "", False, None, "11", "",
         )
 
     async def test_no_color_omits_preview_row(self, gated_call_spy):
@@ -539,7 +545,7 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1")
 
         await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
         })
 
         assert "Color" not in gated_call_spy[0]["preview"]
@@ -549,7 +555,7 @@ class TestCreateEvent:
 
         with pytest.raises(ValueError, match="color must be an event color id"):
             await connector.call("calendar_create_event", {
-                "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+                "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
                 "color": "Chartreuse",
             })
 
@@ -561,14 +567,14 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1")
 
         await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
             "recurrence": "RRULE:FREQ=WEEKLY;COUNT=10",
         })
 
         assert gated_call_spy[0]["preview"]["Recurrence"] == "RRULE:FREQ=WEEKLY;COUNT=10"
         assert gated_call_spy[0]["raw_data"]["recurrence"] == "RRULE:FREQ=WEEKLY;COUNT=10"
         client.create_event.assert_called_once_with(
-            "primary", "Sync", "t0", "t1", "", None, "", False, None, "", "RRULE:FREQ=WEEKLY;COUNT=10",
+            "primary", "Sync", "2026-10-15T09:00:00+02:00", "2026-10-15T10:00:00+02:00", "", None, "", False, None, "", "RRULE:FREQ=WEEKLY;COUNT=10",
         )
 
     async def test_no_recurrence_omits_preview_row(self, gated_call_spy):
@@ -576,7 +582,7 @@ class TestCreateEvent:
         client.create_event.return_value = make_event(id="new1")
 
         await connector.call("calendar_create_event", {
-            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "calendar_id": "primary", "title": "Sync", "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
         })
 
         assert "Recurrence" not in gated_call_spy[0]["preview"]
@@ -943,12 +949,12 @@ class TestCreateOutOfOffice:
         client.create_out_of_office.return_value = make_event(id="ooo1")
 
         await connector.call("calendar_create_out_of_office", {
-            "start_time": "t0", "end_time": "t1", "title": "Vacation",
+            "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00", "title": "Vacation",
         })
 
         kwargs = gated_call_spy[0]
         assert kwargs["preview"] == {
-            "Title": "Vacation", "Time": "t0 – t1",
+            "Title": "Vacation", "Time": "2026-10-15T09:00:00+02:00 – 2026-10-15T10:00:00+02:00",
             "Auto-decline": "New conflicting invitations only",
         }
         assert kwargs["gate"] == "popup"
@@ -961,7 +967,7 @@ class TestCreateOutOfOffice:
         client.create_out_of_office.return_value = make_event(id="ooo1")
 
         await connector.call("calendar_create_out_of_office", {
-            "start_time": "t0", "end_time": "t1", "decline_message": "Back Monday",
+            "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00", "decline_message": "Back Monday",
         })
 
         assert "Decline message" not in gated_call_spy[0]["preview"]
@@ -971,16 +977,16 @@ class TestCreateOutOfOffice:
         connector, client = make_connector()
         client.create_out_of_office.return_value = make_event(id="ooo1")
 
-        await connector.call("calendar_create_out_of_office", {"start_time": "t0", "end_time": "t1"})
+        await connector.call("calendar_create_out_of_office", {"start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00"})
 
         assert gated_call_spy[0]["preview"]["Title"] == "Out of Office"
-        client.create_out_of_office.assert_called_once_with("Out of Office", "t0", "t1", "")
+        client.create_out_of_office.assert_called_once_with("Out of Office", "2026-10-15T09:00:00+02:00", "2026-10-15T10:00:00+02:00", "")
 
     async def test_result_shape(self, gated_call_spy):
         connector, client = make_connector()
         client.create_out_of_office.return_value = make_event(id="ooo1", title="Vacation")
 
-        result = await connector.call("calendar_create_out_of_office", {"start_time": "t0", "end_time": "t1"})
+        result = await connector.call("calendar_create_out_of_office", {"start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00"})
 
         assert result["id"] == "ooo1"
         assert result["title"] == "Vacation"
@@ -1276,8 +1282,107 @@ class TestEveryToolIsAudited:
                 # color must be a valid event color id/name -- validated
                 # before gating.
                 "calendar_set_event_color": {"color": "Tomato"},
+                # Times, date and location are validated before gating.
+                "calendar_get_free_busy": {
+                    "time_min": "2026-10-15T09:00:00+02:00", "time_max": "2026-10-15T10:00:00+02:00",
+                },
+                "calendar_create_event": {
+                    "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
+                },
+                "calendar_create_out_of_office": {
+                    "start_time": "2026-10-15T09:00:00+02:00", "end_time": "2026-10-15T10:00:00+02:00",
+                },
+                "calendar_set_working_location": {"date": "2026-08-01", "location": "home"},
             },
         )
+
+
+class TestTimeValidation:
+    """Time, date and location arguments are validated before the gate, so a
+    doomed call never costs an approval decision."""
+
+    GOOD_START = "2026-10-15T09:00:00+02:00"
+    GOOD_END = "2026-10-15T10:00:00+02:00"
+
+    @pytest.mark.parametrize("bad", ["2026-10-15", "tomorrow", "2026-10-15T09:00:00"])
+    async def test_list_events_rejects_bare_date_garbage_and_missing_offset(self, bad):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="time_min must be an RFC 3339"):
+            await connector.call("calendar_list_events", {"calendar_id": "primary", "time_min": bad})
+        with pytest.raises(ValueError, match="time_max must be an RFC 3339"):
+            await connector.call("calendar_list_events", {"calendar_id": "primary", "time_max": bad})
+        client.list_events.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["2026-10-15", "2026-10-15T09:00:00"])
+    async def test_free_busy_rejects_bare_date_and_missing_offset(self, bad, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="time_min must be an RFC 3339"):
+            await connector.call("calendar_get_free_busy", {
+                "emails": "a@example.com", "time_min": bad, "time_max": self.GOOD_END})
+        with pytest.raises(ValueError, match="time_max must be an RFC 3339"):
+            await connector.call("calendar_get_free_busy", {
+                "emails": "a@example.com", "time_min": self.GOOD_START, "time_max": bad})
+        client.get_colleagues_schedule.assert_not_called()
+
+    async def test_create_event_rejects_bare_date_before_the_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="start_time must be an RFC 3339"):
+            await connector.call("calendar_create_event", {
+                "calendar_id": "primary", "title": "x",
+                "start_time": "2026-10-15", "end_time": self.GOOD_END})
+        assert gated_call_spy == []
+        client.create_event.assert_not_called()
+
+    async def test_create_event_accepts_a_time_without_an_offset(self, gated_call_spy):
+        connector, client = make_connector()
+        client.create_event.return_value = make_event(id="new1")
+        await connector.call("calendar_create_event", {
+            "calendar_id": "primary", "title": "x",
+            "start_time": "2026-10-15T09:00:00", "end_time": "2026-10-15T10:00:00"})
+        client.create_event.assert_called_once()
+
+    async def test_create_event_rejects_end_not_after_start(self, gated_call_spy):
+        connector, client = make_connector()
+        for end in (self.GOOD_START, "2026-10-15T08:00:00+02:00"):
+            with pytest.raises(ValueError, match="end_time must be after start_time"):
+                await connector.call("calendar_create_event", {
+                    "calendar_id": "primary", "title": "x",
+                    "start_time": self.GOOD_START, "end_time": end})
+        assert gated_call_spy == []
+
+    async def test_out_of_office_rejects_bad_and_reversed_times(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="start_time must be an RFC 3339"):
+            await connector.call("calendar_create_out_of_office", {
+                "start_time": "2026-10-15", "end_time": self.GOOD_END})
+        with pytest.raises(ValueError, match="end_time must be after start_time"):
+            await connector.call("calendar_create_out_of_office", {
+                "start_time": self.GOOD_END, "end_time": self.GOOD_START})
+        assert gated_call_spy == []
+        client.create_out_of_office.assert_not_called()
+
+    async def test_update_event_validates_only_non_empty_times(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+        client.update_event.return_value = make_event()
+        with pytest.raises(ValueError, match="end_time must be an RFC 3339"):
+            await connector.call("calendar_update_event", {
+                "calendar_id": "primary", "event_id": "e1", "end_time": "2026-10-15"})
+        assert gated_call_spy == []
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "title": "New"})
+        client.update_event.assert_called_once()
+
+    async def test_working_location_rejects_bad_date_and_location_before_the_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="date must be"):
+            await connector.call("calendar_set_working_location", {
+                "date": "next monday", "location": "home"})
+        with pytest.raises(ValueError, match="location must be one of"):
+            await connector.call("calendar_set_working_location", {
+                "date": "2026-08-01", "location": "beach"})
+        assert gated_call_spy == []
+        client.set_working_location.assert_not_called()
 
 
 class TestGoogleUnavailableErrors:

@@ -18,7 +18,7 @@ Optional config keys (needed to refresh an expired access token — see
 
 Account ids (page authors, storage-format mentions) are resolved to display
 names through the user directory shared with the Jira client, which looks
-them up lazily via Jira's user API (ADR 0116). Those calls retry a token
+them up lazily via Jira's user API (ADR 0117). Those calls retry a token
 refresh only on 401, not on the 403/404 that ``_request`` also treats as
 stale: a Confluence-only site answers Jira's API with them, and refreshing
 would rotate the shared refresh token for nothing.
@@ -32,6 +32,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from atlassian import Confluence
@@ -64,6 +65,9 @@ logger = logging.getLogger(__name__)
 _V2_SPACES_PATH = "api/v2/spaces"
 _V2_PAGES_PATH = "api/v2/pages"
 
+# Hard budget of requests per list call when following ``_links.next`` cursors.
+MAX_PAGES = 10
+
 # Unlike Jira, the api.atlassian.com OAuth proxy in front of Confluence Cloud
 # doesn't reliably surface an expired/invalid access token as 401: the v2
 # REST endpoints (spaces, pages) 404 instead, and the legacy CQL-backed
@@ -74,6 +78,15 @@ _V2_PAGES_PATH = "api/v2/pages"
 # just 401. A false positive (a genuinely missing space/page, or an actual
 # permission error) just costs one extra retry that fails the same way.
 _STALE_TOKEN_STATUS_CODES = (401, 403, 404)
+
+
+def _next_cursor(raw: Any) -> str | None:
+    """Return the ``cursor`` query parameter of a v2 response's ``_links.next``, or None."""
+    next_link = ((raw or {}).get("_links") or {}).get("next")
+    if not next_link:
+        return None
+    values = parse_qs(urlparse(next_link).query).get("cursor")
+    return values[0] if values else None
 
 
 class ConfluenceClientError(Exception):
@@ -360,18 +373,37 @@ class ConfluenceClient:
     # ------------------------------------------------------------------ #
 
     def list_spaces(self, max_results: int = 50, space_type: str = "") -> list[ConfluenceSpace]:
-        max_results = max(1, min(max_results, 250))  # v2 API page size cap
-        params: dict[str, Any] = {"limit": max_results, "description-format": "plain"}
-        if space_type:
-            params["type"] = space_type
-        try:
-            raw = self._request(self._client.get, _V2_SPACES_PATH, params=params)
-            results = (raw or {}).get("results") or []
-        except Exception as exc:
-            raise ConfluenceClientError(f"list_spaces failed: {exc}") from exc
+        max_results = max(1, min(max_results, 1000))
+        results = self._collect_pages(
+            _V2_SPACES_PATH, max_results, 250, "list_spaces",
+            {"description-format": "plain", **({"type": space_type} if space_type else {})},
+        )
         spaces = [self._parse_space(s) for s in results]
         logger.info("list_spaces returned %d space(s)", len(spaces))
         return spaces
+
+    def _collect_pages(
+        self, path: str, max_results: int, page_max: int, label: str, params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Follow ``_links.next`` cursors on a v2 list endpoint, up to ``max_results`` items."""
+        collected: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(MAX_PAGES):
+            remaining = max_results - len(collected)
+            if remaining <= 0:
+                break
+            request_params = {**params, "limit": min(remaining, page_max)}
+            if cursor:
+                request_params["cursor"] = cursor
+            try:
+                raw = self._request(self._client.get, path, params=request_params)
+            except Exception as exc:
+                raise ConfluenceClientError(f"{label} failed: {exc}") from exc
+            collected.extend((raw or {}).get("results") or [])
+            cursor = _next_cursor(raw)
+            if not cursor:
+                break
+        return collected[:max_results]
 
     # ------------------------------------------------------------------ #
     # Search
@@ -381,10 +413,11 @@ class ConfluenceClient:
         if not query:
             raise ConfluenceClientError("search requires a non-empty query")
         max_results = max(1, min(max_results, 100))
+        escaped = query.replace("\\", "\\\\").replace('"', '\\"')
         try:
             raw = self._request(
                 self._client.cql,
-                f'text ~ "{query}" order by lastmodified desc',
+                f'text ~ "{escaped}" order by lastmodified desc',
                 limit=max_results,
             )
             results = (raw or {}).get("results") or []
@@ -447,17 +480,12 @@ class ConfluenceClient:
     def list_pages_in_space(self, space_key: str, max_results: int = 20) -> list[ConfluencePage]:
         if not space_key:
             raise ConfluenceClientError("list_pages_in_space requires a space_key")
-        max_results = max(1, min(max_results, 200))  # v2 API page size cap is 250
+        max_results = max(1, min(max_results, 1000))
         space_id = self._resolve_space_id(space_key)
-        try:
-            raw = self._request(
-                self._client.get,
-                f"{_V2_SPACES_PATH}/{space_id}/pages",
-                params={"limit": max_results},
-            )
-            results = (raw or {}).get("results") or []
-        except Exception as exc:
-            raise ConfluenceClientError(f"list_pages_in_space({space_key!r}) failed: {exc}") from exc
+        results = self._collect_pages(
+            f"{_V2_SPACES_PATH}/{space_id}/pages", max_results, 200,
+            f"list_pages_in_space({space_key!r})", {},
+        )
         author_ids = [p["authorId"] for p in results if p.get("authorId")]
         names = self.resolve_user_names(author_ids) if author_ids else None
         pages = [self._parse_page_v2(p, space_key=space_key, names=names) for p in results]
@@ -550,19 +578,14 @@ class ConfluenceClient:
     # Attachments
     # ------------------------------------------------------------------ #
 
-    def list_attachments(self, page_id: str, max_results: int = 50) -> list[ConfluenceAttachment]:
+    def list_attachments(self, page_id: str, max_results: int = 500) -> list[ConfluenceAttachment]:
         if not page_id:
             raise ConfluenceClientError("list_attachments requires a page_id")
-        max_results = max(1, min(max_results, 250))  # v2 API page size cap
-        try:
-            raw = self._request(
-                self._client.get,
-                f"{_V2_PAGES_PATH}/{page_id}/attachments",
-                params={"limit": max_results},
-            )
-            results = (raw or {}).get("results") or []
-        except Exception as exc:
-            raise ConfluenceClientError(f"list_attachments({page_id!r}) failed: {exc}") from exc
+        max_results = max(1, min(max_results, 500))
+        results = self._collect_pages(
+            f"{_V2_PAGES_PATH}/{page_id}/attachments", max_results, 250,
+            f"list_attachments({page_id!r})", {},
+        )
         attachments = [self._parse_attachment(a) for a in results]
         logger.info("list_attachments %s returned %d attachment(s)", page_id, len(attachments))
         return attachments

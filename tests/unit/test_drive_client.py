@@ -805,6 +805,104 @@ class TestListSharedDrives:
             client.list_shared_drives()
 
 
+class TestListPaging:
+    """The three list calls follow ``nextPageToken`` (MAX_PAGES budget)."""
+
+    @staticmethod
+    def _files_service(pages):
+        service = MagicMock()
+        service.files.return_value.list.return_value.execute.side_effect = pages
+        return service
+
+    @staticmethod
+    def _file_page(prefix, n, token=None):
+        page = {"files": [{"id": f"{prefix}{i}", "name": "x"} for i in range(n)]}
+        if token:
+            page["nextPageToken"] = token
+        return page
+
+    @pytest.mark.parametrize("call", ["list_files", "list_folder"])
+    def test_files_two_pages_combined(self, call):
+        service = self._files_service(
+            [self._file_page("a", 2, "tok"), self._file_page("b", 1)]
+        )
+        client = make_client(service)
+        arg = "folder-1" if call == "list_folder" else "q"
+        files = getattr(client, call)(arg, 10)
+        assert [f.id for f in files] == ["a0", "a1", "b0"]
+        calls = service.files.return_value.list.call_args_list
+        assert "pageToken" not in calls[0].kwargs
+        assert calls[1].kwargs["pageToken"] == "tok"
+        assert "nextPageToken" in calls[0].kwargs["fields"]
+
+    @pytest.mark.parametrize("call", ["list_files", "list_folder"])
+    def test_files_stops_at_max_results(self, call):
+        service = self._files_service(
+            [self._file_page("a", 3, "tok"), self._file_page("b", 3, "tok2")]
+        )
+        client = make_client(service)
+        arg = "folder-1" if call == "list_folder" else "q"
+        files = getattr(client, call)(arg, 4)
+        assert len(files) == 4
+        calls = service.files.return_value.list.call_args_list
+        assert len(calls) == 2
+        assert calls[1].kwargs["pageSize"] == 1
+
+    @pytest.mark.parametrize("call", ["list_files", "list_folder"])
+    def test_files_stops_at_max_pages(self, call):
+        service = MagicMock()
+        service.files.return_value.list.return_value.execute.return_value = (
+            self._file_page("a", 1, "tok")
+        )
+        client = make_client(service)
+        arg = "folder-1" if call == "list_folder" else "q"
+        files = getattr(client, call)(arg, 1000)
+        assert len(files) == drive_client_module.MAX_PAGES
+        assert service.files.return_value.list.call_count == drive_client_module.MAX_PAGES
+
+    @staticmethod
+    def _drive_page(prefix, n, token=None):
+        page = {"drives": [{"id": f"{prefix}{i}", "name": "n"} for i in range(n)]}
+        if token:
+            page["nextPageToken"] = token
+        return page
+
+    def test_shared_drives_two_pages_combined(self):
+        service = MagicMock()
+        service.drives.return_value.list.return_value.execute.side_effect = [
+            self._drive_page("a", 2, "tok"),
+            self._drive_page("b", 1),
+        ]
+        client = make_client(service)
+        drives = client.list_shared_drives(500)
+        assert [d["id"] for d in drives] == ["a0", "a1", "b0"]
+        calls = service.drives.return_value.list.call_args_list
+        assert calls[1].kwargs["pageToken"] == "tok"
+        assert "nextPageToken" in calls[0].kwargs["fields"]
+
+    def test_shared_drives_stops_at_max_results(self):
+        service = MagicMock()
+        service.drives.return_value.list.return_value.execute.side_effect = [
+            self._drive_page("a", 3, "tok"),
+            self._drive_page("b", 3, "tok2"),
+        ]
+        client = make_client(service)
+        assert len(client.list_shared_drives(4)) == 4
+        assert service.drives.return_value.list.call_count == 2
+
+    def test_shared_drives_stops_at_max_pages_and_page_size_capped(self):
+        service = MagicMock()
+        service.drives.return_value.list.return_value.execute.return_value = (
+            self._drive_page("a", 1, "tok")
+        )
+        client = make_client(service)
+        drives = client.list_shared_drives(1000)
+        assert len(drives) == drive_client_module.MAX_PAGES
+        calls = service.drives.return_value.list.call_args_list
+        assert len(calls) == drive_client_module.MAX_PAGES
+        assert all(c.kwargs["pageSize"] <= 100 for c in calls)
+
+
 class TestCreateBlankFile:
     def test_creates_with_parent(self):
         service = MagicMock()

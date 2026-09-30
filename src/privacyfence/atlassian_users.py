@@ -1,7 +1,7 @@
 """Account-id -> display-name directory shared by the Jira and Confluence clients.
 
 Names are looked up lazily, only for the ids that actually appear in a read, through Jira's user
-API (ADR 0116), and remembered in a small cache that can be persisted to disk. This module also
+API (ADR 0117), and remembered in a small cache that can be persisted to disk. This module also
 holds the ``@[Name](accountId)`` mention markup helpers used on reads and writes, and the
 storage-format helpers Confluence needs.
 """
@@ -53,7 +53,7 @@ class AtlassianUser:
 
     def __post_init__(self) -> None:
         # Every record (API response, cache file, remember()) is built here, so an email-shaped
-        # name, typical of Jira Service Management customer accounts, can reach no output (ADR 0118).
+        # name, typical of Jira Service Management customer accounts, can reach no output (ADR 0119).
         self.display_name = mask_emails(self.display_name, self.account_id)
 
 

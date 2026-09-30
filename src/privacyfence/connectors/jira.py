@@ -104,7 +104,7 @@ class JiraConnector(Connector):
                     "Search Jira issues using JQL. Returns summary info for matching issues, "
                     "as a list of {key, summary, status, issue_type, priority, assignee, "
                     "reporter, labels, created, updated, url} with description left empty, "
-                    "only the first page, at most max_results (default 20, capped at 100), "
+                    "at most max_results (default 20, capped at 500), "
                     "in the order the JQL gives. Use jira_get_issue instead for one issue's "
                     "description and comments. Auto-approved."
                 ),
@@ -113,7 +113,7 @@ class JiraConnector(Connector):
                               description="A JQL query, e.g. \"project = MYPROJ AND status = 'In Progress' "
                                           "ORDER BY updated DESC\". Must not be empty."),
                     ToolParam("max_results", "int", required=False, default=20,
-                              description="Maximum number of issues to return. Default 20, capped at 100."),
+                              description="Maximum number of issues to return. Default 20, capped at 500."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -539,7 +539,7 @@ class JiraConnector(Connector):
             )
         # Field ids are resolved up front so a built-in field cannot ride in
         # through custom_fields, and so every account id inside a custom value
-        # is resolved with the rest before the approval card (ADR 0117).
+        # is resolved with the rest before the approval card (ADR 0118).
         resolved_custom: list[tuple[str, str, Any, Any, list[str]]] = []
         seen_field_ids: set[str] = set()
         for field_name, value in (custom_updates or {}).items():
@@ -632,7 +632,7 @@ class JiraConnector(Connector):
     async def _resolve_write_accounts(self, text: str, extra_ids: list[str]) -> dict[str, str]:
         """Directory names for every account id a write mentions or assigns.
 
-        The approver is shown these names, never the agent's labels (ADR 0117);
+        The approver is shown these names, never the agent's labels (ADR 0118);
         an id that cannot be resolved is refused before the approval card.
         """
         ids = list(dict.fromkeys(markup_mention_ids(text) + [i for i in extra_ids if i]))
