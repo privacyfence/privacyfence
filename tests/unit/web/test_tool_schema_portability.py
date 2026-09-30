@@ -9,7 +9,8 @@ into their own function-calling format resolve neither); the name matches
 and at most 1024 characters (OpenAI's function-description limit); and every tool carries all three
 annotation hints, so no client falls back to the MCP defaults (a tool
 without ``readOnlyHint`` is assumed to write, and without ``destructiveHint`` to destroy). Which
-values the hints take is not this file's business -- see test_mcp_tools.py.
+values the hints take is not this file's business -- see test_mcp_tools.py. Every connector tool
+also has its parameters described, a ``Returns`` sentence and its gate's approval wording.
 
 The tools are built from every connector class the tools-reference generator discovers, the way
 test_systemic_gate_invariants.py does, so a new connector is covered the moment it exists; one test
@@ -32,6 +33,8 @@ from mcp.client.streamable_http import streamable_http_client
 from privacyfence.web import mcp_tools
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
+
+from ...helpers import assert_tool_definitions_complete
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -94,6 +97,14 @@ def test_no_two_tools_share_a_name():
     names = [spec.name for connector in CONNECTORS.values() for spec in connector.tool_specs()]
     names += [tool.name for tool in mcp_tools.META_TOOLS]
     assert len(names) == len(set(names))
+
+
+@pytest.mark.parametrize("connector", CONNECTORS.values(), ids=list(CONNECTORS))
+def test_every_connector_tool_definition_is_complete(connector):
+    """A connector added later cannot ship parameters without descriptions, a tool with no
+    ``Returns`` sentence, or the wrong approval wording (each connector's own test module adds the
+    sibling map)."""
+    assert_tool_definitions_complete(connector, {})
 
 
 @pytest.mark.parametrize("tool", TOOLS)
