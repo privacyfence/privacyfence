@@ -9,6 +9,7 @@ expect -- no equivalent bug here.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -660,6 +661,121 @@ class TestUpdateIssue:
             await connector.call("jira_update_issue", {
                 "issue_key": "ENG-42", "custom_fields": '{"Nope": 1}',
             })
+
+
+class TestCustomFieldPeople:
+    @staticmethod
+    def _adf_mention(account_id):
+        return {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [
+            {"type": "mention", "attrs": {"id": account_id, "text": "@Jane Doe"}},
+        ]}]}
+
+    async def test_reviewer_failing_input_is_refused_and_never_sent(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Jane Doe"}
+        client.resolve_custom_field.side_effect = lambda name, value: (name.lower(), value)
+        custom = json.dumps({"ASSIGNEE": {"accountId": ACC2}, "DESCRIPTION": self._adf_mention(ACC2)})
+
+        with pytest.raises(ValueError, match="dedicated assignee_account_id parameter"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "ENG-1", "description": f"cc @[x]({ACC})",
+                "assignee_account_id": ACC, "custom_fields": custom,
+            })
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
+
+    @pytest.mark.parametrize("field_id,param", [
+        ("description", "description"), ("summary", "summary"), ("priority", "priority"),
+    ])
+    async def test_dedicated_parameter_fields_refused(self, gated_call_spy, field_id, param):
+        connector, client = make_connector()
+        client.resolve_custom_field.return_value = (field_id, "x")
+
+        with pytest.raises(ValueError, match=f"dedicated {param} parameter"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "ENG-1", "custom_fields": '{"Whatever": "x"}',
+            })
+        assert gated_call_spy == []
+
+    async def test_same_field_twice_refused(self, gated_call_spy):
+        connector, client = make_connector()
+        client.resolve_custom_field.return_value = ("customfield_1", 1)
+
+        with pytest.raises(ValueError, match="more than once"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "ENG-1", "custom_fields": '{"A": 1, "a": 2}',
+            })
+        assert gated_call_spy == []
+
+    async def test_unknown_id_in_custom_value_refused_before_card(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {}
+        client.resolve_custom_field.return_value = ("customfield_9", {"accountId": ACC})
+
+        with pytest.raises(ValueError, match="Unknown Atlassian account id"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "ENG-1", "custom_fields": json.dumps({"Approver": {"accountId": ACC}}),
+            })
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
+
+    async def test_user_picker_list_resolved_and_named(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.update_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Jane Doe", ACC2: "Bob Real"}
+        value = [{"accountId": ACC}, {"accountId": ACC2}, {"accountId": ACC}]
+        client.resolve_custom_field.return_value = ("customfield_9", value)
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "ENG-1", "custom_fields": json.dumps({"Reviewers": value}),
+        })
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Reviewers"] == "→ people: Jane Doe, Bob Real"
+        client.resolve_user_names.assert_called_once_with([ACC, ACC2])
+        client.update_issue.assert_called_once_with("ENG-1", {"customfield_9": value})
+
+    async def test_adf_mention_in_rich_text_custom_field_named(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.update_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Jane Doe"}
+        adf = self._adf_mention(ACC)
+        client.resolve_custom_field.return_value = ("customfield_7", adf)
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "ENG-1", "custom_fields": json.dumps({"Notes": adf}),
+        })
+
+        assert gated_call_spy[0]["preview"]["Notes"] == "→ people: Jane Doe"
+
+    @pytest.mark.parametrize("bad", [{"accountId": 5}, {"accountId": ""},
+                                     {"type": "mention", "attrs": {"text": "x"}}])
+    async def test_invalid_account_id_shape_refused(self, gated_call_spy, bad):
+        connector, client = make_connector()
+        client.resolve_custom_field.return_value = ("customfield_9", bad)
+
+        with pytest.raises(ValueError, match="invalid account id"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "ENG-1", "custom_fields": json.dumps({"P": bad}),
+            })
+        assert gated_call_spy == []
+
+    async def test_plain_text_custom_field_still_works_without_lookup(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.update_issue.return_value = make_issue()
+        client.resolve_custom_field.return_value = ("customfield_3", "hello")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "ENG-1", "custom_fields": '{"Notes": "hello"}',
+        })
+
+        client.resolve_user_names.assert_not_called()
+        assert gated_call_spy[0]["preview"]["Notes"] == "→ hello"
 
 
 class TestTransitionIssue:

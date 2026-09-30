@@ -19,6 +19,43 @@ from ..preview_dates import format_preview_datetime
 logger = logging.getLogger(__name__)
 
 
+# Built-in fields jira_update_issue has a dedicated, name-resolving parameter for.
+_DEDICATED_FIELD_PARAMS = {
+    "summary": "summary",
+    "description": "description",
+    "priority": "priority",
+    "assignee": "assignee_account_id",
+}
+
+
+def _account_ids_in(value: Any) -> list[str]:
+    """Every account id inside a custom field value, at any depth: dicts with
+    an ``accountId`` key and ADF ``mention`` nodes (``attrs.id``)."""
+    found: list[str] = []
+
+    def add(account_id: Any) -> None:
+        if not isinstance(account_id, str) or not account_id:
+            raise ValueError("update_issue: custom_fields contains an invalid account id.")
+        if account_id not in found:
+            found.append(account_id)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "accountId" in node:
+                add(node["accountId"])
+            attrs = node.get("attrs")
+            if node.get("type") == "mention" and isinstance(attrs, dict):
+                add(attrs.get("id"))
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return found
+
+
 def _parse_json_object(value: str) -> dict[str, Any] | None:
     """Parse a JSON object tool argument, or None if empty/invalid."""
     if not value or not value.strip():
@@ -495,7 +532,29 @@ class JiraConnector(Connector):
         assignee_account_id: str = "",
         custom_fields: str = "",
     ) -> Any:
-        names = await self._resolve_write_accounts(description, [assignee_account_id])
+        custom_updates = _parse_json_object(custom_fields)
+        if custom_fields and custom_updates is None:
+            raise ValueError(
+                "update_issue: custom_fields must be a JSON object, e.g. {\"Story Points\": 5}"
+            )
+        # Field ids are resolved up front so a built-in field cannot ride in
+        # through custom_fields, and so every account id inside a custom value
+        # is resolved with the rest before the approval card (ADR 0117).
+        resolved_custom: list[tuple[str, str, Any, Any, list[str]]] = []
+        seen_field_ids: set[str] = set()
+        for field_name, value in (custom_updates or {}).items():
+            field_id, coerced = await self._fetch(self._jira.resolve_custom_field, field_name, value)
+            if field_id in _DEDICATED_FIELD_PARAMS:
+                raise ValueError(
+                    f"update_issue: custom_fields cannot set '{field_name}'; "
+                    f"use the dedicated {_DEDICATED_FIELD_PARAMS[field_id]} parameter instead."
+                )
+            if field_id in seen_field_ids:
+                raise ValueError(f"update_issue: custom_fields sets '{field_name}' more than once.")
+            seen_field_ids.add(field_id)
+            resolved_custom.append((field_name, field_id, value, coerced, _account_ids_in(coerced)))
+        custom_ids = [i for *_, ids in resolved_custom for i in ids]
+        names = await self._resolve_write_accounts(description, [assignee_account_id, *custom_ids])
         issue = await self._fetch(self._jira.get_issue, issue_key)
         fields: dict[str, Any] = {}
         preview = {"Issue": f"{issue.key} — {issue.summary}"}
@@ -513,15 +572,12 @@ class JiraConnector(Connector):
         if assignee_account_id:
             fields["assignee"] = {"accountId": assignee_account_id}
             preview["Assignee"] = f"→ {names[assignee_account_id]}"
-        custom_updates = _parse_json_object(custom_fields)
-        if custom_fields and custom_updates is None:
-            raise ValueError(
-                "update_issue: custom_fields must be a JSON object, e.g. {\"Story Points\": 5}"
-            )
-        for field_name, value in (custom_updates or {}).items():
-            field_id, coerced = await self._fetch(self._jira.resolve_custom_field, field_name, value)
+        for field_name, field_id, value, coerced, ids in resolved_custom:
             fields[field_id] = coerced
-            preview[field_name] = f"→ {value}"
+            if ids:
+                preview[field_name] = f"→ people: {', '.join(names[i] for i in ids)}"
+            else:
+                preview[field_name] = f"→ {value}"
         if not fields:
             raise ValueError("update_issue: at least one field must be provided")
         if description:
