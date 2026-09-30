@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.3.0] — 2026-09-30
+
 ### Added
 
 - **Gemini Enterprise on privacyfence.eu.** [privacyfence.eu/ai-agents/gemini-enterprise](https://privacyfence.eu/ai-agents/gemini-enterprise/) says how Gemini Enterprise connects to an organization deployment, what it asks before a write, what it can do with files and how it is named on the approval card. Gemini Enterprise is listed with the other tested clients on the homepage and the FAQ.
@@ -3153,7 +3155,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.2.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.3.0...HEAD
+[5.3.0]: https://github.com/privacyfence/privacyfence/compare/v5.2.1...v5.3.0
 [5.2.1]: https://github.com/privacyfence/privacyfence/compare/v5.1.0...v5.2.1
 [5.1.0]: https://github.com/privacyfence/privacyfence/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/privacyfence/privacyfence/compare/v4.7.0...v5.0.0
