@@ -197,6 +197,47 @@ class TestMentionMarkup:
         assert au.storage_mentions_to_text(html, {ID_A: "Jane Doe"}) == "x @Jane Doe y"
 
 
+    REAL_ID = "557058:f58131cb-b67d-43c7-b30d-6b58d40bd077"
+
+    def test_gt_inside_earlier_quoted_attribute(self):
+        html = (f'<ac:link><ri:user ri:local-id="a>b" ri:account-id="{self.REAL_ID}" />'
+                '<ac:plain-text-link-body><![CDATA[Bob]]></ac:plain-text-link-body></ac:link>')
+        assert au.storage_mention_ids(html) == [self.REAL_ID]
+        assert au.storage_mentions_to_text(html, {self.REAL_ID: "Bob Real"}) == "@Bob Real"
+
+    def test_entity_encoded_account_id_is_decoded(self):
+        html = '<ac:link><ri:user ri:account-id="557058&#58;f58131cb-b67d-43c7-b30d-6b58d40bd077" /></ac:link>'
+        assert au.storage_mention_ids(html) == [self.REAL_ID]
+        assert au.storage_mentions_to_text(html, {self.REAL_ID: "Bob Real"}) == "@Bob Real"
+
+    @pytest.mark.parametrize("attr", ['ri:userkey="8a7f"', "ri:username='bob'", ""])
+    def test_legacy_or_idless_user_is_unrecognised(self, attr):
+        html = f"x <ac:link><ri:user {attr} /></ac:link> y"
+        assert au.storage_mention_ids(html) == []
+        assert au.storage_unrecognised_user_mentions(html) == 1
+        assert au.storage_mentions_to_text(html, {}) == "x @unknown user y"
+
+    def test_unrecognised_count_ignores_recognised(self):
+        html = f'<ri:user ri:account-id="{ID_A}"/><ri:user ri:userkey="k"/><ri:user ri:username="u"/>'
+        assert au.storage_unrecognised_user_mentions(html) == 2
+
+    def test_link_body_cannot_swallow_content_after_the_link(self):
+        html = (f'<ac:link><ri:user ri:account-id="{ID_A}"/><ac:link-body>x</ac:link-body>JUNK</ac:link>'
+                '<p>hidden</p><ac:link><ri:page ri:content-title="t"/><ac:link-body>y</ac:link-body></ac:link>')
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == (
+            '@Jane<p>hidden</p><ac:link><ri:page ri:content-title="t"/>'
+            '<ac:link-body>y</ac:link-body></ac:link>')
+
+    def test_script_element_does_not_hide_later_mentions(self):
+        html = f'<script>x</script><ac:link><ri:user ri:account-id="{ID_A}"/></ac:link>'
+        assert au.storage_mention_ids(html) == [ID_A]
+
+    def test_multiline_offsets_and_unclosed_link(self):
+        html = f'a\n<ac:link>\n<ri:user ri:account-id="{ID_A}"/>\n</ac:link>\nb <ac:link><ri:user ri:account-id="{ID_B}"/>'
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}).startswith("a\n@Jane\nb <ac:link>")
+        assert au.storage_mention_ids(html) == [ID_A, ID_B]
+
+
 class TestDirectoryConcurrency:
     def test_blocked_fetch_does_not_block_cached_resolve(self):
         directory = AtlassianUserDirectory()
