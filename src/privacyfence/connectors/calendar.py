@@ -155,7 +155,11 @@ class CalendarConnector(Connector):
         return [
             ToolSpec(
                 name="calendar_list_calendars",
-                description="List all Google Calendars for the authenticated user. Auto-approved.",
+                description=(
+                    "List all Google Calendars for the authenticated user. Returns a list of "
+                    "{id, summary, primary, access_role}. Pass an id as calendar_id to "
+                    "calendar_list_events and the other calendar tools. Auto-approved."
+                ),
                 params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
                 read_only=True,
             ),
@@ -163,14 +167,33 @@ class CalendarConnector(Connector):
                 name="calendar_list_events",
                 description=(
                     "List events from a calendar (id, title, start_time, end_time, all_day, status). "
-                    "No attendees, description, or links returned. Auto-approved."
+                    "No attendees, description, or links returned. Returns a list of {id, title, "
+                    "start_time, end_time, day_of_week, all_day, status}, recurring events expanded "
+                    "into single occurrences and sorted by start time, from one page only: no "
+                    "paging, so narrow time_min/time_max to see more. Use calendar_get_event_details "
+                    "to read one event's attendees and description, or calendar_list_calendars to "
+                    "find calendar_id. Auto-approved."
                 ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("max_results", "int", required=False, default=20),
-                    ToolParam("time_min", "str", required=False, default=""),
-                    ToolParam("time_max", "str", required=False, default=""),
-                    ToolParam("query", "str", required=False, default=""),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Maximum number of events to return. Default 20, "
+                                          "clamped to between 1 and 250."),
+                    ToolParam("time_min", "str", required=False, default="",
+                              description="Only events ending after this time, as an RFC 3339 timestamp "
+                                          "with an offset, e.g. '2026-10-15T00:00:00Z' or "
+                                          "'2026-10-15T09:00:00+02:00'; a bare date is not accepted. "
+                                          "Empty means no lower bound, so the oldest events come first: "
+                                          "pass it to get upcoming ones."),
+                    ToolParam("time_max", "str", required=False, default="",
+                              description="Only events starting before this time, same RFC 3339 format "
+                                          "as time_min. Empty means no upper bound."),
+                    ToolParam("query", "str", required=False, default="",
+                              description="Free-text search matched against event fields such as title, "
+                                          "description, location and attendees. Empty returns every event "
+                                          "in the window."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -182,12 +205,17 @@ class CalendarConnector(Connector):
                     "For each email, tries to fetch full event details (title, time, status) "
                     "when the authenticated user has calendar access; "
                     "falls back to free/busy slots only when access is unavailable. "
-                    "Use this for meeting scheduling. Auto-approved."
+                    "Use this for meeting scheduling. Returns one entry per email: {email, source: "
+                    "'events', events: [{id, title, start_time, end_time, status, all_day}]} (up to 50 "
+                    "events), or {email, source: 'free_busy', busy: [{start, end}]}, or {email, "
+                    "source: 'error', error}; the user's privacy settings may reduce 'events' to busy "
+                    "slots. Use calendar_list_events instead for the user's own calendar. "
+                    "Auto-approved."
                 ),
                 params=[
-                    ToolParam("emails", "str", description="Comma-separated list of email addresses"),
-                    ToolParam("time_min", "str", description="ISO 8601 datetime"),
-                    ToolParam("time_max", "str", description="ISO 8601 datetime"),
+                    ToolParam("emails", "str", description="Comma-separated email addresses of the people (or room resource emails) to check, e.g. 'a@example.com,b@example.com'."),
+                    ToolParam("time_min", "str", description="Start of the range as an RFC 3339 timestamp with an offset, e.g. '2026-10-15T09:00:00+02:00'. Required; a bare date is not accepted."),
+                    ToolParam("time_max", "str", description="End of the range, same RFC 3339 format as time_min. Required."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -199,11 +227,18 @@ class CalendarConnector(Connector):
                     "conferencing links, and file attachments (e.g. the \"Notes by Gemini\" and "
                     "transcript docs Google Meet attaches after a meeting ends). Each attachment's "
                     "file_id can be passed to drive_get_file_content to read its content. "
+                    "Returns {id, calendar_id, title, description, start_time, end_time, day_of_week, "
+                    "all_day, organizer_email, attendees: [{email, display_name, response_status, "
+                    "organizer}], location, status, html_link}; conferencing links and attachments "
+                    "are not included. Use calendar_list_events instead to find events. "
                     "Requires user approval."
                 ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("event_id", "str"),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("event_id", "str",
+                              description="Id of the event, from calendar_list_events (its id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -213,11 +248,15 @@ class CalendarConnector(Connector):
                 description=(
                     "Get a calendar event's visibility setting (default, public, private, "
                     "or confidential) without fetching its full details (attendees, "
-                    "description, etc.) the way calendar_get_event_details does. Auto-approved."
+                    "description, etc.) the way calendar_get_event_details does. Returns {visibility}. "
+                    "Use calendar_set_event_visibility to change it. Auto-approved."
                 ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("event_id", "str"),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("event_id", "str",
+                              description="Id of the event, from calendar_list_events (its id field)."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -229,13 +268,20 @@ class CalendarConnector(Connector):
                     "sharing settings; 'public' makes it visible to anyone who can see the "
                     "calendar; 'private' hides its details from viewers who aren't invited; "
                     "'confidential' is a legacy synonym the Calendar API still accepts for "
-                    "'private'. Only visibility changes — no other fields are affected. "
-                    "Requires user approval."
+                    "'private'. Only visibility changes — no other fields are affected. Returns {id, "
+                    "title, visibility}. Use calendar_get_event_visibility to read the current "
+                    "value. Requires user approval."
                 ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("event_id", "str"),
-                    ToolParam("visibility", "str", description="'default', 'public', 'private', or 'confidential'"),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("event_id", "str",
+                              description="Id of the event, from calendar_list_events (its id field)."),
+                    ToolParam("visibility", "str",
+                              description="New visibility: 'default', 'public', 'private' or "
+                                          "'confidential' (case-insensitive). Any other value is "
+                                          "rejected before approval is requested."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -245,8 +291,9 @@ class CalendarConnector(Connector):
                     "List meeting rooms and resource calendars from the organization's room "
                     "directory. This is a locally-cached list IT refreshes with "
                     "scripts/sync_room_directory.py, not a live Workspace lookup — it may come back "
-                    "empty if IT hasn't synced one yet. Returns room name, email, building, floor, "
-                    "and capacity. To check whether a room is actually free before booking, call "
+                    "empty if IT hasn't synced one yet. Returns a list of {resource_id, resource_name, "
+                    "resource_email, building_id, floor_name, capacity, description}, unpaged. "
+                    "To check whether a room is actually free before booking, call "
                     "calendar_get_free_busy with its resource_email. Use the room email with "
                     "calendar_create_event or calendar_update_event to book. Auto-approved."
                 ),
@@ -264,30 +311,50 @@ class CalendarConnector(Connector):
                     "List Calendar's fixed event color palette: each color's id, name (e.g. "
                     "\"Tomato\", \"Sage\"), and hex background/foreground. Use a color's id or "
                     "name as the color argument to calendar_create_event, calendar_update_event, "
-                    "or calendar_set_event_color instead of guessing a numeric id. Auto-approved."
+                    "or calendar_set_event_color instead of guessing a numeric id. Returns a list of "
+                    "{id, name, background, foreground}, sorted by id (1-11). Auto-approved."
                 ),
                 params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
                 read_only=True,
             ),
             ToolSpec(
                 name="calendar_create_event",
-                description="Create a new calendar event. Requires user approval.",
+                description=(
+                    "Create a new calendar event. Returns {id, title, start_time, end_time, "
+                    "html_link}, plus conference_link when a Google Meet was added. Timed events "
+                    "only: all-day events cannot be created. Use calendar_create_out_of_office "
+                    "for time off, calendar_list_rooms to find rooms to book and "
+                    "calendar_list_colors for color ids. Requires user approval."
+                ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("title", "str"),
-                    ToolParam("start_time", "str", description="ISO 8601 datetime"),
-                    ToolParam("end_time", "str", description="ISO 8601 datetime"),
-                    ToolParam("description", "str", required=False, default=""),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("title", "str", description="Title of the event, as shown on the calendar."),
+                    ToolParam("start_time", "str",
+                              description="Start as an RFC 3339 timestamp, e.g. "
+                                          "'2026-10-15T09:00:00+02:00'. A time without an offset is "
+                                          "read as UTC. Date-only values are not accepted."),
+                    ToolParam("end_time", "str",
+                              description="End as an RFC 3339 timestamp, same format as start_time; "
+                                          "must be after it."),
+                    ToolParam("description", "str", required=False, default="",
+                              description="Free-text description of the event. Empty means none."),
                     ToolParam("attendees", "str", required=False, default="",
-                              description="Comma-separated email addresses"),
-                    ToolParam("location", "str", required=False, default=""),
+                              description="Comma-separated email addresses of the guests to invite, e.g. "
+                                          "'a@example.com,b@example.com'. Empty invites nobody."),
+                    ToolParam("location", "str", required=False, default="",
+                              description="Free-text location of the event. Empty means none."),
                     ToolParam("add_google_meet", "bool", required=False, default=False,
                               description="Set to true to add a Google Meet video conference link"),
                     ToolParam("rooms", "str", required=False, default="",
-                              description="Comma-separated room resource email addresses to book"),
+                              description="Comma-separated room resource email addresses to book, from "
+                                          "calendar_list_rooms (its resource_email field). Empty books "
+                                          "no room."),
                     ToolParam("color", "str", required=False, default="",
                               description="Event color id (1-11) or name, e.g. \"Tomato\" -- see "
-                                          "calendar_list_colors"),
+                                          "calendar_list_colors. Empty uses the calendar's default "
+                                          "color."),
                     ToolParam("recurrence", "str", required=False, default="",
                               description="RRULE line(s) to make this a recurring event, e.g. "
                                           "\"RRULE:FREQ=WEEKLY;COUNT=10\". One rule per line for "
@@ -303,23 +370,43 @@ class CalendarConnector(Connector):
                     "which occurrences this touches: 'this' (default) affects only the given "
                     "event_id; 'following' splits the series so this instance and every later one "
                     "get the changes, leaving earlier ones untouched; 'all' updates the entire "
-                    "series. Requires user approval."
+                    "series. Only the fields you pass non-empty change; guests cannot be edited here. "
+                    "Returns {id, title, start_time, end_time, html_link}, plus conference_link "
+                    "when the event has a Google Meet. Use calendar_set_event_color or "
+                    "calendar_set_event_visibility to change only the color or visibility. "
+                    "Requires user approval."
                 ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("event_id", "str"),
-                    ToolParam("title", "str", required=False, default=""),
-                    ToolParam("start_time", "str", required=False, default=""),
-                    ToolParam("end_time", "str", required=False, default=""),
-                    ToolParam("description", "str", required=False, default=""),
-                    ToolParam("location", "str", required=False, default=""),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("event_id", "str",
+                              description="Id of the event, from calendar_list_events (its id field)."),
+                    ToolParam("title", "str", required=False, default="",
+                              description="New title. Empty leaves the title unchanged."),
+                    ToolParam("start_time", "str", required=False, default="",
+                              description="New start as an RFC 3339 timestamp, e.g. "
+                                          "'2026-10-15T09:00:00+02:00'; a time without an offset uses "
+                                          "the event's own time zone (UTC if it has none). Empty leaves "
+                                          "the start unchanged."),
+                    ToolParam("end_time", "str", required=False, default="",
+                              description="New end, same format as start_time. Empty leaves the "
+                                          "end unchanged."),
+                    ToolParam("description", "str", required=False, default="",
+                              description="New description, replacing the current one. Empty leaves "
+                                          "it unchanged."),
+                    ToolParam("location", "str", required=False, default="",
+                              description="New location, replacing the current one. Empty leaves "
+                                          "it unchanged."),
                     ToolParam("add_google_meet", "bool", required=False, default=False,
                               description="Set to true to add a Google Meet link (skipped if one already exists)"),
                     ToolParam("rooms", "str", required=False, default="",
-                              description="Comma-separated room resource email addresses to book"),
+                              description="Comma-separated room resource email addresses to book, from "
+                                          "calendar_list_rooms (its resource_email field); they replace "
+                                          "the rooms already booked. Empty leaves the rooms unchanged."),
                     ToolParam("color", "str", required=False, default="",
-                              description="Event color id (1-11) or name, e.g. \"Tomato\" -- see "
-                                          "calendar_list_colors"),
+                              description="New event color id (1-11) or name, e.g. \"Tomato\" -- see "
+                                          "calendar_list_colors. Empty leaves the color unchanged."),
                     ToolParam("scope", "str", required=False, default="this",
                               description="For a recurring event: 'this', 'following', or 'all'. "
                                           "Ignored (has no other meaning) for a non-recurring event."),
@@ -336,12 +423,16 @@ class CalendarConnector(Connector):
                     "Delete a calendar event. For a recurring event, 'scope' controls what's "
                     "deleted: 'this' (default) deletes only the given event_id; 'following' ends "
                     "the series just before this instance, deleting it and every later occurrence "
-                    "but keeping earlier ones; 'all' deletes the entire series. Requires user "
-                    "approval."
+                    "but keeping earlier ones; 'all' deletes the entire series. Returns {id, deleted: "
+                    "true, scope}. Use calendar_update_event instead to change an event rather "
+                    "than remove it. Requires user approval."
                 ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("event_id", "str"),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("event_id", "str",
+                              description="Id of the event, from calendar_list_events (its id field)."),
                     ToolParam("scope", "str", required=False, default="this",
                               description="For a recurring event: 'this', 'following', or 'all'. "
                                           "Ignored (has no other meaning) for a non-recurring event."),
@@ -358,12 +449,17 @@ class CalendarConnector(Connector):
                 description=(
                     "Set a calendar event's color. Only the color changes — no other fields are "
                     "affected. Accepts a color id (1-11) or name, e.g. \"Tomato\" -- see "
-                    "calendar_list_colors. Requires user approval."
+                    "calendar_list_colors. Returns {id, title, color_id}. Requires user approval."
                 ),
                 params=[
-                    ToolParam("calendar_id", "str"),
-                    ToolParam("event_id", "str"),
-                    ToolParam("color", "str", description="Event color id (1-11) or name, e.g. \"Tomato\""),
+                    ToolParam("calendar_id", "str",
+                              description="Id of the calendar, from calendar_list_calendars (its id field), "
+                                          "or 'primary' for the user's main calendar."),
+                    ToolParam("event_id", "str",
+                              description="Id of the event, from calendar_list_events (its id field)."),
+                    ToolParam("color", "str",
+                              description="Event color id (1-11) or name, e.g. \"Tomato\" "
+                                          "(case-insensitive), from calendar_list_colors. Required."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -372,14 +468,22 @@ class CalendarConnector(Connector):
                 description=(
                     "Create an out-of-office event on the primary calendar. Always auto-declines "
                     "new conflicting meeting invitations that arrive while it's in effect — existing "
-                    "invitations already on the calendar are left alone. Requires user approval."
+                    "invitations already on the calendar are left alone. Returns {id, title, start_time, "
+                    "end_time, html_link}. Timed events only (not all-day). Use calendar_create_event "
+                    "for an ordinary event. Requires user approval."
                 ),
                 params=[
-                    ToolParam("start_time", "str", description="ISO 8601 datetime"),
-                    ToolParam("end_time", "str", description="ISO 8601 datetime"),
-                    ToolParam("title", "str", required=False, default="Out of Office"),
+                    ToolParam("start_time", "str",
+                              description="Start as an RFC 3339 timestamp, e.g. "
+                                          "'2026-10-15T09:00:00+02:00'. A time without an offset is "
+                                          "read as UTC. Date-only values are not accepted."),
+                    ToolParam("end_time", "str",
+                              description="End as an RFC 3339 timestamp, same format as start_time; "
+                                          "must be after it."),
+                    ToolParam("title", "str", required=False, default="Out of Office",
+                              description="Title shown on the calendar. Default 'Out of Office'."),
                     ToolParam("decline_message", "str", required=False, default="",
-                              description="Message sent to organizers of auto-declined invitations"),
+                              description="Message sent to organizers of auto-declined invitations. Empty sends no custom message."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -388,15 +492,19 @@ class CalendarConnector(Connector):
                 description=(
                     "Set your working-location presence (office or home) for a single day on the "
                     "primary calendar — the same picker Google Calendar's web UI exposes. "
-                    "Requires user approval."
+                    "Replaces the day's existing working-location entry if there is one. Returns {id, "
+                    "start_time, end_time, html_link}. Use calendar_create_out_of_office for "
+                    "time off. Requires user approval."
                 ),
                 params=[
-                    ToolParam("date", "str", description="ISO 8601 date, e.g. 2026-07-10"),
-                    ToolParam("location", "str", description="\"office\" or \"home\""),
+                    ToolParam("date", "str", description="The day as YYYY-MM-DD, e.g. 2026-07-10."),
+                    ToolParam("location", "str",
+                              description="Where you work that day: exactly \"office\" or \"home\". "
+                                          "Anything else is rejected."),
                     ToolParam("building_id", "str", required=False, default="",
-                              description="Workspace building id (office only; see calendar_list_rooms)"),
+                              description="Workspace building id (office only), from calendar_list_rooms (its building_id field). Empty leaves the building unset."),
                     ToolParam("label", "str", required=False, default="",
-                              description="Office label shown on Calendar (office only)"),
+                              description="Office label shown on Calendar (office only). Empty shows no label."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
