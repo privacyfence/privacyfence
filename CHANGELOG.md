@@ -51,6 +51,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Gmail.** Reading a message or thread no longer fails when it has attachments, `gmail_list_messages` and `gmail_list_threads` now read up to `max_results` across pages, and `gmail_update_filter` creates the replacement filter before deleting the old one (and leaves the original in place if either step fails).
 - **Drive.** `drive_list_files`, `drive_list_folder` and `drive_list_shared_drives` now read up to `max_results` items across pages instead of only the first page.
+- **Contacts.** `contacts_list` now applies `source` while paging, so a narrow source no longer drops matches; `contacts_search` no longer falls back to a full scan when a search simply finds nothing (and its fallback no longer returns directory-only contacts for `source="personal"`); and invalid `emails`/`phones` JSON is now rejected with an error instead of being silently ignored.
 
 ## [5.3.0] — 2026-09-30
 

@@ -360,6 +360,39 @@ class TestListContacts:
             "READ_SOURCE_TYPE_CONTACT", "READ_SOURCE_TYPE_PROFILE", "READ_SOURCE_TYPE_DOMAIN_CONTACT",
         ]
 
+    def test_pages_with_source_filter_until_max_results_matches(self):
+        service = MagicMock()
+        directory = {"metadata": {"sources": [{"type": "DOMAIN_PROFILE"}]}}
+        saved = {"metadata": {"sources": [{"type": "CONTACT"}]}}
+        service.people.return_value.connections.return_value.list.return_value.execute.side_effect = [
+            {"connections": [{"resourceName": "people/d1", **directory}, {"resourceName": "people/s1", **saved}],
+             "nextPageToken": "t2"},
+            {"connections": [{"resourceName": "people/s2", **saved}, {"resourceName": "people/s3", **saved}],
+             "nextPageToken": "t3"},
+        ]
+        client = make_client(service)
+
+        contacts = client.list_contacts(max_results=3, source="personal")
+
+        assert [c.resource_name for c in contacts] == ["people/s1", "people/s2", "people/s3"]
+        calls = service.people.return_value.connections.return_value.list.call_args_list
+        assert len(calls) == 2
+        assert "pageToken" not in calls[0].kwargs
+        assert calls[0].kwargs["pageSize"] == 3
+        assert calls[1].kwargs["pageToken"] == "t2"
+        assert calls[1].kwargs["pageSize"] == 2
+
+    def test_paging_stops_at_page_budget(self):
+        service = MagicMock()
+        service.people.return_value.connections.return_value.list.return_value.execute.return_value = {
+            "connections": [], "nextPageToken": "more",
+        }
+        client = make_client(service)
+
+        client.list_contacts(max_results=5)
+
+        assert service.people.return_value.connections.return_value.list.call_count == 10
+
     def test_source_personal_filters_out_directory_only_entries(self):
         service = MagicMock()
         service.people.return_value.connections.return_value.list.return_value.execute.return_value = {
@@ -472,21 +505,58 @@ class TestSearchContacts:
         assert contacts[0].display_name == "Jane"
         service.people.return_value.connections.return_value.list.assert_not_called()
 
-    def test_falls_back_to_client_side_filter_when_search_returns_empty(self):
+    def test_empty_search_result_does_not_fall_back(self):
         service = MagicMock()
         service.people.return_value.searchContacts.return_value.execute.return_value = {"results": []}
+        client = make_client(service)
+
+        assert client.search_contacts("jane") == []
+        service.people.return_value.connections.return_value.list.assert_not_called()
+
+    def test_warm_up_call_is_made_first_and_only_once(self):
+        service = MagicMock()
+        service.people.return_value.searchContacts.return_value.execute.return_value = {"results": []}
+        client = make_client(service)
+
+        client.search_contacts("jane")
+        client.search_contacts("bob")
+
+        queries = [c.kwargs["query"] for c in service.people.return_value.searchContacts.call_args_list]
+        assert queries == ["", "jane", "bob"]
+
+    def test_warm_up_errors_are_ignored(self):
+        service = MagicMock()
+        search = service.people.return_value.searchContacts.return_value.execute
+        search.side_effect = [http_error(500), {"results": [{"person": {"resourceName": "people/c1"}}]}]
+        client = make_client(service)
+
+        assert len(client.search_contacts("jane")) == 1
+
+    def test_search_page_size_clamped_to_30(self):
+        service = MagicMock()
+        service.people.return_value.searchContacts.return_value.execute.return_value = {"results": []}
+        client = make_client(service)
+
+        client.search_contacts("jane", max_results=500)
+
+        assert service.people.return_value.searchContacts.call_args.kwargs["pageSize"] == 30
+
+    def test_personal_fallback_never_returns_directory_only_contacts(self):
+        service = MagicMock()
+        service.people.return_value.searchContacts.return_value.execute.side_effect = http_error(400)
         service.people.return_value.connections.return_value.list.return_value.execute.return_value = {
             "connections": [
-                {"resourceName": "people/c1", "names": [{"displayName": "Jane Doe"}], "emailAddresses": []},
-                {"resourceName": "people/c2", "names": [{"displayName": "Bob"}], "emailAddresses": [{"value": "bob@x.com"}]},
+                {"resourceName": "people/c1", "names": [{"displayName": "Jane Directory"}],
+                 "metadata": {"sources": [{"type": "DOMAIN_PROFILE"}]}},
+                {"resourceName": "people/c2", "names": [{"displayName": "Jane Saved"}],
+                 "metadata": {"sources": [{"type": "CONTACT"}]}},
             ]
         }
         client = make_client(service)
 
-        contacts = client.search_contacts("jane")
+        contacts = client.search_contacts("jane", source="personal")
 
-        assert len(contacts) == 1
-        assert contacts[0].display_name == "Jane Doe"
+        assert [c.display_name for c in contacts] == ["Jane Saved"]
 
     def test_falls_back_when_search_contacts_endpoint_raises(self):
         service = MagicMock()
@@ -502,7 +572,7 @@ class TestSearchContacts:
 
     def test_fallback_filter_matches_on_email_too(self):
         service = MagicMock()
-        service.people.return_value.searchContacts.return_value.execute.return_value = {"results": []}
+        service.people.return_value.searchContacts.return_value.execute.side_effect = http_error(400)
         service.people.return_value.connections.return_value.list.return_value.execute.return_value = {
             "connections": [
                 {"resourceName": "people/c1", "names": [{"displayName": "No Match"}],
@@ -517,7 +587,7 @@ class TestSearchContacts:
 
     def test_fallback_respects_max_results_cap(self):
         service = MagicMock()
-        service.people.return_value.searchContacts.return_value.execute.return_value = {"results": []}
+        service.people.return_value.searchContacts.return_value.execute.side_effect = http_error(400)
         service.people.return_value.connections.return_value.list.return_value.execute.return_value = {
             "connections": [
                 {"resourceName": f"people/c{i}", "names": [{"displayName": "Match"}], "emailAddresses": []}
