@@ -24,9 +24,6 @@ Requires PrivacyFence to be importable (``pip install -e .``): it reads the real
 """
 from __future__ import annotations
 
-import importlib
-import inspect
-import pkgutil
 import re
 import sys
 from dataclasses import dataclass
@@ -35,9 +32,8 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from privacyfence import connectors as connectors_pkg  # noqa: E402
 from privacyfence.auto_accept import TOOL_TO_GATE  # noqa: E402
-from privacyfence.connector import Connector  # noqa: E402
+from privacyfence.connector_catalog import connector_classes as _connector_classes  # noqa: E402
 from privacyfence.policy.registry import TOOL_REGISTRY  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -84,18 +80,6 @@ class ToolRow:
     direction: str
     gate: str
     summary: str
-
-
-def _connector_classes() -> list[type[Connector]]:
-    """Every concrete ``Connector`` subclass defined in ``privacyfence.connectors``."""
-    found: dict[str, type[Connector]] = {}
-    for module_info in pkgutil.iter_modules(connectors_pkg.__path__):
-        module = importlib.import_module(f"{connectors_pkg.__name__}.{module_info.name}")
-        for _, obj in inspect.getmembers(module, inspect.isclass):
-            if issubclass(obj, Connector) and obj is not Connector and not inspect.isabstract(obj):
-                if obj.__module__ == module.__name__:
-                    found[obj.__qualname__] = obj
-    return [found[key] for key in sorted(found)]
 
 
 # Sentence end: a period followed by whitespace, unless the period closes a common abbreviation.

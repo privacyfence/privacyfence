@@ -300,6 +300,31 @@ Each script also has `status` (audits the layout) and `daemon status|start|stop|
 the companion's service controls;
 [ADR 0026](adr/0026-the-companion-manages-the-daemon-through-the-service-manager.md)).
 
+## The Glama listing
+
+Glama starts `python -m privacyfence.catalog_server` to read PrivacyFence's tool list. That module
+is a catalog, not a way to run PrivacyFence: it lists every tool from the same definitions the
+daemon's `/mcp` endpoint serves, holds no credentials, does no I/O beyond stdio, and answers every
+tool call with an error that says to install PrivacyFence
+([ADR 0114](adr/0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md)). No
+console script is installed for it.
+
+The maintainer enters this build spec in Glama's admin page:
+
+- base image: `debian:trixie-slim`
+- build steps: `uv venv /opt/privacyfence --python 3.12` and
+  `uv pip install --python /opt/privacyfence/bin/python privacyfence`
+- command arguments: `["mcp-proxy", "--", "/opt/privacyfence/bin/python", "-m", "privacyfence.catalog_server"]`
+- environment variables: none
+
+It installs the latest stable release from PyPI, so a change to the catalog reaches Glama only with
+a release.
+
+`uv` and `mcp-proxy` come from Glama's build image, not from this repository. If Glama's build log
+shows either missing, switch the build steps to
+`apt-get update && apt-get install -y --no-install-recommends python3 python3-venv`,
+`python3 -m venv /opt/privacyfence` and `/opt/privacyfence/bin/pip install privacyfence`.
+
 ## CI
 
 `build.yml` runs on a `v*` tag push and on `workflow_dispatch` (every upload, publish and release

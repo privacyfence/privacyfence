@@ -219,3 +219,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0111](0111-a-duplicate-release-run-cancels-itself.md) | A duplicate release run cancels itself | Accepted |
 | [0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) | Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release | Accepted |
 | [0113](0113-process-docs-live-in-docs-not-in-claude-md.md) | Project process documentation lives in `docs/` and `CONTRIBUTING.md`, not in `CLAUDE.md` | Accepted |
+| [0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md) | The Glama listing runs a credential-free tool catalog, not a hosted PrivacyFence | Accepted |
