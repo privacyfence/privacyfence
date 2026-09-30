@@ -10,6 +10,7 @@ the resulting access/refresh token is per-user, stored in a token file.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -53,6 +54,13 @@ class SalesforceRecord:
     fields: dict
 
 
+@dataclass
+class ReportFilter:
+    column: str          # report column API name, e.g. "Opportunity.Opp_Id__c" or "ACCOUNT.NAME"
+    operator: str        # one of REPORT_FILTER_OPERATORS
+    values: list[str]    # one or more values; several values = match any (or: none, for negative operators)
+
+
 # ------------------------------------------------------------------ #
 # SOSL query building — search() below assembles a query string from
 # caller-supplied text, so every interpolated piece is validated or escaped
@@ -91,6 +99,116 @@ def _escape_sosl_term(term: str) -> str:
     for ch in _SOSL_RESERVED_CHARS:
         escaped = escaped.replace(ch, "\\" + ch)
     return escaped
+
+
+# ------------------------------------------------------------------ #
+# Report run overrides — run_report() can narrow one run of a saved report
+# (a subset of its own columns, extra row filters). Everything the caller
+# supplies is validated before it is sent, and an override can only ever
+# narrow the saved report: columns must be a subset of its own, and filters
+# are ANDed onto its own. The approved_report_ids policy rule relies on that.
+# ------------------------------------------------------------------ #
+
+REPORT_FILTER_OPERATORS = frozenset({
+    "equals", "notEqual", "lessThan", "greaterThan", "lessOrEqual", "greaterOrEqual",
+    "contains", "notContain", "startsWith", "includes", "excludes", "within",
+})
+_NEGATIVE_REPORT_OPERATORS = frozenset({"notEqual", "notContain", "excludes"})   # chunks joined with AND
+_MULTI_VALUE_REPORT_OPERATORS = frozenset({"equals", "notEqual", "contains", "notContain",
+                                           "startsWith", "includes", "excludes"})
+MAX_REPORT_FILTERS = 20              # Salesforce's per-report filter limit
+_REPORT_FILTER_CHUNK_VALUES = 10     # max values joined into one filter's comma list
+_REPORT_FILTER_CHUNK_CHARS = 240     # max length of that joined value string
+_REPORT_COLUMN_RE = _re.compile(r"^[A-Za-z0-9_.$]+$")   # $ appears in custom-report-type columns, e.g. Account$Name
+
+
+def _chunk_report_values(values: list[str]) -> list[list[str]]:
+    chunks: list[list[str]] = []
+    for value in values:
+        if chunks:
+            candidate = chunks[-1] + [value]
+            if (len(candidate) <= _REPORT_FILTER_CHUNK_VALUES
+                    and len(",".join(candidate)) <= _REPORT_FILTER_CHUNK_CHARS):
+                chunks[-1] = candidate
+                continue
+        chunks.append([value])
+    return chunks
+
+
+def build_report_metadata(
+    saved: dict, columns: list[str] | None, filters: list[ReportFilter] | None,
+) -> dict:
+    """The reportMetadata to POST for one narrowed run of a saved report.
+
+    ``saved`` is the ``reportMetadata`` from the report's describe call and is
+    not mutated. Raises SalesforceClientError for anything that isn't a
+    narrowing of the saved report.
+    """
+    metadata = copy.deepcopy(saved)
+
+    if columns:
+        saved_columns = saved.get("detailColumns") or []
+        requested: list[str] = []
+        for raw_name in columns:
+            name = raw_name.strip()
+            if name not in saved_columns:
+                raise SalesforceClientError(
+                    f"column {name!r} is not one of this report's columns: {', '.join(saved_columns)}"
+                )
+            if name in requested:
+                raise SalesforceClientError(f"column {name!r} is listed twice")
+            requested.append(name)
+        metadata["detailColumns"] = requested
+
+    if filters:
+        report_filters = list(metadata.get("reportFilters") or [])
+        n_saved = len(report_filters)
+        groups: list[str] = []
+        for flt in filters:
+            column, operator = flt.column, flt.operator
+            if not _REPORT_COLUMN_RE.match(column):
+                raise SalesforceClientError(f"Invalid report filter column: {column!r}")
+            if operator not in REPORT_FILTER_OPERATORS:
+                raise SalesforceClientError(
+                    f"Unknown report filter operator {operator!r}; "
+                    f"use one of: {', '.join(sorted(REPORT_FILTER_OPERATORS))}"
+                )
+            values = [v for v in (str(raw).strip() for raw in flt.values) if v]
+            if not values:
+                raise SalesforceClientError(f"report filter on {column!r} has no values")
+            for value in values:
+                if "," in value:
+                    raise SalesforceClientError(
+                        f"report filter value {value!r} contains a comma, "
+                        "which Salesforce reads as a list separator"
+                    )
+            if operator not in _MULTI_VALUE_REPORT_OPERATORS and len(values) > 1:
+                raise SalesforceClientError(f"operator {operator!r} takes exactly one value")
+            indices = []
+            for chunk in _chunk_report_values(values):
+                report_filters.append({"column": column, "operator": operator, "value": ",".join(chunk)})
+                indices.append(str(len(report_filters)))
+            if len(indices) == 1:
+                groups.append(indices[0])
+            else:
+                joiner = " AND " if operator in _NEGATIVE_REPORT_OPERATORS else " OR "
+                groups.append("(" + joiner.join(indices) + ")")
+        if len(report_filters) > MAX_REPORT_FILTERS:
+            raise SalesforceClientError(
+                f"report would have {len(report_filters)} filters; Salesforce allows at most "
+                f"{MAX_REPORT_FILTERS}. Pass fewer values or fewer filters."
+            )
+        saved_logic = saved.get("reportBooleanFilter")
+        if isinstance(saved_logic, str) and saved_logic.strip():
+            base = f"({saved_logic})"
+        elif n_saved > 0:
+            base = " AND ".join(str(i) for i in range(1, n_saved + 1))
+        else:
+            base = ""
+        metadata["reportFilters"] = report_filters
+        metadata["reportBooleanFilter"] = " AND ".join([base, *groups] if base else groups)
+
+    return metadata
 
 
 def build_authorize_url(
@@ -433,18 +551,31 @@ class SalesforceClient:
         logger.info("search %r returned %d record(s)", search_term, len(records))
         return records
 
-    def run_report(self, report_id: str) -> dict:
-        """Run a Salesforce report and return its result as a dict."""
+    def run_report(
+        self, report_id: str, columns: list[str] | None = None,
+        filters: list[ReportFilter] | None = None, summary_only: bool = False,
+    ) -> dict:
+        """Run a Salesforce report and return its result as a dict.
+
+        With no ``columns``/``filters`` the saved report runs as is. Otherwise
+        the saved definition is fetched first and narrowed for this one run;
+        the saved report itself never changes. Detail rows are requested
+        explicitly (``includeDetails``) because Salesforce's default may
+        return aggregates only.
+        """
         if not report_id:
             raise SalesforceClientError("run_report requires a report_id")
+        params = {"includeDetails": "false" if summary_only else "true"}
+        path = f"analytics/reports/{report_id}"
 
         def _run(sf):
-            return sf.restful(
-                f"analytics/reports/{report_id}",
-                method="POST",
-                json={"reportMetadata": {}},
-            )
+            if not columns and not filters:
+                return sf.restful(path, params=params)
+            describe = sf.restful(f"{path}/describe")
+            saved = (describe.get("reportMetadata") if isinstance(describe, dict) else None) or {}
+            metadata = build_report_metadata(saved, columns, filters)
+            return sf.restful(path, params=params, method="POST", json={"reportMetadata": metadata})
 
         result = self._call(_run)
-        logger.info("run_report %s completed", report_id)
+        logger.info("run_report %s completed (%s)", report_id, "summary" if summary_only else "details")
         return result

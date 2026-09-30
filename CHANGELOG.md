@@ -46,6 +46,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Jira and Confluence show people by name, and the agent can @mention them.** @mentioned people and Confluence page authors appear by name instead of as account ids, through a shared cache that looks each person up once a week at most. New `jira_find_users`, `confluence_find_users`, `jira_refresh_user_cache` and `confluence_refresh_user_cache` tools find people and refresh their names. The agent can @mention people in Jira comments and descriptions and in Confluence pages, and assign Jira issues, and the approval card names each person.
+- **Narrower Salesforce report runs.** salesforce_run_report can return only some of a report's columns, add filters for one run (such as a list of opportunity IDs), or return totals only, without changing the saved report. It now asks Salesforce for detail rows explicitly, and says when Salesforce cut a report off at 2,000 rows.
 
 ### Changed
 
