@@ -444,6 +444,128 @@ To have the daemon terminate TLS itself, pass `--server-tls-cert` and `--server-
 by the service account. A proxy is still the better choice: it handles certificate renewal and rate
 limiting.
 
+### Optional: restrict access by IP address
+
+The setup above leaves the whole hostname open to the internet. You can narrow it, in two layers:
+the proxy limits the endpoints that only machines call to those machines' addresses, and a host
+firewall closes every port the deployment does not use. Neither replaces sign-in; they shrink what
+a stranger can reach at all.
+
+**Who calls what.** Only part of the hostname is called by claude.ai's servers. The rest is called
+by people's browsers, including phones approving a request, and by claude.ai's code sandbox:
+
+| Path | Called by | Can be limited to |
+|---|---|---|
+| `/mcp`, `/register`, `/token`, `/revoke`, `/.well-known/*` | The AI client's servers. For claude.ai and Claude Desktop's remote connectors, that is Anthropic. | Anthropic's range, plus the addresses of any other AI client you use. |
+| `/login`, `/authorize`, `/oauth/*`, `/approvals`, `/connect`, `/settings`, `/security`, `/downloads/*`, `/api/*` | People's browsers. A sign-in or connector callback comes from the person's browser, redirected by the provider, not from the provider's own addresses. | Your office or VPN range, or nothing. |
+| `/mcp-files/*` (download links and upload slots) | The AI client's code sandbox ([section 13](#13-file-delivery)). | Leave open until you have checked where the sandbox connects from. |
+
+**Anthropic's range.** Anthropic publishes the addresses claude.ai connects from at
+[platform.claude.com/docs/en/api/ip-addresses](https://platform.claude.com/docs/en/api/ip-addresses):
+`160.79.104.0/21`, IPv4 only. Check that page whenever you review these rules. Claude Code,
+ChatGPT and Gemini Enterprise do not connect from it: Claude Code connects from the person's own
+machine, the others from their own providers' networks. If you use them, add their addresses or
+your VPN range wherever the rules below list Anthropic's.
+
+With Google (or any other identity provider) as the sign-in, most deployments limit only the
+machine endpoints and leave the browser pages open: those pages are useless without a sign-in, and
+locking them to a VPN also locks out anyone approving from a phone off the VPN. If you do limit
+them, keep `--authz-allowed-domain` set regardless ([section 4](#who-may-sign-in)); an IP rule is
+not a substitute for it.
+
+#### Caddy
+
+```
+pf.acme.example.com {
+    # Machine endpoints: only Anthropic, plus your VPN or office range for other AI clients.
+    @machine_denied {
+        path /mcp /mcp/* /register /token /revoke /.well-known/*
+        not remote_ip 160.79.104.0/21 198.51.100.0/24
+    }
+    respond @machine_denied 403
+
+    # Optional: browser pages from the VPN or office only. /mcp-files/* stays open.
+    # @browser_denied {
+    #     not path /mcp /mcp/* /register /token /revoke /.well-known/* /mcp-files/*
+    #     not remote_ip 198.51.100.0/24
+    # }
+    # respond @browser_denied 403
+
+    reverse_proxy 127.0.0.1:8765
+}
+```
+
+Replace `198.51.100.0/24` with your VPN or office range, or remove it if claude.ai is the only AI
+client. Write the paths exactly as shown: `/mcp*` would also match `/mcp-files/...`. `remote_ip`
+is the address connected to Caddy; if a CDN or load balancer sits in front, list it under
+`servers { trusted_proxies static <range> }` in Caddy's global options and use `client_ip`
+instead. Run `caddy validate --config /etc/caddy/Caddyfile` and `sudo systemctl reload caddy` after
+each change. With nginx, the same rules are a `geo` block on `$remote_addr` and a `return 403` in a
+`location` for the machine paths.
+
+The [monitoring probe](#monitoring) calls `/.well-known/oauth-authorization-server`, so run it from
+an address the rule allows, or against `http://127.0.0.1:8765` on the server itself.
+
+#### Host firewall (ufw)
+
+The proxy rules still accept the TCP connection. A host firewall drops everything else before it
+reaches anything. On Ubuntu, with `ufw`, and your admin address in place of `203.0.113.10`:
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from 203.0.113.10 to any port 22 proto tcp   # SSH: your admin address only
+sudo ufw allow 443/tcp                                      # HTTPS; the proxy rules decide per path
+sudo ufw allow 80/tcp                                       # certificate issuance only; see below
+sudo ufw enable
+sudo ufw status verbose
+```
+
+Add the SSH rule before `ufw enable`, or you lock yourself out of the server. Outgoing stays open:
+the daemon needs the identity provider, every connector's API and the push services
+([section 2](#2-prerequisites)), and pip needs PyPI.
+
+**Port 443 limited to given addresses.** If people reach the browser pages only through the VPN,
+the firewall can limit 443 as well: replace `sudo ufw allow 443/tcp` with one rule per range.
+
+```bash
+sudo ufw allow from 160.79.104.0/21 to any port 443 proto tcp   # Anthropic (claude.ai)
+sudo ufw allow from 198.51.100.0/24 to any port 443 proto tcp   # VPN or office
+```
+
+`/mcp-files/*` is then limited too, so test a file larger than about 75 KB each way before you rely
+on it.
+
+**Port 80 is for certificates only.** PrivacyFence serves nothing over plain HTTP. Caddy (or
+certbot) uses port 80 only to answer the certificate authority's HTTP-01 challenge; Caddy redirects
+every other request on it to HTTPS. Which rule to use depends on where the challenge comes from:
+
+- **Let's Encrypt, or any public certificate authority.** It validates from several addresses that
+  it does not publish and changes without notice, so an address rule on port 80 makes renewals fail
+  weeks later, when nobody is looking. Keep `sudo ufw allow 80/tcp`. The same applies to port 443 if
+  you limited it: Caddy's other challenge, TLS-ALPN-01, arrives there from the same unpublished
+  addresses.
+- **A certificate authority that validates from fixed addresses** (for example an internal ACME
+  server). Allow only those addresses on port 80:
+
+  ```bash
+  sudo ufw allow from 192.0.2.53 to any port 80 proto tcp   # your CA's validation address
+  ```
+
+- **No port 80 at all.** Switch to the DNS-01 challenge, which proves control of the domain through
+  a DNS record instead of a connection to the server. Caddy needs a build with your DNS provider's
+  module (for example `tls { dns cloudflare {env.CF_API_TOKEN} }` in the site block); certbot needs
+  its DNS plugin. Then delete the port 80 rule (`sudo ufw delete allow 80/tcp`), and port 443 can
+  be limited to given addresses without breaking renewals.
+
+**Test before you rely on it.** Connect claude.ai, approve a request, and move a file larger than
+about 75 KB each way. Requests from outside the rules show up as `403` in the proxy's log, or not at
+all when the firewall dropped them. The file transfers tell you where claude.ai's sandbox connects
+from: if every `/mcp-files/` request in the proxy log comes from `160.79.104.0/21`, you can add
+`/mcp-files/*` to the machine rule. Otherwise its only protection is the single-use link that
+expires after 300 seconds. After the first renewal (`journalctl -u caddy | grep -i certificate`),
+confirm the certificate was renewed rather than failing quietly.
+
 ## 8. Hardened systemd unit
 
 Save this as `/etc/systemd/system/privacyfence-org.service`:
@@ -842,6 +964,117 @@ earlier version reads the data as the newer one left it, so keep the pre-upgrade
 A `settings.yaml` that still has `auto_accept_rules` or `auto_accept_grants` sections is refused at
 startup, unless it also carries the `migrated_to_policy_v2` marker, in which case those sections
 are removed and the file is rewritten.
+
+### Optional: upgrade automatically
+
+A systemd timer can run the upgrade above every night and keep the server on the latest stable
+release. `pip install --upgrade` skips pre-releases, and PyPI carries stable releases only, so it
+never picks up a test build. The trade-off is the advice above: nobody reads the changelog before
+an upgrade, and each one restarts the daemon, which drops pending approvals and browser sessions
+([What a restart keeps](#what-a-restart-keeps)). Pick an hour when nobody is approving requests, and
+have a nightly backup run before it.
+
+Save the upgrade script as `/usr/local/sbin/privacyfence-upgrade`, owned by root with mode `0755`.
+It restarts only when the version changed, then waits up to a minute for the daemon to answer on
+`127.0.0.1:8765`. If it does not, it installs the previous version again and restarts:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+VENV=/opt/privacyfence/venv
+UNIT=privacyfence-org
+PROBE=http://127.0.0.1:8765/.well-known/oauth-authorization-server
+
+current() { "$VENV/bin/python" -c 'from importlib.metadata import version; print(version("privacyfence"))'; }
+healthy() {
+    for _ in $(seq 12); do
+        sleep 5
+        if systemctl is-active --quiet "$UNIT" && curl -fsS -o /dev/null "$PROBE"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+before=$(current)
+"$VENV/bin/pip" install --quiet --upgrade privacyfence
+after=$(current)
+
+if [[ "$before" == "$after" ]]; then
+    echo "privacyfence $after is the latest stable release"
+    exit 0
+fi
+
+echo "Upgraded privacyfence $before -> $after; restarting $UNIT"
+systemctl restart "$UNIT"
+if healthy; then
+    echo "$UNIT is healthy on $after"
+    exit 0
+fi
+
+echo "$UNIT is not healthy on $after; going back to $before" >&2
+"$VENV/bin/pip" install --quiet "privacyfence==$before"
+systemctl restart "$UNIT"
+exit 1
+```
+
+The script runs pip as root because root owns the virtual environment
+([section 3](#3-service-account-and-install)); the service account still cannot change its own
+code.
+
+`/etc/systemd/system/privacyfence-upgrade.service`:
+
+```ini
+[Unit]
+Description=Upgrade PrivacyFence to the latest stable release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/privacyfence-upgrade
+```
+
+`/etc/systemd/system/privacyfence-upgrade.timer`:
+
+```ini
+[Unit]
+Description=Nightly PrivacyFence upgrade
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Turn it on, run it once by hand and read the result:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now privacyfence-upgrade.timer
+sudo systemctl start privacyfence-upgrade.service
+journalctl -u privacyfence-upgrade.service -n 30
+systemctl list-timers privacyfence-upgrade.timer
+```
+
+Notes:
+
+- **The fallback is a safety net, not a rollback.** It catches a daemon that does not start or does
+  not answer. It does not catch one that starts but misbehaves, it does not undo dependency
+  upgrades pip made along the way, and going back is safe only if the earlier version reads the
+  data as the newer one left it. When it fires, restore from the backup if the older version
+  misbehaves too.
+- **Alerts.** A failed run leaves `privacyfence-upgrade.service` in the `failed` state. Add
+  `OnFailure=` to its `[Unit]` section, pointing at a notification unit, or alert on it alongside
+  the daemon ([Monitoring](#monitoring)).
+- **Bundles.** The timer does not fetch the matching `build_org_bundle.py`; download it before you
+  next change the bundle.
+- **Holding a version.** `sudo systemctl disable --now privacyfence-upgrade.timer` stops automatic
+  upgrades until you enable the timer again.
 
 ### Monitoring
 
