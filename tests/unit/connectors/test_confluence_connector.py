@@ -1128,3 +1128,17 @@ class TestWriteMentions:
 
         client.resolve_user_names.assert_not_called()
         assert "Mentions" not in gated_call_spy[0]["preview"]
+
+    @pytest.mark.parametrize("raw", [
+        f"<ac:link><ri:user ri:account-id='{_JANE}' /></ac:link>",
+        f'<ac:link><ri:user ri:account-id = "{_JANE}" /></ac:link>',
+    ])
+    async def test_raw_mention_with_single_quotes_or_spaces_is_in_preview(self, gated_call_spy, raw):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe"}
+        client.create_page.return_value = make_page()
+
+        await connector.call("confluence_create_page", self._create_args(f"<p>{raw}</p>"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Jane Doe"
+        client.resolve_user_names.assert_called_once_with([_JANE])

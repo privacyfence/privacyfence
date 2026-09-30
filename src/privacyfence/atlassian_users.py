@@ -33,9 +33,10 @@ FIND_USERS_MAX_RESULTS = 50
 _HTTP_TIMEOUT_SECONDS = 30
 ACCOUNT_ID_RE = re.compile(r"[A-Za-z0-9:_-]{10,128}")  # always used with .fullmatch()
 MENTION_MARKUP_RE = re.compile(r"@\[([^\]\n]{1,200})\]\(([A-Za-z0-9:_-]{10,128})\)")
-_STORAGE_USER_RE = re.compile(r'<ri:user\b[^>]*?\bri:account-id="([^"]+)"[^>]*>')
+_ACCOUNT_ID_ATTR = r"""\bri:account-id\s*=\s*(?:"(?P<dq>[^"]+)"|'(?P<sq>[^']+)')"""
+_STORAGE_USER_RE = re.compile(r"<ri:user\b[^>]*?" + _ACCOUNT_ID_ATTR + r"[^>]*>")
 _STORAGE_MENTION_RE = re.compile(
-    r'<ac:link\b[^>]*>\s*<ri:user\b[^>]*?\bri:account-id="([^"]+)"[^>]*?(?:/>|>\s*</ri:user>)\s*'
+    r"<ac:link\b[^>]*>\s*<ri:user\b[^>]*?" + _ACCOUNT_ID_ATTR + r"[^>]*?(?:/>|>\s*</ri:user>)\s*"
     r'(?:<ac:(?:plain-text-)?link-body>.*?</ac:(?:plain-text-)?link-body>\s*)?</ac:link>',
     re.S,
 )
@@ -120,12 +121,12 @@ def display_markup(text: str, names: Mapping[str, str] | None = None) -> str:
 
 
 def storage_mention_ids(html: str) -> list[str]:
-    return list(dict.fromkeys(m.group(1) for m in _STORAGE_USER_RE.finditer(html)))
+    return list(dict.fromkeys(m["dq"] or m["sq"] for m in _STORAGE_USER_RE.finditer(html)))
 
 
 def storage_mentions_to_text(html: str, names: Mapping[str, str]) -> str:
     def replace(match: re.Match[str]) -> str:
-        return "@" + html_lib.escape(names.get(match.group(1)) or UNKNOWN_USER_LABEL)
+        return "@" + html_lib.escape(names.get(match["dq"] or match["sq"]) or UNKNOWN_USER_LABEL)
 
     return _STORAGE_MENTION_RE.sub(replace, html)
 

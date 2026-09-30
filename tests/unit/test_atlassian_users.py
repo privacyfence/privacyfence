@@ -178,6 +178,24 @@ class TestMentionMarkup:
         html = f'<ac:link><ri:user ri:account-id="{ID_A}"></ri:user></ac:link>'
         assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == "@Jane"
 
+    @pytest.mark.parametrize("attr", [
+        f'ri:account-id="{ID_A}"',
+        f"ri:account-id='{ID_A}'",
+        f'ri:account-id = "{ID_A}"',
+        f"ri:account-id\n=\t'{ID_A}'",
+    ])
+    @pytest.mark.parametrize("shape", [
+        '<ac:link><ri:user {a} /></ac:link>',
+        '<ac:link><ri:user {a}></ri:user></ac:link>',
+        '<ac:link><ri:user ri:x="1" {a} ri:y="2" /></ac:link>',
+        '<ac:link><ri:user {a} /><ac:link-body>Jane</ac:link-body></ac:link>',
+        '<ac:link><ri:user {a} /><ac:plain-text-link-body><![CDATA[Jane]]></ac:plain-text-link-body></ac:link>',
+    ])
+    def test_quote_and_whitespace_forms(self, attr, shape):
+        html = f"x {shape.format(a=attr)} y"
+        assert au.storage_mention_ids(html) == [ID_A]
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane Doe"}) == "x @Jane Doe y"
+
 
 class TestDirectoryConcurrency:
     def test_blocked_fetch_does_not_block_cached_resolve(self):
