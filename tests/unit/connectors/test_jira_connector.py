@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence.atlassian_users import AtlassianUser
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import jira as jira_module
 from privacyfence.connectors.jira import JiraConnector
@@ -123,7 +124,72 @@ class TestAutoTools:
         assert '"decision": "auto_accepted"' in entries[-1]
 
 
+class TestFindUsers:
+    async def test_returns_users_audits_and_never_gates(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.find_users.return_value = [AtlassianUser(account_id="acc-jane-0001", display_name="Jane Doe")]
+
+        result = await connector.call("jira_find_users", {"query": "jane", "max_results": 5})
+
+        assert result == [
+            {"account_id": "acc-jane-0001", "display_name": "Jane Doe", "active": True, "account_type": ""},
+        ]
+        client.find_users.assert_called_once_with("jane", 5)
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"tool": "jira_find_users"' in entries[-1]
+        assert '"decision": "auto_accepted"' in entries[-1]
+
+    async def test_client_error_becomes_runtime_error(self):
+        connector, client = make_connector()
+        client.find_users.side_effect = JiraClientError("find_users failed: boom")
+
+        with pytest.raises(RuntimeError, match="find_users failed"):
+            await connector.call("jira_find_users", {"query": "jane"})
+
+
+class TestRefreshUserCache:
+    async def test_returns_count_audits_and_never_gates(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.refresh_user_cache.return_value = 7
+
+        result = await connector.call("jira_refresh_user_cache", {})
+
+        assert result == {"cached_users": 7}
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"tool": "jira_refresh_user_cache"' in entries[-1]
+
+    async def test_client_error_becomes_runtime_error(self):
+        connector, client = make_connector()
+        client.refresh_user_cache.side_effect = JiraClientError("refresh already in progress")
+
+        with pytest.raises(RuntimeError, match="already in progress"):
+            await connector.call("jira_refresh_user_cache", {})
+
+
 class TestGetIssue:
+    async def test_mentions_show_names_in_preview_but_result_keeps_markup(self, gated_call_spy):
+        connector, client = make_connector()
+        markup = "@[Jane Doe](acc-jane-0001)"
+        client.get_issue.return_value = make_issue(description=f"Ask {markup} about it")
+        client.get_issue_comments.return_value = [
+            JiraComment(id="c1", author="bob", body=f"cc {markup}", created="2026-07-01"),
+        ]
+
+        result = await connector.call("jira_get_issue", {"issue_key": "ENG-42"})
+
+        kwargs = gated_call_spy[0]
+        assert "Ask @Jane Doe about it" in kwargs["details_text"]
+        assert "acc-jane-0001" not in kwargs["details_text"]
+        assert "@Jane Doe" in kwargs["pii_scan_text"]
+        assert kwargs["preview_blocks"][2] == {"type": "text", "text": "Ask @Jane Doe about it"}
+        assert kwargs["preview_blocks"][3]["rows"][0][2] == "cc @Jane Doe"
+        assert result["description"] == f"Ask {markup} about it"
+        assert result["comments"][0]["body"] == f"cc {markup}"
+
     async def test_preview_fields(self, gated_call_spy):
         connector, client = make_connector()
         client.get_issue.return_value = make_issue()
@@ -550,6 +616,8 @@ class TestEveryToolIsAudited:
             JiraTransition(id="11", name="Start Progress", to_status="In Progress"),
         ]
         client.transition_issue.return_value = make_issue()
+        client.find_users.return_value = [AtlassianUser(account_id="acc-jane-0001", display_name="Jane Doe")]
+        client.refresh_user_cache.return_value = 1
 
         await assert_all_tools_leave_an_audit_trail(
             connector, jira_module, monkeypatch, tmp_path,

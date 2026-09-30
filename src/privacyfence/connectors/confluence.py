@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .. import local_files
+from ..atlassian_users import storage_mentions_to_text
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..confluence_client import ConfluenceClient, ConfluenceClientError, resolve_attachment_destination
 from ..connector import Connector, ToolParam, ToolSpec
@@ -121,6 +122,30 @@ class ConfluenceConnector(Connector):
             read_only=True,
             ),
             ToolSpec(
+                name="confluence_find_users",
+                description=(
+                    "Find Atlassian users by name or email and return their account ids. "
+                    "Auto-approved -- mention someone in a page body by writing "
+                    "@[Name](accountId). Email addresses are never returned."
+                ),
+                params=[
+                    ToolParam("query", "str", description="Part of a person's name or email address"),
+                    ToolParam("max_results", "int", required=False, default=10),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="confluence_refresh_user_cache",
+                description=(
+                    "Re-fetch the names of every Atlassian account id PrivacyFence has cached. "
+                    "Auto-approved -- use this when a renamed or newly added person shows up "
+                    "wrong; cached names otherwise refresh on their own after 7 days."
+                ),
+                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                read_only=True,
+            ),
+            ToolSpec(
                 name="confluence_download_attachment",
                 description=(
                     "Download a Confluence page attachment's content. "
@@ -166,7 +191,9 @@ class ConfluenceConnector(Connector):
                 name="confluence_get_page",
                 description=(
                     "Fetch the full content of a Confluence page by page ID. "
-                    "Returns the page body as HTML storage format. Requires user approval."
+                    "Returns the page body as HTML storage format. Requires user approval. "
+                    "The result's author_name names the author, and its mentions field "
+                    "maps each @mentioned account id in the body to a name."
                 ),
                 params=[
                     ToolParam("page_id", "str"),
@@ -178,7 +205,9 @@ class ConfluenceConnector(Connector):
                 name="confluence_get_page_by_title",
                 description=(
                     "Fetch a Confluence page by space key and exact title. "
-                    "Requires user approval."
+                    "Requires user approval. "
+                    "The result's author_name names the author, and its mentions field "
+                    "maps each @mentioned account id in the body to a name."
                 ),
                 params=[
                     ToolParam("space_key", "str"),
@@ -228,6 +257,10 @@ class ConfluenceConnector(Connector):
             return await self._list_pages(**args)
         if tool == "confluence_list_attachments":
             return await self._list_attachments(**args)
+        if tool == "confluence_find_users":
+            return await self._find_users(**args)
+        if tool == "confluence_refresh_user_cache":
+            return await self._refresh_user_cache(**args)
         if tool == "confluence_download_attachment":
             return await self._download_attachment(**args)
         if tool == "confluence_get_page":
@@ -299,6 +332,25 @@ class ConfluenceConnector(Connector):
         )
         return {"page_id": page_id, "attachments": data}
 
+    async def _find_users(self, query: str, max_results: int = 10) -> Any:
+        t0 = time.time()
+        users = await self._fetch(self._confluence.find_users, query, max_results)
+        data = [asdict(u) for u in users]
+        self._auto_audit(
+            "confluence_find_users", "Find Confluence Users",
+            f"Find users: {query[:80]}", f"{len(users)} user(s)", t0,
+        )
+        return data
+
+    async def _refresh_user_cache(self) -> Any:
+        t0 = time.time()
+        count = await self._fetch(self._confluence.refresh_user_cache)
+        self._auto_audit(
+            "confluence_refresh_user_cache", "Refresh Atlassian User Cache",
+            "Refresh Atlassian user cache", f"{count} user(s)", t0,
+        )
+        return {"cached_users": count}
+
     # ------------------------------------------------------------------ #
     # Gated
     # ------------------------------------------------------------------ #
@@ -321,18 +373,18 @@ class ConfluenceConnector(Connector):
             "Space": page.space_key or "(unknown)",
         }
         new_info = {
-            "Author": page.author or "(unknown)",
+            "Author": page.author_name or page.author or "(unknown)",
             "Last modified": page.updated or "(unknown)",
             "Page body": "Full page content",
         }
         body_raw = getattr(page, "body", "") or getattr(page, "body_text", "") or ""
-        body_text = html_to_markdown(body_raw)
+        body_text = html_to_markdown(storage_mentions_to_text(body_raw, page.mentions))
         return await gated_call(
             connector=self.name,
             tool="confluence_get_page",
             tool_name="Read Confluence Page",
             summary=f"Read \"{page.title}\" ({page.space_key})",
-            sender=page.author or page_id,
+            sender=page.author_name or page.author or page_id,
             raw_data=data,
             filtered_data=data,
             gate="review",
@@ -354,18 +406,18 @@ class ConfluenceConnector(Connector):
             "Space": page.space_key or space_key,
         }
         new_info = {
-            "Author": page.author or "(unknown)",
+            "Author": page.author_name or page.author or "(unknown)",
             "Last modified": page.updated or "(unknown)",
             "Page body": "Full page content",
         }
         body_raw = getattr(page, "body", "") or getattr(page, "body_text", "") or ""
-        body_text = html_to_markdown(body_raw)
+        body_text = html_to_markdown(storage_mentions_to_text(body_raw, page.mentions))
         return await gated_call(
             connector=self.name,
             tool="confluence_get_page_by_title",
             tool_name="Read Confluence Page",
             summary=f"Read \"{page.title}\" ({page.space_key})",
-            sender=page.author or space_key,
+            sender=page.author_name or page.author or space_key,
             raw_data=data,
             filtered_data=data,
             gate="review",
@@ -491,7 +543,7 @@ class ConfluenceConnector(Connector):
             tool="confluence_download_attachment",
             tool_name="Download Confluence Attachment",
             summary=f"Download attachment '{attachment.name}' from: {page.title or page_id}",
-            sender=page.author or page_id,
+            sender=page.author_name or page.author or page_id,
             raw_data=asdict(page),
             filtered_data=None,
             gate="review",

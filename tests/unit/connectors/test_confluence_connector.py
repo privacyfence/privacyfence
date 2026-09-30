@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence.atlassian_users import AtlassianUser
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.confluence_client import (
     ConfluenceAttachment,
@@ -244,6 +245,91 @@ class TestExcerptPrivacyFilter:
         result = await connector.call("confluence_search", {"query": "runbook"})
 
         assert result[0]["excerpt"] == "a normal excerpt"
+
+
+class TestFindUsers:
+    async def test_returns_users_audits_and_never_gates(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.find_users.return_value = [AtlassianUser(account_id="acc-jane-0001", display_name="Jane Doe")]
+
+        result = await connector.call("confluence_find_users", {"query": "jane", "max_results": 5})
+
+        assert result == [
+            {"account_id": "acc-jane-0001", "display_name": "Jane Doe", "active": True, "account_type": ""},
+        ]
+        client.find_users.assert_called_once_with("jane", 5)
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"tool": "confluence_find_users"' in entries[-1]
+        assert '"decision": "auto_accepted"' in entries[-1]
+
+    async def test_client_error_becomes_runtime_error(self):
+        connector, client = make_connector()
+        client.find_users.side_effect = ConfluenceClientError("find_users failed: boom")
+
+        with pytest.raises(RuntimeError, match="find_users failed"):
+            await connector.call("confluence_find_users", {"query": "jane"})
+
+
+class TestRefreshUserCache:
+    async def test_returns_count_audits_and_never_gates(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.refresh_user_cache.return_value = 7
+
+        result = await connector.call("confluence_refresh_user_cache", {})
+
+        assert result == {"cached_users": 7}
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"tool": "confluence_refresh_user_cache"' in entries[-1]
+
+    async def test_client_error_becomes_runtime_error(self):
+        connector, client = make_connector()
+        client.refresh_user_cache.side_effect = ConfluenceClientError("refresh already in progress")
+
+        with pytest.raises(RuntimeError, match="already in progress"):
+            await connector.call("confluence_refresh_user_cache", {})
+
+
+_MENTION_BODY = (
+    '<p>Ping <ac:link><ri:user ri:account-id="acc-jane-0001" /></ac:link> please</p>'
+)
+
+
+class TestGetPageNames:
+    @pytest.mark.parametrize("tool,args,client_method", [
+        ("confluence_get_page", {"page_id": "p1"}, "get_page"),
+        ("confluence_get_page_by_title", {"space_key": "ENG", "title": "Runbook"}, "get_page_by_title"),
+    ])
+    async def test_author_name_and_mentions_in_preview_raw_body_in_result(
+        self, gated_call_spy, tool, args, client_method,
+    ):
+        connector, client = make_connector()
+        page = make_page(
+            author="acc-alice-0001", author_name="Alice Smith", body=_MENTION_BODY,
+            mentions={"acc-jane-0001": "Jane Doe"},
+        )
+        getattr(client, client_method).return_value = page
+
+        result = await connector.call(tool, args)
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["new_info"]["Author"] == "Alice Smith"
+        assert kwargs["sender"] == "Alice Smith"
+        assert "@Jane Doe" in kwargs["details_text"]
+        assert "acc-jane-0001" not in kwargs["details_text"]
+        assert result["body"] == _MENTION_BODY
+        assert result["author"] == "acc-alice-0001"
+
+    async def test_author_falls_back_to_id_without_name(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(author="acc-alice-0001")
+
+        await connector.call("confluence_get_page", {"page_id": "p1"})
+
+        assert gated_call_spy[0]["new_info"]["Author"] == "acc-alice-0001"
 
 
 class TestGetPage:
@@ -916,6 +1002,8 @@ class TestEveryToolIsAudited:
         client.get_page_by_title.return_value = make_page()
         client.create_page.return_value = make_page()
         client.update_page.return_value = make_page()
+        client.find_users.return_value = [AtlassianUser(account_id="acc-jane-0001", display_name="Jane Doe")]
+        client.refresh_user_cache.return_value = 1
         # confluence_download_attachment looks up the attachment by name on
         # the fetched page's attachment list before ever reaching the gate,
         # so the generic "stub" arg needs a matching attachment on the
