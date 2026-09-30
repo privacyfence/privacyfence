@@ -186,9 +186,10 @@ todo:
       <p class="note">Do this on your development machine, a source checkout as in <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/dev-vs-live-setup.md" target="_blank" rel="noopener">dev-vs-live-setup.md</a>. The token file is a live credential: it only ever lives on that machine and the runner (ADR 0019).</p>
       <ol class="steps">
         <li><input type="checkbox" id="g-1"><label for="g-1"><span class="t">Update your checkout: <code>git fetch origin feature/microsoft-connectors &amp;&amp; git checkout feature/microsoft-connectors &amp;&amp; git pull</code>, then <code>.venv/bin/pip install -e ".[test]"</code>.</span></label></li>
-        <li><input type="checkbox" id="g-2"><label for="g-2"><span class="t">Add the Microsoft section to your existing QA bundle. Add <code>--sign-key &lt;your key&gt;</code> if your QA bundle is signed:</span>
-<pre>.venv/bin/python scripts/build_org_bundle.py --merge -o org_config.qa.json \
-  --microsoft-client-id &lt;Application (client) ID from mb2&gt;</pre><span class="see">The script writes <code>org_config.qa.json</code> with a <code>microsoft</code> section.</span></label></li>
+        <li><input type="checkbox" id="g-2"><label for="g-2"><span class="t">Start from the runner's <b>current</b> bundle so the Google, Slack, Atlassian and Salesforce sections stay, then merge the Microsoft section into that copy. Add <code>--sign-key &lt;your key&gt;</code> if your QA bundle is signed:</span>
+<pre>scp &lt;runner&gt;:~/privacyfence/org/org_config.json org_config.qa.json
+.venv/bin/python scripts/build_org_bundle.py --merge -o org_config.qa.json \
+  --microsoft-client-id &lt;Application (client) ID from mb2&gt;</pre><span class="see"><code>org_config.qa.json</code> now has a <code>microsoft</code> section next to the existing ones.</span></label></li>
         <li><input type="checkbox" id="g-3"><label for="g-3"><span class="t">Sign in: <code>.venv/bin/python scripts/qa_authenticate_connectors.py --org-config org_config.qa.json --only microsoft</code>. In the browser tab that opens, sign in as the <b>QA</b> account and accept the permissions.</span><span class="see">The terminal prints <code>Signed in as &lt;the QA address&gt;</code>, and <code>credentials/microsoft_token.json</code> exists. An error mentioning <code>AADSTS50011</code> means a redirect URI from mb2 step 4 is missing.</span></label></li>
         <li><input type="checkbox" id="g-4"><label for="g-4"><span class="t">Copy both files to the runner, as its runner user:</span>
 <pre>scp org_config.qa.json &lt;runner&gt;:~/privacyfence/org/org_config.json

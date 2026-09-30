@@ -98,6 +98,8 @@ privacyfence.eu.
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
+- [`microsoft-connectors-plan.md`](microsoft-connectors-plan.md) — the open plan for the Microsoft
+  connectors (Outlook Mail, Calendar, Contacts, OneDrive, To Do); deleted when its work lands.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
   are, and what was rejected.
 

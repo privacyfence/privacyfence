@@ -103,7 +103,9 @@ The build order follows two decisions the maintainer made:
     `"To Do"`.
 - **Website and README:**
   - Page: `/connectors/microsoft-365/` (`website/connectors/microsoft-365/index.html`).
-  - Setup guide: `docs/microsoft-365-setup.md` (stem `microsoft-365-setup`).
+  - Setup guide: `microsoft-365-setup.md` in `docs/` (stem `microsoft-365-setup`). This plan never
+    writes the guide's full `docs/…` path in one piece, because `test_docs_references_exist.py` would
+    fail on the plan branch before the guide exists. In briefs, "the setup guide" means this file.
   - `README.md` Connectors row label: `Microsoft Outlook, OneDrive, To Do`. All five connectors map
     to this one page, guide and row in `test_website_connector_pages.CONNECTORS`, the way the
     Google connectors share one.
@@ -153,6 +155,34 @@ The build order follows two decisions the maintainer made:
    there, and without an icon the card renders cleanly.
 9. **Comments carry no project history** (`test_code_no_history.py`, ADR 0056). Cite ADRs by
    number and open work by full issue URL.
+10. **No citation of ADRs 0114–0119 before p28.** They don't exist until p28, and p28 may renumber
+    them. p28 adds the citations listed in its brief.
+11. **Website counts move with the tools reference.** Any phase that changes
+    `docs/tools-reference.md` updates, in the same commit:
+    - that connector's card in `website/connectors/index.html`. The card's `id` is the tools
+      reference anchor; it carries `data-tools`/`data-auto`/`data-review`/`data-popup` and the
+      printed line "`N tools: A without a card · R reviewed · P need approval`". A new
+      connector's card is copied from the Tasks or Contacts card, and cards follow the tools
+      reference order.
+    - the page's `"<total> tools"`, its `"<Word> connectors"` heading, and every other count on
+      that page that `test_website_connectors_page.py` checks.
+    - `"<total> connector tools"` in `website/how-it-works/index.html`.
+    - `test_website_connectors_page.py`'s `len(REFERENCE) == N and "<Word> connectors"` line
+      (`:60`).
+
+    Connector counts after each phase: p13 twelve, p15a thirteen, p16 fourteen, p18a fifteen,
+    p21a sixteen.
+12. **The always-allow reference moves with gated tools.** Any phase that adds a `review` or
+    `popup` tool runs `python3 scripts/generate_always_allow_reference.py` and commits
+    `docs/always-allow-rules-reference.md`, since the document lists every gated tool.
+13. **The configuration reference moves with settings.** A phase that adds a privacy group to
+    `settings.yaml.example`, or an option to `build_org_bundle.py`, documents it in
+    `docs/configuration-reference.md` in the same commit. `test_docs_configuration_reference.py`
+    enforces this. Follow the neighbouring entries: `tasks_privacy` for groups, the Atlassian
+    options for bundle flags.
+14. **Parsed-client tests assert named fields.** `tests/helpers.py::assert_no_placeholder_fields`
+    takes a preview dict, so it belongs only in connector tests (§2.6 item 5). A client's
+    `TestLiveFixtureParsing` asserts that the fields its brief names are non-empty.
 
 ### 3.3 `msgraph_oauth.py` (p01)
 
@@ -231,6 +261,9 @@ sign-in)}`.
 `daemon_main.py` gets these changes:
 
 - `TOKEN_FILES["microsoft"] = "credentials/microsoft_token.json"`.
+- `from .msgraph_oauth import MicrosoftOAuthError, authorize_interactive as
+  msgraph_authorize_interactive, load_token_file as load_msgraph_token`, next to the Atlassian
+  imports (`:141-143`).
 - `run_microsoft_oauth(org_config) -> int`. It prints "No Microsoft organization config
   installed." to stderr and returns 1 when `client_id` is missing. Otherwise it calls
   `msgraph_oauth.authorize_interactive(client_id, _resolve_path(TOKEN_FILES["microsoft"]),
@@ -275,7 +308,8 @@ class GraphHttp:
     def list_all(self, path: str, params: dict[str, str] | None = None, max_items: int = 100) -> list[dict[str, Any]]
     def get_bytes(self, path: str, max_bytes: int) -> bytes
     def put_bytes(self, path: str, data: bytes, content_type: str) -> Any
-    def upload_large(self, create_session_path: str, create_body: dict[str, Any], data: bytes) -> Any
+    def upload_large(self, create_session_path: str, create_body: dict[str, Any], data: bytes,
+                     chunk_size: int = UPLOAD_CHUNK_BYTES) -> dict[str, Any]
     def check_connection(self) -> str                    # GET /me; returns account email
 ```
 
@@ -316,10 +350,13 @@ class GraphHttp:
   redirect. Once more than `max_bytes` have been read it raises `error_cls(f"File is larger than
   {max_bytes} bytes", 413, "too_large")`.
 - **`upload_large`** creates an upload session by POSTing `create_body` to `create_session_path`,
-  then PUTs `UPLOAD_CHUNK_BYTES` slices to the returned `uploadUrl`. Those PUTs carry `Content-Range`
+  then PUTs `chunk_size` slices to the returned `uploadUrl`. Those PUTs carry `Content-Range`
   and **no** Authorization header, and go through a plain `session.put`, since the upload URL is
   pre-authenticated and on another host. The `uploadUrl` must be `https`. It returns the final
-  response's JSON (the created item).
+  response's JSON when it has a body (OneDrive returns the created item). Otherwise it returns
+  `{"location": response.headers.get("Location", "")}`: Outlook's attachment sessions end with a
+  201 and a `Location` header but no body. OneDrive uses the default `chunk_size`. Outlook
+  attachments pass `chunk_size=3 * 1024 * 1024`, because Outlook accepts less than 4 MB per PUT.
 - **`_REFRESH_LOCKS` is module-level state.** Add `msgraph_http._REFRESH_LOCKS.clear()` to
   `tests/conftest.py::_reset()`.
 
@@ -366,13 +403,21 @@ def _build_msgraph_http() -> GraphHttp:
     return GraphHttp(section, daemon_main._resolve_path(daemon_main.TOKEN_FILES["microsoft"]))
 ```
 
-**`redact_msgraph(value)`** runs *instead of* `redact()` for every Microsoft fixture, and then
-`deidentify_structural_fields()` runs on its output. It deep-copies the value, then walks it
-recursively and applies these rules:
+**`redact_msgraph(value: Any, id_map: dict[Any, str]) -> Any`** runs *instead of* `redact()` for
+every Microsoft fixture. The recording pipeline is exactly:
 
-- **`emailAddress`.** Any dict value under the key `emailAddress` becomes
-  `{"name": "QA Placeholder", "address": "qa-placeholder@example.com"}`. This covers `from`,
-  `sender`, `toRecipients`, `ccRecipients`, `replyTo`, `organizer` and `attendees`.
+```python
+id_map: dict[Any, str] = {}
+raw = deidentify_structural_fields(redact_msgraph(value, id_map), id_map)
+```
+
+`redact_msgraph` deep-copies the value, then walks it recursively and applies these rules:
+
+- **Addresses.** Any dict that has an `address` key whose value is a string containing `@`
+  becomes `{"name": "QA Placeholder", "address": "qa-placeholder@example.com"}`, keeping only
+  those two keys. This covers every Graph `emailAddress` (`from`, `sender`, `toRecipients`,
+  `ccRecipients`, `replyTo`, `organizer`, `attendees`), a calendar's `owner`, and a contact's
+  `emailAddresses` items.
 - **Identity sets.** Any dict value under `createdBy`, `lastModifiedBy`, `owner`, `sharedBy`,
   `createdByUser` or `lastModifiedByUser` has each of its sub-dicts `user`, `application`,
   `device` and `group` replaced with `{"displayName": "QA Placeholder", "id":
@@ -382,11 +427,15 @@ recursively and applies these rules:
   - `@odata.context` becomes `"https://graph.microsoft.com/v1.0/$metadata#qa-placeholder"`.
   - `@odata.etag` becomes `"W/\"qa-placeholder\""`.
   - `@odata.nextLink` and `@odata.deltaLink` become `"https://example.com/qa-placeholder"`.
-- **Ids.** A **string** value whose key, lower-cased, ends with `id`, or is one of `changekey`,
-  `conversationindex`, `etag`, `ctag` or `@odata.id`, becomes a stable `qa-placeholder-id-N`. It
-  shares one `_id_map` with the later `deidentify_structural_fields` call, and a value that is
-  already a placeholder is skipped. This covers `conversationId`, `parentFolderId`,
-  `internetMessageId`, `iCalUId`, `seriesMasterId`, `driveId`, `transactionId`, `uid` and `id`.
+- **Ids.** Some string values are replaced, but only when their lower-cased key is **not** in
+  `_STRUCTURAL_ID_KEYS`, since `deidentify_structural_fields` handles those afterwards with the
+  same `id_map`. The keys covered are those ending in `id`, plus `changekey`,
+  `conversationindex`, `etag`, `ctag` and `@odata.id`. Values in `_STRUCTURAL_VALUES_TO_SKIP` are
+  left alone. The replacement is `id_map.setdefault(v, _fake_structural_value(key_l,
+  len(id_map) + 1))`, the same scheme `deidentify_structural_fields` uses. Sharing `id_map` means
+  one real id gets one placeholder whether it appears as `id` or as `parentFolderId`. This covers
+  `conversationId`, `parentFolderId`, `internetMessageId`, `iCalUId`, `seriesMasterId`,
+  `driveId`, `transactionId` and `uid`.
 - **URLs.** URL keys (`webLink`, `webUrl`, `@microsoft.graph.downloadUrl`, `onlineMeetingUrl`)
   are left to `deidentify_structural_fields`, which blanks every key containing `url` and the
   keys in `_STRUCTURAL_URL_KEYS`.
@@ -452,15 +501,14 @@ with a clear note and no further calls.
 | | `list_tasks.json` | `GET /me/todo/lists/{QA list id}/tasks`, keep `title` containing `[QATEST]` | ≥ 1 kept |
 | | `get_task.json` | `GET /me/todo/lists/{id}/tasks/{first kept id}` | `title` contains `[QATEST]` |
 
-When recording, `raw = deidentify_structural_fields(redact_msgraph(value))`. The live
-`TestLiveFixtureParsing` classes (p06–p12) parse these files with the clients' `_parse_*`
+When recording, `raw` comes from the two-line pipeline above. The live
+`TestLiveFixtureParsing` classes (p06–p12 and p10) parse these files with the clients' `_parse_*`
 methods.
 
 ### 3.6 Family wiring (p03, p24)
 
 - **`settings_controller.py`** (p03):
   - `MICROSOFT_CONNECTORS: set[str] = set()`, which p24 fills with the five names.
-  - `ORG_BUNDLE_SERVICES` gains `"microsoft"`.
   - `authenticate_connector` gains `elif connector in MICROSOFT_CONNECTORS:
     self._authenticate_microsoft(org_config)`.
   - `_authenticate_microsoft` mirrors `_authenticate_atlassian` (`:1297-1344`), with three
@@ -479,7 +527,16 @@ methods.
     then saves `token_record(..., client_kind=CLIENT_KIND_CONFIDENTIAL)` after
     `fetch_account_email`.
   - Page rows render for `MICROSOFT_SERVICES` beside the Atlassian rows.
-  - Tests monkeypatch `MICROSOFT_SERVICES` to `frozenset({"todo"})` until p24.
+  - `OAUTH_SERVICES`, `_GRANT_KEY`, `_ORG_CONFIG_SECTION` and `SERVICE_LABELS` are built at
+    import time (`:100-119`). Each gains its Microsoft entries from `MICROSOFT_SERVICES` in the
+    same expression, so p24 only edits `MICROSOFT_SERVICES` and `_MICROSOFT_LABELS` (a new
+    `dict[str, str]`, empty in p03, merged into `SERVICE_LABELS`).
+  - Until p24, tests simulate one Microsoft service with `monkeypatch.setattr(routes_connect,
+    "MICROSOFT_SERVICES", frozenset({"todo"}))` and `monkeypatch.setattr(routes_connect,
+    "OAUTH_SERVICES", routes_connect.OAUTH_SERVICES | {"todo"})`, plus
+    `monkeypatch.setitem(routes_connect._GRANT_KEY, "todo", "microsoft")`, and the same
+    `setitem` for `_ORG_CONFIG_SECTION` (`"microsoft"`) and `SERVICE_LABELS` (`"Microsoft To
+    Do"`).
 - **`daemon_main.build_connectors`** (p24):
   - Load the family once, as `:1455-1466` does for Atlassian: `microsoft_org =
     org_config.get("microsoft") or {}`; when it has a `client_id`, `microsoft_token =
@@ -566,16 +623,21 @@ does.
   - Static parser: `_parse_contact(raw)`.
 - **Methods.**
   - `list_contacts(max_results=50)`: `{"$top": str(max_results), "$orderby": "displayName"}`.
-  - `search_contacts(query, max_results=20)`: `$filter`
-    `startswith(displayName,'{q}') or startswith(givenName,'{q}') or startswith(surname,'{q}') or
-    emailAddresses/any(a:startswith(a/address,'{q}'))`, where `q = query.replace("'", "''")`.
+  - `search_contacts(query, max_results=20)`, where `q = query.replace("'", "''")`:
+    1. `$filter` `startswith(displayName,'{q}') or startswith(givenName,'{q}') or
+       startswith(surname,'{q}')`, with `$top`.
+    2. When `"@" in query`, a second request with
+       `$filter=emailAddresses/any(a:a/address eq '{q}')`.
+    3. Results merged by id in request order, truncated to `max_results`.
   - `get_contact(contact_id)`.
-  - `create_contact(fields)` and `update_contact(contact_id, fields)` map the counterpart's
+  - `create_contact(display_name, emails: list[dict[str, str]] | None, phones: list[dict[str, str]]
+    | None, organization="", job_title="", notes="")` and `update_contact(contact_id, <same
+    keywords>)`. For `update_contact`, `None` or `""` means unchanged. Both map the counterpart's
     fields to Graph:
     - `display_name` → `displayName`
-    - `emails` (the counterpart's JSON list of `{"value", "type"}`, parsed with
-      `connectors/contacts.py`'s `_parse_json_list`) → `emailAddresses: [{"address": value,
-      "name": display_name}]`
+    - `emails` (already-parsed `{"value", "type"}` dicts; the connector parses the JSON string
+      with its own private copy of `connectors/contacts.py:409`'s `_parse_json_list`) →
+      `emailAddresses: [{"address": value, "name": display_name}]`
     - `phones`: `type == "mobile"` → `mobilePhone` (the first one), `"home"` → `homePhones`,
       anything else → `businessPhones`
     - `organization` → `companyName`, `job_title` → `jobTitle`, `notes` → `personalNotes`
@@ -713,7 +775,7 @@ Excel tools accept only `.xlsx` items; any other item is rejected before the gat
 no counterpart for `drive_write_doc_content`, `drive_docs_*`, `drive_add_comment`,
 `drive_create_blank_file`, `drive_sheets_create` or `drive_list_shared_drives`.
 
-### 3.11 Outlook Mail (`outlook_mail_client.py` p11–p12, `connectors/outlook_mail.py` p21–p23)
+### 3.11 Outlook Mail (`outlook_mail_client.py` p11–p12, `connectors/outlook_mail.py` p21a–p23)
 
 **Client — reads (p11).**
 
@@ -732,10 +794,15 @@ no counterpart for `drive_write_doc_content`, `drive_docs_*`, `drive_add_comment
   - Static parsers `_parse_message`, `_parse_attachment`, `_parse_folder`, `_parse_category` and
     `_parse_rule` take raw dicts.
 - **Methods.**
-  - `list_messages(folder="inbox", query="", max_results=20, unread_only=False)`:
-    - `$search` with `"{query}"` quoted when there is a query; `$orderby=receivedDateTime desc`
-      only when there isn't (Graph rejects the two together).
-    - `$filter=isRead eq false` when `unread_only` is true.
+  - `list_messages(folder="inbox", query="", max_results=20, unread_only=False)`. Graph rejects
+    `$search` together with `$orderby` or `$filter`, and rejects an `isRead` filter with
+    `$orderby` unless `receivedDateTime` comes first in the filter. The exact query per case:
+    - query given: `$search="{query}"` (double quotes in the query removed) and
+      `$top=max(50, max_results)`. When `unread_only` is also true, unread rows are kept in
+      Python. Either way the result is truncated to `max_results`.
+    - no query, `unread_only`: `$filter=receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq
+      false`, `$orderby=receivedDateTime desc`, `$top=max_results`.
+    - no query, not `unread_only`: `$orderby=receivedDateTime desc`, `$top=max_results`.
     - `$select=id,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,categories,parentFolderId,bodyPreview,webLink`.
   - `list_conversations(folder, max_results)`: `list_messages` over `max_results * 3` rows, grouped
     by `conversation_id`, keeping the newest message per conversation.
@@ -764,7 +831,8 @@ no counterpart for `drive_write_doc_content`, `drive_docs_*`, `drive_add_comment
     - `len(data) <= 3 * 1024 * 1024`: POST `/me/messages/{id}/attachments` with `{"@odata.type":
       "#microsoft.graph.fileAttachment", "name", "contentType", "contentBytes": base64}`.
     - Otherwise `upload_large(f"/me/messages/{id}/attachments/createUploadSession",
-      {"AttachmentItem": {"attachmentType": "file", "name", "size"}}, data)`.
+      {"AttachmentItem": {"attachmentType": "file", "name", "size"}}, data, chunk_size=3 * 1024 *
+      1024)`.
 - **Organizing.**
   - `move_message(message_id, destination_id)`: POST `/move` `{"destinationId"}`.
   - `archive_message(id)`: `move_message(id, "archive")`.
@@ -804,8 +872,9 @@ no counterpart for `drive_write_doc_content`, `drive_docs_*`, `drive_add_comment
 **Rules never forward, redirect or delete** (a design choice, below). The rule tools have no
 `forward_to` and send no forwarding, redirect or delete action.
 
-p21 does the six list tools, `get_message`, `get_conversation` and `download_attachment`. p22 does
-the six draft tools. p23 does the rest.
+p21a does the six list tools, `get_message` and `get_conversation`. p21b does
+`download_attachment`. p22a does the three plain draft tools. p22b does the three
+`*_with_attachments` tools. p23 does the rest.
 
 ### 3.12 Always-allow scopes (p25–p26)
 
@@ -821,7 +890,8 @@ Every new predicate is a **new** `ScopeSelector` in `policy/scopes.py`'s `NEW_SC
 | `outlook_contacts_category_allowlist` | `outlook_contacts.category` | identity / args | outlook_contacts | LABEL | `_args_values("category_name")` | `label_name_allowlist` (contacts entry) |
 | `trusted_outlook_sender_domain` | `outlook_mail.sender_domain` | attribute / fetched | outlook_mail | READ, DOWNLOAD, ARCHIVE | `_sender_domain` over `raw_data.sender` | `trusted_sender_domain` |
 | `outlook_mail_category_allowlist` | `outlook_mail.category` | identity / args | outlook_mail | LABEL | `_args_values("category_name")` | `label_name_allowlist` (gmail entry) |
-| `always_allow` under `outlook_mail.anything` | `outlook_mail.anything` | — | outlook_mail | DRAFT | `widenable=False`, `group="outlook_mail.anything"` | the `gmail.anything` entry |
+| `always_allow` under `outlook_mail.anything` | `outlook_mail.anything` | — | outlook_mail | DRAFT | `widenable=False`, `group="outlook_mail.anything"` | the `gmail.anything` `PROPOSABLE_SCOPES` entry |
+| `outlook_mail.anything` | `outlook_mail.anything` | attribute / args | outlook_mail | (catalogue only) | always matches | the `gmail.anything` `NEW_SCOPE_SELECTORS` entry (`scopes.py:564`) |
 | `approved_onedrive_folder` | `onedrive.folder` | identity / fetched | onedrive | READ, DOWNLOAD | the item's `parent_id` | `approved_folder` |
 | `approved_onedrive_sandbox_folder` | `onedrive.folder` | identity / fetched | onedrive | UPDATE, FORMAT, RESTRUCTURE, DELETE | same | `approved_sandbox_folder` |
 | `onedrive_parent_folder_allowlist` | `onedrive.folder` | identity / args | onedrive | CREATE | `_args_values("parent_folder_id")` | `parent_folder_allowlist` |
@@ -831,8 +901,10 @@ Every new predicate is a **new** `ScopeSelector` in `policy/scopes.py`'s `NEW_SC
   `contacts.edit` (the `no_contact_info_change` condition), copied from however `contacts.edit`
   is expressed in `propose.py`/`catalogue.py`.
 - **Mail rules.** `outlook_mail.create_rule`/`update_rule` get the treatment
-  `gmail.create_filter`/`update_filter` get: configurable only from Settings through an
-  `outlook_mail.anything` extra scope in `catalogue.EXTRA_SCOPES`, never proposed from a popup.
+  `gmail.create_filter`/`update_filter` get: configurable only from Settings, through
+  `catalogue.EXTRA_SCOPES["outlook_mail.configure"]` with predicate `outlook_mail.anything`,
+  mirroring `EXTRA_SCOPES["gmail.configure"]`. They are never proposed from a popup. Catalogue
+  ids must differ from propose groups (`test_propose.py::test_catalogue_ids_are_unique`).
 - **Grant resource types** (`policy/resource_registry.GRANT_RESOURCE_TYPES`) are added for
   `todo.task_lists`, `outlook_calendar.calendars` and `onedrive.folders`. They mirror the
   `tasks`, `calendar` and `drive` entries, and their resolvers call `client.list_task_lists()`,
@@ -877,17 +949,29 @@ Step-by-step page: see `manual_steps_artifact` in the manifest (source:
   - the QA seed data;
   - the `qa_environment.yaml` sections on the runner.
 - **At the one pause, after p04 merges** (the maintainer chose this over a device-code bootstrap):
-  - build and install the QA bundle with the new `--microsoft-client-id` flag;
+  - copy the runner's current `org/org_config.json`, merge the new `microsoft` section into that
+    copy with `--merge --microsoft-client-id`, and install it back, so no other connector's
+    section is lost;
   - run `qa_authenticate_connectors.py --only microsoft` from the feature branch;
   - copy the token to the runner.
 - **After the last phase:** the end-to-end smoke test on the QA account in local mode.
 
 ## 6. Risks and open questions
 
-- **Excel on a personal OneDrive.** If `check_onedrive_excel` fails with a Graph error saying the
-  workbook API is not supported for this account, p05 stops with `status=blocked` and quotes the
-  error. The maintainer then decides whether p10 and p20 move to
-  https://github.com/privacyfence/privacyfence/issues/828.
+- **Excel on a personal OneDrive.** Graph's permission tables list personal accounts as
+  unsupported for several workbook APIs, so this is a real possibility. The plan settles it up
+  front:
+  1. p05 records `onedrive_excel` last.
+  2. If that run fails with a Graph error, p05 leaves `onedrive_excel` unregistered, reports the
+     error, and still finishes `done`.
+  3. p10 and p20 run at the very end (after p26). Each starts by checking for
+     `tests/fixtures/live/onedrive_excel/list_worksheets.json`. Without it, the phase stops with
+     `status=blocked` and "Excel workbook API unsupported on personal accounts; drop p10 and p20
+     (tracked in #828)".
+  4. The orchestrator asks the maintainer, whose answer is to drop both. p28 then lists Excel
+     editing under "What is not available".
+
+  Nothing else in the build waits on Excel.
 - **Redirect URI mismatch** (`AADSTS50011`) at the pause means the app registration lacks
   `http://localhost:53685/callback`. The artifact has the maintainer register both
   `http://localhost/callback` and `http://localhost:53685/callback`.
@@ -930,20 +1014,20 @@ manual_before:
     done_when: Every item in the artifact's seed checklist exists with exactly the listed name.
   - id: mb4-runner-manifest
     title: Add the Microsoft sections to ~/privacyfence/tests/fixtures/qa_environment.yaml on the runner
-    why: qa-record-fixture.yml copies this file into its checkout; without the sections the recorder falls back to defaults, and any renamed seed item would fail.
+    why: qa-record-fixture.yml copies this file into its checkout; the sections pin the seed names the recorder resolves.
     done_when: The runner's qa_environment.yaml contains outlook_mail, outlook_calendar, outlook_contacts, onedrive, onedrive_excel and todo sections matching the plan's section 3.5.
 manual_after:
   - id: ma1-smoke-test
     title: End-to-end smoke test of all five connectors in local mode against the QA account
     why: Nothing before this exercises the real consent screen from Settings, the approval cards with real Graph data, or a real MCP client driving the tools.
 verify_after_merge:
-  - python3 -m pytest tests/unit/test_qa_fixture_recorder.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_website_connector_pages.py -q
+  - python3 -m pytest tests/unit/test_qa_fixture_recorder.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_docs_references_exist.py tests/unit/test_website_docs_allowlist.py -q
 final_checks:
-  - docs/microsoft-connectors-plan.md and docs/microsoft-connectors-plan-manual-steps.html are deleted and nothing links to them
-  - ADRs 0114, 0115, 0116, 0117, 0118 and 0119 exist, are Accepted, and are in docs/adr/README.md's index (renumbered if main took a number first)
+  - docs/microsoft-connectors-plan.md and docs/microsoft-connectors-plan-manual-steps.html are deleted, and neither docs/README.md nor build_site.CONTRIBUTOR_DOCS lists the plan
+  - ADRs 0114–0119 (or their renumbered equivalents) exist, are Accepted, are in docs/adr/README.md's index, and are cited where p28's brief lists
   - CHANGELOG.md has [Unreleased] entries and no version heading
-  - p28's PHASE-REPORT links a green connector-live-check.yml run on the feature branch, and the PR body carries it under "## Local QA check"
-  - grep -rn "/send\b" src/privacyfence/outlook_mail_client.py finds nothing
+  - p28's PHASE-REPORT links a connector-live-check.yml run on the feature branch whose Microsoft rows pass, and the PR body carries it under "## Local QA check"
+  - grep -rn "/send" src/privacyfence/outlook_mail_client.py finds nothing
 phases:
   - id: p01-msgraph-oauth
     title: Microsoft sign-in, token file, --microsoft-oauth, org bundle flags and the QA auth step
@@ -959,49 +1043,51 @@ phases:
       - tests/unit/test_build_org_bundle.py
       - tests/unit/test_qa_authenticate_connectors.py
       - tests/unit/test_systemic_gate_invariants.py
-      - docs/microsoft-365-setup.md
+      - tests/unit/test_docs_no_history.py
+      - docs/microsoft-365-setup*
       - docs/README.md
+      - docs/configuration-reference.md
     brief: |
       1. Create src/privacyfence/msgraph_oauth.py exactly as the plan's section 3.3 specifies (constants,
          MicrosoftOAuthError, every function and its behavior). Use requests with timeout=30 and
-         oauth_loopback.run_browser_oauth. Model the module docstring and structure on
-         src/privacyfence/atlassian_oauth.py, but note the differences: public client, no secret on the
-         loopback, form-encoded token requests, redirect_host="localhost".
-      2. daemon_main.py: add TOKEN_FILES["microsoft"], run_microsoft_oauth(org_config) and the
-         --microsoft-oauth flag, wired exactly like --atlassian-oauth (daemon_main.py:1750-1766, 2071,
-         2179-2184, 2212-2213). Import msgraph_oauth's functions the way atlassian_oauth's are imported
-         (:141-143).
-      3. scripts/build_org_bundle.py: add the "Microsoft (Outlook, OneDrive, To Do)" argument group and
-         the bundle["microsoft"] section, _CONNECTOR_CALLBACKS["microsoft"] and the services tuple
-         entry, as section 3.3 says.
+         oauth_loopback.run_browser_oauth. Model the module docstring and layout on
+         src/privacyfence/atlassian_oauth.py; the differences are a public client with no secret on the
+         loopback, form-encoded token requests, and redirect_host="localhost". No ADR citations (rule 3.2.10).
+      2. daemon_main.py: the TOKEN_FILES entry, the msgraph_oauth imports with the aliases section 3.3 names,
+         run_microsoft_oauth(org_config) and the --microsoft-oauth flag, wired exactly like --atlassian-oauth
+         (daemon_main.py:1750-1766, 2071, 2179-2184, 2212-2213).
+      3. scripts/build_org_bundle.py: the "Microsoft (Outlook, OneDrive, To Do)" argument group, the
+         bundle["microsoft"] section, _CONNECTOR_CALLBACKS["microsoft"] and the services tuple entry (:692), as
+         section 3.3 says. Document the three new options in docs/configuration-reference.md next to the
+         Atlassian ones (rule 3.2.13).
       4. scripts/qa_authenticate_connectors.py: append the Microsoft OAuthStep from section 3.3.
       5. tests/unit/test_systemic_gate_invariants.py: add ("msgraph_oauth", None, "save_token_file") to
-         TOKEN_WRITE_SITES.
-      6. Tests: create tests/unit/test_msgraph_oauth.py, modeled on tests/unit/test_atlassian_oauth.py
-         (TestLoadSaveTokenFile, TestRefresh, TestAuthorizeInteractiveBuildUrl, TestAuthorizeInteractiveExchange,
-         TestTokenRecord, TestFetchAccountEmail). Include negative tests: client_secret absent from the
-         form when empty and present when given; an error message never contains the code or token; a
-         missing token file raises with "Use Authenticate…". Extend tests/unit/test_daemon_main.py
-         (the --microsoft-oauth flag and run_microsoft_oauth with no config, with success, and with
-         MicrosoftOAuthError), tests/unit/test_build_org_bundle.py (the section and the usage error) and
-         tests/unit/test_qa_authenticate_connectors.py (the group list gains "microsoft").
-      7. Create docs/microsoft-365-setup.md: "Register the app" (Entra admin center → App
-         registrations → New registration; "Accounts in any organizational directory and personal
-         Microsoft accounts"; platform "Mobile and desktop applications" with http://localhost/callback
-         and http://localhost:53685/callback; API permissions: the delegated scopes in section 3.3's
-         DEFAULT_SCOPES; no secret for local mode), "Install the organization config"
-         (build_org_bundle.py --microsoft-client-id [--microsoft-tenant]), "Org mode" (add a Web
-         platform redirect <issuer>/oauth/callback/microsoft, create a client secret, pass
-         --microsoft-client-secret), "Sign in" (Settings → Authenticate…, or --microsoft-oauth), and
-         "Personal and work accounts" (verified on personal accounts; work/school accounts are tracked in
-         https://github.com/privacyfence/privacyfence/issues/828). Mirror docs/atlassian-setup.md's
-         structure and tone. Link it from docs/README.md's published (user) half next to
-         atlassian-setup.md.
-      Stop with status=blocked if run_browser_oauth's signature differs from
-      oauth_loopback.py:148-156 as quoted in the plan's section 2.
+         TOKEN_WRITE_SITES, change the count assertion at :248-253 from 10 to 11, and "ten" to "eleven" in
+         the module docstring.
+      6. Tests: create tests/unit/test_msgraph_oauth.py modeled on tests/unit/test_atlassian_oauth.py
+         (TestLoadSaveTokenFile, TestRefresh, TestAuthorizeInteractiveBuildUrl,
+         TestAuthorizeInteractiveExchange, TestTokenRecord, TestFetchAccountEmail). Negative tests:
+         client_secret is absent from the form when empty and present when given; no error message contains
+         the code or a token; a missing token file raises with "Use Authenticate…". Extend
+         tests/unit/test_daemon_main.py (flag present; run_microsoft_oauth with no config → 1, success → 0,
+         MicrosoftOAuthError → 1), tests/unit/test_build_org_bundle.py (the section; the secret-without-id
+         usage error) and tests/unit/test_qa_authenticate_connectors.py (groups gain "microsoft").
+      7. Create the setup guide (section 3.1) with these headings: "Register the app" (Entra admin center →
+         App registrations → New registration; "Accounts in any organizational directory and personal
+         Microsoft accounts"; platform "Mobile and desktop applications" with http://localhost/callback and
+         http://localhost:53685/callback; API permissions: the delegated scopes of section 3.3's
+         DEFAULT_SCOPES; no secret for local mode), "Install the organization config" (build_org_bundle.py
+         --microsoft-client-id [--microsoft-tenant]), "Org mode" (a Web platform redirect
+         <issuer>/oauth/callback/microsoft, a client secret, --microsoft-client-secret), "Sign in" (Settings →
+         Authenticate…, or --microsoft-oauth), and "Personal and work accounts" (verified on personal
+         accounts; work/school accounts are tracked in https://github.com/privacyfence/privacyfence/issues/828).
+         Mirror atlassian-setup.md's structure and tone. Link it in docs/README.md's "Connector setup"
+         subsection next to atlassian-setup.md, and add it to tests/unit/test_docs_no_history.py's
+         PUBLISHED_DOCS next to the Atlassian guide.
+      Stop with status=blocked if oauth_loopback.run_browser_oauth's signature differs from the one quoted
+      in the plan's section 2.
     acceptance:
-      - python3 -m pytest tests/unit/test_msgraph_oauth.py tests/unit/test_daemon_main.py tests/unit/test_build_org_bundle.py tests/unit/test_qa_authenticate_connectors.py tests/unit/test_systemic_gate_invariants.py -q passes
-      - python3 -m pytest tests/unit/test_build_site.py -q passes (docs/microsoft-365-setup.md is published and linked)
+      - python3 -m pytest tests/unit/test_msgraph_oauth.py tests/unit/test_daemon_main.py tests/unit/test_build_org_bundle.py tests/unit/test_qa_authenticate_connectors.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_docs_no_history.py tests/unit/test_docs_configuration_reference.py tests/unit/test_website_docs_allowlist.py tests/unit/test_docs_references_exist.py -q passes
       - grep -n "53685" src/privacyfence/msgraph_oauth.py finds MICROSOFT_OAUTH_PORT
       - python3 -m privacyfence.daemon_main --help | grep -- --microsoft-oauth prints a line
   - id: p02-graph-http
@@ -1015,32 +1101,36 @@ phases:
       - tests/unit/test_msgraph_errors.py
       - tests/conftest.py
     brief: |
-      1. Create src/privacyfence/msgraph_http.py exactly as the plan's section 3.4 specifies (constants,
-         GraphError, GraphHttp and every method's behavior, the host check, the refresh lock and
-         re-read-first refresh, 401 retry, 429/503/504 Retry-After handling, the error mapping,
-         list_all, get_bytes, put_bytes, upload_large, check_connection). The module docstring
-         explains the single choke point (request) and why the bearer token never leaves
-         graph.microsoft.com.
+      1. Create src/privacyfence/msgraph_http.py exactly as the plan's section 3.4 specifies: constants,
+         GraphError, GraphHttp and every method's behavior, including the host check, the refresh lock and
+         re-read-first refresh, the 401 retry, 429/503/504 Retry-After handling, the error mapping, list_all,
+         get_bytes, put_bytes, upload_large (with chunk_size and the two return shapes) and
+         check_connection. The module docstring explains the single choke point (request) and why the bearer
+         token never leaves graph.microsoft.com.
       2. Add msgraph_http._REFRESH_LOCKS.clear() to tests/conftest.py's _reset().
       3. Create src/privacyfence/msgraph_errors.py exactly as section 3.4 specifies, mirroring
          src/privacyfence/google_errors.py:109-175.
-      4. tests/unit/test_msgraph_http.py: use a fake requests.Session (a small class recording calls and
-         returning scripted responses) and injected sleep/clock. Test classes: TestRequestSuccess (JSON,
-         204→None), TestHostCheck (a nextLink or path on another host raises and sends no request),
-         TestProactiveRefresh (expiry inside the margin refreshes first), TestUnauthorizedRetry (401 →
-         refresh → retry once; a second 401 raises with status 401), TestConcurrentRefreshAdoption (a
-         token file already refreshed by another client is adopted without calling
-         msgraph_oauth.refresh), TestConfidentialRefresh (client_secret is passed only when client_kind
-         is confidential), TestThrottle (Retry-After honored and capped; gives up after 3), TestErrorMapping
-         (JSON error body, non-JSON body, network error), TestListAll, TestGetBytes (the size cap),
-         TestUploadLarge (chunk ranges; no Authorization header on chunk PUTs), TestNotAuthenticated
-         (a missing token file → error_cls with status 401).
-      5. tests/unit/test_msgraph_errors.py: 404 and each NOT_FOUND code, 403 with each FORBIDDEN code,
-         403 with another code → None, 500 → None, the account formatting.
+      4. tests/unit/test_msgraph_http.py, with a fake requests.Session (a small class recording calls and
+         returning scripted responses) and injected sleep/clock:
+         - TestRequestSuccess: JSON, and 204 → None.
+         - TestHostCheck: a nextLink or path on another host raises and sends no request.
+         - TestProactiveRefresh: expiry inside the margin refreshes first.
+         - TestUnauthorizedRetry: 401 → refresh → retry once; a second 401 raises with status 401.
+         - TestConcurrentRefreshAdoption: a token file already refreshed by another client is adopted
+           without calling msgraph_oauth.refresh.
+         - TestConfidentialRefresh: client_secret is passed only when client_kind is confidential.
+         - TestThrottle: Retry-After is honored and capped; gives up after 3.
+         - TestErrorMapping: JSON error body, non-JSON body, network error.
+         - TestListAll.
+         - TestGetBytes: the size cap.
+         - TestUploadLarge: chunk ranges at the default and at a 3 MiB chunk_size; no Authorization header
+           on chunk PUTs; a body-less 201 returns {"location": ...}.
+         - TestNotAuthenticated: a missing token file → error_cls with status 401.
+      5. tests/unit/test_msgraph_errors.py: 404 and each NOT_FOUND code; 403 with each FORBIDDEN code; 403
+         with another code → None; 500 → None; the account formatting.
     acceptance:
-      - python3 -m pytest tests/unit/test_msgraph_http.py tests/unit/test_msgraph_errors.py -q passes
+      - python3 -m pytest tests/unit/test_msgraph_http.py tests/unit/test_msgraph_errors.py tests/unit/test_code_no_history.py -q passes
       - grep -n "Authorization" src/privacyfence/msgraph_http.py shows the header set only inside request()
-      - python3 scripts/mypy_strict_modules.py passes
   - id: p03-family-wiring
     title: Microsoft sign-in from Settings and org-mode connect (no connectors yet)
     depends_on: [p01-msgraph-oauth]
@@ -1051,24 +1141,27 @@ phases:
       - tests/unit/test_settings_controller.py
       - tests/unit/web/test_routes_connect.py
     brief: |
-      1. settings_controller.py: add MICROSOFT_CONNECTORS, the ORG_BUNDLE_SERVICES entry, the
-         authenticate_connector branch and _authenticate_microsoft exactly as the plan's section 3.6
-         says, mirroring _authenticate_atlassian (settings_controller.py:1297-1344).
-      2. web/routes_connect.py: add MICROSOFT_SERVICES (empty), the _GRANT_KEY/_ORG_CONFIG_SECTION
-         entries, _is_configured's client_id+client_secret rule, the authorize URL and exchange branches
-         (confidential redemption; token_record with client_kind "confidential"), and the page rows
-         rendering MICROSOFT_SERVICES, as section 3.6 says. Mirror the Atlassian branches (:99-148,
-         :275-326, :338-390, :595-676).
-      3. Tests: tests/unit/test_settings_controller.py gains TestAuthenticateMicrosoft (mirroring
-         TestAuthenticateAtlassian :1215, with MICROSOFT_CONNECTORS monkeypatched to {"todo"}) and a
-         dispatch case in TestAuthenticateDispatch. tests/unit/web/test_routes_connect.py gains, with
-         MICROSOFT_SERVICES monkeypatched to frozenset({"todo"}): start redirects to
-         login.microsoftonline.com with the /oauth/callback/microsoft redirect_uri; the callback
-         exchanges with the client_secret and saves client_kind "confidential"; a callback on the wrong
-         grant URL is rejected; without client_secret the row shows "Not set up by your organization".
+      1. settings_controller.py: add MICROSOFT_CONNECTORS, the authenticate_connector branch and
+         _authenticate_microsoft exactly as the plan's section 3.6 says, mirroring _authenticate_atlassian
+         (settings_controller.py:1297-1344).
+      2. web/routes_connect.py: add MICROSOFT_SERVICES (empty) and _MICROSOFT_LABELS (empty), and fold them
+         into OAUTH_SERVICES, _GRANT_KEY, _ORG_CONFIG_SECTION and SERVICE_LABELS where those are built
+         (:100-119). Also add _is_configured's client_id + client_secret rule, the authorize URL and exchange
+         branches (confidential redemption; token_record with client_kind "confidential" after
+         fetch_account_email) and the page rows rendering MICROSOFT_SERVICES, exactly as section 3.6 says.
+         Mirror the Atlassian branches (:99-148, :275-326, :338-390, :595-676).
+      3. tests/unit/test_settings_controller.py: add TestAuthenticateMicrosoft (mirroring
+         TestAuthenticateAtlassian :1215, with MICROSOFT_CONNECTORS monkeypatched to {"todo"}) and a dispatch
+         case in TestAuthenticateDispatch.
+      4. tests/unit/web/test_routes_connect.py, simulating one service exactly as section 3.6's test bullet
+         says:
+         - start redirects to login.microsoftonline.com with the /oauth/callback/microsoft redirect_uri;
+         - the callback exchanges with the client_secret and saves client_kind "confidential";
+         - a callback on the wrong grant URL is rejected;
+         - without client_secret the row shows "Not set up by your organization".
     acceptance:
       - python3 -m pytest tests/unit/test_settings_controller.py tests/unit/web/test_routes_connect.py -q passes
-      - grep -n "MICROSOFT_SERVICES" src/privacyfence/web/routes_connect.py shows the frozenset and its uses
+      - grep -n "MICROSOFT_SERVICES" src/privacyfence/web/routes_connect.py shows the frozenset and its uses in the import-time maps
   - id: p04-recorder-checks
     title: QA recorder checks for the Microsoft family (not registered until fixtures are recorded)
     depends_on: [p02-graph-http]
@@ -1080,40 +1173,51 @@ phases:
       - tests/fixtures/qa_environment.yaml.example
       - docs/connector-qa.md
     brief: |
-      1. scripts/qa_fixture_recorder.py: import GraphHttp and GraphError from privacyfence.msgraph_http
-         next to the other client imports (:75-88). Add _build_msgraph_http, redact_msgraph (with its
-         key-set constants next to the other redaction constants), _keep_tagged, and check_outlook_mail,
-         check_outlook_calendar, check_outlook_contacts, check_onedrive, check_onedrive_excel and
-         check_todo, exactly as the plan's section 3.5 specifies (calls, guardrails, fixture names,
-         recording pipeline raw = deidentify_structural_fields(redact_msgraph(value))). Each returns
-         list[CheckResult] like check_tasks (:1237-1290), and catches GraphError into a failed
-         CheckResult.
-      2. Do NOT add them to CONNECTOR_CHECKS or EXPECTED_FIXTURES yet: TestFixturePresence would fail
-         until the fixtures exist (p05 registers and records them). Instead add, right after
-         EXPECTED_FIXTURES:
+      The human gate on this phase is where the maintainer signs the QA account in with p01's code and
+      installs the token and bundle on the runner (the plan's section 5, and the artifact's "At the pause"
+      item). This phase only builds the checks.
+      1. scripts/qa_fixture_recorder.py:
+         - Import GraphHttp and GraphError from privacyfence.msgraph_http next to the other client imports
+           (:75-88).
+         - Add _build_msgraph_http, redact_msgraph (signature and rules exactly as section 3.5; its key-set
+           constants go next to the other redaction constants) and _keep_tagged.
+         - Add check_outlook_mail, check_outlook_calendar, check_outlook_contacts, check_onedrive,
+           check_onedrive_excel and check_todo, exactly as section 3.5 specifies: the calls, the guardrails,
+           the fixture names, and the two-line id_map recording pipeline.
+         - Each check returns list[CheckResult] like check_tasks (:1246 onward), and turns a GraphError into
+           a failed CheckResult.
+      2. Do NOT add them to CONNECTOR_CHECKS or EXPECTED_FIXTURES: TestFixturePresence would fail until the
+         fixtures exist, and p05 registers them. Instead add, right after EXPECTED_FIXTURES:
            MSGRAPH_CHECKS: dict[str, Callable[[bool, dict], list[CheckResult]]] = {...the six...}
-           MSGRAPH_EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {...the fixture names from 3.5...}
+           MSGRAPH_EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {...the fixture names from section 3.5...}
          and an import-time assert that their keys are equal.
-      3. tests/fixtures/qa_environment.yaml.example: add the six sections from section 3.5, each with the
-         same comment style pointing at docs/connector-qa.md's "Seed: <X>" heading.
-      4. docs/connector-qa.md: add a "Microsoft" row to "QA accounts" (a dedicated free outlook.com
-         account; the Entra app from microsoft-365-setup.md), a "Seed: Outlook Mail", "Seed: Outlook
-         Calendar", "Seed: Outlook Contacts", "Seed: OneDrive" and "Seed: To Do" checklist each (items
-         and exact names from the plan's manual steps page source, docs/microsoft-connectors-plan-manual-steps.html,
-         section mb3), the six rows in "Manifest reference", the microsoft group in "Authenticating
-         connectors", and a sentence in "Running the recorder" that the Microsoft checks read raw Graph
-         JSON through msgraph_http (ADR 0119).
-      5. tests/unit/test_qa_fixture_recorder.py: TestRedactMsgraph (a synthetic sample containing every
-         key class in section 3.5: emailAddress dicts, each identity-set key, each @odata key, id-suffixed
-         and listed id keys, a non-string id-suffixed value left alone, URL keys blanked after
-         deidentify), TestKeepTagged, and one TestCheck<Name> class per check with a fake GraphHttp
-         (a class whose get(path, params) returns scripted JSON keyed by path): the happy path records
-         every fixture; a resolve miss yields one failed result and no further calls; an untagged item is
-         never recorded; list fixtures contain only kept items. Add TestMsgraphRegistries (keys equal).
+      3. tests/fixtures/qa_environment.yaml.example: add the six sections from section 3.5, each with a
+         comment in the existing style pointing at docs/connector-qa.md's matching "Seed:" heading.
+      4. docs/connector-qa.md:
+         - a "Microsoft" row in "QA accounts": a dedicated free outlook.com account and the Entra app from
+           the setup guide;
+         - seed checklists "Seed: Outlook Mail", "Seed: Outlook Calendar", "Seed: Outlook Contacts",
+           "Seed: OneDrive" and "Seed: To Do", with the items and exact names from the mb3 section of
+           docs/microsoft-connectors-plan-manual-steps.html;
+         - the six rows in "Manifest reference";
+         - the microsoft group in "Authenticating connectors";
+         - a sentence in "Running the recorder" saying the Microsoft checks read raw Graph JSON through
+           msgraph_http. No ADR citation (rule 3.2.10).
+      5. tests/unit/test_qa_fixture_recorder.py:
+         - TestRedactMsgraph: a synthetic sample with every rule's case — address dicts at several depths;
+           a calendar owner; each identity-set key; each @odata key; id-suffixed keys outside
+           _STRUCTURAL_ID_KEYS; one real id appearing as both id and parentFolderId getting the same
+           placeholder after the full pipeline; a non-string id-suffixed value left alone; URL keys blanked
+           after deidentify.
+         - TestKeepTagged.
+         - One TestCheck<Name> class per check, with a fake GraphHttp (a class whose get(path, params)
+           returns scripted JSON keyed by path): the happy path records every fixture; a resolve miss gives
+           one failed result and no further calls; an untagged item is never recorded; list fixtures contain
+           only kept items.
+         - TestMsgraphRegistries: the two dicts have equal keys.
     acceptance:
-      - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q passes
+      - python3 -m pytest tests/unit/test_qa_fixture_recorder.py tests/unit/test_docs_references_exist.py -q passes
       - python3 scripts/qa_fixture_recorder.py --help exits 0
-      - grep -c "check_outlook_mail\|check_outlook_calendar\|check_outlook_contacts\|check_onedrive\b\|check_onedrive_excel\|check_todo" scripts/qa_fixture_recorder.py is at least 12
   - id: p05-record-fixtures
     title: Register the Microsoft checks and record their fixtures on the self-hosted runner
     depends_on: [p04-recorder-checks]
@@ -1128,32 +1232,45 @@ phases:
       - tests/fixtures/live/onedrive_excel/**
       - tests/fixtures/live/todo/**
     brief: |
-      This phase starts only after the p04 human gate, at which the maintainer installed the QA bundle
-      (with its microsoft section) and credentials/microsoft_token.json on the runner.
-      1. scripts/qa_fixture_recorder.py: move the six MSGRAPH_CHECKS entries into CONNECTOR_CHECKS and the
-         six MSGRAPH_EXPECTED_FIXTURES entries into EXPECTED_FIXTURES, each on its own line in exactly the
-         form `    "outlook_mail": check_outlook_mail,` (four spaces, double quotes) because
-         qa-record-fixture.yml validates the name with grep "^    \"<name>\": check_". Delete
-         MSGRAPH_CHECKS, MSGRAPH_EXPECTED_FIXTURES and their assert, and TestMsgraphRegistries.
+      This phase starts only after the p04 human gate, at which the maintainer installed the QA bundle (with
+      its microsoft section) and credentials/microsoft_token.json on the runner.
+      1. scripts/qa_fixture_recorder.py:
+         - Move the six MSGRAPH_CHECKS entries into CONNECTOR_CHECKS, and the six MSGRAPH_EXPECTED_FIXTURES
+           entries into EXPECTED_FIXTURES.
+         - Write each on its own line in exactly the form `    "outlook_mail": check_outlook_mail,` (four
+           spaces, double quotes), because qa-record-fixture.yml validates the name with
+           grep "^    \"<name>\": check_".
+         - Delete MSGRAPH_CHECKS, MSGRAPH_EXPECTED_FIXTURES, their assert and TestMsgraphRegistries.
       2. Commit and push the phase branch.
-      3. For each name in order todo, outlook_contacts, outlook_calendar, onedrive, onedrive_excel,
-         outlook_mail: dispatch .github/workflows/qa-record-fixture.yml (GitHub MCP actions_run_trigger)
-         with ref = this phase branch and connector = the name, then wait until that run completes
-         before dispatching the next one (use the Monitor tool or send_later check-ins; never sleep; never
-         dispatch two at once: the shared concurrency group keeps only one pending run and cancels the
-         rest). Each run commits tests/fixtures/live/<name>/ back to this branch.
-      4. git pull. Read every fixture diff as docs/connector-qa.md "Reviewing recorded fixtures" requires:
+      3. For each name, in the order todo, outlook_contacts, outlook_calendar, onedrive, outlook_mail,
+         onedrive_excel:
+         - dispatch .github/workflows/qa-record-fixture.yml (GitHub MCP actions_run_trigger) with ref = this
+           phase branch and connector = the name;
+         - wait until that run completes before dispatching the next. Use the Monitor tool or send_later
+           check-ins, never sleep, and never dispatch two at once: the shared concurrency group keeps only
+           one pending run and cancels the rest.
+         Each run commits tests/fixtures/live/<name>/ back to this branch.
+      4. Handle a failed run:
+         - If the onedrive_excel run fails with a Graph error, do not retry it. Remove "onedrive_excel" from
+           CONNECTOR_CHECKS and EXPECTED_FIXTURES (keep the unregistered check_onedrive_excel function), and
+           quote the run URL and error in your report. This is the plan's settled Excel fallback (section 6),
+           and the phase still ends status=done.
+         - If any other run fails, stop with status=blocked, quoting the run URL and the error line from its
+           log. Causes include an expired or missing grant and an unresolved seed item. Re-dispatch a failed
+           run at most once, and only if its log shows it died before the recorder ran.
+      5. git pull. Read every fixture diff as docs/connector-qa.md's "Reviewing recorded fixtures" requires:
          no real address, display name, tenant, account id, token or private content. A leak means: fix
-         redact_msgraph (and its test), push, and re-dispatch that one connector.
-      5. Run /dod; TestFixturePresence must now pass with the new directories.
-      Stop with status=blocked, quoting the run URL and the error line from its log, if any run fails
-      (an expired or missing grant, an unresolved seed item, or check_onedrive_excel reporting that the
-      workbook API is unsupported for this account). Do not retry a failed run more than once.
+         redact_msgraph and its test, push, and re-dispatch that one connector.
+      6. Last commit, which carries the Plan-Phase trailer: add TestMsgraphFixturesRedacted to
+         tests/unit/test_qa_fixture_recorder.py. It is parametrized over every *.json under the recorded
+         Microsoft fixture directories and asserts each file's text has no "@" address except
+         qa-placeholder@example.com and example.com/example.org/example.net ones, and does not match
+         (?i)(outlook|hotmail|live)\.com|onmicrosoft|graph\.microsoft\.com/v1\.0/users\(. Then run /dod;
+         TestFixturePresence must pass with the new directories.
     acceptance:
-      - ls tests/fixtures/live/{outlook_mail,outlook_calendar,outlook_contacts,onedrive,onedrive_excel,todo}/*.json lists exactly the files in the plan's section 3.5
-      - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q passes, including TestFixturePresence
-      - grep -rniE "@(outlook|hotmail|live)\.com|onmicrosoft" tests/fixtures/live/{outlook_mail,outlook_calendar,outlook_contacts,onedrive,onedrive_excel,todo} finds nothing
-      - the PHASE-REPORT lists the six run URLs
+      - ls tests/fixtures/live/{outlook_mail,outlook_calendar,outlook_contacts,onedrive,todo}/*.json lists exactly the files in the plan's section 3.5 (and onedrive_excel's too unless the report records the Excel fallback)
+      - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q passes, including TestFixturePresence and TestMsgraphFixturesRedacted
+      - the PHASE-REPORT lists every run URL
   - id: p06-todo-client
     title: To Do client
     depends_on: [p05-record-fixtures]
@@ -1162,18 +1279,21 @@ phases:
       - src/privacyfence/todo_client.py
       - tests/unit/test_todo_client.py
     brief: |
-      1. Create src/privacyfence/todo_client.py per the plan's section 3.7 (TodoClientError(GraphError),
-         dataclasses, static parsers, every method) and section 3.6's constructor rule
+      1. Create src/privacyfence/todo_client.py per the plan's section 3.7 (TodoClientError(GraphError), the
+         dataclasses, static parsers and every method) and section 3.6's constructor rule
          (TodoClient(org_section, token_file) building GraphHttp(..., error_cls=TodoClientError);
-         check_connection()). Read tests/fixtures/live/todo/*.json first; where a field path differs from
-         section 3.7, follow the fixture and note it in your report.
-      2. tests/unit/test_todo_client.py: a fake GraphHttp injected by monkeypatching the client's _http;
-         one test class per method (payload shape, blank-means-unchanged, the status values, the filter
-         for show_completed), TestMoveTask (copy then delete; refusal with attachments; refusal with
-         checklist items; no delete when the create fails), and TestLiveFixtureParsing mirroring
-         tests/unit/test_tasks_client.py:564-586 over list_task_lists.json, list_tasks.json and
-         get_task.json, with assert_no_placeholder_fields from tests/helpers.py on the parsed task.
-      Stop with status=blocked if a fixture shows To Do has a native move endpoint.
+         check_connection()). Read tests/fixtures/live/todo/*.json first. Where a field path differs from
+         section 3.7, follow the fixture and say so in your report (section 6).
+      2. tests/unit/test_todo_client.py, with a fake GraphHttp swapped in for the client's _http:
+         - one test class per method: payload shape, blank means unchanged, the status values, the
+           show_completed filter;
+         - TestMoveTask: copies then deletes; refuses a task with attachments; refuses one with checklist
+           items; makes no delete when the create fails;
+         - TestLiveFixtureParsing, mirroring tests/unit/test_tasks_client.py:564-586, over
+           list_task_lists.json (every list has id and name), list_tasks.json and get_task.json (id,
+           list_id, title and status non-empty), per rule 3.2.14.
+      Stop with status=blocked if get_task.json has no "title" or "status" key, because then the To Do
+      shape differs from section 3.7 in a way that changes tool output.
     acceptance:
       - python3 -m pytest tests/unit/test_todo_client.py -q passes with no skips in TestLiveFixtureParsing
       - grep -n "class TodoClientError(GraphError)" src/privacyfence/todo_client.py matches
@@ -1185,14 +1305,14 @@ phases:
       - src/privacyfence/outlook_contacts_client.py
       - tests/unit/test_outlook_contacts_client.py
     brief: |
-      1. Create src/privacyfence/outlook_contacts_client.py per the plan's section 3.8 and section 3.6's
-         constructor rule. Import _parse_json_list from privacyfence.connectors.contacts only if it is a
-         plain module-level function; otherwise copy its logic into a private helper here. Read
+      1. Create src/privacyfence/outlook_contacts_client.py per the plan's section 3.8 (typed keyword
+         arguments; emails and phones arrive already parsed) and section 3.6's constructor rule. Read
          tests/fixtures/live/outlook_contacts/*.json first.
-      2. tests/unit/test_outlook_contacts_client.py: the search filter string (including quote
-         doubling), the field mapping for create/update (each phone type), set_categories, and
-         TestLiveFixtureParsing over list_contacts.json and get_contact.json with
-         assert_no_placeholder_fields.
+      2. tests/unit/test_outlook_contacts_client.py: the search requests (quote doubling; the second
+         email request only when the query contains "@"; merge by id; truncation), the field mapping for
+         create and update (each phone type; None/"" unchanged on update), set_categories, and
+         TestLiveFixtureParsing over list_contacts.json and get_contact.json (id, display_name and emails
+         non-empty).
     acceptance:
       - python3 -m pytest tests/unit/test_outlook_contacts_client.py -q passes with no skips in TestLiveFixtureParsing
   - id: p08-calendar-client
@@ -1206,11 +1326,16 @@ phases:
       1. Create src/privacyfence/outlook_calendar_client.py per the plan's section 3.9 and section 3.6's
          constructor rule. Bodies go through privacyfence.html_to_text.html_to_text. Read
          tests/fixtures/live/outlook_calendar/*.json first.
-      2. tests/unit/test_outlook_calendar_client.py: default-calendar paths for a blank calendar_id;
-         calendarView params; the create payload (attendees, all-day); update sends only the changed
-         fields; the sensitivity values; the out-of-office payload (showAs oof, isAllDay for date
-         values, default calendar); list_categories; and TestLiveFixtureParsing over
-         list_calendars.json, list_events.json and get_event.json with assert_no_placeholder_fields.
+      2. tests/unit/test_outlook_calendar_client.py:
+         - default-calendar paths for a blank calendar_id;
+         - calendarView params;
+         - the create payload (attendees, all-day);
+         - update sends only the changed fields;
+         - the sensitivity values;
+         - the out-of-office payload (showAs oof, isAllDay for date values, default calendar);
+         - list_categories;
+         - TestLiveFixtureParsing over list_calendars.json (id, name), list_events.json and get_event.json
+           (id, subject, start, end non-empty).
     acceptance:
       - python3 -m pytest tests/unit/test_outlook_calendar_client.py -q passes with no skips in TestLiveFixtureParsing
   - id: p09-onedrive-client
@@ -1221,34 +1346,19 @@ phases:
       - src/privacyfence/onedrive_client.py
       - tests/unit/test_onedrive_client.py
     brief: |
-      1. Create src/privacyfence/onedrive_client.py with the file half of the plan's section 3.10
-         (OneDriveItem, _parse_item, list_files, list_folder, get_item, download, upload,
-         move, write_content) and section 3.6's constructor rule. Read
-         tests/fixtures/live/onedrive/*.json first.
-      2. tests/unit/test_onedrive_client.py: the search quote doubling; root vs item children paths;
-         the small upload path vs upload_large at the SIMPLE_UPLOAD_MAX_BYTES boundary; the conflict
-         behavior in the URL; move with and without new_name; download passes max_bytes; and
-         TestLiveFixtureParsing over get_folder.json, list_folder.json and get_file_metadata.json with
-         assert_no_placeholder_fields.
+      1. Create src/privacyfence/onedrive_client.py with the file half of the plan's section 3.10 and
+         section 3.6's constructor rule. Read tests/fixtures/live/onedrive/*.json first.
+      2. tests/unit/test_onedrive_client.py:
+         - search quote doubling;
+         - root vs item children paths;
+         - the simple upload vs upload_large at SIMPLE_UPLOAD_MAX_BYTES;
+         - the conflict behavior in the URL;
+         - move with and without new_name;
+         - download passes max_bytes;
+         - TestLiveFixtureParsing over get_folder.json, list_folder.json and get_file_metadata.json (id,
+           name, parent_id non-empty on the file).
     acceptance:
       - python3 -m pytest tests/unit/test_onedrive_client.py -q passes with no skips in TestLiveFixtureParsing
-  - id: p10-onedrive-excel-client
-    title: OneDrive client (Excel workbook methods)
-    depends_on: [p09-onedrive-client]
-    complexity: M
-    touches:
-      - src/privacyfence/onedrive_client.py
-      - tests/unit/test_onedrive_client.py
-    brief: |
-      1. Add the Excel half of the plan's section 3.10 to src/privacyfence/onedrive_client.py
-         (OneDriveWorksheet, _parse_worksheet, _parse_range_values, and the eight workbook methods),
-         under a "# ----- Excel workbook ----- #" banner. Read tests/fixtures/live/onedrive_excel/*.json first.
-      2. Extend tests/unit/test_onedrive_client.py: each method's path and body (sheet-name quoting,
-         the shift values' capitalization, format_range sending only the given attributes), and a second
-         TestLiveFixtureParsing class (TestExcelLiveFixtureParsing) over list_worksheets.json and
-         get_range.json.
-    acceptance:
-      - python3 -m pytest tests/unit/test_onedrive_client.py -q passes with no skips
   - id: p11-mail-client-read
     title: Outlook Mail client (reads)
     depends_on: [p05-record-fixtures]
@@ -1257,16 +1367,18 @@ phases:
       - src/privacyfence/outlook_mail_client.py
       - tests/unit/test_outlook_mail_client.py
     brief: |
-      1. Create src/privacyfence/outlook_mail_client.py with the read half of the plan's section 3.11
-         (dataclasses, static parsers, list_messages, list_conversations, get_message,
-         list_conversation_messages, list_attachments, get_attachment_bytes, list_folders,
-         list_categories, list_rules, resolve_folder) and section 3.6's constructor rule. Read
-         tests/fixtures/live/outlook_mail/*.json first.
-      2. tests/unit/test_outlook_mail_client.py: $search vs $orderby exclusivity; unread_only filter;
-         conversation grouping keeps the newest per conversation and honors max_results; the
-         body_text/body_html split by contentType; address rendering; resolve_folder for a well-known name,
-         an id and a display name; and TestLiveFixtureParsing over all six outlook_mail fixtures with
-         assert_no_placeholder_fields on the parsed message.
+      1. Create src/privacyfence/outlook_mail_client.py with the read half of the plan's section 3.11 and
+         section 3.6's constructor rule. list_messages builds exactly the three query shapes section 3.11
+         gives. Read tests/fixtures/live/outlook_mail/*.json first.
+      2. tests/unit/test_outlook_mail_client.py:
+         - the three list_messages query shapes (no $orderby or $filter alongside $search; unread kept in
+           Python with a query);
+         - conversation grouping keeps the newest message per conversation and honors max_results;
+         - the body_text/body_html split by contentType;
+         - address rendering;
+         - resolve_folder for a well-known name, an id and a display name;
+         - TestLiveFixtureParsing over all six outlook_mail fixtures (the message's id, conversation_id,
+           subject, sender and received are non-empty).
     acceptance:
       - python3 -m pytest tests/unit/test_outlook_mail_client.py -q passes with no skips in TestLiveFixtureParsing
   - id: p12-mail-client-write
@@ -1277,17 +1389,20 @@ phases:
       - src/privacyfence/outlook_mail_client.py
       - tests/unit/test_outlook_mail_client.py
     brief: |
-      1. Add the write half of the plan's section 3.11 to src/privacyfence/outlook_mail_client.py
-         (create_draft, create_reply_draft, add_attachment, move_message, archive_message,
-         set_categories, create_category, create_rule, update_rule) under banners. Render Markdown with
-         privacyfence.email_markdown exactly as gmail_client.py does for body_markdown. Build rule
-         conditions/actions from the named fields in section 3.11's create_rule row; never emit
+      1. Add the write half of the plan's section 3.11 to src/privacyfence/outlook_mail_client.py, under
+         banners. Render Markdown with privacyfence.email_markdown exactly as gmail_client.py does for
+         body_markdown. Attachment upload sessions pass chunk_size=3 * 1024 * 1024 (section 3.4). Build rule
+         conditions and actions only from the named fields in section 3.11's create_rule row; never emit
          forwardTo, forwardAsAttachmentTo, redirectTo, delete or permanentDelete.
-      2. Extend tests/unit/test_outlook_mail_client.py: draft payload (HTML body, recipients, cc/bcc);
-         reply draft creates via createReply/createReplyAll then PATCHes the body; attachment inline vs
-         upload session at the 3 MiB boundary; archive uses "archive"; create_rule sequence and field
-         mapping; a test asserting no request path in any write method ends with "/send"; a test that
-         every generated rule action key is in the allowed set.
+      2. Extend tests/unit/test_outlook_mail_client.py:
+         - the draft payload (HTML body, recipients, cc/bcc);
+         - the reply draft is created via createReply/createReplyAll, then its body is PATCHed;
+         - an attachment goes inline vs through an upload session at the 3 MiB boundary, with the session
+           using chunk_size 3 MiB;
+         - archive uses "archive";
+         - create_rule's sequence and field mapping;
+         - no request path in any write method ends with "/send";
+         - every generated rule action key is in the allowed set.
     acceptance:
       - python3 -m pytest tests/unit/test_outlook_mail_client.py -q passes
       - grep -rn "/send" src/privacyfence/outlook_mail_client.py finds nothing
@@ -1299,55 +1414,54 @@ phases:
       - src/privacyfence/connectors/todo.py
       - tests/unit/connectors/test_todo_connector.py
       - src/privacyfence/auto_accept.py
-      - src/privacyfence/privacy_filter.py
-      - src/privacyfence/settings_controller.py
-      - src/privacyfence/resources/settings.yaml.example
+      - docs/tools-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
       - scripts/pyinstaller_common.py
       - scripts/generate_tools_reference.py
-      - docs/tools-reference.md
       - tests/unit/connectors/test_readme_manifest_alignment.py
       - tests/unit/test_website_connector_pages.py
-      - tests/unit/test_website_connectors_page.py
       - scripts/build_site.py
       - README.md
       - website/connectors/microsoft-365/index.html
-      - website/connectors/index.html
       - website/_partials/other-connectors.html
     brief: |
       1. Create src/privacyfence/connectors/todo.py with TodoConnector and the three auto tools from the
-         plan's section 3.7, mirroring src/privacyfence/connectors/tasks.py's structure (_run, _fetch
-         per rule 3.2.2, _auto_audit, _redact_notes with "todo_privacy"). Unknown tool → ValueError.
-      2. Tables: TOOL_TO_GATE entries (auto) in auto_accept.py; "privacyfence.connectors.todo" in
-         scripts/pyinstaller_common.py; TodoConnector in CONNECTOR_CLASSES
-         (tests/unit/connectors/test_readme_manifest_alignment.py:36); "todo" in
-         generate_tools_reference.py's CONNECTOR_TITLES/CONNECTOR_SHORT (section 3.1), then regenerate
-         docs/tools-reference.md with python3 scripts/generate_tools_reference.py.
-      3. The todo_privacy group (section 3.1): privacy_filter._GROUP_NAMES, settings_controller
-         PRIVACY_GROUP_LABELS/PRIVACY_CATEGORY_LABELS, resources/settings.yaml.example.
-      4. Website and README (section 3.1): add "microsoft-365-setup" to build_site.CONNECTOR_GUIDES; add
-         "/connectors/microsoft-365/" to build_site.PAGES and an llms line next to the Jira/Confluence one
-         (build_site.py:1117) that says "Outlook mail, calendar and contacts, OneDrive and Microsoft To Do
-         through one Microsoft sign-in; verified on personal Microsoft accounts; no tool sends email";
-         create website/connectors/microsoft-365/index.html by copying
-         website/connectors/jira-confluence/index.html's structure (canonical/og URLs, the
-         other-connectors include with current="microsoft-365", a "Set it up" button to the
-         microsoft-365-setup guide) with content describing the five connectors, that work/school
-         accounts are not yet verified, and that no tool sends email; add the page to
-         website/_partials/other-connectors.html and website/connectors/index.html following the
-         jira-confluence entries; add the README.md Connectors row
-         "| Microsoft Outlook, OneDrive, To Do | Read mail, calendar, contacts, files and tasks; drafts,
-         events, uploads, Excel edits and task changes need approval. No tool sends email. Personal
-         Microsoft accounts. |"; add "todo" to test_website_connector_pages.CONNECTORS mapped to
-         ("/connectors/microsoft-365/", "microsoft-365-setup", "Microsoft Outlook, OneDrive, To Do").
-      5. tests/unit/connectors/test_todo_connector.py per docs/coding-and-testing-guidelines.md §2.6
-         items 1, 2 and 4 (TestDispatch, one auto-tool test each proving no gate and an audit entry,
-         assert_all_tools_leave_an_audit_trail), plus notes redaction under todo_privacy and the
-         _fetch error mapping (unavailable_error vs RuntimeError).
+         plan's section 3.7, mirroring src/privacyfence/connectors/tasks.py (_run, _fetch per rule 3.2.2,
+         _auto_audit). Notes redaction arrives in p14 with the todo_privacy group; the daemon does not build
+         this connector until p24. Unknown tool → ValueError.
+      2. Add TOOL_TO_GATE entries (auto) and add "privacyfence.connectors.<module>" to scripts/pyinstaller_common.py, the class to
+         CONNECTOR_CLASSES (tests/unit/connectors/test_readme_manifest_alignment.py:36), the connector to
+         generate_tools_reference.py's CONNECTOR_TITLES/CONNECTOR_SHORT (section 3.1), and the module to
+         tests/unit/test_website_connector_pages.py's CONNECTORS mapped to ("/connectors/microsoft-365/",
+         "microsoft-365-setup", "Microsoft Outlook, OneDrive, To Do"); add the connector's card to
+         website/connectors/index.html (rule 3.2.11).
+         Regenerate docs/tools-reference.md, and apply rule 3.2.11 (twelve connectors).
+      3. Website and README (section 3.1):
+         - Add "microsoft-365-setup" to build_site.CONNECTOR_GUIDES.
+         - Add "/connectors/microsoft-365/" to build_site.PAGES.
+         - Add an llms line after the Jira/Confluence one (build_site.py:1117) reading "Microsoft connectors:
+           Outlook mail, calendar and contacts, OneDrive and Microsoft To Do through one Microsoft sign-in;
+           verified on personal Microsoft accounts; no tool sends email".
+         - Create website/connectors/microsoft-365/index.html by copying
+           website/connectors/jira-confluence/index.html's structure: canonical and og URLs, the
+           other-connectors include with current="microsoft-365", and a "Set it up" button to the
+           microsoft-365-setup guide. Its content describes the five connectors, says that work/school
+           accounts are not yet verified, and says that no tool sends email.
+         - Add the page to website/_partials/other-connectors.html, following the jira-confluence entry.
+         - Add the README.md Connectors row "| Microsoft Outlook, OneDrive, To Do | Read mail, calendar,
+           contacts, files and tasks; drafts, events, uploads and task changes need approval. No tool sends
+           email. Personal Microsoft accounts. |".
+      4. tests/unit/connectors/test_todo_connector.py, per docs/coding-and-testing-guidelines.md §2.6
+         items 1, 2 and 4: TestDispatch, one test per auto tool proving no gate and an audit entry, and
+         assert_all_tools_leave_an_audit_trail. Add the _fetch error mapping (unavailable_error vs
+         RuntimeError).
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_build_site.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/test_docs_tools_reference.py tests/unit/test_privacy_filter.py tests/unit/test_systemic_gate_invariants.py -q passes
+      - python3 -m pytest tests/unit/connectors tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_build_site.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/test_docs_tools_reference.py tests/unit/test_systemic_gate_invariants.py -q passes
       - git diff --stat shows docs/tools-reference.md regenerated with three todo_ rows
   - id: p14-todo-connector-write
-    title: To Do connector (write tools)
+    title: To Do connector (write tools and the todo_privacy group)
     depends_on: [p13-todo-connector-read]
     complexity: M
     touches:
@@ -1358,22 +1472,42 @@ phases:
       - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
       - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+      - src/privacyfence/privacy_filter.py
+      - src/privacyfence/settings_controller.py
+      - src/privacyfence/resources/settings.yaml.example
+      - docs/configuration-reference.md
     brief: |
       1. Add the five popup tools from the plan's section 3.7 to connectors/todo.py, each mirroring its
-         counterpart in connectors/tasks.py (fetch existing → preview/details/preview_blocks →
-         gated_call(tool=..., gate="popup", args=...) → client call). todo_move_task passes
-         source_list_id and destination_list_id in args like tasks_move_task.
-      2. Tables per rule 3.2.1: TOOL_TO_GATE, TOOL_TO_OPERATION ("todo.<suffix>"), TOOL_TO_VERB (the
-         counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence with "task list"
-         wording kept; todo_move_task uses section 3.7's sentence), gate._TOOL_LAYOUT (the counterpart's
-         value). Regenerate docs/tools-reference.md.
-      3. Tests: §2.6 item 3 (each preview carries only metadata), gated_call kwargs per tool
-         (gated_call_spy pattern from tests/unit/connectors/test_tasks_connector.py), the move refusal
-         surfacing as RuntimeError, and assert_all_tools_leave_an_audit_trail over all eight tools.
+         counterpart in connectors/tasks.py: fetch the existing item, build the preview, details and
+         preview_blocks, call gated_call(tool=..., gate="popup", args=...), then call the client.
+         todo_move_task passes source_list_id and destination_list_id in args, as tasks_move_task does.
+      2. Add _redact_notes with the "todo_privacy" group to the read results, as tasks.py:384 does, and
+         add the privacy group from section 3.1 to privacy_filter._GROUP_NAMES,
+         settings_controller.PRIVACY_GROUP_LABELS/PRIVACY_CATEGORY_LABELS and
+         resources/settings.yaml.example, and document it in docs/configuration-reference.md next to
+         tasks_privacy (rule 3.2.13).
+      3. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      4. Tests:
+         - §2.6 item 3: each preview carries only metadata;
+         - the gated_call kwargs per tool (the gated_call_spy pattern from
+           tests/unit/connectors/test_tasks_connector.py);
+         - the move refusal surfacing as RuntimeError;
+         - notes redaction;
+         - assert_all_tools_leave_an_audit_trail over all eight tools.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py -q passes
-  - id: p15-contacts-connector
-    title: Outlook Contacts connector
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_privacy_filter.py tests/unit/test_docs_configuration_reference.py -q passes
+  - id: p15a-contacts-connector-read
+    title: Outlook Contacts connector (list, search, get)
     depends_on: [p14-todo-connector-write, p07-contacts-client]
     complexity: M
     touches:
@@ -1383,29 +1517,79 @@ phases:
       - src/privacyfence/policy/registry.py
       - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
-      - src/privacyfence/privacy_filter.py
-      - src/privacyfence/settings_controller.py
-      - src/privacyfence/resources/settings.yaml.example
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
       - scripts/pyinstaller_common.py
       - scripts/generate_tools_reference.py
-      - docs/tools-reference.md
       - tests/unit/connectors/test_readme_manifest_alignment.py
       - tests/unit/test_website_connector_pages.py
     brief: |
-      1. Create src/privacyfence/connectors/outlook_contacts.py with all seven tools of the plan's
-         section 3.8, mirroring src/privacyfence/connectors/contacts.py (its auto-accepted reads, its
-         update/create preview diffing, its label tools → category tools).
-      2. Every table from p13 step 2 and p14 step 2 for these tools; the outlook_contacts_privacy group
-         (p13 step 3's three places); "outlook_contacts" in test_website_connector_pages.CONNECTORS with
-         the same page/guide/row as todo. Regenerate docs/tools-reference.md.
-      3. tests/unit/connectors/test_outlook_contacts_connector.py: the full §2.6 checklist (items 1–5;
-         item 5 runs tests/fixtures/live/outlook_contacts/get_contact.json through
-         OutlookContactsClient._parse_contact and the update preview, with assert_no_placeholder_fields).
+      1. Create src/privacyfence/connectors/outlook_contacts.py with outlook_contacts_list, _search and
+         _get from the plan's section 3.8, mirroring the auto-accepted reads of
+         src/privacyfence/connectors/contacts.py.
+      2. Add TOOL_TO_GATE entries and add "privacyfence.connectors.<module>" to scripts/pyinstaller_common.py, the class to
+         CONNECTOR_CLASSES (tests/unit/connectors/test_readme_manifest_alignment.py:36), the connector to
+         generate_tools_reference.py's CONNECTOR_TITLES/CONNECTOR_SHORT (section 3.1), and the module to
+         tests/unit/test_website_connector_pages.py's CONNECTORS mapped to ("/connectors/microsoft-365/",
+         "microsoft-365-setup", "Microsoft Outlook, OneDrive, To Do"); add the connector's card to
+         website/connectors/index.html (rule 3.2.11).
+         Regenerate docs/tools-reference.md, and apply rule 3.2.11 (thirteen connectors).
+      3. Tests: §2.6 items 1, 2 and 4, and the _fetch error mapping.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_website_connector_pages.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/test_docs_tools_reference.py tests/unit/test_privacy_filter.py -q passes
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_pyinstaller_hidden_imports.py -q passes
+  - id: p15b-contacts-connector-write
+    title: Outlook Contacts connector (create, update, categories, privacy group)
+    depends_on: [p15a-contacts-connector-read]
+    complexity: M
+    touches:
+      - src/privacyfence/connectors/outlook_contacts.py
+      - tests/unit/connectors/test_outlook_contacts_connector.py
+      - src/privacyfence/auto_accept.py
+      - src/privacyfence/policy/registry.py
+      - src/privacyfence/write_effects.py
+      - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+      - src/privacyfence/privacy_filter.py
+      - src/privacyfence/settings_controller.py
+      - src/privacyfence/resources/settings.yaml.example
+      - docs/configuration-reference.md
+    brief: |
+      1. Add outlook_contacts_update, _create, _add_category and _remove_category (section 3.8), mirroring
+         connectors/contacts.py's update/create preview diffing and its label tools.
+         - Copy connectors/contacts.py:409's _parse_json_list into this module as a private helper.
+           Do not import it.
+         - Pass parsed lists to the client.
+         - args= carries emails and phones as the counterpart does, so no_contact_info_change applies.
+      2. Redact notes on reads with apply_text("outlook_contacts_privacy", "notes", ...), and
+         add the privacy group from section 3.1 to privacy_filter._GROUP_NAMES,
+         settings_controller.PRIVACY_GROUP_LABELS/PRIVACY_CATEGORY_LABELS and
+         resources/settings.yaml.example, and document it in docs/configuration-reference.md next to
+         tasks_privacy (rule 3.2.13).
+      3. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      4. Tests:
+         - the full §2.6 checklist; item 5 runs tests/fixtures/live/outlook_contacts/get_contact.json
+           through OutlookContactsClient._parse_contact and the update preview, with
+           assert_no_placeholder_fields;
+         - assert_all_tools_leave_an_audit_trail over all seven tools.
+    acceptance:
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_privacy_filter.py tests/unit/test_docs_configuration_reference.py -q passes
   - id: p16-calendar-connector-core
     title: Outlook Calendar connector (list, read, create, update, delete)
-    depends_on: [p15-contacts-connector, p08-calendar-client]
+    depends_on: [p15b-contacts-connector-write, p08-calendar-client]
     complexity: M
     touches:
       - src/privacyfence/connectors/outlook_calendar.py
@@ -1414,24 +1598,39 @@ phases:
       - src/privacyfence/policy/registry.py
       - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
       - scripts/pyinstaller_common.py
       - scripts/generate_tools_reference.py
-      - docs/tools-reference.md
       - tests/unit/connectors/test_readme_manifest_alignment.py
       - tests/unit/test_website_connector_pages.py
       - tests/unit/test_connector_tool_annotations.py
     brief: |
-      1. Create src/privacyfence/connectors/outlook_calendar.py with the p16 tools listed under the plan's
-         section 3.9 table, mirroring src/privacyfence/connectors/calendar.py's corresponding methods
-         (get_event_details passes raw_data with organizer_email and args {"calendar_id","event_id"};
-         create/update/delete previews). Use section 3.9's effect sentences.
-      2. Every table (as in p14 step 2), outlook_calendar_delete_event in DESTRUCTIVE_TOOLS, the
-         pyinstaller/CONNECTOR_CLASSES/CONNECTOR_TITLES/CONNECTOR_SHORT/website-mapping entries.
-         Regenerate docs/tools-reference.md.
-      3. tests/unit/connectors/test_outlook_calendar_connector.py: the full §2.6 checklist (item 5 over
-         get_event.json through _parse_event and the get_event_details preview).
+      1. Create src/privacyfence/connectors/outlook_calendar.py with the p16 tools of the plan's section
+         3.9, mirroring src/privacyfence/connectors/calendar.py's corresponding methods.
+         get_event_details passes raw_data with organizer_email, and args {"calendar_id", "event_id"}.
+         Use section 3.9's effect sentences.
+      2. Add outlook_calendar_delete_event to DESTRUCTIVE_TOOLS (tests/unit/test_connector_tool_annotations.py),
+         and add "privacyfence.connectors.<module>" to scripts/pyinstaller_common.py, the class to
+         CONNECTOR_CLASSES (tests/unit/connectors/test_readme_manifest_alignment.py:36), the connector to
+         generate_tools_reference.py's CONNECTOR_TITLES/CONNECTOR_SHORT (section 3.1), and the module to
+         tests/unit/test_website_connector_pages.py's CONNECTORS mapped to ("/connectors/microsoft-365/",
+         "microsoft-365-setup", "Microsoft Outlook, OneDrive, To Do"); add the connector's card to
+         website/connectors/index.html (rule 3.2.11).
+      3. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts). Fourteen connectors.
+      4. tests/unit/connectors/test_outlook_calendar_connector.py: the full §2.6 checklist; item 5 runs
+         get_event.json through _parse_event and the get_event_details preview.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_connector_tool_annotations.py tests/unit/test_website_connector_pages.py tests/unit/test_docs_tools_reference.py -q passes
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_connector_tool_annotations.py -q passes
   - id: p17-calendar-connector-extras
     title: Outlook Calendar connector (visibility, categories, out of office)
     depends_on: [p16-calendar-connector-core]
@@ -1444,19 +1643,30 @@ phases:
       - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
       - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
     brief: |
       1. Add the p17 tools from the plan's section 3.9 to connectors/outlook_calendar.py, mirroring
          calendar_get_event_visibility, calendar_list_colors, calendar_create_out_of_office,
-         calendar_set_event_visibility and calendar_set_event_color. The visibility value is validated
-         before the gate (anything but normal/private raises ValueError with the allowed values).
-      2. Tables as in p14 step 2; section 3.9's out-of-office effect sentence. Regenerate
-         docs/tools-reference.md.
-      3. Tests: previews metadata-only, the invalid-visibility rejection never reaching gated_call, the
-         out-of-office call carrying no calendar_id in args, audit sweep over all eleven tools.
+         calendar_set_event_visibility and calendar_set_event_color. The visibility value is validated before
+         the gate: anything but normal/private raises ValueError naming the allowed values.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      3. Tests:
+         - previews are metadata-only;
+         - an invalid visibility never reaches gated_call;
+         - the out-of-office call carries no calendar_id in args;
+         - assert_all_tools_leave_an_audit_trail over all eleven tools.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_docs_tools_reference.py -q passes
-  - id: p18-onedrive-connector-read
-    title: OneDrive connector (list, metadata, content, download)
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+  - id: p18a-onedrive-connector-read
+    title: OneDrive connector (list, metadata, content) and the onedrive_privacy group
     depends_on: [p17-calendar-connector-extras, p09-onedrive-client]
     complexity: M
     touches:
@@ -1464,33 +1674,82 @@ phases:
       - tests/unit/connectors/test_onedrive_connector.py
       - src/privacyfence/auto_accept.py
       - src/privacyfence/policy/registry.py
+      - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+      - scripts/pyinstaller_common.py
+      - scripts/generate_tools_reference.py
+      - tests/unit/connectors/test_readme_manifest_alignment.py
+      - tests/unit/test_website_connector_pages.py
       - src/privacyfence/privacy_filter.py
       - src/privacyfence/settings_controller.py
       - src/privacyfence/resources/settings.yaml.example
-      - scripts/pyinstaller_common.py
-      - scripts/generate_tools_reference.py
-      - docs/tools-reference.md
-      - tests/unit/connectors/test_readme_manifest_alignment.py
-      - tests/unit/test_website_connector_pages.py
+      - docs/configuration-reference.md
     brief: |
       1. Create src/privacyfence/connectors/onedrive.py with onedrive_list_files, onedrive_list_folder,
-         onedrive_get_file_metadata, onedrive_get_file_content and onedrive_download_file from the plan's
-         section 3.10, mirroring the drive_* counterparts in src/privacyfence/connectors/drive.py
-         (content extraction and its size cap, PII scan text, download_mode delivery including the org
-         inline/staged-link branch and local_files.deliver_file, the delivery= kwarg). raw_data for
-         the gated reads is {"file": item} so auto_accept._file_from finds it (its parent_id is what
-         p26's folder scopes read).
-      2. Tables (as in p14 step 2), the onedrive_privacy group (p13 step 3's three places), the
-         pyinstaller/CONNECTOR_CLASSES/titles/website-mapping entries. Regenerate docs/tools-reference.md.
-      3. tests/unit/connectors/test_onedrive_connector.py: the full §2.6 checklist (item 5 over
-         get_file_metadata.json), plus download delivery in local and org mode (inline and staged link)
-         mirroring tests/unit/connectors/test_drive_connector.py's download tests.
+         onedrive_get_file_metadata and onedrive_get_file_content (section 3.10), mirroring the drive_*
+         counterparts in src/privacyfence/connectors/drive.py: content extraction and its size cap, PII scan
+         text, and "onedrive_privacy" categories. raw_data for the gated read is {"file": item}, so
+         auto_accept._file_from finds it; p26's folder scopes read its parent_id.
+      2. add the privacy group from section 3.1 to privacy_filter._GROUP_NAMES,
+         settings_controller.PRIVACY_GROUP_LABELS/PRIVACY_CATEGORY_LABELS and
+         resources/settings.yaml.example, and document it in docs/configuration-reference.md next to
+         tasks_privacy (rule 3.2.13).
+      3. Add TOOL_TO_GATE entries and add "privacyfence.connectors.<module>" to scripts/pyinstaller_common.py, the class to
+         CONNECTOR_CLASSES (tests/unit/connectors/test_readme_manifest_alignment.py:36), the connector to
+         generate_tools_reference.py's CONNECTOR_TITLES/CONNECTOR_SHORT (section 3.1), and the module to
+         tests/unit/test_website_connector_pages.py's CONNECTORS mapped to ("/connectors/microsoft-365/",
+         "microsoft-365-setup", "Microsoft Outlook, OneDrive, To Do"); add the connector's card to
+         website/connectors/index.html (rule 3.2.11).
+      4. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts). Fifteen connectors.
+      5. Tests: the full §2.6 checklist; item 5 runs get_file_metadata.json through _parse_item and the
+         get_file_content preview.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_website_connector_pages.py tests/unit/test_privacy_filter.py tests/unit/test_docs_tools_reference.py -q passes
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_privacy_filter.py tests/unit/test_docs_configuration_reference.py tests/unit/test_pyinstaller_hidden_imports.py -q passes
+  - id: p18b-onedrive-connector-download
+    title: OneDrive connector (download)
+    depends_on: [p18a-onedrive-connector-read]
+    complexity: M
+    touches:
+      - src/privacyfence/connectors/onedrive.py
+      - tests/unit/connectors/test_onedrive_connector.py
+      - src/privacyfence/auto_accept.py
+      - src/privacyfence/policy/registry.py
+      - src/privacyfence/write_effects.py
+      - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+    brief: |
+      1. Add onedrive_download_file (section 3.10), copying drive_download_file in connectors/drive.py: the
+         download_mode handling, the org inline/staged-link branch, local_files.deliver_file, and the
+         delivery= kwarg.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      3. Tests: delivery in local mode and in org mode (inline and staged link), mirroring
+         tests/unit/connectors/test_drive_connector.py's download tests; a metadata-only preview; the audit
+         sweep.
+    acceptance:
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
   - id: p19-onedrive-connector-write
     title: OneDrive connector (upload, move, write text content)
-    depends_on: [p18-onedrive-connector-read]
+    depends_on: [p18b-onedrive-connector-download]
     complexity: M
     touches:
       - src/privacyfence/connectors/onedrive.py
@@ -1500,80 +1759,91 @@ phases:
       - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
       - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
     brief: |
-      1. Add onedrive_upload_file, onedrive_move_file and onedrive_write_file_content (section 3.10),
-         copying drive_upload_file's file-source handling and ADR 0102 slot consumption
-         (connectors/drive.py:1290-1460), drive_move_file's preview (args carry file_id and
-         destination_folder_id; raw_data {"file": item}), and drive_write_file_content's preview. The
-         text-only check for onedrive_write_file_content runs before the gate.
-      2. Tables as in p14 step 2. Regenerate docs/tools-reference.md.
-      3. Tests: each file source (local_path, content_base64, upload_id; exactly-one rule), the slot is
-         consumed only after approval, the non-text refusal never reaches gated_call, previews
-         metadata-only, audit sweep over all eight tools.
+      1. Add onedrive_upload_file, onedrive_move_file and onedrive_write_file_content (section 3.10):
+         - upload copies drive_upload_file's file-source handling and ADR 0102 slot consumption
+           (connectors/drive.py:1290-1460);
+         - move copies drive_move_file's preview, with args carrying file_id and destination_folder_id and
+           raw_data {"file": item};
+         - write copies drive_write_file_content's preview.
+         The text-only check for onedrive_write_file_content runs before the gate.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      3. Tests:
+         - each file source (local_path, content_base64, upload_id) and the exactly-one rule;
+         - the slot is consumed only after approval;
+         - the non-text refusal never reaches gated_call;
+         - previews are metadata-only;
+         - assert_all_tools_leave_an_audit_trail over all eight tools.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_docs_tools_reference.py -q passes
-  - id: p20-onedrive-excel-connector
-    title: OneDrive connector (Excel tools)
-    depends_on: [p19-onedrive-connector-write, p10-onedrive-excel-client]
-    complexity: M
-    touches:
-      - src/privacyfence/connectors/onedrive.py
-      - tests/unit/connectors/test_onedrive_connector.py
-      - src/privacyfence/auto_accept.py
-      - src/privacyfence/policy/registry.py
-      - src/privacyfence/write_effects.py
-      - src/privacyfence/gate.py
-      - docs/tools-reference.md
-      - tests/unit/test_connector_tool_annotations.py
-    brief: |
-      1. Add the eight onedrive_excel_* tools from the plan's section 3.10, each mirroring its
-         drive_sheets_* counterpart in connectors/drive.py (range parsing "Sheet!A1:B2" into sheet and
-         address; values JSON validation before the gate; the .xlsx-only refusal before the gate).
-         raw_data {"file": item} for every gated one. onedrive_excel_delete_dimensions is destructive.
-      2. Tables as in p14 step 2, DESTRUCTIVE_TOOLS. Regenerate docs/tools-reference.md.
-      3. Tests: range parsing (with and without a sheet, quoted sheet names), the .xlsx refusal, values
-         validation, previews metadata-only, §2.6 item 5 over tests/fixtures/live/onedrive_excel/get_range.json
-         through _parse_range_values and the get_values preview, audit sweep over all sixteen tools.
-    acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_connector_tool_annotations.py tests/unit/test_docs_tools_reference.py -q passes
-  - id: p21-mail-connector-read
-    title: Outlook Mail connector (lists, message, conversation, attachment download)
-    depends_on: [p20-onedrive-excel-connector, p11-mail-client-read]
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+  - id: p21a-mail-connector-read
+    title: Outlook Mail connector (lists, message, conversation) and the outlook_mail_privacy group
+    depends_on: [p19-onedrive-connector-write, p11-mail-client-read]
     complexity: M
     touches:
       - src/privacyfence/connectors/outlook_mail.py
       - tests/unit/connectors/test_outlook_mail_connector.py
       - src/privacyfence/auto_accept.py
       - src/privacyfence/policy/registry.py
+      - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+      - scripts/pyinstaller_common.py
+      - scripts/generate_tools_reference.py
+      - tests/unit/connectors/test_readme_manifest_alignment.py
+      - tests/unit/test_website_connector_pages.py
       - src/privacyfence/privacy_filter.py
       - src/privacyfence/settings_controller.py
       - src/privacyfence/resources/settings.yaml.example
-      - scripts/pyinstaller_common.py
-      - scripts/generate_tools_reference.py
-      - docs/tools-reference.md
-      - tests/unit/connectors/test_readme_manifest_alignment.py
-      - tests/unit/test_website_connector_pages.py
+      - docs/configuration-reference.md
     brief: |
-      1. Create src/privacyfence/connectors/outlook_mail.py with the p21 tools from the plan's section
-         3.11, mirroring connectors/gmail.py: _get_message (gmail.py:699 onward: html_to_text, apply_text
-         with "outlook_mail_privacy" categories body/metadata/attachments, pii_scan_text,
-         include_html, visibility, content_kind="email"), get_conversation mirroring get_thread
-         (gmail.py:822-827, thread_history category), download_attachment mirroring
-         gmail_download_attachment (gmail.py:881-1082: delivery estimate, prefetch for preview,
-         org/local delivery), and the six auto list tools. raw_data for gated reads is the parsed
-         OutlookMessage (its sender feeds p26's sender-domain scope).
-      2. Tables (as in p14 step 2), the outlook_mail_privacy group (section 3.1), the
-         pyinstaller/CONNECTOR_CLASSES/titles/website-mapping entries. Regenerate docs/tools-reference.md.
-      3. tests/unit/connectors/test_outlook_mail_connector.py: the full §2.6 checklist (item 5 over
-         get_message.json through _parse_message and the get_message preview), mirroring
-         tests/unit/connectors/test_gmail_connector.py's TestGetMessagePreviewMinimization and download
-         tests.
+      1. Create src/privacyfence/connectors/outlook_mail.py with the six auto list tools,
+         outlook_mail_get_message and outlook_mail_get_conversation (section 3.11), mirroring
+         connectors/gmail.py:
+         - _get_message (gmail.py:699 onward): html_to_text, apply_text with the "outlook_mail_privacy"
+           categories body, metadata and attachments, pii_scan_text, include_html, visibility and
+           content_kind="email";
+         - get_conversation mirrors get_thread (gmail.py:822-827), with the thread_history category.
+         raw_data for the gated reads is the parsed OutlookMessage; its sender feeds p26's sender-domain
+         scope.
+      2. add the privacy group from section 3.1 to privacy_filter._GROUP_NAMES,
+         settings_controller.PRIVACY_GROUP_LABELS/PRIVACY_CATEGORY_LABELS and
+         resources/settings.yaml.example, and document it in docs/configuration-reference.md next to
+         tasks_privacy (rule 3.2.13).
+      3. Add TOOL_TO_GATE entries and add "privacyfence.connectors.<module>" to scripts/pyinstaller_common.py, the class to
+         CONNECTOR_CLASSES (tests/unit/connectors/test_readme_manifest_alignment.py:36), the connector to
+         generate_tools_reference.py's CONNECTOR_TITLES/CONNECTOR_SHORT (section 3.1), and the module to
+         tests/unit/test_website_connector_pages.py's CONNECTORS mapped to ("/connectors/microsoft-365/",
+         "microsoft-365-setup", "Microsoft Outlook, OneDrive, To Do"); add the connector's card to
+         website/connectors/index.html (rule 3.2.11).
+      4. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts). Sixteen connectors.
+      5. tests/unit/connectors/test_outlook_mail_connector.py: the full §2.6 checklist; item 5 runs
+         get_message.json through _parse_message and the get_message preview. Mirror
+         TestGetMessagePreviewMinimization in tests/unit/connectors/test_gmail_connector.py.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_website_connector_pages.py tests/unit/test_privacy_filter.py tests/unit/test_docs_tools_reference.py -q passes
-  - id: p22-mail-connector-drafts
-    title: Outlook Mail connector (six draft tools)
-    depends_on: [p21-mail-connector-read, p12-mail-client-write]
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_privacy_filter.py tests/unit/test_docs_configuration_reference.py tests/unit/test_pyinstaller_hidden_imports.py -q passes
+  - id: p21b-mail-connector-download
+    title: Outlook Mail connector (attachment download)
+    depends_on: [p21a-mail-connector-read]
     complexity: M
     touches:
       - src/privacyfence/connectors/outlook_mail.py
@@ -1583,19 +1853,89 @@ phases:
       - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
       - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
     brief: |
-      1. Add the six draft tools from the plan's section 3.11, mirroring the six gmail draft tools in
-         connectors/gmail.py (the card shows the raw Markdown; reply-all lists every participant; the
-         *_with_attachments variants take the same file sources and upload-slot handling as the gmail
-         ones). The client's add_attachment is called once per file after the draft exists.
-      2. Tables as in p14 step 2 (all six share op outlook_mail.create_draft). Regenerate docs/tools-reference.md.
-      3. Tests: previews metadata-only, the reply-all participant list, attachments added after the draft
-         is created, slot consumption after approval, audit sweep over all fifteen tools.
+      1. Add outlook_mail_download_attachment (section 3.11), copying gmail_download_attachment
+         (gmail.py:881-1082): the delivery estimate, the prefetch for preview, and org/local delivery.
+         args is {"message_id", "attachment_id"}.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      3. Tests: mirror test_gmail_connector.py's download tests (local and org, inline and staged link,
+         image prefetch, PII scan text), plus the audit sweep.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_docs_tools_reference.py -q passes
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+  - id: p22a-mail-connector-drafts
+    title: Outlook Mail connector (create, reply and reply-all drafts)
+    depends_on: [p21b-mail-connector-download, p12-mail-client-write]
+    complexity: M
+    touches:
+      - src/privacyfence/connectors/outlook_mail.py
+      - tests/unit/connectors/test_outlook_mail_connector.py
+      - src/privacyfence/auto_accept.py
+      - src/privacyfence/policy/registry.py
+      - src/privacyfence/write_effects.py
+      - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+    brief: |
+      1. Add outlook_mail_create_draft, outlook_mail_reply_draft and outlook_mail_reply_all_draft
+         (section 3.11), mirroring the three plain gmail draft tools: the card shows the raw Markdown, and
+         the reply-all card lists every participant.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts). All draft tools share the operation outlook_mail.create_draft.
+      3. Tests: previews are metadata-only, the reply-all participant list, and the audit sweep.
+    acceptance:
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+  - id: p22b-mail-connector-attachment-drafts
+    title: Outlook Mail connector (the three drafts-with-attachments tools)
+    depends_on: [p22a-mail-connector-drafts]
+    complexity: M
+    touches:
+      - src/privacyfence/connectors/outlook_mail.py
+      - tests/unit/connectors/test_outlook_mail_connector.py
+      - src/privacyfence/auto_accept.py
+      - src/privacyfence/policy/registry.py
+      - src/privacyfence/write_effects.py
+      - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+    brief: |
+      1. Add the three *_with_attachments tools (section 3.11), mirroring gmail's, with the same file sources
+         and upload-slot handling. The client's add_attachment is called once per file, after the draft
+         exists.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      3. Tests:
+         - attachments are added after the draft is created;
+         - slots are consumed after approval only;
+         - previews are metadata-only;
+         - assert_all_tools_leave_an_audit_trail over all fifteen tools.
+    acceptance:
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
   - id: p23-mail-connector-organize
     title: Outlook Mail connector (categories, archive, move, rules)
-    depends_on: [p22-mail-connector-drafts]
+    depends_on: [p22b-mail-connector-attachment-drafts]
     complexity: M
     touches:
       - src/privacyfence/connectors/outlook_mail.py
@@ -1605,17 +1945,29 @@ phases:
       - src/privacyfence/write_effects.py
       - src/privacyfence/gate.py
       - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
     brief: |
-      1. Add outlook_mail_add_category, _remove_category, _create_category, _archive_message,
-         _move_message, _create_rule and _update_rule from the plan's section 3.11, mirroring the gmail
-         label/archive/filter tools. outlook_mail_move_message has no counterpart: use the row's verb,
-         layout, effect and preview exactly. Rule tools validate that at least one criterion and one action
-         are given before the gate, as gmail_create_filter does.
-      2. Tables as in p14 step 2. Regenerate docs/tools-reference.md.
-      3. Tests: previews metadata-only; the rule tools expose no forward_to param (assert on tool_specs);
-         the validation errors never reach gated_call; audit sweep over all twenty-two tools.
+      1. Add outlook_mail_add_category, _remove_category, _create_category, _archive_message, _move_message,
+         _create_rule and _update_rule (section 3.11), mirroring the gmail label, archive and filter tools.
+         outlook_mail_move_message has no counterpart, so use its row's verb, layout, effect and preview
+         exactly. The rule tools check, before the gate, that at least one criterion and one action are
+         given, as gmail_create_filter does.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts).
+      3. Tests:
+         - previews are metadata-only;
+         - the rule tools expose no forward_to param (assert on tool_specs);
+         - the validation errors never reach gated_call;
+         - assert_all_tools_leave_an_audit_trail over all twenty-two tools.
     acceptance:
-      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_docs_tools_reference.py -q passes
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
       - python3 -c "from privacyfence.connectors.outlook_mail import OutlookMailConnector as C; from unittest.mock import MagicMock; print(len(C(MagicMock()).tool_specs()))" prints 22
   - id: p24-daemon-wiring
     title: Build the five connectors in the daemon, list them in Settings and on the connect page
@@ -1629,18 +1981,22 @@ phases:
       - tests/unit/test_settings_controller.py
       - tests/unit/web/test_routes_connect.py
     brief: |
-      1. daemon_main.build_connectors: the family load and the five blocks exactly as the plan's section
-         3.6 (p24 bullets) says, mirroring the Atlassian load (:1455-1466), the Jira/Confluence blocks
+      1. daemon_main.build_connectors: the family load and the five blocks, exactly as the plan's section
+         3.6 (p24 bullets) says. Mirror the Atlassian load (:1455-1466), the Jira/Confluence blocks
          (:1468-1500) and the Gmail/Drive download settings (:1279-1312).
       2. settings_controller and routes_connect: fill ALL_CONNECTORS, _CONNECTOR_LABEL_OVERRIDES,
-         ORG_CONFIG_SERVICE, MICROSOFT_CONNECTORS, MICROSOFT_SERVICES and SERVICE_LABELS per section 3.6.
-         Remove the p03 tests' monkeypatching of MICROSOFT_CONNECTORS/MICROSOFT_SERVICES now that they are real.
-      3. Tests: tests/unit/test_daemon_main.py TestBuildConnectorsMicrosoft (mirroring
-         TestBuildConnectorsAtlassian :989): no org section → failures "no_org_config" for all five; no
-         token → "not_authenticated"; a disabled connector is skipped; success builds each with my_email;
-         mail/onedrive carry download settings. Extend TestBuildConnectorsFailureReasons. Settings: the five
-         rows render with labels, has_org from the microsoft section. Connect page: five rows sharing the
-         microsoft grant.
+         ORG_CONFIG_SERVICE, MICROSOFT_CONNECTORS, MICROSOFT_SERVICES and _MICROSOFT_LABELS per section
+         3.6. Replace p03's single-service simulation in the tests with the real sets.
+      3. tests/unit/test_daemon_main.py, TestBuildConnectorsMicrosoft (mirroring TestBuildConnectorsAtlassian
+         :989):
+         - no org section → failures "no_org_config" for all five;
+         - no token → "not_authenticated";
+         - a disabled connector is skipped;
+         - success builds each with my_email;
+         - mail and OneDrive carry the download settings.
+         Also extend TestBuildConnectorsFailureReasons. In settings, the five rows render with their labels
+         and has_org comes from the microsoft section. The connect page shows five rows sharing the microsoft
+         grant.
     acceptance:
       - python3 -m pytest tests/unit/test_daemon_main.py tests/unit/test_settings_controller.py tests/unit/web -q passes
       - python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q passes
@@ -1661,28 +2017,33 @@ phases:
       - tests/unit/policy/test_resource_registry.py
       - docs/always-allow-rules-reference.md
     brief: |
-      1. Add approved_todo_list, approved_outlook_calendar, i_am_outlook_organizer and
-         outlook_contacts_category_allowlist as NEW_SCOPE_SELECTORS entries, with PROPOSABLE_SCOPES
-         entries in the Tasks/Calendar/Contacts style, exactly per the plan's section 3.12 table; give
-         outlook_contacts.edit the same condition-scope treatment contacts.edit has; add VALUE_HINTS; add
-         the todo.task_lists and outlook_calendar.calendars GRANT_RESOURCE_TYPES mirroring the tasks and
-         calendar entries.
-      2. Tests: each new selector's matches() directly (positive, negative, spoofed identity for the
-         fetched one, as _SPOOF_IDENTITY_SELECTORS does), proposals for one representative tool per
-         connector (each accepts its own item; identity before attribute), grant capabilities reproduced
-         exactly, catalogue coverage.
-      3. python3 scripts/generate_always_allow_reference.py and commit docs/always-allow-rules-reference.md.
-      Stop with status=blocked if satisfying a test would require editing SCOPE_SELECTORS or
+      1. Add, exactly per the plan's section 3.12 table:
+         - approved_todo_list, approved_outlook_calendar, i_am_outlook_organizer and
+           outlook_contacts_category_allowlist as NEW_SCOPE_SELECTORS entries, with PROPOSABLE_SCOPES
+           entries in the Tasks/Calendar/Contacts style;
+         - for outlook_contacts.edit, the same condition-scope treatment contacts.edit has;
+         - VALUE_HINTS;
+         - the todo.task_lists and outlook_calendar.calendars GRANT_RESOURCE_TYPES, mirroring the tasks and
+           calendar entries.
+      2. Tests:
+         - each new selector's matches() directly: positive, negative, and spoofed identity for the fetched
+           one, as _SPOOF_IDENTITY_SELECTORS does;
+         - proposals for one representative tool per connector: each accepts its own item, identity before
+           attribute;
+         - grant capabilities reproduced exactly;
+         - catalogue coverage.
+      3. Run python3 scripts/generate_always_allow_reference.py and commit docs/always-allow-rules-reference.md.
+      Stop with status=blocked if satisfying a test would need an edit to SCOPE_SELECTORS or
       tests/unit/policy/_v1_reference.py.
     acceptance:
       - python3 -m pytest tests/unit/policy tests/unit/test_auto_accept.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_gate.py -q passes
-      - git diff --name-only shows tests/unit/policy/_v1_reference.py unchanged
+      - git diff origin/main --name-only does not list tests/unit/policy/_v1_reference.py
   - id: p26-policy-mail-onedrive
     title: Always-allow scopes and grants for Outlook Mail and OneDrive
     depends_on: [p25-policy-todo-calendar-contacts]
     complexity: M
     worker_model: opus
-    worker_model_reason: Same as p25, plus the four OneDrive folder predicates must reproduce Drive's args-vs-fetched split and move semantics without copying their v1-frozen entries.
+    worker_model_reason: Same as p25, plus the four OneDrive folder predicates must reproduce Drive's args-vs-fetched split and move semantics without touching their v1-frozen entries.
     touches:
       - src/privacyfence/policy/scopes.py
       - src/privacyfence/policy/propose.py
@@ -1694,18 +2055,89 @@ phases:
       - tests/unit/policy/test_resource_registry.py
       - docs/always-allow-rules-reference.md
     brief: |
-      1. Add trusted_outlook_sender_domain, outlook_mail_category_allowlist, the outlook_mail.anything
-         always_allow entry, the outlook_mail.anything EXTRA_SCOPES entry for create_rule/update_rule
-         (mirroring gmail.create_filter/update_filter), and the four OneDrive folder predicates, exactly per
-         the plan's section 3.12; VALUE_HINTS; the onedrive.folders GRANT_RESOURCE_TYPE mirroring drive's.
-      2. Tests as in p25 step 2 (spoofed identity for the fetched ones; a move proposal requires both ends;
-         create_rule/update_rule are never proposed from a popup).
+      1. Add, exactly per the plan's section 3.12:
+         - trusted_outlook_sender_domain and outlook_mail_category_allowlist;
+         - the always_allow entry under outlook_mail.anything, the outlook_mail.anything NEW_SCOPE_SELECTORS
+           entry, and EXTRA_SCOPES["outlook_mail.configure"] for create_rule/update_rule, mirroring
+           gmail.anything and gmail.configure;
+         - the four OneDrive folder predicates;
+         - VALUE_HINTS;
+         - the onedrive.folders GRANT_RESOURCE_TYPE, mirroring drive's.
+      2. Tests as in p25 step 2, plus:
+         - spoofed identity for the fetched predicates;
+         - a move proposal requires both ends;
+         - create_rule/update_rule are never proposed from a popup;
+         - the catalogue ids stay unique.
       3. Regenerate docs/always-allow-rules-reference.md.
-      Stop with status=blocked if satisfying a test would require editing SCOPE_SELECTORS or
+      Stop with status=blocked if satisfying a test would need an edit to SCOPE_SELECTORS or
       tests/unit/policy/_v1_reference.py.
     acceptance:
       - python3 -m pytest tests/unit/policy tests/unit/test_auto_accept.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_gate.py -q passes
-      - git diff --name-only shows tests/unit/policy/_v1_reference.py unchanged
+      - git diff origin/main --name-only does not list tests/unit/policy/_v1_reference.py
+  - id: p10-onedrive-excel-client
+    title: OneDrive client (Excel workbook methods)
+    depends_on: [p09-onedrive-client, p26-policy-mail-onedrive]
+    complexity: M
+    touches:
+      - src/privacyfence/onedrive_client.py
+      - tests/unit/test_onedrive_client.py
+    brief: |
+      Precondition: tests/fixtures/live/onedrive_excel/list_worksheets.json exists. If it does not, change
+      nothing and stop with status=blocked and exactly this reason: "Excel workbook API unsupported on
+      personal accounts (see p05's report); drop p10 and p20 and track Excel in
+      https://github.com/privacyfence/privacyfence/issues/828" (the plan's section 6).
+      1. Add the Excel half of the plan's section 3.10 to src/privacyfence/onedrive_client.py, under a
+         "# ----- Excel workbook ----- #" banner. Read tests/fixtures/live/onedrive_excel/*.json first.
+      2. Extend tests/unit/test_onedrive_client.py:
+         - each method's path and body: sheet-name quoting, the capitalization of the shift values, and
+           format_range sending only the given attributes;
+         - TestExcelLiveFixtureParsing over list_worksheets.json (id and name) and get_range.json (a
+           non-empty values grid).
+    acceptance:
+      - python3 -m pytest tests/unit/test_onedrive_client.py -q passes with no skips
+  - id: p20-onedrive-excel-connector
+    title: OneDrive connector (Excel tools)
+    depends_on: [p10-onedrive-excel-client, p26-policy-mail-onedrive]
+    complexity: M
+    touches:
+      - src/privacyfence/connectors/onedrive.py
+      - tests/unit/connectors/test_onedrive_connector.py
+      - src/privacyfence/auto_accept.py
+      - src/privacyfence/policy/registry.py
+      - src/privacyfence/write_effects.py
+      - src/privacyfence/gate.py
+      - docs/tools-reference.md
+      - docs/always-allow-rules-reference.md
+      - website/connectors/index.html
+      - website/how-it-works/index.html
+      - tests/unit/test_website_connectors_page.py
+      - tests/unit/test_connector_tool_annotations.py
+    brief: |
+      1. Add the eight onedrive_excel_* tools from the plan's section 3.10, each mirroring its
+         drive_sheets_* counterpart in connectors/drive.py:
+         - parse a range "Sheet!A1:B2" into sheet and address;
+         - validate values JSON before the gate;
+         - refuse non-.xlsx items before the gate;
+         - pass raw_data {"file": item} for every gated tool.
+         onedrive_excel_delete_dimensions is destructive; add it to DESTRUCTIVE_TOOLS.
+      2. Tables: per rule 3.2.1 add TOOL_TO_GATE, TOOL_TO_OPERATION ("<connector>.<suffix>"),
+         TOOL_TO_VERB (the counterpart's verb), write_effects.EFFECT_BY_TOOL (the counterpart's sentence
+         reworded for the Microsoft service, or the row's own sentence where the table gives one) and
+         gate._TOOL_LAYOUT (the counterpart's value) for every new review/popup tool, and TOOL_TO_GATE for
+         every new auto tool. Then apply rules 3.2.7, 3.2.11 and 3.2.12 (regenerate docs/tools-reference.md
+         and docs/always-allow-rules-reference.md, update the website counts). p26's OneDrive folder scopes derive their verbs from the tool registry, so the
+         regenerated always-allow reference picks the Excel operations up without a policy edit.
+      3. Tests:
+         - range parsing, with and without a sheet, and quoted sheet names;
+         - the .xlsx refusal;
+         - values validation;
+         - previews are metadata-only;
+         - §2.6 item 5: tests/fixtures/live/onedrive_excel/get_range.json through _parse_range_values and
+           the get_values preview;
+         - assert_all_tools_leave_an_audit_trail over all sixteen OneDrive tools.
+    acceptance:
+      - python3 -m pytest tests/unit/connectors tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_auto_accept.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_website_connector_pages.py -q passes
+      - python3 -m pytest tests/unit/test_connector_tool_annotations.py -q passes
   - id: p27-recorder-lifecycle
     title: Recorder --lifecycle for To Do and Outlook Calendar
     depends_on: [p06-todo-client, p08-calendar-client]
@@ -1716,63 +2148,89 @@ phases:
       - docs/connector-qa.md
     brief: |
       1. Add lifecycle_todo and lifecycle_outlook_calendar to scripts/qa_fixture_recorder.py and
-         LIFECYCLE_CHECKS, mirroring lifecycle_tasks (:2046-2109) and lifecycle_calendar: create a
-         "[QATEST-LIFECYCLE] <uuid8>" task in the QA list (resolved by list_name) / event on the QA calendar
-         (resolved by calendar_name, dated inside window_start..window_end), read it back, update it,
-         read it back, delete it in finally, and confirm deletion with _confirm_deleted where a 404 on
-         re-fetch counts as deleted. Build clients with TodoClient/OutlookCalendarClient(org_section,
-         token_path) from the family config.
-      2. Update the comment above LIFECYCLE_CHECKS and docs/connector-qa.md's Manifest reference
-         "--lifecycle" column for todo and outlook_calendar.
-      3. Tests mirroring TestLifecycleTasks with fake clients: success, a failed read-back, a cleanup that
-         leaves the object (cleanup_ok False).
+         LIFECYCLE_CHECKS, mirroring lifecycle_tasks (:2046-2109) and lifecycle_calendar. Each one:
+         - creates a "[QATEST-LIFECYCLE] <uuid8>" task in the QA list (resolved by list_name), or an event on
+           the QA calendar (resolved by calendar_name, dated inside window_start..window_end);
+         - reads it back, updates it, and reads it back again;
+         - deletes it in a finally block, and confirms the deletion with _confirm_deleted, where a 404 on
+           re-fetch counts as deleted.
+         Build the clients as TodoClient / OutlookCalendarClient(org_section, token_path) from the family
+         config.
+      2. Update the comment above LIFECYCLE_CHECKS, and the "--lifecycle" column of docs/connector-qa.md's
+         Manifest reference for todo and outlook_calendar.
+      3. Tests mirroring TestLifecycleTasks with fake clients: success, a failed read-back, and a cleanup
+         that leaves the object behind (cleanup_ok False).
     acceptance:
       - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q passes
   - id: p28-retire
-    title: ADRs, reference docs, changelog, one live check, and delete the plan
-    depends_on: [p24-daemon-wiring, p26-policy-mail-onedrive, p27-recorder-lifecycle, p12-mail-client-write]
+    title: ADRs and their citations, reference docs, changelog, one live check, and delete the plan
+    depends_on: [p24-daemon-wiring, p26-policy-mail-onedrive, p27-recorder-lifecycle, p20-onedrive-excel-connector, p12-mail-client-write]
     complexity: M
     touches:
-      - docs/adr/0114-microsoft-connectors-share-one-grant-and-never-request-mail-send.md
-      - docs/adr/0115-the-microsoft-client-id-comes-from-the-organization-config.md
-      - docs/adr/0116-microsoft-graph-is-called-through-one-requests-based-transport.md
-      - docs/adr/0117-loopback-sign-in-is-a-public-client-org-mode-is-confidential.md
-      - docs/adr/0118-graph-gaps-are-approximated-in-the-open.md
-      - docs/adr/0119-microsoft-fixtures-are-recorded-from-raw-graph-reads-before-the-clients.md
+      - docs/adr/0114-*
+      - docs/adr/0115-*
+      - docs/adr/0116-*
+      - docs/adr/0117-*
+      - docs/adr/0118-*
+      - docs/adr/0119-*
       - docs/adr/README.md
-      - docs/microsoft-365-setup.md
-      - docs/getting-started.md
+      - docs/microsoft-365-setup*
       - docs/connecting-a-service.md
       - docs/configuration-reference.md
-      - docs/approvals-and-policy.md
+      - docs/connector-qa.md
+      - docs/README.md
+      - scripts/build_site.py
+      - website/compare/mcp-gateways/index.html
       - CHANGELOG.md
+      - src/privacyfence/msgraph_oauth.py
+      - src/privacyfence/msgraph_http.py
+      - src/privacyfence/todo_client.py
+      - src/privacyfence/outlook_mail_client.py
+      - scripts/qa_fixture_recorder.py
       - docs/microsoft-connectors-plan.md
       - docs/microsoft-connectors-plan-manual-steps.html
     brief: |
-      1. Write ADRs 0114–0119 from the plan's section 4 with docs/adr/README.md's template (Status
-      Accepted with today's date; Context from sections 2–3; Decision; Rejected alternatives; Consequences),
-      linking source files, ADR 0040/0017/0102/0106 where relevant and
-      https://github.com/privacyfence/privacyfence/issues/828 for 0115, never the plan. Take the next free
-      numbers on origin/main at the time (rename files if main took any). Add them to the index.
-      2. docs/microsoft-365-setup.md: add "What each connector can do" (link docs/tools-reference.md's
-      sections), "What is not available" (Word editing, file comments, forwarding rules, free/busy, rooms,
-      working location, shared drives, Teams; the last five with #828's URL), and the privacy groups.
-      Link the guide from docs/getting-started.md and docs/connecting-a-service.md next to the Atlassian
-      guide; add the four privacy groups to docs/configuration-reference.md; add the Microsoft scopes to
-      docs/approvals-and-policy.md where the Google scopes are listed (only if such a list exists).
-      3. CHANGELOG.md, under ## [Unreleased]: one Added entry for the five connectors (verified on personal
-      Microsoft accounts; work/school accounts tracked in #828's URL), no version heading.
-      4. Delete docs/microsoft-connectors-plan.md and docs/microsoft-connectors-plan-manual-steps.html;
-      grep -rn "microsoft-connectors-plan" . --exclude-dir=.git must find nothing.
+      If the maintainer dropped p10 and p20 (the section 6 Excel fallback), everything below that mentions
+      Excel says instead that Excel editing is not available on personal accounts.
+      1. ADRs:
+         - Write ADRs 0114–0119 from the plan's section 4, using docs/adr/README.md's template: Status
+           Accepted with today's date; Context from sections 2–3; Decision; Rejected alternatives;
+           Consequences.
+         - Link source files, ADRs 0019/0040/0102/0106 where relevant, and
+           https://github.com/privacyfence/privacyfence/issues/828 in 0115. Never link the plan.
+         - Take the next free numbers on origin/main at the time, renaming the files if main took any, and
+           add them to the index.
+         - Add citations: 0114, 0115 and 0117 in msgraph_oauth.py's module docstring; 0116 in
+           msgraph_http.py's; 0114 at outlook_mail_client.py's create_draft ("no method sends"); 0118 at
+           todo_client.py's move_task; 0119 in the comment above the Microsoft checks in
+           qa_fixture_recorder.py and in docs/connector-qa.md's "Running the recorder" sentence.
+      2. Docs:
+         - The setup guide gains "What each connector can do", linking to tools-reference.md's sections,
+           and "What is not available": Word editing, file comments, forwarding rules, free/busy, rooms,
+           working location, shared drives and Teams, with #828's URL for the last five.
+         - Add a row to docs/connecting-a-service.md's setup table (:182): "| Outlook Mail, Outlook
+           Calendar, Outlook Contacts, OneDrive, Microsoft To Do |" followed by a Markdown link to the setup guide,
+         in the same form as the Atlassian row.
+         - Add the Microsoft guide to the sentence at docs/configuration-reference.md:219.
+         - Change "eleven connectors" to "sixteen connectors" in
+           website/compare/mcp-gateways/index.html:62.
+      3. CHANGELOG.md, under ## [Unreleased]: one Added entry for the five connectors. Say they are verified
+         on personal Microsoft accounts, and give #828's URL for work/school accounts. No version heading.
+      4. Delete docs/microsoft-connectors-plan.md and docs/microsoft-connectors-plan-manual-steps.html.
+         Remove the plan's entry from docs/README.md's contributor half and from
+         build_site.CONTRIBUTOR_DOCS. Afterwards, grep -rn "microsoft-connectors-plan" . --exclude-dir=.git
+         must find nothing.
       5. Dispatch .github/workflows/connector-live-check.yml against this phase branch (GitHub MCP
-      actions_run_trigger, no inputs), wait for it with the Monitor tool or send_later check-ins, and put
-      the run URL and its report's Microsoft rows in your PHASE-REPORT. If it opens a drift PR, do not
-      follow it; report its URL. A failing Microsoft check or lifecycle stops this phase with
-      status=blocked quoting the failing rows.
+         actions_run_trigger, no inputs). Wait for it with the Monitor tool or send_later check-ins, and put
+         the run URL and its report's Microsoft rows in your PHASE-REPORT.
+         - If it opens a drift PR, do not follow it; report its URL.
+         - A failing Microsoft --check or --lifecycle row stops this phase with status=blocked, quoting the
+           failing rows.
       6. Run the full /dod.
     acceptance:
-      - ls docs/adr | grep -cE "^011[4-9]-" is 6 (or the renumbered equivalents), each with "Accepted"
+      - ls docs/adr | grep -cE "^011[4-9]-" is 6 (or the renumbered files exist), each with "Accepted"
       - grep -rn "microsoft-connectors-plan" . --exclude-dir=.git finds nothing
       - grep -n "Unreleased" -A30 CHANGELOG.md shows the Microsoft entry
+      - python3 -m pytest tests/unit -q passes
       - the PHASE-REPORT links a completed connector-live-check.yml run whose Microsoft --check and --lifecycle rows pass
 ```
