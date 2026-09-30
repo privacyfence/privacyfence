@@ -1,0 +1,261 @@
+<title>Microsoft Connectors Checklist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; three phases (before / pause / after) as bands, numbered items inside, one checkbox per step. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --fg: #1b2230;
+  --muted: #5a6475;
+  --line: #d9dee6;
+  --accent: #0f6cbd;
+  --accent-soft: #e6f0fa;
+  --warn: #8a5a00;
+  --warn-soft: #fff4dc;
+  --done: #1f7a4d;
+  --code-bg: #eef1f5;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151c; --surface: #19202a; --fg: #e5e9f0; --muted: #9aa4b4; --line: #2c3542;
+    --accent: #5aa9f0; --accent-soft: #16283b; --warn: #f0c060; --warn-soft: #2e2512;
+    --done: #58c48e; --code-bg: #212a36; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151c; --surface: #19202a; --fg: #e5e9f0; --muted: #9aa4b4; --line: #2c3542;
+  --accent: #5aa9f0; --accent-soft: #16283b; --warn: #f0c060; --warn-soft: #2e2512;
+  --done: #58c48e; --code-bg: #212a36; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 64px; display: flex; flex-direction: column; gap: 28px; }
+header { display: flex; flex-direction: column; gap: 8px; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; text-wrap: balance; font-weight: 600; }
+h2 { font-size: 20px; margin: 0; text-wrap: balance; font-weight: 600; }
+h3 { font-size: 16px; margin: 0; font-weight: 600; text-wrap: balance; }
+p { margin: 0; max-width: 65ch; }
+.lede { color: var(--muted); }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, kbd, pre { font-family: var(--mono); font-size: 13px; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; margin: 6px 0 0; overflow-x: auto; white-space: pre; }
+.progress { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 0; background: var(--done); transition: width .2s; }
+@media (prefers-reduced-motion: reduce) { .bar > span { transition: none; } }
+.band { display: flex; flex-direction: column; gap: 16px; }
+.band-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+.band-head.pause { border-bottom-color: var(--warn); }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.item-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.item-id { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+ol.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: s; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; }
+ol.steps > li > input { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--done); }
+ol.steps > li > label { min-width: 0; display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
+ol.steps > li > label::before { content: counter(s) "."; font-weight: 600; color: var(--muted); font-size: 12px; }
+ol.steps > li > input:checked + label > .t { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { font-size: 13px; color: var(--muted); }
+.done-when { background: var(--accent-soft); border-radius: 6px; padding: 10px 12px; font-size: 14px; }
+.done-when b, .report b { display: block; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 2px; }
+.report { background: var(--warn-soft); border-radius: 6px; padding: 10px 12px; font-size: 14px; }
+.note { font-size: 13px; color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.tbl { overflow-x: auto; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+button.reset { align-self: flex-start; font: inherit; font-size: 13px; background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">PrivacyFence · issue #688 · plan/microsoft-connectors</span>
+    <h1>Microsoft Connectors Checklist</h1>
+    <p class="lede">Everything only you can do for the Outlook Mail, Outlook Calendar, Outlook Contacts, OneDrive and To Do connectors. Do the "Before" items before you run <code>/implement</code>. The orchestrator stops once, after phase p04, for the "At the pause" item. Do the "After" item before the pull request merges. Ticks are saved in this browser only.</p>
+    <div class="progress"><div class="bar"><span id="bar"></span></div><span id="count">0 / 0 steps</span></div>
+  </header>
+
+  <!-- ───────────── BEFORE ───────────── -->
+  <section class="band" aria-labelledby="before">
+    <div class="band-head">
+      <span class="eyebrow">Part 1</span>
+      <h2 id="before">Before implementation</h2>
+      <p class="note">About 75 minutes in total. Nothing here needs the new code.</p>
+    </div>
+
+    <article class="item" id="mb1">
+      <div class="item-head"><h3>mb1 · Create a dedicated QA Microsoft account</h3><span class="time">~10 min</span></div>
+      <p class="note">Every seed item, every recorded fixture and the final smoke test live in this account. It must share nothing with your own mailbox.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="mb1-1"><label for="mb1-1"><span class="t">Open <a href="https://signup.live.com/" target="_blank" rel="noopener">signup.live.com</a> in a private window, and create a new <code>@outlook.com</code> address used only for PrivacyFence QA.</span><span class="see">You land in Outlook on the web with an empty inbox.</span></label></li>
+        <li><input type="checkbox" id="mb1-2"><label for="mb1-2"><span class="t">Open <a href="https://onedrive.live.com/" target="_blank" rel="noopener">onedrive.live.com</a> and <a href="https://to-do.live.com/tasks/" target="_blank" rel="noopener">to-do.live.com</a> once each while signed in as the QA account, so both services are provisioned.</span><span class="see">OneDrive shows "My files"; To Do shows a "Tasks" list.</span></label></li>
+        <li><input type="checkbox" id="mb1-3"><label for="mb1-3"><span class="t">Store the QA account's password in your password manager. It never goes into the repository, the chat or the runner.</span></label></li>
+      </ol>
+      <div class="done-when"><b>Done when</b>You can sign in to outlook.live.com with the new account, and it has OneDrive and To Do.</div>
+    </article>
+
+    <article class="item" id="mb2">
+      <div class="item-head"><h3>mb2 · Register the "PrivacyFence QA" app in Microsoft Entra</h3><span class="time">~20 min</span></div>
+      <p class="note">This gives the client id that the QA bundle carries. Use any Microsoft account you control as the owner; it does not have to be the QA account. Registering an app with a personal account needs a directory, which a free Azure account gives you.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="mb2-1"><label for="mb2-1"><span class="t">Sign in to the <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure portal → App registrations</a>. If it says you have no directory or subscription, create a free account at <a href="https://azure.microsoft.com/free/" target="_blank" rel="noopener">azure.microsoft.com/free</a> first (it asks for a card to verify your identity), then come back.</span><span class="see">You see the App registrations list, possibly empty.</span></label></li>
+        <li><input type="checkbox" id="mb2-2"><label for="mb2-2"><span class="t">Click <b>New registration</b>. Name: <code>PrivacyFence QA</code>. Supported account types: <b>Accounts in any organizational directory and personal Microsoft accounts</b>. Leave Redirect URI empty. Click <b>Register</b>.</span><span class="see">The app's Overview page opens.</span></label></li>
+        <li><input type="checkbox" id="mb2-3"><label for="mb2-3"><span class="t">Copy the <b>Application (client) ID</b> from Overview into your password manager next to the QA account. It is not a secret, but keep it with the QA material.</span></label></li>
+        <li><input type="checkbox" id="mb2-4"><label for="mb2-4"><span class="t">Open <b>Authentication</b> → <b>Add a platform</b> → <b>Mobile and desktop applications</b>. Add the custom redirect URI <code>http://localhost/callback</code> and click Configure. Then add a second URI to the same platform: <code>http://localhost:53685/callback</code>. Save.</span><span class="see">Both URIs are listed under "Mobile and desktop applications".</span></label></li>
+        <li><input type="checkbox" id="mb2-5"><label for="mb2-5"><span class="t">Open <b>API permissions</b> → <b>Add a permission</b> → <b>Microsoft Graph</b> → <b>Delegated permissions</b>. Tick <code>offline_access</code>, <code>User.Read</code>, <code>Mail.ReadWrite</code>, <code>MailboxSettings.ReadWrite</code>, <code>Calendars.ReadWrite</code>, <code>Contacts.ReadWrite</code>, <code>Files.ReadWrite</code> and <code>Tasks.ReadWrite</code>. Click <b>Add permissions</b>. Do <b>not</b> add <code>Mail.Send</code>.</span><span class="see">The list shows those eight delegated Graph permissions. "Admin consent required" says No for each.</span></label></li>
+        <li><input type="checkbox" id="mb2-6"><label for="mb2-6"><span class="t">Do not create a client secret. The QA runner uses local mode, a public client. A secret is only for org mode's web sign-in.</span></label></li>
+      </ol>
+      <div class="done-when"><b>Done when</b>The app's Overview page shows an Application (client) ID, and Authentication lists <code>http://localhost/callback</code> and <code>http://localhost:53685/callback</code> under "Mobile and desktop applications".</div>
+    </article>
+
+    <article class="item" id="mb3">
+      <div class="item-head"><h3>mb3 · Seed the QA account</h3><span class="time">~35 min</span></div>
+      <p class="note">The recorder finds each item by its <b>exact</b> name and refuses to record anything without the <code>[QATEST]</code> tag. Copy names character for character. Every body is synthetic. The full reference is <a href="https://github.com/privacyfence/privacyfence/blob/plan/microsoft-connectors/docs/microsoft-connectors-plan.md#35-recorder-p04-p05" target="_blank" rel="noopener">plan §3.5</a>.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="mb3-1"><label for="mb3-1"><span class="t"><b>Mail.</b> In <a href="https://outlook.live.com/mail/" target="_blank" rel="noopener">Outlook on the web</a>, send a message to the QA address itself. Subject <code>PrivacyFence QA seed message [QATEST]</code>. Body <code>Synthetic PrivacyFence QA test message. No real information.</code> Attach a text file <code>qa-seed-attachment.txt</code> containing <code>Synthetic PrivacyFence QA attachment. No real information.</code></span><span class="see">The message arrives in the Inbox with a paperclip.</span></label></li>
+        <li><input type="checkbox" id="mb3-2"><label for="mb3-2"><span class="t">Reply to that Inbox message once, to yourself, with <code>Synthetic PrivacyFence QA reply. No real information.</code></span><span class="see">The Inbox shows a two-message conversation.</span></label></li>
+        <li><input type="checkbox" id="mb3-3"><label for="mb3-3"><span class="t">Create a top-level mail folder (right-click <b>Folders</b> → Create new folder) named <code>PrivacyFence QA Folder [QATEST]</code>.</span></label></li>
+        <li><input type="checkbox" id="mb3-4"><label for="mb3-4"><span class="t">Create a category named <code>PrivacyFence QA Category [QATEST]</code> (right-click the seed message → Categorize → New category). Assign it to the seed message.</span></label></li>
+        <li><input type="checkbox" id="mb3-5"><label for="mb3-5"><span class="t">Create an inbox rule (Settings → Mail → Rules → Add new rule). Name <code>PrivacyFence QA rule [QATEST]</code>. Condition: subject includes <code>[QATEST-RULE]</code>. Action: move to <code>PrivacyFence QA Folder [QATEST]</code>. Save.</span></label></li>
+        <li><input type="checkbox" id="mb3-6"><label for="mb3-6"><span class="t"><b>Calendar.</b> In <a href="https://outlook.live.com/calendar/" target="_blank" rel="noopener">Outlook Calendar</a> → Add calendar → Create blank calendar, create a calendar named <code>PrivacyFence test [PFQA]</code>.</span></label></li>
+        <li><input type="checkbox" id="mb3-7"><label for="mb3-7"><span class="t">On that calendar, create an event on <b>15 January 2030, 10:00–11:00</b> with no attendees. Title <code>PrivacyFence QA seed event [QATEST]</code>. Description <code>Synthetic PrivacyFence QA test event. No real information.</code> Category <code>PrivacyFence QA Category [QATEST]</code>.</span></label></li>
+        <li><input type="checkbox" id="mb3-8"><label for="mb3-8"><span class="t"><b>Contacts.</b> In <a href="https://outlook.live.com/people/" target="_blank" rel="noopener">People</a>, create a contact. Display name <code>PrivacyFence QA Test Contact [QATEST]</code>. Email <code>qatest.contact@example.com</code>. Mobile <code>555-0142</code>. Company <code>PrivacyFence QA</code>. Notes <code>Synthetic PrivacyFence QA note. No real information.</code></span></label></li>
+        <li><input type="checkbox" id="mb3-9"><label for="mb3-9"><span class="t"><b>OneDrive.</b> In <a href="https://onedrive.live.com/" target="_blank" rel="noopener">OneDrive</a> → My files, create a folder named exactly <code>PrivacyFence QA Sandbox</code>.</span></label></li>
+        <li><input type="checkbox" id="mb3-10"><label for="mb3-10"><span class="t">In that folder, upload a text file named <code>PrivacyFence QA seed note [QATEST].txt</code> containing <code>Synthetic PrivacyFence QA test file. No real information.</code></span></label></li>
+        <li><input type="checkbox" id="mb3-11"><label for="mb3-11"><span class="t">In that folder, create an Excel workbook named <code>PrivacyFence QA seed workbook [QATEST].xlsx</code>. Rename its sheet to <code>QA</code>, and fill it in: A1 <code>Name</code>, B1 <code>Value</code>, A2 <code>[QATEST] synthetic</code>, B2 <code>42</code>.</span><span class="see">The folder holds exactly those two files.</span></label></li>
+        <li><input type="checkbox" id="mb3-12"><label for="mb3-12"><span class="t"><b>To Do.</b> In <a href="https://to-do.live.com/tasks/" target="_blank" rel="noopener">Microsoft To Do</a>, create two lists: <code>PrivacyFence QA List</code> and <code>PrivacyFence QA Contrast List</code>.</span></label></li>
+        <li><input type="checkbox" id="mb3-13"><label for="mb3-13"><span class="t">In <code>PrivacyFence QA List</code>, add the task <code>PrivacyFence QA seed task [QATEST]</code> with note <code>Synthetic PrivacyFence QA test task. No real information.</code> and due date 15 January 2030. Add no steps and no files, because the move test needs a plain task.</span></label></li>
+      </ol>
+      <div class="done-when"><b>Done when</b>Every item above exists with exactly the listed name.</div>
+    </article>
+
+    <article class="item" id="mb4">
+      <div class="item-head"><h3>mb4 · Add the Microsoft sections to the runner's QA manifest</h3><span class="time">~5 min</span></div>
+      <p class="note">This is on the self-hosted runner (<code>privacyfence-test</code>), as the runner user. The file is git-ignored and never leaves the runner. See <a href="https://github.com/privacyfence/privacyfence/blob/plan/microsoft-connectors/docs/connector-qa.md#persistent-qa-state" target="_blank" rel="noopener">connector-qa.md → Persistent QA state</a>.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="mb4-1"><label for="mb4-1"><span class="t">SSH to the runner and open <code>~/privacyfence/tests/fixtures/qa_environment.yaml</code>.</span></label></li>
+        <li><input type="checkbox" id="mb4-2"><label for="mb4-2"><span class="t">Append these sections exactly (every value is also the code's default, so leave any ids out):</span>
+<pre>outlook_mail:
+  seed_subject: "PrivacyFence QA seed message [QATEST]"
+  seed_message_id: ""
+  folder_name: "PrivacyFence QA Folder [QATEST]"
+  category_name: "PrivacyFence QA Category [QATEST]"
+  rule_name: "PrivacyFence QA rule [QATEST]"
+outlook_calendar:
+  calendar_name: "PrivacyFence test [PFQA]"
+  seed_event_subject: "PrivacyFence QA seed event [QATEST]"
+  window_start: "2030-01-01T00:00:00Z"
+  window_end: "2030-02-01T00:00:00Z"
+outlook_contacts:
+  seed_contact_display_name: "PrivacyFence QA Test Contact [QATEST]"
+onedrive:
+  folder_name: "PrivacyFence QA Sandbox"
+  seed_file_name: "PrivacyFence QA seed note [QATEST].txt"
+onedrive_excel:
+  folder_name: "PrivacyFence QA Sandbox"
+  seed_workbook_name: "PrivacyFence QA seed workbook [QATEST].xlsx"
+  sheet_name: "QA"
+  range: "A1:B2"
+todo:
+  list_name: "PrivacyFence QA List"
+  contrast_list_name: "PrivacyFence QA Contrast List"
+  seed_task_title: "PrivacyFence QA seed task [QATEST]"</pre></label></li>
+        <li><input type="checkbox" id="mb4-3"><label for="mb4-3"><span class="t">Check that it still parses: <code>python3 -c "import yaml,os; print(sorted(yaml.safe_load(open(os.path.expanduser('~/privacyfence/tests/fixtures/qa_environment.yaml')))))"</code></span><span class="see">The printed list includes the six new section names alongside the existing ones.</span></label></li>
+      </ol>
+      <div class="done-when"><b>Done when</b>The runner's <code>qa_environment.yaml</code> contains the <code>outlook_mail</code>, <code>outlook_calendar</code>, <code>outlook_contacts</code>, <code>onedrive</code>, <code>onedrive_excel</code> and <code>todo</code> sections. Then tell <code>/implement</code> that the "before" steps are done.</div>
+    </article>
+  </section>
+
+  <!-- ───────────── PAUSE ───────────── -->
+  <section class="band" aria-labelledby="pause">
+    <div class="band-head pause">
+      <span class="eyebrow">Part 2 · the one pause</span>
+      <h2 id="pause">At the pause after p04</h2>
+      <p class="note">/implement stops here and asks you to approve p04. By then, the sign-in code (p01), the Graph transport (p02) and the recorder checks (p04) are merged on <code>feature/microsoft-connectors</code>. You chose this pause, so the real sign-in flow mints the QA token.</p>
+    </div>
+
+    <article class="item" id="gate">
+      <div class="item-head"><h3>gate · Sign the QA account in and put the token on the runner</h3><span class="time">~15 min</span></div>
+      <p class="note">Do this on your development machine, a source checkout as in <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/dev-vs-live-setup.md" target="_blank" rel="noopener">dev-vs-live-setup.md</a>. The token file is a live credential: it only ever lives on that machine and the runner (ADR 0019).</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="g-1"><label for="g-1"><span class="t">Update your checkout: <code>git fetch origin feature/microsoft-connectors &amp;&amp; git checkout feature/microsoft-connectors &amp;&amp; git pull</code>, then <code>.venv/bin/pip install -e ".[test]"</code>.</span></label></li>
+        <li><input type="checkbox" id="g-2"><label for="g-2"><span class="t">Add the Microsoft section to your existing QA bundle. Add <code>--sign-key &lt;your key&gt;</code> if your QA bundle is signed:</span>
+<pre>.venv/bin/python scripts/build_org_bundle.py --merge -o org_config.qa.json \
+  --microsoft-client-id &lt;Application (client) ID from mb2&gt;</pre><span class="see">The script writes <code>org_config.qa.json</code> with a <code>microsoft</code> section.</span></label></li>
+        <li><input type="checkbox" id="g-3"><label for="g-3"><span class="t">Sign in: <code>.venv/bin/python scripts/qa_authenticate_connectors.py --org-config org_config.qa.json --only microsoft</code>. In the browser tab that opens, sign in as the <b>QA</b> account and accept the permissions.</span><span class="see">The terminal prints <code>Signed in as &lt;the QA address&gt;</code>, and <code>credentials/microsoft_token.json</code> exists. An error mentioning <code>AADSTS50011</code> means a redirect URI from mb2 step 4 is missing.</span></label></li>
+        <li><input type="checkbox" id="g-4"><label for="g-4"><span class="t">Copy both files to the runner, as its runner user:</span>
+<pre>scp org_config.qa.json &lt;runner&gt;:~/privacyfence/org/org_config.json
+scp credentials/microsoft_token.json &lt;runner&gt;:~/privacyfence/credentials/
+ssh &lt;runner&gt; chmod 600 ~/privacyfence/org/org_config.json ~/privacyfence/credentials/microsoft_token.json</pre></label></li>
+        <li><input type="checkbox" id="g-5"><label for="g-5"><span class="t">Delete the local copy of the token if this machine is not your usual QA machine: <code>rm credentials/microsoft_token.json</code>.</span></label></li>
+        <li><input type="checkbox" id="g-6"><label for="g-6"><span class="t">Reply to <code>/implement</code>: approve p04.</span><span class="see">p05 then records the six fixture sets on the runner, one workflow run at a time.</span></label></li>
+      </ol>
+      <div class="report"><b>Report back</b>"approve p04: bundle and token installed on the runner, signed in as the QA account".</div>
+    </article>
+  </section>
+
+  <!-- ───────────── AFTER ───────────── -->
+  <section class="band" aria-labelledby="after">
+    <div class="band-head">
+      <span class="eyebrow">Part 3</span>
+      <h2 id="after">After implementation</h2>
+      <p class="note">When /implement opens the pull request. This is the only hands-on test of the build.</p>
+    </div>
+
+    <article class="item" id="ma1">
+      <div class="item-head"><h3>ma1 · End-to-end smoke test, local mode, QA account</h3><span class="time">~40 min</span></div>
+      <p class="note">Run PrivacyFence from a source checkout of <code>feature/microsoft-connectors</code> on your development machine (<code>./scripts/dev_start.sh</code>). Connect Claude Desktop or Claude Code to it as the <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/getting-started.md" target="_blank" rel="noopener">getting-started guide</a> says. Ask the AI client in plain words; the tool names are for checking the approval card.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="a-1"><label for="a-1"><span class="t">In PrivacyFence Settings, run <b>Install/Update Organization Config…</b> with <code>org_config.qa.json</code>. Then click <b>Authenticate…</b> on the Outlook Mail row and sign in as the QA account.</span><span class="see">All five rows (Outlook Mail, Outlook Calendar, Outlook Contacts, OneDrive, Microsoft To Do) show as connected after one sign-in.</span></label></li>
+        <li><input type="checkbox" id="a-2"><label for="a-2"><span class="t"><b>Mail:</b> ask the client to read the seed message (<code>outlook_mail_get_message</code>). Click <b>Deny</b> on the card, then ask again and <b>Allow</b>.</span><span class="see">Deny returns an error, not the body. Allow returns the body text and the attachment name.</span></label></li>
+        <li><input type="checkbox" id="a-3"><label for="a-3"><span class="t"><b>Mail:</b> ask for a reply-all draft to the seed conversation (<code>outlook_mail_reply_all_draft</code>) and allow it.</span><span class="see">The card shows the Markdown and every participant. The draft is in Drafts, rendered as HTML. Nothing was sent.</span></label></li>
+        <li><input type="checkbox" id="a-4"><label for="a-4"><span class="t"><b>Mail:</b> download the seed attachment (<code>outlook_mail_download_attachment</code>) and allow it.</span><span class="see">The file is saved locally with its content intact.</span></label></li>
+        <li><input type="checkbox" id="a-5"><label for="a-5"><span class="t"><b>Calendar:</b> list events in January 2030 on <code>PrivacyFence test [PFQA]</code>. Create a new event there titled <code>[QATEST smoke]</code>, then delete it.</span><span class="see">Both writes show approval cards, and the delete card is marked destructive. The event appears in Outlook, then disappears.</span></label></li>
+        <li><input type="checkbox" id="a-6"><label for="a-6"><span class="t"><b>Contacts:</b> search for "PrivacyFence QA" and change the seed contact's job title.</span><span class="see">The card shows "old → new" for the job title only.</span></label></li>
+        <li><input type="checkbox" id="a-7"><label for="a-7"><span class="t"><b>OneDrive:</b> read the seed note's content, upload a small text file <code>[QATEST smoke].txt</code> into the sandbox folder, and read values A1:B2 from the seed workbook.</span><span class="see">Reads show review cards, the upload shows a popup card, and the file appears in OneDrive.</span></label></li>
+        <li><input type="checkbox" id="a-8"><label for="a-8"><span class="t"><b>To Do:</b> create <code>[QATEST smoke] task</code> in the QA list, complete it, and move it to the Contrast list. On the move card, click <b>Always allow</b> for this list, if offered.</span><span class="see">The task ends up completed in the Contrast list with a new id. The Always-allow rule is scoped to the list(s) shown.</span></label></li>
+        <li><input type="checkbox" id="a-9"><label for="a-9"><span class="t">Open the audit log in Settings.</span><span class="see">One entry per call above, with the right connector, tool and decision. No entry contains a token.</span></label></li>
+        <li><input type="checkbox" id="a-10"><label for="a-10"><span class="t">Clean up: delete the <code>[QATEST smoke]</code> file, task and draft, and the Always-allow rule you created.</span></label></li>
+      </ol>
+      <div class="report"><b>Report back</b>Tick the pull request's "ma1-smoke-test" box, and add a comment like: <code>ma1 smoke: PASS (mail read/deny/draft/download, calendar create/delete, contacts edit, onedrive read/upload/excel, todo create/complete/move, audit ok) on &lt;commit sha&gt;</code>. On a failure, write FAIL with the step number and what you saw.</div>
+    </article>
+  </section>
+
+  <button class="reset" id="reset" type="button">Clear all ticks</button>
+</div>
+
+<script>
+(function () {
+  var KEY = "pf-ms-connectors-checklist-v1";
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  function render() {
+    var done = boxes.filter(function (b) { return b.checked; }).length;
+    document.getElementById("count").textContent = done + " / " + boxes.length + " steps";
+    document.getElementById("bar").style.width = (boxes.length ? (100 * done / boxes.length) : 0) + "%";
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!state[b.id];
+    b.addEventListener("change", function () {
+      state[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+      render();
+    });
+  });
+  document.getElementById("reset").addEventListener("click", function () {
+    boxes.forEach(function (b) { b.checked = false; });
+    state = {};
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    render();
+  });
+  render();
+})();
+</script>
