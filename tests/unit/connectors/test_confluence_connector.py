@@ -30,7 +30,11 @@ from privacyfence.connectors import confluence as confluence_module
 from privacyfence.connectors.confluence import ConfluenceConnector
 from privacyfence.privacy_filter import init_privacy_filter
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 
 def make_connector(my_email="me@example.com"):
@@ -82,6 +86,29 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Confluence tool"):
             await connector.call("confluence_does_not_exist", {})
+
+
+CONFLUENCE_SIBLINGS: dict[str, tuple[str, ...]] = {
+    "confluence_list_spaces": ("confluence_list_pages",),
+    "confluence_search": ("confluence_cql_search", "confluence_get_page"),
+    "confluence_cql_search": ("confluence_search",),
+    "confluence_list_pages": ("confluence_search", "confluence_get_page"),
+    "confluence_get_page": ("confluence_get_page_by_title",),
+    "confluence_get_page_by_title": ("confluence_get_page",),
+    "confluence_create_page": ("confluence_update_page",),
+    "confluence_update_page": ("confluence_get_page",),
+    "confluence_list_attachments": ("confluence_download_attachment",),
+    "confluence_download_attachment": ("confluence_list_attachments",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(ConfluenceConnector(MagicMock()), CONFLUENCE_SIBLINGS)
 
 
 class TestAutoTools:
