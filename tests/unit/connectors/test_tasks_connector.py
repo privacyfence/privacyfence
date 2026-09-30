@@ -26,11 +26,16 @@ from privacyfence.google_errors import GoogleResourceUnavailableError
 from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE, public_message
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import tasks as tasks_module
+from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.connectors.tasks import TasksConnector
 from privacyfence.privacy_filter import init_privacy_filter
 from privacyfence.tasks_client import Task, TaskList, TasksClient, TasksClientError
 
-from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
+from ...helpers import (
+    assert_all_tools_leave_an_audit_trail,
+    assert_no_placeholder_fields,
+    assert_tool_definitions_complete,
+)
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures" / "live" / "tasks"
 
@@ -84,6 +89,48 @@ class TestDispatch:
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="Unknown Tasks tool"):
             await connector.call("tasks_does_not_exist", {})
+
+
+TASKS_SIBLINGS = {
+    "tasks_list_task_lists": ("tasks_list_tasks",),
+    "tasks_list_tasks": ("tasks_get_task",),
+    "tasks_get_task": ("tasks_list_tasks",),
+    "tasks_create_task": ("tasks_list_task_lists",),
+    "tasks_update_task": ("tasks_complete_task",),
+    "tasks_complete_task": ("tasks_uncomplete_task",),
+    "tasks_uncomplete_task": ("tasks_complete_task",),
+    "tasks_move_task": ("tasks_list_task_lists",),
+}
+
+
+class TestToolDefinitions:
+    """What an AI client reads to choose and call these tools: every parameter described, what
+    each tool returns, the approval wording its gate implies, and the related tool to use
+    instead. Glama's Tool Definition Quality Score grades exactly this."""
+
+    def test_every_tool_definition_is_complete(self):
+        assert_tool_definitions_complete(TasksConnector(MagicMock()), TASKS_SIBLINGS)
+
+    def test_the_check_reports_a_missing_parameter_description(self):
+        """Guards the check itself against passing vacuously."""
+
+        class _Stub(Connector):
+            @property
+            def name(self) -> str:
+                return "tasks"
+
+            def tool_specs(self) -> list[ToolSpec]:
+                return [ToolSpec(
+                    name="tasks_get_task",
+                    description="Fetch a task. Returns it. Auto-approved.",
+                    params=[ToolParam("task_id", "str")],
+                )]
+
+            async def call(self, tool, args):
+                raise NotImplementedError
+
+        with pytest.raises(AssertionError, match="tasks_get_task.task_id"):
+            assert_tool_definitions_complete(_Stub(), {})
 
 
 class TestListAndGet:
