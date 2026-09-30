@@ -55,18 +55,36 @@ class JiraClientError(Exception):
     """Raised for unrecoverable Jira client problems (auth, config, API)."""
 
 
-def _text_to_adf(text: str) -> dict[str, Any]:
+def _text_to_adf(text: str, names: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Wrap plain text in a single-paragraph Atlassian Document Format node.
 
     Jira Cloud REST API v3 (which this client targets, matching how
     _parse_issue/_parse_comment already read descriptions and comments back
     as ADF) requires description and comment bodies to be ADF objects, not
-    plain strings.
+    plain strings. ``@[Name](accountId)`` markup becomes a real ADF mention
+    node; ``names`` (the user directory's names) overrides the agent's label.
     """
+    matches = list(atlassian_users.MENTION_MARKUP_RE.finditer(text))
+    if not matches:
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    else:
+        content = []
+        pos = 0
+        for m in matches:
+            if m.start() > pos:
+                content.append({"type": "text", "text": text[pos:m.start()]})
+            label, account_id = m.group(1), m.group(2)
+            name = names[account_id] if names and account_id in names else label
+            content.append(
+                {"type": "mention", "attrs": {"id": account_id, "text": "@" + name}}
+            )
+            pos = m.end()
+        if pos < len(text):
+            content.append({"type": "text", "text": text[pos:]})
     return {
         "type": "doc",
         "version": 1,
-        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
+        "content": [{"type": "paragraph", "content": content}],
     }
 
 
@@ -335,6 +353,7 @@ class JiraClient:
         priority: str = "",
         assignee_account_id: str = "",
         labels: list[str] | None = None,
+        mention_names: Mapping[str, str] | None = None,
     ) -> JiraIssue:
         if not project_key or not summary:
             raise JiraClientError("create_issue requires project_key and summary")
@@ -344,7 +363,7 @@ class JiraClient:
             "issuetype": {"name": issue_type},
         }
         if description:
-            fields["description"] = _text_to_adf(description)
+            fields["description"] = _text_to_adf(description, mention_names)
         if priority:
             fields["priority"] = {"name": priority}
         if assignee_account_id:
@@ -359,11 +378,15 @@ class JiraClient:
         logger.info("create_issue created %s", key)
         return self.get_issue(key)
 
-    def add_comment(self, issue_key: str, body: str) -> JiraComment:
+    def add_comment(
+        self, issue_key: str, body: str, mention_names: Mapping[str, str] | None = None
+    ) -> JiraComment:
         if not issue_key or not body:
             raise JiraClientError("add_comment requires issue_key and body")
         try:
-            raw = self._request(self._client.issue_add_comment, issue_key, _text_to_adf(body))
+            raw = self._request(
+                self._client.issue_add_comment, issue_key, _text_to_adf(body, mention_names)
+            )
         except Exception as exc:
             raise JiraClientError(f"add_comment({issue_key!r}) failed: {exc}") from exc
         comment = self._parse_comment(raw)

@@ -98,3 +98,27 @@ class TestEffectFor:
 
     def test_returns_empty_for_no_tool(self):
         assert effect_for("") == ""
+
+
+class TestAtlassianMentionEffects:
+    def test_the_five_mention_capable_writes_say_who_may_be_notified(self):
+        assert EFFECT_BY_TOOL["jira_create_issue"] == (
+            "A new issue is created. The project's watchers, the assignee and anyone "
+            "@mentioned may be notified."
+        )
+        assert EFFECT_BY_TOOL["jira_add_comment"] == (
+            "A comment is added, visible to everyone who can see the issue. "
+            "Anyone @mentioned may be notified."
+        )
+        assert EFFECT_BY_TOOL["jira_update_issue"] == (
+            "The issue's fields are changed. Its watchers, a new assignee and anyone newly "
+            "@mentioned may be notified."
+        )
+        assert EFFECT_BY_TOOL["confluence_create_page"] == (
+            "A new page is created in that space, visible to everyone with access to it. "
+            "Anyone @mentioned may be notified."
+        )
+        assert EFFECT_BY_TOOL["confluence_update_page"] == (
+            "The page's contents are replaced. The previous version stays in the page's "
+            "history. Anyone newly @mentioned may be notified."
+        )

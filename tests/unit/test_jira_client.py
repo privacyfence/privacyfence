@@ -92,6 +92,24 @@ class TestTextToAdf:
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}],
         }
 
+    def test_markup_becomes_text_mention_text_nodes(self):
+        adf = _text_to_adf("hi @[Jane](557058:abcdefgh) bye")
+        assert adf["content"][0]["content"] == [
+            {"type": "text", "text": "hi "},
+            {"type": "mention", "attrs": {"id": "557058:abcdefgh", "text": "@Jane"}},
+            {"type": "text", "text": " bye"},
+        ]
+
+    def test_names_override_the_label(self):
+        adf = _text_to_adf("@[Fake](557058:abcdefgh)", {"557058:abcdefgh": "Real"})
+        assert adf["content"][0]["content"] == [
+            {"type": "mention", "attrs": {"id": "557058:abcdefgh", "text": "@Real"}},
+        ]
+
+    def test_names_without_the_id_keep_the_label(self):
+        adf = _text_to_adf("@[Fake](557058:abcdefgh)", {"other": "Real"})
+        assert adf["content"][0]["content"][0]["attrs"]["text"] == "@Fake"
+
 
 # ---------------------------------------------------------------------------- #
 # _extract_adf_text: recursive ADF walking
@@ -614,6 +632,19 @@ class TestCreateIssue:
         assert fields["description"] == _text_to_adf("desc")
         assert issue.key == "ENG-99"
 
+    def test_mention_names_reach_the_description_adf(self):
+        client = make_client()
+        client._client.create_issue.return_value = {"key": "ENG-99"}
+        client._client.issue.return_value = {"key": "ENG-99", "fields": {"summary": "x"}}
+
+        client.create_issue(
+            "ENG", "x", description="@[Fake](557058:abcdefgh)",
+            mention_names={"557058:abcdefgh": "Real"},
+        )
+
+        fields = client._client.create_issue.call_args.kwargs["fields"]
+        assert fields["description"]["content"][0]["content"][0]["attrs"]["text"] == "@Real"
+
     def test_optional_fields_omitted_when_not_given(self):
         client = make_client()
         client._client.create_issue.return_value = {"key": "ENG-99"}
@@ -648,6 +679,13 @@ class TestAddComment:
         client.add_comment("ENG-1", "hi")
         args = client._client.issue_add_comment.call_args.args
         assert args == ("ENG-1", _text_to_adf("hi"))
+
+    def test_mention_names_reach_the_comment_adf(self):
+        client = make_client()
+        client._client.issue_add_comment.return_value = {"id": "c1", "body": "hi"}
+        client.add_comment("ENG-1", "@[Fake](557058:abcdefgh)", {"557058:abcdefgh": "Real"})
+        adf = client._client.issue_add_comment.call_args.args[1]
+        assert adf["content"][0]["content"][0]["attrs"]["text"] == "@Real"
 
 
 class TestUpdateIssue:

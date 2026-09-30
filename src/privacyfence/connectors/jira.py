@@ -9,7 +9,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-from ..atlassian_users import display_markup
+from ..atlassian_users import display_markup, markup_mention_ids
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
@@ -119,6 +119,8 @@ class JiraConnector(Connector):
                     ToolParam("description", "str", required=False, default=""),
                     ToolParam("priority", "str", required=False, default="",
                               description="e.g. High, Medium, Low"),
+                    ToolParam("assignee_account_id", "str", required=False, default="",
+                              description="Atlassian account id to assign the issue to -- find it with jira_find_users"),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -127,7 +129,7 @@ class JiraConnector(Connector):
                 description="Add a comment to an existing Jira issue. Requires user approval.",
                 params=[
                     ToolParam("issue_key", "str", description="e.g. PROJ-123"),
-                    ToolParam("body", "str", description="Comment text (plain text)"),
+                    ToolParam("body", "str", description="Comment text (plain text). Mention someone with @[Name](accountId) -- find the id with jira_find_users."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -135,13 +137,16 @@ class JiraConnector(Connector):
                 name="jira_update_issue",
                 description=(
                     "Update fields on an existing Jira issue (summary, description, priority, "
-                    "and/or custom fields). Requires user approval."
+                    "and/or custom fields). Requires user approval. "
+                    "Pass assignee_account_id to reassign it."
                 ),
                 params=[
                     ToolParam("issue_key", "str"),
                     ToolParam("summary", "str", required=False, default=""),
                     ToolParam("description", "str", required=False, default=""),
                     ToolParam("priority", "str", required=False, default=""),
+                    ToolParam("assignee_account_id", "str", required=False, default="",
+                              description="Atlassian account id to assign the issue to -- find it with jira_find_users"),
                     ToolParam("custom_fields", "str", required=False, default="",
                               description=(
                                   "JSON object mapping Jira Cloud custom field display names "
@@ -332,14 +337,23 @@ class JiraConnector(Connector):
         issue_type: str = "Task",
         description: str = "",
         priority: str = "",
+        assignee_account_id: str = "",
     ) -> Any:
+        names = await self._resolve_write_accounts(description, [assignee_account_id])
         payload = {
             "project_key": project_key, "summary": summary,
             "issue_type": issue_type, "description": description, "priority": priority,
         }
+        if assignee_account_id:
+            payload["assignee_account_id"] = assignee_account_id
         preview = {"Project": project_key, "Type": issue_type, "Summary": summary}
         if priority:
             preview["Priority"] = priority
+        if assignee_account_id:
+            preview["Assignee"] = names[assignee_account_id]
+        if markup_mention_ids(description):
+            preview["Mentions"] = ", ".join(names[i] for i in markup_mention_ids(description))
+        shown_description = display_markup(description, names)
         # v2's right pane: a label-styled "Description" heading above the
         # body text, same treatment jira_get_issue's own Description
         # already gets (see approval_window_html.py's _field_block_html) --
@@ -349,7 +363,7 @@ class JiraConnector(Connector):
         blocks = []
         if description:
             blocks.append({"type": "heading", "label": "Description"})
-            blocks.append({"type": "text", "text": description})
+            blocks.append({"type": "text", "text": shown_description})
         await gated_call(
             connector=self.name,
             tool="jira_create_issue",
@@ -360,34 +374,39 @@ class JiraConnector(Connector):
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=description,
+            details_text=shown_description,
             preview_blocks=blocks,
             my_email=self.my_email,
             args=payload,
         )
         issue = await self._fetch(
             self._jira.create_issue, project_key, summary, issue_type, description, priority,
+            assignee_account_id, None, names,
         )
         return asdict(issue)
 
     async def _add_comment(self, issue_key: str, body: str) -> Any:
+        names = await self._resolve_write_accounts(body, [])
         issue = await self._fetch(self._jira.get_issue, issue_key)
         preview = {"Issue": f"{issue.key} — {issue.summary}"}
+        if markup_mention_ids(body):
+            preview["Mentions"] = ", ".join(names[i] for i in markup_mention_ids(body))
+        shown_body = display_markup(body, names)
         await gated_call(
             connector=self.name,
             tool="jira_add_comment",
             tool_name="Add Jira Comment",
-            summary=f"Comment on {issue_key}: {body[:80]}",
+            summary=f"Comment on {issue_key}: {shown_body[:80]}",
             sender=f"issue={issue_key}",
             raw_data={"issue_key": issue_key, "body": body},
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=body,
+            details_text=shown_body,
             my_email=self.my_email,
             args={"issue_key": issue_key, "body": body},
         )
-        comment = await self._fetch(self._jira.add_comment, issue_key, body)
+        comment = await self._fetch(self._jira.add_comment, issue_key, body, names)
         return asdict(comment)
 
     async def _update_issue(
@@ -396,8 +415,10 @@ class JiraConnector(Connector):
         summary: str = "",
         description: str = "",
         priority: str = "",
+        assignee_account_id: str = "",
         custom_fields: str = "",
     ) -> Any:
+        names = await self._resolve_write_accounts(description, [assignee_account_id])
         issue = await self._fetch(self._jira.get_issue, issue_key)
         fields: dict[str, Any] = {}
         preview = {"Issue": f"{issue.key} — {issue.summary}"}
@@ -405,11 +426,16 @@ class JiraConnector(Connector):
             fields["summary"] = summary
             preview["Summary"] = f"{issue.summary} → {summary}"
         if description:
-            fields["description"] = _text_to_adf(description)
+            fields["description"] = _text_to_adf(description, names)
             preview["Description"] = "(updated — see below)"
+            if markup_mention_ids(description):
+                preview["Mentions"] = ", ".join(names[i] for i in markup_mention_ids(description))
         if priority:
             fields["priority"] = {"name": priority}
             preview["Priority"] = f"→ {priority}"
+        if assignee_account_id:
+            fields["assignee"] = {"accountId": assignee_account_id}
+            preview["Assignee"] = f"→ {names[assignee_account_id]}"
         custom_updates = _parse_json_object(custom_fields)
         if custom_fields and custom_updates is None:
             raise ValueError(
@@ -422,7 +448,7 @@ class JiraConnector(Connector):
         if not fields:
             raise ValueError("update_issue: at least one field must be provided")
         if description:
-            details_text = description
+            details_text = display_markup(description, names)
         else:
             changed_fields = ", ".join(k for k in preview if k != "Issue")
             details_text = f"{changed_fields} will be updated; description is unchanged."
@@ -469,6 +495,24 @@ class JiraConnector(Connector):
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    async def _resolve_write_accounts(self, text: str, extra_ids: list[str]) -> dict[str, str]:
+        """Directory names for every account id a write mentions or assigns.
+
+        The approver is shown these names, never the agent's labels (ADR 0116);
+        an id that cannot be resolved is refused before the approval card.
+        """
+        ids = list(dict.fromkeys(markup_mention_ids(text) + [i for i in extra_ids if i]))
+        if not ids:
+            return {}
+        names = await self._fetch(self._jira.resolve_user_names, ids)
+        missing = [i for i in ids if i not in names]
+        if missing:
+            raise ValueError(
+                f"Unknown Atlassian account id(s): {', '.join(missing)}. "
+                "Look the person up with jira_find_users and use their account_id."
+            )
+        return names
 
     async def _fetch(self, func, *args) -> Any:
         try:
