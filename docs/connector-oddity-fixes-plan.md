@@ -57,6 +57,7 @@ Every client list method that returns one page today follows the pages itself:
 - The description sentences that say "only the first page" are replaced by
   "Reads up to max_results items across pages." (adapt the noun), and the page budget is not
   mentioned.
+- Where the existing clamp already equals the API page size (Gmail `_clamp_max_results` caps at 100, Apps Script `get_execution_log` at 50), the loop is a no-op today; it is still added so a later clamp change cannot silently truncate.
 - A page that fails raises the client's existing error type, as a single call does today. No
   partial results.
 
@@ -93,8 +94,7 @@ for. Also rejected: leaving paging as documented limits.
   moved between lists; the API error surfaces as `TasksClientError`. The pinned client is
   google-api-python-client 2.200.0 (`requirements/runtime.lock.txt`), whose bundled discovery
   document has `destinationTasklist`; do not change `pyproject.toml`.
-- Update `write_effects.py` (~`:117`, "The previous values are not kept." stays true only for
-  non-cleared fields; ~`:120` "Nothing is deleted." becomes true) and the tool descriptions.
+- `write_effects.py` (~`:117`, the `tasks_update_task` sentence "The previous values are not kept.") is left as is (a cleared value is still not kept); ~`:120` ("Nothing is deleted." for `tasks_move_task`) becomes true and needs no edit. Only the tool descriptions change.
 
 ### D4. Gmail (p2)
 
@@ -105,17 +105,15 @@ for. Also rejected: leaving paging as documented limits.
   capped by `_clamp_max_results`). A message whose metadata fetch fails is still skipped and logged;
   the description gains "Messages whose metadata cannot be fetched are omitted."
 - `GmailClient.update_filter` order becomes: validate; `filters().get` the old filter; if the new
-  criteria and action equal the old ones, return the old filter unchanged (no writes); otherwise
-  `create` the new filter, then `delete` the old one. If `delete` fails, delete the new filter
+  criteria and action equal the old ones, return the old filter unchanged (no writes); otherwise `create` the new filter, then `delete` the old one. Do the equality comparison on the raw criteria and on the action *inputs* before label names are resolved, so the no-op path never creates a label (`_build_filter_action` calls `_get_or_create_label`, which writes). The no-op returns the same shape as a normal update, `{"old_id": id, "id": id, "criteria": ..., "action": ...}` (read the current return in `update_filter` and reuse its keys). If `delete` fails, delete the new filter
   (best effort) and raise `GmailClientError` naming the old and new ids and saying which state
-  remains. If `create` fails, the old filter is untouched and the error says so. Update the tool
-  description (currently "if creating the new one fails the old one is already gone") and the
+  remains. Error texts: create failure `"Could not create the replacement filter; the original filter is unchanged."`; delete failure when the rollback succeeds `"Could not delete the old filter {old_id}; the new filter {new_id} was removed again, so the original is unchanged."`; when the rollback also fails `"Could not delete the old filter {old_id} and could not remove the new filter {new_id}; both now exist, delete one in Gmail."`. Replace the tool description sentence saying the old filter is already gone with "The replacement is created before the old filter is deleted, so a failure leaves the original in place." Update the tool description (currently "if creating the new one fails the old one is already gone") and the
   approval `details_text` in `connectors/gmail.py` (`_update_filter`, ~`:1779`).
 
 ### D5. Drive (p3)
 
 `list_files`, `list_folder` and `list_shared_drives` add `nextPageToken` to their `fields` masks
-(`"nextPageToken, files(...)"`, `"nextPageToken, drives(id,name)"`) and page per D1.
+(`"nextPageToken, files(...)"`, `"nextPageToken, drives(id,name,kind)"`) and page per D1.
 `list_shared_drives` uses `pageSize=min(remaining, 100)` (the API rejects more than 100) while the
 tool's `max_results` clamp stays 1000; fix the description that says "capped at 1000" only if it
 implies one request.
@@ -138,8 +136,7 @@ implies one request.
   (`need_offset=False`). On create and out-of-office, also raise
   `ValueError("end_time must be after start_time")` when both parse and end <= start (a naive value
   is compared as UTC).
-- `_set_working_location`: validate `date` with `date.fromisoformat` and `location` against the
-  allowed set (the same set the client checks, ~`calendar_client.py:1117`) before `gated_call`,
+- `_set_working_location`: validate `date` with `date.fromisoformat` and `location` against the allowed set before `gated_call`. The set is an inline literal at `calendar_client.py:~1117` (`{"office": "officeLocation", "home": "homeOffice"}`); extract it to a module constant `WORKING_LOCATION_TYPES` in `calendar_client.py`, use it there, and import it in `connectors/calendar.py`,
   raising `ValueError` with the allowed values in the message.
 
 ### D7. Contacts (p5)
@@ -151,23 +148,22 @@ implies one request.
   client-side scan **only when `searchContacts` raises `HttpError`**, not when it returns nothing;
   the fallback and the `source="directory"` scan pass `source` to `list_contacts` (so
   `source="personal"` never returns directory-only contacts) and page per D1.
-- `_parse_json_list` in `connectors/contacts.py` becomes strict: a non-empty value that is not a JSON
-  list of objects each with a non-empty string `value` raises `ValueError("emails must be a JSON
-  list such as [{\"value\": \"a@b.com\", \"type\": \"work\"}]")` (and the same for `phones`),
+- `_parse_json_list(value: str, field: str)` in `connectors/contacts.py` (callers pass `"emails"` / `"phones"`) becomes strict: a non-empty value that is not a JSON
+  list of objects each with a non-empty string `value` raises `ValueError(f"{field} must be a JSON list such as [{{\"value\": \"a@b.com\", \"type\": \"work\"}}]")`,
   **before** `gated_call`, following `apps_script.py`'s `_parse_files_json`. Empty string still
   means "unchanged" (update) or "none" (create). `[]` still clears; the update preview shows
   `(cleared)` for a cleared list. Remove "(or invalid JSON)" from the four param descriptions.
 - Description fixes: `source` is "contacts with a saved-contact source" / "contacts with a
   Workspace directory source" (a contact can match both) / "no filtering"; the Returns text lists the
   possible `source` values `personal`, `directory`, `both` and `other`; in `contacts_search`,
-  `both` (default) searches saved contacts only, and only `directory` scans the directory.
+  `both` (default) searches saved contacts only, only `directory` scans the directory, and `max_results` "capped at 1000" becomes "capped at 30 for saved contacts, up to 1000 for directory".
 
 ### D8. apps_script and telegram (p6)
 
 - `apps_script_client.list_projects`: add `nextPageToken` to the Drive `fields` mask and page per D1;
   `get_execution_log` pages `listScriptProcesses` per D1 (`pageSize=min(remaining, 50)`).
 - `telegram_search_messages` results gain `"chat_id": getattr(m, "chat_id", 0)` (after `id`);
-  `telegram_list_chats` results gain `"username": c.username` (empty string when none, no `@`).
+  `telegram_list_chats` results gain `"username": c.username or ""` (empty string when none, no `@`).
   Descriptions say so and say `chat_id` is the value `telegram_get_messages` takes.
 
 ### D9. Slack (p7, p8)
@@ -190,8 +186,7 @@ implies one request.
 
 ### D10. Confluence (p9)
 
-- `list_spaces` (`limit` ≤ 250 per request), `list_pages_in_space` (≤ 200) and `list_attachments`
-  (≤ 250) follow `raw["_links"]["next"]` per D1 by extracting its `cursor` query parameter and
+- `list_spaces` (`limit` ≤ 250 per request), `list_pages_in_space` (≤ 200) and `list_attachments` (≤ 250, new signature `list_attachments(page_id: str, max_results: int = 500)`) follow `raw["_links"]["next"]` per D1 by extracting its `cursor` query parameter and
   sending it back in `params` on the same endpoint. The tool `max_results` clamps become 1000 for
   spaces and pages; `list_attachments` collects up to 500 (default no longer 50), so
   `_download_attachment` finds attachments past the 50th.
@@ -238,9 +233,7 @@ None. `manual_before` and `manual_after` are empty. The connector changes are co
   equality reliable, stop `blocked` instead of skipping the check.
 - **Contacts warm-up.** If a test double for `people().searchContacts` is called with an unexpected
   `query=""` first call, update the double; do not drop the warm-up.
-- **Slack `get_channel_history` return shape** is consumed by `_search_by_participant` and by the
-  connector; any other unpacking of the returned tuple (`grep get_channel_history src tests`) is p7/p8
-  territory. If a caller outside `slack.py`/`slack_client.py` exists, stop `blocked`.
+- **Slack `get_channel_history` / `get_thread_replies` return shape** is also unpacked by `scripts/qa_fixture_recorder.py` and `scripts/qa_readme_screenshots.py`; p8 owns those edits. A caller elsewhere means stop `blocked`.
 - **Confluence `_links.next`** format: if a live fixture shows `next` without a `cursor` query
   parameter, stop `blocked`.
 - **Coverage ratchet.** New client code needs tests (`check_coverage_floor.py`); never lower a floor.
@@ -257,7 +250,7 @@ max_parallel: 2
 manual_before: []
 manual_after: []
 verify_after_merge:
-  - python3 -m pytest tests/unit/connectors tests/unit/test_docs_tools_reference.py tests/unit/web/test_tool_schema_portability.py -q
+  - python3 -m pytest tests/unit -q
 final_checks:
   - docs/connector-oddity-fixes-plan.md is deleted and nothing links to it
   - the ADR from the ADRs section exists, is Accepted, and is in docs/adr/README.md
@@ -293,9 +286,7 @@ phases:
          `tasks_list_tasks`, `tasks_update_task` and `tasks_move_task` descriptions (remove "first
          page (up to 20)", "cannot clear", "Google Tasks cannot move a task between lists"; do not
          change first sentences; keep Returns, gate wording, siblings, 1024 limit).
-      5. write_effects.py: fix the two lines about previous values and "Nothing is deleted."
-         (`grep -n "previous values\|Nothing is deleted" src/privacyfence/write_effects.py`); update
-         any test asserting them.
+      5. write_effects.py needs no edit (see D3). Confirm with `grep -n "Nothing is deleted" src/privacyfence/write_effects.py` that the move sentence is there.
       6. Tests. Update: TestListTasks (client) for the new kwargs and paging (two pages -> one list);
          TestUpdateTask (client) to assert `.patch` bodies, including a clear-notes and a clear-due
          case, and rename `test_due_can_be_explicitly_cleared_by_passing_none_is_not_possible_uses_existing`;
@@ -310,7 +301,7 @@ phases:
       installed client, or if a first sentence of a tools description would have to change.
     acceptance:
       - python3 -m pytest tests/unit/test_tasks_client.py tests/unit/connectors/test_tasks_connector.py -q passes
-      - grep -n "insert\|delete" src/privacyfence/tasks_client.py finds no call inside move_task
+      - grep -n "tasks().insert\|tasks().delete" src/privacyfence/tasks_client.py finds nothing inside move_task
       - grep -n "showHidden" src/privacyfence/tasks_client.py finds the list_tasks kwarg
       - python3 -m pytest tests/unit/test_docs_tools_reference.py -q passes with docs/tools-reference.md unmodified
       - ruff check . and python3 scripts/mypy_strict_modules.py pass
@@ -407,7 +398,7 @@ phases:
       2. Add `_require_rfc3339` and the end-after-start check per D6 and call them before `gated_call`
          in `_list_events`, `_get_free_busy`, `_create_event`, `_update_event`,
          `_create_out_of_office`. Validate `date` and `location` in `_set_working_location` before the
-         gate (read the allowed locations from the client module's existing constant, do not duplicate the list).
+         gate (add `WORKING_LOCATION_TYPES` to calendar_client.py as in D6 and import it; do not duplicate the list).
       3. `_list_events`: empty `time_min` -> now (UTC, isoformat); update the param text to "Empty means
          now." and the Returns text ("oldest first" wording removed if present).
       4. calendar_client.py `list_events` (~:435): page with `pageToken`, `MAX_PAGES = 10`,
@@ -421,10 +412,10 @@ phases:
          rejected, bad `date` and bad `location` rejected before the gate (gate mock not called); client
          two-page list_events test. `TestListEvents::test_optional_filters_only_included_when_given`
          must still pass unchanged.
-      Stop with status=blocked if the allowed-locations constant does not exist in the client module.
+      
     acceptance:
       - python3 -m pytest tests/unit/test_calendar_client.py tests/unit/connectors/test_calendar_connector.py tests/unit/test_docs_tools_reference.py -q passes
-      - git diff --stat main -- docs/tools-reference.md shows one row changed
+      - git diff --stat origin/main -- docs/tools-reference.md shows one row changed
       - grep -n "drive_get_file_content" src/privacyfence/connectors/calendar.py finds nothing
       - ruff check . and python3 scripts/mypy_strict_modules.py pass
   - id: p5-contacts
@@ -449,7 +440,7 @@ phases:
          in `_contacts_update` and `_contacts_create`); `(cleared)` in the update preview when the
          parsed list is empty; edit the param descriptions (remove "(or invalid JSON)"; new `source`
          text; Returns lists `personal`, `directory`, `both`, `other`; search's `both` explanation);
-         remove "filters after that page is fetched" from contacts_list's text.
+         replace the whole sentence in contacts_list's description (`connectors/contacts.py:~43`, from "Only the first page comes back" through "a narrow source can return fewer") with "Reads up to max_results contacts across pages; 'source' is applied before counting."
       4. Tests. Replace: `TestParseJsonList::test_invalid_json_returns_none` and
          `test_valid_json_but_not_a_list_returns_none` (now raise ValueError), the two connector tests
          `test_invalid_json_emails_falls_back_to_current_value_not_a_bogus_diff` and
@@ -484,7 +475,7 @@ phases:
          apps_script_list_projects and apps_script_get_execution_log with "Reads up to max_results
          items across pages."
       3. connectors/telegram.py: add `"chat_id": getattr(m, "chat_id", 0)` to `_search_messages` results
-         (after `id`) and `"username": c.username` to `_list_chats` results; update the two descriptions
+         (after `id`) and `"username": c.username or ""` to `_list_chats` results; update the two descriptions
          (remove "the chat's numeric id is not included"; say chat_id is what telegram_get_messages takes;
          document username as the @handle without the @, empty if none).
       4. Tests: two-page client tests for both apps_script methods; update
@@ -524,6 +515,7 @@ phases:
       5. Tests: DM and group-chat participant match beyond max_results raw items (both fast path and
          fallback), search with a query that only matches an older page, cap of 10 conversations
          (assert the 11th is not read) and cap of 5 pages. Existing tests unchanged.
+      Stop paging a conversation when `has_more` is false or a page comes back empty. The participant search can now make up to 50 `conversations.history` calls (10 conversations x 5 pages) before the approval popup; run `python3 scripts/slack_call_budget.py` (read its header for usage) and put its output for a participant `slack_search_messages` in your final report. If it shows more than the budget `docs/slack-setup.md` gives for a non-Marketplace app, lower `_SEARCH_HISTORY_PAGE_CAP` to 2 rather than stopping.
       Do NOT change get_channel_history / get_thread_replies (phase p8 owns them).
     acceptance:
       - python3 -m pytest tests/unit/test_slack_client.py tests/unit/connectors/test_slack_connector.py -q passes
@@ -537,15 +529,18 @@ phases:
     touches:
       - src/privacyfence/slack_client.py
       - src/privacyfence/connectors/slack.py
+      - scripts/qa_fixture_recorder.py
+      - scripts/qa_readme_screenshots.py
       - tests/unit/test_slack_client.py
       - tests/unit/connectors/test_slack_connector.py
+      - tests/unit/test_qa_fixture_recorder.py
     brief: |
       Implement Design D9 (p8 half).
       1. slack_client.py `get_channel_history` (~:668) and `get_thread_replies` (~:717): add
          `cursor: str = ""` (sent as `cursor=` only when non-empty) and return `next_cursor` from
          `(response.get("response_metadata") or {}).get("next_cursor") or ""` in addition to
          `has_more`. Update every caller of the changed return shape, including
-         `_search_by_participant` (`grep -n "get_channel_history\|get_thread_replies" -r src tests`).
+         `_search_by_participant`, `scripts/qa_fixture_recorder.py:1403` and `:1410` (3-tuple unpack), `scripts/qa_readme_screenshots.py:222` (the fake returns `(replies, False)`; make it `(replies, False, "")`) and `tests/unit/test_qa_fixture_recorder.py:~671`. Find them all with `grep -rn "get_channel_history\|get_thread_replies" src tests scripts`.
       2. connectors/slack.py: add the `cursor` ToolParam (annotation "str", required False, default "",
          description per D9) to both tools; pass it through; `_message_page_result` (~:55) adds
          `"next_cursor"` and its note becomes
@@ -556,7 +551,7 @@ phases:
          `test_has_more_is_surfaced_to_claude_with_a_note` and `test_has_more_false_carries_no_note`
          to the new envelope; `TestLiveFixtureParsing.test_get_thread_replies_fixture_still_parses`
          must pass unchanged.
-      Stop with status=blocked if a caller outside slack.py / slack_client.py unpacks these return values.
+      Stop with status=blocked only if a caller outside src, tests and scripts unpacks these return values.
     acceptance:
       - python3 -m pytest tests/unit/test_slack_client.py tests/unit/connectors/test_slack_connector.py -q passes
       - grep -n "larger limit\|narrow the time range" src/privacyfence/connectors/slack.py finds nothing
@@ -575,12 +570,11 @@ phases:
       Implement Design D10 (and D1 via `_links.next` cursors).
       1. confluence_client.py: add a private helper that, given a v2 response, returns the `cursor` query
          parameter of `raw["_links"]["next"]` (or None); use it in `list_spaces` (per-request limit 250),
-         `list_pages_in_space` (200) and `list_attachments` (250, collect up to 500, remove the 50
-         default) with `MAX_PAGES = 10`; raise the `confluence_list_spaces` and `confluence_list_pages`
+         `list_pages_in_space` (200) and `list_attachments` (250, collect up to 500, the default is now 500) with `MAX_PAGES = 10`; raise the `confluence_list_spaces` and `confluence_list_pages`
          `max_results` clamps to 1000.
       2. `search`: escape backslash then double quote before building `text ~ "..."`. Leave `cql_search`
          untouched.
-      3. connectors/confluence.py: remove the "first page" and "avoid double quotes" sentences; make
+      3. connectors/confluence.py: remove the "first page" and "avoid double quotes" sentences and change "capped at 250" (`confluence.py:~61`) and "capped at 200" (`~126`) to "capped at 1000"; make
          `title` and `body` of `confluence_update_page` `required=False, default=""`; in `_update_page`
          raise ValueError("Provide a new title, a new body, or both") before the gate when both are
          empty, fill the empty one from `current` (the `get_page` result it already fetches), show
@@ -600,7 +594,7 @@ phases:
   - id: p10-jira-salesforce
     title: Jira paging, Salesforce search limit and wording
     depends_on: []
-    complexity: S
+    complexity: M
     touches:
       - src/privacyfence/jira_client.py
       - src/privacyfence/connectors/jira.py
@@ -614,13 +608,12 @@ phases:
       Implement Design D11.
       1. jira_client.py `search_issues` (~:225): call `self._client.enhanced_jql(jql, nextPageToken=..., limit=min(remaining, 100))`
          in a loop (stop on `isLast` or max_results, `MAX_PAGES = 10`); return the same list truncated to
-         max_results. Raise the tool clamp in connectors/jira.py to 500 and replace "only the first page"
-         wording.
+         max_results. Raise the clamp at `jira_client.py:228` (`min(max_results, 100)`) to 500, and change connectors/jira.py's "capped at 100" / "only the first page" wording (~:69) to match.
       2. salesforce_client.py `search` unscoped branch (~:418): `FIND {term} IN ALL FIELDS LIMIT {max_results}`
          (int-coerced). Do not touch `list_reports`.
       3. connectors/salesforce.py: reword the salesforce_search Returns text and `max_results` param text
          per D11 (fields shape; max_results applies unscoped too). Keep first sentence.
-      4. Tests: two-page jira client test with `nextPageToken`/`isLast`; update
+      4. Tests: `tests/unit/test_jira_client.py:~361-367` mock `_client.jql`; move them to `enhanced_jql`. Add a two-page jira client test with `nextPageToken`/`isLast`; update
          `test_unscoped_search_builds_plain_find_query` and `test_search_term_is_escaped_in_query` to the
          LIMIT form; change `test_maps_search_records_including_type_from_attributes` so its unscoped fake
          response has no `Name` (real SOSL returns only Id) and assert the result's `fields == {"Id": ...}`;
@@ -657,19 +650,20 @@ phases:
          can be cleared, and moving a task keeps its id; Gmail: attachments in message and thread results
          are objects, and a filter update no longer loses the original when it fails; Calendar: empty
          time_min means now and bad times are rejected before approval; Contacts: invalid emails/phones
-         JSON is rejected, the source filter no longer drops matches, search no longer scans only 1000;
+         JSON is rejected, the source filter no longer drops matches, personal search no longer returns directory-only contacts from its fallback;
          Slack: participant filters run before truncation and history/replies accept a cursor;
          Telegram: search results carry chat_id and chats carry username; Confluence: quotes in searches,
          attachments past the 50th, title-only or body-only page updates; Salesforce: unscoped search
          honours max_results.
       4. Delete docs/connector-oddity-fixes-plan.md (`git rm`) and confirm nothing links to it
          (`grep -rn "connector-oddity-fixes-plan" . --include=* ` outside .git finds nothing).
-      5. Run the full checks (`/dod` gate rows: pytest with coverage and the ratchet, ruff, bandit, mypy
-         strict script).
+      5. Run the full checks (`/dod` gate rows: pytest with coverage and the ratchet, ruff, bandit, mypy strict script).
+      6. Dispatch `connector-live-check.yml` against `fix/connector-oddity-fixes` (steward table; no inputs), wait for it, and report its run URL in your final report so the orchestrator can link it in the PR. If its report shows drift, stop `blocked` and do not follow the fixture-drift PR.
     acceptance:
       - ls docs/adr | grep -c "list-tools-page-inside-the-client" prints 1 and the file's Status is Accepted
       - grep -n "list-tools-page-inside-the-client" docs/adr/README.md finds the index row
       - grep -n "^## \[" CHANGELOG.md | head -3 shows `## [Unreleased]` above any version heading and no new version heading
       - test ! -e docs/connector-oddity-fixes-plan.md
       - python3 -m pytest tests/unit -q passes
+      - the connector-live-check.yml run on fix/connector-oddity-fixes concluded success
 ```
