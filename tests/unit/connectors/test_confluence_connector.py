@@ -1225,6 +1225,27 @@ class TestWriteMentions:
         assert gated_call_spy[0]["preview"]["Mentions"] == "Bob Real"
         client.resolve_user_names.assert_called_once_with([self._REAL])
 
+    async def test_raw_mention_after_plaintext_is_named_in_preview(self, gated_call_spy):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe"}
+        client.create_page.return_value = make_page()
+
+        await connector.call("confluence_create_page", self._create_args(f"<plaintext>{_LINK}"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Jane Doe"
+        client.resolve_user_names.assert_called_once_with([_JANE])
+
+    async def test_duplicate_account_id_attributes_are_all_resolved(self, gated_call_spy):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe", "acc-bob-0002": "Bob Roe"}
+        client.create_page.return_value = make_page()
+        raw = f'<ac:link><ri:user ri:account-id="{_JANE}" ri:account-id="acc-bob-0002" /></ac:link>'
+
+        await connector.call("confluence_create_page", self._create_args(raw))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Jane Doe, Bob Roe"
+        client.resolve_user_names.assert_called_once_with([_JANE, "acc-bob-0002"])
+
     @pytest.mark.parametrize("attr", ['ri:userkey="8a7f"', "ri:username='bob'"])
     async def test_legacy_raw_mention_listed_as_unrecognised(self, gated_call_spy, attr):
         connector, client = make_connector()

@@ -273,6 +273,26 @@ class TestMentionMarkup:
         html = f'<script>x</script><ac:link><ri:user ri:account-id="{ID_A}"/></ac:link>'
         assert au.storage_mention_ids(html) == [ID_A]
 
+    @pytest.mark.parametrize("tag", [
+        "plaintext", "script", "style", "textarea", "title", "xmp", "iframe", "noscript",
+        "noembed", "noframes",
+    ])
+    def test_raw_text_elements_do_not_hide_later_mentions(self, tag):
+        html = f'<{tag}><ac:link><ri:user ri:account-id="{ID_A}"/></ac:link>'
+        assert au.storage_mention_ids(html) == [ID_A]
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == f"<{tag}>@Jane"
+
+    def test_duplicate_account_id_attributes_list_every_value(self):
+        html = f'<ac:link><ri:user ri:account-id="{ID_A}" ri:account-id="{ID_B}"/></ac:link>'
+        assert au.storage_mention_ids(html) == [ID_A, ID_B]
+        assert au.storage_unrecognised_user_mentions(html) == 0
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane", ID_B: "Bob"}) == "@unknown user"
+
+    def test_duplicate_account_id_with_blank_value_keeps_the_other(self):
+        html = f'<ac:link><ri:user ri:account-id=" " ri:account-id="{ID_A}"/></ac:link>'
+        assert au.storage_mention_ids(html) == [ID_A]
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == "@Jane"
+
     def test_multiline_offsets_and_unclosed_link(self):
         html = f'a\n<ac:link>\n<ri:user ri:account-id="{ID_A}"/>\n</ac:link>\nb <ac:link><ri:user ri:account-id="{ID_B}"/>'
         assert au.storage_mentions_to_text(html, {ID_A: "Jane"}).startswith("a\n@Jane\nb <ac:link>")
