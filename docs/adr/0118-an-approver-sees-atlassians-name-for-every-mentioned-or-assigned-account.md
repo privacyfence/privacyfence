@@ -30,11 +30,16 @@ directory's name in its `attrs.text`.
 - Every account id found at any depth of any custom value, including ADF `mention` nodes, is resolved
   and named like the others, and an unresolvable one is refused before the card.
 - The card shows what is written. A rich-text (ADF) value is rendered in full: text verbatim (mention markup typed
-  mention markup typed into a text node stays literal text), mentions as directory names, every link target next to
+  into a text node stays literal text), mentions as directory names, every link target next to
   its text, every `inlineCard`, `blockCard` and `embedCard` URL and `data`, and a placeholder carrying
   the attributes of media, emoji, status and date nodes. Only a fixed list of node and mark types can
   be shown completely; a value containing any other type is refused, naming it, before the card. A
-  plain value is shown with people replaced by their names.
+  plain value is shown with people replaced by their names; an object that holds an `accountId` next
+  to other keys keeps every other key and value on the card, and only an object that is nothing but a
+  person collapses to the name. Numeric and boolean node attributes (list `order`, heading `level`,
+  table layout) are shown too. A mention node without a text `attrs.id` is refused before the card.
+  Custom-field rows on the card are labelled `<field name> (field)`, so a field can never overwrite
+  the card's own Issue or Mentions row.
 
 An id in mention markup, or an `assignee_account_id`, that cannot be resolved is refused with
 `Unknown Atlassian account id(s): …` before any approval card appears.
