@@ -406,6 +406,63 @@ class TestGetPageNames:
         )
 
 
+_PROFILE_MACRO_BODY = (
+    '<p>Owner:</p><ac:structured-macro ac:name="profile"><ac:parameter ac:name="user">'
+    '<ri:user ri:account-id="acc-jane-0001"/></ac:parameter></ac:structured-macro>'
+)
+
+
+class TestGetPageEveryDeliveredNameIsShownAndScanned:
+    @pytest.mark.parametrize("tool,args,client_method", [
+        ("confluence_get_page", {"page_id": "p1"}, "get_page"),
+        ("confluence_get_page_by_title", {"space_key": "ENG", "title": "Runbook"}, "get_page_by_title"),
+    ])
+    @pytest.mark.parametrize("body,mentions", [
+        (_PROFILE_MACRO_BODY, {"acc-jane-0001": "Jane Doe"}),
+        (
+            '<ac:link><ri:user ri:account-id="acc-jane-0001" ri:account-id="acc-john-0002"/></ac:link>',
+            {"acc-jane-0001": "Jane Doe", "acc-john-0002": "John Roe"},
+        ),
+        (
+            '<ac:link><ri:user ri:account-id="acc-jane-0001"/><ac:link-body>hi '
+            '<ac:link><ri:user ri:account-id="acc-john-0002"/></ac:link> there</ac:link-body></ac:link>',
+            {"acc-jane-0001": "Jane Doe", "acc-john-0002": "John Roe"},
+        ),
+        (
+            '<ac:link><ri:user ri:account-id="acc-jane-0001"/></ac:link>'
+            '<ac:link><ri:user ri:account-id="acc-john-0002"/></ac:link>',
+            {"acc-jane-0001": "Jane Doe", "acc-john-0002": "John Roe"},
+        ),
+    ])
+    async def test_every_name_in_result_is_on_the_card_and_in_the_scan(
+        self, gated_call_spy, tool, args, client_method, body, mentions,
+    ):
+        connector, client = make_connector()
+        getattr(client, client_method).return_value = make_page(
+            body=body, author="acc-alice-0001", author_name="Alice Smith", mentions=mentions,
+        )
+
+        result = await connector.call(tool, args)
+
+        kwargs = gated_call_spy[0]
+        assert result["mentions"] == mentions
+        for name in result["mentions"].values():
+            assert name in kwargs["new_info"]["Mentioned people"]
+            assert name in kwargs["pii_scan_text"]
+        assert "Alice Smith" in kwargs["pii_scan_text"]
+        assert kwargs["new_info"]["Author"] == "Alice Smith"
+
+    async def test_no_mentions_adds_no_row_and_no_name_means_body_only_scan(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+
+        await connector.call("confluence_get_page", {"page_id": "p1"})
+
+        kwargs = gated_call_spy[0]
+        assert "Mentioned people" not in kwargs["new_info"]
+        assert kwargs["pii_scan_text"] == kwargs["details_text"]
+
+
 class TestGetPage:
     async def test_preview_shows_real_last_modified_not_blank(self, gated_call_spy):
         # Regression test for the last_modified bug: preview must reflect

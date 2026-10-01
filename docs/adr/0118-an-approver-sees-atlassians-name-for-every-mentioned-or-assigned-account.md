@@ -50,6 +50,11 @@ Confluence-only site, where refusing them would make existing pages uneditable. 
 unresolved one as `unknown account <id>`, and a legacy `ri:userkey` / `ri:username` mention (no account
 id) as `unrecognised user mention(s)`. Storage tags are found with an HTML tokenizer, not a regex.
 
+Reads follow the same rule: `confluence_get_page` and `confluence_get_page_by_title` list every name
+they hand the agent (the author and each resolved mention) on the card as `Author` and
+`Mentioned people`, and PII-scan those names with the body, even where the body's markup does not
+render a mention (a User Profile macro, a tag with several account ids, a nested link).
+
 ## Alternatives considered
 
 - **Show the agent's label and trust it.** Rejected. The label is unverified text chosen by the
