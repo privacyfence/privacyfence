@@ -456,8 +456,11 @@ class ConfluenceConnector(Connector):
             "Last modified": page.updated or "(unknown)",
             "Page body": "Full page content",
         }
+        if page.mentions:
+            new_info["Mentioned people"] = ", ".join(page.mentions.values())
         body_raw = getattr(page, "body", "") or getattr(page, "body_text", "") or ""
         body_text = html_to_markdown(storage_mentions_to_text(body_raw, page.mentions))
+        pii_scan_text = _with_names(body_text, page)
         return await gated_call(
             connector=self.name,
             tool="confluence_get_page",
@@ -470,7 +473,7 @@ class ConfluenceConnector(Connector):
             preview=preview_fields,
             new_info=new_info,
             details_text=body_text,
-            pii_scan_text=body_text,
+            pii_scan_text=pii_scan_text,
             preview_blocks=[{"type": "markdown", "text": body_text}] if body_text else None,
             my_email=self.my_email,
             args={"page_id": page_id},
@@ -489,8 +492,11 @@ class ConfluenceConnector(Connector):
             "Last modified": page.updated or "(unknown)",
             "Page body": "Full page content",
         }
+        if page.mentions:
+            new_info["Mentioned people"] = ", ".join(page.mentions.values())
         body_raw = getattr(page, "body", "") or getattr(page, "body_text", "") or ""
         body_text = html_to_markdown(storage_mentions_to_text(body_raw, page.mentions))
+        pii_scan_text = _with_names(body_text, page)
         return await gated_call(
             connector=self.name,
             tool="confluence_get_page_by_title",
@@ -503,7 +509,7 @@ class ConfluenceConnector(Connector):
             preview=preview_fields,
             new_info=new_info,
             details_text=body_text,
-            pii_scan_text=body_text,
+            pii_scan_text=pii_scan_text,
             preview_blocks=[{"type": "markdown", "text": body_text}] if body_text else None,
             my_email=self.my_email,
             args={"space_key": space_key, "title": title},
@@ -825,6 +831,13 @@ class ConfluenceConnector(Connector):
             ))
         except Exception as exc:
             logger.warning("Audit log write failed: %s", exc)
+
+
+def _with_names(body_text: str, page: Any) -> str:
+    """The text a page read is PII-scanned on: the shown body plus every person's name the agent
+    receives (the author and each resolved mention), whether or not the body renders it."""
+    names = [page.author_name, *page.mentions.values()]
+    return "\n".join([body_text, *(n for n in names if n)])
 
 
 def _redact_excerpt(result_dict: dict[str, Any]) -> dict[str, Any]:
