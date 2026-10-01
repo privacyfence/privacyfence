@@ -16,7 +16,20 @@ name, and the approver would approve a notification to someone they did not expe
 
 The approval card names each mentioned or assigned account with the name Atlassian returns for its
 id, never the agent's label. This covers the card title, the body preview and the `Mentions` and
-`Assignee` preview rows. The data the write sends keeps the agent's text.
+`Assignee` preview rows. Only the audit record's `raw_data` and `args` keep the agent's text; the Jira
+mention node sent to Atlassian carries the directory's name in its `attrs.text`.
+
+`jira_update_issue`'s `custom_fields` follows the same rule:
+
+- A field that has a dedicated parameter (`summary`, `description`, `priority`, `assignee`) is refused
+  in `custom_fields`, so it cannot bypass that parameter's name resolution.
+- A user field, or a multi-user picker, accepts only `{"accountId": id}` or a bare id string, which is
+  normalised to the object form. Any other key (`id`, `name`, `key`, `displayName`, `emailAddress`) is
+  refused with a message naming the accepted shape.
+- Every account id found at any depth of any custom value, including ADF `mention` nodes, is resolved
+  and named like the others, and an unresolvable one is refused before the card.
+- The card shows what is written: a rich-text value's text appears in the card body with mentions as
+  directory names, and a plain value is shown with people replaced by their names.
 
 An id in mention markup, or an `assignee_account_id`, that cannot be resolved is refused with
 `Unknown Atlassian account id(s): …` before any approval card appears.

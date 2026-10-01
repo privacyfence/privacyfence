@@ -185,6 +185,14 @@ class TestExtractAdfTextMentions:
         node = mention_node(JANE_ID, None)
         assert JiraClient._extract_adf_text(node) == f"@[unknown user]({JANE_ID})"
 
+    def test_email_shaped_label_is_masked_when_no_name_is_known(self):
+        out = JiraClient._extract_adf_text(mention_node(JANE_ID, "@jane@customer.com"))
+        assert "customer.com" not in out and "Customer account" in out
+
+    def test_email_shaped_label_masked_for_invalid_id_too(self):
+        out = JiraClient._extract_adf_text(mention_node("short", "@jane@customer.com"))
+        assert "customer.com" not in out
+
     def test_invalid_id_renders_node_text(self):
         assert JiraClient._extract_adf_text(mention_node("short", "@Jane")) == "@Jane"
         assert JiraClient._extract_adf_text(mention_node(None, "@Jane")) == "@Jane"
@@ -799,6 +807,21 @@ class TestResolveCustomField:
         client.resolve_custom_field("Story Points", 1)
         client.resolve_custom_field("Story Points", 2)
         client._client.get_all_fields.assert_called_once()
+
+    @pytest.mark.parametrize("schema,kind", [
+        ({"type": "user"}, "user"),
+        ({"type": "array", "items": "user"}, "user_list"),
+        ({"type": "array", "items": "option"}, "other"),
+        ({"type": "option"}, "other"),
+        (None, "other"),
+    ])
+    def test_custom_field_kind(self, schema, kind):
+        client = make_client()
+        field = {"id": "customfield_1", "name": "Person"}
+        if schema is not None:
+            field["schema"] = schema
+        client._client.get_all_fields.return_value = [field]
+        assert client.custom_field_kind("Person") == kind
 
     def test_unknown_field_name_raises(self):
         client = make_client()

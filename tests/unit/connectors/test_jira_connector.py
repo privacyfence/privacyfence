@@ -37,6 +37,7 @@ from ...helpers import (
 
 def make_connector(my_email="me@example.com"):
     client = MagicMock()
+    client.custom_field_kind.return_value = "other"
     connector = JiraConnector(client)
     connector.my_email = my_email
     return connector, client
@@ -755,6 +756,7 @@ class TestCustomFieldPeople:
         client.get_issue.return_value = make_issue()
         client.update_issue.return_value = make_issue()
         client.resolve_user_names.return_value = {ACC: "Jane Doe", ACC2: "Bob Real"}
+        client.custom_field_kind.return_value = "user_list"
         value = [{"accountId": ACC}, {"accountId": ACC2}, {"accountId": ACC}]
         client.resolve_custom_field.return_value = ("customfield_9", value)
 
@@ -763,7 +765,7 @@ class TestCustomFieldPeople:
         })
 
         kwargs = gated_call_spy[0]
-        assert kwargs["preview"]["Reviewers"] == "→ people: Jane Doe, Bob Real"
+        assert kwargs["preview"]["Reviewers"] == "→ @Jane Doe, @Bob Real, @Jane Doe"
         client.resolve_user_names.assert_called_once_with([ACC, ACC2])
         client.update_issue.assert_called_once_with("ENG-1", {"customfield_9": value})
 
@@ -779,7 +781,9 @@ class TestCustomFieldPeople:
             "issue_key": "ENG-1", "custom_fields": json.dumps({"Notes": adf}),
         })
 
-        assert gated_call_spy[0]["preview"]["Notes"] == "→ people: Jane Doe"
+        preview = gated_call_spy[0]["preview"]
+        assert preview["Notes"] == "→ (updated — see below); people: Jane Doe"
+        assert gated_call_spy[0]["details_text"] == "Notes:\n@Jane Doe"
 
     @pytest.mark.parametrize("bad", [{"accountId": 5}, {"accountId": ""},
                                      {"type": "mention", "attrs": {"text": "x"}}])
@@ -805,6 +809,152 @@ class TestCustomFieldPeople:
 
         client.resolve_user_names.assert_not_called()
         assert gated_call_spy[0]["preview"]["Notes"] == "→ hello"
+
+
+class TestCustomFieldUserShapes:
+    @staticmethod
+    def _setup(kind, names=None):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.update_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Jane Doe", ACC2: "Bob Real"} if names is None else names
+        client.custom_field_kind.return_value = kind
+        client.resolve_custom_field.side_effect = lambda name, value: (
+            name.lower(), value if kind != "user_list" or isinstance(value, list) else [value])
+        return connector, client
+
+    async def test_reporter_id_shape_refused_and_never_shown(self, gated_call_spy):
+        connector, client = self._setup("user")
+        custom = json.dumps({"Reporter": {"id": ACC, "displayName": "Jane Doe"}})
+
+        with pytest.raises(ValueError, match=r'\{"accountId"'):
+            await connector.call("jira_update_issue", {"issue_key": "E-1", "custom_fields": custom})
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
+
+    async def test_multi_user_picker_id_shape_refused(self, gated_call_spy):
+        connector, client = self._setup("user_list")
+
+        with pytest.raises(ValueError, match="user field"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "E-1", "custom_fields": json.dumps({"Reviewers": [{"id": ACC}]}),
+            })
+        assert gated_call_spy == []
+
+    @pytest.mark.parametrize("bad", [{"accountId": ACC, "displayName": "x"}, {"name": "jane"}, 5, ""])
+    async def test_other_user_shapes_refused(self, gated_call_spy, bad):
+        connector, _client = self._setup("user")
+
+        with pytest.raises(ValueError, match="user field"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "E-1", "custom_fields": json.dumps({"Reporter": bad}),
+            })
+        assert gated_call_spy == []
+
+    async def test_bare_id_normalised_resolved_and_named(self, gated_call_spy):
+        connector, client = self._setup("user")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Approver": ACC}),
+        })
+
+        assert gated_call_spy[0]["preview"]["Approver"] == "→ @Jane Doe"
+        client.update_issue.assert_called_once_with("E-1", {"approver": {"accountId": ACC}})
+
+    async def test_bare_unknown_id_refused_before_card(self, gated_call_spy):
+        connector, _client = self._setup("user", names={})
+
+        with pytest.raises(ValueError, match="Unknown Atlassian account id"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "E-1", "custom_fields": json.dumps({"Approver": ACC}),
+            })
+        assert gated_call_spy == []
+
+    async def test_user_field_can_be_cleared(self, gated_call_spy):
+        connector, client = self._setup("user")
+
+        await connector.call("jira_update_issue", {"issue_key": "E-1", "custom_fields": '{"Approver": null}'})
+
+        client.update_issue.assert_called_once_with("E-1", {"approver": None})
+        client.resolve_user_names.assert_not_called()
+
+    async def test_multi_user_bare_ids(self, gated_call_spy):
+        connector, client = self._setup("user_list")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Reviewers": [ACC, {"accountId": ACC2}]}),
+        })
+
+        assert gated_call_spy[0]["preview"]["Reviewers"] == "→ @Jane Doe, @Bob Real"
+        client.update_issue.assert_called_once_with(
+            "E-1", {"reviewers": [{"accountId": ACC}, {"accountId": ACC2}]})
+
+    async def test_select_field_with_id_object_still_works(self, gated_call_spy):
+        connector, client = self._setup("other")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": '{"Severity": {"id": "10001"}}',
+        })
+
+        client.resolve_user_names.assert_not_called()
+        assert gated_call_spy[0]["preview"]["Severity"] == "→ {'id': '10001'}"
+        client.update_issue.assert_called_once_with("E-1", {"severity": {"id": "10001"}})
+
+    async def test_non_user_field_account_id_shows_name_not_agent_label(self, gated_call_spy):
+        connector, _client = self._setup("other")
+        value = {"accountId": ACC, "displayName": "Somebody Else"}
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Owner": value}),
+        })
+
+        row = gated_call_spy[0]["preview"]["Owner"]
+        assert row == "→ @Jane Doe"
+        assert "Somebody Else" not in row
+
+    async def test_nested_people_in_a_plain_value_are_named(self, gated_call_spy):
+        connector, _client = self._setup("other")
+        value = {"note": "hi", "who": [{"accountId": ACC2, "displayName": "Fake"},
+                                      {"type": "mention", "attrs": {"id": ACC, "text": "@Fake"}}]}
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Mixed": value}),
+        })
+
+        row = gated_call_spy[0]["preview"]["Mixed"]
+        assert row == "→ {'note': 'hi', 'who': ['@Bob Real', '@Jane Doe']}"
+
+    async def test_rich_text_shown_on_card_with_names_for_two_fields(self, gated_call_spy):
+        connector, client = self._setup("other")
+        def doc(text):
+            return {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": text},
+                {"type": "mention", "attrs": {"id": ACC, "text": "@Fake Label"}}]}]}
+
+        custom = json.dumps({"Environment": doc("SECRET PAYLOAD TEXT"), "Notes": doc("SECOND BLOCK")})
+
+        await connector.call("jira_update_issue", {"issue_key": "E-1", "custom_fields": custom})
+
+        kwargs = gated_call_spy[0]
+        details = kwargs["details_text"]
+        assert "SECRET PAYLOAD TEXT" in details and "SECOND BLOCK" in details
+        assert "@Jane Doe" in details and "Fake Label" not in details
+        assert kwargs["preview"]["Environment"] == "→ (updated — see below); people: Jane Doe"
+        assert "Notes" in kwargs["preview"]
+
+    async def test_rich_text_and_description_both_on_card(self, gated_call_spy):
+        connector, _client = self._setup("other")
+        doc = {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [
+            {"type": "text", "text": "RICH TEXT"}]}]}
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "description": "plain description",
+            "custom_fields": json.dumps({"Environment": doc}),
+        })
+
+        details = gated_call_spy[0]["details_text"]
+        assert "description:\nplain description" in details and "Environment:\nRICH TEXT" in details
+        assert gated_call_spy[0]["preview"]["Environment"] == "→ (updated — see below)"
 
 
 class TestTransitionIssue:
