@@ -59,8 +59,9 @@ class AtlassianUser:
 
 
 def mask_emails(name: str, account_id: str) -> str:
-    """Replace any email-shaped text with ``Customer account <last 4 of the id>``."""
-    label = f"{CUSTOMER_ACCOUNT_LABEL} {account_id[-4:]}"
+    """Replace any email-shaped text with ``Customer account <last 4 of the id>``
+    (``unknown user`` when there is no id to take the suffix from)."""
+    label = f"{CUSTOMER_ACCOUNT_LABEL} {account_id[-4:]}" if account_id else UNKNOWN_USER_LABEL
     return _EMAIL_RE.sub(label, name)
 
 

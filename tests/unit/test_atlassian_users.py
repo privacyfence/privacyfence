@@ -77,6 +77,9 @@ class TestEmailMasking:
     def test_parse_user_masks_customer_email(self):
         assert au.parse_user(CUSTOMER_RAW).display_name == MASKED
 
+    def test_empty_id_falls_back_to_unknown_user(self):
+        assert au.mask_emails("jo@example.com", "") == "unknown user"
+
     def test_masks_substring(self):
         user = au.parse_user({"accountId": ID_A, "displayName": "Jo (o'neil@x.com) Doe"})
         assert user.display_name == f"Jo ({MASKED}) Doe"

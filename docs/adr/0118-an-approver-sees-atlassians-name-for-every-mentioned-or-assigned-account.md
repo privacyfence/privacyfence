@@ -16,8 +16,9 @@ name, and the approver would approve a notification to someone they did not expe
 
 The approval card names each mentioned or assigned account with the name Atlassian returns for its
 id, never the agent's label. This covers the card title, the body preview and the `Mentions` and
-`Assignee` preview rows. Only the audit record's `raw_data` and `args` keep the agent's text; the Jira
-mention node sent to Atlassian carries the directory's name in its `attrs.text`.
+`Assignee` preview rows. Only the audit record's `raw_data` and `args` keep the agent's text; every Jira
+mention node sent to Atlassian, in a description, a comment or a rich-text custom field, carries the
+directory's name in its `attrs.text`.
 
 `jira_update_issue`'s `custom_fields` follows the same rule:
 
@@ -28,8 +29,12 @@ mention node sent to Atlassian carries the directory's name in its `attrs.text`.
   refused with a message naming the accepted shape.
 - Every account id found at any depth of any custom value, including ADF `mention` nodes, is resolved
   and named like the others, and an unresolvable one is refused before the card.
-- The card shows what is written: a rich-text value's text appears in the card body with mentions as
-  directory names, and a plain value is shown with people replaced by their names.
+- The card shows what is written. A rich-text (ADF) value is rendered in full: text verbatim (mention markup typed
+  mention markup typed into a text node stays literal text), mentions as directory names, every link target next to
+  its text, every `inlineCard`, `blockCard` and `embedCard` URL and `data`, and a placeholder carrying
+  the attributes of media, emoji, status and date nodes. Only a fixed list of node and mark types can
+  be shown completely; a value containing any other type is refused, naming it, before the card. A
+  plain value is shown with people replaced by their names.
 
 An id in mention markup, or an `assignee_account_id`, that cannot be resolved is refused with
 `Unknown Atlassian account id(s): …` before any approval card appears.
