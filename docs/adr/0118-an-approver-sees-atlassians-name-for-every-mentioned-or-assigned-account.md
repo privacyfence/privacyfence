@@ -55,6 +55,11 @@ they hand the agent (the author and each resolved mention) on the card as `Autho
 `Mentioned people`, and PII-scan those names with the body, even where the body's markup does not
 render a mention (a User Profile macro, a tag with several account ids, a nested link).
 
+Write results are out of scope of that read rule: `confluence_update_page`, `confluence_create_page` and
+the Jira write tools return the stored content as it stands after the write, with directory names for
+the authors and mentions in it. That is an echo of the write, not a gated read, and it matches the
+behaviour before this change, which already returned the full stored body.
+
 ## Alternatives considered
 
 - **Show the agent's label and trust it.** Rejected. The label is unverified text chosen by the

@@ -1329,6 +1329,20 @@ class TestWriteMentions:
         assert gated_call_spy[0]["preview"]["Mentions"] == "Bob Real"
         client.resolve_user_names.assert_called_once_with([self._REAL])
 
+    async def test_mention_hidden_by_markup_conversion_is_listed(self, gated_call_spy):
+        """Markup inside a double-quoted attribute ends it early once converted, so
+        the text after it becomes a real tag the original body did not show."""
+        connector, client = make_connector()
+        client.resolve_user_names.side_effect = lambda ids: {i: "Real" for i in ids if i == "aaaaaaaaaaaa"}
+        client.create_page.return_value = make_page()
+        body = '<p title="@[A](aaaaaaaaaaaa) <ri:user ri:account-id=\'hiddenhidden1\'/>">x</p>'
+
+        await connector.call("confluence_create_page", self._create_args(body))
+
+        assert "hiddenhidden1" in gated_call_spy[0]["details_text"]
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Real, unknown account hiddenhidden1"
+        client.resolve_user_names.assert_called_once_with(["aaaaaaaaaaaa", "hiddenhidden1"])
+
     async def test_raw_mention_after_plaintext_is_named_in_preview(self, gated_call_spy):
         connector, client = make_connector()
         client.resolve_user_names.return_value = {_JANE: "Jane Doe"}

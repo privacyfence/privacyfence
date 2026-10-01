@@ -70,8 +70,8 @@ mentions someone with `@[Name]` followed by the account id in parentheses and fi
 `confluence_find_users`. The approval card names each mentioned or assigned person with
 Atlassian's own name.
 
-A Confluence-only site (no Jira product) cannot look names up: it shows raw account ids and cannot
-use mention markup.
+A Confluence-only site (no Jira product) cannot look names up: page authors show as raw account ids, mentions
+as "unknown user", and it cannot use mention markup.
 
 ## Build and distribute the bundle
 
@@ -125,7 +125,7 @@ Switch Jira back to the classic scopes listed above, then have users **Reconnect
 `read:attachment:confluence` scope is missing from the app, or the user's token predates it. Add
 the scope if needed, then have the user **Reconnect…**.
 
-**Mentions show raw account ids, or a write fails with "Unknown Atlassian account id"** — the site
+**Page authors show raw account ids, mentions show "unknown user" (Confluence) or Jira's own label, or a write fails with "Unknown Atlassian account id"** — the site
 has no Jira product, or the "Browse users and groups" global permission was removed for the user.
 
 **403 on specific projects or spaces** — the user's Atlassian account has no access to that project
