@@ -169,6 +169,19 @@ class TestFindUsers:
         assert '"tool": "jira_find_users"' in entries[-1]
         assert '"decision": "auto_accepted"' in entries[-1]
 
+    async def test_audit_entry_never_holds_the_search_text(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.find_users.return_value = []
+
+        await connector.call("jira_find_users", {"query": "jane@example.com"})
+
+        entry = json.loads((tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        assert entry["summary"] == "Find users"
+        assert entry["sender"] == "0 user(s)"
+        for part in ("jane", "example", "@"):
+            assert part not in json.dumps(entry)
+
     async def test_customer_account_email_name_is_masked(self, tmp_path):
         init_audit_logger(str(tmp_path))
         connector, client = make_connector()

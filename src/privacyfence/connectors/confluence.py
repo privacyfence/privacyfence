@@ -417,7 +417,7 @@ class ConfluenceConnector(Connector):
         data = [asdict(u) for u in users]
         self._auto_audit(
             "confluence_find_users", "Find Confluence Users",
-            f"Find users: {query[:80]}", f"{len(users)} user(s)", t0,
+            "Find users", f"{len(users)} user(s)", t0,
         )
         return data
 
