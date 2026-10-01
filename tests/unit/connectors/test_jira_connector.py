@@ -232,6 +232,9 @@ class TestGetIssue:
             JiraComment(id="c1", author="bob", body=f"cc {markup}", created="2026-07-01"),
         ]
 
+        client.get_issue.return_value.display_description = "Ask @Jane Doe about it"
+        client.get_issue_comments.return_value[0].display_body = "cc @Jane Doe"
+
         result = await connector.call("jira_get_issue", {"issue_key": "ENG-42"})
 
         kwargs = gated_call_spy[0]
@@ -1371,3 +1374,91 @@ class TestEveryToolIsAudited:
             connector, jira_module, monkeypatch, tmp_path,
             arg_overrides={"jira_update_issue": {"summary": "Updated summary"}},
         )
+
+
+class TestReviewerInputsFix12:
+    @staticmethod
+    def _setup(kind="other", names=None):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.update_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Real X"} if names is None else names
+        client.custom_field_kind.return_value = kind
+        return connector, client
+
+    async def test_mention_inside_an_attribute_value_shows_the_directory_name(self, gated_call_spy):
+        connector, client = self._setup()
+        doc = _doc(_para({"type": "inlineCard", "attrs": {"data": {
+            "type": "mention", "attrs": {"id": ACC, "text": "@CEO"}}}}))
+        client.resolve_custom_field.side_effect = lambda name, value: (name.lower(), value)
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Rich": doc}),
+        })
+
+        details = gated_call_spy[0]["details_text"]
+        assert "@Real X" in details and "@CEO" not in details
+        sent = client.update_issue.call_args.args[1]["rich"]
+        assert sent["content"][0]["content"][0]["attrs"]["data"]["attrs"]["text"] == "@Real X"
+
+    async def test_mention_with_node_level_account_id_shows_the_name(self, gated_call_spy):
+        connector, client = self._setup()
+        value = {"type": "mention", "attrs": {"id": ACC, "text": "@CEO"}, "accountId": ACC}
+        client.resolve_custom_field.side_effect = lambda name, value: (name.lower(), value)
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Any": value}),
+        })
+
+        row = gated_call_spy[0]["preview"]["Any (field)"]
+        assert ACC not in row and "@CEO" not in row
+        assert row.count("@Real X") == 3
+
+    @pytest.mark.parametrize("wrap", [lambda d: {"value": d}, lambda d: [d]])
+    async def test_adf_doc_on_option_or_array_field_card_equals_sent(self, gated_call_spy, wrap):
+        connector, client = self._setup()
+        doc = _doc(_para({"type": "mention", "attrs": {"id": ACC, "text": "@CEO"}}))
+        client.resolve_custom_field.side_effect = lambda name, value: (name.lower(), wrap(value))
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Opt": doc}),
+        })
+
+        row = gated_call_spy[0]["preview"]["Opt (field)"]
+        assert "@Real X" in row and "@CEO" not in row
+        assert "details_text" in gated_call_spy[0]
+        sent = client.update_issue.call_args.args[1]["opt"]
+        assert "@Real X" in json.dumps(sent) and "@CEO" not in json.dumps(sent)
+
+    async def test_literal_markup_text_in_read_preview_is_not_rewritten(self, gated_call_spy):
+        connector, client = make_connector()
+        literal = "@[Label](0123456789)"
+        client.get_issue.return_value = make_issue(description=literal)
+        client.get_issue.return_value.display_description = literal
+        client.get_issue_comments.return_value = []
+
+        await connector.call("jira_get_issue", {"issue_key": "ENG-42"})
+
+        kwargs = gated_call_spy[0]
+        assert literal in kwargs["details_text"]
+        assert literal in kwargs["pii_scan_text"]
+
+    async def test_real_client_read_preview_renders_nodes_only(self, gated_call_spy):
+        client = make_real_client()
+        literal = "@[Label](0123456789)"
+        raw = {"key": "ENG-42", "fields": {"description": {"type": "doc", "content": [{
+            "type": "paragraph", "content": [
+                {"type": "text", "text": literal},
+                {"type": "mention", "attrs": {"id": ACC, "text": "@Jane"}},
+            ]}]}}}
+        issue = client._parse_issue(raw, include_description=True, names={ACC: "Jane Doe"})
+        comment = client._parse_comment(
+            {"id": "c", "body": {"type": "doc", "content": [{"type": "paragraph", "content": [
+                {"type": "mention", "attrs": {"id": ACC, "text": "@Jane"}}]}]}},
+            {ACC: "Jane Doe"},
+        )
+        assert issue.display_description == f"{literal} @Jane Doe"
+        assert issue.description == f"{literal} @[Jane Doe]({ACC})"
+        assert comment.display_body == "@Jane Doe"
+        assert "display_description" not in jira_module.asdict(issue)
+        assert "display_body" not in jira_module.asdict(comment)

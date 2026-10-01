@@ -199,6 +199,18 @@ class TestExtractAdfTextMentions:
         assert JiraClient._extract_adf_text(mention_node(None, "@Jane")) == "@Jane"
         assert JiraClient._extract_adf_text({"type": "mention"}) == ""
 
+    @pytest.mark.parametrize("account_id", ["bad id", JANE_ID])
+    def test_non_string_label_does_not_raise(self, account_id):
+        node = {"type": "mention", "attrs": {"id": account_id, "text": 5}}
+        out = JiraClient._extract_adf_text(node)
+        assert out == ("" if account_id == "bad id" else f"@[unknown user]({account_id})")
+
+    def test_display_mode_renders_at_name_and_leaves_literal_markup(self):
+        literal = "@[Label](0123456789)"
+        doc = adf_doc({"type": "text", "text": literal}, mention_node(JANE_ID))
+        out = JiraClient._extract_adf_text(doc, {JANE_ID: "Jane Doe"}, display=True)
+        assert out == f"{literal} @Jane Doe"
+
     def test_nested_among_text(self):
         doc = adf_doc({"type": "text", "text": "Hi"}, mention_node(JANE_ID), {"type": "text", "text": "thanks"})
         out = JiraClient._extract_adf_text(doc, {JANE_ID: "Jane Doe"})

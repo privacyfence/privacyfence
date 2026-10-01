@@ -108,7 +108,10 @@ def _display_value(node: Any, names: dict[str, str]) -> Any:
                 k: "@" + names[account_id] if k in ("id", "text") else _display_value(v, names)
                 for k, v in attrs.items()
             }
-            return {k: attrs if k == "attrs" else _display_value(v, names) for k, v in node.items()}
+            return {
+                k: attrs if k == "attrs" else "@" + names[v] if k == "accountId" else _display_value(v, names)
+                for k, v in node.items()
+            }
         return {
             k: "@" + names[v] if k == "accountId" else _display_value(v, names)
             for k, v in node.items()
@@ -162,11 +165,15 @@ def _adf_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _adf_note(attrs: dict[str, Any], skip: set[str]) -> str:
-    return " ".join(f"{k}={_adf_value(v)}" for k, v in attrs.items() if k not in skip)
+def _adf_note(attrs: dict[str, Any], skip: set[str], names: dict[str, str]) -> str:
+    # Attribute values are shown as they are sent: a mention nested in one carries the
+    # directory's name, never the agent's label.
+    return " ".join(
+        f"{k}={_adf_value(_with_directory_names(v, names))}" for k, v in attrs.items() if k not in skip
+    )
 
 
-def _adf_apply_marks(text: str, marks: Any) -> str:
+def _adf_apply_marks(text: str, marks: Any, names: dict[str, str]) -> str:
     if not isinstance(marks, list):
         raise _adf_error("has marks that are not a list")
     for mark in marks:
@@ -177,10 +184,10 @@ def _adf_apply_marks(text: str, marks: Any) -> str:
         if kind == "link":
             if not isinstance(attrs.get("href"), str):
                 raise _adf_error("contains a link without a text href")
-            note = _adf_note(attrs, {"href"})
+            note = _adf_note(attrs, {"href"}, names)
             text = f"{text} ({attrs['href']})" + (f" [link {note}]" if note else "")
         elif attrs:
-            text = f"{text} [{kind} {_adf_note(attrs, set())}]"
+            text = f"{text} [{kind} {_adf_note(attrs, set(), names)}]"
     return text
 
 
@@ -212,7 +219,7 @@ def _render_adf(node: Any, names: dict[str, str]) -> str:
     elif kind == "mention":
         body, skip = "@" + names[_mention_id(node)], {"id", "text"}
     elif kind in _ADF_LEAVES:
-        note = _adf_note(attrs, set())
+        note = _adf_note(attrs, set(), names)
         body, skip = f"[{kind}{' ' + note if note else ''}]", set(attrs)
     elif kind == "bulletList":
         body = "\n".join(f"- {c}" for c in children)
@@ -224,10 +231,15 @@ def _render_adf(node: Any, names: dict[str, str]) -> str:
         body = "".join(children)
     else:
         body = "\n".join(children)
-    note = _adf_note(attrs, skip)
+    note = _adf_note(attrs, skip, names)
     if note:
         body = f"{body} [{kind} {note}]" if kind in _ADF_INLINE else f"[{kind} {note}]\n{body}"
-    return _adf_apply_marks(body, node.get("marks", []))
+    return _adf_apply_marks(body, node.get("marks", []), names)
+
+
+def _shown(item: Any, display_attr: str, plain_attr: str) -> str:
+    shown = getattr(item, display_attr, None)
+    return (getattr(item, plain_attr, "") or "") if shown is None else shown
 
 
 def _parse_json_object(value: str) -> dict[str, Any] | None:
@@ -551,8 +563,10 @@ class JiraConnector(Connector):
             "Description": "Full description text",
             "Comments": "Author, created date, and body per comment",
         }
-        description_text = display_markup(getattr(issue, "description", "") or "")
-        comment_bodies = [display_markup(getattr(c, "body", "") or "") for c in comments]
+        # The preview shows mention nodes as @Name; text a person typed in the mention-markup
+        # shape stays as written, as the agent receives it.
+        description_text = _shown(issue, "display_description", "description")
+        comment_bodies = [_shown(c, "display_body", "body") for c in comments]
         details_parts = []
         if len(issue.summary) > 80:
             # Preview truncates the summary at 80 chars -- the untruncated
@@ -714,7 +728,7 @@ class JiraConnector(Connector):
         # Field ids are resolved up front so a built-in field cannot ride in
         # through custom_fields, and so every account id inside a custom value
         # is resolved with the rest before the approval card (ADR 0118).
-        resolved_custom: list[tuple[str, str, Any, Any, list[str]]] = []  # name, id, shown, sent, people
+        resolved_custom: list[tuple[str, str, Any, list[str]]] = []  # name, id, sent value, people
         seen_field_ids: set[str] = set()
         for field_name, value in (custom_updates or {}).items():
             field_id, coerced = await self._fetch(self._jira.resolve_custom_field, field_name, value)
@@ -730,7 +744,7 @@ class JiraConnector(Connector):
             if kind != "other":
                 coerced = _normalise_user_value(kind, coerced, field_name)
             resolved_custom.append(
-                (field_name, field_id, coerced if kind != "other" else value, coerced, _account_ids_in(coerced))
+                (field_name, field_id, coerced, _account_ids_in(coerced))
             )
         custom_ids = [i for *_, ids in resolved_custom for i in ids]
         names = await self._resolve_write_accounts(description, [assignee_account_id, *custom_ids])
@@ -754,20 +768,20 @@ class JiraConnector(Connector):
         changed = [k for k in preview if k != "Issue"]
         written: list[str] = []
         sent_custom: dict[str, Any] = {}
-        for field_name, field_id, shown, coerced, ids in resolved_custom:
+        for field_name, field_id, coerced, ids in resolved_custom:
             sent_custom[field_id] = coerced
             fields[field_id] = _with_directory_names(coerced, names)
             row = f"{field_name} (field)"
             changed.append(field_name)
-            if isinstance(shown, dict) and shown.get("type") == "doc":
-                text = _render_adf(shown, names)
+            if isinstance(coerced, dict) and coerced.get("type") == "doc":
+                text = _render_adf(coerced, names)
                 preview[row] = "→ (updated — see below)" + (f"; people: {', '.join(names[i] for i in ids)}" if ids else "")
                 written.append(f"{field_name}:\n{text}")
             elif ids:
-                named = _display_value(shown, names)
+                named = _display_value(coerced, names)
                 preview[row] = "→ " + (", ".join(map(str, named)) if isinstance(named, list) else str(named))
             else:
-                preview[row] = f"→ {shown}"
+                preview[row] = f"→ {coerced}"
         if not fields:
             raise ValueError("update_issue: at least one field must be provided")
         if description:

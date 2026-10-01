@@ -117,6 +117,10 @@ class JiraIssue:
     created: str = ""
     updated: str = ""
     url: str = ""
+    # Not a dataclass field, so asdict() (what the agent receives) never carries it: the
+    # description as the approval preview shows it, mentions as @Name and every other
+    # character as written. None when the description has no ADF form.
+    display_description = None
 
     def short_summary(self) -> str:
         snippet = self.summary[:60] + "…" if len(self.summary) > 60 else self.summary
@@ -130,6 +134,7 @@ class JiraComment:
     body: str
     created: str = ""
     updated: str = ""
+    display_body = None  # as ``JiraIssue.display_description``: not a field, preview-only
 
 
 @dataclass
@@ -533,13 +538,15 @@ class JiraClient:
         f = raw.get("fields") or {}
         key = raw.get("key", "")
         desc = ""
+        display_desc = None
         if include_description:
             desc_raw = f.get("description")
             if isinstance(desc_raw, str):
                 desc = desc_raw
             elif isinstance(desc_raw, dict):
                 desc = self._extract_adf_text(desc_raw, names)
-        return JiraIssue(
+                display_desc = self._extract_adf_text(desc_raw, names, display=True)
+        issue = JiraIssue(
             key=key,
             summary=f.get("summary", ""),
             status=(f.get("status") or {}).get("name", ""),
@@ -553,28 +560,38 @@ class JiraClient:
             updated=f.get("updated", ""),
             url=f"{self._base_url}/browse/{key}" if key else "",
         )
+        issue.display_description = display_desc
+        return issue
 
     @staticmethod
     def _parse_comment(raw: dict[str, Any], names: Mapping[str, str] | None = None) -> JiraComment:
         body_raw = raw.get("body", "")
+        display_body = None
         if isinstance(body_raw, dict):
             body = JiraClient._extract_adf_text(body_raw, names)
+            display_body = JiraClient._extract_adf_text(body_raw, names, display=True)
         else:
             body = str(body_raw)
-        return JiraComment(
+        comment = JiraComment(
             id=raw.get("id", ""),
             author=(raw.get("author") or {}).get("displayName", ""),
             body=body,
             created=raw.get("created", ""),
             updated=raw.get("updated", ""),
         )
+        comment.display_body = display_body
+        return comment
 
     @staticmethod
-    def _extract_adf_text(node: dict[str, Any], names: Mapping[str, str] | None = None) -> str:
+    def _extract_adf_text(
+        node: dict[str, Any], names: Mapping[str, str] | None = None, display: bool = False
+    ) -> str:
         """Extract plain text from an Atlassian Document Format node.
 
         A mention renders as ``@[Name](accountId)``; the name comes from
-        ``names`` when known, else from the label Jira put on the node.
+        ``names`` when known, else from the label Jira put on the node. With ``display`` it
+        renders ``@Name`` instead, for the approval preview, so literal text that merely looks
+        like the markup is left as written.
         """
         if not isinstance(node, dict):
             return str(node)
@@ -583,15 +600,16 @@ class JiraClient:
         if node.get("type") == "mention":
             attrs = node.get("attrs") or {}
             account_id = attrs.get("id")
-            label = attrs.get("text", "")
+            label = attrs.get("text")
+            label = label if isinstance(label, str) else ""
             if not isinstance(account_id, str) or not ACCOUNT_ID_RE.fullmatch(account_id):
                 return mask_emails(label, "")
             # Jira's own label can be an email (service-desk customers): mask it like a directory name.
             name = (names or {}).get(account_id) or mask_emails(label.lstrip("@"), account_id) or UNKNOWN_USER_LABEL
-            return mention_markup(name, account_id)
+            return "@" + name if display else mention_markup(name, account_id)
         parts: list[str] = []
         for child in node.get("content") or []:
-            parts.append(JiraClient._extract_adf_text(child, names))
+            parts.append(JiraClient._extract_adf_text(child, names, display))
         return " ".join(p for p in parts if p)
 
     @staticmethod
