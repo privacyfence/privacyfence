@@ -130,7 +130,7 @@ class ConfluenceConnector(Connector):
                     "List pages in a Confluence space (title, id, version). "
                     "Returns a list of {id, title, space_key, space_name, version, author, "
                     "created, updated, url} without page bodies, at most max_results "
-                    "(default 20, capped at 1000), in the API's order. author is an opaque Atlassian account id, not a name. Use "
+                    "(default 20, capped at 1000), in the API's order. author is an opaque Atlassian account id; author_name is the resolved name. Use "
                     "confluence_search instead to find pages by words, and "
                     "confluence_get_page to read one. Auto-approved."
                 ),
@@ -787,7 +787,10 @@ class ConfluenceConnector(Connector):
         listed as unknown, and <ri:user> tags with no account id (legacy userkey/username)
         as unrecognised, but neither is refused: refusing would make existing pages uneditable."""
         markup_ids = markup_mention_ids(body)
-        ids = list(dict.fromkeys([*markup_ids, *storage_mention_ids(body)]))
+        storage_body = markup_to_storage(body)
+        # Scan what is actually written: converting markup inserts quotes, which can
+        # let text inside an attribute become a real <ri:user> tag the raw body hid.
+        ids = list(dict.fromkeys([*markup_ids, *storage_mention_ids(body), *storage_mention_ids(storage_body)]))
         names: dict[str, str] = {}
         if ids:
             names = await self._fetch(self._confluence.resolve_user_names, ids)
@@ -798,11 +801,11 @@ class ConfluenceConnector(Connector):
                 "Look the person up with confluence_find_users and use their account_id."
             )
         parts = [names.get(i) or f"unknown account {i}" for i in ids]
-        unrecognised = storage_unrecognised_user_mentions(body)
+        unrecognised = storage_unrecognised_user_mentions(storage_body)
         if unrecognised:
             parts.append(f"{unrecognised} unrecognised user mention(s)")
         mentions = ", ".join(parts)
-        return markup_to_storage(body), mentions
+        return storage_body, mentions
 
     async def _fetch(self, func, *args) -> Any:
         try:
