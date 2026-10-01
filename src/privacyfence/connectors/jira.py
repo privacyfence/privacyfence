@@ -29,6 +29,15 @@ _DEDICATED_FIELD_PARAMS = {
 }
 
 
+def _mention_id(node: dict[str, Any]) -> str:
+    """The account id of an ADF ``mention`` node; a mention without a text id is refused."""
+    attrs = node.get("attrs")
+    account_id = attrs.get("id") if isinstance(attrs, dict) else None
+    if not isinstance(account_id, str) or not account_id:
+        raise _adf_error("contains a mention without an account id")
+    return account_id
+
+
 def _account_ids_in(value: Any) -> list[str]:
     """Every account id inside a custom field value, at any depth: dicts with
     an ``accountId`` key and ADF ``mention`` nodes (``attrs.id``)."""
@@ -44,9 +53,8 @@ def _account_ids_in(value: Any) -> list[str]:
         if isinstance(node, dict):
             if "accountId" in node:
                 add(node["accountId"])
-            attrs = node.get("attrs")
-            if node.get("type") == "mention" and isinstance(attrs, dict):
-                add(attrs.get("id"))
+            if node.get("type") == "mention":
+                add(_mention_id(node))
             for child in node.values():
                 walk(child)
         elif isinstance(node, list):
@@ -85,14 +93,26 @@ def _normalise_user_value(kind: str, value: Any, field_name: str) -> Any:
 
 def _display_value(node: Any, names: dict[str, str]) -> Any:
     """``node`` for the approval card: every person (accountId object or ADF mention) is
-    replaced by the directory's name; the agent's own labels for people never show."""
+    replaced by the directory's name, the agent's own labels for people never show, and every
+    other key and value is shown as written. Only an object that is nothing but a person
+    collapses to ``@name``."""
     if isinstance(node, dict):
-        attrs = node.get("attrs")
-        if "accountId" in node:
+        if set(node) == {"accountId"}:
             return "@" + names[node["accountId"]]
-        if node.get("type") == "mention" and isinstance(attrs, dict):
-            return "@" + names[attrs["id"]]
-        return {k: _display_value(v, names) for k, v in node.items()}
+        if node.get("type") == "mention":
+            account_id = _mention_id(node)
+            attrs = node["attrs"]
+            if set(node) == {"type", "attrs"} and set(attrs) <= {"id", "text"}:
+                return "@" + names[account_id]
+            attrs = {
+                k: "@" + names[account_id] if k in ("id", "text") else _display_value(v, names)
+                for k, v in attrs.items()
+            }
+            return {k: attrs if k == "attrs" else _display_value(v, names) for k, v in node.items()}
+        return {
+            k: "@" + names[v] if k == "accountId" else _display_value(v, names)
+            for k, v in node.items()
+        }
     if isinstance(node, list):
         return [_display_value(v, names) for v in node]
     return node
@@ -103,9 +123,8 @@ def _with_directory_names(node: Any, names: dict[str, str]) -> Any:
     ``attrs.text``, as ``_text_to_adf`` does for descriptions and comments (ADR 0118)."""
     if isinstance(node, dict):
         out = {k: _with_directory_names(v, names) for k, v in node.items()}
-        attrs = node.get("attrs")
-        if node.get("type") == "mention" and isinstance(attrs, dict):
-            out["attrs"] = {**out["attrs"], "text": "@" + names[attrs["id"]]}
+        if node.get("type") == "mention":
+            out["attrs"] = {**out["attrs"], "text": "@" + names[_mention_id(node)]}
         return out
     if isinstance(node, list):
         return [_with_directory_names(v, names) for v in node]
@@ -143,11 +162,8 @@ def _adf_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _adf_note(attrs: dict[str, Any], skip: set[str], silent_numbers: bool) -> str:
-    return " ".join(
-        f"{k}={_adf_value(v)}" for k, v in attrs.items()
-        if k not in skip and not (silent_numbers and isinstance(v, (bool, int)))
-    )
+def _adf_note(attrs: dict[str, Any], skip: set[str]) -> str:
+    return " ".join(f"{k}={_adf_value(v)}" for k, v in attrs.items() if k not in skip)
 
 
 def _adf_apply_marks(text: str, marks: Any) -> str:
@@ -161,10 +177,10 @@ def _adf_apply_marks(text: str, marks: Any) -> str:
         if kind == "link":
             if not isinstance(attrs.get("href"), str):
                 raise _adf_error("contains a link without a text href")
-            note = _adf_note(attrs, {"href"}, False)
+            note = _adf_note(attrs, {"href"})
             text = f"{text} ({attrs['href']})" + (f" [link {note}]" if note else "")
         elif attrs:
-            text = f"{text} [{kind} {_adf_note(attrs, set(), False)}]"
+            text = f"{text} [{kind} {_adf_note(attrs, set())}]"
     return text
 
 
@@ -194,9 +210,9 @@ def _render_adf(node: Any, names: dict[str, str]) -> str:
     elif kind == "rule":
         body = "---"
     elif kind == "mention":
-        body, skip = "@" + names[attrs["id"]], {"id", "text"}
+        body, skip = "@" + names[_mention_id(node)], {"id", "text"}
     elif kind in _ADF_LEAVES:
-        note = _adf_note(attrs, set(), False)
+        note = _adf_note(attrs, set())
         body, skip = f"[{kind}{' ' + note if note else ''}]", set(attrs)
     elif kind == "bulletList":
         body = "\n".join(f"- {c}" for c in children)
@@ -208,7 +224,7 @@ def _render_adf(node: Any, names: dict[str, str]) -> str:
         body = "".join(children)
     else:
         body = "\n".join(children)
-    note = _adf_note(attrs, skip, kind not in _ADF_LEAVES)
+    note = _adf_note(attrs, skip)
     if note:
         body = f"{body} [{kind} {note}]" if kind in _ADF_INLINE else f"[{kind} {note}]\n{body}"
     return _adf_apply_marks(body, node.get("marks", []))
@@ -735,20 +751,23 @@ class JiraConnector(Connector):
         if assignee_account_id:
             fields["assignee"] = {"accountId": assignee_account_id}
             preview["Assignee"] = f"→ {names[assignee_account_id]}"
+        changed = [k for k in preview if k != "Issue"]
         written: list[str] = []
         sent_custom: dict[str, Any] = {}
         for field_name, field_id, shown, coerced, ids in resolved_custom:
             sent_custom[field_id] = coerced
             fields[field_id] = _with_directory_names(coerced, names)
+            row = f"{field_name} (field)"
+            changed.append(field_name)
             if isinstance(shown, dict) and shown.get("type") == "doc":
                 text = _render_adf(shown, names)
-                preview[field_name] = "→ (updated — see below)" + (f"; people: {', '.join(names[i] for i in ids)}" if ids else "")
+                preview[row] = "→ (updated — see below)" + (f"; people: {', '.join(names[i] for i in ids)}" if ids else "")
                 written.append(f"{field_name}:\n{text}")
             elif ids:
                 named = _display_value(shown, names)
-                preview[field_name] = "→ " + (", ".join(map(str, named)) if isinstance(named, list) else str(named))
+                preview[row] = "→ " + (", ".join(map(str, named)) if isinstance(named, list) else str(named))
             else:
-                preview[field_name] = f"→ {shown}"
+                preview[row] = f"→ {shown}"
         if not fields:
             raise ValueError("update_issue: at least one field must be provided")
         if description:
@@ -757,13 +776,12 @@ class JiraConnector(Connector):
         if written:
             details_text = "\n\n".join(written)
         else:
-            changed_fields = ", ".join(k for k in preview if k != "Issue")
-            details_text = f"{changed_fields} will be updated; description is unchanged."
+            details_text = f"{', '.join(changed)} will be updated; description is unchanged."
         await gated_call(
             connector=self.name,
             tool="jira_update_issue",
             tool_name="Update Jira Issue",
-            summary=f"Update {issue_key}: {', '.join(k for k in preview if k != 'Issue')}",
+            summary=f"Update {issue_key}: {', '.join(changed)}",
             sender=f"issue={issue_key}",
             raw_data={"issue_key": issue_key, "fields": {**fields, **sent_custom}},
             filtered_data=None,

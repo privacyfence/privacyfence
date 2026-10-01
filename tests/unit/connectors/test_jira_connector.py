@@ -661,7 +661,7 @@ class TestUpdateIssue:
         client.resolve_custom_field.assert_called_once_with("Story Points", 5)
         client.update_issue.assert_called_once_with("ENG-42", {"customfield_10016": 5})
         kwargs = gated_call_spy[0]
-        assert kwargs["preview"]["Story Points"] == "→ 5"
+        assert kwargs["preview"]["Story Points (field)"] == "→ 5"
         assert kwargs["details_text"] == "Story Points will be updated; description is unchanged."
 
     async def test_custom_fields_combine_with_standard_fields(self, gated_call_spy):
@@ -778,7 +778,7 @@ class TestCustomFieldPeople:
         })
 
         kwargs = gated_call_spy[0]
-        assert kwargs["preview"]["Reviewers"] == "→ @Jane Doe, @Bob Real, @Jane Doe"
+        assert kwargs["preview"]["Reviewers (field)"] == "→ @Jane Doe, @Bob Real, @Jane Doe"
         client.resolve_user_names.assert_called_once_with([ACC, ACC2])
         client.update_issue.assert_called_once_with("ENG-1", {"customfield_9": value})
 
@@ -795,11 +795,10 @@ class TestCustomFieldPeople:
         })
 
         preview = gated_call_spy[0]["preview"]
-        assert preview["Notes"] == "→ (updated — see below); people: Jane Doe"
+        assert preview["Notes (field)"] == "→ (updated — see below); people: Jane Doe"
         assert gated_call_spy[0]["details_text"] == "Notes:\n@Jane Doe"
 
-    @pytest.mark.parametrize("bad", [{"accountId": 5}, {"accountId": ""},
-                                     {"type": "mention", "attrs": {"text": "x"}}])
+    @pytest.mark.parametrize("bad", [{"accountId": 5}, {"accountId": ""}])
     async def test_invalid_account_id_shape_refused(self, gated_call_spy, bad):
         connector, client = make_connector()
         client.resolve_custom_field.return_value = ("customfield_9", bad)
@@ -821,7 +820,7 @@ class TestCustomFieldPeople:
         })
 
         client.resolve_user_names.assert_not_called()
-        assert gated_call_spy[0]["preview"]["Notes"] == "→ hello"
+        assert gated_call_spy[0]["preview"]["Notes (field)"] == "→ hello"
 
 
 class TestCustomFieldUserShapes:
@@ -871,7 +870,7 @@ class TestCustomFieldUserShapes:
             "issue_key": "E-1", "custom_fields": json.dumps({"Approver": ACC}),
         })
 
-        assert gated_call_spy[0]["preview"]["Approver"] == "→ @Jane Doe"
+        assert gated_call_spy[0]["preview"]["Approver (field)"] == "→ @Jane Doe"
         client.update_issue.assert_called_once_with("E-1", {"approver": {"accountId": ACC}})
 
     async def test_bare_unknown_id_refused_before_card(self, gated_call_spy):
@@ -898,7 +897,7 @@ class TestCustomFieldUserShapes:
             "issue_key": "E-1", "custom_fields": json.dumps({"Reviewers": [ACC, {"accountId": ACC2}]}),
         })
 
-        assert gated_call_spy[0]["preview"]["Reviewers"] == "→ @Jane Doe, @Bob Real"
+        assert gated_call_spy[0]["preview"]["Reviewers (field)"] == "→ @Jane Doe, @Bob Real"
         client.update_issue.assert_called_once_with(
             "E-1", {"reviewers": [{"accountId": ACC}, {"accountId": ACC2}]})
 
@@ -910,10 +909,10 @@ class TestCustomFieldUserShapes:
         })
 
         client.resolve_user_names.assert_not_called()
-        assert gated_call_spy[0]["preview"]["Severity"] == "→ {'id': '10001'}"
+        assert gated_call_spy[0]["preview"]["Severity (field)"] == "→ {'id': '10001'}"
         client.update_issue.assert_called_once_with("E-1", {"severity": {"id": "10001"}})
 
-    async def test_non_user_field_account_id_shows_name_not_agent_label(self, gated_call_spy):
+    async def test_non_user_field_account_id_shows_name_and_every_other_key(self, gated_call_spy):
         connector, _client = self._setup("other")
         value = {"accountId": ACC, "displayName": "Somebody Else"}
 
@@ -921,9 +920,8 @@ class TestCustomFieldUserShapes:
             "issue_key": "E-1", "custom_fields": json.dumps({"Owner": value}),
         })
 
-        row = gated_call_spy[0]["preview"]["Owner"]
-        assert row == "→ @Jane Doe"
-        assert "Somebody Else" not in row
+        row = gated_call_spy[0]["preview"]["Owner (field)"]
+        assert row == "→ {'accountId': '@Jane Doe', 'displayName': 'Somebody Else'}"
 
     async def test_nested_people_in_a_plain_value_are_named(self, gated_call_spy):
         connector, _client = self._setup("other")
@@ -934,8 +932,10 @@ class TestCustomFieldUserShapes:
             "issue_key": "E-1", "custom_fields": json.dumps({"Mixed": value}),
         })
 
-        row = gated_call_spy[0]["preview"]["Mixed"]
-        assert row == "→ {'note': 'hi', 'who': ['@Bob Real', '@Jane Doe']}"
+        row = gated_call_spy[0]["preview"]["Mixed (field)"]
+        assert row == (
+            "→ {'note': 'hi', 'who': [{'accountId': '@Bob Real', 'displayName': 'Fake'}, '@Jane Doe']}"
+        )
 
     async def test_rich_text_shown_on_card_with_names_for_two_fields(self, gated_call_spy):
         connector, client = self._setup("other")
@@ -952,8 +952,121 @@ class TestCustomFieldUserShapes:
         details = kwargs["details_text"]
         assert "SECRET PAYLOAD TEXT" in details and "SECOND BLOCK" in details
         assert "@Jane Doe" in details and "Fake Label" not in details
-        assert kwargs["preview"]["Environment"] == "→ (updated — see below); people: Jane Doe"
-        assert "Notes" in kwargs["preview"]
+        assert kwargs["preview"]["Environment (field)"] == "→ (updated — see below); people: Jane Doe"
+        assert "Notes (field)" in kwargs["preview"]
+
+    async def test_account_id_with_extra_keys_shows_them_cascading_select(self, gated_call_spy):
+        connector, client = self._setup("other")
+        value = {"value": "Parent", "child": {"value": "Secret"}, "accountId": ACC}
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Cascade": value}),
+        })
+
+        row = gated_call_spy[0]["preview"]["Cascade (field)"]
+        assert "Secret" in row and "Parent" in row and "@Jane Doe" in row and ACC not in row
+        client.update_issue.assert_called_once()
+
+    @pytest.mark.parametrize("value,hidden", [
+        ({"accountId": ACC, "payload": "HIDDEN TEXT"}, "HIDDEN TEXT"),
+        ([{"accountId": ACC, "note": "HIDDEN"}], "HIDDEN"),
+    ])
+    async def test_extra_keys_next_to_account_id_shown_for_any_field(self, gated_call_spy, value, hidden):
+        connector, _client = self._setup("other")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Anything": value}),
+        })
+
+        row = gated_call_spy[0]["preview"]["Anything (field)"]
+        assert hidden in row and "@Jane Doe" in row
+
+    async def test_exact_account_id_object_collapses_to_name(self, gated_call_spy):
+        connector, _client = self._setup("other")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Owner": {"accountId": ACC}}),
+        })
+
+        assert gated_call_spy[0]["preview"]["Owner (field)"] == "→ @Jane Doe"
+
+    @pytest.mark.parametrize("node,expected", [
+        ({"type": "mention", "attrs": {"id": ACC}}, "→ @Jane Doe"),
+        ({"type": "mention", "attrs": {"id": ACC, "text": "@Fake", "localId": "L1", "accessLevel": "CONTAINER"}},
+         "→ {'type': 'mention', 'attrs': {'id': '@Jane Doe', 'text': '@Jane Doe', 'localId': 'L1', "
+         "'accessLevel': 'CONTAINER'}}"),
+        ({"type": "mention", "attrs": {"id": ACC}, "marks": [{"type": "strong"}]},
+         "→ {'type': 'mention', 'attrs': {'id': '@Jane Doe'}, 'marks': [{'type': 'strong'}]}"),
+    ])
+    async def test_bare_mention_node_collapses_only_when_nothing_else_is_written(
+        self, gated_call_spy, node, expected
+    ):
+        connector, _client = self._setup("other")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Who": node}),
+        })
+
+        assert gated_call_spy[0]["preview"]["Who (field)"] == expected
+
+    @pytest.mark.parametrize("node", [
+        {"type": "mention"}, {"type": "mention", "attrs": {}}, {"type": "mention", "attrs": {"id": 5}},
+        {"type": "mention", "attrs": {"id": ""}}, {"type": "mention", "attrs": "x"},
+    ])
+    @pytest.mark.parametrize("wrap", [False, True])
+    async def test_mention_without_text_id_refused_before_card(self, gated_call_spy, node, wrap):
+        connector, client = self._setup("other")
+        value = _doc(_para(node)) if wrap else node
+
+        with pytest.raises(ValueError, match="mention without an account id"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "E-1", "custom_fields": json.dumps({"Notes": value}),
+            })
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
+
+    async def test_render_adf_refuses_mention_without_id_itself(self):
+        from privacyfence.connectors.jira import _render_adf
+        with pytest.raises(ValueError, match="mention without an account id"):
+            _render_adf({"type": "mention"}, {})
+
+    async def test_ordered_list_start_number_shown(self, gated_call_spy):
+        connector, _client = self._setup("other")
+        item = {"type": "listItem", "content": [_para(_text("a"))]}
+        doc = _doc({"type": "orderedList", "attrs": {"order": 1000}, "content": [item]})
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": json.dumps({"Notes": doc}),
+        })
+
+        assert "[orderedList order=1000]" in gated_call_spy[0]["details_text"]
+
+    @pytest.mark.parametrize("name", ["Issue", "Mentions", "Assignee", "Summary", "Priority", "Description"])
+    async def test_custom_field_rows_never_overwrite_card_rows(self, gated_call_spy, name):
+        connector, client = self._setup("other")
+        client.resolve_custom_field.side_effect = lambda n, v: ("cf_" + n.lower(), v)
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "summary": "New",
+            "custom_fields": json.dumps({name: "zzz", name.upper() + "2": "yyy"}),
+        })
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Issue"].startswith("ENG-42")
+        assert kwargs["preview"]["Summary"] == "Fix login bug → New"
+        assert kwargs["preview"][f"{name} (field)"] == "→ zzz"
+        assert kwargs["preview"][f"{name.upper()}2 (field)"] == "→ yyy"
+        assert kwargs["summary"] == f"Update E-1: Summary, {name}, {name.upper()}2"
+
+    async def test_card_text_lists_custom_field_names_without_empty_segment(self, gated_call_spy):
+        connector, _client = self._setup("other")
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "E-1", "custom_fields": '{"Issue": "zzz"}',
+        })
+
+        assert gated_call_spy[0]["summary"] == "Update E-1: Issue"
+        assert gated_call_spy[0]["details_text"] == "Issue will be updated; description is unchanged."
 
     async def test_rich_text_and_description_both_on_card(self, gated_call_spy):
         connector, _client = self._setup("other")
@@ -967,7 +1080,7 @@ class TestCustomFieldUserShapes:
 
         details = gated_call_spy[0]["details_text"]
         assert "description:\nplain description" in details and "Environment:\nRICH TEXT" in details
-        assert gated_call_spy[0]["preview"]["Environment"] == "→ (updated — see below)"
+        assert gated_call_spy[0]["preview"]["Environment (field)"] == "→ (updated — see below)"
 
 
 def _doc(*blocks):
@@ -1087,7 +1200,7 @@ class TestRichTextCard:
 
         details = gated_call_spy[0]["details_text"]
         assert "[media type=file id=abc-123 collection=contentId-9]" in details
-        assert "[mediaSingle layout=center]" in details and "width" not in details
+        assert "[mediaSingle layout=center width=50]" in details
         assert "[emoji shortName=:smile: text=x]" in details
         assert '[status text="Done now" color=green]' in details
         assert "[date timestamp=1700000000000]" in details
@@ -1115,7 +1228,7 @@ class TestRichTextCard:
 
         details = gated_call_spy[0]["details_text"]
         assert details == (
-            "Notes:\nTitle\n- a\n- b\n1. c\n2. d\n---\n"
+            "Notes:\n[heading level=2]\nTitle\n- a\n- b\n1. c\n2. d\n---\n"
             "[panel panelType=info]\ncareful\n"
             "[codeBlock language=py]\nx = 1\n"
             "H | C\n"
