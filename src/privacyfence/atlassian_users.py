@@ -146,13 +146,20 @@ class _StorageScan(HTMLParser):
     CDATA_CONTENT_ELEMENTS = ()  # <script>/<style> are ordinary elements in storage format
     RCDATA_CONTENT_ELEMENTS = ()
 
+    def set_cdata_mode(self, *args: object, **kwargs: object) -> None:
+        """Never enter raw-text mode. Some patch releases switch ``<plaintext>`` (and other
+        elements) into it regardless of the class attributes above, which would hide any
+        ``<ri:user>`` that follows; Confluence's XML parser has no such modes."""
+
     def __init__(self, text: str) -> None:
         super().__init__(convert_charrefs=True)
         self._text = text
         self._line_starts = [0]
         for line in text.split("\n")[:-1]:
             self._line_starts.append(self._line_starts[-1] + len(line) + 1)
-        self.users: list[dict[str, str]] = []
+        # One entry per <ri:user> tag: every non-blank ri:account-id on it (a repeated attribute
+        # lists all its values, so none escapes resolution), empty for legacy/id-less forms.
+        self.users: list[list[str]] = []
         self.links: list[tuple[int, int, int | None]] = []  # (start, end, index into users)
         self._open: tuple[int, int | None] | None = None
         self.feed(text)
@@ -166,10 +173,8 @@ class _StorageScan(HTMLParser):
         if tag == "ac:link":
             self._open = (self._offset(), None)
         elif tag == "ri:user":
-            values: dict[str, str] = {}
-            for key, value in attrs:
-                values.setdefault(key, (value or "").strip())
-            self.users.append(values)
+            ids = [(v or "").strip() for k, v in attrs if k == "ri:account-id"]
+            self.users.append([i for i in ids if i])
             if self._open is not None and self._open[1] is None:
                 self._open = (self._open[0], len(self.users) - 1)
 
@@ -184,13 +189,13 @@ class _StorageScan(HTMLParser):
 
 def storage_mention_ids(html: str) -> list[str]:
     users = _StorageScan(html).users
-    return list(dict.fromkeys(u["ri:account-id"] for u in users if u.get("ri:account-id")))
+    return list(dict.fromkeys(i for ids in users for i in ids))
 
 
 def storage_unrecognised_user_mentions(html: str) -> int:
     """Count ``<ri:user>`` tags with no usable ``ri:account-id`` (legacy ``ri:userkey`` /
     ``ri:username`` forms, or none at all), which cannot be named from the directory."""
-    return sum(1 for u in _StorageScan(html).users if not u.get("ri:account-id"))
+    return sum(1 for ids in _StorageScan(html).users if not ids)
 
 
 def storage_mentions_to_text(html: str, names: Mapping[str, str]) -> str:
@@ -198,7 +203,9 @@ def storage_mentions_to_text(html: str, names: Mapping[str, str]) -> str:
     out: list[str] = []
     cursor = 0
     for start, end, index in scan.links:
-        name = names.get(scan.users[index].get("ri:account-id", "")) or UNKNOWN_USER_LABEL
+        ids = scan.users[index]
+        # A tag naming several accounts is ambiguous, so it reads as an unknown user.
+        name = (names.get(ids[0]) if len(ids) == 1 else None) or UNKNOWN_USER_LABEL
         out.append(html[cursor:start])
         out.append("@" + html_lib.escape(name))
         cursor = end
