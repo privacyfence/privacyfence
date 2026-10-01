@@ -294,7 +294,7 @@ class TestMentionMarkup:
 
         html = f"<p><ac:link>{user}{body}</ac:link></p>"
         text = au.storage_mentions_to_text(html, {ID_A: "Jane Doe"})
-        assert "</ri:user>" not in text and f"ri:account-id" not in text
+        assert "</ri:user>" not in text and "ri:account-id" not in text
         rendered = html_to_markdown(text)
         assert "@Jane Doe" in rendered and self.PII in rendered
 
