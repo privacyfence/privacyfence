@@ -43,11 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Jira and Confluence show people by name, and the agent can @mention them.** @mentioned people and Confluence page authors appear by name instead of as account ids, through a shared cache that looks each person up once a week at most. New `jira_find_users`, `confluence_find_users`, `jira_refresh_user_cache` and `confluence_refresh_user_cache` tools find people and refresh their names. The agent can @mention people in Jira comments and descriptions and in Confluence pages, and assign Jira issues, and the approval card names each person.
+
 ## [5.4.0] — 2026-10-01
 
 ### Added
 
-- **Jira and Confluence show people by name, and the agent can @mention them.** @mentioned people and Confluence page authors appear by name instead of as account ids, through a shared cache that looks each person up once a week at most. New `jira_find_users`, `confluence_find_users`, `jira_refresh_user_cache` and `confluence_refresh_user_cache` tools find people and refresh their names. The agent can @mention people in Jira comments and descriptions and in Confluence pages, and assign Jira issues, and the approval card names each person.
 - **Narrower Salesforce report runs.** salesforce_run_report can return only some of a report's columns, add filters for one run (such as a list of opportunity IDs), or return totals only, without changing the saved report. It now asks Salesforce for detail rows explicitly, and says when Salesforce cut a report off at 2,000 rows.
 
 - **Organization deployment guide: automatic upgrades and IP hardening.** Two optional sections in the org-mode setup guide: a nightly systemd timer that upgrades to the latest stable release and falls back to the previous version if the daemon does not come back, and how to limit the MCP endpoints to Anthropic's addresses at the proxy and close unused ports with `ufw`, including what port 80 is still needed for.
