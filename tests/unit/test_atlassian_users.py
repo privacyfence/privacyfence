@@ -216,7 +216,9 @@ class TestMentionMarkup:
             f'<ac:link><ri:user ri:account-id="{ID_B}" />'
             f'<ac:plain-text-link-body><![CDATA[Bob]]></ac:plain-text-link-body></ac:link>'
         )
-        assert au.storage_mentions_to_text(html, {ID_A: "Jane Doe"}) == "@Jane Doe@unknown user"
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane Doe"}) == (
+            "@Jane Doe (link text: Jane)@unknown user (link text: Bob)"
+        )
 
     def test_storage_mentions_to_text_non_self_closing(self):
         html = f'<ac:link><ri:user ri:account-id="{ID_A}"></ri:user></ac:link>'
@@ -238,7 +240,9 @@ class TestMentionMarkup:
     def test_quote_and_whitespace_forms(self, attr, shape):
         html = f"x {shape.format(a=attr)} y"
         assert au.storage_mention_ids(html) == [ID_A]
-        assert au.storage_mentions_to_text(html, {ID_A: "Jane Doe"}) == "x @Jane Doe y"
+        text = au.storage_mentions_to_text(html, {ID_A: "Jane Doe"})
+        assert text.startswith("x @Jane Doe") and text.endswith(" y")
+        assert ("link text: Jane)" in text) == ("body" in shape)
 
 
     REAL_ID = "557058:f58131cb-b67d-43c7-b30d-6b58d40bd077"
@@ -247,7 +251,9 @@ class TestMentionMarkup:
         html = (f'<ac:link><ri:user ri:local-id="a>b" ri:account-id="{self.REAL_ID}" />'
                 '<ac:plain-text-link-body><![CDATA[Bob]]></ac:plain-text-link-body></ac:link>')
         assert au.storage_mention_ids(html) == [self.REAL_ID]
-        assert au.storage_mentions_to_text(html, {self.REAL_ID: "Bob Real"}) == "@Bob Real"
+        assert au.storage_mentions_to_text(html, {self.REAL_ID: "Bob Real"}) == (
+            "@Bob Real (link text: Bob)"
+        )
 
     def test_entity_encoded_account_id_is_decoded(self):
         html = '<ac:link><ri:user ri:account-id="557058&#58;f58131cb-b67d-43c7-b30d-6b58d40bd077" /></ac:link>'
@@ -269,8 +275,42 @@ class TestMentionMarkup:
         html = (f'<ac:link><ri:user ri:account-id="{ID_A}"/><ac:link-body>x</ac:link-body>JUNK</ac:link>'
                 '<p>hidden</p><ac:link><ri:page ri:content-title="t"/><ac:link-body>y</ac:link-body></ac:link>')
         assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == (
-            '@Jane<p>hidden</p><ac:link><ri:page ri:content-title="t"/>'
+            '@Jane (link text: x)JUNK<p>hidden</p><ac:link><ri:page ri:content-title="t"/>'
             '<ac:link-body>y</ac:link-body></ac:link>')
+
+    PII = "SSN 123-45-6789, card 4111 1111 1111 1111, jane.doe@corp.example"
+
+    @pytest.mark.parametrize("user", [
+        f'<ri:user ri:account-id="{ID_A}"/>',
+        f'<ri:user ri:account-id="{ID_A}"></ri:user>',
+    ])
+    @pytest.mark.parametrize("body", [
+        f"<ac:link-body>{PII}</ac:link-body>",
+        f"<ac:plain-text-link-body><![CDATA[{PII}]]></ac:plain-text-link-body>",
+        f"<ac:link-body><strong>{PII}</strong></ac:link-body>",
+    ])
+    def test_user_link_text_survives_conversion(self, user, body):
+        from privacyfence.html_to_text import html_to_markdown
+
+        html = f"<p><ac:link>{user}{body}</ac:link></p>"
+        text = au.storage_mentions_to_text(html, {ID_A: "Jane Doe"})
+        assert "</ri:user>" not in text and f"ri:account-id" not in text
+        rendered = html_to_markdown(text)
+        assert "@Jane Doe" in rendered and self.PII in rendered
+
+    def test_plain_text_link_body_cdata_is_escaped(self):
+        html = (f'<ac:link><ri:user ri:account-id="{ID_A}"/>'
+                '<ac:plain-text-link-body><![CDATA[<b>x</b> & y]]></ac:plain-text-link-body></ac:link>')
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == (
+            "@Jane (link text: &lt;b&gt;x&lt;/b&gt; &amp; y)")
+
+    def test_other_cdata_in_user_link_becomes_text(self):
+        html = f'<ac:link><ri:user ri:account-id="{ID_A}"/><![CDATA[a<b]]></ac:link>'
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == "@Janea&lt;b"
+
+    def test_user_link_without_body_is_just_the_name(self):
+        html = f'<ac:link ac:card-appearance="inline"><ri:user ri:account-id="{ID_A}"/></ac:link>'
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}) == "@Jane"
 
     def test_script_element_does_not_hide_later_mentions(self):
         html = f'<script>x</script><ac:link><ri:user ri:account-id="{ID_A}"/></ac:link>'
@@ -298,7 +338,7 @@ class TestMentionMarkup:
 
     def test_multiline_offsets_and_unclosed_link(self):
         html = f'a\n<ac:link>\n<ri:user ri:account-id="{ID_A}"/>\n</ac:link>\nb <ac:link><ri:user ri:account-id="{ID_B}"/>'
-        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}).startswith("a\n@Jane\nb <ac:link>")
+        assert au.storage_mentions_to_text(html, {ID_A: "Jane"}).startswith("a\n\n@Jane\n\nb <ac:link>")
         assert au.storage_mention_ids(html) == [ID_A, ID_B]
 
 

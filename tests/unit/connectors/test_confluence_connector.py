@@ -372,6 +372,39 @@ class TestGetPageNames:
 
         assert gated_call_spy[0]["new_info"]["Author"] == "acc-alice-0001"
 
+    @pytest.mark.parametrize("tool,args,client_method", [
+        ("confluence_get_page", {"page_id": "p1"}, "get_page"),
+        ("confluence_get_page_by_title", {"space_key": "ENG", "title": "Runbook"}, "get_page_by_title"),
+    ])
+    @pytest.mark.parametrize("link_body", [
+        "<ac:link-body>{pii}</ac:link-body>",
+        "<ac:plain-text-link-body><![CDATA[{pii}]]></ac:plain-text-link-body>",
+    ])
+    async def test_pii_inside_a_user_link_body_is_shown_and_scanned(
+        self, gated_call_spy, tool, args, client_method, link_body,
+    ):
+        from privacyfence.pii_detector import detect_pii_categories
+
+        pii = "SSN 123-45-6789, card 4111 1111 1111 1111, jane.doe@corp.example"
+        connector, client = make_connector()
+        body = (
+            '<p><ac:link><ri:user ri:account-id="acc-jane-0001"/>'
+            + link_body.format(pii=pii) + "</ac:link></p>"
+        )
+        getattr(client, client_method).return_value = make_page(
+            body=body, mentions={"acc-jane-0001": "Jane Doe"},
+        )
+
+        await connector.call(tool, args)
+
+        kwargs = gated_call_spy[0]
+        assert "@Jane Doe" in kwargs["details_text"]
+        assert pii in kwargs["details_text"]
+        assert pii in kwargs["pii_scan_text"]
+        assert {"Credit card number", "US Social Security Number"} <= set(
+            detect_pii_categories(kwargs["pii_scan_text"])
+        )
+
 
 class TestGetPage:
     async def test_preview_shows_real_last_modified_not_blank(self, gated_call_spy):
