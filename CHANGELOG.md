@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.4.0] — 2026-10-01
+
 ### Added
 
 - **Narrower Salesforce report runs.** salesforce_run_report can return only some of a report's columns, add filters for one run (such as a list of opportunity IDs), or return totals only, without changing the saved report. It now asks Salesforce for detail rows explicitly, and says when Salesforce cut a report off at 2,000 rows.
@@ -3178,7 +3180,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.3.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.4.0...HEAD
+[5.4.0]: https://github.com/privacyfence/privacyfence/compare/v5.3.0...v5.4.0
 [5.3.0]: https://github.com/privacyfence/privacyfence/compare/v5.2.1...v5.3.0
 [5.2.1]: https://github.com/privacyfence/privacyfence/compare/v5.1.0...v5.2.1
 [5.1.0]: https://github.com/privacyfence/privacyfence/compare/v5.0.0...v5.1.0
