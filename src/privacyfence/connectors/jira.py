@@ -4,11 +4,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from ..atlassian_users import display_markup, markup_mention_ids
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
@@ -16,6 +18,228 @@ from ..jira_client import JiraClient, JiraClientError, _text_to_adf
 from ..preview_dates import format_preview_datetime
 
 logger = logging.getLogger(__name__)
+
+
+# Built-in fields jira_update_issue has a dedicated, name-resolving parameter for.
+_DEDICATED_FIELD_PARAMS = {
+    "summary": "summary",
+    "description": "description",
+    "priority": "priority",
+    "assignee": "assignee_account_id",
+}
+
+
+def _mention_id(node: dict[str, Any]) -> str:
+    """The account id of an ADF ``mention`` node; a mention without a text id is refused."""
+    attrs = node.get("attrs")
+    account_id = attrs.get("id") if isinstance(attrs, dict) else None
+    if not isinstance(account_id, str) or not account_id:
+        raise _adf_error("contains a mention without an account id")
+    return account_id
+
+
+def _account_ids_in(value: Any) -> list[str]:
+    """Every account id inside a custom field value, at any depth: dicts with
+    an ``accountId`` key and ADF ``mention`` nodes (``attrs.id``)."""
+    found: list[str] = []
+
+    def add(account_id: Any) -> None:
+        if not isinstance(account_id, str) or not account_id:
+            raise ValueError("update_issue: custom_fields contains an invalid account id.")
+        if account_id not in found:
+            found.append(account_id)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "accountId" in node:
+                add(node["accountId"])
+            if node.get("type") == "mention":
+                add(_mention_id(node))
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return found
+
+
+def _user_shape_error(field_name: str) -> ValueError:
+    return ValueError(
+        f"update_issue: '{field_name}' is a user field; give each person as "
+        '{"accountId": "<id>"} or the bare account id (from jira_find_users), and a '
+        "multi-user field as a list of those. "
+        "Other keys such as id, name, key, displayName or emailAddress are not accepted."
+    )
+
+
+def _one_user(value: Any, field_name: str) -> dict[str, str]:
+    """A person value for a user field: ``{"accountId": id}`` or a bare id, nothing else."""
+    if isinstance(value, str) and value:
+        return {"accountId": value}
+    if isinstance(value, dict) and set(value) == {"accountId"}:
+        return {"accountId": value["accountId"]}
+    raise _user_shape_error(field_name)
+
+
+def _normalise_user_value(kind: str, value: Any, field_name: str) -> Any:
+    if kind == "user":
+        return None if value is None else _one_user(value, field_name)
+    if not isinstance(value, list):
+        raise _user_shape_error(field_name)
+    return [_one_user(item, field_name) for item in value]
+
+
+def _display_value(node: Any, names: dict[str, str]) -> Any:
+    """``node`` for the approval card: every person (accountId object or ADF mention) is
+    replaced by the directory's name, the agent's own labels for people never show, and every
+    other key and value is shown as written. Only an object that is nothing but a person
+    collapses to ``@name``."""
+    if isinstance(node, dict):
+        if set(node) == {"accountId"}:
+            return "@" + names[node["accountId"]]
+        if node.get("type") == "mention":
+            account_id = _mention_id(node)
+            attrs = node["attrs"]
+            if set(node) == {"type", "attrs"} and set(attrs) <= {"id", "text"}:
+                return "@" + names[account_id]
+            attrs = {
+                k: "@" + names[account_id] if k in ("id", "text") else _display_value(v, names)
+                for k, v in attrs.items()
+            }
+            return {
+                k: attrs if k == "attrs" else "@" + names[v] if k == "accountId" else _display_value(v, names)
+                for k, v in node.items()
+            }
+        return {
+            k: "@" + names[v] if k == "accountId" else _display_value(v, names)
+            for k, v in node.items()
+        }
+    if isinstance(node, list):
+        return [_display_value(v, names) for v in node]
+    return node
+
+
+def _with_directory_names(node: Any, names: dict[str, str]) -> Any:
+    """Copy of ``node`` in which every ADF mention node carries the directory's name in
+    ``attrs.text``, as ``_text_to_adf`` does for descriptions and comments (ADR 0118)."""
+    if isinstance(node, dict):
+        out = {k: _with_directory_names(v, names) for k, v in node.items()}
+        if node.get("type") == "mention":
+            out["attrs"] = {**out["attrs"], "text": "@" + names[_mention_id(node)]}
+        return out
+    if isinstance(node, list):
+        return [_with_directory_names(v, names) for v in node]
+    return node
+
+
+# ADF node and mark types the approval card can show completely (ADR 0118). Anything else in a
+# rich-text custom field is refused: the card must show what is written, not part of it.
+_ADF_TEXT_BLOCKS = {"paragraph", "heading", "codeBlock", "caption", "taskItem", "decisionItem"}
+_ADF_CONTAINERS = {
+    "doc", "blockquote", "bulletList", "orderedList", "listItem", "table", "tableRow",
+    "tableCell", "tableHeader", "panel", "expand", "nestedExpand", "mediaSingle", "mediaGroup",
+    "taskList", "decisionList",
+}
+_ADF_LEAVES = {"emoji", "status", "date", "inlineCard", "blockCard", "embedCard", "media", "mediaInline"}
+_ADF_INLINE = {"text", "hardBreak", "mention"}
+_ADF_NODE_TYPES = _ADF_TEXT_BLOCKS | _ADF_CONTAINERS | _ADF_LEAVES | _ADF_INLINE | {"rule"}
+_ADF_NODE_KEYS = {"type", "attrs", "content", "text", "marks", "version"}
+_ADF_MARKS = {
+    "strong", "em", "code", "strike", "underline", "subsup", "textColor", "backgroundColor",
+    "link", "alignment", "indentation", "breakout", "border",
+}
+
+
+def _adf_error(problem: str) -> ValueError:
+    return ValueError(
+        f"update_issue: a rich-text custom field {problem}; it cannot be shown completely "
+        "on the approval card, so it is refused."
+    )
+
+
+def _adf_value(value: Any) -> str:
+    if isinstance(value, str) and value and not re.search(r'[\s"\[\]]', value):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _adf_note(attrs: dict[str, Any], skip: set[str], names: dict[str, str]) -> str:
+    # Attribute values are shown as they are sent: a mention nested in one carries the
+    # directory's name, never the agent's label.
+    return " ".join(
+        f"{k}={_adf_value(_with_directory_names(v, names))}" for k, v in attrs.items() if k not in skip
+    )
+
+
+def _adf_apply_marks(text: str, marks: Any, names: dict[str, str]) -> str:
+    if not isinstance(marks, list):
+        raise _adf_error("has marks that are not a list")
+    for mark in marks:
+        kind = mark.get("type") if isinstance(mark, dict) else None
+        attrs = mark.get("attrs", {}) if isinstance(mark, dict) else None
+        if kind not in _ADF_MARKS or set(mark) - {"type", "attrs"} or not isinstance(attrs, dict):
+            raise _adf_error(f"contains the mark {kind!r}")
+        if kind == "link":
+            if not isinstance(attrs.get("href"), str):
+                raise _adf_error("contains a link without a text href")
+            note = _adf_note(attrs, {"href"}, names)
+            text = f"{text} ({attrs['href']})" + (f" [link {note}]" if note else "")
+        elif attrs:
+            text = f"{text} [{kind} {_adf_note(attrs, set(), names)}]"
+    return text
+
+
+def _render_adf(node: Any, names: dict[str, str]) -> str:
+    """Approval-card text for a rich-text custom field: every written character, link target,
+    card URL and identifying attribute, with mentions as the directory's name. Raises
+    ValueError for any node or mark type that is not on the allowlist above."""
+    kind = node.get("type") if isinstance(node, dict) else None
+    if kind not in _ADF_NODE_TYPES:
+        raise _adf_error(f"contains the node type {kind!r}")
+    attrs, content = node.get("attrs", {}), node.get("content", [])
+    if (
+        set(node) - _ADF_NODE_KEYS
+        or not isinstance(attrs, dict) or not isinstance(content, list)
+        or (content and kind not in _ADF_CONTAINERS | _ADF_TEXT_BLOCKS)
+        or ("text" in node and (kind != "text" or not isinstance(node["text"], str)))
+        or (kind == "text" and "text" not in node)
+        or ("version" in node and kind != "doc")
+    ):
+        raise _adf_error(f"contains a malformed {kind!r} node")
+    children = [_render_adf(child, names) for child in content]
+    skip: set[str] = set()
+    if kind == "text":
+        body = node["text"]
+    elif kind == "hardBreak":
+        body = "\n"
+    elif kind == "rule":
+        body = "---"
+    elif kind == "mention":
+        body, skip = "@" + names[_mention_id(node)], {"id", "text"}
+    elif kind in _ADF_LEAVES:
+        note = _adf_note(attrs, set(), names)
+        body, skip = f"[{kind}{' ' + note if note else ''}]", set(attrs)
+    elif kind == "bulletList":
+        body = "\n".join(f"- {c}" for c in children)
+    elif kind == "orderedList":
+        body = "\n".join(f"{i}. {c}" for i, c in enumerate(children, 1))
+    elif kind == "tableRow":
+        body = " | ".join(children)
+    elif kind in _ADF_TEXT_BLOCKS:
+        body = "".join(children)
+    else:
+        body = "\n".join(children)
+    note = _adf_note(attrs, skip, names)
+    if note:
+        body = f"{body} [{kind} {note}]" if kind in _ADF_INLINE else f"[{kind} {note}]\n{body}"
+    return _adf_apply_marks(body, node.get("marks", []), names)
+
+
+def _shown(item: Any, display_attr: str, plain_attr: str) -> str:
+    shown = getattr(item, display_attr, None)
+    return (getattr(item, plain_attr, "") or "") if shown is None else shown
 
 
 def _parse_json_object(value: str) -> dict[str, Any] | None:
@@ -88,7 +312,7 @@ class JiraConnector(Connector):
                     "status, issue_type, priority, assignee, reporter, description, labels, "
                     "created, updated, url, comments: a list of {id, author, body, created, "
                     "updated}}. Use jira_search_issues instead to find issues without "
-                    "reading them in full. Requires user approval."
+                    "reading them in full. Mentions appear as @[Name](accountId). Requires user approval."
                 ),
                 params=[
                     ToolParam("issue_key", "str",
@@ -116,6 +340,38 @@ class JiraConnector(Connector):
                 read_only=True,
             ),
             ToolSpec(
+                name="jira_find_users",
+                description=(
+                    "Find Atlassian users by name or email and return their account ids. "
+                    "Returns a list of {account_id, display_name, active, account_type}, "
+                    "at most max_results entries; email addresses are never returned. "
+                    "Auto-approved -- mention someone in a comment or description by writing "
+                    "@[Name](accountId), or assign an issue with assignee_account_id. "
+                    "Use jira_search_issues instead to find issues, not people."
+                ),
+                params=[
+                    ToolParam("query", "str",
+                              description="Part of a person's name or email address, e.g. 'jane' or "
+                                          "'jane@example.com'. Must not be empty."),
+                    ToolParam("max_results", "int", required=False, default=10,
+                              description="Most users to return, 1 to 50. Defaults to 10."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="jira_refresh_user_cache",
+                description=(
+                    "Re-fetch the names of every Atlassian account id PrivacyFence has cached. "
+                    "Auto-approved -- use this when a renamed or newly added person shows up "
+                    "wrong; cached names otherwise refresh on their own after 7 days. "
+                    "Returns {cached_users: n}, the number of account ids re-fetched. Use "
+                    "jira_find_users instead to look up someone by name."
+                ),
+                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                read_only=True,
+            ),
+            ToolSpec(
                 name="jira_create_issue",
                 description=(
                     "Create a new Jira issue. Returns the created issue, with its new key, in "
@@ -135,6 +391,10 @@ class JiraConnector(Connector):
                     ToolParam("priority", "str", required=False, default="",
                               description="Name of the priority, e.g. 'High', 'Medium' or 'Low'. Empty "
                                           "uses the project's default priority."),
+                    ToolParam("assignee_account_id", "str", required=False, default="",
+                              description="Atlassian account id to assign the issue to, from "
+                                          "jira_find_users (its account_id field). Empty assigns "
+                                          "nobody."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -150,7 +410,8 @@ class JiraConnector(Connector):
                               description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
                                           "(its key field)."),
                     ToolParam("body", "str",
-                              description="Comment text, plain text (not Jira markup). Must not be empty."),
+                              description="Comment text, plain text (not Jira markup). Must not be empty. Mention "
+                                          "someone with @[Name](accountId), the id from jira_find_users."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -161,7 +422,7 @@ class JiraConnector(Connector):
                     "and/or custom fields). Only the fields you pass non-empty change, and at "
                     "least one is required. Returns the updated issue in the same shape "
                     "jira_get_issue returns minus comments. Use jira_transition_issue instead "
-                    "to change its status. Requires user approval."
+                    "to change its status. Pass assignee_account_id to reassign it. Requires user approval."
                 ),
                 params=[
                     ToolParam("issue_key", "str",
@@ -175,6 +436,10 @@ class JiraConnector(Connector):
                     ToolParam("priority", "str", required=False, default="",
                               description="New priority name, e.g. 'High', 'Medium' or 'Low'. Empty "
                                           "leaves the priority unchanged."),
+                    ToolParam("assignee_account_id", "str", required=False, default="",
+                              description="Atlassian account id to assign the issue to, from "
+                                          "jira_find_users (its account_id field). Empty leaves the "
+                                          "assignee unchanged or unset."),
                     ToolParam("custom_fields", "str", required=False, default="",
                               description=(
                                   "JSON object mapping Jira Cloud custom field display names "
@@ -215,6 +480,10 @@ class JiraConnector(Connector):
             return await self._get_issue(**args)
         if tool == "jira_get_transitions":
             return await self._get_transitions(**args)
+        if tool == "jira_find_users":
+            return await self._find_users(**args)
+        if tool == "jira_refresh_user_cache":
+            return await self._refresh_user_cache(**args)
         if tool == "jira_create_issue":
             return await self._create_issue(**args)
         if tool == "jira_add_comment":
@@ -253,6 +522,21 @@ class JiraConnector(Connector):
                          f"List transitions: {issue_key}", f"{len(transitions)} transition(s)", t0)
         return data
 
+    async def _find_users(self, query: str, max_results: int = 10) -> Any:
+        t0 = time.time()
+        users = await self._fetch(self._jira.find_users, query, max_results)
+        data = [asdict(u) for u in users]
+        self._auto_audit("jira_find_users", "Find Jira Users",
+                         "Find users", f"{len(users)} user(s)", t0)
+        return data
+
+    async def _refresh_user_cache(self) -> Any:
+        t0 = time.time()
+        count = await self._fetch(self._jira.refresh_user_cache)
+        self._auto_audit("jira_refresh_user_cache", "Refresh Atlassian User Cache",
+                         "Refresh Atlassian user cache", f"{count} user(s)", t0)
+        return {"cached_users": count}
+
     # ------------------------------------------------------------------ #
     # Review gate (reads)
     # ------------------------------------------------------------------ #
@@ -279,6 +563,10 @@ class JiraConnector(Connector):
             "Description": "Full description text",
             "Comments": "Author, created date, and body per comment",
         }
+        # The preview shows mention nodes as @Name; text a person typed in the mention-markup
+        # shape stays as written, as the agent receives it.
+        description_text = _shown(issue, "display_description", "description")
+        comment_bodies = [_shown(c, "display_body", "body") for c in comments]
         details_parts = []
         if len(issue.summary) > 80:
             # Preview truncates the summary at 80 chars -- the untruncated
@@ -286,15 +574,14 @@ class JiraConnector(Connector):
             details_parts.append(f"Summary: {issue.summary}\n")
         details_parts.append(
             f"Reporter: {getattr(issue, 'reporter', '')}\n\n"
-            f"Description:\n{getattr(issue, 'description', '') or '(none)'}"
+            f"Description:\n{description_text or '(none)'}"
         )
         # details_text/pii_scan_text stay a flat string -- kept for legacy
         # display and the PII scan's default fallback, unrelated to how v2
         # renders the same content (preview_blocks below).
         details = "".join(details_parts)
         pii_scan_text = (
-            f"{getattr(issue, 'description', '') or ''}\n\n" +
-            "\n".join(getattr(c, "body", "") or "" for c in comments)
+            f"{description_text}\n\n" + "\n".join(comment_bodies)
         )
         # v2's right pane: Reporter/Summary as standalone labeled fields
         # (same font as a table header -- see approval_window_html.py's
@@ -308,7 +595,7 @@ class JiraConnector(Connector):
             blocks.append({"type": "field", "label": "Summary", "value": issue.summary})
         blocks.append({"type": "field", "label": "Reporter", "value": getattr(issue, "reporter", "") or ""})
         blocks.append({"type": "heading", "label": "Description"})
-        blocks.append({"type": "text", "text": getattr(issue, "description", "") or "(none)"})
+        blocks.append({"type": "text", "text": description_text or "(none)"})
         if comments:
             blocks.append({
                 "type": "table",
@@ -318,9 +605,9 @@ class JiraConnector(Connector):
                     [
                         getattr(c, "author", "unknown"),
                         format_preview_datetime(getattr(c, "created", "")),
-                        getattr(c, "body", ""),
+                        body,
                     ]
-                    for c in comments
+                    for c, body in zip(comments, comment_bodies, strict=True)
                 ],
             })
         return await gated_call(
@@ -352,14 +639,23 @@ class JiraConnector(Connector):
         issue_type: str = "Task",
         description: str = "",
         priority: str = "",
+        assignee_account_id: str = "",
     ) -> Any:
+        names = await self._resolve_write_accounts(description, [assignee_account_id])
         payload = {
             "project_key": project_key, "summary": summary,
             "issue_type": issue_type, "description": description, "priority": priority,
         }
+        if assignee_account_id:
+            payload["assignee_account_id"] = assignee_account_id
         preview = {"Project": project_key, "Type": issue_type, "Summary": summary}
         if priority:
             preview["Priority"] = priority
+        if assignee_account_id:
+            preview["Assignee"] = names[assignee_account_id]
+        if markup_mention_ids(description):
+            preview["Mentions"] = ", ".join(names[i] for i in markup_mention_ids(description))
+        shown_description = display_markup(description, names)
         # v2's right pane: a label-styled "Description" heading above the
         # body text, same treatment jira_get_issue's own Description
         # already gets (see approval_window_html.py's _field_block_html) --
@@ -369,7 +665,7 @@ class JiraConnector(Connector):
         blocks = []
         if description:
             blocks.append({"type": "heading", "label": "Description"})
-            blocks.append({"type": "text", "text": description})
+            blocks.append({"type": "text", "text": shown_description})
         await gated_call(
             connector=self.name,
             tool="jira_create_issue",
@@ -380,34 +676,39 @@ class JiraConnector(Connector):
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=description,
+            details_text=shown_description,
             preview_blocks=blocks,
             my_email=self.my_email,
             args=payload,
         )
         issue = await self._fetch(
             self._jira.create_issue, project_key, summary, issue_type, description, priority,
+            assignee_account_id, None, names,
         )
         return asdict(issue)
 
     async def _add_comment(self, issue_key: str, body: str) -> Any:
+        names = await self._resolve_write_accounts(body, [])
         issue = await self._fetch(self._jira.get_issue, issue_key)
         preview = {"Issue": f"{issue.key} — {issue.summary}"}
+        if markup_mention_ids(body):
+            preview["Mentions"] = ", ".join(names[i] for i in markup_mention_ids(body))
+        shown_body = display_markup(body, names)
         await gated_call(
             connector=self.name,
             tool="jira_add_comment",
             tool_name="Add Jira Comment",
-            summary=f"Comment on {issue_key}: {body[:80]}",
+            summary=f"Comment on {issue_key}: {shown_body[:80]}",
             sender=f"issue={issue_key}",
             raw_data={"issue_key": issue_key, "body": body},
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=body,
+            details_text=shown_body,
             my_email=self.my_email,
             args={"issue_key": issue_key, "body": body},
         )
-        comment = await self._fetch(self._jira.add_comment, issue_key, body)
+        comment = await self._fetch(self._jira.add_comment, issue_key, body, names)
         return asdict(comment)
 
     async def _update_issue(
@@ -416,8 +717,37 @@ class JiraConnector(Connector):
         summary: str = "",
         description: str = "",
         priority: str = "",
+        assignee_account_id: str = "",
         custom_fields: str = "",
     ) -> Any:
+        custom_updates = _parse_json_object(custom_fields)
+        if custom_fields and custom_updates is None:
+            raise ValueError(
+                "update_issue: custom_fields must be a JSON object, e.g. {\"Story Points\": 5}"
+            )
+        # Field ids are resolved up front so a built-in field cannot ride in
+        # through custom_fields, and so every account id inside a custom value
+        # is resolved with the rest before the approval card (ADR 0118).
+        resolved_custom: list[tuple[str, str, Any, list[str]]] = []  # name, id, sent value, people
+        seen_field_ids: set[str] = set()
+        for field_name, value in (custom_updates or {}).items():
+            field_id, coerced = await self._fetch(self._jira.resolve_custom_field, field_name, value)
+            if field_id in _DEDICATED_FIELD_PARAMS:
+                raise ValueError(
+                    f"update_issue: custom_fields cannot set '{field_name}'; "
+                    f"use the dedicated {_DEDICATED_FIELD_PARAMS[field_id]} parameter instead."
+                )
+            if field_id in seen_field_ids:
+                raise ValueError(f"update_issue: custom_fields sets '{field_name}' more than once.")
+            seen_field_ids.add(field_id)
+            kind = await self._fetch(self._jira.custom_field_kind, field_name)
+            if kind != "other":
+                coerced = _normalise_user_value(kind, coerced, field_name)
+            resolved_custom.append(
+                (field_name, field_id, coerced, _account_ids_in(coerced))
+            )
+        custom_ids = [i for *_, ids in resolved_custom for i in ids]
+        names = await self._resolve_write_accounts(description, [assignee_account_id, *custom_ids])
         issue = await self._fetch(self._jira.get_issue, issue_key)
         fields: dict[str, Any] = {}
         preview = {"Issue": f"{issue.key} — {issue.summary}"}
@@ -425,34 +755,49 @@ class JiraConnector(Connector):
             fields["summary"] = summary
             preview["Summary"] = f"{issue.summary} → {summary}"
         if description:
-            fields["description"] = _text_to_adf(description)
+            fields["description"] = _text_to_adf(description, names)
             preview["Description"] = "(updated — see below)"
+            if markup_mention_ids(description):
+                preview["Mentions"] = ", ".join(names[i] for i in markup_mention_ids(description))
         if priority:
             fields["priority"] = {"name": priority}
             preview["Priority"] = f"→ {priority}"
-        custom_updates = _parse_json_object(custom_fields)
-        if custom_fields and custom_updates is None:
-            raise ValueError(
-                "update_issue: custom_fields must be a JSON object, e.g. {\"Story Points\": 5}"
-            )
-        for field_name, value in (custom_updates or {}).items():
-            field_id, coerced = await self._fetch(self._jira.resolve_custom_field, field_name, value)
-            fields[field_id] = coerced
-            preview[field_name] = f"→ {value}"
+        if assignee_account_id:
+            fields["assignee"] = {"accountId": assignee_account_id}
+            preview["Assignee"] = f"→ {names[assignee_account_id]}"
+        changed = [k for k in preview if k != "Issue"]
+        written: list[str] = []
+        sent_custom: dict[str, Any] = {}
+        for field_name, field_id, coerced, ids in resolved_custom:
+            sent_custom[field_id] = coerced
+            fields[field_id] = _with_directory_names(coerced, names)
+            row = f"{field_name} (field)"
+            changed.append(field_name)
+            if isinstance(coerced, dict) and coerced.get("type") == "doc":
+                text = _render_adf(coerced, names)
+                preview[row] = "→ (updated — see below)" + (f"; people: {', '.join(names[i] for i in ids)}" if ids else "")
+                written.append(f"{field_name}:\n{text}")
+            elif ids:
+                named = _display_value(coerced, names)
+                preview[row] = "→ " + (", ".join(map(str, named)) if isinstance(named, list) else str(named))
+            else:
+                preview[row] = f"→ {coerced}"
         if not fields:
             raise ValueError("update_issue: at least one field must be provided")
         if description:
-            details_text = description
+            written.insert(0, display_markup(description, names) if not written else
+                           f"description:\n{display_markup(description, names)}")
+        if written:
+            details_text = "\n\n".join(written)
         else:
-            changed_fields = ", ".join(k for k in preview if k != "Issue")
-            details_text = f"{changed_fields} will be updated; description is unchanged."
+            details_text = f"{', '.join(changed)} will be updated; description is unchanged."
         await gated_call(
             connector=self.name,
             tool="jira_update_issue",
             tool_name="Update Jira Issue",
-            summary=f"Update {issue_key}: {', '.join(k for k in preview if k != 'Issue')}",
+            summary=f"Update {issue_key}: {', '.join(changed)}",
             sender=f"issue={issue_key}",
-            raw_data={"issue_key": issue_key, "fields": fields},
+            raw_data={"issue_key": issue_key, "fields": {**fields, **sent_custom}},
             filtered_data=None,
             gate="popup",
             preview=preview,
@@ -489,6 +834,24 @@ class JiraConnector(Connector):
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    async def _resolve_write_accounts(self, text: str, extra_ids: list[str]) -> dict[str, str]:
+        """Directory names for every account id a write mentions or assigns.
+
+        The approver is shown these names, never the agent's labels (ADR 0118);
+        an id that cannot be resolved is refused before the approval card.
+        """
+        ids = list(dict.fromkeys(markup_mention_ids(text) + [i for i in extra_ids if i]))
+        if not ids:
+            return {}
+        names = await self._fetch(self._jira.resolve_user_names, ids)
+        missing = [i for i in ids if i not in names]
+        if missing:
+            raise ValueError(
+                f"Unknown Atlassian account id(s): {', '.join(missing)}. "
+                "Look the person up with jira_find_users and use their account_id."
+            )
+        return names
 
     async def _fetch(self, func, *args) -> Any:
         try:

@@ -665,6 +665,20 @@ class TestConfluenceRules:
         assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == rule_id("i_am_author")
 
 
+    async def test_author_name_containing_my_email_does_not_match_i_am_author(self, monkeypatch, audit_dir):
+        install_rules({"confluence.read_page": [{"predicate": "i_am_author"}]})
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+
+        result = await gate.gated_call(**make_kwargs(
+            connector="confluence", tool="confluence_get_page", gate="review",
+            args={"space_key": "OTHERSPACE"},
+            raw_data=SimpleNamespace(author="557058:f58131cb-b67d-43c7-b30d-6b58d40bd077", author_name="me@example.com"),
+        ))
+
+        assert result is FILTERED
+        assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
+
+
 class TestContactsNoContactInfoChange:
     """connector-qa.md "Contacts checks", contact-info edits: a name/note-only edit may
     auto-accept; the same rule must not cover an edit that also touches

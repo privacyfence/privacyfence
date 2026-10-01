@@ -19,6 +19,7 @@ import pytest
 
 from privacyfence import jira_client as jira_client_module
 from privacyfence.atlassian_oauth import AtlassianOAuthError
+from privacyfence.atlassian_users import AtlassianUser, AtlassianUserDirectory
 from privacyfence.jira_client import (
     JiraClient,
     JiraClientError,
@@ -65,6 +66,16 @@ class TestConstruction:
         client = JiraClient(config={"access_token": "t", "cloud_id": "c1", "site_url": "https://acme.atlassian.net/"})
         assert client._base_url == "https://acme.atlassian.net"
 
+    def test_default_directory_is_memory_only(self):
+        client = JiraClient(config={"access_token": "t", "cloud_id": "c1"})
+        assert isinstance(client._users, AtlassianUserDirectory)
+        assert client._users._cache_file == ""
+
+    def test_passed_directory_is_used(self):
+        directory = AtlassianUserDirectory(cloud_id="c1")
+        client = JiraClient(config={"access_token": "t", "cloud_id": "c1"}, user_directory=directory)
+        assert client._users is directory
+
     def test_base_url_falls_back_to_api_url_without_site_url(self):
         client = JiraClient(config={"access_token": "t", "cloud_id": "c1"})
         assert client._base_url == "https://api.atlassian.com/ex/jira/c1"
@@ -80,6 +91,24 @@ class TestTextToAdf:
             "type": "doc", "version": 1,
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}],
         }
+
+    def test_markup_becomes_text_mention_text_nodes(self):
+        adf = _text_to_adf("hi @[Jane](557058:abcdefgh) bye")
+        assert adf["content"][0]["content"] == [
+            {"type": "text", "text": "hi "},
+            {"type": "mention", "attrs": {"id": "557058:abcdefgh", "text": "@Jane"}},
+            {"type": "text", "text": " bye"},
+        ]
+
+    def test_names_override_the_label(self):
+        adf = _text_to_adf("@[Fake](557058:abcdefgh)", {"557058:abcdefgh": "Real"})
+        assert adf["content"][0]["content"] == [
+            {"type": "mention", "attrs": {"id": "557058:abcdefgh", "text": "@Real"}},
+        ]
+
+    def test_names_without_the_id_keep_the_label(self):
+        adf = _text_to_adf("@[Fake](557058:abcdefgh)", {"other": "Real"})
+        assert adf["content"][0]["content"][0]["attrs"]["text"] == "@Fake"
 
 
 # ---------------------------------------------------------------------------- #
@@ -115,6 +144,90 @@ class TestExtractAdfText:
 # ---------------------------------------------------------------------------- #
 # _parse_project / _parse_issue / _parse_comment
 # ---------------------------------------------------------------------------- #
+
+JANE_ID = "557058:f58131cb-b67d-4c8b-a6d3-0a3b1f4b2a11"
+JOHN_ID = "5b10ac8d82e05b22cc7d4ef5"
+
+
+def mention_node(account_id: str | None, text: str | None = "@Jane") -> dict:
+    attrs: dict = {}
+    if account_id is not None:
+        attrs["id"] = account_id
+    if text is not None:
+        attrs["text"] = text
+    return {"type": "mention", "attrs": attrs}
+
+
+def adf_doc(*nodes: dict) -> dict:
+    return {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": list(nodes)}]}
+
+
+def fake_bulk(monkeypatch, names: dict[str, str]) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def fetch(session, cloud_id, account_ids):
+        calls.append(list(account_ids))
+        return [AtlassianUser(i, names[i]) for i in account_ids if i in names]
+
+    monkeypatch.setattr("privacyfence.atlassian_users.fetch_users_bulk", fetch)
+    return calls
+
+
+class TestExtractAdfTextMentions:
+    def test_name_from_lookup_wins(self):
+        node = mention_node(JANE_ID, "@jane")
+        assert JiraClient._extract_adf_text(node, {JANE_ID: "Jane Doe"}) == f"@[Jane Doe]({JANE_ID})"
+
+    def test_falls_back_to_node_text_without_at(self):
+        assert JiraClient._extract_adf_text(mention_node(JANE_ID, "@Jane")) == f"@[Jane]({JANE_ID})"
+
+    def test_unknown_user_when_no_name_and_no_text(self):
+        node = mention_node(JANE_ID, None)
+        assert JiraClient._extract_adf_text(node) == f"@[unknown user]({JANE_ID})"
+
+    def test_email_shaped_label_is_masked_when_no_name_is_known(self):
+        out = JiraClient._extract_adf_text(mention_node(JANE_ID, "@jane@customer.com"))
+        assert "customer.com" not in out and "Customer account" in out
+
+    def test_email_shaped_label_masked_for_invalid_id_too(self):
+        out = JiraClient._extract_adf_text(mention_node("short", "@jane@customer.com"))
+        assert "customer.com" not in out
+        assert out == "@unknown user"
+
+    def test_invalid_id_renders_node_text(self):
+        assert JiraClient._extract_adf_text(mention_node("short", "@Jane")) == "@Jane"
+        assert JiraClient._extract_adf_text(mention_node(None, "@Jane")) == "@Jane"
+        assert JiraClient._extract_adf_text({"type": "mention"}) == ""
+
+    @pytest.mark.parametrize("account_id", ["bad id", JANE_ID])
+    def test_non_string_label_does_not_raise(self, account_id):
+        node = {"type": "mention", "attrs": {"id": account_id, "text": 5}}
+        out = JiraClient._extract_adf_text(node)
+        assert out == ("" if account_id == "bad id" else f"@[unknown user]({account_id})")
+
+    def test_display_mode_renders_at_name_and_leaves_literal_markup(self):
+        literal = "@[Label](0123456789)"
+        doc = adf_doc({"type": "text", "text": literal}, mention_node(JANE_ID))
+        out = JiraClient._extract_adf_text(doc, {JANE_ID: "Jane Doe"}, display=True)
+        assert out == f"{literal} @Jane Doe"
+
+    def test_nested_among_text(self):
+        doc = adf_doc({"type": "text", "text": "Hi"}, mention_node(JANE_ID), {"type": "text", "text": "thanks"})
+        out = JiraClient._extract_adf_text(doc, {JANE_ID: "Jane Doe"})
+        assert out == f"Hi @[Jane Doe]({JANE_ID}) thanks"
+
+
+class TestCollectAdfMentionIds:
+    def test_order_and_dedup(self):
+        doc = adf_doc(mention_node(JANE_ID), mention_node(JOHN_ID), mention_node(JANE_ID))
+        assert JiraClient._collect_adf_mention_ids(doc) == [JANE_ID, JOHN_ID]
+
+    def test_invalid_ids_and_non_dicts_skipped(self):
+        doc = adf_doc(mention_node("x"), mention_node(None), {"type": "text", "text": "t"})
+        doc["content"].append("stray")
+        assert JiraClient._collect_adf_mention_ids(doc) == []
+        assert JiraClient._collect_adf_mention_ids("nope") == []
+
 
 class TestParseProject:
     def test_full_project(self):
@@ -396,6 +509,131 @@ class TestGetIssue:
         assert issue.description == "d"
 
 
+class TestGetIssueMentions:
+    def test_one_bulk_call_and_name_rendered(self, monkeypatch):
+        calls = fake_bulk(monkeypatch, {JANE_ID: "Jane Doe"})
+        client = make_client()
+        client._client.issue.return_value = {
+            "key": "ENG-1",
+            "fields": {"description": adf_doc(mention_node(JANE_ID), mention_node(JANE_ID))},
+        }
+        issue = client.get_issue("ENG-1")
+        assert calls == [[JANE_ID]]
+        assert f"@[Jane Doe]({JANE_ID})" in issue.description
+
+    def test_no_lookup_without_mentions(self, monkeypatch):
+        calls = fake_bulk(monkeypatch, {})
+        client = make_client()
+        client._client.issue.return_value = {"key": "ENG-1", "fields": {"description": adf_doc()}}
+        client.get_issue("ENG-1")
+        client._client.issue.return_value = {"key": "ENG-1", "fields": {"description": "plain"}}
+        client.get_issue("ENG-1")
+        assert calls == []
+
+    def test_comments_share_one_bulk_call(self, monkeypatch):
+        calls = fake_bulk(monkeypatch, {JANE_ID: "Jane Doe", JOHN_ID: "John Roe"})
+        client = make_client()
+        client._client.issue.return_value = {"fields": {"comment": {"comments": [
+            {"id": "1", "body": adf_doc(mention_node(JANE_ID))},
+            {"id": "2", "body": adf_doc(mention_node(JOHN_ID), mention_node(JANE_ID))},
+            {"id": "3", "body": "plain"},
+        ]}}}
+        comments = client.get_issue_comments("ENG-1")
+        assert calls == [[JANE_ID, JOHN_ID]]
+        assert comments[0].body == f"@[Jane Doe]({JANE_ID})"
+        assert JOHN_ID in comments[1].body
+
+    def test_comments_without_mentions_make_no_call(self, monkeypatch):
+        calls = fake_bulk(monkeypatch, {})
+        client = make_client()
+        client._client.issue.return_value = {"fields": {"comment": {"comments": [{"id": "1", "body": "hi"}]}}}
+        client.get_issue_comments("ENG-1")
+        assert calls == []
+
+
+class TestUserLookups:
+    def test_resolve_user_names_falls_back_when_fetch_fails(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("403")
+
+        monkeypatch.setattr("privacyfence.atlassian_users.fetch_users_bulk", boom)
+        assert make_client().resolve_user_names([JANE_ID]) == {}
+
+    def test_find_users_blank_query(self):
+        with pytest.raises(JiraClientError, match="non-empty query"):
+            make_client().find_users("  ")
+
+    @pytest.mark.parametrize("requested,expected", [(0, 1), (500, 50), (7, 7)])
+    def test_find_users_clamps_max_results(self, monkeypatch, requested, expected):
+        seen = []
+        monkeypatch.setattr(
+            "privacyfence.atlassian_users.search_users",
+            lambda session, cloud_id, query, n: seen.append(n) or [],
+        )
+        make_client().find_users("jane", requested)
+        assert seen == [expected]
+
+    def test_find_users_remembers_results(self, monkeypatch):
+        monkeypatch.setattr(
+            "privacyfence.atlassian_users.search_users",
+            lambda *a: [AtlassianUser(JANE_ID, "Jane Doe")],
+        )
+        calls = fake_bulk(monkeypatch, {})
+        client = make_client()
+        users = client.find_users("jane")
+        assert users[0].account_id == JANE_ID
+        assert client.resolve_user_names([JANE_ID]) == {JANE_ID: "Jane Doe"}
+        assert calls == []
+
+    def test_find_users_failure_wrapped(self, monkeypatch):
+        def boom(*a):
+            raise RuntimeError("nope")
+
+        monkeypatch.setattr("privacyfence.atlassian_users.search_users", boom)
+        with pytest.raises(JiraClientError, match="find_users failed: nope"):
+            make_client().find_users("jane")
+
+    def test_find_users_error_text_omits_the_query(self, monkeypatch):
+        def boom(*a):
+            raise RuntimeError("400 for url: https://x/user/search?query=jane%40example.com")
+
+        monkeypatch.setattr("privacyfence.atlassian_users.search_users", boom)
+        with pytest.raises(JiraClientError) as err:
+            make_client().find_users("jane@example.com")
+        assert "jane" not in str(err.value)
+
+    def test_refresh_user_cache_returns_count(self, monkeypatch):
+        fake_bulk(monkeypatch, {JANE_ID: "Jane Doe"})
+        client = make_client()
+        client.resolve_user_names([JANE_ID])
+        assert client.refresh_user_cache() == 1
+
+    def test_refresh_user_cache_maps_error(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("down")
+
+        client = make_client()
+        client._users.remember([AtlassianUser(JANE_ID, "Jane Doe")])
+        monkeypatch.setattr("privacyfence.atlassian_users.fetch_users_bulk", boom)
+        with pytest.raises(JiraClientError, match="refresh failed"):
+            client.refresh_user_cache()
+
+    def test_fetch_users_bulk_refreshes_and_retries_on_401(self, monkeypatch):
+        client = make_client()
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+        calls = {"n": 0}
+
+        def fetch(session, cloud_id, ids):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise unauthorized_error()
+            return [AtlassianUser(JANE_ID, "Jane Doe")]
+
+        monkeypatch.setattr("privacyfence.atlassian_users.fetch_users_bulk", fetch)
+        assert client._fetch_users_bulk([JANE_ID])[0].display_name == "Jane Doe"
+        assert calls["n"] == 2
+
+
 class TestGetIssueComments:
     def test_requires_issue_key(self):
         client = make_client()
@@ -438,6 +676,19 @@ class TestCreateIssue:
         assert fields["description"] == _text_to_adf("desc")
         assert issue.key == "ENG-99"
 
+    def test_mention_names_reach_the_description_adf(self):
+        client = make_client()
+        client._client.create_issue.return_value = {"key": "ENG-99"}
+        client._client.issue.return_value = {"key": "ENG-99", "fields": {"summary": "x"}}
+
+        client.create_issue(
+            "ENG", "x", description="@[Fake](557058:abcdefgh)",
+            mention_names={"557058:abcdefgh": "Real"},
+        )
+
+        fields = client._client.create_issue.call_args.kwargs["fields"]
+        assert fields["description"]["content"][0]["content"][0]["attrs"]["text"] == "@Real"
+
     def test_optional_fields_omitted_when_not_given(self):
         client = make_client()
         client._client.create_issue.return_value = {"key": "ENG-99"}
@@ -472,6 +723,13 @@ class TestAddComment:
         client.add_comment("ENG-1", "hi")
         args = client._client.issue_add_comment.call_args.args
         assert args == ("ENG-1", _text_to_adf("hi"))
+
+    def test_mention_names_reach_the_comment_adf(self):
+        client = make_client()
+        client._client.issue_add_comment.return_value = {"id": "c1", "body": "hi"}
+        client.add_comment("ENG-1", "@[Fake](557058:abcdefgh)", {"557058:abcdefgh": "Real"})
+        adf = client._client.issue_add_comment.call_args.args[1]
+        assert adf["content"][0]["content"][0]["attrs"]["text"] == "@Real"
 
 
 class TestUpdateIssue:
@@ -562,6 +820,21 @@ class TestResolveCustomField:
         client.resolve_custom_field("Story Points", 1)
         client.resolve_custom_field("Story Points", 2)
         client._client.get_all_fields.assert_called_once()
+
+    @pytest.mark.parametrize("schema,kind", [
+        ({"type": "user"}, "user"),
+        ({"type": "array", "items": "user"}, "user_list"),
+        ({"type": "array", "items": "option"}, "other"),
+        ({"type": "option"}, "other"),
+        (None, "other"),
+    ])
+    def test_custom_field_kind(self, schema, kind):
+        client = make_client()
+        field = {"id": "customfield_1", "name": "Person"}
+        if schema is not None:
+            field["schema"] = schema
+        client._client.get_all_fields.return_value = [field]
+        assert client.custom_field_kind("Person") == kind
 
     def test_unknown_field_name_raises(self):
         client = make_client()

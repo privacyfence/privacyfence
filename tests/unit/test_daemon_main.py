@@ -1011,6 +1011,20 @@ class TestBuildConnectorsAtlassian:
         for c in connectors:
             assert c.my_email == "me@x.com"
 
+    def test_both_clients_share_one_user_directory(self, monkeypatch):
+        self._patch_token(monkeypatch, token={"access_token": "at", "cloud_id": "cloud-1", "account_email": "me@x.com"})
+        jira_fake = fake_client_class(result="jira info")
+        confluence_fake = fake_client_class(result="https://x.atlassian.net/wiki")
+        monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
+        monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
+
+        daemon_main.build_connectors({}, self._org_config())
+
+        directory = jira_fake.captured_kwargs["user_directory"]
+        assert directory is confluence_fake.captured_kwargs["user_directory"]
+        assert directory._cache_file == str(data_dir() / "atlassian_user_cache.json")
+        assert directory._cloud_id == "cloud-1"
+
     def test_config_passed_to_clients_merges_org_registration_and_token(self, monkeypatch):
         # Regression coverage for the reauth-on-restart fix: JiraClient/
         # ConfluenceClient need client_id/client_secret (from org config) *and*

@@ -11,6 +11,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .. import local_files
+from ..atlassian_users import (
+    markup_mention_ids,
+    markup_to_storage,
+    storage_mention_ids,
+    storage_mentions_to_text,
+    storage_unrecognised_user_mentions,
+)
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..confluence_client import ConfluenceClient, ConfluenceClientError, resolve_attachment_destination
 from ..connector import Connector, ToolParam, ToolSpec
@@ -123,7 +130,7 @@ class ConfluenceConnector(Connector):
                     "List pages in a Confluence space (title, id, version). "
                     "Returns a list of {id, title, space_key, space_name, version, author, "
                     "created, updated, url} without page bodies, at most max_results "
-                    "(default 20, capped at 1000), in the API's order. author is an opaque Atlassian account id, not a name. Use "
+                    "(default 20, capped at 1000), in the API's order. author is an opaque Atlassian account id; author_name is the resolved name. Use "
                     "confluence_search instead to find pages by words, and "
                     "confluence_get_page to read one. Auto-approved."
                 ),
@@ -154,6 +161,37 @@ class ConfluenceConnector(Connector):
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
+            ),
+            ToolSpec(
+                name="confluence_find_users",
+                description=(
+                    "Find Atlassian users by name or email and return their account ids. "
+                    "Returns a list of {account_id, display_name, active, account_type}, "
+                    "at most max_results entries; email addresses are never returned. "
+                    "Auto-approved -- mention someone in a page body by writing @[Name](accountId). "
+                    "Use confluence_search instead to find pages, not people."
+                ),
+                params=[
+                    ToolParam("query", "str",
+                              description="Part of a person's name or email address, e.g. 'jane' or "
+                                          "'jane@example.com'. Must not be empty."),
+                    ToolParam("max_results", "int", required=False, default=10,
+                              description="Most users to return, 1 to 50. Defaults to 10."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="confluence_refresh_user_cache",
+                description=(
+                    "Re-fetch the names of every Atlassian account id PrivacyFence has cached. "
+                    "Auto-approved -- use this when a renamed or newly added person shows up "
+                    "wrong; cached names otherwise refresh on their own after 7 days. "
+                    "Returns {cached_users: n}, the number of account ids re-fetched. Use "
+                    "confluence_find_users instead to look up someone by name."
+                ),
+                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                read_only=True,
             ),
             ToolSpec(
                 name="confluence_download_attachment",
@@ -202,7 +240,8 @@ class ConfluenceConnector(Connector):
                     "Fetch the full content of a Confluence page by page ID. "
                     "Returns the page body as HTML storage format, inside one page object "
                     "{id, title, space_key, space_name, version, author, created, updated, "
-                    "body, url}; author is an opaque Atlassian account id. Use "
+                    "body, url}; author is an opaque Atlassian account id, author_name is the name resolved for it, "
+                    "and mentions maps each @mentioned account id in the body to a name. Use "
                     "confluence_get_page_by_title when you know the space and title but not "
                     "the id. Requires user approval."
                 ),
@@ -250,7 +289,8 @@ class ConfluenceConnector(Connector):
                     ToolParam("title", "str", description="Title of the new page, as shown in Confluence."),
                     ToolParam("body", "str",
                               description="Page body in Confluence storage format (XHTML-based HTML), "
-                                          "e.g. '<p>Hello</p>'."),
+                                          "e.g. '<p>Hello</p>'. Mention someone with "
+                                          "@[Name](accountId), the id from confluence_find_users."),
                     ToolParam("parent_id", "str", required=False, default="",
                               description="Id of the page to nest the new page under, from "
                                           "confluence_list_pages. Empty creates it at the top level of the space."),
@@ -278,7 +318,8 @@ class ConfluenceConnector(Connector):
                     ToolParam("body", "str", required=False, default="",
                               description="New body in Confluence storage format (XHTML-based HTML), "
                                           "replacing the whole current body. Omit or leave empty to "
-                                          "keep the current body."),
+                                          "keep the current body. Mention someone with "
+                                          "@[Name](accountId), the id from confluence_find_users."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -295,6 +336,10 @@ class ConfluenceConnector(Connector):
             return await self._list_pages(**args)
         if tool == "confluence_list_attachments":
             return await self._list_attachments(**args)
+        if tool == "confluence_find_users":
+            return await self._find_users(**args)
+        if tool == "confluence_refresh_user_cache":
+            return await self._refresh_user_cache(**args)
         if tool == "confluence_download_attachment":
             return await self._download_attachment(**args)
         if tool == "confluence_get_page":
@@ -366,6 +411,25 @@ class ConfluenceConnector(Connector):
         )
         return {"page_id": page_id, "attachments": data}
 
+    async def _find_users(self, query: str, max_results: int = 10) -> Any:
+        t0 = time.time()
+        users = await self._fetch(self._confluence.find_users, query, max_results)
+        data = [asdict(u) for u in users]
+        self._auto_audit(
+            "confluence_find_users", "Find Confluence Users",
+            "Find users", f"{len(users)} user(s)", t0,
+        )
+        return data
+
+    async def _refresh_user_cache(self) -> Any:
+        t0 = time.time()
+        count = await self._fetch(self._confluence.refresh_user_cache)
+        self._auto_audit(
+            "confluence_refresh_user_cache", "Refresh Atlassian User Cache",
+            "Refresh Atlassian user cache", f"{count} user(s)", t0,
+        )
+        return {"cached_users": count}
+
     # ------------------------------------------------------------------ #
     # Gated
     # ------------------------------------------------------------------ #
@@ -388,25 +452,28 @@ class ConfluenceConnector(Connector):
             "Space": page.space_key or "(unknown)",
         }
         new_info = {
-            "Author": page.author or "(unknown)",
+            "Author": page.author_name or page.author or "(unknown)",
             "Last modified": page.updated or "(unknown)",
             "Page body": "Full page content",
         }
+        if page.mentions:
+            new_info["Mentioned people"] = ", ".join(page.mentions.values())
         body_raw = getattr(page, "body", "") or getattr(page, "body_text", "") or ""
-        body_text = html_to_markdown(body_raw)
+        body_text = html_to_markdown(storage_mentions_to_text(body_raw, page.mentions))
+        pii_scan_text = _with_names(body_text, page)
         return await gated_call(
             connector=self.name,
             tool="confluence_get_page",
             tool_name="Read Confluence Page",
             summary=f"Read \"{page.title}\" ({page.space_key})",
-            sender=page.author or page_id,
+            sender=page.author_name or page.author or page_id,
             raw_data=data,
             filtered_data=data,
             gate="review",
             preview=preview_fields,
             new_info=new_info,
             details_text=body_text,
-            pii_scan_text=body_text,
+            pii_scan_text=pii_scan_text,
             preview_blocks=[{"type": "markdown", "text": body_text}] if body_text else None,
             my_email=self.my_email,
             args={"page_id": page_id},
@@ -421,25 +488,28 @@ class ConfluenceConnector(Connector):
             "Space": page.space_key or space_key,
         }
         new_info = {
-            "Author": page.author or "(unknown)",
+            "Author": page.author_name or page.author or "(unknown)",
             "Last modified": page.updated or "(unknown)",
             "Page body": "Full page content",
         }
+        if page.mentions:
+            new_info["Mentioned people"] = ", ".join(page.mentions.values())
         body_raw = getattr(page, "body", "") or getattr(page, "body_text", "") or ""
-        body_text = html_to_markdown(body_raw)
+        body_text = html_to_markdown(storage_mentions_to_text(body_raw, page.mentions))
+        pii_scan_text = _with_names(body_text, page)
         return await gated_call(
             connector=self.name,
             tool="confluence_get_page_by_title",
             tool_name="Read Confluence Page",
             summary=f"Read \"{page.title}\" ({page.space_key})",
-            sender=page.author or space_key,
+            sender=page.author_name or page.author or space_key,
             raw_data=data,
             filtered_data=data,
             gate="review",
             preview=preview_fields,
             new_info=new_info,
             details_text=body_text,
-            pii_scan_text=body_text,
+            pii_scan_text=pii_scan_text,
             preview_blocks=[{"type": "markdown", "text": body_text}] if body_text else None,
             my_email=self.my_email,
             args={"space_key": space_key, "title": title},
@@ -558,7 +628,7 @@ class ConfluenceConnector(Connector):
             tool="confluence_download_attachment",
             tool_name="Download Confluence Attachment",
             summary=f"Download attachment '{attachment.name}' from: {page.title or page_id}",
-            sender=page.author or page_id,
+            sender=page.author_name or page.author or page_id,
             raw_data=asdict(page),
             filtered_data=None,
             gate="review",
@@ -647,7 +717,10 @@ class ConfluenceConnector(Connector):
         preview = {"Space": space_key, "Title": title}
         if parent_id:
             preview["Parent page ID"] = parent_id
-        raw = {"space_key": space_key, "title": title, "parent_id": parent_id, "body": body}
+        storage_body, mentions = await self._prepare_body(body)
+        if mentions:
+            preview["Mentions"] = mentions
+        raw = {"space_key": space_key, "title": title, "parent_id": parent_id, "body": storage_body}
         await gated_call(
             connector=self.name,
             tool="confluence_create_page",
@@ -658,11 +731,13 @@ class ConfluenceConnector(Connector):
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text=body,
+            details_text=storage_body,
             my_email=self.my_email,
             args={"space_key": space_key, "title": title, "parent_id": parent_id},
         )
-        page = await self._fetch(self._confluence.create_page, space_key, title, body, parent_id)
+        page = await self._fetch(
+            self._confluence.create_page, space_key, title, storage_body, parent_id,
+        )
         return asdict(page)
 
     async def _update_page(self, page_id: str, title: str = "", body: str = "") -> Any:
@@ -677,26 +752,60 @@ class ConfluenceConnector(Connector):
             "Space": current.space_key or "(unknown)",
             "Title": f"{current.title} → {title}" if title != current.title else title,
         }
+        if body_omitted:
+            storage_body, mentions = body, ""
+        else:
+            storage_body, mentions = await self._prepare_body(body)
+        if mentions:
+            preview["Mentions"] = mentions
         await gated_call(
             connector=self.name,
             tool="confluence_update_page",
             tool_name="Update Confluence Page",
             summary=f"Update \"{title}\"",
             sender=f"page={page_id}",
-            raw_data={"page_id": page_id, "space_key": current.space_key, "title": title, "body": body},
+            raw_data={"page_id": page_id, "space_key": current.space_key, "title": title, "body": storage_body},
             filtered_data=None,
             gate="popup",
             preview=preview,
-            details_text="(unchanged)" if body_omitted else body,
+            details_text="(unchanged)" if body_omitted else storage_body,
             my_email=self.my_email,
             args={"page_id": page_id, "space_key": current.space_key, "title": title},
         )
-        page = await self._fetch(self._confluence.update_page, page_id, title, body)
+        page = await self._fetch(self._confluence.update_page, page_id, title, storage_body)
         return asdict(page)
 
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    async def _prepare_body(self, body: str) -> tuple[str, str]:
+        """Turn @[Name](accountId) markup into storage mentions and name every
+        mentioned account for the approver. Returns (storage_body, mentions_row)
+        with an empty row when the body mentions nobody. Markup ids Atlassian
+        cannot resolve are refused; raw <ri:user> ids already in the body are
+        listed as unknown, and <ri:user> tags with no account id (legacy userkey/username)
+        as unrecognised, but neither is refused: refusing would make existing pages uneditable."""
+        markup_ids = markup_mention_ids(body)
+        storage_body = markup_to_storage(body)
+        # Scan what is actually written: converting markup inserts quotes, which can
+        # let text inside an attribute become a real <ri:user> tag the raw body hid.
+        ids = list(dict.fromkeys([*markup_ids, *storage_mention_ids(body), *storage_mention_ids(storage_body)]))
+        names: dict[str, str] = {}
+        if ids:
+            names = await self._fetch(self._confluence.resolve_user_names, ids)
+        missing = [i for i in markup_ids if i not in names]
+        if missing:
+            raise ValueError(
+                f"Unknown Atlassian account id(s): {', '.join(missing)}. "
+                "Look the person up with confluence_find_users and use their account_id."
+            )
+        parts = [names.get(i) or f"unknown account {i}" for i in ids]
+        unrecognised = storage_unrecognised_user_mentions(storage_body)
+        if unrecognised:
+            parts.append(f"{unrecognised} unrecognised user mention(s)")
+        mentions = ", ".join(parts)
+        return storage_body, mentions
 
     async def _fetch(self, func, *args) -> Any:
         try:
@@ -725,6 +834,13 @@ class ConfluenceConnector(Connector):
             ))
         except Exception as exc:
             logger.warning("Audit log write failed: %s", exc)
+
+
+def _with_names(body_text: str, page: Any) -> str:
+    """The text a page read is PII-scanned on: the shown body plus every person's name the agent
+    receives (the author and each resolved mention), whether or not the body renders it."""
+    names = [page.author_name, *page.mentions.values()]
+    return "\n".join([body_text, *(n for n in names if n)])
 
 
 def _redact_excerpt(result_dict: dict[str, Any]) -> dict[str, Any]:

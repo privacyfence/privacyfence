@@ -12,11 +12,13 @@ Cowork preview.
 """
 from __future__ import annotations
 
+import json
 import sys
 from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence.atlassian_users import AtlassianUser
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.confluence_client import (
     ConfluenceAttachment,
@@ -271,6 +273,194 @@ class TestExcerptPrivacyFilter:
         result = await connector.call("confluence_search", {"query": "runbook"})
 
         assert result[0]["excerpt"] == "a normal excerpt"
+
+
+class TestFindUsers:
+    async def test_returns_users_audits_and_never_gates(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.find_users.return_value = [AtlassianUser(account_id="acc-jane-0001", display_name="Jane Doe")]
+
+        result = await connector.call("confluence_find_users", {"query": "jane", "max_results": 5})
+
+        assert result == [
+            {"account_id": "acc-jane-0001", "display_name": "Jane Doe", "active": True, "account_type": ""},
+        ]
+        client.find_users.assert_called_once_with("jane", 5)
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"tool": "confluence_find_users"' in entries[-1]
+        assert '"decision": "auto_accepted"' in entries[-1]
+
+    async def test_audit_entry_never_holds_the_search_text(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.find_users.return_value = []
+
+        await connector.call("confluence_find_users", {"query": "jane@example.com"})
+
+        entry = json.loads((tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        assert entry["summary"] == "Find users"
+        assert entry["sender"] == "0 user(s)"
+        for part in ("jane", "example", "@"):
+            assert part not in json.dumps(entry)
+
+    async def test_client_error_becomes_runtime_error(self):
+        connector, client = make_connector()
+        client.find_users.side_effect = ConfluenceClientError("find_users failed: boom")
+
+        with pytest.raises(RuntimeError, match="find_users failed"):
+            await connector.call("confluence_find_users", {"query": "jane"})
+
+
+class TestRefreshUserCache:
+    async def test_returns_count_audits_and_never_gates(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.refresh_user_cache.return_value = 7
+
+        result = await connector.call("confluence_refresh_user_cache", {})
+
+        assert result == {"cached_users": 7}
+        assert gated_call_spy == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"tool": "confluence_refresh_user_cache"' in entries[-1]
+
+    async def test_client_error_becomes_runtime_error(self):
+        connector, client = make_connector()
+        client.refresh_user_cache.side_effect = ConfluenceClientError("refresh already in progress")
+
+        with pytest.raises(RuntimeError, match="already in progress"):
+            await connector.call("confluence_refresh_user_cache", {})
+
+
+_MENTION_BODY = (
+    '<p>Ping <ac:link><ri:user ri:account-id="acc-jane-0001" /></ac:link> please</p>'
+)
+
+
+class TestGetPageNames:
+    @pytest.mark.parametrize("tool,args,client_method", [
+        ("confluence_get_page", {"page_id": "p1"}, "get_page"),
+        ("confluence_get_page_by_title", {"space_key": "ENG", "title": "Runbook"}, "get_page_by_title"),
+    ])
+    async def test_author_name_and_mentions_in_preview_raw_body_in_result(
+        self, gated_call_spy, tool, args, client_method,
+    ):
+        connector, client = make_connector()
+        page = make_page(
+            author="acc-alice-0001", author_name="Alice Smith", body=_MENTION_BODY,
+            mentions={"acc-jane-0001": "Jane Doe"},
+        )
+        getattr(client, client_method).return_value = page
+
+        result = await connector.call(tool, args)
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["new_info"]["Author"] == "Alice Smith"
+        assert kwargs["sender"] == "Alice Smith"
+        assert "@Jane Doe" in kwargs["details_text"]
+        assert "acc-jane-0001" not in kwargs["details_text"]
+        assert result["body"] == _MENTION_BODY
+        assert result["author"] == "acc-alice-0001"
+
+    async def test_author_falls_back_to_id_without_name(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(author="acc-alice-0001")
+
+        await connector.call("confluence_get_page", {"page_id": "p1"})
+
+        assert gated_call_spy[0]["new_info"]["Author"] == "acc-alice-0001"
+
+    @pytest.mark.parametrize("tool,args,client_method", [
+        ("confluence_get_page", {"page_id": "p1"}, "get_page"),
+        ("confluence_get_page_by_title", {"space_key": "ENG", "title": "Runbook"}, "get_page_by_title"),
+    ])
+    @pytest.mark.parametrize("link_body", [
+        "<ac:link-body>{pii}</ac:link-body>",
+        "<ac:plain-text-link-body><![CDATA[{pii}]]></ac:plain-text-link-body>",
+    ])
+    async def test_pii_inside_a_user_link_body_is_shown_and_scanned(
+        self, gated_call_spy, tool, args, client_method, link_body,
+    ):
+        from privacyfence.pii_detector import detect_pii_categories
+
+        pii = "SSN 123-45-6789, card 4111 1111 1111 1111, jane.doe@corp.example"
+        connector, client = make_connector()
+        body = (
+            '<p><ac:link><ri:user ri:account-id="acc-jane-0001"/>'
+            + link_body.format(pii=pii) + "</ac:link></p>"
+        )
+        getattr(client, client_method).return_value = make_page(
+            body=body, mentions={"acc-jane-0001": "Jane Doe"},
+        )
+
+        await connector.call(tool, args)
+
+        kwargs = gated_call_spy[0]
+        assert "@Jane Doe" in kwargs["details_text"]
+        assert pii in kwargs["details_text"]
+        assert pii in kwargs["pii_scan_text"]
+        assert {"Credit card number", "US Social Security Number"} <= set(
+            detect_pii_categories(kwargs["pii_scan_text"])
+        )
+
+
+_PROFILE_MACRO_BODY = (
+    '<p>Owner:</p><ac:structured-macro ac:name="profile"><ac:parameter ac:name="user">'
+    '<ri:user ri:account-id="acc-jane-0001"/></ac:parameter></ac:structured-macro>'
+)
+
+
+class TestGetPageEveryDeliveredNameIsShownAndScanned:
+    @pytest.mark.parametrize("tool,args,client_method", [
+        ("confluence_get_page", {"page_id": "p1"}, "get_page"),
+        ("confluence_get_page_by_title", {"space_key": "ENG", "title": "Runbook"}, "get_page_by_title"),
+    ])
+    @pytest.mark.parametrize("body,mentions", [
+        (_PROFILE_MACRO_BODY, {"acc-jane-0001": "Jane Doe"}),
+        (
+            '<ac:link><ri:user ri:account-id="acc-jane-0001" ri:account-id="acc-john-0002"/></ac:link>',
+            {"acc-jane-0001": "Jane Doe", "acc-john-0002": "John Roe"},
+        ),
+        (
+            '<ac:link><ri:user ri:account-id="acc-jane-0001"/><ac:link-body>hi '
+            '<ac:link><ri:user ri:account-id="acc-john-0002"/></ac:link> there</ac:link-body></ac:link>',
+            {"acc-jane-0001": "Jane Doe", "acc-john-0002": "John Roe"},
+        ),
+        (
+            '<ac:link><ri:user ri:account-id="acc-jane-0001"/></ac:link>'
+            '<ac:link><ri:user ri:account-id="acc-john-0002"/></ac:link>',
+            {"acc-jane-0001": "Jane Doe", "acc-john-0002": "John Roe"},
+        ),
+    ])
+    async def test_every_name_in_result_is_on_the_card_and_in_the_scan(
+        self, gated_call_spy, tool, args, client_method, body, mentions,
+    ):
+        connector, client = make_connector()
+        getattr(client, client_method).return_value = make_page(
+            body=body, author="acc-alice-0001", author_name="Alice Smith", mentions=mentions,
+        )
+
+        result = await connector.call(tool, args)
+
+        kwargs = gated_call_spy[0]
+        assert result["mentions"] == mentions
+        for name in result["mentions"].values():
+            assert name in kwargs["new_info"]["Mentioned people"]
+            assert name in kwargs["pii_scan_text"]
+        assert "Alice Smith" in kwargs["pii_scan_text"]
+        assert kwargs["new_info"]["Author"] == "Alice Smith"
+
+    async def test_no_mentions_adds_no_row_and_no_name_means_body_only_scan(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+
+        await connector.call("confluence_get_page", {"page_id": "p1"})
+
+        kwargs = gated_call_spy[0]
+        assert "Mentioned people" not in kwargs["new_info"]
+        assert kwargs["pii_scan_text"] == kwargs["details_text"]
 
 
 class TestGetPage:
@@ -991,6 +1181,8 @@ class TestEveryToolIsAudited:
         client.get_page_by_title.return_value = make_page()
         client.create_page.return_value = make_page()
         client.update_page.return_value = make_page()
+        client.find_users.return_value = [AtlassianUser(account_id="acc-jane-0001", display_name="Jane Doe")]
+        client.refresh_user_cache.return_value = 1
         # confluence_download_attachment looks up the attachment by name on
         # the fetched page's attachment list before ever reaching the gate,
         # so the generic "stub" arg needs a matching attachment on the
@@ -1005,3 +1197,182 @@ class TestEveryToolIsAudited:
             # title and body are optional now, but at least one is required.
             arg_overrides={"confluence_update_page": {"title": "Updated"}},
         )
+
+
+_JANE = "acc-jane-0001"
+_LINK = f'<ac:link><ri:user ri:account-id="{_JANE}" /></ac:link>'
+
+
+class TestWriteMentions:
+    @staticmethod
+    def _create_args(body):
+        return {"space_key": "ENG", "title": "T", "body": body}
+
+    @staticmethod
+    def _update_args(body):
+        return {"page_id": "p1", "title": "T", "body": body}
+
+    @pytest.mark.parametrize("tool,make_args,client_method", [
+        ("confluence_create_page", _create_args, "create_page"),
+        ("confluence_update_page", _update_args, "update_page"),
+    ])
+    async def test_markup_becomes_storage_with_directory_name_in_preview(
+        self, gated_call_spy, tool, make_args, client_method,
+    ):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(title="T")
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe"}
+        getattr(client, client_method).return_value = make_page()
+
+        await connector.call(tool, make_args(f"<p>Hi @[Janey]({_JANE})</p>"))
+
+        expected = f"<p>Hi {_LINK}</p>"
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Mentions"] == "Jane Doe"
+        assert kwargs["raw_data"]["body"] == expected
+        assert kwargs["details_text"] == expected
+        assert getattr(client, client_method).call_args.args[-2 if client_method == "create_page" else -1] == expected
+        client.resolve_user_names.assert_called_once_with([_JANE])
+
+    @pytest.mark.parametrize("tool,make_args", [
+        ("confluence_create_page", _create_args),
+        ("confluence_update_page", _update_args),
+    ])
+    async def test_unresolvable_markup_id_refused_before_gate(
+        self, gated_call_spy, tool, make_args,
+    ):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+        client.resolve_user_names.return_value = {}
+
+        with pytest.raises(ValueError, match="Unknown Atlassian account id"):
+            await connector.call(tool, make_args(f"@[Ghost]({_JANE})"))
+
+        assert gated_call_spy == []
+        client.create_page.assert_not_called()
+        client.update_page.assert_not_called()
+
+    @pytest.mark.parametrize("tool,make_args", [
+        ("confluence_create_page", _create_args),
+        ("confluence_update_page", _update_args),
+    ])
+    async def test_unresolvable_raw_storage_mention_listed_and_write_proceeds(
+        self, gated_call_spy, tool, make_args,
+    ):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+        client.resolve_user_names.return_value = {}
+        client.create_page.return_value = make_page()
+        client.update_page.return_value = make_page()
+
+        await connector.call(tool, make_args(f"<p>{_LINK}</p>"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == f"unknown account {_JANE}"
+        assert gated_call_spy[0]["details_text"] == f"<p>{_LINK}</p>"
+
+    @pytest.mark.parametrize("tool,make_args", [
+        ("confluence_create_page", _create_args),
+        ("confluence_update_page", _update_args),
+    ])
+    async def test_no_mentions_means_no_lookup_and_no_row(self, gated_call_spy, tool, make_args):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page()
+        client.create_page.return_value = make_page()
+        client.update_page.return_value = make_page()
+
+        await connector.call(tool, make_args("<p>plain</p>"))
+
+        client.resolve_user_names.assert_not_called()
+        assert "Mentions" not in gated_call_spy[0]["preview"]
+
+    async def test_omitted_body_keeps_current_body_verbatim_without_lookup_or_row(self, gated_call_spy):
+        connector, client = make_connector()
+        current = f"<p>@[literal]({_JANE}) stays text</p>"
+        client.get_page.return_value = make_page(title="T", body=current)
+        client.update_page.return_value = make_page()
+
+        await connector.call("confluence_update_page", {"page_id": "p1", "title": "New"})
+
+        client.resolve_user_names.assert_not_called()
+        assert "Mentions" not in gated_call_spy[0]["preview"]
+        assert gated_call_spy[0]["details_text"] == "(unchanged)"
+        assert client.update_page.call_args.args[-1] == current
+
+    @pytest.mark.parametrize("raw", [
+        f"<ac:link><ri:user ri:account-id='{_JANE}' /></ac:link>",
+        f'<ac:link><ri:user ri:account-id = "{_JANE}" /></ac:link>',
+    ])
+    async def test_raw_mention_with_single_quotes_or_spaces_is_in_preview(self, gated_call_spy, raw):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe"}
+        client.create_page.return_value = make_page()
+
+        await connector.call("confluence_create_page", self._create_args(f"<p>{raw}</p>"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Jane Doe"
+        client.resolve_user_names.assert_called_once_with([_JANE])
+
+    _REAL = "557058:f58131cb-b67d-43c7-b30d-6b58d40bd077"
+
+    @pytest.mark.parametrize("raw", [
+        f'<ac:link><ri:user ri:local-id="a>b" ri:account-id="{_REAL}" />'
+        '<ac:plain-text-link-body><![CDATA[Bob]]></ac:plain-text-link-body></ac:link>',
+        '<ac:link><ri:user ri:account-id="557058&#58;f58131cb-b67d-43c7-b30d-6b58d40bd077" /></ac:link>',
+    ])
+    async def test_tricky_raw_mentions_named_in_preview(self, gated_call_spy, raw):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {self._REAL: "Bob Real"}
+        client.create_page.return_value = make_page()
+
+        await connector.call("confluence_create_page", self._create_args(f"<p>{raw}</p>"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Bob Real"
+        client.resolve_user_names.assert_called_once_with([self._REAL])
+
+    async def test_mention_hidden_by_markup_conversion_is_listed(self, gated_call_spy):
+        """Markup inside a double-quoted attribute ends it early once converted, so
+        the text after it becomes a real tag the original body did not show."""
+        connector, client = make_connector()
+        client.resolve_user_names.side_effect = lambda ids: {i: "Real" for i in ids if i == "aaaaaaaaaaaa"}
+        client.create_page.return_value = make_page()
+        body = '<p title="@[A](aaaaaaaaaaaa) <ri:user ri:account-id=\'hiddenhidden1\'/>">x</p>'
+
+        await connector.call("confluence_create_page", self._create_args(body))
+
+        assert "hiddenhidden1" in gated_call_spy[0]["details_text"]
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Real, unknown account hiddenhidden1"
+        client.resolve_user_names.assert_called_once_with(["aaaaaaaaaaaa", "hiddenhidden1"])
+
+    async def test_raw_mention_after_plaintext_is_named_in_preview(self, gated_call_spy):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe"}
+        client.create_page.return_value = make_page()
+
+        await connector.call("confluence_create_page", self._create_args(f"<plaintext>{_LINK}"))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Jane Doe"
+        client.resolve_user_names.assert_called_once_with([_JANE])
+
+    async def test_duplicate_account_id_attributes_are_all_resolved(self, gated_call_spy):
+        connector, client = make_connector()
+        client.resolve_user_names.return_value = {_JANE: "Jane Doe", "acc-bob-0002": "Bob Roe"}
+        client.create_page.return_value = make_page()
+        raw = f'<ac:link><ri:user ri:account-id="{_JANE}" ri:account-id="acc-bob-0002" /></ac:link>'
+
+        await connector.call("confluence_create_page", self._create_args(raw))
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "Jane Doe, Bob Roe"
+        client.resolve_user_names.assert_called_once_with([_JANE, "acc-bob-0002"])
+
+    @pytest.mark.parametrize("attr", ['ri:userkey="8a7f"', "ri:username='bob'"])
+    async def test_legacy_raw_mention_listed_as_unrecognised(self, gated_call_spy, attr):
+        connector, client = make_connector()
+        client.create_page.return_value = make_page()
+
+        await connector.call(
+            "confluence_create_page",
+            self._create_args(f"<p><ac:link><ri:user {attr} /></ac:link></p>"),
+        )
+
+        assert gated_call_spy[0]["preview"]["Mentions"] == "1 unrecognised user mention(s)"
+        client.resolve_user_names.assert_not_called()

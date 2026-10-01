@@ -14,11 +14,16 @@ Optional config keys (needed to refresh an expired access token — see
 ``_try_refresh`` below):
   client_id / client_secret – the organization's Atlassian OAuth app
   refresh_token             – from the same OAuth grant as access_token
+
+Account ids in issue descriptions and comments (ADF mentions) are resolved to
+names through the ``AtlassianUserDirectory`` shared with the Confluence client
+(ADR 0117); a mention renders as ``@[Name](accountId)``.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,6 +38,17 @@ from .atlassian_oauth import (
     save_token_file,
 )
 
+from . import atlassian_users
+from .atlassian_users import (
+    ACCOUNT_ID_RE,
+    UNKNOWN_USER_LABEL,
+    AtlassianUser,
+    AtlassianUserDirectory,
+    AtlassianUsersError,
+    mask_emails,
+    mention_markup,
+)
+
 logger = logging.getLogger(__name__)
 
 MAX_PAGES = 10
@@ -42,18 +58,36 @@ class JiraClientError(Exception):
     """Raised for unrecoverable Jira client problems (auth, config, API)."""
 
 
-def _text_to_adf(text: str) -> dict[str, Any]:
+def _text_to_adf(text: str, names: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Wrap plain text in a single-paragraph Atlassian Document Format node.
 
     Jira Cloud REST API v3 (which this client targets, matching how
     _parse_issue/_parse_comment already read descriptions and comments back
     as ADF) requires description and comment bodies to be ADF objects, not
-    plain strings.
+    plain strings. ``@[Name](accountId)`` markup becomes a real ADF mention
+    node; ``names`` (the user directory's names) overrides the agent's label.
     """
+    matches = list(atlassian_users.MENTION_MARKUP_RE.finditer(text))
+    if not matches:
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    else:
+        content = []
+        pos = 0
+        for m in matches:
+            if m.start() > pos:
+                content.append({"type": "text", "text": text[pos:m.start()]})
+            label, account_id = m.group(1), m.group(2)
+            name = names[account_id] if names and account_id in names else label
+            content.append(
+                {"type": "mention", "attrs": {"id": account_id, "text": "@" + name}}
+            )
+            pos = m.end()
+        if pos < len(text):
+            content.append({"type": "text", "text": text[pos:]})
     return {
         "type": "doc",
         "version": 1,
-        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
+        "content": [{"type": "paragraph", "content": content}],
     }
 
 
@@ -83,6 +117,10 @@ class JiraIssue:
     created: str = ""
     updated: str = ""
     url: str = ""
+    # Not a dataclass field, so asdict() (what the agent receives) never carries it: the
+    # description as the approval preview shows it, mentions as @Name and every other
+    # character as written. None when the description has no ADF form.
+    display_description = None
 
     def short_summary(self) -> str:
         snippet = self.summary[:60] + "…" if len(self.summary) > 60 else self.summary
@@ -96,6 +134,7 @@ class JiraComment:
     body: str
     created: str = ""
     updated: str = ""
+    display_body = None  # as ``JiraIssue.display_description``: not a field, preview-only
 
 
 @dataclass
@@ -117,7 +156,12 @@ class JiraClient:
     launch doesn't need a fresh sign-in.
     """
 
-    def __init__(self, config: dict[str, Any], token_file: str | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        token_file: str | None = None,
+        user_directory: AtlassianUserDirectory | None = None,
+    ) -> None:
         self._config = dict(config)
         self._token_file = token_file
         # Populated lazily by _get_field_descriptor: a site's field list
@@ -133,6 +177,7 @@ class JiraClient:
                 "Jira is not authenticated. Use Authenticate… in PrivacyFence Settings."
             )
 
+        self._users = user_directory or AtlassianUserDirectory(cloud_id=cloud_id)
         api_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"
         self._base_url = site_url or api_url
         self._session = requests.Session()
@@ -207,6 +252,47 @@ class JiraClient:
             raise JiraClientError(f"Jira connection check failed: {exc}") from exc
 
     # ------------------------------------------------------------------ #
+    # Users
+    # ------------------------------------------------------------------ #
+
+    def _fetch_users_bulk(self, account_ids: list[str]) -> list[AtlassianUser]:
+        return self._request(
+            atlassian_users.fetch_users_bulk,
+            self._session,
+            self._config.get("cloud_id", ""),
+            account_ids,
+        )
+
+    def resolve_user_names(self, account_ids: list[str]) -> dict[str, str]:
+        """Map account ids to display names; ids that cannot be resolved are omitted."""
+        return self._users.resolve(account_ids, self._fetch_users_bulk)
+
+    def find_users(self, query: str, max_results: int = 10) -> list[AtlassianUser]:
+        if not query or not query.strip():
+            raise JiraClientError("find_users requires a non-empty query")
+        max_results = max(1, min(max_results, atlassian_users.FIND_USERS_MAX_RESULTS))
+        try:
+            users = self._request(
+                atlassian_users.search_users,
+                self._session,
+                self._config.get("cloud_id", ""),
+                query,
+                max_results,
+            )
+        except Exception as exc:
+            raise JiraClientError(
+                f"find_users failed: {atlassian_users.redact_query(exc, query)}"
+            ) from exc
+        self._users.remember(users)
+        return users
+
+    def refresh_user_cache(self) -> int:
+        try:
+            return self._users.refresh(self._fetch_users_bulk)
+        except AtlassianUsersError as exc:
+            raise JiraClientError(str(exc)) from exc
+
+    # ------------------------------------------------------------------ #
     # Projects
     # ------------------------------------------------------------------ #
 
@@ -256,7 +342,10 @@ class JiraClient:
             raw = self._request(self._client.issue, issue_key)
         except Exception as exc:
             raise JiraClientError(f"get_issue({issue_key!r}) failed: {exc}") from exc
-        issue = self._parse_issue(raw, include_description=True)
+        description = (raw.get("fields") or {}).get("description")
+        ids = self._collect_adf_mention_ids(description) if isinstance(description, dict) else []
+        names = self.resolve_user_names(ids) if ids else None
+        issue = self._parse_issue(raw, include_description=True, names=names)
         logger.info("get_issue %s: %s", issue_key, issue.short_summary())
         return issue
 
@@ -268,7 +357,13 @@ class JiraClient:
             comments_raw = (raw.get("fields", {}).get("comment") or {}).get("comments", [])
         except Exception as exc:
             raise JiraClientError(f"get_issue_comments({issue_key!r}) failed: {exc}") from exc
-        comments = [self._parse_comment(c) for c in comments_raw]
+        ids: list[str] = []
+        for c in comments_raw:
+            body = c.get("body")
+            if isinstance(body, dict):
+                ids.extend(i for i in self._collect_adf_mention_ids(body) if i not in ids)
+        names = self.resolve_user_names(ids) if ids else None
+        comments = [self._parse_comment(c, names) for c in comments_raw]
         logger.info("get_issue_comments %s returned %d comment(s)", issue_key, len(comments))
         return comments
 
@@ -281,6 +376,7 @@ class JiraClient:
         priority: str = "",
         assignee_account_id: str = "",
         labels: list[str] | None = None,
+        mention_names: Mapping[str, str] | None = None,
     ) -> JiraIssue:
         if not project_key or not summary:
             raise JiraClientError("create_issue requires project_key and summary")
@@ -290,7 +386,7 @@ class JiraClient:
             "issuetype": {"name": issue_type},
         }
         if description:
-            fields["description"] = _text_to_adf(description)
+            fields["description"] = _text_to_adf(description, mention_names)
         if priority:
             fields["priority"] = {"name": priority}
         if assignee_account_id:
@@ -305,11 +401,15 @@ class JiraClient:
         logger.info("create_issue created %s", key)
         return self.get_issue(key)
 
-    def add_comment(self, issue_key: str, body: str) -> JiraComment:
+    def add_comment(
+        self, issue_key: str, body: str, mention_names: Mapping[str, str] | None = None
+    ) -> JiraComment:
         if not issue_key or not body:
             raise JiraClientError("add_comment requires issue_key and body")
         try:
-            raw = self._request(self._client.issue_add_comment, issue_key, _text_to_adf(body))
+            raw = self._request(
+                self._client.issue_add_comment, issue_key, _text_to_adf(body, mention_names)
+            )
         except Exception as exc:
             raise JiraClientError(f"add_comment({issue_key!r}) failed: {exc}") from exc
         comment = self._parse_comment(raw)
@@ -355,6 +455,16 @@ class JiraClient:
         else:
             coerced = value
         return field_id, coerced
+
+    def custom_field_kind(self, field_name: str) -> str:
+        """``"user"`` for a single-user field, ``"user_list"`` for a multi-user picker,
+        else ``"other"``. Lets callers hold person-valued fields to the accountId shape."""
+        schema = self._get_field_descriptor(field_name).get("schema") or {}
+        if schema.get("type") == "user":
+            return "user"
+        if schema.get("type") == "array" and schema.get("items") == "user":
+            return "user_list"
+        return "other"
 
     def _get_field_descriptor(self, field_name: str) -> dict[str, Any]:
         if self._field_cache is None:
@@ -419,17 +529,24 @@ class JiraClient:
             lead=(raw.get("lead") or {}).get("displayName", ""),
         )
 
-    def _parse_issue(self, raw: dict[str, Any], include_description: bool = False) -> JiraIssue:
+    def _parse_issue(
+        self,
+        raw: dict[str, Any],
+        include_description: bool = False,
+        names: Mapping[str, str] | None = None,
+    ) -> JiraIssue:
         f = raw.get("fields") or {}
         key = raw.get("key", "")
         desc = ""
+        display_desc = None
         if include_description:
             desc_raw = f.get("description")
             if isinstance(desc_raw, str):
                 desc = desc_raw
             elif isinstance(desc_raw, dict):
-                desc = self._extract_adf_text(desc_raw)
-        return JiraIssue(
+                desc = self._extract_adf_text(desc_raw, names)
+                display_desc = self._extract_adf_text(desc_raw, names, display=True)
+        issue = JiraIssue(
             key=key,
             summary=f.get("summary", ""),
             status=(f.get("status") or {}).get("name", ""),
@@ -443,30 +560,76 @@ class JiraClient:
             updated=f.get("updated", ""),
             url=f"{self._base_url}/browse/{key}" if key else "",
         )
+        issue.display_description = display_desc
+        return issue
 
     @staticmethod
-    def _parse_comment(raw: dict[str, Any]) -> JiraComment:
+    def _parse_comment(raw: dict[str, Any], names: Mapping[str, str] | None = None) -> JiraComment:
         body_raw = raw.get("body", "")
+        display_body = None
         if isinstance(body_raw, dict):
-            body = JiraClient._extract_adf_text(body_raw)
+            body = JiraClient._extract_adf_text(body_raw, names)
+            display_body = JiraClient._extract_adf_text(body_raw, names, display=True)
         else:
             body = str(body_raw)
-        return JiraComment(
+        comment = JiraComment(
             id=raw.get("id", ""),
             author=(raw.get("author") or {}).get("displayName", ""),
             body=body,
             created=raw.get("created", ""),
             updated=raw.get("updated", ""),
         )
+        comment.display_body = display_body
+        return comment
 
     @staticmethod
-    def _extract_adf_text(node: dict[str, Any]) -> str:
-        """Extract plain text from an Atlassian Document Format node."""
+    def _extract_adf_text(
+        node: dict[str, Any], names: Mapping[str, str] | None = None, display: bool = False
+    ) -> str:
+        """Extract plain text from an Atlassian Document Format node.
+
+        A mention renders as ``@[Name](accountId)``; the name comes from
+        ``names`` when known, else from the label Jira put on the node. With ``display`` it
+        renders ``@Name`` instead, for the approval preview, so literal text that merely looks
+        like the markup is left as written.
+        """
         if not isinstance(node, dict):
             return str(node)
         if node.get("type") == "text":
             return node.get("text", "")
+        if node.get("type") == "mention":
+            attrs = node.get("attrs") or {}
+            account_id = attrs.get("id")
+            label = attrs.get("text")
+            label = label if isinstance(label, str) else ""
+            if not isinstance(account_id, str) or not ACCOUNT_ID_RE.fullmatch(account_id):
+                return mask_emails(label, "")
+            # Jira's own label can be an email (service-desk customers): mask it like a directory name.
+            name = (names or {}).get(account_id) or mask_emails(label.lstrip("@"), account_id) or UNKNOWN_USER_LABEL
+            return "@" + name if display else mention_markup(name, account_id)
         parts: list[str] = []
         for child in node.get("content") or []:
-            parts.append(JiraClient._extract_adf_text(child))
+            parts.append(JiraClient._extract_adf_text(child, names, display))
         return " ".join(p for p in parts if p)
+
+    @staticmethod
+    def _collect_adf_mention_ids(node: Any) -> list[str]:
+        """Every valid mention account id in an ADF tree, in document order, deduplicated."""
+        found: list[str] = []
+
+        def walk(n: Any) -> None:
+            if not isinstance(n, dict):
+                return
+            if n.get("type") == "mention":
+                account_id = (n.get("attrs") or {}).get("id")
+                if (
+                    isinstance(account_id, str)
+                    and ACCOUNT_ID_RE.fullmatch(account_id)
+                    and account_id not in found
+                ):
+                    found.append(account_id)
+            for child in n.get("content") or []:
+                walk(child)
+
+        walk(node)
+        return found

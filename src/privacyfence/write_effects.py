@@ -129,16 +129,18 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "telegram_send_message": "The message is delivered and cannot be unsent.",
 
     # ── Jira ─────────────────────────────────────────────────────────────
-    "jira_create_issue": "A new issue is created. The project's watchers may be notified.",
-    "jira_add_comment": "A comment is added, visible to everyone who can see the issue.",
-    "jira_update_issue": "The issue's fields are changed. Its watchers may be notified.",
+    "jira_create_issue": "A new issue is created. The project's watchers, the assignee and anyone @mentioned may be notified.",
+    "jira_add_comment": "A comment is added, visible to everyone who can see the issue. Anyone @mentioned may be notified.",
+    "jira_update_issue": "The issue's fields are changed. Its watchers, a new assignee and anyone newly @mentioned may be notified.",
     "jira_transition_issue": "The issue moves to another status. Its watchers may be notified.",
 
     # ── Confluence ───────────────────────────────────────────────────────
     "confluence_create_page":
-        "A new page is created in that space, visible to everyone with access to it.",
+        "A new page is created in that space, visible to everyone with access to it. "
+        "Anyone @mentioned may be notified.",
     "confluence_update_page":
-        "The page's contents are replaced. The previous version stays in the page's history.",
+        "The page's contents are replaced. The previous version stays in the page's history. "
+        "Anyone newly @mentioned may be notified.",
 
     # ── Apps Script ──────────────────────────────────────────────────────
     "apps_script_write_content":

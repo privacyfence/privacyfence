@@ -139,6 +139,7 @@ from .connectors.tasks import TasksConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
 from .atlassian_oauth import AtlassianOAuthError
+from .atlassian_users import AtlassianUserDirectory
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
 from .calendar_client import CalendarClient, CalendarClientError
@@ -1464,6 +1465,10 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     # refresh an expired access token instead of forcing re-authentication
     # on every restart (the token file only ever holds the per-user fields).
     atlassian_config = {**atlassian_org, **(atlassian_token or {})}
+    atlassian_users = AtlassianUserDirectory(
+        cache_file=str(user_dir() / "atlassian_user_cache.json"),
+        cloud_id=atlassian_config.get("cloud_id", ""),
+    )
 
     if enabled("jira"):
         try:
@@ -1471,7 +1476,11 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 raise JiraClientError("Atlassian organization config not installed")
             if not atlassian_token:
                 raise JiraClientError("Jira is not authenticated. Use Authenticate… in PrivacyFence Settings.")
-            client = JiraClient(config=atlassian_config, token_file=_resolve_path(TOKEN_FILES["atlassian"]))
+            client = JiraClient(
+                config=atlassian_config,
+                token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+                user_directory=atlassian_users,
+            )
             info = client.check_connection()
             logger.info("Jira connector ready: %s", info)
             connector = JiraConnector(client)
@@ -1487,7 +1496,11 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 raise ConfluenceClientError("Atlassian organization config not installed")
             if not atlassian_token:
                 raise ConfluenceClientError("Confluence is not authenticated. Use Authenticate… in PrivacyFence Settings.")
-            client = ConfluenceClient(config=atlassian_config, token_file=_resolve_path(TOKEN_FILES["atlassian"]))
+            client = ConfluenceClient(
+                config=atlassian_config,
+                token_file=_resolve_path(TOKEN_FILES["atlassian"]),
+                user_directory=atlassian_users,
+            )
             url = client.check_connection()
             logger.info("Confluence connector ready: %s", url)
             connector = ConfluenceConnector(client)

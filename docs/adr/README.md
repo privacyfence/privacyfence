@@ -222,3 +222,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md) | The Glama listing runs a credential-free tool catalog, not a hosted PrivacyFence | Accepted |
 | [0115](0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md) | Tool definitions carry their parameter, return and routing guidance in prose, and a test enforces it | Accepted |
 | [0116](0116-list-tools-page-inside-the-client-and-keep-their-return-shape.md) | List and search tools page inside the client up to `max_results` and keep their bare-list return shape | Accepted |
+| [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted |
+| [0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
+| [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |

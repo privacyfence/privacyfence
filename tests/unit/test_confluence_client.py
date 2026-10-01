@@ -7,11 +7,14 @@ pattern.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from freezegun import freeze_time
 
+from privacyfence import atlassian_users
 from privacyfence import confluence_client as confluence_client_module
 from privacyfence.atlassian_oauth import AtlassianOAuthError
 from privacyfence.confluence_client import (
@@ -24,6 +27,31 @@ from privacyfence.confluence_client import (
     ConfluenceSpace,
     resolve_attachment_destination,
 )
+
+AUTHOR = "acc-author-0001"
+MENTIONED = "acc-mention-0002"
+OTHER = "acc-other-000003"
+
+
+def _mention(account_id: str) -> str:
+    return f'<ac:link><ri:user ri:account-id="{account_id}" /></ac:link>'
+
+
+def patch_bulk(monkeypatch, names: dict[str, str] | None = None) -> list[list[str]]:
+    """Replace fetch_users_bulk; return the list of id batches it was called with."""
+    calls: list[list[str]] = []
+    known = names or {}
+
+    def fake(session, cloud_id, account_ids):
+        calls.append(list(account_ids))
+        return [
+            atlassian_users.AtlassianUser(account_id=i, display_name=known[i])
+            for i in account_ids if i in known
+        ]
+
+    monkeypatch.setattr(atlassian_users, "fetch_users_bulk", fake)
+    return calls
+
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "confluence"
 
@@ -142,6 +170,34 @@ class TestParsePageV2:
         page = client._parse_page_v2({"id": "1", "spaceId": "999"})
         assert page.space_key == "ENG"
         assert client._client.get.call_args.args[0] == "api/v2/spaces/999"
+
+    def test_author_stays_raw_id_and_name_comes_from_names(self):
+        client = make_client()
+        page = client._parse_page_v2({"authorId": AUTHOR}, names={AUTHOR: "Ada Lovelace"})
+        assert page.author == AUTHOR
+        assert page.author_name == "Ada Lovelace"
+
+    def test_author_name_empty_when_unresolved(self):
+        client = make_client()
+        assert client._parse_page_v2({"authorId": AUTHOR}).author_name == ""
+        page = client._parse_page_v2({"authorId": AUTHOR}, names={OTHER: "Someone"})
+        assert page.author == AUTHOR
+        assert page.author_name == ""
+
+    def test_mentions_only_resolved_ids_present_in_body(self):
+        client = make_client()
+        body = f"<p>{_mention(MENTIONED)} and {_mention(OTHER)}</p>"
+        raw = {"id": "1", "body": {"storage": {"value": body}}}
+        page = client._parse_page_v2(
+            raw, include_body=True, names={MENTIONED: "Grace", AUTHOR: "Ada"},
+        )
+        assert page.mentions == {MENTIONED: "Grace"}
+
+    def test_mentions_empty_without_body_or_names(self):
+        client = make_client()
+        raw = {"id": "1", "body": {"storage": {"value": _mention(MENTIONED)}}}
+        assert client._parse_page_v2(raw, include_body=False, names={MENTIONED: "G"}).mentions == {}
+        assert client._parse_page_v2(raw, include_body=True).mentions == {}
 
     def test_short_summary_truncates_long_title(self):
         page = ConfluencePage(id="1", title="x" * 100, space_key="ENG")
@@ -457,6 +513,34 @@ class TestListPagesInSpace:
         assert pages[0].space_key == "ENG"
         assert client._client.get.call_args_list[1].args[0] == "api/v2/spaces/999/pages"
 
+    def test_one_bulk_call_for_all_authors(self, monkeypatch):
+        calls = patch_bulk(monkeypatch, {AUTHOR: "Ada", OTHER: "Grace"})
+        client = make_client()
+        client._client.get.side_effect = [
+            {"results": [{"id": "999"}]},
+            {"results": [
+                {"id": "1", "authorId": AUTHOR},
+                {"id": "2", "authorId": OTHER},
+                {"id": "3", "authorId": AUTHOR},
+                {"id": "4"},
+            ]},
+        ]
+        pages = client.list_pages_in_space("ENG")
+        assert len(calls) == 1
+        assert sorted(calls[0]) == sorted([AUTHOR, OTHER])
+        assert [p.author_name for p in pages] == ["Ada", "Grace", "Ada", ""]
+        assert [p.author for p in pages] == [AUTHOR, OTHER, AUTHOR, ""]
+
+    def test_no_bulk_call_without_authors(self, monkeypatch):
+        calls = patch_bulk(monkeypatch)
+        client = make_client()
+        client._client.get.side_effect = [
+            {"results": [{"id": "999"}]},
+            {"results": [{"id": "1", "title": "Page"}]},
+        ]
+        client.list_pages_in_space("ENG")
+        assert calls == []
+
     def test_follows_cursor_to_second_page(self):
         client = make_client()
         client._client.get.side_effect = [
@@ -518,6 +602,42 @@ class TestGetPage:
         assert client._client.get.call_args.args[0] == "api/v2/pages/1"
         assert client._client.get.call_args.kwargs["params"]["body-format"] == "storage"
 
+    def test_no_bulk_call_without_author_or_mentions(self, monkeypatch):
+        calls = patch_bulk(monkeypatch)
+        client = make_client()
+        client._client.get.return_value = {
+            "id": "1", "title": "Page", "body": {"storage": {"value": "<p>plain</p>"}},
+        }
+        page = client.get_page("1")
+        assert calls == []
+        assert page.author_name == ""
+        assert page.mentions == {}
+
+    def test_one_bulk_call_with_author_and_every_mention(self, monkeypatch):
+        calls = patch_bulk(monkeypatch, {AUTHOR: "Ada", MENTIONED: "Grace", OTHER: "Linus"})
+        client = make_client()
+        body = f"<p>{_mention(MENTIONED)} {_mention(OTHER)} {_mention(MENTIONED)}</p>"
+        client._client.get.return_value = {
+            "id": "1", "authorId": AUTHOR, "body": {"storage": {"value": body}},
+        }
+        page = client.get_page("1")
+        assert len(calls) == 1
+        assert sorted(calls[0]) == sorted([AUTHOR, MENTIONED, OTHER])
+        assert page.author == AUTHOR
+        assert page.author_name == "Ada"
+        assert page.mentions == {MENTIONED: "Grace", OTHER: "Linus"}
+        assert page.body == body  # byte-for-byte unchanged
+
+    def test_mentions_without_author_still_resolved(self, monkeypatch):
+        calls = patch_bulk(monkeypatch, {MENTIONED: "Grace"})
+        client = make_client()
+        client._client.get.return_value = {
+            "id": "1", "body": {"storage": {"value": _mention(MENTIONED)}},
+        }
+        page = client.get_page("1")
+        assert calls == [[MENTIONED]]
+        assert page.mentions == {MENTIONED: "Grace"}
+
 
 class TestGetPageByTitle:
     def test_requires_space_key_and_title(self):
@@ -545,6 +665,267 @@ class TestGetPageByTitle:
         page = client.get_page_by_title("ENG", "Found")
         assert page.title == "Found"
         assert page.space_key == "ENG"
+
+    def test_one_bulk_call_and_body_unchanged(self, monkeypatch):
+        calls = patch_bulk(monkeypatch, {AUTHOR: "Ada", MENTIONED: "Grace"})
+        client = make_client()
+        body = f"<p>{_mention(MENTIONED)}</p>"
+        client._client.get.side_effect = [
+            {"results": [{"id": "999"}]},
+            {"results": [{"id": "1", "authorId": AUTHOR, "body": {"storage": {"value": body}}}]},
+        ]
+        page = client.get_page_by_title("ENG", "Found")
+        assert len(calls) == 1
+        assert sorted(calls[0]) == sorted([AUTHOR, MENTIONED])
+        assert page.author_name == "Ada"
+        assert page.mentions == {MENTIONED: "Grace"}
+        assert page.body == body
+
+    def test_no_bulk_call_without_ids(self, monkeypatch):
+        calls = patch_bulk(monkeypatch)
+        client = make_client()
+        client._client.get.side_effect = [
+            {"results": [{"id": "999"}]},
+            {"results": [{"id": "1", "title": "Found"}]},
+        ]
+        client.get_page_by_title("ENG", "Found")
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------- #
+# Users: resolve_user_names / find_users / refresh_user_cache
+# ---------------------------------------------------------------------------- #
+
+def _user(account_id: str, name: str) -> atlassian_users.AtlassianUser:
+    return atlassian_users.AtlassianUser(account_id=account_id, display_name=name)
+
+
+class TestUserLookups:
+    def test_uses_injected_directory(self):
+        directory = atlassian_users.AtlassianUserDirectory(cloud_id="cloud-1")
+        client = ConfluenceClient(
+            config={"access_token": "tok", "cloud_id": "cloud-1"}, user_directory=directory,
+        )
+        assert client._users is directory
+
+    def test_resolve_user_names_maps_ids_and_caches(self, monkeypatch):
+        calls = patch_bulk(monkeypatch, {AUTHOR: "Ada"})
+        client = make_client()
+        assert client.resolve_user_names([AUTHOR]) == {AUTHOR: "Ada"}
+        assert client.resolve_user_names([AUTHOR]) == {AUTHOR: "Ada"}
+        assert calls == [[AUTHOR]]
+
+    def test_resolve_user_names_never_raises(self, monkeypatch):
+        def boom(session, cloud_id, account_ids):
+            raise RuntimeError("down")
+
+        monkeypatch.setattr(atlassian_users, "fetch_users_bulk", boom)
+        client = make_client()
+        assert client.resolve_user_names([AUTHOR]) == {}
+
+    def test_bulk_call_passes_session_and_cloud_id(self, monkeypatch):
+        seen = {}
+
+        def fake(session, cloud_id, account_ids):
+            seen.update(session=session, cloud_id=cloud_id, ids=account_ids)
+            return []
+
+        monkeypatch.setattr(atlassian_users, "fetch_users_bulk", fake)
+        client = make_client()
+        client.resolve_user_names([AUTHOR])
+        assert seen == {"session": client._session, "cloud_id": "cloud-1", "ids": [AUTHOR]}
+
+    def test_find_users_blank_query_raises(self):
+        client = make_client()
+        for query in ("", "   "):
+            with pytest.raises(ConfluenceClientError, match="find_users requires a non-empty query"):
+                client.find_users(query)
+
+    def test_find_users_returns_users_and_remembers_them(self, monkeypatch):
+        seen = {}
+
+        def fake(session, cloud_id, query, max_results):
+            seen.update(query=query, max_results=max_results)
+            return [_user(AUTHOR, "Ada")]
+
+        monkeypatch.setattr(atlassian_users, "search_users", fake)
+        calls = patch_bulk(monkeypatch, {})
+        client = make_client()
+        users = client.find_users("ada", max_results=5)
+        assert [u.account_id for u in users] == [AUTHOR]
+        assert seen == {"query": "ada", "max_results": 5}
+        # remembered: resolving it needs no bulk call
+        assert client.resolve_user_names([AUTHOR]) == {AUTHOR: "Ada"}
+        assert calls == []
+
+    def test_find_users_clamps_max_results(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            atlassian_users, "search_users",
+            lambda session, cloud_id, query, max_results: seen.append(max_results) or [],
+        )
+        client = make_client()
+        client.find_users("a", max_results=0)
+        client.find_users("a", max_results=10_000)
+        assert seen == [1, atlassian_users.FIND_USERS_MAX_RESULTS]
+
+    def test_find_users_never_logs_the_query(self, monkeypatch, caplog):
+        query = "jane@example.com"
+        monkeypatch.setattr(atlassian_users, "search_users",
+                            lambda *a: [atlassian_users.AtlassianUser("acc-jane-000001", "Jane")])
+        with caplog.at_level(logging.DEBUG):
+            make_client().find_users(query)
+        assert caplog.records
+        assert not any(query in r.getMessage() or query in str(r.args) for r in caplog.records)
+
+    def test_find_users_error_text_omits_the_query(self, monkeypatch):
+        def boom(session, cloud_id, query, max_results):
+            raise RuntimeError(f"400 Client Error for url: https://x/user/search?query=jane%40example.com&q={query}")
+
+        monkeypatch.setattr(atlassian_users, "search_users", boom)
+        with pytest.raises(ConfluenceClientError) as err:
+            make_client().find_users("jane@example.com")
+        assert "jane" not in str(err.value)
+
+    def test_find_users_failure_becomes_client_error(self, monkeypatch):
+        def boom(session, cloud_id, query, max_results):
+            raise RuntimeError("nope")
+
+        monkeypatch.setattr(atlassian_users, "search_users", boom)
+        client = make_client()
+        with pytest.raises(ConfluenceClientError, match="find_users failed: nope"):
+            client.find_users("ada")
+
+    def test_refresh_user_cache_returns_count(self, monkeypatch):
+        patch_bulk(monkeypatch, {AUTHOR: "Ada"})
+        client = make_client()
+        assert client.refresh_user_cache() == 0
+        client.resolve_user_names([AUTHOR])
+        assert client.refresh_user_cache() == 1
+
+    def test_refresh_user_cache_error_becomes_client_error(self, monkeypatch):
+        patch_bulk(monkeypatch, {AUTHOR: "Ada"})
+        client = make_client()
+        client.resolve_user_names([AUTHOR])
+
+        def boom(session, cloud_id, account_ids):
+            raise RuntimeError("down")
+
+        monkeypatch.setattr(atlassian_users, "fetch_users_bulk", boom)
+        with pytest.raises(ConfluenceClientError, match="refresh failed"):
+            client.refresh_user_cache()
+
+    # -- _request_jira_api: refresh only on 401 ------------------------------- #
+
+    def _fail_refresh(self, client, monkeypatch):
+        def refresh():
+            raise AssertionError("_try_refresh must not be called")
+
+        monkeypatch.setattr(client, "_try_refresh", refresh)
+
+    def test_success_needs_no_refresh(self, monkeypatch):
+        client = make_client()
+        self._fail_refresh(client, monkeypatch)
+        assert client._request_jira_api(lambda x: x + 1, 1) == 2
+
+    @pytest.mark.parametrize("status", [403, 404, 500])
+    def test_non_401_does_not_refresh(self, monkeypatch, status):
+        client = make_client()
+        self._fail_refresh(client, monkeypatch)
+        exc = error_with_status(status, "boom")
+
+        def fn():
+            raise exc
+
+        with pytest.raises(Exception) as info:
+            client._request_jira_api(fn)
+        assert info.value is exc
+
+    def test_404_from_bulk_call_does_not_refresh(self, monkeypatch):
+        def fake(session, cloud_id, account_ids):
+            raise error_with_status(404, "Not Found")
+
+        monkeypatch.setattr(atlassian_users, "fetch_users_bulk", fake)
+        client = make_client()
+        self._fail_refresh(client, monkeypatch)
+        assert client.resolve_user_names([AUTHOR]) == {}
+
+    def test_non_http_error_does_not_refresh(self, monkeypatch):
+        client = make_client()
+        self._fail_refresh(client, monkeypatch)
+
+        def fn():
+            raise RuntimeError("plain")
+
+        with pytest.raises(RuntimeError):
+            client._request_jira_api(fn)
+
+    def test_401_refreshes_once_and_retries(self, monkeypatch):
+        client = make_client()
+        refreshes = []
+        monkeypatch.setattr(client, "_try_refresh", lambda: refreshes.append(1) or True)
+        attempts = []
+
+        def fn():
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise unauthorized_error()
+            return "ok"
+
+        assert client._request_jira_api(fn) == "ok"
+        assert len(refreshes) == 1
+        assert len(attempts) == 2
+        assert client._jira_api_denied_at is None
+
+    def test_401_with_failed_refresh_reraises_without_marking_denied(self, monkeypatch):
+        client = make_client()
+        monkeypatch.setattr(client, "_try_refresh", lambda: False)
+        exc = unauthorized_error()
+
+        def fn():
+            raise exc
+
+        with pytest.raises(Exception) as info:
+            client._request_jira_api(fn)
+        assert info.value is exc
+        assert client._jira_api_denied_at is None
+
+    def test_non_401_after_refresh_is_reraised_without_marking_denied(self, monkeypatch):
+        client = make_client()
+        monkeypatch.setattr(client, "_try_refresh", lambda: True)
+        attempts = []
+
+        def fn():
+            attempts.append(1)
+            raise unauthorized_error() if len(attempts) == 1 else error_with_status(500, "boom")
+
+        with pytest.raises(Exception, match="boom"):
+            client._request_jira_api(fn)
+        assert client._jira_api_denied_at is None
+
+    def test_401_surviving_refresh_backs_off_for_an_hour(self, monkeypatch):
+        client = make_client()
+        refreshes = []
+        monkeypatch.setattr(client, "_try_refresh", lambda: refreshes.append(1) or True)
+
+        def fn():
+            raise unauthorized_error()
+
+        with freeze_time("2026-01-01 12:00:00") as clock:
+            with pytest.raises(Exception, match="401"):
+                client._request_jira_api(fn)
+            assert len(refreshes) == 1
+            assert client._jira_api_denied_at is not None
+
+            clock.tick(1800)  # within the hour: no refresh
+            with pytest.raises(Exception, match="401"):
+                client._request_jira_api(fn)
+            assert len(refreshes) == 1
+
+            clock.tick(1800 + 1)  # past the hour: refreshes again
+            with pytest.raises(Exception, match="401"):
+                client._request_jira_api(fn)
+            assert len(refreshes) == 2
 
 
 # ---------------------------------------------------------------------------- #

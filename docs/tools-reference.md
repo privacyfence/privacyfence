@@ -98,9 +98,9 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Slack](#slack) | 11 | 6 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
 | [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
-| [Jira](#jira) | 8 | 3 | 1 | 4 |
-| [Confluence](#confluence) | 10 | 5 | 3 | 2 |
-| **Total** | **114** | **42** | **21** | **51** |
+| [Jira](#jira) | 10 | 5 | 1 | 4 |
+| [Confluence](#confluence) | 12 | 7 | 3 | 2 |
+| **Total** | **118** | **46** | **21** | **51** |
 
 ## Gmail
 
@@ -247,8 +247,10 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
+| `jira_find_users` | read | `auto` | Find Atlassian users by name or email and return their account ids. |
 | `jira_get_transitions` | read | `auto` | List the status transitions available for a Jira issue right now (name and target status), given its current workflow state. |
 | `jira_list_projects` | read | `auto` | List Jira projects accessible to the user (key, name, type, lead). |
+| `jira_refresh_user_cache` | read | `auto` | Re-fetch the names of every Atlassian account id PrivacyFence has cached. |
 | `jira_search_issues` | read | `auto` | Search Jira issues using JQL. |
 | `jira_get_issue` | read | `review` | Fetch full details of a Jira issue by key (e.g. PROJ-123), including description and comments. |
 | `jira_add_comment` | write | `popup` | Add a comment to an existing Jira issue. |
@@ -261,9 +263,11 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
 | `confluence_cql_search` | read | `auto` | Search Confluence using CQL (Confluence Query Language). |
+| `confluence_find_users` | read | `auto` | Find Atlassian users by name or email and return their account ids. |
 | `confluence_list_attachments` | read | `auto` | List attachment names, media types, and sizes for a Confluence page. |
 | `confluence_list_pages` | read | `auto` | List pages in a Confluence space (title, id, version). |
 | `confluence_list_spaces` | read | `auto` | List Confluence spaces the user has access to (key, name, type, description). |
+| `confluence_refresh_user_cache` | read | `auto` | Re-fetch the names of every Atlassian account id PrivacyFence has cached. |
 | `confluence_search` | read | `auto` | Full-text search across Confluence content. |
 | `confluence_download_attachment` | read | `review` | Download a Confluence page attachment's content. |
 | `confluence_get_page` | read | `review` | Fetch the full content of a Confluence page by page ID. |
