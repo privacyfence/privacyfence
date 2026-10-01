@@ -139,8 +139,8 @@ def display_markup(text: str, names: Mapping[str, str] | None = None) -> str:
 
 
 class _StorageScan(HTMLParser):
-    """Tokenise Confluence storage format, collecting every ``<ri:user>`` start tag and the
-    ``<ac:link>`` element spans (absolute offsets) that wrap one. A real tokenizer, so a ``>``
+    """Tokenise Confluence storage format, collecting every ``<ri:user>`` start tag (with its
+    absolute span) and the ``<ac:link>`` element spans that wrap one. A real tokenizer, so a ``>``
     inside a quoted attribute, either quote style and entity-encoded values all behave as they do
     for Confluence's own XML parser."""
 
@@ -161,8 +161,10 @@ class _StorageScan(HTMLParser):
         # One entry per <ri:user> tag: every non-blank ri:account-id on it (a repeated attribute
         # lists all its values, so none escapes resolution), empty for legacy/id-less forms.
         self.users: list[list[str]] = []
-        self.links: list[tuple[int, int, int | None]] = []  # (start, end, index into users)
-        self._open: tuple[int, int | None] | None = None
+        self.user_spans: list[tuple[int, int]] = []  # start tag (start, end), parallel to users
+        # (start, end, index into users, end of the opening tag) per user link
+        self.links: list[tuple[int, int, int, int]] = []
+        self._open: tuple[int, int | None, int] | None = None
         self.feed(text)
         self.close()
 
@@ -172,19 +174,22 @@ class _StorageScan(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "ac:link":
-            self._open = (self._offset(), None)
+            start = self._offset()
+            self._open = (start, None, start + len(self.get_starttag_text() or ""))
         elif tag == "ri:user":
             ids = [(v or "").strip() for k, v in attrs if k == "ri:account-id"]
             self.users.append([i for i in ids if i])
+            start = self._offset()
+            self.user_spans.append((start, start + len(self.get_starttag_text() or "")))
             if self._open is not None and self._open[1] is None:
-                self._open = (self._open[0], len(self.users) - 1)
+                self._open = (self._open[0], len(self.users) - 1, self._open[2])
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "ac:link" and self._open is not None:
-            start, user = self._open
+            start, user, body_start = self._open
             end = self._text.find(">", self._offset()) + 1
             if end and user is not None:
-                self.links.append((start, end, user))
+                self.links.append((start, end, user, body_start))
             self._open = None
 
 
@@ -199,16 +204,52 @@ def storage_unrecognised_user_mentions(html: str) -> int:
     return sum(1 for ids in _StorageScan(html).users if not ids)
 
 
+_USER_END_TAG_RE = re.compile(r"</ri:user\s*>")
+_CDATA_RE = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.DOTALL)
+_PLAIN_LINK_BODY_RE = re.compile(
+    r"<ac:plain-text-link-body\s*>\s*<!\[CDATA\[(.*?)\]\]>\s*</ac:plain-text-link-body\s*>",
+    re.DOTALL,
+)
+_LINK_BODY_OPEN_RE = re.compile(r"<ac:link-body\s*>")
+_LINK_BODY_CLOSE_RE = re.compile(r"</ac:link-body\s*>")
+
+
+def _visible_link_text(fragment: str) -> str:
+    """Make the link text of a user link visible to ``html_to_markdown`` (and so to the approval
+    card and the PII scan): ``<ac:link-body>`` markup is kept, wrapped as ``(link text: ...)``, and
+    the CDATA text of ``<ac:plain-text-link-body>`` (which an HTML tokenizer would not surface) is
+    escaped into ordinary text."""
+    fragment = _PLAIN_LINK_BODY_RE.sub(
+        lambda m: f" (link text: {html_lib.escape(m.group(1))})", fragment
+    )
+    fragment = _LINK_BODY_OPEN_RE.sub(" (link text: ", fragment)
+    fragment = _LINK_BODY_CLOSE_RE.sub(")", fragment)
+    return _CDATA_RE.sub(lambda m: html_lib.escape(m.group(1)), fragment)
+
+
+def _link_close_start(html: str, end: int) -> int:
+    """Start of the ``</ac:link>`` closing tag ending at ``end``."""
+    return html.rfind("<", 0, end)
+
+
 def storage_mentions_to_text(html: str, names: Mapping[str, str]) -> str:
+    """Replace each user link's ``<ri:user>`` tag with ``@Name``, keeping everything else the link
+    holds so that all of its text is still shown and scanned."""
     scan = _StorageScan(html)
     out: list[str] = []
     cursor = 0
-    for start, end, index in scan.links:
+    for start, end, index, body_start in scan.links:
         ids = scan.users[index]
         # A tag naming several accounts is ambiguous, so it reads as an unknown user.
         name = (names.get(ids[0]) if len(ids) == 1 else None) or UNKNOWN_USER_LABEL
+        user_start, user_end = scan.user_spans[index]
+        closing = _USER_END_TAG_RE.match(html, user_end)
+        if closing is not None and closing.end() <= end:
+            user_end = closing.end()
         out.append(html[cursor:start])
+        out.append(_visible_link_text(html[body_start:user_start]))
         out.append("@" + html_lib.escape(name))
+        out.append(_visible_link_text(html[user_end:_link_close_start(html, end)]))
         cursor = end
     out.append(html[cursor:])
     return "".join(out)
