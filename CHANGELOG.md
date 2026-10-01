@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.4.0] — 2026-10-01
+
 ### Added
 
 - **Jira and Confluence show people by name, and the agent can @mention them.** @mentioned people and Confluence page authors appear by name instead of as account ids, through a shared cache that looks each person up once a week at most. New `jira_find_users`, `confluence_find_users`, `jira_refresh_user_cache` and `confluence_refresh_user_cache` tools find people and refresh their names. The agent can @mention people in Jira comments and descriptions and in Confluence pages, and assign Jira issues, and the approval card names each person.
@@ -3179,7 +3181,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.3.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.4.0...HEAD
+[5.4.0]: https://github.com/privacyfence/privacyfence/compare/v5.3.0...v5.4.0
 [5.3.0]: https://github.com/privacyfence/privacyfence/compare/v5.2.1...v5.3.0
 [5.2.1]: https://github.com/privacyfence/privacyfence/compare/v5.1.0...v5.2.1
 [5.1.0]: https://github.com/privacyfence/privacyfence/compare/v5.0.0...v5.1.0
