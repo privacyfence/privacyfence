@@ -375,7 +375,7 @@ class JiraConnector(Connector):
         users = await self._fetch(self._jira.find_users, query, max_results)
         data = [asdict(u) for u in users]
         self._auto_audit("jira_find_users", "Find Jira Users",
-                         f"Find users: {query[:80]}", f"{len(users)} user(s)", t0)
+                         "Find users", f"{len(users)} user(s)", t0)
         return data
 
     async def _refresh_user_cache(self) -> Any:
