@@ -45,6 +45,7 @@ from .atlassian_users import (
     AtlassianUser,
     AtlassianUserDirectory,
     AtlassianUsersError,
+    mask_emails,
     mention_markup,
 )
 
@@ -450,6 +451,16 @@ class JiraClient:
             coerced = value
         return field_id, coerced
 
+    def custom_field_kind(self, field_name: str) -> str:
+        """``"user"`` for a single-user field, ``"user_list"`` for a multi-user picker,
+        else ``"other"``. Lets callers hold person-valued fields to the accountId shape."""
+        schema = self._get_field_descriptor(field_name).get("schema") or {}
+        if schema.get("type") == "user":
+            return "user"
+        if schema.get("type") == "array" and schema.get("items") == "user":
+            return "user_list"
+        return "other"
+
     def _get_field_descriptor(self, field_name: str) -> dict[str, Any]:
         if self._field_cache is None:
             try:
@@ -574,8 +585,9 @@ class JiraClient:
             account_id = attrs.get("id")
             label = attrs.get("text", "")
             if not isinstance(account_id, str) or not ACCOUNT_ID_RE.fullmatch(account_id):
-                return label
-            name = (names or {}).get(account_id) or label.lstrip("@") or UNKNOWN_USER_LABEL
+                return mask_emails(label, "")
+            # Jira's own label can be an email (service-desk customers): mask it like a directory name.
+            name = (names or {}).get(account_id) or mask_emails(label.lstrip("@"), account_id) or UNKNOWN_USER_LABEL
             return mention_markup(name, account_id)
         parts: list[str] = []
         for child in node.get("content") or []:

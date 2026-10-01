@@ -56,6 +56,40 @@ def _account_ids_in(value: Any) -> list[str]:
     return found
 
 
+def _one_user(value: Any, field_name: str) -> dict[str, str]:
+    """A person value for a user field: ``{"accountId": id}`` or a bare id, nothing else."""
+    if isinstance(value, str) and value:
+        return {"accountId": value}
+    if isinstance(value, dict) and set(value) == {"accountId"}:
+        return {"accountId": value["accountId"]}
+    raise ValueError(
+        f"update_issue: '{field_name}' is a user field; give each person as "
+        '{"accountId": "<id>"} or the bare account id (from jira_find_users). '
+        "Other keys such as id, name, key, displayName or emailAddress are not accepted."
+    )
+
+
+def _normalise_user_value(kind: str, value: Any, field_name: str) -> Any:
+    if kind == "user":
+        return None if value is None else _one_user(value, field_name)
+    return [_one_user(item, field_name) for item in value]
+
+
+def _display_value(node: Any, names: dict[str, str]) -> Any:
+    """``node`` for the approval card: every person (accountId object or ADF mention) is
+    replaced by the directory's name; the agent's own labels for people never show."""
+    if isinstance(node, dict):
+        attrs = node.get("attrs")
+        if "accountId" in node:
+            return "@" + names[node["accountId"]]
+        if node.get("type") == "mention" and isinstance(attrs, dict):
+            return "@" + names[attrs["id"]]
+        return {k: _display_value(v, names) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_display_value(v, names) for v in node]
+    return node
+
+
 def _parse_json_object(value: str) -> dict[str, Any] | None:
     """Parse a JSON object tool argument, or None if empty/invalid."""
     if not value or not value.strip():
@@ -540,7 +574,7 @@ class JiraConnector(Connector):
         # Field ids are resolved up front so a built-in field cannot ride in
         # through custom_fields, and so every account id inside a custom value
         # is resolved with the rest before the approval card (ADR 0118).
-        resolved_custom: list[tuple[str, str, Any, Any, list[str]]] = []
+        resolved_custom: list[tuple[str, str, Any, Any, list[str]]] = []  # name, id, shown, sent, people
         seen_field_ids: set[str] = set()
         for field_name, value in (custom_updates or {}).items():
             field_id, coerced = await self._fetch(self._jira.resolve_custom_field, field_name, value)
@@ -552,7 +586,12 @@ class JiraConnector(Connector):
             if field_id in seen_field_ids:
                 raise ValueError(f"update_issue: custom_fields sets '{field_name}' more than once.")
             seen_field_ids.add(field_id)
-            resolved_custom.append((field_name, field_id, value, coerced, _account_ids_in(coerced)))
+            kind = await self._fetch(self._jira.custom_field_kind, field_name)
+            if kind != "other":
+                coerced = _normalise_user_value(kind, coerced, field_name)
+            resolved_custom.append(
+                (field_name, field_id, coerced if kind != "other" else value, coerced, _account_ids_in(coerced))
+            )
         custom_ids = [i for *_, ids in resolved_custom for i in ids]
         names = await self._resolve_write_accounts(description, [assignee_account_id, *custom_ids])
         issue = await self._fetch(self._jira.get_issue, issue_key)
@@ -572,16 +611,25 @@ class JiraConnector(Connector):
         if assignee_account_id:
             fields["assignee"] = {"accountId": assignee_account_id}
             preview["Assignee"] = f"→ {names[assignee_account_id]}"
-        for field_name, field_id, value, coerced, ids in resolved_custom:
+        written: list[str] = []
+        for field_name, field_id, shown, coerced, ids in resolved_custom:
             fields[field_id] = coerced
-            if ids:
-                preview[field_name] = f"→ people: {', '.join(names[i] for i in ids)}"
+            if isinstance(shown, dict) and shown.get("type") == "doc":
+                text = display_markup(JiraClient._extract_adf_text(shown, names), names)
+                preview[field_name] = "→ (updated — see below)" + (f"; people: {', '.join(names[i] for i in ids)}" if ids else "")
+                written.append(f"{field_name}:\n{text}")
+            elif ids:
+                named = _display_value(shown, names)
+                preview[field_name] = "→ " + (", ".join(map(str, named)) if isinstance(named, list) else str(named))
             else:
-                preview[field_name] = f"→ {value}"
+                preview[field_name] = f"→ {shown}"
         if not fields:
             raise ValueError("update_issue: at least one field must be provided")
         if description:
-            details_text = display_markup(description, names)
+            written.insert(0, display_markup(description, names) if not written else
+                           f"description:\n{display_markup(description, names)}")
+        if written:
+            details_text = "\n\n".join(written)
         else:
             changed_fields = ", ".join(k for k in preview if k != "Issue")
             details_text = f"{changed_fields} will be updated; description is unchanged."
