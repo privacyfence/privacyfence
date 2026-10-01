@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -56,22 +57,29 @@ def _account_ids_in(value: Any) -> list[str]:
     return found
 
 
+def _user_shape_error(field_name: str) -> ValueError:
+    return ValueError(
+        f"update_issue: '{field_name}' is a user field; give each person as "
+        '{"accountId": "<id>"} or the bare account id (from jira_find_users), and a '
+        "multi-user field as a list of those. "
+        "Other keys such as id, name, key, displayName or emailAddress are not accepted."
+    )
+
+
 def _one_user(value: Any, field_name: str) -> dict[str, str]:
     """A person value for a user field: ``{"accountId": id}`` or a bare id, nothing else."""
     if isinstance(value, str) and value:
         return {"accountId": value}
     if isinstance(value, dict) and set(value) == {"accountId"}:
         return {"accountId": value["accountId"]}
-    raise ValueError(
-        f"update_issue: '{field_name}' is a user field; give each person as "
-        '{"accountId": "<id>"} or the bare account id (from jira_find_users). '
-        "Other keys such as id, name, key, displayName or emailAddress are not accepted."
-    )
+    raise _user_shape_error(field_name)
 
 
 def _normalise_user_value(kind: str, value: Any, field_name: str) -> Any:
     if kind == "user":
         return None if value is None else _one_user(value, field_name)
+    if not isinstance(value, list):
+        raise _user_shape_error(field_name)
     return [_one_user(item, field_name) for item in value]
 
 
@@ -88,6 +96,122 @@ def _display_value(node: Any, names: dict[str, str]) -> Any:
     if isinstance(node, list):
         return [_display_value(v, names) for v in node]
     return node
+
+
+def _with_directory_names(node: Any, names: dict[str, str]) -> Any:
+    """Copy of ``node`` in which every ADF mention node carries the directory's name in
+    ``attrs.text``, as ``_text_to_adf`` does for descriptions and comments (ADR 0118)."""
+    if isinstance(node, dict):
+        out = {k: _with_directory_names(v, names) for k, v in node.items()}
+        attrs = node.get("attrs")
+        if node.get("type") == "mention" and isinstance(attrs, dict):
+            out["attrs"] = {**out["attrs"], "text": "@" + names[attrs["id"]]}
+        return out
+    if isinstance(node, list):
+        return [_with_directory_names(v, names) for v in node]
+    return node
+
+
+# ADF node and mark types the approval card can show completely (ADR 0118). Anything else in a
+# rich-text custom field is refused: the card must show what is written, not part of it.
+_ADF_TEXT_BLOCKS = {"paragraph", "heading", "codeBlock", "caption", "taskItem", "decisionItem"}
+_ADF_CONTAINERS = {
+    "doc", "blockquote", "bulletList", "orderedList", "listItem", "table", "tableRow",
+    "tableCell", "tableHeader", "panel", "expand", "nestedExpand", "mediaSingle", "mediaGroup",
+    "taskList", "decisionList",
+}
+_ADF_LEAVES = {"emoji", "status", "date", "inlineCard", "blockCard", "embedCard", "media", "mediaInline"}
+_ADF_INLINE = {"text", "hardBreak", "mention"}
+_ADF_NODE_TYPES = _ADF_TEXT_BLOCKS | _ADF_CONTAINERS | _ADF_LEAVES | _ADF_INLINE | {"rule"}
+_ADF_NODE_KEYS = {"type", "attrs", "content", "text", "marks", "version"}
+_ADF_MARKS = {
+    "strong", "em", "code", "strike", "underline", "subsup", "textColor", "backgroundColor",
+    "link", "alignment", "indentation", "breakout", "border",
+}
+
+
+def _adf_error(problem: str) -> ValueError:
+    return ValueError(
+        f"update_issue: a rich-text custom field {problem}; it cannot be shown completely "
+        "on the approval card, so it is refused."
+    )
+
+
+def _adf_value(value: Any) -> str:
+    if isinstance(value, str) and value and not re.search(r'[\s"\[\]]', value):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _adf_note(attrs: dict[str, Any], skip: set[str], silent_numbers: bool) -> str:
+    return " ".join(
+        f"{k}={_adf_value(v)}" for k, v in attrs.items()
+        if k not in skip and not (silent_numbers and isinstance(v, (bool, int)))
+    )
+
+
+def _adf_apply_marks(text: str, marks: Any) -> str:
+    if not isinstance(marks, list):
+        raise _adf_error("has marks that are not a list")
+    for mark in marks:
+        kind = mark.get("type") if isinstance(mark, dict) else None
+        attrs = mark.get("attrs", {}) if isinstance(mark, dict) else None
+        if kind not in _ADF_MARKS or set(mark) - {"type", "attrs"} or not isinstance(attrs, dict):
+            raise _adf_error(f"contains the mark {kind!r}")
+        if kind == "link":
+            if not isinstance(attrs.get("href"), str):
+                raise _adf_error("contains a link without a text href")
+            note = _adf_note(attrs, {"href"}, False)
+            text = f"{text} ({attrs['href']})" + (f" [link {note}]" if note else "")
+        elif attrs:
+            text = f"{text} [{kind} {_adf_note(attrs, set(), False)}]"
+    return text
+
+
+def _render_adf(node: Any, names: dict[str, str]) -> str:
+    """Approval-card text for a rich-text custom field: every written character, link target,
+    card URL and identifying attribute, with mentions as the directory's name. Raises
+    ValueError for any node or mark type that is not on the allowlist above."""
+    kind = node.get("type") if isinstance(node, dict) else None
+    if kind not in _ADF_NODE_TYPES:
+        raise _adf_error(f"contains the node type {kind!r}")
+    attrs, content = node.get("attrs", {}), node.get("content", [])
+    if (
+        set(node) - _ADF_NODE_KEYS
+        or not isinstance(attrs, dict) or not isinstance(content, list)
+        or (content and kind not in _ADF_CONTAINERS | _ADF_TEXT_BLOCKS)
+        or ("text" in node and (kind != "text" or not isinstance(node["text"], str)))
+        or (kind == "text" and "text" not in node)
+        or ("version" in node and kind != "doc")
+    ):
+        raise _adf_error(f"contains a malformed {kind!r} node")
+    children = [_render_adf(child, names) for child in content]
+    skip: set[str] = set()
+    if kind == "text":
+        body = node["text"]
+    elif kind == "hardBreak":
+        body = "\n"
+    elif kind == "rule":
+        body = "---"
+    elif kind == "mention":
+        body, skip = "@" + names[attrs["id"]], {"id", "text"}
+    elif kind in _ADF_LEAVES:
+        note = _adf_note(attrs, set(), False)
+        body, skip = f"[{kind}{' ' + note if note else ''}]", set(attrs)
+    elif kind == "bulletList":
+        body = "\n".join(f"- {c}" for c in children)
+    elif kind == "orderedList":
+        body = "\n".join(f"{i}. {c}" for i, c in enumerate(children, 1))
+    elif kind == "tableRow":
+        body = " | ".join(children)
+    elif kind in _ADF_TEXT_BLOCKS:
+        body = "".join(children)
+    else:
+        body = "\n".join(children)
+    note = _adf_note(attrs, skip, kind not in _ADF_LEAVES)
+    if note:
+        body = f"{body} [{kind} {note}]" if kind in _ADF_INLINE else f"[{kind} {note}]\n{body}"
+    return _adf_apply_marks(body, node.get("marks", []))
 
 
 def _parse_json_object(value: str) -> dict[str, Any] | None:
@@ -612,10 +736,12 @@ class JiraConnector(Connector):
             fields["assignee"] = {"accountId": assignee_account_id}
             preview["Assignee"] = f"→ {names[assignee_account_id]}"
         written: list[str] = []
+        sent_custom: dict[str, Any] = {}
         for field_name, field_id, shown, coerced, ids in resolved_custom:
-            fields[field_id] = coerced
+            sent_custom[field_id] = coerced
+            fields[field_id] = _with_directory_names(coerced, names)
             if isinstance(shown, dict) and shown.get("type") == "doc":
-                text = display_markup(JiraClient._extract_adf_text(shown, names), names)
+                text = _render_adf(shown, names)
                 preview[field_name] = "→ (updated — see below)" + (f"; people: {', '.join(names[i] for i in ids)}" if ids else "")
                 written.append(f"{field_name}:\n{text}")
             elif ids:
@@ -639,7 +765,7 @@ class JiraConnector(Connector):
             tool_name="Update Jira Issue",
             summary=f"Update {issue_key}: {', '.join(k for k in preview if k != 'Issue')}",
             sender=f"issue={issue_key}",
-            raw_data={"issue_key": issue_key, "fields": fields},
+            raw_data={"issue_key": issue_key, "fields": {**fields, **sent_custom}},
             filtered_data=None,
             gate="popup",
             preview=preview,

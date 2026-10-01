@@ -970,6 +970,194 @@ class TestCustomFieldUserShapes:
         assert gated_call_spy[0]["preview"]["Environment"] == "→ (updated — see below)"
 
 
+def _doc(*blocks):
+    return {"type": "doc", "version": 1, "content": list(blocks)}
+
+
+def _para(*inline):
+    return {"type": "paragraph", "content": list(inline)}
+
+
+def _text(text, *marks):
+    node = {"type": "text", "text": text}
+    if marks:
+        node["marks"] = list(marks)
+    return node
+
+
+class TestRichTextCard:
+    @staticmethod
+    def _setup(names=None):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.update_issue.return_value = make_issue()
+        client.resolve_user_names.return_value = {ACC: "Jane Doe"} if names is None else names
+        client.custom_field_kind.return_value = "other"
+        client.resolve_custom_field.side_effect = lambda name, value: (name.lower(), value)
+        return connector, client
+
+    async def _update(self, connector, **fields):
+        await connector.call("jira_update_issue", {"issue_key": "E-1", "custom_fields": json.dumps(fields)})
+
+    async def test_link_hrefs_and_card_urls_are_on_the_card(self, gated_call_spy):
+        connector, client = self._setup()
+        doc = _doc(_para(
+            _text("see docs", {"type": "link", "attrs": {"href": "https://evil.example/?secret=SSN123"}}),
+            {"type": "inlineCard", "attrs": {"url": "https://evil.example/2"}},
+        ), {"type": "blockCard", "attrs": {"url": "https://evil.example/3", "data": {"k": "v w"}}})
+
+        await self._update(connector, Notes=doc)
+
+        details = gated_call_spy[0]["details_text"]
+        assert "see docs (https://evil.example/?secret=SSN123)" in details
+        assert "[inlineCard url=https://evil.example/2]" in details
+        assert 'url=https://evil.example/3 data={"k": "v w"}' in details
+        client.update_issue.assert_called_once_with("E-1", {"notes": doc})
+
+    async def test_literal_mention_markup_in_text_stays_literal(self, gated_call_spy):
+        connector, _client = self._setup()
+        literal = f"@[Alice]({ACC})"
+        doc = _doc(_para(_text(literal), {"type": "mention", "attrs": {"id": ACC, "text": "@x"}}))
+
+        await self._update(connector, Notes=doc)
+
+        details = gated_call_spy[0]["details_text"]
+        assert details == f"Notes:\n{literal}@Jane Doe"
+
+    async def test_sent_mention_carries_directory_name_audit_keeps_original(self, gated_call_spy):
+        connector, client = self._setup()
+        doc = _doc(_para({"type": "mention", "attrs": {"id": ACC, "text": "@Fake Label"}}))
+
+        await self._update(connector, Notes=doc)
+
+        sent = client.update_issue.call_args.args[1]["notes"]
+        assert sent["content"][0]["content"][0]["attrs"] == {"id": ACC, "text": "@Jane Doe"}
+        assert doc["content"][0]["content"][0]["attrs"]["text"] == "@Fake Label"
+        assert gated_call_spy[0]["raw_data"]["fields"]["notes"] == doc
+
+    @pytest.mark.parametrize("bad", [
+        {"type": "layoutSection", "content": []},
+        {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": [{"type": "annotation"}]}]},
+        {"type": "paragraph", "content": ["not a node"]},
+        {"type": "paragraph", "extra": "hidden"},
+        {"type": "paragraph", "attrs": "x"},
+        {"type": "paragraph", "content": "x"},
+        {"type": "rule", "content": [{"type": "text", "text": "hidden"}]},
+        {"type": "paragraph", "text": "hidden"},
+        {"type": "text", "text": 5},
+        {"type": "text"},
+        {"type": "paragraph", "version": 1},
+        {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": "strong"}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": ["strong"]}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": [{"type": "strong", "x": 1}]}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": [{"type": "strong", "attrs": 1}]}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": [{"type": "link", "attrs": {"href": 5}}]}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": [{"type": "link"}]}]},
+    ])
+    async def test_unsupported_or_malformed_adf_refused_before_card(self, gated_call_spy, bad):
+        connector, client = self._setup()
+
+        with pytest.raises(ValueError, match="cannot be shown completely"):
+            await self._update(connector, Notes=_doc(bad))
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
+
+    async def test_refusal_names_the_node_type(self, gated_call_spy):
+        connector, _client = self._setup()
+
+        with pytest.raises(ValueError, match="'layoutSection'"):
+            await self._update(connector, Notes=_doc({"type": "layoutSection"}))
+
+    async def test_media_and_other_leaves_show_identifying_attributes(self, gated_call_spy):
+        connector, _client = self._setup()
+        doc = _doc(
+            {"type": "mediaSingle", "attrs": {"layout": "center", "width": 50}, "content": [
+                {"type": "media", "attrs": {"type": "file", "id": "abc-123", "collection": "contentId-9"}}]},
+            _para(
+                {"type": "emoji", "attrs": {"shortName": ":smile:", "text": "x"}},
+                _text(" "),
+                {"type": "status", "attrs": {"text": "Done now", "color": "green"}},
+                _text(" "),
+                {"type": "date", "attrs": {"timestamp": "1700000000000"}},
+                {"type": "hardBreak"},
+                {"type": "mediaInline", "attrs": {}},
+            ))
+
+        await self._update(connector, Notes=doc)
+
+        details = gated_call_spy[0]["details_text"]
+        assert "[media type=file id=abc-123 collection=contentId-9]" in details
+        assert "[mediaSingle layout=center]" in details and "width" not in details
+        assert "[emoji shortName=:smile: text=x]" in details
+        assert '[status text="Done now" color=green]' in details
+        assert "[date timestamp=1700000000000]" in details
+        assert "[mediaInline]" in details
+
+    async def test_structure_is_rendered(self, gated_call_spy):
+        connector, _client = self._setup()
+        def item(t):
+            return {"type": "listItem", "content": [_para(_text(t))]}
+        doc = _doc(
+            {"type": "heading", "attrs": {"level": 2}, "content": [_text("Title")]},
+            {"type": "bulletList", "content": [item("a"), item("b")]},
+            {"type": "orderedList", "content": [item("c"), item("d")]},
+            {"type": "rule"},
+            {"type": "panel", "attrs": {"panelType": "info"}, "content": [_para(_text("careful"))]},
+            {"type": "codeBlock", "attrs": {"language": "py"}, "content": [_text("x = 1")]},
+            {"type": "table", "content": [{"type": "tableRow", "content": [
+                {"type": "tableHeader", "content": [_para(_text("H"))]},
+                {"type": "tableCell", "content": [_para(_text("C"))]}]}]},
+            _para(_text("bold", {"type": "strong"}), _text("red", {"type": "textColor", "attrs": {"color": "#f00"}}),
+                  _text("linked", {"type": "link", "attrs": {"href": "https://x.example", "title": "T"}})),
+        )
+
+        await self._update(connector, Notes=doc)
+
+        details = gated_call_spy[0]["details_text"]
+        assert details == (
+            "Notes:\nTitle\n- a\n- b\n1. c\n2. d\n---\n"
+            "[panel panelType=info]\ncareful\n"
+            "[codeBlock language=py]\nx = 1\n"
+            "H | C\n"
+            "boldred [textColor color=#f00]linked (https://x.example) [link title=T]"
+        )
+
+    async def test_inline_node_with_extra_attrs_shows_them(self, gated_call_spy):
+        connector, _client = self._setup()
+        doc = _doc(_para({"type": "mention", "attrs": {"id": ACC, "text": "@x", "accessLevel": "SITE"}}))
+
+        await self._update(connector, Notes=doc)
+
+        assert "@Jane Doe [mention accessLevel=SITE]" in gated_call_spy[0]["details_text"]
+
+    async def test_two_rich_fields_each_shown(self, gated_call_spy):
+        connector, _client = self._setup()
+
+        await self._update(connector, A=_doc(_para(_text("ONE"))), B=_doc(_para(_text("TWO"))))
+
+        assert gated_call_spy[0]["details_text"] == "A:\nONE\n\nB:\nTWO"
+
+
+class TestMultiUserNonList:
+    @pytest.mark.parametrize("bad", [None, "just-a-string", {"accountId": ACC}, 5])
+    async def test_multi_user_field_needs_a_list(self, gated_call_spy, bad):
+        connector, client = TestCustomFieldUserShapes._setup("user_list")
+        client.resolve_custom_field.side_effect = lambda name, value: (name.lower(), value)
+
+        with pytest.raises(ValueError, match=r'list of those'):
+            await connector.call("jira_update_issue", {
+                "issue_key": "E-1", "custom_fields": json.dumps({"Reviewers": bad}),
+            })
+        assert gated_call_spy == []
+
+    async def test_single_user_field_null_still_clears(self, gated_call_spy):
+        connector, client = TestCustomFieldUserShapes._setup("user")
+
+        await connector.call("jira_update_issue", {"issue_key": "E-1", "custom_fields": '{"Approver": null}'})
+
+        client.update_issue.assert_called_once_with("E-1", {"approver": None})
+
+
 class TestTransitionIssue:
     async def test_preview_and_gate(self, gated_call_spy):
         connector, client = make_connector()

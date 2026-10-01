@@ -192,6 +192,7 @@ class TestExtractAdfTextMentions:
     def test_email_shaped_label_masked_for_invalid_id_too(self):
         out = JiraClient._extract_adf_text(mention_node("short", "@jane@customer.com"))
         assert "customer.com" not in out
+        assert out == "@unknown user"
 
     def test_invalid_id_renders_node_text(self):
         assert JiraClient._extract_adf_text(mention_node("short", "@Jane")) == "@Jane"
