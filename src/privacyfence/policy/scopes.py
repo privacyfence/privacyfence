@@ -570,3 +570,102 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
     ),
 }
+
+
+# ── Plugin scopes (registered at runtime) ──────────────────────────────────────────────────────
+#
+# A plugin declares scope types ("calendar") and reports, with every gated call, which values of
+# each the call touched (``raw_data["scopes"]``). Its rules live under ``NEW_SCOPE_SELECTORS`` as
+# ``plugin:<plugin>:<scope type>`` predicates, added and removed with the plugin's tool list
+# (``auto_accept.register_dynamic_tools``). The selector's own ``scope_type`` is dotted
+# (``today.calendar``) so ``policy.describe.scope_type_label`` finds the noun the same way it does
+# for a connector's scope.
+
+PLUGIN_PREDICATE_PREFIX = "plugin:"
+PLUGIN_ANYTHING_SCOPE_TYPE = "anything"
+
+# predicate -> how many registrations hold it. Two tools of one plugin share a scope type's
+# predicate, so the selector goes only when the last of them is unregistered.
+_PLUGIN_SELECTOR_REFS: dict[str, int] = {}
+
+
+def _plugin_scope_matches(scope_type: str) -> Callable[[Any, ReviewContext], bool]:
+    """Match when every value of ``scope_type`` the call returned is in the rule. A call that
+    returned none, an empty rule, or an empty value never matches."""
+
+    def matches(value: Any, ctx: ReviewContext) -> bool:
+        reported = ctx.raw_data.get("scopes") if isinstance(ctx.raw_data, dict) else None
+        returned = reported.get(scope_type) if isinstance(reported, dict) else None
+        allowed = {str(v) for v in _values_of(value) if v not in (None, "")}
+        # ``_values_of`` keeps a lone string whole; iterating it would compare its characters.
+        return bool(returned) and bool(allowed) and {str(v) for v in _values_of(returned)} <= allowed
+
+    return matches
+
+
+def _plugin_of_predicate(predicate: str, scope_type: str) -> str:
+    """The plugin a ``plugin:<plugin>:<scope type>`` predicate belongs to; ``ValueError`` if
+    ``predicate`` is not that shape for ``scope_type``."""
+    plugin, sep, rest = predicate[len(PLUGIN_PREDICATE_PREFIX):].partition(":")
+    if not predicate.startswith(PLUGIN_PREDICATE_PREFIX) or not plugin or not sep or rest != scope_type:
+        raise ValueError(f"{predicate!r} is not a plugin predicate for scope type {scope_type!r}")
+    return plugin
+
+
+def _plugin_selector(predicate: str, scope_type: str) -> ScopeSelector:
+    plugin = _plugin_of_predicate(predicate, scope_type)
+    if scope_type == PLUGIN_ANYTHING_SCOPE_TYPE:
+        # Unconditional: the rule's operation key is the only thing that limits it.
+        return ScopeSelector(
+            predicate=predicate, scope_type=f"{plugin}.{scope_type}", kind=ScopeKind.ATTRIBUTE,
+            resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
+        )
+    return ScopeSelector(
+        predicate=predicate, scope_type=f"{plugin}.{scope_type}", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_plugin_scope_matches(scope_type),
+    )
+
+
+def check_plugin_selector(predicate: str, scope_type: str) -> None:
+    """Raise ``ValueError`` if ``register_plugin_selector(predicate, scope_type)`` would fail,
+    without registering anything."""
+    _plugin_of_predicate(predicate, scope_type)
+    if predicate in SCOPE_SELECTORS:
+        raise ValueError(f"{predicate!r} is a built-in predicate")
+    if predicate in NEW_SCOPE_SELECTORS and predicate not in _PLUGIN_SELECTOR_REFS:
+        raise ValueError(f"{predicate!r} is a built-in predicate")
+
+
+def _register(predicate: str, scope_type: str) -> None:
+    check_plugin_selector(predicate, scope_type)
+    if predicate not in _PLUGIN_SELECTOR_REFS:
+        NEW_SCOPE_SELECTORS[predicate] = _plugin_selector(predicate, scope_type)
+    _PLUGIN_SELECTOR_REFS[predicate] = _PLUGIN_SELECTOR_REFS.get(predicate, 0) + 1
+
+
+def register_plugin_selector(predicate: str, scope_type: str) -> None:
+    """Add the selector for a plugin's declared scope type (``plugin:<plugin>:<scope type>``).
+    Registering a predicate already held adds one more holder."""
+    if scope_type == PLUGIN_ANYTHING_SCOPE_TYPE:
+        raise ValueError(f"scope type {scope_type!r} is reserved")
+    _register(predicate, scope_type)
+
+
+def register_plugin_anything_selector(plugin: str) -> None:
+    """Add ``plugin:<plugin>:anything``, the unconditional predicate for a plugin tool that
+    declares no scope types. Its own predicate, never the shared ``always_allow``: rules that
+    share a predicate and value merge into one row in ``store.merge_rules``."""
+    _register(f"{PLUGIN_PREDICATE_PREFIX}{plugin}:{PLUGIN_ANYTHING_SCOPE_TYPE}", PLUGIN_ANYTHING_SCOPE_TYPE)
+
+
+def unregister_plugin_selector(predicate: str) -> None:
+    """Drop one holder of a plugin predicate, and the selector with the last one. A built-in
+    predicate, or one never registered, is left alone."""
+    held = _PLUGIN_SELECTOR_REFS.get(predicate)
+    if held is None:
+        return
+    if held > 1:
+        _PLUGIN_SELECTOR_REFS[predicate] = held - 1
+        return
+    del _PLUGIN_SELECTOR_REFS[predicate]
+    NEW_SCOPE_SELECTORS.pop(predicate, None)

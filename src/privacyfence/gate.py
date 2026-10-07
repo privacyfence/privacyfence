@@ -295,6 +295,26 @@ _TOOL_LAYOUT: dict[str, str] = {
     "apps_script_get_execution_log": WIDE,
 }
 
+# Plugin tools whose layout was added at runtime (``auto_accept.register_dynamic_tools``).
+_DYNAMIC_LAYOUT_TOOLS: set[str] = set()
+
+
+def register_dynamic_layout(tool: str, layout: str) -> None:
+    """Give a plugin tool its card layout. Raises ``ValueError`` for a tool that already has one."""
+    if layout not in (WIDE, NARROW):
+        raise ValueError(f"tool {tool} has an unknown layout {layout!r}")
+    if tool in _TOOL_LAYOUT:
+        raise ValueError(f"tool {tool} already has a layout")
+    _TOOL_LAYOUT[tool] = layout
+    _DYNAMIC_LAYOUT_TOOLS.add(tool)
+
+
+def unregister_dynamic_layout(tool: str) -> None:
+    """Remove a layout ``register_dynamic_layout`` added; a static tool's layout is never touched."""
+    if tool in _DYNAMIC_LAYOUT_TOOLS:
+        _DYNAMIC_LAYOUT_TOOLS.discard(tool)
+        _TOOL_LAYOUT.pop(tool, None)
+
 # Every dialog this module shows (the approval popup itself, the PII
 # confirmation, the "Always allow" rule confirmation) runs on this dedicated
 # executor rather than asyncio.to_thread's default pool. That default pool

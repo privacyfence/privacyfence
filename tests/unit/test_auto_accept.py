@@ -463,3 +463,149 @@ class TestConcurrentRulePersistence:
         )
         live = auto_accept.get_policy_v2_store_rules()
         assert sorted(r.id for r in live) == sorted(r.id for r in on_disk)
+
+
+class TestDynamicTools:
+    """Plugin tools added to, and removed from, every static policy table (ADR 0120)."""
+
+    @staticmethod
+    def _specs():
+        from privacyfence import gate
+        from privacyfence.policy.registry import Verb
+
+        return [
+            auto_accept.DynamicToolSpec(
+                tool="today_get_day", gate="review", operation="plugin.today.get_day", verb=Verb.READ,
+                layout=gate.WIDE, effect="", scope_predicates=(("plugin:today:calendar", "calendar"),),
+            ),
+            auto_accept.DynamicToolSpec(
+                tool="today_add_note", gate="popup", operation="plugin.today.add_note", verb=Verb.UPDATE,
+                layout=gate.WIDE, effect="A note is added.", scope_predicates=(),
+            ),
+            auto_accept.DynamicToolSpec(
+                tool="today_list_days", gate="auto", operation=None, verb=Verb.READ,
+                layout=gate.NARROW, effect="", scope_predicates=(),
+            ),
+        ]
+
+    @staticmethod
+    def _tables():
+        from privacyfence import gate, write_effects
+        from privacyfence.policy import propose, registry, scopes
+
+        return (
+            dict(TOOL_TO_GATE), dict(TOOL_TO_OPERATION), dict(registry.TOOL_TO_VERB),
+            dict(registry.TOOL_REGISTRY), dict(gate._TOOL_LAYOUT), dict(write_effects.EFFECT_BY_TOOL),
+            dict(scopes.NEW_SCOPE_SELECTORS), dict(scopes.SCOPE_SELECTORS),
+            {owner: dict(tools) for owner, tools in propose._DYNAMIC_SCOPES.items()},
+        )
+
+    def test_static_tool_names_are_the_connector_tools(self):
+        assert auto_accept.STATIC_TOOL_NAMES == frozenset(TOOL_TO_GATE)
+        assert "gmail_get_message" in auto_accept.STATIC_TOOL_NAMES
+
+    def test_register_writes_every_table(self):
+        from privacyfence import gate, write_effects
+        from privacyfence.policy import registry, scopes
+        from privacyfence.policy.registry import Verb
+
+        auto_accept.register_dynamic_tools("today", self._specs())
+        assert TOOL_TO_GATE["today_get_day"] == "review"
+        assert TOOL_TO_GATE["today_list_days"] == "auto"
+        assert TOOL_TO_OPERATION["today_add_note"] == "plugin.today.add_note"
+        assert "today_list_days" not in TOOL_TO_OPERATION
+        assert registry.TOOL_TO_VERB["today_add_note"] is Verb.UPDATE
+        entry = registry.TOOL_REGISTRY["today_get_day"]
+        assert (entry.gate, entry.operation, entry.verb) == ("review", "plugin.today.get_day", Verb.READ)
+        assert registry.TOOL_REGISTRY["today_list_days"].verb is None
+        assert gate._TOOL_LAYOUT["today_get_day"] == gate.WIDE
+        assert gate._TOOL_LAYOUT["today_list_days"] == gate.NARROW
+        assert write_effects.effect_for("today_add_note") == "A note is added."
+        assert "today_get_day" not in write_effects.EFFECT_BY_TOOL
+        assert "plugin:today:calendar" in scopes.NEW_SCOPE_SELECTORS
+        assert "plugin:today:anything" in scopes.NEW_SCOPE_SELECTORS
+        assert "today_get_day" not in auto_accept.STATIC_TOOL_NAMES
+
+    def test_unregister_restores_the_exact_prior_tables(self):
+        before = self._tables()
+        auto_accept.register_dynamic_tools("today", self._specs())
+        assert self._tables() != before
+        auto_accept.unregister_dynamic_tools("today")
+        assert self._tables() == before
+
+    def test_registering_again_replaces_the_owner_s_list(self):
+        auto_accept.register_dynamic_tools("today", self._specs())
+        auto_accept.register_dynamic_tools("today", self._specs()[:1])
+        assert "today_get_day" in TOOL_TO_GATE
+        assert "today_add_note" not in TOOL_TO_GATE
+
+    def test_unregistering_an_unknown_owner_is_a_no_op(self):
+        before = self._tables()
+        auto_accept.unregister_dynamic_tools("nobody")
+        assert self._tables() == before
+
+    def test_static_name_refused(self):
+        from privacyfence.policy.registry import Verb
+
+        before = self._tables()
+        clash = auto_accept.DynamicToolSpec(
+            tool="apps_script_get_content", gate="review", operation="plugin.apps.script_get_content",
+            verb=Verb.READ, layout="wide", effect="", scope_predicates=(),
+        )
+        with pytest.raises(ValueError, match="collides with a built-in tool"):
+            auto_accept.register_dynamic_tools("apps", [clash])
+        assert self._tables() == before
+
+    def test_duplicate_name_refused(self):
+        import dataclasses
+
+        auto_accept.register_dynamic_tools("today", self._specs())
+        before = self._tables()
+        with pytest.raises(ValueError, match="already registered by today"):
+            auto_accept.register_dynamic_tools("other", self._specs()[:1])
+        twice = dataclasses.replace(self._specs()[2], tool="other_list_days")
+        with pytest.raises(ValueError, match="listed twice"):
+            auto_accept.register_dynamic_tools("other", [twice, twice])
+        assert self._tables() == before
+
+    @pytest.mark.parametrize("change", [
+        {"operation": "gmail.read_message"},
+        {"operation": None},
+        {"operation": "plugin."},
+        {"gate": "sometimes"},
+        {"scope_predicates": (("plugin:other:calendar", "calendar"),)},
+        {"scope_predicates": (("approved_channel", "calendar"),)},
+        {"scope_predicates": (("plugin:today:anything", "anything"),)},
+    ])
+    def test_a_spec_that_could_reach_another_rule_is_refused(self, change):
+        import dataclasses
+
+        before = self._tables()
+        spec = dataclasses.replace(self._specs()[0], **change)
+        with pytest.raises(ValueError):
+            auto_accept.register_dynamic_tools("today", [spec])
+        assert self._tables() == before
+
+    def test_an_auto_tool_cannot_carry_an_operation(self):
+        import dataclasses
+
+        spec = dataclasses.replace(self._specs()[2], operation="plugin.today.list_days")
+        with pytest.raises(ValueError, match="auto tool"):
+            auto_accept.register_dynamic_tools("today", [spec])
+
+    def test_another_owner_cannot_take_an_operation_key(self):
+        import dataclasses
+
+        auto_accept.register_dynamic_tools("today", self._specs())
+        spec = dataclasses.replace(self._specs()[0], tool="today_get_day_again")
+        with pytest.raises(ValueError, match="already registered by today"):
+            auto_accept.register_dynamic_tools("other", [spec])
+
+    def test_reset_all_clears(self):
+        from privacyfence.plugins import _testing
+
+        before = self._tables()
+        auto_accept.register_dynamic_tools("today", self._specs())
+        _testing.reset_all()
+        assert self._tables() == before
+        assert auto_accept._DYNAMIC_TOOLS == {}

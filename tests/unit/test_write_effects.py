@@ -13,7 +13,8 @@ import re
 
 import pytest
 
-from privacyfence.write_effects import EFFECT_BY_TOOL, effect_for
+from privacyfence import write_effects
+from privacyfence.write_effects import EFFECT_BY_TOOL, STATIC_EFFECT_TOOLS, effect_for
 
 _CONNECTORS_DIR = pathlib.Path(__file__).resolve().parents[2] / "src" / "privacyfence" / "connectors"
 
@@ -39,6 +40,15 @@ def _write_gated_tools() -> set[str]:
     return tools
 
 
+@pytest.fixture(autouse=True)
+def _no_plugin_effects_left_behind():
+    # Plugins register through auto_accept, whose reset runs between tests; these tests call
+    # write_effects directly, so they clean up their own rows.
+    yield
+    for tool in ("today_add_note", "today_list_notes"):
+        write_effects.unregister_dynamic_effect(tool)
+
+
 class TestCoverage:
     def test_the_scan_finds_the_write_tools_at_all(self):
         # Guards the guard: a regex that silently matched nothing would
@@ -49,15 +59,41 @@ class TestCoverage:
         assert "gmail_add_label" in found
 
     def test_every_write_gated_tool_has_an_effect_sentence(self):
-        missing = sorted(_write_gated_tools() - set(EFFECT_BY_TOOL))
+        missing = sorted(_write_gated_tools() - STATIC_EFFECT_TOOLS)
         assert not missing, (
             "these write tools would render a card that never says what approving it does: "
             f"{missing}"
         )
 
     def test_no_entry_describes_a_tool_that_no_longer_reaches_the_write_gate(self):
-        stale = sorted(set(EFFECT_BY_TOOL) - _write_gated_tools())
+        stale = sorted(STATIC_EFFECT_TOOLS - _write_gated_tools())
         assert not stale, f"effect sentences for tools that are no longer write-gated: {stale}"
+
+
+    def test_a_plugin_tool_is_outside_the_coverage_check(self):
+        # Plugin tools are registered at runtime and have no connector source to scan.
+        write_effects.register_dynamic_effect("today_add_note", "A note is added.")
+        assert "today_add_note" in EFFECT_BY_TOOL
+        assert "today_add_note" not in STATIC_EFFECT_TOOLS
+
+
+class TestDynamicEffects:
+    def test_register_then_unregister_leaves_the_table_as_it_was(self):
+        before = dict(EFFECT_BY_TOOL)
+        write_effects.register_dynamic_effect("today_add_note", "A note is added.")
+        assert effect_for("today_add_note") == "A note is added."
+        write_effects.unregister_dynamic_effect("today_add_note")
+        assert EFFECT_BY_TOOL == before
+
+    def test_an_empty_sentence_adds_no_row(self):
+        write_effects.register_dynamic_effect("today_list_notes", "")
+        assert "today_list_notes" not in EFFECT_BY_TOOL
+
+    def test_a_static_sentence_cannot_be_replaced_or_removed(self):
+        with pytest.raises(ValueError):
+            write_effects.register_dynamic_effect("gmail_add_label", "Something else.")
+        write_effects.unregister_dynamic_effect("gmail_add_label")
+        assert "gmail_add_label" in EFFECT_BY_TOOL
 
 
 class TestSentences:
