@@ -509,6 +509,18 @@ class TestWebServerConstruction:
         )
         assert server.mcp_url == "http://localhost:1234/mcp"
 
+    def test_plugin_host_is_stored_on_the_server_and_the_app(self):
+        host = object()
+        server = WebServer(WebApprovalUI(), port=0, plugin_host=host)
+        assert server.plugin_host is host
+        app = build_app(WebApprovalUI(), plugin_host=host)
+        while not hasattr(app, "state"):
+            app = app._app  # unwrap the middleware layers to the Starlette app
+        assert app.state.plugin_host is host
+
+    def test_plugin_host_defaults_to_none(self):
+        assert WebServer(WebApprovalUI(), port=0).plugin_host is None
+
     def test_build_app_requires_a_token_or_a_verifier_for_an_mcp_dispatcher(self):
         from privacyfence.web.mcp_dispatch import McpDispatcher
 

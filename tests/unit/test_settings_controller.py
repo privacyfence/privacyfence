@@ -76,6 +76,24 @@ def controller(tmp_path, monkeypatch):
     return ctrl
 
 
+class TestPluginHostWiring:
+    def test_rows_changed_listener_is_registered_on_the_host(self, tmp_path):
+        listeners = []
+        host = SimpleNamespace(set_rows_changed_listener=listeners.append)
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("connectors: {}\n", encoding="utf-8")
+
+        ctrl = sc.SettingsController(
+            str(config_path), connectors=[], connector_host=SimpleNamespace(), plugin_host=host,
+        )
+
+        assert ctrl._plugin_host is host
+        assert listeners == [ctrl._push_snapshot]
+
+    def test_no_host_by_default(self, controller):
+        assert controller._plugin_host is None
+
+
 class TestRunAsyncMarshaling:
     """_run_async is the mechanism every threaded flow in this module funnels
     through. If it ever regresses to invoking on_done directly on the worker

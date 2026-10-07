@@ -601,8 +601,14 @@ class SettingsController:
         connector_host: Any,
         connector_objs: list[Any] | None = None,
         connector_failures: dict[str, str] | None = None,
+        plugin_host: Any = None,
     ) -> None:
         self._config_path = config_path
+        # The daemon's PluginHost (local mode), or None. Its rows reach the page through the
+        # same snapshot push as every other change.
+        self._plugin_host = plugin_host
+        if plugin_host is not None:
+            plugin_host.set_rows_changed_listener(self._push_snapshot)
         self._connectors = connectors
         self.connector_host = connector_host
         # name -> live Connector wrapper (exposes .client for resolving
