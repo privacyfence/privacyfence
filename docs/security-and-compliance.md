@@ -284,6 +284,54 @@ On a separated install, a tool that reads or writes a local file you named goes 
 A non-packaged install is never separated. `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` exists for
 development against a source checkout and must never be set in a real deployment.
 
+## Plugins
+
+A [plugin](plugins.md) is a separate program an administrator installs and you enable. The design
+is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
+[ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md).
+
+**Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
+every connector credential, so whoever can replace it can read your data. The privacy boundary of
+[ADR 0058](adr/0058-nothing-runs-elevated-unless-only-an-administrator-can-rewrite-it.md) therefore
+applies. Plugins run only on a separated install. A plugin lives in an administrator-only plugins
+directory outside the app and the data directory ([Platform support](platform-support.md#plugins-directory)),
+and at every start PrivacyFence checks that the executable, the plugin's folder and every folder
+above it can be written by administrators only. For the folders above the plugin's own, Windows
+ignores inherit-only entries and the right to create subfolders, which a default drive root grants
+every signed-in user, because they cannot swap an existing folder; the executable and the plugin's
+own folder keep the strict rule, and POSIX applies one rule to all. Some older Debian installs make
+`/usr/local` and `/usr/local/lib` group-writable by `staff`, and plugins are refused there until
+those directories are administrator-only. The directory is not configurable.
+
+**Enabling is a sensitive action.** It needs a human session and, where step-up is on, a passkey.
+You review the plugin's tools and gates, the connector reads it may make and whether it serves
+pages. PrivacyFence records the hashes of the executable and the manifest and the tools you saw. A
+changed file, or a tool you did not review, disables the plugin until you enable it again. A tool on
+the `auto` gate, read or write, needs the manifest's `max_gate_floor: auto`, which the review card
+shows. The plugin starts with an allow-listed environment, never a copy of the daemon's.
+
+**What a plugin can do.** Through the protocol, only what is listed: add tools (gated like any
+connector tool, where a read releases the payload you saw on the card), read connected services
+through the source API, ask you for a confirmation, serve pages and keep files. The source API is
+**not gated**: a read through it opens no card. It is limited to the operations in the plugin's
+manifest, which you approve at enable, to the local principal and to six read operations, and every
+call is written to the audit log with the target and the size, never the content. A plugin holds no
+connector token.
+
+**Plugin pages** are served only to your signed-in human session, never to an AI client. They run in
+a sandbox: no `allow-same-origin`, so a page cannot read the session cookie or call PrivacyFence's
+APIs, and the content security policy allows scripts but no form posts and no framing. Only GET
+and HEAD are served.
+
+**Confirmations** are cards that no rule can accept, with step-up kept, and they are refused while
+any AI session is unattended.
+
+**Residual risk.** PrivacyFence does not sandbox a plugin and gives it no account of its own. An
+enabled plugin can read what the service account can read, connector credential files included, and
+can use the source API silently within its approved operations. The controls are the administrator
+who installs it and your decision to enable it. Review a plugin as you would review any program run
+by an administrator. Organization deployments do not run plugins.
+
 ## Audit log integrity
 
 Each gate decision, approval and security event is written to a weekly JSON Lines file

@@ -28,6 +28,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   notifications.
 - [`configuration-reference.md`](configuration-reference.md) — every `settings.yaml` key and every
   organization-bundle option, with its default.
+- [`plugins.md`](plugins.md) — what a plugin is, where an administrator installs it, how you review and
+  enable it, why one does not start, and how to write and test one with the SDK.
 
 ### Organization deployment and security
 
@@ -68,6 +70,8 @@ Connecting each AI client, in local mode and in an organization deployment:
 - [`always-allow-rules-reference.md`](always-allow-rules-reference.md) — what "Always allow"
   proposes, tool by tool (generated).
 - [`pii-detection-keywords.md`](pii-detection-keywords.md) — what the PII detector looks for.
+- [`plugin-protocol.md`](plugin-protocol.md) — the plugin protocol: transport, manifest, every message
+  and data shape, limits and timeouts.
 
 Release history is in [`../CHANGELOG.md`](../CHANGELOG.md).
 
@@ -98,8 +102,6 @@ privacyfence.eu.
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
-- [`plugin-framework-plan.md`](plugin-framework-plan.md) — the open plan for the plugin framework
-  (out-of-process plugins, the plugin SDK and the example plugins); deleted when its work lands.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
   are, and what was rejected.
 

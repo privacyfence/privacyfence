@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Plugins.** A separately built program can add tools to PrivacyFence. An administrator installs a plugin into an administrator-only plugins directory, you review what it can do in **Settings → Plugins** and enable it with your passkey, and its tools then appear to your AI client, gated by the same cards as connector tools: a read returns exactly what the card showed, a write runs once, and a plugin's "Always allow" rule covers one tool and the values it returned. A plugin can also read connected services without holding a token (every read is audited, never its content), ask you to confirm something on a card no rule can accept, serve read-only pages in a sandbox to you alone, and keep its own files. A plugin that changes after you enabled it, or reports a tool you did not review, stops until you enable it again. `plugins.enabled: false` turns plugins off, and organization deployments do not run plugins. The SDK, `privacyfence-plugin-sdk`, is a dependency-free Python package published to PyPI from the same release tag, with an in-memory test host (`PluginTestHost`) that applies PrivacyFence's gate, block, scope and page rules. The `today` example in `examples/plugins/today/` shows today's Google Calendar events and uses every part of the protocol; you build and install it by hand, and it does not ship in the installers. See `docs/plugins.md` and `docs/plugin-protocol.md`.
+
 ## [5.5.0] — 2026-10-01
 
 ### Added

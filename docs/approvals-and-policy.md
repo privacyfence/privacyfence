@@ -384,6 +384,8 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Salesforce report | identity | report ids | `approved_report_ids` | the report is one of these |
 | Contacts label | identity | label names | `label_name_allowlist` | the label being applied or removed is one of these |
 | Apps Script project | identity | script ids | `apps_script.project` | the script is one of these |
+| Plugin scope | identity | the values the call returned for one of the tool's scope types | `plugin:<name>:<scope>` | every value the call returned for that scope type is one of these; a missing or empty value never matches |
+| Plugin tool — anything | attribute | — | `plugin:<name>:anything` | always, for the one plugin tool the rule names |
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
@@ -435,6 +437,38 @@ The card says so above its buttons ("Approving this also allows further calls li
 file for a few minutes without asking again."). The window is not a rule: it is never written to
 `settings.yaml` and ends when PrivacyFence restarts. Deleting rows or columns, adding or renaming a
 sheet, replacing a whole file or document, uploading and moving never open one.
+
+---
+
+## Plugin tools
+
+A [plugin](plugins.md) adds tools named `<plugin>_<tool>`. They use the same three gates as
+connector tools, and the plugin says which gate each tool uses, within limits PrivacyFence enforces:
+
+- A tool on the `review` or `popup` gate opens a card. The card shows the plugin's name and the
+  tool, and the preview the plugin prepared (text, tables, code and diffs, rendered by PrivacyFence,
+  never as the plugin's own markup). For a read, the card shows the payload the AI will receive, and
+  an approved read returns exactly that payload, whatever the plugin does afterwards. The PII check
+  runs on the payload like any read.
+- A tool on the `auto` gate runs without a card and is written to the audit log. A plugin may
+  declare one only when its manifest sets `max_gate_floor: auto`, which you see when you enable
+  the plugin. A destructive tool always uses `popup`.
+- An approved write runs once. Asking again prepares afresh and opens a new card. A repeat of an
+  approved read within five minutes is released without a second card, as for connectors.
+- A gated call takes a required `reason`, like any gated tool.
+
+**Rules.** "Always allow" proposes a rule that covers one plugin tool only. When the tool declares
+scopes (for example the calendar a call reads), the rule is `plugin:<name>:<scope>` with the values
+the call returned, and it matches a later call only when every value that call returns is in the
+rule. A tool with no scopes is proposed as `plugin:<name>:anything` for that tool. A destructive
+tool is never proposed. Plugin rules are written from the card's button, not through
+`privacyfence_propose_policy_change`. Removing a plugin removes its rules.
+
+**Confirmations.** A plugin can ask you to confirm something on its own card. It is shown on the
+approvals list with the plugin's name and the details the plugin sent. No rule can accept it, it
+asks for your passkey wherever the install requires one for sensitive actions, and it is refused
+while any AI session is marked [unattended](security-and-compliance.md#human-and-unattested-sessions).
+A refusal is written to the audit log.
 
 ---
 
