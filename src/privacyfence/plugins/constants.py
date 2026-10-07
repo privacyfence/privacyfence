@@ -44,6 +44,8 @@ TIMEOUT_SECONDS: dict[str, float] = {
     "confirm.request": 5.0,
 }
 CONFIRM_AWAIT_MAX_MS = 300_000
+MAX_PENDING_CONFIRMS = 64                  # all plugins together; the host's finalizer threads
+MAX_PENDING_CONFIRMS_PER_PLUGIN = 8
 SHUTDOWN_GRACE_SECONDS = 5.0
 TERMINATE_GRACE_SECONDS = 2.0
 RESTART_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
@@ -56,6 +58,7 @@ LOG_BACKUP_COUNT = 3
 PLUGIN_NAME_RE = re.compile(r"[a-z][a-z0-9-]{1,30}")     # always .fullmatch()
 TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")       # always .fullmatch()
 SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")      # always .fullmatch()
+BLOCK_KEY_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")       # always .fullmatch(); table column keys
 RESERVED_PLUGIN_NAMES = frozenset({
     "privacyfence", "plugin", "plugins", "settings", "mcp",
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",

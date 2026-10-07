@@ -71,7 +71,7 @@ A failed request is answered with a JSON-RPC error whose `data` carries the stab
 | `payload_too_large` | -32004 | A result over its limit |
 | `upstream_error` | -32005 | The service answered with an error (`data.reason` is `revision_changed` for a Drive file that changed) |
 | `org_only_field` | -32006 | An organization-mode field in local mode |
-| `confirmation_refused` | -32007 | A confirmation refused (`data.reason` is `unattended_session`) |
+| `confirmation_refused` | -32007 | A confirmation refused (`data.reason` is `unattended_session` or `too_many_pending`) |
 | `unknown_tool` | -32008 | A tool name the plugin does not have |
 | `invalid_blocks` | -32009 | A block list that fails validation |
 | `version_mismatch` | -32010 | The protocol major differs |
@@ -87,7 +87,7 @@ Next to its executable a plugin ships `privacyfence-plugin.yaml`, loaded with `y
 
 ```yaml
 name: today                      # 2-31 characters, [a-z][a-z0-9-], equals the directory name
-display_name: Today              # 1-60 characters
+display_name: Today              # 1-60 characters, no control or bidirectional characters
 version: 1.2.0                   # MAJOR.MINOR.PATCH, optionally with -prerelease
 protocol: "1"                    # the major version, as a string
 command: ["today-plugin"]        # a non-empty list of strings
@@ -263,7 +263,7 @@ characters with a trailing "…".
 |---|---|
 | `heading` | `text`; optional `level` 2 or 3 |
 | `fields` | `items`: 1 to 50 of `{label, value}`, both strings |
-| `table` | `columns`: 1 to 20 of `{key, label}` with unique keys; `rows`: objects that use declared keys only, with string, number, boolean or null values |
+| `table` | `columns`: 1 to 20 of `{key, label}` with unique keys that match `[A-Za-z0-9_.-]{1,64}` (a key is never shown on the card); `rows`: objects that use declared keys only, with string, number, boolean or null values |
 | `text` | `text` |
 | `code` | `text`; optional `language` matching `[a-z0-9+#-]{1,20}` |
 | `diff` | `format` (`"unified"`) and `text`; lines starting `+`, `-` and `@@` are marked on the card |
@@ -316,7 +316,8 @@ the human gets the usual notification.
 The request is refused with `confirmation_refused` (`data.reason` `unattended_session`) while any
 MCP session is unattended, because the request comes from the plugin process and the daemon cannot
 tell which session caused it. A refusal is audited as `<kind>; refused`. At most 64 confirmations
-may be pending at once.
+may be pending at once, and at most 8 per plugin; a request over either cap is refused with
+`confirmation_refused` (`data.reason` `too_many_pending`) before any card exists.
 
 `confirm.await` takes `approval_id` (one of this plugin's own) and `timeout_ms` (0 to 300,000;
 default 300,000) and answers `{"status": "approved" | "denied" | "expired", "decided_at": "…"}`, or

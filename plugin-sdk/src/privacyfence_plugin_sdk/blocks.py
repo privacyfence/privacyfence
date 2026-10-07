@@ -17,6 +17,7 @@ _MAX_PREVIEW_BYTES = 64 * 1024
 _MAX_CELL_CHARS = 4096
 _MAX_FIELD_ITEMS = 50
 _MAX_TABLE_COLUMNS = 20
+_BLOCK_KEY_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 _STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩‎‏؜]")
 _LANGUAGE = re.compile(r"[a-z0-9+#-]{1,20}")
@@ -98,8 +99,10 @@ def _validate_table(block: dict, where: str) -> dict:
         if not isinstance(column, dict) or set(column) != {"key", "label"}:
             raise ValueError(f"{where}: each column needs exactly a key and a label")
         key = column["key"]
-        if not isinstance(key, str) or not key or key in keys:
-            raise ValueError(f"{where}: column keys must be unique non-empty strings")
+        if not isinstance(key, str) or not _BLOCK_KEY_RE.fullmatch(key):
+            raise ValueError(f"{where}: column keys must match {_BLOCK_KEY_RE.pattern}")
+        if key in keys:
+            raise ValueError(f"{where}: column keys must be unique")
         keys.add(key)
         cleaned_columns.append({"key": key, "label": _string(column, "label", where)})
     rows = block.get("rows")

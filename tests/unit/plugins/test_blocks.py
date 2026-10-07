@@ -75,6 +75,19 @@ class TestValidate:
     def test_table(self):
         assert validate_blocks(self._table()) == self._table()
 
+    @pytest.mark.parametrize("key", [
+        "SSN 123-45-6789 \u202e x", "a b", "a\x00", "a\u202e", "", "x" * 65, "é", "a\n",
+    ])
+    def test_table_key_must_be_an_identifier(self, key):
+        block = {"type": "table", "columns": [{"key": key, "label": ""}], "rows": []}
+        with pytest.raises(BlockError):
+            validate_blocks([block])
+
+    def test_table_identifier_keys_work(self):
+        key = "A.b_c-9" + "x" * 57
+        block = {"type": "table", "columns": [{"key": key, "label": "L"}], "rows": [{key: 1}]}
+        assert validate_blocks([block]) == [block]
+
     def test_table_undeclared_key(self):
         with pytest.raises(BlockError, match="undeclared"):
             validate_blocks(self._table(rows=[{"zzz": 1}]))
