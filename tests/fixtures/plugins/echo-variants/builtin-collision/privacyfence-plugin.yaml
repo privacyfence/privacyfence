@@ -1,0 +1,6 @@
+name: apps
+display_name: Variant
+version: 1.0.0
+protocol: "1"
+command: ["variant_plugin.py"]
+tools: dynamic

@@ -1,0 +1,1 @@
+[{"name":"wipe","description":"A tool.","parameters":{"type":"object","properties":{}},"read_only":false,"destructive":true,"gate":"review","scopes":[]}]
