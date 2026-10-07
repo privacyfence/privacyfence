@@ -40,6 +40,7 @@ from privacyfence.plugins.constants import (
     PROTOCOL_VERSION,
     TIMEOUT_SECONDS,
     mcp_tool_name,
+    operation_key,
 )
 from privacyfence.plugins.connector import PluginConnector
 from privacyfence.plugins.events import EventFanout
@@ -299,12 +300,28 @@ class PluginHost:
 
     def _uninstall(self, name: str) -> None:
         storage.remove_all(name)
-        prefix = f"plugin:{name}:"
-        for rule in list(auto_accept.get_policy_v2_store_rules()):
-            if rule.predicate.startswith(prefix):
-                auto_accept.remove_policy_v2_rule(rule.id)
+        self._remove_rules(name, lambda _operations: True)
         self._store.forget(name)
         self._audit_lifecycle(name, "removed; data and rules deleted")
+
+    @staticmethod
+    def _remove_rules(name: str, affected: Callable[[frozenset[str]], bool]) -> None:
+        """Delete the plugin's stored auto-accept rules whose operation keys ``affected`` picks."""
+        prefix = f"plugin:{name}:"
+        for rule in list(auto_accept.get_policy_v2_store_rules()):
+            if rule.predicate.startswith(prefix) and affected(rule.operations):
+                auto_accept.remove_policy_v2_rule(rule.id)
+
+    def _drop_stale_rules(self, name: str, reviewed: frozenset[tuple]) -> None:
+        """Before an enable records ``reviewed``, delete the rules a human saved for tools whose
+        signature changed or disappeared since the last review, and every rule for a destructive
+        tool, so no "Always allow" outlives the review it was given under."""
+        record = self._store.load().get(name)
+        previous = record.reviewed if record is not None else frozenset()
+        stale = {operation_key(name, signature[0]) for signature in previous - reviewed}
+        stale |= {operation_key(name, signature[0]) for signature in reviewed if signature[3]}
+        if stale:
+            self._remove_rules(name, lambda operations: bool(operations & stale))
 
     async def _settle(self, discovered: trust.DiscoveredPlugin) -> None:
         plugin = self._plugins.setdefault(discovered.dir_name, _Plugin(discovered.dir_name))
@@ -452,6 +469,18 @@ class PluginHost:
         handlers, notifications = self._handlers(plugin)
         plugin.reviewed_violation = False
 
+        async def before_spawn() -> None:
+            # Every start, restarts after a crash included, is of what is on disk now (ADR 0121).
+            found = await asyncio.to_thread(trust.discover, self._plugins_dir, trust_check=self._trust_check)
+            current = next((d for d in found if d.dir_name == plugin.name), None)
+            if current is None:
+                raise StartError("plugin is no longer installed")
+            if current.problem is not None:
+                raise StartError(current.problem)
+            drift = self._store.check_hashes(current)
+            if drift is not None:
+                raise StartError(drift)
+
         async def on_ready(result: InitializeResult) -> None:
             connector = PluginConnector(
                 plugin.name,
@@ -474,6 +503,7 @@ class PluginHost:
             on_state=lambda state, reason: self._on_state(plugin, state, reason),
             on_ready=on_ready,
             validate_tools=lambda result: self._validate(plugin, result, record.reviewed),
+            before_spawn=before_spawn,
         )
         plugin.supervisor = supervisor
         try:
@@ -615,6 +645,7 @@ class PluginHost:
             manifest = discovered.manifest
             assert manifest is not None  # nosec B101
             await self._stop(plugin, "shutdown")
+            await asyncio.to_thread(self._drop_stale_rules, plugin.name, plugin.review_signatures)
             self._store.enable(
                 plugin.name,
                 version=manifest.version,
@@ -697,7 +728,7 @@ class PluginHost:
         manifest = plugin.manifest if plugin is not None else None
         supervisor = plugin.supervisor if plugin is not None else None
         peer = supervisor.peer if supervisor is not None else None
-        if peer is None or manifest is None or not manifest.pages:
+        if peer is None or plugin is None or plugin.state != "running" or manifest is None or not manifest.pages:
             raise LookupError(f"Plugin {name} is not serving pages.")
         context = principal_context(principal, storage.principal_dir(name, principal))
         return await peer.request(

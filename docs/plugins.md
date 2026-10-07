@@ -111,8 +111,10 @@ afresh, for example after it restarts, gets its own card.
 "Always allow" works as for connectors, with limits: a rule for a plugin tool names the plugin, the
 tool and the values the call returned for each of the tool's scopes (for example one calendar), and
 it matches only when every returned value is in the rule. A tool with no scopes gets a rule for that
-one tool. A destructive tool never offers "Always allow". A plugin's confirmation cards cannot be
-auto-accepted. See [Approvals and policy](approvals-and-policy.md#plugin-tools).
+one tool. A destructive tool never offers "Always allow". When you enable a plugin again, PrivacyFence
+deletes the rules saved for any tool whose gate, read or write, destructive flag or scopes differ from
+your previous review, or that is gone, and every rule for a destructive tool. A plugin's
+confirmation cards cannot be auto-accepted. See [Approvals and policy](approvals-and-policy.md#plugin-tools).
 
 ## Logs
 
@@ -162,11 +164,13 @@ Settings shows a plugin's state and, unless it is running, the reason.
 | Disabled | `manifest invalid: name or version differs from the plugin's own` | The plugin's name or version differs from the manifest's. |
 | Disabled | `plugins need PrivacyFence's background service` | The install is not separated (`pip` or source). |
 | Disabled | `plugins are turned off in settings` | `plugins.enabled` is `false`. |
-| Disabled | `could not start` | The process could not be started; the daemon log has the error. |
+| Disabled | `could not start` | The process could not be started, or the checks before a start could not run; the daemon log has the error. |
+| Disabled | `plugin is no longer installed` | The plugin's folder was gone when it was about to restart after a crash. |
 | Missing | `plugins directory unreadable` | The plugins directory could not be listed. Nothing is deleted; **Rescan** once it is back. |
 
 A **Restarting** plugin crashed and is waiting to start again, after 1, 2, 4, 8, 16 and then 30
-seconds. Under a plugin, "last tools change rejected: …" means the plugin sent a tool list
+seconds. Each restart checks the files again as a first start does, so a plugin that changed while
+it ran is disabled with the matching reason above instead. Under a plugin, "last tools change rejected: …" means the plugin sent a tool list
 PrivacyFence refused (for example a tool you have not reviewed); the previous list stays in force.
 
 ## Writing a plugin
