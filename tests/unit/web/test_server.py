@@ -446,6 +446,106 @@ class TestSecurityHeadersMiddlewareReplacesNotExtends:
         assert "default-src 'none'" in csp_values[0]
 
 
+class _PageHost:
+    def __init__(self):
+        self.calls = []
+
+    async def web_request(self, name, path, query, principal):
+        self.calls.append((name, path))
+        return {"status": 200, "headers": {"content-type": "text/html"}, "body": "<p>hi</p>"}
+
+
+def _route_paths(app) -> set[str]:
+    """Walk the middleware chain down to the Starlette app and list its route paths."""
+    seen = 0
+    while not hasattr(app, "routes") and seen < 20:
+        app = getattr(app, "_app", None) or getattr(app, "app", None)
+        seen += 1
+    return {getattr(route, "path", "") for route in app.routes}
+
+
+class TestPluginPagesSandboxCsp:
+    """The plugin-page branch of the security-header middleware (ADR 0124): every response under
+    /plugins/ gets the sandbox CSP and private, no-store, and no other path changes."""
+
+    SANDBOX = (
+        "sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; "
+        "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+
+    def _client(self, host=None):
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions, plugin_host=host or _PageHost())
+        client = TestClient(app, base_url="http://localhost")
+        client.cookies.set(SESSION_COOKIE, sessions.create(provenance=PROVENANCE_HUMAN))
+        return client
+
+    def test_sandbox_csp_under_plugins(self):
+        r = self._client().get("/plugins/today/")
+        assert r.status_code == 200
+        assert r.headers.get_list("content-security-policy") == [self.SANDBOX]
+        assert r.headers.get_list("cache-control") == ["private, no-store"]
+        assert r.headers["x-frame-options"] == "DENY"
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "no-referrer"
+        # The headers the middleware sets on every path stay.
+        assert r.headers["cross-origin-opener-policy"] == "same-origin"
+        assert "camera=()" in r.headers["permissions-policy"]
+
+    def test_sandbox_csp_on_an_unrouted_plugins_path_too(self):
+        r = self._client().get("/plugins/")
+        assert r.status_code == 404
+        assert r.headers["content-security-policy"] == self.SANDBOX
+
+    @pytest.mark.parametrize("path", ["/approvals", "/plugins", "/pluginsx/today/", "/settings/plugins/x", "/"])
+    def test_other_paths_keep_the_app_csp(self, path):
+        r = self._client().get(path)
+        csp = r.headers["content-security-policy"]
+        assert "sandbox" not in csp
+        assert "default-src 'none'" in csp
+        assert r.headers.get("cache-control") != "private, no-store"
+
+    def test_middleware_alone_branches_on_the_path(self):
+        async def app(scope, receive, send):
+            response = JSONResponse({"ok": True}, headers={"Content-Security-Policy": "default-src *"})
+            await response(scope, receive, send)
+
+        client = TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
+        assert client.get("/plugins/x/").headers.get_list("content-security-policy") == [self.SANDBOX]
+        other = client.get("/x/plugins/").headers.get_list("content-security-policy")
+        assert len(other) == 1
+        assert "default-src 'none'" in other[0]
+
+    def test_local_app_mounts_the_plugin_routes(self):
+        app = build_app(WebApprovalUI(), plugin_host=_PageHost())
+        assert {"/plugins/{name}", "/plugins/{name}/{path:path}"} <= _route_paths(app)
+
+    def test_org_app_has_no_plugins_route(self, tmp_path, monkeypatch):
+        from privacyfence import org_identity as oi
+        from privacyfence.web.oauth_provider import OrgOAuthProvider
+        from privacyfence.web.org_session import OrgSessionStore
+        from privacyfence.web.server import OrgAuth
+
+        issuer = "https://pf.example.com"
+        idp = oi.IdpConfig(
+            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
+            authorization_endpoint="https://idp.example.com/authorize",
+            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
+        )
+        monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "c.json"))
+        monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "r.json"))
+        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer}/oauth/idp/callback")
+        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer)
+        host = _PageHost()
+
+        app = build_app(WebApprovalUI(), org=org, plugin_host=host, allowed_hosts=frozenset({"pf.example.com"}))
+
+        assert not any(path.startswith("/plugins") for path in _route_paths(app))
+        r = TestClient(app, base_url=issuer).get("/plugins/today/")
+        assert r.status_code == 404
+        assert host.calls == []
+
+
 class TestBuildCsp:
     def test_same_nonce_appears_in_every_nonce_source(self):
         csp = build_csp("the-nonce")
