@@ -103,8 +103,10 @@ async def home(ctx, request) -> Html:
 
 Pages are served read-only at `/plugins/<name>/` under a sandbox content security policy. **A page
 must be self-contained**: inline its CSS, scripts and images (as `data:` URIs). The page runs in an
-opaque origin, so requests for separate files carry no session and are refused. Links between pages
-work.
+opaque origin, so requests for separate files carry no session and are refused. A page is a single
+self-contained page that keeps its state in the page itself (script or `#fragment`). Other pages of
+the plugin open only from Settings or a typed URL: links between plugin pages, and links from a
+plugin page back into PrivacyFence, do not carry the session and get a 404.
 
 ## Building with PyInstaller
 
@@ -126,8 +128,8 @@ stream; log to stderr.
 ### Testing a plugin
 
 `privacyfence_plugin_sdk.testing` provides `PluginTestHost`, an in-memory PrivacyFence. It runs the
-plugin's real runner and plays the daemon's side of the protocol: it validates the tool definitions,
-blocks and limits the way PrivacyFence does, decides each call at the simulated gate, answers
+plugin's real runner and plays the daemon's side of the protocol: it checks the tool definitions,
+blocks and limits against the rules the SDK knows, decides each call at the simulated gate, answers
 `source.call` from fixtures, and releases only what a person would have seen on the card.
 
 ```python
@@ -145,3 +147,19 @@ With pytest, add `pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]` t
 use the `plugin_host` fixture: `async with plugin_host(plugin) as host`. The host also drives pages,
 confirmations, events, purge and shutdown. The module docstring of `privacyfence_plugin_sdk.testing`
 lists them all.
+
+Where the test host differs from PrivacyFence:
+
+- `PluginTestHost(plugin, max_gate_floor="auto")` is how a test declares the manifest's floor; the
+  default is `"review"`, which refuses a tool on the `auto` gate.
+- It has no `host.introspect()` (what Settings does when you review a plugin), and it ignores a
+  `tools.changed` the plugin sends.
+- It does not check a tool's MCP name against PrivacyFence's built-in tools; PrivacyFence refuses a
+  tool whose name collides with one.
+- A `source.call` that no fixture answers raises `SourceFixtureMissing`.
+- A call a saved rule accepted reports `approval.via` as `rule`; PrivacyFence reports `card`.
+- An audit decision PrivacyFence records as `rejected` is `denied` in the test host.
+- The body of a 405 is "Method not allowed." in the test host and "Method Not Allowed" in
+  PrivacyFence.
+- PrivacyFence adds `Permissions-Policy` and `Cross-Origin-Opener-Policy` headers to a page
+  response; the test host does not.

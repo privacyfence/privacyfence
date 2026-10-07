@@ -357,7 +357,10 @@ answers `{"status", "headers", "body", "body_encoding"}` with `body_encoding` `u
 
   The page runs in an opaque origin without `allow-same-origin`: it cannot read the session cookie
   or call PrivacyFence's APIs, and its requests for separate files carry no cookie and are refused.
-  A page must inline its CSS, scripts and images (as `data:` URIs). Links between pages work.
+  A page must inline its CSS, scripts and images (as `data:` URIs). A plugin page is a single
+  self-contained page that keeps its state in the page itself (script or `#fragment`). Other pages
+  of the same plugin open only from Settings or a typed URL: a link from a plugin page to another
+  page, or back into PrivacyFence, does not carry the session and gets the owner-only 404.
 
 ### Storage
 

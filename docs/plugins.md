@@ -233,8 +233,14 @@ fixture. Where the test host differs from PrivacyFence:
 
 - `PluginTestHost(plugin, max_gate_floor="auto")` is how a test declares the manifest's floor; the
   default is `"review"`, which refuses a tool on the `auto` gate.
-- It does not implement `host.introspect()` (what Settings does when you review a plugin) or a
-  `tools.changed` sent by the plugin.
+- It has no `host.introspect()` (what Settings does when you review a plugin), and it ignores a
+  `tools.changed` the plugin sends.
+- It does not check a tool's MCP name against PrivacyFence's built-in tools; PrivacyFence refuses a
+  tool whose name collides with one.
 - A `source.call` that no fixture answers raises `SourceFixtureMissing`.
 - A call a saved rule accepted reports `approval.via` as `rule`; PrivacyFence reports `card`.
 - An audit decision PrivacyFence records as `rejected` is `denied` in the test host.
+- The body of a 405 is "Method not allowed." in the test host and "Method Not Allowed" in
+  PrivacyFence.
+- PrivacyFence adds `Permissions-Policy` and `Cross-Origin-Opener-Policy` headers to a page
+  response; the test host does not.

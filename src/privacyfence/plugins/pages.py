@@ -86,7 +86,8 @@ def filter_response(result: Any) -> tuple[int, dict[str, str], bytes]:
     """Cut a plugin's ``web.request`` result down to ``(status, headers, body)``.
 
     The status must be one of 200, 204, 400, 404 or 500, the body must decode per
-    ``body_encoding`` and fit in ``MAX_PAGE_BODY_BYTES``; anything else is a 502. The only headers
+    ``body_encoding`` and fit in ``MAX_PAGE_BODY_BYTES``; anything else is a 502. A 204 is sent with
+    an empty body. The only headers
     kept are ``content-type`` (from the allowlist, else ``application/octet-stream``) and this
     module's own ``cache-control``.
     """
@@ -111,6 +112,8 @@ def filter_response(result: Any) -> tuple[int, dict[str, str], bytes]:
         return _plain(502, BAD_RESPONSE)
     if status not in _ALLOWED_STATUSES or len(data) > MAX_PAGE_BODY_BYTES:
         return _plain(502, BAD_RESPONSE)
+    if status == 204:
+        data = b""  # a 204 has no body; one would break the response's declared length
     return status, {"cache-control": CACHE_CONTROL, "content-type": _content_type(content_type)}, data
 
 
