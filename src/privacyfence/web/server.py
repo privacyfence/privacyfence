@@ -147,6 +147,10 @@ from .state_stream import StateStream
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8765
+# uvicorn otherwise waits for every in-flight response before it stops, and an open event stream
+# (an approvals tab, an MCP client's notification stream) never finishes on its own.
+SHUTDOWN_GRACE_SECONDS = 2.0
+_STOP_JOIN_SECONDS = 5.0
 MCP_URL_FILE_NAME = "mcp_url"
 
 # Content-Security-Policy: see web/csp.py's own module docstring for the
@@ -1433,6 +1437,7 @@ class WebServer:
             wrapped, host=host, port=port, log_level="warning",
             ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
             proxy_headers=False,
+            timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
         )
         self._server = uvicorn.Server(config)
         self._thread: threading.Thread | None = None
@@ -1482,6 +1487,11 @@ class WebServer:
         return _state_stream.get_loop()
 
     @property
+    def stopped(self) -> bool:
+        """True once the server thread has ended, or was never started."""
+        return self._thread is None or not self._thread.is_alive()
+
+    @property
     def mcp_url(self) -> str | None:
         """``None`` unless this server was built with ``mcp_dispatcher`` --
         the URL to configure in a Streamable HTTP MCP client, e.g.
@@ -1504,7 +1514,12 @@ class WebServer:
     def stop(self) -> None:
         self._server.should_exit = True
         if self._thread is not None:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=SHUTDOWN_GRACE_SECONDS + _STOP_JOIN_SECONDS)
+            if self._thread.is_alive():
+                self._server.force_exit = True
+                self._thread.join(timeout=_STOP_JOIN_SECONDS)
+            if self._thread.is_alive():
+                logger.warning("The web server thread is still running after stop()")
         if self.control_channel is not None:
             self.control_channel.stop()
             _clear_web_base_url_file()

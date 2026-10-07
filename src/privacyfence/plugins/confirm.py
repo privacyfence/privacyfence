@@ -17,8 +17,9 @@ Three properties hold by construction:
 
 ``request`` returns at once. A finalizer, run in the injected executor, waits for the human's
 answer and calls ``registry.finalize``, which is what ``registry.await_status`` (and so
-``privacyfence_await_approval`` and ``confirm.await``) reads; nothing else finalizes a confirm
-card. There is no deny note: a confirm dialog posts only ``confirm`` or ``cancel``.
+``privacyfence_await_approval`` and ``confirm.await``) reads. The only other finalize is the
+host's shutdown, which expires the cards nobody answered. There is no deny note: a confirm dialog
+posts only ``confirm`` or ``cancel``.
 """
 from __future__ import annotations
 
@@ -160,6 +161,17 @@ class ConfirmationService:
         if card is not None and card.decided_at is not None:
             result["decided_at"] = _rfc3339(card.decided_at)
         return result
+
+    async def close(self, timeout: float = 5.0) -> None:
+        """Expire every confirmation still waiting for a human and wait for its finalizer, so the
+        outcome is audited before the audit log closes and no finalizer outlives the host."""
+        with self._lock:
+            waiting = [(i, o.registry) for i, o in self._owned.items() if i not in self._finished]
+        for approval_id, registry in waiting:
+            registry.finalize(approval_id, "expired")
+        finalizers = list(self._finalizers)
+        if finalizers:
+            await asyncio.wait(finalizers, timeout=timeout)
 
     def _finalize_when_answered(self, approval_id: str) -> None:
         with self._lock:

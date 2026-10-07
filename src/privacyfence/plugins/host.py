@@ -259,6 +259,7 @@ class PluginHost:
     async def stop_all(self) -> None:
         running = [p for p in self._plugins.values() if p.supervisor is not None]
         await asyncio.gather(*(self._stop(p, "shutdown") for p in running))
+        await self._confirm.close()
         if self._spool is not None:
             self._spool.clear()
 

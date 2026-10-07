@@ -289,6 +289,29 @@ class TestConfirm:
         assert harness.audits[0] == (PLUGIN, "publish_note", "requested")
 
 
+class TestClose:
+    async def test_expires_and_audits_unanswered_confirmations(self, harness):
+        waiting = (await harness.request())["approval_id"]
+        answered = (await harness.request())["approval_id"]
+        harness.registry.answer(answered, "confirm")
+        for _ in range(500):
+            if (PLUGIN, "publish_note", "approved") in harness.audits:
+                break
+            await asyncio.sleep(0.01)
+
+        await harness.service.close()
+
+        assert not harness.service._finalizers
+        assert harness.registry.await_status(waiting) == "expired"
+        assert harness.registry.await_status(answered) == "approved"
+        assert harness.audits.count((PLUGIN, "publish_note", "expired")) == 1
+        assert harness.service._active_total == 0
+
+    async def test_with_nothing_pending_returns_at_once(self, harness):
+        await harness.service.close()
+        assert harness.audits == []
+
+
 class _RefusingExecutor(Executor):
     def submit(self, *args, **kwargs):
         raise RuntimeError("no threads left")

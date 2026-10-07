@@ -206,6 +206,7 @@ class Stack:
         self.web_loop: asyncio.AbstractEventLoop | None = None
         self.dispatcher: McpDispatcher | None = None
         self.hosts: list[PluginHost] = []
+        self.stopped = False
 
     # ------------------------------------------------------------------ building
 
@@ -260,13 +261,18 @@ class Stack:
         return self.host
 
     async def stop(self) -> None:
+        if self.stopped:
+            return
+        self.stopped = True
         for host in self.hosts:
             try:
                 await self.run(host.stop_all(), host)
             except Exception:  # noqa: BLE001  # best-effort teardown
                 pass
         if self.server is not None:
-            self.server.stop()
+            # Off this loop: the server waits on the connections this loop's clients hold.
+            await asyncio.to_thread(self.server.stop)
+            assert self.server.stopped, "the web server thread outlived Stack.stop()"
 
     # ------------------------------------------------------------------ running on the host's loop
 
