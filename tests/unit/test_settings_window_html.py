@@ -632,3 +632,67 @@ class TestOrgCapabilities:
         nav_fn_end = html_non_admin.index("function renderNotificationsDetailControl")
         nav_fn = html_non_admin[nav_fn_start:nav_fn_end]
         assert "CAPS.sections[key] === false" in nav_fn
+
+
+class TestPluginsSection:
+    """The Plugins section is drawn client-side, so this asserts on the shipped template and on
+    the capabilities that decide whether the section exists at all."""
+
+    def _caps(self, html):
+        match = re.search(r"window\.__pfCapabilities = (\{.*?\});</script>", html, re.DOTALL)
+        assert match
+        return json.loads(match.group(1))
+
+    def test_present_in_local_mode(self):
+        html = build_html(_make_state())
+
+        assert self._caps(html)["sections"]["plugins"] is True
+        assert "['plugins', 'Plugins']" in html
+        assert "case 'plugins': return renderPlugins(state);" in html
+
+    def test_absent_in_org_mode(self):
+        for is_admin in (True, False):
+            assert self._caps(build_html(_make_state(), mode="org", is_admin=is_admin))["sections"]["plugins"] is False
+
+    def test_the_plugin_actions_are_not_applicable_in_org_mode(self):
+        not_applicable = self._caps(build_html(_make_state(), mode="org", is_admin=True))["not_applicable_actions"]
+
+        assert {"rescan_plugins", "inspect_plugin", "enable_plugin", "disable_plugin", "purge_plugin_data"} <= set(not_applicable)
+
+    def test_each_row_shows_what_the_host_reports_and_the_buttons(self):
+        html = build_html(_make_state())
+
+        for needle in (
+            "p.display_name", "p.version", "p.reason", "p.last_error", "p.page_url", "Open page",
+            "Review and enable", "data-plugin-review", "'disable_plugin'", "Delete this plugin\\'s data",
+            "data-plugin-purge", "'rescan_plugins'",
+        ):
+            assert needle in html, needle
+
+    def test_the_enable_dialog_lists_every_tool_with_its_gate_and_the_floor(self):
+        html = build_html(_make_state())
+
+        for needle in (
+            "PLUGIN_GATE_LABELS", "t.gate", "t.read_only", "t.destructive", "r.source_operations", "r.pages",
+            "Some tools run without asking", "r.max_gate_floor === 'auto'", "data-plugin-enable",
+        ):
+            assert needle in html, needle
+
+    def test_enable_posts_the_hashes_from_the_summary(self):
+        html = build_html(_make_state())
+
+        assert "post('enable_plugin'" in html
+        assert "executable_sha256: enabling.review.executable_sha256" in html
+        assert "manifest_sha256: enabling.review.manifest_sha256" in html
+
+    def test_the_dialog_opens_when_the_review_arrives_in_a_pushed_snapshot(self):
+        html = build_html(_make_state())
+
+        assert "function syncPluginDialog(state)" in html
+        assert "else if (asked.review) { ui.pluginDialog = asked.name; ui.pluginReviewing = null; }" in html
+        assert html.index("syncPluginDialog(state);") < html.index("renderSection(state) + '</div></div>'")
+
+    def test_the_review_button_asks_the_host_to_inspect(self):
+        html = build_html(_make_state())
+
+        assert "post('inspect_plugin', { name: ui.pluginReviewing });" in html

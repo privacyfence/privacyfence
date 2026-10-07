@@ -84,6 +84,18 @@ SDK_PLUGIN = textwrap.dedent('''
 
     plugin.on_purge(hang)
 
+    SEEN = []
+
+
+    @plugin.on("connector.state_changed")
+    async def changed(ctx, params):
+        SEEN.append(params)
+
+
+    @plugin.page("/events")
+    async def events(ctx, request):
+        return Text(json.dumps(SEEN))
+
 
     @plugin.page("/info")
     async def info(ctx, request):
@@ -1054,13 +1066,47 @@ class TestRowsChangedListener:
 
         assert env.row(host, "stub")["state"] == "running"
 
-    async def test_on_connectors_changed_keeps_the_latest_rows(self, env):
+    async def test_connector_changes_reach_a_running_plugin(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        host.on_connectors_changed([{"key": "gmail", "enabled": True, "authed": False}])
+        assert json.loads((await env.page(host, "/events"))["body"]) == []
+        host.on_connectors_changed([{"key": "gmail", "enabled": True, "authed": True}])
+
+        async def received() -> list:
+            return json.loads((await env.page(host, "/events"))["body"])
+
+        deadline = time.monotonic() + 15
+        while not await received():
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.02)
+        assert await received() == [{"connector": "gmail", "state": "signed_in", "principal": "local"}]
+
+    async def test_a_plugin_that_is_not_running_is_not_sent_events(self, env):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+
+        assert host._running_peers() == []
+        host.on_connectors_changed([{"key": "gmail", "enabled": True, "authed": False}])
+        host.on_connectors_changed([{"key": "gmail", "enabled": False, "authed": False}])
+
+    async def test_events_before_the_host_runs_are_dropped_quietly(self, env):
         host = env.host()
 
-        host.on_connectors_changed([{"name": "gmail", "enabled": True}])
-        host.on_connectors_changed([{"name": "drive", "enabled": False}])
+        host.on_connectors_changed([{"key": "gmail", "enabled": True, "authed": False}])
+        host.on_connectors_changed([{"key": "gmail", "enabled": False, "authed": False}])
 
-        assert host._connector_rows == [{"name": "drive", "enabled": False}]
+    async def test_a_scheduling_failure_does_not_reach_the_caller(self, env, monkeypatch):
+        host = env.host()
+        await host.start()
+        monkeypatch.setattr(host, "submit", MagicMock(side_effect=RuntimeError("closed")))
+        host.on_connectors_changed([{"key": "gmail", "enabled": True, "authed": False}])
+
+        host.on_connectors_changed([{"key": "gmail", "enabled": False, "authed": False}])
 
     async def test_submit_runs_on_the_hosts_loop(self, env):
         host = env.host()

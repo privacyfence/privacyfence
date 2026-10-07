@@ -608,7 +608,7 @@ class SettingsController:
         # same snapshot push as every other change.
         self._plugin_host = plugin_host
         if plugin_host is not None:
-            plugin_host.set_rows_changed_listener(self._push_snapshot)
+            plugin_host.set_rows_changed_listener(self._on_plugin_rows_changed)
         self._connectors = connectors
         self.connector_host = connector_host
         # name -> live Connector wrapper (exposes .client for resolving
@@ -710,6 +710,11 @@ class SettingsController:
         """Fired by auto_accept.notify_rules_changed(), possibly from the web
         server's own asyncio thread -- marshal the state push onto the
         main thread."""
+        call_on_main(self._push_snapshot)
+
+    def _on_plugin_rows_changed(self) -> None:
+        """Fired by the PluginHost, on the web loop (plugin results arrive there, not on the thread
+        that raised the action) -- marshalled like every other listener here."""
         call_on_main(self._push_snapshot)
 
     def _on_unattended_changed(self) -> None:
@@ -1194,10 +1199,51 @@ class SettingsController:
                 # new set, not the one refresh_connectors() is replacing.
                 if self._connectors_changed_listener is not None:
                     self._connectors_changed_listener()
+                if self._plugin_host is not None:
+                    self._plugin_host.on_connectors_changed(
+                        self._connectors_state(self._load_config(), self._org_config_or_empty()),
+                    )
             self._push_snapshot()
 
         _run_async(work, done)
         return self.snapshot()
+
+    # ------------------------------------------------------------------ #
+    # Plugins (local mode). Each action hands the host a coroutine and returns the snapshot at
+    # once, never waiting on it: the result reaches the page through the host's rows listener,
+    # as a row's ``review`` or ``last_error``.
+    # ------------------------------------------------------------------ #
+
+    def _submit_plugin(self, make: Callable[[Any], Any]) -> dict[str, Any]:
+        host = self._plugin_host
+        if host is None:
+            self.error = "Plugins are not available."
+            return self.snapshot()
+        try:
+            future = host.submit(make(host))
+        except RuntimeError as exc:
+            self.error = str(exc)
+            return self.snapshot()
+        # The host records a failure on the row; this only keeps it from being logged unretrieved.
+        future.add_done_callback(lambda f: f.cancelled() or f.exception())
+        return self.snapshot()
+
+    def rescan_plugins(self) -> dict[str, Any]:
+        return self._submit_plugin(lambda host: host.rescan())
+
+    def inspect_plugin(self, name: str) -> dict[str, Any]:
+        return self._submit_plugin(lambda host: host.inspect(name))
+
+    def enable_plugin(self, name: str, executable_sha256: str, manifest_sha256: str) -> dict[str, Any]:
+        return self._submit_plugin(
+            lambda host: host.enable(name, executable_sha256=executable_sha256, manifest_sha256=manifest_sha256),
+        )
+
+    def disable_plugin(self, name: str) -> dict[str, Any]:
+        return self._submit_plugin(lambda host: host.disable(name))
+
+    def purge_plugin_data(self, name: str) -> dict[str, Any]:
+        return self._submit_plugin(lambda host: host.purge(name))
 
     def authenticate_connector(self, connector: str) -> dict[str, Any]:
         """OAuth-style single-click connectors only -- Telegram's
@@ -1672,6 +1718,7 @@ class SettingsController:
             "privacy": self._privacy_state(cfg),
             "audit": self._audit_state(cfg),
             "about": self._about_state(),
+            "plugins": self._plugin_host.rows() if self._plugin_host is not None else [],
         }
 
     def _general_state(self, cfg: dict[str, Any]) -> dict[str, Any]:

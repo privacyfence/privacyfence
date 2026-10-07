@@ -2539,7 +2539,7 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        assert nav_labels == ["General", "Connectors", "Auto-accept", "Privacy Filter", "Audit Log", "About"]
+        assert nav_labels == ["General", "Connectors", "Auto-accept", "Privacy Filter", "Audit Log", "Plugins", "About"]
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "local-settings")
 
