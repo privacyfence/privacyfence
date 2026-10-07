@@ -225,10 +225,14 @@ the tool declares; a missing or empty one fails the call. The `preview` is limit
 blocks; the JSON of `{"blocks": payload}` must be at most 100,000 bytes.
 
 The daemon shows `preview` followed by `payload` on the approval card, applies the gate, and only
-then calls `tool.execute`. An identical call is answered from the daemon's 30 second result cache,
-and a prepared call is reused while its card is pending (up to 15 minutes) and, for an approved
-read, for the decision ledger's five-minute replay window, so `prepare` is not run again for a call
-a human has already seen.
+then calls `tool.execute`. An identical call is answered from the daemon's 30 second result cache.
+A card's decision belongs to the `call_id` it showed: a prepared call is reused while its card is
+pending (up to 15 minutes) and the decision ledger's five-minute replay window after that, and, for
+a decided read, for one more replay window, so a repeat call gets the same payload without running
+`prepare` again. A call the daemon prepares afresh, including after the plugin restarts, always gets
+its own card. `tool.execute` can therefore name a `call_id` prepared more than 15 minutes earlier,
+and a read's `call_id` more than once. A plugin that no longer holds the call answers
+`unknown_call`; for a read the daemon still returns the prepared payload.
 
 ### `tool.execute`
 

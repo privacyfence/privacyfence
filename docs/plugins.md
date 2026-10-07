@@ -98,7 +98,9 @@ enable again".
 A plugin's tool is named `<plugin>_<tool>` (for example `today_list_events`) and takes a required
 `reason` like any gated tool. A gated call opens an approval card. The card shows the plugin's name
 and tool, and the plugin's own description of the call, as text, tables and diffs that PrivacyFence
-renders itself. An approved read returns exactly what the card showed.
+renders itself. An approved read returns exactly what the card showed. Asking for the same read
+again within five minutes returns the same result without a new card; anything the plugin prepares
+afresh, for example after it restarts, gets its own card.
 
 "Always allow" works as for connectors, with limits: a rule for a plugin tool names the plugin, the
 tool and the values the call returned for each of the tool's scopes (for example one calendar), and
