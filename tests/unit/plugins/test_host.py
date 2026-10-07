@@ -991,6 +991,9 @@ class TestUninstall:
         }))
         (storage.install_dir(SDK) / "cache.db").write_text("x")
         assert env.row(host, SDK)["state"] == "running"
+        # Windows refuses to delete a running plugin's folder (it is the process's working
+        # directory), so the administrator disables it first.
+        await host.disable(SDK)
 
         self._remove(plugin_dir)
         await host.rescan()
@@ -1002,6 +1005,23 @@ class TestUninstall:
         assert remaining == ["gmail.anything"]
         assert env.audit.summaries("plugin_lifecycle")[-1] == "removed; data and rules deleted"
         assert host.connectors() == {}
+
+    async def test_a_running_plugin_that_disappears_is_stopped_and_uninstalled(self, env, monkeypatch):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        proc = host._plugins["stub"].supervisor._child.proc
+        assert env.row(host, "stub")["state"] == "running"
+        # The folder stays on disk: a running plugin's folder cannot be deleted on Windows.
+        monkeypatch.setattr(host_mod.trust, "discover", lambda *_a, **_k: [])
+
+        await host.rescan()
+
+        assert proc.returncode is not None
+        assert host.rows() == []
+        assert host._store.load() == {}
+        assert env.audit.summaries("plugin_lifecycle")[-1] == "removed; data and rules deleted"
 
     async def test_unreadable_dir_deletes_nothing(self, env):
         plugin_dir = env.add("stub")
@@ -1305,7 +1325,8 @@ class TestDaemonThreadExecutor:
             def start(self) -> None:
                 started.append(self.target)
 
-        monkeypatch.setattr(host_mod.threading, "Thread", FakeThread)
+        # Only the host module's view of threading: the test runner's own threads stay real.
+        monkeypatch.setattr(host_mod, "threading", SimpleNamespace(**{**vars(threading), "Thread": FakeThread}))
         executor = host_mod._DaemonThreadExecutor(1)
         ran: list[str] = []
         future = executor.submit(lambda: ran.append("late"))

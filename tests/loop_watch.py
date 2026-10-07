@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 CLOSE_REPORT_AFTER_SECONDS = 5.0
+CLOSE_WATCHDOG_THREAD_NAME = "proactor-close-watchdog"
 
 
 def pending_io(loop: asyncio.AbstractEventLoop) -> list[str]:
@@ -64,6 +65,7 @@ def watched_close(
         started = time.monotonic()
         loop = getattr(proactor, "_loop", None)
         timer = threading.Timer(after, lambda: report(close_report(proactor, loop, time.monotonic() - started)))
+        timer.name = CLOSE_WATCHDOG_THREAD_NAME
         timer.daemon = True
         timer.start()
         try:
@@ -78,9 +80,7 @@ def install_close_watchdog(report: Callable[[str], None]) -> None:
     """Wrap ``IocpProactor.close`` (Windows only) with ``watched_close``."""
     if sys.platform != "win32":
         return
-    from asyncio import windows_events
-
-    proactor_class = windows_events.IocpProactor
+    proactor_class = asyncio.windows_events.IocpProactor
     if not getattr(proactor_class.close, "_close_watchdog", False):
         wrapper = watched_close(proactor_class.close, report)
         wrapper._close_watchdog = True  # type: ignore[attr-defined]

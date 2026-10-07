@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import socket
 import sys
 import threading
@@ -11,7 +12,7 @@ import types
 import pytest
 
 from tests import loop_watch
-from tests.loop_watch import install_close_watchdog, pending_io, watched_close
+from tests.loop_watch import CLOSE_WATCHDOG_THREAD_NAME, install_close_watchdog, pending_io, watched_close
 
 pytestmark = pytest.mark.unit
 
@@ -36,7 +37,8 @@ class TestPendingIo:
             read = asyncio.ensure_future(loop.sock_recv(left, 1))
             await asyncio.sleep(0)
             [entry] = pending_io(loop)
-            assert f"fd {left.fileno()}" in entry
+            # "fd 14 ..." from a selector loop, "<socket.socket fd=14, ...>" from a proactor loop
+            assert re.search(rf"\bfd[ =]{left.fileno()}\b", entry)
 
             right.send(b"x")
             assert await read == b"x"
@@ -96,7 +98,7 @@ class TestWatchedClose:
         time.sleep(0.3)
 
         assert reports == []
-        assert not [t for t in threading.enumerate() if isinstance(t, threading.Timer) and t.is_alive()]
+        assert not [t for t in threading.enumerate() if t.name == CLOSE_WATCHDOG_THREAD_NAME and t.is_alive()]
 
 
 class TestInstall:
@@ -105,8 +107,7 @@ class TestInstall:
         fake = types.ModuleType("asyncio.windows_events")
         fake.IocpProactor = type("IocpProactor", (), {"close": lambda self: closed.append(self)})
         monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.setitem(sys.modules, "asyncio.windows_events", fake)
-        monkeypatch.delattr(asyncio, "windows_events", raising=False)
+        monkeypatch.setattr(asyncio, "windows_events", fake, raising=False)
 
         install_close_watchdog(lambda text: None)
         wrapped = fake.IocpProactor.close

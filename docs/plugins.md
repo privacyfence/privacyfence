@@ -136,10 +136,11 @@ daemon log, and its enabling, disabling, tool changes and reads are in the audit
   directory).
 - **Remove** a plugin by deleting its folder from the plugins directory as an administrator, then
   choosing **Rescan**. PrivacyFence stops the plugin and deletes its data, its "Always allow" rules
-  and its record, so a different plugin later installed under the same name inherits nothing. If the
-  plugins directory is missing or cannot be read (an upgrade in progress, a permissions change),
-  nothing is deleted and every known plugin shows "plugins directory unreadable" until a rescan
-  succeeds.
+  and its record, so a different plugin later installed under the same name inherits nothing. On
+  Windows, **Disable** the plugin first: Windows does not let a running plugin's folder be deleted.
+  If the plugins directory is missing or cannot be read (an upgrade in progress, a permissions
+  change), nothing is deleted and every known plugin shows "plugins directory unreadable" until a
+  rescan succeeds.
 
 ## Turning plugins off
 

@@ -3081,6 +3081,7 @@ class TestDaemonPluginHost:
 
     def test_no_host_in_org_mode(self, monkeypatch, loop_thread):
         events, built = self._setup(monkeypatch, loop_thread, org_config={"mode": "org"})
+        monkeypatch.setattr(daemon_main, "check_storage_permissions", lambda org_mode_active: None)
 
         daemon_main.run_app({}, "config.yaml")
 
