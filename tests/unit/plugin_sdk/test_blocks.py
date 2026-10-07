@@ -74,3 +74,13 @@ class TestValidateBlocks:
         with pytest.raises(ValueError, match="limit"):
             blocks.validate_blocks(big)
         assert len(blocks.validate_blocks(big, max_bytes=None)) == 2
+
+
+@pytest.mark.parametrize("key", ["SSN 123-45-6789 \u202e x", "a b", "a\x00", "a\u202e", "x" * 65])
+def test_table_key_must_be_an_identifier(key):
+    with pytest.raises(ValueError):
+        blocks.table([(key, "")], [])
+
+
+def test_table_identifier_key_works():
+    assert blocks.table([("A.b_c-9", "L")], [])["columns"][0]["key"] == "A.b_c-9"

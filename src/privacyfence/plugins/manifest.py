@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from privacyfence.plugins.blocks import clean_text
 from privacyfence.plugins.constants import (
     PLUGIN_NAME_RE,
     RESERVED_PLUGIN_NAMES,
@@ -88,6 +89,8 @@ def load_manifest(plugin_dir: Path, *, mode: str = "local") -> Manifest:
         raise ManifestError(f"name {name!r} must equal the directory name {plugin_dir.name!r}")
 
     display_name = _str(data, "display_name")
+    if clean_text(display_name) != display_name:
+        raise ManifestError("display_name must not contain control or bidirectional characters")
     if not 1 <= len(display_name) <= 60:
         raise ManifestError("display_name must be 1 to 60 characters")
     version = _str(data, "version")

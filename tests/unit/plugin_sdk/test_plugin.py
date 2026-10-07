@@ -111,6 +111,7 @@ class TestLimits:
         assert sdk_blocks._MAX_PREVIEW_BLOCKS == constants.MAX_PREVIEW_BLOCKS
         assert sdk_blocks._MAX_PREVIEW_BYTES == constants.MAX_PREVIEW_BYTES
         assert sdk_blocks._MAX_CELL_CHARS == constants.MAX_CELL_CHARS
+        assert sdk_blocks._BLOCK_KEY_RE.pattern == constants.BLOCK_KEY_RE.pattern
         assert sdk_plugin.PROTOCOL_VERSION == constants.PROTOCOL_VERSION
 
     def test_digest_matches_the_daemons(self):
