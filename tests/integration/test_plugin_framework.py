@@ -221,6 +221,16 @@ class TestConfirmRoundTrip:
 
         assert status[approval_id] == "denied"
 
+    async def test_stopping_expires_an_unanswered_card_before_returning(self, stack):
+        async with mcp_session(stack.server) as mcp:
+            approval_id = await self.confirm(stack, mcp)
+
+        await stack.stop()
+
+        assert stack.registry.await_status(approval_id) == "expired"
+        summaries = [e["summary"] for e in stack.audit() if e["decision"] == "plugin_confirm"]
+        assert summaries == ["echo_publish; requested", "echo_publish; expired"]
+
     async def test_refused_while_a_session_is_unattended(self, stack):
         stack.unattended = True
         async with mcp_session(stack.server) as mcp:
