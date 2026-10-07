@@ -1184,15 +1184,22 @@ def _posix_script_elevation_problem(script: Path) -> str | None:
     to check, and the script a Linux install elevates is the .deb's own
     root-owned ``/usr/sbin/privacyfence-privilege-separation``.
     """
+    return _posix_admin_only_write_problem(script)
+
+
+def _posix_admin_only_write_problem(path: Path) -> str | None:
+    """Root owns ``path`` and neither its group nor anyone else may write
+    it. The same rule for a file and a directory: write on a directory is
+    the right to replace what is in it."""
     try:
-        st = os.stat(script)
+        st = os.stat(path)
     except OSError as exc:
-        return f"could not stat {script}: {exc}"
+        return f"could not stat {path}: {exc}"
     if st.st_uid != 0:
-        return f"{script} is owned by uid {st.st_uid}, not root"
+        return f"{path} is owned by uid {st.st_uid}, not root"
     mode = stat.S_IMODE(st.st_mode)
     if mode & (stat.S_IWGRP | stat.S_IWOTH):
-        return f"{script} is group- or world-writable (mode {mode:04o})"
+        return f"{path} is group- or world-writable (mode {mode:04o})"
     return None
 
 
@@ -2067,17 +2074,38 @@ def _windows_script_elevation_problem(script: Path) -> str | None:
     asks of the daemon's own image and for the same reason: whether anything
     outside SYSTEM and Administrators can rewrite what is about to run
     elevated (ADR 0058)."""
+    return _windows_admin_only_write_problem(script)
+
+
+def _windows_admin_only_write_problem(path: Path) -> str | None:
     from . import windows_acl
 
-    aces = windows_acl.read_dacl(script)
+    aces = windows_acl.read_dacl(path)
     if aces is None:
-        return f"could not read {script}'s ACL"
+        return f"could not read {path}'s ACL"
     writable = sorted(
         {ace.trustee for ace in aces if ace.grants_write() and not windows_acl.is_trusted(ace.trustee)}
     )
     if writable:
-        return f"{script} is writable by {', '.join(writable)}"
+        return f"{path} is writable by {', '.join(writable)}"
     return None
+
+
+def admin_only_write_problem(path: Path) -> str | None:
+    """Whether anyone but an administrator can rewrite ``path``, a file or a
+    directory: ``None`` when only administrators can, otherwise a
+    human-readable reason. On POSIX, root must own it and neither its group
+    nor others may write it; on Windows, no ACE may grant write to anyone
+    outside SYSTEM, Administrators and TrustedInstaller. A path that cannot
+    be checked reads as a problem, never as fine (ADR 0058).
+
+    The per-path half of the elevation check, without macOS's bundle
+    signature check, which belongs to the elevation alone. Plugins use it
+    for their executable and every directory above it.
+    """
+    if current_platform() == "win32":
+        return _windows_admin_only_write_problem(path)
+    return _posix_admin_only_write_problem(path)
 
 
 def _elevation_script_problem(script: Path) -> str | None:
