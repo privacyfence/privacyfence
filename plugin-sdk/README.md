@@ -123,4 +123,25 @@ named after the plugin, inside PrivacyFence's administrator-only plugins directo
 the pipe. Anything the plugin prints to stdout goes to stderr, so it cannot corrupt the protocol
 stream; log to stderr.
 
-An in-memory test host for plugin tests ships in a later release.
+### Testing a plugin
+
+`privacyfence_plugin_sdk.testing` provides `PluginTestHost`, an in-memory PrivacyFence. It runs the
+plugin's real runner and plays the daemon's side of the protocol: it validates the tool definitions,
+blocks and limits the way PrivacyFence does, decides each call at the simulated gate, answers
+`source.call` from fixtures, and releases only what a person would have seen on the card.
+
+```python
+from privacyfence_plugin_sdk.testing import PluginTestHost, samples
+
+async def test_the_ai_gets_what_the_card_showed():
+    async with PluginTestHost(plugin) as host:
+        host.source.load(samples.get("calendar.list_events"))
+        outcome = await host.call_tool("list_events", {"reason": "plan the day"})
+        assert outcome.card_shown
+        assert outcome.released == {"blocks": outcome.card.payload}
+```
+
+With pytest, add `pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]` to `conftest.py` and
+use the `plugin_host` fixture: `async with plugin_host(plugin) as host`. The host also drives pages,
+confirmations, events, purge and shutdown. The module docstring of `privacyfence_plugin_sdk.testing`
+lists them all.
