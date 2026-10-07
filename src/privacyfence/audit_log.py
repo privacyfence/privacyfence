@@ -320,10 +320,12 @@ class AuditEntry:
                             # ("plugin_confirm": plugins/confirm.py, the human-confirmation cards a
                             #  plugin asks for through ``confirm.request``. Two entries per card, one
                             #  when it is raised and one when it is answered, sharing ``connector``
-                            #  "plugin:<name>" and the card's id as ``request_id``. ``summary`` is
+                            #  "plugin:<name>"; ``request_id`` is empty. ``summary`` is
                             #  "<kind>; requested" and then "<kind>; approved", "<kind>; denied" or
                             #  "<kind>; expired", where <kind> is the confirmation kind the plugin
-                            #  named. Nothing the plugin put in the card body is recorded.)
+                            #  named; a request refused while a session is unattended is recorded
+                            #  once as "<kind>; refused". Nothing the plugin put in the card body
+                            #  is recorded.)
                             # ("plugin_lifecycle": plugins/host.py and plugins/supervisor.py, a change
                             #  in a plugin's own standing that is not one call: ``connector`` is
                             #  "plugin:<name>" and ``summary`` says what happened -- "enabled",
