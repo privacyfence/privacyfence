@@ -32,6 +32,7 @@ from privacyfence import (
     gate,
     local_files,
     pii_detector,
+    plugins,
     privacy_filter,
     privilege_separation,
     resource_names,
@@ -39,6 +40,7 @@ from privacyfence import (
     upload_staging,
     web_approval_ui,
 )
+import privacyfence.plugins._testing  # noqa: F401  (loads the submodule `plugins._testing` names)
 from privacyfence.web import state_stream
 from tests.diagnostics import capture_failure_diagnostics, suite_name_for
 
@@ -93,6 +95,8 @@ def _reset() -> None:
     # call by the dispatcher; a test that calls gate._audit directly sets
     # it outside any such scope, so it must not carry into the next test.
     audit_log.set_released_request_id("")
+    # Plugin modules register their own module-level resets here (ADR 0120).
+    plugins._testing.reset_all()
 
 
 @pytest.fixture(autouse=True)
