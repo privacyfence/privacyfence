@@ -2978,6 +2978,9 @@ class _FakePluginHost:
         self.fail_start = fail_start
         self.start_thread: int | None = None
 
+    def on_connectors_changed(self, rows: list) -> None:
+        pass
+
     async def start(self) -> None:
         self.start_thread = threading.get_ident()
         self.events.append("plugins start")

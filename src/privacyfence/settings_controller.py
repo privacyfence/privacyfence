@@ -668,6 +668,15 @@ class SettingsController:
 
         set_rules_changed_listener(self._on_rules_changed)
 
+        if plugin_host is not None:
+            # The host's first connector report is only a baseline, so give it the state as it is
+            # now: the first change after this start is then diffed against it and sent.
+            plugin_host.on_connectors_changed(self._plugin_connector_rows())
+
+    def _plugin_connector_rows(self) -> list[dict[str, Any]]:
+        """The connector rows a plugin host diffs for its ``connector.state_changed`` events."""
+        return self._connectors_state(self._load_config(), self._org_config_or_empty())
+
     def wire_unattended_listener(self, dispatcher: Any) -> None:
         """Register this controller's push-on-change with ``dispatcher``
         (web.mcp_dispatch.McpDispatcher) -- called by daemon_main.py's
@@ -1200,9 +1209,7 @@ class SettingsController:
                 if self._connectors_changed_listener is not None:
                     self._connectors_changed_listener()
                 if self._plugin_host is not None:
-                    self._plugin_host.on_connectors_changed(
-                        self._connectors_state(self._load_config(), self._org_config_or_empty()),
-                    )
+                    self._plugin_host.on_connectors_changed(self._plugin_connector_rows())
             self._push_snapshot()
 
         _run_async(work, done)
