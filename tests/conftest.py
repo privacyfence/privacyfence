@@ -18,6 +18,7 @@ test module -- see ``pytest_runtest_makereport`` below.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,7 @@ from privacyfence import (
 import privacyfence.plugins._testing  # noqa: F401  (loads the submodule `plugins._testing` names)
 from privacyfence.web import state_stream
 from tests.diagnostics import capture_failure_diagnostics, suite_name_for
+from tests.loop_watch import install_close_watchdog
 
 
 def _reset() -> None:
@@ -97,6 +99,19 @@ def _reset() -> None:
     audit_log.set_released_request_id("")
     # Plugin modules register their own module-level resets here (ADR 0120).
     plugins._testing.reset_all()
+
+
+def pytest_configure(config):
+    # A test loop that never finishes closing on Windows names what it waits for (tests/loop_watch.py).
+    def report(text: str) -> None:
+        capman = config.pluginmanager.getplugin("capturemanager")
+        if capman is None:
+            print(text, file=sys.stderr, flush=True)
+            return
+        with capman.global_and_fixture_disabled():
+            print(text, file=sys.stderr, flush=True)
+
+    install_close_watchdog(report)
 
 
 @pytest.fixture(autouse=True)

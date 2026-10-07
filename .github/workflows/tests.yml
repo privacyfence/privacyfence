@@ -273,8 +273,10 @@ jobs:
       # suite" reasoning test-python-compat gives, since this job exists to
       # catch Windows-specific breakage in the Python core, not to
       # re-prove the (already cross-platform, Node-runtime) shim.
+      # faulthandler_timeout dumps every thread's stack while a slow test is still running, before
+      # pytest-timeout's 30 s limit ends the run.
       - name: Run test suite (100% pass rate required)
-        run: pytest -v --cov=src/privacyfence --cov-report=term-missing
+        run: pytest -v -o faulthandler_timeout=20 --cov=src/privacyfence --cov-report=term-missing
 
       # Same failure-diagnostics capture as the `test` job's identically-named step.
       - name: Upload failure diagnostics
