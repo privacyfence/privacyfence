@@ -178,6 +178,7 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "downloads-and-release-kpi.md",
         "releasing.md",
         "plugin-framework-plan.md",
+        "plugin-framework-cr-plan.md",
     }
 )
 
