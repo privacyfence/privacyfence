@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "privacyfence-plugin-sdk"
+dynamic = ["version"]
+description = "SDK for writing PrivacyFence plugins: out-of-process extensions that PrivacyFence gates and audits"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Andras Takacs", email = "info@privacyfence.eu" }]
+keywords = ["privacyfence", "mcp", "plugin", "sdk", "json-rpc"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/privacyfence/privacyfence"
+Issues = "https://github.com/privacyfence/privacyfence/issues/846"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+privacyfence_plugin_sdk = ["py.typed", "testing/samples/*.json"]
+
+[tool.setuptools_scm]
+root = ".."
+fallback_version = "0.0.0"
