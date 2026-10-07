@@ -46,3 +46,16 @@ def test_windows_refuses_a_file_in_a_user_writable_directory(tmp_path):
     assert problem is not None
     assert "is writable by" in problem
     assert trust.admin_only_problem(plugin_dir, exe) == problem
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS ACLs exist only on Windows")
+def test_windows_reads_inherit_only_entries_on_program_files():
+    # Program Files carries inherit-only entries (CREATOR OWNER among them) on every standard
+    # install; the ancestor rule can only ignore them if the real reader reports the flag.
+    from privacyfence import windows_acl
+
+    aces = windows_acl.read_dacl(trust.plugins_dir().parent)
+
+    assert aces is not None
+    assert any(ace.inherit_only for ace in aces)
+    assert not all(ace.inherit_only for ace in aces)

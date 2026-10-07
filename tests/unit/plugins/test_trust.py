@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from privacyfence import privilege_separation
+from privacyfence import privilege_separation, windows_acl
 from privacyfence.plugins import trust
 from privacyfence.plugins.manifest import MANIFEST_FILENAME
 
@@ -139,6 +139,144 @@ class TestLocation:
 
         assert real.resolve() in seen
         assert real.resolve().parent in seen
+
+
+_ADMIN_ONLY_ACL = [
+    windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF),
+    windows_acl.Ace(trustee="NT AUTHORITY\\SYSTEM", mask=0x1F01FF),
+    windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1200A9),
+]
+# A standard install's drive root: every signed-in user may create a folder in it, and holds an
+# inherit-only Modify meant for its subdirectories.
+_DEFAULT_DRIVE_ROOT_ACL = [
+    *_ADMIN_ONLY_ACL,
+    windows_acl.Ace(trustee="NT AUTHORITY\\Authenticated Users", mask=0x1301BF, inherit_only=True),
+    windows_acl.Ace(trustee="NT AUTHORITY\\Authenticated Users", mask=windows_acl.FILE_APPEND_DATA),
+]
+
+
+class TestWindowsAncestors:
+    """Directories above the plugin directory need only be safe from having an entry renamed,
+    replaced or deleted (ADR 0058); the executable and the plugin directory stay strict."""
+
+    @staticmethod
+    def _layout(monkeypatch, tmp_path, acl_for):
+        plugin_dir = _install(tmp_path / "plugins")
+        exe = plugin_dir / f"today-plugin{_EXE_SUFFIX}"
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        real_dir = plugin_dir.resolve()
+        monkeypatch.setattr(
+            windows_acl, "read_dacl", lambda path: acl_for(Path(path), exe, real_dir),
+        )
+        return plugin_dir, exe
+
+    def test_the_default_drive_root_acl_on_every_ancestor_passes(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(
+            monkeypatch, tmp_path,
+            lambda path, exe, real_dir: _ADMIN_ONLY_ACL if path in (exe, real_dir) else _DEFAULT_DRIVE_ROOT_ACL,
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) is None
+
+    def test_the_default_drive_root_acl_on_the_executable_is_refused(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(
+            monkeypatch, tmp_path,
+            lambda path, exe, real_dir: _DEFAULT_DRIVE_ROOT_ACL if path == exe else _ADMIN_ONLY_ACL,
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) == (
+            f"{exe} is writable by NT AUTHORITY\\Authenticated Users"
+        )
+
+    def test_the_default_drive_root_acl_on_the_plugin_directory_is_refused(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(
+            monkeypatch, tmp_path,
+            lambda path, exe, real_dir: _DEFAULT_DRIVE_ROOT_ACL if path == real_dir else _ADMIN_ONLY_ACL,
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) == (
+            f"{plugin_dir.resolve()} is writable by NT AUTHORITY\\Authenticated Users"
+        )
+
+    def test_the_default_drive_root_acl_between_the_executable_and_its_directory_is_refused(
+        self, monkeypatch, tmp_path,
+    ):
+        plugin_dir = tmp_path / "plugins" / "today"
+        (plugin_dir / "bin").mkdir(parents=True)
+        exe = plugin_dir / "bin" / "today-plugin"
+        exe.write_bytes(b"x")
+        bin_dir = plugin_dir.resolve() / "bin"
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: _DEFAULT_DRIVE_ROOT_ACL if Path(path) == bin_dir else _ADMIN_ONLY_ACL,
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) == (
+            f"{bin_dir} is writable by NT AUTHORITY\\Authenticated Users"
+        )
+
+    @pytest.mark.parametrize("mask", [0x1301BF, windows_acl.FILE_WRITE_DATA])
+    def test_a_real_write_grant_on_an_ancestor_is_refused(self, monkeypatch, tmp_path, mask):
+        user_writable = [*_ADMIN_ONLY_ACL, windows_acl.Ace(trustee="BUILTIN\\Users", mask=mask)]
+        plugin_dir, exe = self._layout(
+            monkeypatch, tmp_path,
+            lambda path, exe, real_dir: user_writable if path == real_dir.parent else _ADMIN_ONLY_ACL,
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) == (
+            f"{plugin_dir.resolve().parent} is writable by BUILTIN\\Users"
+        )
+
+
+class TestAncestorRule:
+    """How the strict and the ancestor rule combine, independent of platform."""
+
+    def test_an_ancestor_the_ancestor_rule_accepts_passes(self, monkeypatch, tmp_path):
+        plugin_dir = _install(tmp_path)
+        exe = plugin_dir / f"today-plugin{_EXE_SUFFIX}"
+        asked: list[Path] = []
+        monkeypatch.setattr(
+            privilege_separation, "admin_only_write_problem",
+            lambda path: None if path in (exe, plugin_dir.resolve()) else f"strict {path}",
+        )
+        monkeypatch.setattr(
+            privilege_separation, "admin_only_ancestor_write_problem",
+            lambda path: asked.append(path),
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) is None
+        assert asked == list(plugin_dir.resolve().parents)
+
+    def test_an_ancestor_both_rules_refuse_reports_the_strict_reason(self, monkeypatch, tmp_path):
+        plugin_dir = _install(tmp_path)
+        exe = plugin_dir / f"today-plugin{_EXE_SUFFIX}"
+        parent = plugin_dir.resolve().parent
+        monkeypatch.setattr(
+            privilege_separation, "admin_only_write_problem",
+            lambda path: f"strict {path}" if path == parent else None,
+        )
+        monkeypatch.setattr(
+            privilege_separation, "admin_only_ancestor_write_problem", lambda path: f"ancestor {path}",
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) == f"strict {parent}"
+
+    def test_the_executable_and_plugin_directory_are_never_asked_the_ancestor_rule(
+        self, monkeypatch, tmp_path,
+    ):
+        plugin_dir = _install(tmp_path)
+        exe = plugin_dir / f"today-plugin{_EXE_SUFFIX}"
+        monkeypatch.setattr(
+            privilege_separation, "admin_only_write_problem",
+            lambda path: f"strict {path}" if path in (exe, plugin_dir.resolve()) else None,
+        )
+        monkeypatch.setattr(
+            privilege_separation, "admin_only_ancestor_write_problem",
+            lambda path: pytest.fail(f"asked the ancestor rule about {path}"),
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) == f"strict {exe}"
 
 
 class TestDiscovery:

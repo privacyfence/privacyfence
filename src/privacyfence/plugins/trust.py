@@ -84,9 +84,10 @@ def _sha256_or_empty(path: Path) -> str:
         return ""
 
 
-def _paths_to_check(plugin_dir: Path, executable: Path) -> list[Path]:
+def _paths_to_check(plugin_dir: Path, executable: Path) -> list[tuple[Path, bool]]:
     """The executable, any directory between it and the plugin directory, the plugin directory,
-    then every directory above it up to and including the filesystem root.
+    then every directory above it up to and including the filesystem root, each paired with
+    whether it is one of those directories above.
 
     Real paths: a symlink anywhere on the way is followed, so the directories checked are the ones
     the operating system actually walks to reach the file it runs.
@@ -94,7 +95,10 @@ def _paths_to_check(plugin_dir: Path, executable: Path) -> list[Path]:
     real_dir = plugin_dir.resolve()
     real_exe = executable.resolve()
     between = [p for p in real_exe.parents if real_dir in p.parents]
-    return [executable, *between, real_dir, *real_dir.parents]
+    return [
+        *((path, False) for path in (executable, *between, real_dir)),
+        *((path, True) for path in real_dir.parents),
+    ]
 
 
 def admin_only_problem(plugin_dir: Path, executable: Path) -> str | None:
@@ -105,9 +109,22 @@ def admin_only_problem(plugin_dir: Path, executable: Path) -> str | None:
     ``plugin_dir``, then every ancestor of ``plugin_dir`` up to and including the filesystem
     root. Any one of them writable by the user would let the user, and so the AI client, swap
     the code the service account runs (ADR 0058, ADR 0121).
+
+    The ancestors are held to a narrower question than the rest: only whether someone else can
+    rename, replace or delete what is already in them, which is all it takes to swap the chain
+    of directories leading to the plugin. On Windows that forgives the create-folder and
+    inherit-only grants a default ``C:\\`` gives every signed-in user; on POSIX the two rules are
+    the same. An ancestor the strict rule refuses is therefore asked again under the narrower
+    one, and still reported with the strict reason when that refuses it too.
     """
-    for path in _paths_to_check(plugin_dir, executable):
+    for path, ancestor in _paths_to_check(plugin_dir, executable):
         problem = privilege_separation.admin_only_write_problem(path)
+        if (
+            problem is not None
+            and ancestor
+            and privilege_separation.admin_only_ancestor_write_problem(path) is None
+        ):
+            problem = None
         if problem is not None:
             return problem
     return None

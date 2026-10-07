@@ -3992,6 +3992,121 @@ class TestAdminOnlyWriteProblem:
         assert problem == f"could not read {tmp_path}'s ACL"
 
 
+def _default_drive_root_acl() -> list:
+    """What ``icacls C:\\`` shows on a standard Windows install: administrators and SYSTEM in
+    full, Users read-and-execute, and two grants to every signed-in user -- create-folder on the
+    root itself, and Modify that is inherit-only, so it lands on subdirectories and never on the
+    root."""
+    return [
+        windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF),
+        windows_acl.Ace(trustee="NT AUTHORITY\\SYSTEM", mask=0x1F01FF),
+        windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1200A9),
+        windows_acl.Ace(trustee="NT AUTHORITY\\Authenticated Users", mask=0x1301BF, inherit_only=True),
+        windows_acl.Ace(trustee="NT AUTHORITY\\Authenticated Users", mask=windows_acl.FILE_APPEND_DATA),
+    ]
+
+
+class TestAdminOnlyAncestorWriteProblem:
+    """A directory above a plugin's own directory is refused only when someone else can rename,
+    replace or delete what it already holds (ADR 0058). On Windows that forgives inherit-only
+    entries and create-folder; everything else stays as strict as for the executable."""
+
+    @staticmethod
+    def _windows_acl(monkeypatch, aces: list) -> None:
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(windows_acl, "read_dacl", lambda path: aces)
+
+    def test_windows_accepts_the_default_drive_root(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, _default_drive_root_acl())
+
+        assert privilege_separation.admin_only_ancestor_write_problem(tmp_path) is None
+
+    def test_the_strict_rule_still_refuses_the_default_drive_root(self, monkeypatch, tmp_path):
+        # The executable and the plugin's own directory are judged by this one.
+        self._windows_acl(monkeypatch, _default_drive_root_acl())
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is writable by NT AUTHORITY\\Authenticated Users"
+
+    def test_the_elevation_check_still_refuses_the_default_drive_root(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, _default_drive_root_acl())
+
+        problem = privilege_separation._elevation_script_problem(tmp_path / "x.ps1")
+
+        assert problem == f"{tmp_path / 'x.ps1'} is writable by NT AUTHORITY\\Authenticated Users"
+
+    @pytest.mark.parametrize("mask", [
+        0x1301BF,  # Modify
+        windows_acl.FILE_WRITE_DATA,
+        windows_acl.FILE_WRITE_EA,
+        windows_acl.FILE_WRITE_ATTRIBUTES,
+        windows_acl.FILE_DELETE_CHILD,
+        windows_acl.DELETE,
+        windows_acl.WRITE_DAC,
+        windows_acl.WRITE_OWNER,
+        windows_acl.GENERIC_WRITE,
+        windows_acl.GENERIC_ALL,
+        windows_acl.FILE_APPEND_DATA | windows_acl.FILE_WRITE_DATA,
+    ])
+    def test_windows_refuses_any_right_that_can_replace_an_entry(self, monkeypatch, tmp_path, mask):
+        self._windows_acl(monkeypatch, [
+            windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF),
+            windows_acl.Ace(trustee="BUILTIN\\Users", mask=mask),
+        ])
+
+        problem = privilege_separation.admin_only_ancestor_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is writable by BUILTIN\\Users"
+
+    def test_windows_refuses_an_inherited_modify_that_applies_to_the_directory(self, monkeypatch, tmp_path):
+        # Inherited from above (OI)(CI) without the inherit-only flag: it applies here.
+        self._windows_acl(monkeypatch, [
+            windows_acl.Ace(trustee="NT AUTHORITY\\Authenticated Users", mask=0x1301BF, inherited=True),
+        ])
+
+        problem = privilege_separation.admin_only_ancestor_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is writable by NT AUTHORITY\\Authenticated Users"
+
+    def test_windows_ignores_a_deny_entry(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, [
+            windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1F01FF, allowed=False),
+        ])
+
+        assert privilege_separation.admin_only_ancestor_write_problem(tmp_path) is None
+
+    def test_windows_still_ignores_administrators(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, [
+            windows_acl.Ace(trustee="NT SERVICE\\TrustedInstaller", mask=0x1F01FF),
+            windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=windows_acl.GENERIC_ALL),
+        ])
+
+        assert privilege_separation.admin_only_ancestor_write_problem(tmp_path) is None
+
+    def test_windows_refuses_an_acl_it_cannot_read(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, None)
+
+        problem = privilege_separation.admin_only_ancestor_write_problem(tmp_path)
+
+        assert problem == f"could not read {tmp_path}'s ACL"
+
+    @pytest.mark.parametrize("platform", ["linux", "darwin"])
+    def test_posix_is_unchanged_and_still_refuses_a_group_writable_directory(
+        self, monkeypatch, tmp_path, platform,
+    ):
+        # An older Debian's /usr/local is group-writable by staff; that stays refused.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: platform)
+        monkeypatch.setattr(
+            privilege_separation.os, "stat",
+            lambda path: os.stat_result((stat.S_IFDIR | 0o2775, 0, 0, 1, 0, 50, 0, 0, 0, 0)),
+        )
+
+        problem = privilege_separation.admin_only_ancestor_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is group- or world-writable (mode 2775)"
+
+
 def _command_line_to_argv(command_line: str) -> list[str]:
     """``CommandLineToArgvW``, in Python, for the arguments half of a Windows
     command line (no executable name).
