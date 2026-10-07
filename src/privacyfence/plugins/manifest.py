@@ -6,6 +6,7 @@ decided by the human who enables it and by the gate.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -132,10 +133,10 @@ def load_manifest(plugin_dir: Path, *, mode: str = "local") -> Manifest:
 def resolve_command(manifest: Manifest, plugin_dir: Path) -> list[str]:
     """Absolute argv for the plugin; ``command[0]`` must resolve inside ``plugin_dir``."""
     root = plugin_dir.resolve()
-    first = manifest.command[0]
-    if sys.platform == "win32" and not Path(first).suffix:
-        first += ".exe"
-    exe = (plugin_dir / first).resolve()
+    named = plugin_dir / manifest.command[0]
+    if sys.platform == "win32" and not named.suffix and not os.path.lexists(named):
+        named = named.with_name(named.name + ".exe")
+    exe = named.resolve()
     if exe != root and root not in exe.parents:
         raise ManifestError("command[0] resolves outside the plugin directory")
     return [str(exe), *manifest.command[1:]]
