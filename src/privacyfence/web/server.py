@@ -82,7 +82,7 @@ import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -128,6 +128,9 @@ from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
 from .routes_settings import AiClientConnect
 from .routes_settings import build_routes as build_settings_routes
+
+if TYPE_CHECKING:
+    from ..plugins.host import PluginHost
 from .routes_settings import settings_page_state
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
@@ -851,6 +854,7 @@ def build_app(
     agent_overrides: AgentOverrides | None = None,
     mint_mcp_token: Callable[[bool], str] | None = None,
     mcp_url: str | None = None,
+    plugin_host: PluginHost | None = None,
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -898,6 +902,8 @@ def build_app(
     always constructs and shares one pair for its whole lifetime. Every
     optional surface's parameter defaults to ``None``, so a caller (a test,
     usually) that omits it simply does not get that surface.
+
+    ``plugin_host`` (local mode) is stored on ``app.state.plugin_host`` for the plugin routes.
 
     ``mint_mcp_token``/``mcp_url`` (local mode, both or neither) add the
     settings page's "Connect an AI client" section (ADR 0104) --
@@ -1053,6 +1059,8 @@ def build_app(
         ),
         require_human_session=require_human_session,
     )
+    # Kept for the plugin routes; nothing reads it yet.
+    app.state.plugin_host = plugin_host
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(
         bootstrapped, principal_resolver or _local_principal_resolver(sessions),
@@ -1219,6 +1227,7 @@ class WebServer:
         trusted_proxies: tuple[str, ...] = (),
         step_up: StepUpConfig | None = None,
         agent_overrides: AgentOverrides | None = None,
+        plugin_host: PluginHost | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own -- every local-mode caller leaves them unset.
@@ -1240,8 +1249,12 @@ class WebServer:
         ``agent_overrides`` (local mode only) is ``settings.yaml``'s ``agent_overrides:`` section,
         parsed once by daemon_main.py (``agent_overrides.from_config``) -- a relabel only, never
         an attested source (see that module).
+
+        ``plugin_host`` (local mode only) is the daemon's ``PluginHost``; it is kept on the server
+        and on the built app for the plugin routes. ``None`` (org mode, a test) means no plugins.
         """
         self.host = host
+        self.plugin_host = plugin_host
         self.port = port
         self.org = org
         # Local mode's real session/bootstrap-code stores, built
@@ -1385,6 +1398,7 @@ class WebServer:
             step_up=step_up,
             step_up_issuer_url=f"http://{host}:{port}",
             agent_overrides=agent_overrides,
+            plugin_host=plugin_host,
             mint_mcp_token=self._mint_mcp_token if self.mcp_verifier is not None else None,
             mcp_url=f"http://{host}:{port}{MCP_PATH}" if self.mcp_verifier is not None else None,
         )
