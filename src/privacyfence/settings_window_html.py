@@ -243,6 +243,20 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-agents-meta { font-size: 13px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .pf-agents-controls { display: flex; flex-wrap: wrap; gap: var(--space-2xs); align-items: center; margin-top: 6px; font-size: var(--step-small); color: var(--ink-soft); }
 
+/* ---- Plugins ---- */
+.pf-plugin-row { padding: 12px var(--space-s); display: flex; flex-direction: column; gap: 4px; }
+.pf-plugin-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px var(--space-xs); }
+.pf-plugin-name { font-size: var(--step-body); font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.pf-plugin-meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.pf-plugin-error { font-size: var(--step-small); color: var(--danger); font-weight: 600; overflow-wrap: anywhere; }
+.pf-plugin-controls { display: flex; flex-wrap: wrap; gap: var(--space-2xs); align-items: center; margin-top: 6px; }
+.pf-plugin-tools { display: flex; flex-direction: column; gap: var(--space-2xs); margin: 0; padding: 0; list-style: none; max-height: 40vh; overflow-y: auto; }
+.pf-plugin-tool { display: flex; flex-direction: column; gap: 2px; font-size: var(--step-small); }
+.pf-plugin-tool-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs); }
+.pf-plugin-tool-name { font-weight: 650; color: var(--ink); overflow-wrap: anywhere; }
+.pf-plugin-facts { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.5; overflow-wrap: anywhere; }
+.pf-modal.pf-plugin-modal { width: min(560px, 100%); max-height: 100%; overflow-y: auto; }
+
 /* ---- About ---- */
 .pf-about-page { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding-block: var(--space-l); }
 .pf-about-icon {
@@ -288,7 +302,7 @@ _JS = r"""
   // (ADR 0032).
   var CAPS = window.__pfCapabilities || {
     mode: 'local', is_admin: false,
-    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
+    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, plugins: true, about: true },
     not_applicable_actions: [],
   };
 
@@ -321,6 +335,9 @@ _JS = r"""
     // null, and without this the auto-close-on-success check in render()
     // couldn't tell "flow just succeeded" apart from "flow never started".
     telegramAuthWasActive: false,
+    // Plugins: the plugin whose "Review and enable" was just clicked (its summary is on the way),
+    // and the one whose review dialog is open.
+    pluginReviewing: null, pluginDialog: null,
   };
   var pyState = null;
 
@@ -422,7 +439,7 @@ _JS = r"""
 
   var NAV_ITEMS = [
     ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['auto_accept', 'Auto-accept'],
-    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
+    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['plugins', 'Plugins'], ['about', 'About'],
   ];
 
   // A tabstrip (app.css) above the content when the page is narrow, a
@@ -1154,6 +1171,119 @@ _JS = r"""
     return html;
   }
 
+
+  // -------------------------------------------------------------------- //
+  // Plugins (local mode). Every button posts an action that returns at once; what the host finds
+  // out afterwards (an inspection summary in a row's `review`, a refusal in its `last_error`)
+  // arrives in a pushed snapshot, which is also what opens the review dialog.
+  // -------------------------------------------------------------------- //
+
+  var PLUGIN_STATE_LABELS = {
+    running: ['Running', 'badge-success'], discovered: ['Not enabled', 'badge-dashed'],
+    disabled: ['Disabled', 'badge-warning'], rejected: ['Rejected', 'badge-danger'],
+    backoff: ['Restarting', 'badge-warning'], starting: ['Starting', 'badge-info'],
+    missing: ['Missing', 'badge-danger'],
+  };
+  var PLUGIN_GATE_LABELS = { auto: 'Runs without asking', review: 'Review', popup: 'Popup' };
+
+  function pluginRows(state) { return state.plugins || []; }
+
+  function renderPluginRow(p) {
+    var label = PLUGIN_STATE_LABELS[p.state] || [p.state, 'badge-dashed'];
+    var html = '<div class="pf-plugin-row" data-plugin="' + esc(p.name) + '">';
+    html += '<div class="pf-plugin-head"><div class="pf-plugin-name">' + esc(p.display_name) +
+      (p.version ? ' <span class="pf-plugin-meta">' + esc(p.version) + '</span>' : '') + '</div>';
+    html += '<span class="badge ' + label[1] + '">' + esc(label[0]) + '</span></div>';
+    if (p.reason) html += '<div class="pf-plugin-meta">' + esc(p.reason) + '</div>';
+    if (p.tools_note) html += '<div class="pf-plugin-meta">' + esc(p.tools_note) + '</div>';
+    if (p.last_error) html += '<div class="pf-plugin-error" role="alert">' + esc(p.last_error) + '</div>';
+    html += '<div class="pf-plugin-controls">';
+    if (p.page_url) {
+      html += '<a class="pf-link" href="' + esc(p.page_url) + '" target="_blank" rel="noopener" aria-label="Open page for ' +
+        esc(p.display_name) + '">Open page</a>';
+    }
+    var reviewing = ui.pluginReviewing === p.name;
+    if (p.state !== 'rejected' && p.state !== 'missing') {
+      html += '<div class="button ' + (p.enabled ? 'secondary' : 'primary') + '" role="button" tabindex="0" aria-label="' +
+        (p.enabled ? 'Review ' : 'Review and enable ') + esc(p.display_name) + '"' +
+        (reviewing ? ' aria-disabled="true"' : ' data-plugin-review="' + esc(p.name) + '"') + '>' +
+        (reviewing ? 'Reviewing…' : (p.enabled ? 'Review again' : 'Review and enable')) + '</div>';
+    }
+    if (p.enabled) {
+      html += '<div class="button secondary" role="button" tabindex="0" aria-label="Disable ' + esc(p.display_name) + '" ' +
+        dataAttr('disable_plugin', { name: p.name }) + '>Disable</div>';
+    }
+    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Delete the data of ' + esc(p.display_name) +
+      '" data-plugin-purge="' + esc(p.name) + '">Delete this plugin\'s data</div>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function renderPlugins(state) {
+    var rows = pluginRows(state);
+    var html = '<div class="pf-page">';
+    html += '<h1 class="pf-page-title">Plugins</h1>';
+    html += '<div class="pf-page-subtitle">A plugin is a program an administrator installed that adds tools. It only runs after you review what it can do and enable it.</div>';
+    html += '<div class="card pf-list pf-plugin-list">';
+    if (rows.length === 0) {
+      html += '<div class="pf-plugin-row"><div class="pf-plugin-meta">No plugins are installed.</div></div>';
+    }
+    rows.forEach(function (p) { html += renderPluginRow(p); });
+    html += '</div>';
+    html += '<div class="pf-plugin-controls"><div class="button secondary" role="button" tabindex="0" aria-label="Rescan plugins" ' +
+      dataAttr('rescan_plugins', {}) + '>Rescan</div></div>';
+    html += '</div>';
+    return html;
+  }
+
+  function renderPluginDialog(state) {
+    if (!ui.pluginDialog) return '';
+    var row = pluginRows(state).find(function (p) { return p.name === ui.pluginDialog; });
+    var r = row && row.review;
+    if (!r) return '';
+    var html = '<div class="pf-modal-overlay" role="presentation">';
+    html += '<div class="pf-modal pf-plugin-modal" role="dialog" aria-modal="true" aria-label="Enable ' + esc(r.display_name) + '">';
+    html += '<div class="pf-modal-title">Enable ' + esc(r.display_name) + ' ' + esc(r.version) + '?</div>';
+    html += '<div class="pf-modal-desc">Once enabled, these tools appear to Claude. Check each one.</div>';
+    html += '<ul class="pf-plugin-tools">';
+    r.tools.forEach(function (t) {
+      html += '<li class="pf-plugin-tool"><div class="pf-plugin-tool-head"><span class="pf-plugin-tool-name">' + esc(t.name) + '</span>' +
+        '<span class="badge ' + (t.gate === 'auto' ? 'badge-warning' : 'badge-info') + '">' + esc(PLUGIN_GATE_LABELS[t.gate] || t.gate) + '</span>' +
+        '<span class="badge badge-dashed">' + (t.read_only ? 'Read-only' : 'Writes') + '</span>' +
+        (t.destructive ? '<span class="badge badge-danger">Destructive</span>' : '') + '</div>' +
+        (t.description ? '<div class="pf-plugin-meta">' + esc(t.description) + '</div>' : '') + '</li>';
+    });
+    if (r.tools.length === 0) html += '<li class="pf-plugin-meta">This plugin declares no tools.</li>';
+    html += '</ul>';
+    html += '<div class="pf-plugin-facts">Reads from your connectors: ' +
+      (r.source_operations.length ? esc(r.source_operations.join(', ')) : 'nothing') + '.</div>';
+    html += '<div class="pf-plugin-facts">Serves its own pages: ' + (r.pages ? 'yes' : 'no') + '.</div>';
+    if (r.service_credentials) html += '<div class="pf-plugin-facts">Uses its own service credentials.</div>';
+    if (r.max_gate_floor === 'auto') html += '<div class="pf-plugin-facts"><strong>Some tools run without asking.</strong></div>';
+    html += '<div class="pf-modal-buttons">';
+    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel" data-plugin-cancel="1">Cancel</div>';
+    html += '<div class="button primary" role="button" tabindex="0" aria-label="Enable ' + esc(r.display_name) +
+      '" data-plugin-enable="' + esc(r.name) + '">Enable</div>';
+    html += '</div></div></div>';
+    return html;
+  }
+
+  // The summary arrives in a pushed snapshot: open the dialog for the plugin that asked, and close
+  // it once the review is gone (enabled, or the plugin changed).
+  function syncPluginDialog(state) {
+    var rows = pluginRows(state);
+    if (ui.pluginReviewing) {
+      var asked = rows.find(function (p) { return p.name === ui.pluginReviewing; });
+      if (!asked) { ui.pluginReviewing = null; }
+      else if (asked.review) { ui.pluginDialog = asked.name; ui.pluginReviewing = null; }
+      else if (asked.last_error) { ui.pluginReviewing = null; }
+    }
+    if (ui.pluginDialog) {
+      var open = rows.find(function (p) { return p.name === ui.pluginDialog; });
+      if (!open || !open.review) { ui.pluginDialog = null; }
+    }
+  }
+
   // -------------------------------------------------------------------- //
   // Top-level render
   // -------------------------------------------------------------------- //
@@ -1176,6 +1306,7 @@ _JS = r"""
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
       case 'agents': return renderAgents(state);
+      case 'plugins': return renderPlugins(state);
       case 'about': return renderAbout(state);
       default: return renderGeneral(state);
     }
@@ -1237,6 +1368,7 @@ _JS = r"""
 
   function render(state) {
     pyState = state;
+    syncPluginDialog(state);
     // Auto-close the modal once Python reports the sign-in is no longer in
     // progress (success or explicit cancel) -- see telegram_cancel_auth/
     // the success branches of telegram_submit_code/telegram_submit_2fa.
@@ -1259,6 +1391,7 @@ _JS = r"""
     }
     html += renderSection(state) + '</div></div>';
     html += renderTelegramModal(state);
+    html += renderPluginDialog(state);
     document.getElementById('app').innerHTML = html;
     revealSelectedTabs();
     if (ui.telegramModalOpen) {
@@ -1338,6 +1471,30 @@ _JS = r"""
 
     var telegramSubmitEl = e.target.closest('[data-telegram-submit]');
     if (telegramSubmitEl) { submitTelegramModal(telegramSubmitEl.getAttribute('data-telegram-submit')); return; }
+
+    var pluginReviewEl = e.target.closest('[data-plugin-review]');
+    if (pluginReviewEl) {
+      ui.pluginReviewing = pluginReviewEl.getAttribute('data-plugin-review');
+      post('inspect_plugin', { name: ui.pluginReviewing });
+      render(pyState);
+      return;
+    }
+    var pluginCancelEl = e.target.closest('[data-plugin-cancel]');
+    if (pluginCancelEl) { ui.pluginDialog = null; render(pyState); return; }
+    var pluginEnableEl = e.target.closest('[data-plugin-enable]');
+    if (pluginEnableEl) {
+      var enabling = pluginRows(pyState).find(function (p) { return p.name === pluginEnableEl.getAttribute('data-plugin-enable'); });
+      if (enabling && enabling.review) {
+        post('enable_plugin', {
+          name: enabling.name, executable_sha256: enabling.review.executable_sha256, manifest_sha256: enabling.review.manifest_sha256,
+        });
+      }
+      ui.pluginDialog = null;
+      render(pyState);
+      return;
+    }
+    var pluginPurgeEl = e.target.closest('[data-plugin-purge]');
+    if (pluginPurgeEl) { post('purge_plugin_data', { name: pluginPurgeEl.getAttribute('data-plugin-purge') }); return; }
 
     var repoEl = e.target.closest('[data-action="open_repo"]');
     if (repoEl) { post('open_repo', {}); return; }
@@ -1492,7 +1649,7 @@ _JS = r"""
 """
 
 
-_ALL_SECTIONS = ("general", "connectors", "ai_client", "auto_accept", "privacy", "audit", "agents", "about")
+_ALL_SECTIONS = ("general", "connectors", "ai_client", "auto_accept", "privacy", "audit", "agents", "plugins", "about")
 
 # The four actions web/routes_settings.py's own bridge shim intercepts
 # client-side rather than forwarding to the generic dispatcher (that
@@ -1559,7 +1716,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
             # Org mode's clients connect with OAuth 2.1, not a local token
             # (ADR 0011), so the local "Connect an AI client" page is never shown.
             "general": True, "connectors": False, "ai_client": False, "auto_accept": True,
-            "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
+            "privacy": is_admin, "audit": True, "agents": is_admin, "plugins": False, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
     }

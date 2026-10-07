@@ -21,6 +21,8 @@ popup, so there's nothing to prioritize or exclude.
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import threading
 import time
@@ -76,22 +78,204 @@ def controller(tmp_path, monkeypatch):
     return ctrl
 
 
-class TestPluginHostWiring:
-    def test_rows_changed_listener_is_registered_on_the_host(self, tmp_path):
-        listeners = []
-        host = SimpleNamespace(set_rows_changed_listener=listeners.append)
-        config_path = tmp_path / "settings.yaml"
-        config_path.write_text("connectors: {}\n", encoding="utf-8")
+class FakePluginHost:
+    """Records what the controller asks of a PluginHost; ``submit`` is given each coroutine."""
 
-        ctrl = sc.SettingsController(
-            str(config_path), connectors=[], connector_host=SimpleNamespace(), plugin_host=host,
-        )
+    def __init__(self, rows=None, *, fail_submit=False):
+        self.listener = None
+        self.rows_value = rows or []
+        self.calls = []
+        self.connector_changes = []
+        self.fail_submit = fail_submit
+
+    def set_rows_changed_listener(self, fn):
+        self.listener = fn
+
+    def rows(self):
+        return list(self.rows_value)
+
+    def on_connectors_changed(self, rows):
+        self.connector_changes.append(rows)
+
+    def submit(self, coro):
+        if self.fail_submit:
+            coro.close()
+            raise RuntimeError("The plugin host is not running.")
+        self.calls.append(coro)
+        future = concurrent.futures.Future()
+        future.set_result(None)
+        return future
+
+    async def rescan(self):
+        return "rescan"
+
+    async def inspect(self, name):
+        return ("inspect", name)
+
+    async def enable(self, name, *, executable_sha256, manifest_sha256):
+        return ("enable", name, executable_sha256, manifest_sha256)
+
+    async def disable(self, name):
+        return ("disable", name)
+
+    async def purge(self, name):
+        return ("purge", name)
+
+
+@pytest.fixture
+def plugin_controller(tmp_path, controller):
+    host = FakePluginHost(rows=[{"name": "demo", "state": "running"}])
+    ctrl = sc.SettingsController(
+        controller._config_path, connectors=[], connector_host=SimpleNamespace(set_connectors=lambda conns: None),
+        plugin_host=host,
+    )
+    return ctrl, host
+
+
+class TestPluginHostWiring:
+    def test_rows_changed_listener_is_registered_on_the_host(self, plugin_controller):
+        ctrl, host = plugin_controller
 
         assert ctrl._plugin_host is host
-        assert listeners == [ctrl._push_snapshot]
+        assert host.listener == ctrl._on_plugin_rows_changed
 
     def test_no_host_by_default(self, controller):
         assert controller._plugin_host is None
+
+    def test_rows_changed_is_marshaled_onto_the_main_thread(self, plugin_controller):
+        """The host calls its listener from the web loop's thread, never from where the page's
+        state is pushed from, so the push goes through ``call_on_main`` like every other listener."""
+        ctrl, host = plugin_controller
+        recorded = []
+        pushed = []
+        ctrl.on_change = pushed.append
+        sc.set_main_dispatcher(lambda f, *a, **k: recorded.append((f, a, k)))
+        try:
+            host.listener()
+
+            assert pushed == []
+            assert [r[0] for r in recorded] == [ctrl._push_snapshot]
+            recorded[0][0](*recorded[0][1])
+            assert len(pushed) == 1 and pushed[0]["plugins"] == host.rows_value
+        finally:
+            sc.set_main_dispatcher(None)
+
+    def test_rows_changed_from_another_thread_never_pushes_on_that_thread(self, plugin_controller):
+        ctrl, host = plugin_controller
+        recorded = []
+        pushing_threads = []
+        ctrl.on_change = lambda state: pushing_threads.append(threading.current_thread())
+        sc.set_main_dispatcher(lambda f, *a, **k: recorded.append((f, a, k)))
+        try:
+            worker = threading.Thread(target=host.listener)
+            worker.start()
+            worker.join()
+
+            assert pushing_threads == [] and len(recorded) == 1
+        finally:
+            sc.set_main_dispatcher(None)
+
+
+class TestPluginSnapshot:
+    def test_snapshot_contains_the_hosts_rows(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        assert ctrl.snapshot()["plugins"] == [{"name": "demo", "state": "running"}]
+
+    def test_snapshot_without_a_host_has_an_empty_list(self, controller):
+        assert controller.snapshot()["plugins"] == []
+
+
+class TestPluginActions:
+    """Each action hands the host a coroutine and returns the snapshot at once: it never waits."""
+
+    def _run(self, host):
+        assert len(host.calls) == 1
+        return asyncio.run(host.calls[0])
+
+    def test_rescan(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        state = ctrl.rescan_plugins()
+
+        assert self._run(host) == "rescan"
+        assert state["plugins"] == host.rows_value
+
+    def test_inspect(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        ctrl.inspect_plugin("demo")
+
+        assert self._run(host) == ("inspect", "demo")
+
+    def test_enable_passes_both_hashes(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        ctrl.enable_plugin("demo", "aa", "bb")
+
+        assert self._run(host) == ("enable", "demo", "aa", "bb")
+
+    def test_disable(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        ctrl.disable_plugin("demo")
+
+        assert self._run(host) == ("disable", "demo")
+
+    def test_purge(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        ctrl.purge_plugin_data("demo")
+
+        assert self._run(host) == ("purge", "demo")
+
+    def test_a_host_that_is_not_running_is_reported_not_raised(self, plugin_controller):
+        ctrl, host = plugin_controller
+        host.fail_submit = True
+
+        state = ctrl.inspect_plugin("demo")
+
+        assert state["error"] == "The plugin host is not running."
+
+    def test_without_a_host_the_action_says_so(self, controller):
+        state = controller.rescan_plugins()
+
+        assert state["error"] == "Plugins are not available."
+
+    def test_the_action_does_not_wait_for_the_host(self, plugin_controller):
+        ctrl, host = plugin_controller
+        pending = concurrent.futures.Future()
+        host.submit = lambda coro: (coro.close(), pending)[1]
+
+        state = ctrl.inspect_plugin("demo")
+
+        assert not pending.done() and "plugins" in state
+
+
+@pytest.mark.usefixtures("stub_connector_build")
+class TestConnectorChangesReachThePluginHost:
+    def test_refresh_connectors_forwards_the_rows(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        ctrl.refresh_connectors()
+
+        assert wait_until(lambda: host.connector_changes)
+        assert len(host.connector_changes) == 1
+        assert {r["key"] for r in host.connector_changes[0]} == set(sc.ALL_CONNECTORS)
+        assert all({"enabled", "authed"} <= set(r) for r in host.connector_changes[0])
+
+    def test_a_failed_rebuild_forwards_nothing(self, plugin_controller, monkeypatch):
+        ctrl, host = plugin_controller
+
+        def broken(cfg, org):
+            raise RuntimeError("no network")
+
+        monkeypatch.setattr(daemon_main, "build_connectors", broken)
+
+        ctrl.refresh_connectors()
+
+        time.sleep(0.2)
+        assert host.connector_changes == []
 
 
 class TestRunAsyncMarshaling:
@@ -1984,7 +2168,7 @@ class TestSnapshotStructure:
     def test_snapshot_has_one_key_per_page(self, controller):
         state = controller.snapshot()
         assert set(state) == {
-            "error", "general", "connectors", "telegram_auth", "auto_accept", "privacy", "audit", "about",
+            "error", "general", "connectors", "telegram_auth", "auto_accept", "privacy", "audit", "about", "plugins",
         }
 
     def test_connectors_cover_all_connectors(self, controller):

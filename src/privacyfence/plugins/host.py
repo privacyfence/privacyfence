@@ -42,6 +42,7 @@ from privacyfence.plugins.constants import (
     mcp_tool_name,
 )
 from privacyfence.plugins.connector import PluginConnector
+from privacyfence.plugins.events import EventFanout
 from privacyfence.plugins.manifest import Manifest, ManifestError
 from privacyfence.plugins.protocol import InitializeResult, RpcError, principal_context
 from privacyfence.plugins.spool import DownloadSpool
@@ -147,7 +148,7 @@ class PluginHost:
         self._plugins: dict[str, _Plugin] = {}
         self._spool: DownloadSpool | None = None
         self._directory_unreadable = False
-        self._connector_rows: list[dict] = []
+        self._events = EventFanout(self._running_peers)
         self._tools_changed: Callable[[], None] = lambda: None
         self._rows_changed: Callable[[], None] = lambda: None
         self._unattended: Callable[[], bool] = lambda: False
@@ -172,7 +173,26 @@ class PluginHost:
         self._rows_changed = fn
 
     def on_connectors_changed(self, rows: list[dict]) -> None:
-        self._connector_rows = list(rows)
+        """Tell every running plugin about connector state changes. Called on the main thread by
+        the settings controller; the sends are scheduled on the host's loop and never awaited."""
+        events = self._events.changes(rows)
+        if not events or self.loop is None:
+            return
+        coro = self._events.send(events)
+        try:
+            self.submit(coro)
+        except Exception:
+            coro.close()
+            logger.debug("Could not schedule connector events", exc_info=True)
+
+    def _running_peers(self) -> list:
+        peers = []
+        for plugin in self._plugins.values():
+            supervisor = plugin.supervisor
+            peer = supervisor.peer if supervisor is not None else None
+            if peer is not None and plugin.state == "running":
+                peers.append(peer)
+        return peers
 
     def submit(self, coro: Coroutine) -> concurrent.futures.Future:
         """Schedule ``coro`` on the host's loop and return at once."""
