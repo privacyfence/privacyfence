@@ -98,6 +98,8 @@ privacyfence.eu.
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
+- [`plugin-framework-plan.md`](plugin-framework-plan.md) — the open plan for the plugin framework
+  (out-of-process plugins, the plugin SDK and the example plugins); deleted when its work lands.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they
   are, and what was rejected.
 

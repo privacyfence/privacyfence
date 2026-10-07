@@ -47,6 +47,18 @@ Measurements are against `main` at `ddcf8f9e`.
 
 ### Tools, gate and policy
 
+- **Tool parameters.** `ToolParam` (`connector.py:17`) has `annotation`, one of `"str"`, `"int"`,
+  `"bool"` or `"float"`, and `web/mcp_tools.py:61` `_param_schema` publishes anything else as a
+  string. Connector tools carry no array, object or enum parameters (ADR 0115 lists fixed choices
+  in prose). The gated-tool `reason` parameter is `ToolParam("reason", "str", required=True,
+  description="One sentence: why are you calling this tool right now?")`
+  (`connectors/apps_script.py:111` and every connector).
+- **Card layout.** A NARROW card has no preview pane (`approval_window_html.py:46`, `:368`), so
+  blocks passed to it are not shown. `preview` (the dict) is stored on `PendingApproval.preview`
+  and read by notifications, so it must carry metadata only (guidelines §1.5).
+- **Ledger replay.** An approved read (`gate="review"`) stays in the decision ledger for
+  `ledger_ttl` (5 minutes, `approvals.py:104`), and an identical repeat call within that window
+  is released without a card (`consume_ledger`, :774-810, ADR 0073).
 - **Tool listing.** `web/routes_mcp.py:367` `handle_list_tools` lists
   `mcp_tools.to_mcp_tool(spec)` for every `spec` of every `connector` in
   `dispatcher.connectors.values()`, plus `META_TOOLS` (`web/mcp_tools.py:318`). Annotations come
@@ -108,8 +120,25 @@ Measurements are against `main` at `ddcf8f9e`.
   `web/approval_step_up.py:121`). `registry.await_status(approval_id)` (`approvals.py:910`) is what
   `privacyfence_await_approval` reads. `dialog_window_html.build_confirmation_html(*, title,
   message_lines, cancel_label, confirm_label)` (:212) renders text only.
-- **Unattended sessions** exist only when the org config sets `unattended_sessions.enabled`
-  (`daemon_main.py:1887`). In local mode they never exist.
+- **Unattended sessions.** `run_app` reads the org config's `unattended_sessions.enabled`
+  (`daemon_main.py:1887`) and passes it to the dispatcher in local mode too (`:809-811`). When it
+  is on, an MCP session can mark itself unattended (`McpDispatcher.begin_unattended_session`,
+  `web/mcp_dispatch.py:595`; the set is `self._unattended_sessions`, :108). A plugin's
+  confirmation request reaches the daemon outside any MCP call's context, so it cannot read the
+  `unattended_scope` context variable.
+- **Event loop.** `web_loop = server.wait_until_ready(timeout=5)` (`daemon_main.py:1927`) is the
+  web server's asyncio loop. MCP calls and Settings routes run on it, and
+  `asyncio.run_coroutine_threadsafe(..., web_loop)` is already used to schedule work on it
+  (`daemon_main.py:1588`). Settings actions call controller methods **synchronously on that loop**
+  (`web/routes_settings.py:877` `_call_action`), so a controller method must never block waiting
+  on a coroutine that runs on the same loop.
+- **Confirm cards never finalize on their own.** Answering a confirm card only calls
+  `PendingApproval.answer`, which sets `event` (`approvals.py:330-351`). The dialog posts
+  `confirm` or `cancel` (`CONFIRM_RESULTS`, :142). `registry.finalize(approval_id, decision)`
+  (:740) is what `await_status` (:910) reads, and nothing calls it for a confirm card. The decide
+  route refuses a deny note unless the result is `deny` (`web/routes_approvals.py:666-671`), so a
+  confirm card never carries one. `register_confirm` (:630) does not call `_notify_created`
+  (:503), so no notification goes out.
 
 ### Daemon, settings, web
 
@@ -169,7 +198,7 @@ Measurements are against `main` at `ddcf8f9e`.
   and `atomic_write_json(path, data, *, mode=0o600)` (:224).
 - **Principals.** `principal.LOCAL_PRINCIPAL_ID == "local"` (:42), `current_principal()` (:95) and
   `principal_scope` (:99). No principal-removal hook exists.
-- **Config keys** have no schema. `resources/settings.yaml.example` is the source of truth, and
+- **Config keys** have no schema. `src/privacyfence/resources/settings.yaml.example` is the source of truth, and
   `tests/unit/test_docs_configuration_reference.py` requires every key in it to appear in
   `docs/configuration-reference.md`.
 
@@ -177,9 +206,9 @@ Measurements are against `main` at `ddcf8f9e`.
 
 | Operation | Client method | Returns |
 |---|---|---|
-| `salesforce.report_run` | `SalesforceClient.run_report(report_id, columns=None, filters=None, summary_only=False)` (`salesforce_client.py:554`) | **Raw** analytics JSON, `allData` included |
+| `salesforce.report_run` | `SalesforceClient.run_report(report_id, columns=None, filters=None, summary_only=False)` (`salesforce_client.py:554`); `filters` is `list[ReportFilter]` (:58), built and validated by `connectors/salesforce.py:166` `_parse_report_filters(raw: str)` from a JSON array of `{column, operator, value}` | **Raw** analytics JSON, `allData` included |
 | `jira.search` | `JiraClient.search_issues(jql, max_results=20)` (`jira_client.py:313`), up to 500 | Parsed `list[JiraIssue]` dataclasses |
-| `drive.download` | `DriveClient.download_file(file_id, destination_dir)` (`drive_client.py:1522`), streams 8 MB chunks to disk | A file. Google-native files are exported per `_GOOGLE_DOC_EXPORTS` (:48): Docs and Slides to `text/plain`, Sheets to `text/csv`. No range reads |
+| `drive.download` | `DriveClient.download_file_bytes(file_id)` (`drive_client.py:1558`); `download_file` (:1522) writes `<dest>/<Drive file name>` and also holds the whole file in memory | `{data: bytes, name, mime_type, size_bytes}`. Google-native files are exported per `_GOOGLE_DOC_EXPORTS` (:48): Docs and Slides to `text/plain`, Sheets to `text/csv`, and report size 0 in metadata. No range reads. `get_file_metadata(file_id) -> DriveFile` (:1338) has `modified_time`; `_FILE_FIELDS` (:66) has no `headRevisionId` |
 | `sheets.get_values` | `DriveClient.get_sheet_values(spreadsheet_id, range_a1, value_render_option="FORMATTED_VALUE")` (`drive_client.py:2288`) | Raw `values` array |
 | `confluence.get_page` | `ConfluenceClient.get_page(page_id)` (`confluence_client.py:497`) | Parsed `ConfluencePage`. `body` is the storage-format XHTML |
 | `calendar.list_events` | `CalendarClient.list_events(calendar_id, max_results=20, time_min="", time_max="", query="")` (`calendar_client.py:442`), up to 250 | Parsed `list[CalendarEvent]` |
@@ -209,8 +238,15 @@ Clients are private attributes of the connectors: `SalesforceConnector._sf`
     `CHANGELOG.md` and `tests/fixtures/`: "Phase N", `P9`, `#123`, `§x.y`, `B<n>`, `D<n>`,
     "as of vX". **Code, comments, workflows and tests must not mention this plan's D-numbers,
     phase ids or the issue number.** Cite ADRs or the issue's full URL.
-  - `tests/unit/test_docs_references_exist.py`: every `docs/...md` path mentioned anywhere must
-    exist. So nothing outside `docs/` may name this plan file.
+  - `tests/unit/test_docs_references_exist.py`: every path of the form docs-slash-name-dot-md
+    mentioned anywhere, including GitHub URLs and this plan, must exist. So nothing outside `docs/`
+    may name this plan file, and nothing may name a doc before the phase that creates it. This plan
+    names the two new docs without their directory prefix (`plugin-protocol.md`, `plugins.md`) for
+    that reason. Briefs that need to name them do the same.
+  - `tests/unit/test_website_docs_allowlist.py`: every doc in `docs/` must be listed in
+    `docs/README.md`'s "User and operator docs" half or in `scripts/build_site.py`'s
+    `CONTRIBUTOR_DOCS`. This plan is in `CONTRIBUTOR_DOCS` on its own branch, which is the same
+    precedent as the Microsoft connectors plan. The retirement phase removes it.
   - `tests/unit/test_docs_links.py` checks links.
   - `tests/unit/test_website_docs_allowlist.py`: a new `docs/*.md` must be listed in
     `docs/README.md` or in `scripts/build_site.py`'s `CONTRIBUTOR_DOCS`.
@@ -272,6 +308,11 @@ Other new files:
 
 Module-level state in the package registers its reset with `_testing.register_reset`, so
 `tests/conftest.py` gains exactly one line, `plugins._testing.reset_all()`, in `_reset()` (p1).
+This is a deliberate departure from §2.3's one-line-per-reset habit. About ten modules, written in
+parallel phases, each add state, and ten phases appending to the same `_reset()` would conflict
+at every merge. The registry keeps `tests/conftest.py` out of every phase but the first. The
+dynamic policy tables in `auto_accept.py` (D15) register through it too, with a function-local
+import.
 
 ### D2. Constants (`plugins/constants.py`, verbatim)
 
@@ -439,12 +480,12 @@ is org only.
 | Method | Dir | Kind | Params | Result | Errors |
 |---|---|---|---|---|---|
 | `initialize` | D→P | req | `protocol_version, purpose ("run"\|"introspect"), mode ("local"\|"org"), daemon {name, version}, plugin {name, manifest_version}, data_dir, principals: PrincipalContext[], limits {max_line_bytes, max_in_flight, inline_result_bytes}` | `protocol_version, plugin {name, version}, scope_types: [{name, description}], tools: ToolDef[]` | `version_mismatch`, `invalid_params` |
-| `tools.changed` | P→D | notif | `tools: ToolDef[]` | — | (validated as a whole; D9) |
+| `tools.changed` | P→D | notif | `tools: ToolDef[]` | — | (validated as a whole, and only tools the human reviewed at enable are accepted; D9) |
 | `tool.prepare` | D→P | req | `call_id, principal, tool, args, reason (str\|null)` | `preview: Block[], payload?: Block[], scopes: {type: [str]}` | `unknown_tool`, `invalid_params`, `invalid_blocks`, `payload_too_large`, `connector_unavailable` |
 | `tool.execute` | D→P | req | `call_id, principal, tool, args, args_digest, approval {approval_id, decision:"approved", via:"card"\|"rule"\|"auto", decided_at}` | `result: any, approval_id?: str` | `unknown_call`, `digest_mismatch` |
 | `source.call` | P→D | req | `principal: str, operation, params, credential?` (org only) | `operation, data, bytes, next_cursor (str\|null)` | `operation_not_allowed`, `unknown_principal`, `connector_unavailable`, `payload_too_large`, `upstream_error`, `org_only_field`, `introspection_only`, `invalid_params` |
 | `confirm.request` | P→D | req | `principal: str, kind, title, preview: Block[], require_step_up (default true)` | `approval_id, expires_at` | `confirmation_refused`, `invalid_blocks`, `unknown_principal`, `introspection_only` |
-| `confirm.await` | P→D | req | `approval_id, timeout_ms?` (≤ `CONFIRM_AWAIT_MAX_MS`) | `status ("approved"\|"denied"\|"expired"), deny_note?, decided_at?` | `timeout`, `invalid_params` |
+| `confirm.await` | P→D | req | `approval_id, timeout_ms?` (≤ `CONFIRM_AWAIT_MAX_MS`) | `status ("approved"\|"denied"\|"expired"), decided_at?` | `timeout`, `invalid_params` |
 | `web.request` | D→P | req | `principal, method ("GET"), path, query: {str: str}` | `status, headers: {str: str}, body, body_encoding ("utf8"\|"base64")` | — |
 | `storage.purge` | D→P | req | `scope ("all"\|"install"\|"principal"), principal?` | `{purged: true}` | — |
 | `connector.state_changed` | D→P | notif | `connector, state ("enabled"\|"disabled"\|"signed_in"\|"signed_out"), principal` | — | — |
@@ -466,7 +507,8 @@ Further method rules:
   separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()`. For read-only tools the
   daemon ignores `result` and returns the prepared payload (D10). A write's `result` must
   serialize to at most `INLINE_RESULT_BYTES`.
-- `web.request`: other status values become 502. Of the response headers, only `content-type` and
+- `web.request`: `method` is always `"GET"` on the wire. A HEAD request is forwarded as GET, and
+  the daemon drops the body. Other status values become 502. Of the response headers, only `content-type` and
   `cache-control` are kept (D14).
 - `storage.purge` gets an acknowledgement, with a timeout (D12).
 
@@ -710,7 +752,7 @@ says so in a comment and changes no connector.
 
 | Operation | `connector`/`client_attr` | Params (validated) | `data` | `targets` (audit) |
 |---|---|---|---|---|
-| `salesforce.report_run` | `salesforce`/`_sf` | `report_id: str` (required), `filters?: list` | `client.run_report(report_id, filters=filters)` as returned (**raw**) | `report_id` |
+| `salesforce.report_run` | `salesforce`/`_sf` | `report_id: str` (required), `filters?: list[{column, operator, value}]` | `client.run_report(report_id, filters=_parse_report_filters(json.dumps(filters)) if filters else None)` as returned (**raw**). `_parse_report_filters` is imported from `privacyfence.connectors.salesforce`, so the operator check is the connector's own. Its `ValueError` becomes `invalid_params` with the error text as detail | `report_id`, and the filter count |
 | `jira.search` | `jira`/`_jira` | `jql: str` (required), `max_results?: int` 1-500, default 100 | `[dataclasses.asdict(i) for i in client.search_issues(jql, max_results)]` (**normalized**) | `"jql:" + sha256(jql)[:16]`, plus the count |
 | `drive.download` | `drive`/`_drive` | `file_id: str` (required), `length?: int` 1..`DRIVE_CHUNK_BYTES` (default the max), and either `offset?: int` ≥ 0 or `cursor?: str`, not both (`invalid_params`) | `{file_id, mime_type, revision, total_size_bytes, offset, length, eof, content_base64}` (**raw bytes**); `next_cursor` set until `eof` | `file_id`, `offset`, `length` |
 | `sheets.get_values` | `drive`/`_drive` | `spreadsheet_id: str`, `range: str` (both required), `value_render_option?`: `FORMATTED_VALUE` (default), `UNFORMATTED_VALUE` or `FORMULA` | `{"values": client.get_sheet_values(...)}` (**raw values array**) | `spreadsheet_id`, `range` |
@@ -734,14 +776,18 @@ can add `*_raw` operations. This goes into ADR 0123.
 - `DownloadSpool(root: Path, *, clock=time.monotonic)`, where `root` is
   `paths.data_dir()/plugin-spool`, created with `secure_mkdir(mode=0o700)`.
 - On the first call for a `(plugin, file_id)` with no cursor:
-  - fetch metadata with the client's own metadata call (`DriveClient.get_file_metadata(file_id)`;
-    a worker who finds it named differently stops with `status=blocked`);
-  - refuse a file over `DRIVE_MAX_FILE_BYTES` with `payload_too_large`;
-  - download the whole file with `download_file(file_id, <spool dir>)` into
-    `root/<plugin>/<sha256(file_id)[:16]>-<revision>`;
-  - a native Google file is exported per the client's existing `_GOOGLE_DOC_EXPORTS`. Range reads
-    do not exist, so spooling is the uniform path.
-- `revision` is the file's `headRevisionId` when present, else its `modifiedTime`.
+  - fetch metadata with `DriveClient.get_file_metadata(file_id)`, which returns a `DriveFile`;
+  - refuse a file whose metadata `size` is over `DRIVE_MAX_FILE_BYTES` with `payload_too_large`.
+    Google-native files report 0, so the check is repeated on the downloaded bytes;
+  - fetch the bytes with `DriveClient.download_file_bytes(file_id)` (`data` is the whole file,
+    already exported per `_GOOGLE_DOC_EXPORTS` for a native file). If `len(data)` is over
+    `DRIVE_MAX_FILE_BYTES`, the result is `payload_too_large`. Otherwise write the bytes yourself
+    with `secure_files.atomic_write_bytes(..., mode=0o600)` to
+    `root/<plugin>/<sha256(file_id)[:16]>-<sha256(revision)[:12]>`. Do **not** use `download_file`,
+    which names the file after its Drive name. Range reads do not exist, so spooling is the
+    uniform path. `mime_type` in the result comes from `download_file_bytes`;
+- `revision` is the `DriveFile.modified_time` string. `_FILE_FIELDS` has no `headRevisionId`, and
+  this plan does not change the client.
 - The cursor is `base64url(json.dumps({"f": file_id, "r": revision, "o": next_offset}))`. A cursor
   that doesn't decode is `invalid_params`.
 - On every call with a cursor or offset, metadata is re-read. A revision different from the
@@ -832,18 +878,34 @@ class Supervisor:
 
 ### D9. Tool definitions and exposure (`plugins/tools.py`, `plugins/connector.py`)
 
-`validate_tool_defs(plugin: str, defs: Any, scope_types: list[dict], manifest: Manifest) ->
-list[ToolDef]` raises `ToolDefError(detail)` on the first violation, so the whole list is rejected:
+`validate_tool_defs(plugin: str, defs: Any, scope_types: list[dict], manifest: Manifest, *,
+reviewed: frozenset[tuple] | None = None) -> list[ToolDef]` raises `ToolDefError(detail)` on the first violation, so the whole list is rejected:
 
 - the list type, and at most `MAX_TOOLS` entries;
 - each `ToolDef.from_wire` passes, and names are unique;
 - `TOOL_NAME_RE`;
 - `len(mcp_tool_name(plugin, name)) ≤ MCP_TOOL_NAME_MAX`;
+- `mcp_tool_name(plugin, name)` is not in `auto_accept.STATIC_TOOL_NAMES` (D15) nor in
+  `web.mcp_tools.META_TOOL_NAMES` (`"tool <mcp name> collides with a built-in tool"`). A plugin
+  `apps` with a tool `script_get_content` would otherwise shadow `apps_script_get_content`;
 - the description is 1..`MAX_DESCRIPTION_CHARS`;
-- `parameters` is a dict with `"type": "object"`, and has no property named `reason`;
+- `parameters` is a dict with `"type": "object"`, and has no property named `reason`. Each
+  property is a dict whose `type` is one of `string`, `integer`, `number` or `boolean`. Arrays,
+  objects, `enum`, `oneOf` and nested schemas are refused (`"parameter <p> of <tool>: only string,
+  integer, number and boolean are supported"`), because `ToolParam` and the MCP schema builder
+  carry scalars only. Fixed choices go in the description (ADR 0115), and structured input is a
+  JSON string the plugin parses. `required` is a list of property names;
 - `destructive` ⇒ `gate == "popup"` (`"destructive tool <name> must use the popup gate"`);
-- `not read_only and gate == "auto"` ⇒ `manifest.max_gate_floor == "auto"` (`"tool <name> needs
-  max_gate_floor: auto to use the auto gate"`);
+- `gate == "auto"` ⇒ `manifest.max_gate_floor == "auto"` (`"tool <name> needs
+  max_gate_floor: auto to use the auto gate"`), **for reads as well as writes**. The issue limited
+  the floor to non-read-only tools. But a plugin reads connected services ungated
+  (`source.call`), so an `auto` read tool would hand connector data to the AI with no card. The
+  owner sees and approves the floor at enable (D13), and ADR 0121 records the choice;
+- when `reviewed` is given (a `tools.changed` after enable), every tool's signature
+  `(name, gate, read_only, destructive, tuple(scopes))` must be in `reviewed`, the set recorded at
+  enable (`"tool <name> was not in the list reviewed at enable; review and enable the plugin
+  again"`). Removing tools is always allowed. Adding a tool, or changing a gate or flag, needs a
+  new review;
 - `read_only and destructive` is an error;
 - every name in `scopes` is declared in `scope_types`, and every scope type name matches
   `SCOPE_TYPE_RE`;
@@ -857,11 +919,11 @@ against `SCOPE_TYPE_RE`, and at most 20 entries.
 
 - `name = mcp_tool_name(plugin, tool)`;
 - `description` unchanged;
-- `params` converted from the JSON Schema properties to `ToolParam`. A property's `type` maps to
-  `ToolParam.type` as-is (`string`, `integer`, `number`, `boolean`, `array`, `object`), and
-  `required` membership is kept. Gated tools (`gate != "auto"`) get the same required `reason`
-  `ToolParam` that connector tools use: copy it from `connector.py` and the connectors, where it
-  already exists, and do not invent new wording;
+- `params`: one `ToolParam(name, annotation, required, default=None, description)` per property,
+  with `annotation` mapped `string→"str"`, `integer→"int"`, `number→"float"`, `boolean→"bool"`,
+  and `required` from the schema's `required` list. Gated tools (`gate != "auto"`) get, last, the
+  required `reason` `ToolParam` exactly as the connectors spell it: `ToolParam("reason", "str",
+  required=True, description="One sentence: why are you calling this tool right now?")`;
 - `read_only` and `destructive` as declared.
 
 **Policy registration.** On every accepted tool list (initialize or `tools.changed`),
@@ -870,12 +932,17 @@ against `SCOPE_TYPE_RE`, and at most 20 entries.
 - `mcp_tool_name` → gate;
 - `mcp_tool_name` → `operation_key`, for review and popup tools;
 - verb `READ` for `read_only`, else `UPDATE`. Use the existing `policy.registry.Verb` members;
-- `layout` WIDE when `read_only` and the tool has a payload, else NARROW;
+- `layout` WIDE for every `review` and `popup` tool, so the preview pane shows the blocks (a
+  NARROW card has none), and NARROW for `auto` tools, which never show a card;
 - `effect`, else `f"Runs {title} in the {display_name} plugin."`;
 - scope types.
 
 It first unregisters the previous list. Then the host calls `on_tools_changed()`, which reaches
-`McpDispatcher.notify_tools_changed` (D13).
+`McpDispatcher.notify_tools_changed` (D13). The reviewed signature set is stored in the state file
+at enable (D5, field `reviewed_tools`: a list of `[name, gate, read_only, destructive, [scopes]]`).
+The tool list a plugin reports at every later start must also be within it. If it is not, the
+start fails with reason `executable or manifest changed, enable again`, so a plugin cannot widen
+its tools by restarting.
 
 **Rejected `tools.changed`.** The previous list stays in force. An audit
 `plugin_lifecycle` entry with summary `"tools change rejected: <detail>"` is written, and Settings
@@ -889,8 +956,9 @@ accepted change. An accepted change writes `"tools changed: +a,+b,-c"`.
 1. Unknown tool → `ValueError(f"Unknown tool: {tool}")` (the connector convention). The plugin not
    running → `RuntimeError("The <display_name> plugin is not running.")`.
 2. **Reuse or prepare.** Key `k = approvals.canonical_key(self.name, tool, args)`, with `reason`
-   already popped by the dispatcher. If `self._pending_prepared[k]` exists and is younger than
-   `PREPARED_CALL_LIFETIME_SECONDS`, reuse it. Otherwise:
+   already popped by the dispatcher. `self._prepared: dict[str, PreparedCall]` holds
+   `PreparedCall(call_id, preview, payload, scopes, created_at, keep_until)`. If `_prepared[k]`
+   exists and `now < keep_until`, reuse it with no new `prepare`. Otherwise drop it and:
    - `call_id = uuid4().hex`;
    - `await peer.request("tool.prepare", {call_id, principal: principal_context(...), tool: <own
      name>, args, reason: current_reason() or None})`;
@@ -919,17 +987,29 @@ accepted change. An accepted change writes `"tools changed: +a,+b,-c"`.
          summary=<first fields item "label: value" or title>, sender="",
          raw_data={"plugin": self.name, "tool": <own name>, "scopes": scopes},
          filtered_data=({"blocks": payload} if read_only else None), gate=<gate>,
-         preview=fields_dict(preview), preview_blocks=to_card_blocks(non-fields preview blocks + payload),
+         preview={"Plugin": display_name, "Tool": title},
+         preview_blocks=to_card_blocks(preview + (payload or [])),
          pii_scan_text=(flatten_text(payload) if read_only else None),
          args=args,
      )
      ```
 
-     Store the prepared call in `_pending_prepared[k]` **before** calling `gated_call`. If
-     `gated_call` raises `ApprovalPending`, keep it and re-raise. On any other outcome (released,
-     `GateDeniedError`, anything else), delete `_pending_prepared[k]`. `approval.via` is `"rule"`
-     when the audit decision was an auto-accept and `"card"` otherwise. If `gated_call` exposes no
-     way to tell them apart, use `"card"` for both and note it as an out-of-scope finding.
+     `preview` (the dict) carries only the plugin's display name and the tool title, never plugin
+     content. Notifications read it (Current state, "Card layout"). Every block the plugin sent
+     goes to `preview_blocks`, which the WIDE card shows in its pane.
+
+     Store the prepared call in `_prepared[k]` with `keep_until = created_at +
+     PREPARED_CALL_LIFETIME_SECONDS` **before** calling `gated_call`. Then, by outcome:
+     - `ApprovalPending`: keep the entry and re-raise.
+     - **A read released:** set `keep_until = now + registry.ledger_ttl`, using the registry from
+       `approval_ui`/`web_approval_ui` that the gate uses. That is the same window in which ADR
+       0073's ledger replays the approval, so a repeat call in that window releases the same
+       payload the human saw, and never a fresh `prepare` that nobody saw.
+     - **A write released, or any denial or error:** delete the entry.
+
+     `approval.via` is `"card"`. `approval.approval_id` is `"card-" + call_id`; `gated_call`
+     returns only data and does not expose its approval id. Telling a rule-accepted call apart
+     from a card-approved one is out of scope for protocol 1.
 4. **Execute.**
 
    ```python
@@ -941,15 +1021,16 @@ accepted change. An accepted change writes `"tools changed: +a,+b,-c"`.
      `{"blocks": payload}`, never the plugin's `result`.
    - **Write:** return `result`, plus `{"approval_id": …}` merged in when present, so the agent can
      call `privacyfence_await_approval`. A write that was released is executed at most once:
-     execute is never retried, and `_pending_prepared` was already cleared in step 3.
+     execute is never retried, and its `_prepared` entry was already deleted in step 3.
 5. `unknown_call` or `digest_mismatch` from execute become
    `RuntimeError("The plugin lost track of this call; ask again.")`.
 
 **Why the read returns the prepared payload:** the human approved exactly those bytes. A plugin
 that returned something else from execute would bypass the gate. ADR 0122.
 
-**Why reuse the pending prepared call:** after an `ApprovalPending`, the agent repeats the call to
-collect the decision. Re-running `prepare` could produce a payload the human never saw.
+**Why reuse the prepared call:** after an `ApprovalPending`, the agent repeats the call to
+collect the decision, and an approved read replays from the ledger for `ledger_ttl`. In both
+cases, re-running `prepare` could release a payload the human never saw.
 
 **Single use.** A popup write that is approved once is collected once (ADR 0073, through the
 ledger). A second identical call re-prepares and gets a new card.
@@ -959,7 +1040,8 @@ ledger). A second identical call re-prepares and gets a new card.
 ```python
 class ConfirmationService:
     def __init__(self, *, registry_provider: Callable[[], PendingApprovalRegistry],
-                 unattended_active: Callable[[], bool], executor: Executor) -> None
+                 unattended_active: Callable[[], bool], executor: Executor,
+                 audit: Callable[[str, str, str], None]) -> None   # (plugin, kind, status)
     async def request(self, plugin: str, display_name: str, params: dict, *, introspecting: bool) -> dict
     async def await_(self, plugin: str, params: dict) -> dict
 ```
@@ -972,13 +1054,25 @@ class ConfirmationService:
    `invalid_blocks`.
 3. `principal != "local"` → `unknown_principal`.
 4. `unattended_active()` → `confirmation_refused`, `data.reason = "unattended_session"`.
-5. `card = registry.register_confirm(sensitive=require_step_up)`.
+5. `card = registry.register_confirm(sensitive=require_step_up, notify=True)`. p11 adds the
+   keyword `notify: bool = False` to `PendingApprovalRegistry.register_confirm`. When true, it calls
+   `self._notify_created(approval)` after registering, so the human gets the same notification a
+   card gets. Existing callers keep `False` and are unchanged.
 6. `registry.set_html(card.id, dialog_window_html.build_confirmation_html(title=f"{display_name}:
    {title}", message_lines=[], cancel_label="Deny", confirm_label="Approve",
    body_blocks=to_card_blocks(preview)))`.
-7. Remember `card.id → plugin`. Write an audit `plugin_confirm` entry with summary
+7. Start a **finalizer** task: `loop.run_in_executor(executor, _finalize_when_answered, card.id)`.
+   That function waits on `card.event` until `card.expires_at`, then calls exactly one of:
+   - `registry.finalize(card.id, "accept")` when `card.result == "confirm"`;
+   - `registry.finalize(card.id, "deny")` for any other answer;
+   - `registry.finalize(card.id, "expired")` when the wait timed out.
+
+   This is what makes `registry.await_status` (and so `privacyfence_await_approval`) report
+   `approved`, `denied` or `expired`. Nothing else finalizes a confirm card (Current state).
+   It then writes the audit `plugin_confirm` entry with summary `f"{kind}; {status}"`.
+8. Remember `card.id → (plugin, kind)`. Write an audit `plugin_confirm` entry with summary
    `f"{kind}; requested"`.
-8. Return `{approval_id: card.id, expires_at: <card.expires_at as RFC 3339 UTC>}`.
+9. Return `{approval_id: card.id, expires_at: <card.expires_at as RFC 3339 UTC>}`.
 
 It returns at once. The human decides on the existing approvals page, and the card shows the
 plugin's display name.
@@ -986,12 +1080,15 @@ plugin's display name.
 `await_`:
 
 1. The `approval_id` must belong to this plugin, else `invalid_params`.
-2. Wait on `card.event` in `executor` (never the default pool), up to `timeout_ms`.
-3. Timeout → `RpcError("timeout")`.
-4. Map `card.result`: `"confirm"` → `approved`, `"cancel"` or `"deny"` → `denied`, expired →
-   `expired`.
-5. Add `deny_note` from `registry.denial_feedback(approval_id)`, in the delimited form of ADR 0083.
-6. Audit `plugin_confirm` with summary `f"{kind}; {status}"`.
+2. Poll `registry.await_status(approval_id)` every 0.5 s, sleeping with `asyncio.sleep` (the
+   `McpDispatcher.await_approval` pattern), until it is not `"pending"` or `timeout_ms` passes.
+   Timeout → `RpcError("timeout")`.
+3. Map `"approved"` → `approved`, `"denied"` → `denied`, and `"expired"` or `"unknown"` →
+   `expired`. Add `decided_at` (RFC 3339) when finalized.
+
+There is no deny note. A confirm dialog posts only `confirm` or `cancel`, and the decide route
+refuses a note with anything but `deny` (Current state). Notes on plugin confirmations would need
+a new dialog type, which is out of scope for protocol 1.
 
 `dialog_window_html.build_confirmation_html` gains a keyword `body_blocks: list[dict] | None =
 None`, rendered between the message and the buttons through
@@ -1000,11 +1097,14 @@ None`, rendered between the message and the buttons through
 A confirm card is `kind="confirm"` with no operation key, so no rule can ever auto-accept it. That
 is the existing invariant of `privacyfence_propose_policy_change`.
 
-`privacyfence_await_approval(approval_id)` works on the same id with no change, because it reads
-`registry.await_status`.
+`privacyfence_await_approval(approval_id)` works on the same id once the finalizer has run,
+because it reads `registry.await_status`.
 
-In local mode `unattended_active` is `lambda: False`: unattended sessions are an org-mode setting,
-and the host does not run in org mode. The refusal is tested with an injected `True`.
+**Unattended.** `unattended_active` is `McpDispatcher.any_unattended_session` (a new method, p13b:
+`return bool(self._unattended_sessions)`). The confirmation is refused while **any** MCP session
+is unattended. The request comes from the plugin process, not from inside one MCP call, so the
+daemon cannot tell which session caused it. Refusing whenever any session is unattended fails
+closed. Tests inject `True` and `False`.
 
 ### D12. Storage, purge and events
 
@@ -1034,8 +1134,20 @@ def remove_all(name: str) -> None      # shutil.rmtree of data_dir()/plugin-data
    `"data purged (timeout)"`.
 4. Restart the plugin if it was running.
 
-**Uninstall.** A rescan that no longer finds an enabled or known plugin directory calls
-`remove_all` directly and `state.forget(name)`, with audit `"removed; data deleted"`.
+**Uninstall.** A plugin that has a state record but no directory is treated as uninstalled.
+Nobody is asked, since there is no plugin left to ask. The steps:
+
+1. `remove_all(name)`.
+2. Remove every stored auto-accept rule whose predicate starts with `f"plugin:{name}:"`, through
+   `auto_accept.get_policy_v2_store_rules` and `remove_policy_v2_rule`. Otherwise a different
+   plugin installed later under the same name would inherit the rules.
+3. `state.forget(name)`.
+4. Audit `"removed; data and rules deleted"`.
+
+**This runs only after a successful listing.** `plugins_dir()` must exist and `os.scandir` it
+without error. If the directory is missing or unreadable (an upgrade in progress, a permissions
+change), rescan deletes nothing, logs a warning, and every known plugin shows `state =
+"missing"`, reason `plugins directory unreadable`, until a later rescan succeeds.
 
 **Events** (`plugins/events.py`, `EventFanout`):
 
@@ -1061,7 +1173,6 @@ class PluginHost:
                  connectors_provider: Callable[[], dict[str, Connector]],
                  connector_state: Callable[[str], tuple[bool, str | None]],
                  registry_provider: Callable[[], PendingApprovalRegistry],
-                 unattended_active: Callable[[], bool] = lambda: False,
                  trust_check: Callable[[Path, Path], str | None] = trust.admin_only_problem,
                  command_resolver: Callable[[Manifest, Path], list[str]] = manifest.resolve_command,
                  separation_enabled: Callable[[], bool] = privilege_separation.is_enabled,
@@ -1077,6 +1188,10 @@ class PluginHost:
     def connectors(self) -> dict[str, Connector]   # running plugins' PluginConnectors
     def rows(self) -> list[dict]                    # for Settings (below)
     def set_tools_changed_listener(self, fn: Callable[[], None]) -> None
+    def set_unattended_provider(self, fn: Callable[[], bool]) -> None
+    def set_rows_changed_listener(self, fn: Callable[[], None]) -> None
+    def submit(self, coro: Coroutine) -> concurrent.futures.Future
+    async def web_request(self, name: str, path: str, query: dict[str, str], principal: Principal) -> dict
     def on_connectors_changed(self, rows: list[dict]) -> None   # forwards to EventFanout
 ```
 
@@ -1097,31 +1212,62 @@ class PluginHost:
   ```
 - `enable(...)` recomputes both hashes and refuses with `ValueError("The plugin changed since you
   reviewed it; review it again.")` if either differs from the hashes passed in. This closes the
-  gap between what the human reviewed and what gets enabled. It then records state, starts the
-  plugin, and audits `plugin_lifecycle` `"enabled"`.
+  gap between what the human reviewed and what gets enabled. It then records state, including
+  `reviewed_tools` from the latest `inspect` summary of the same hashes (D9), starts the plugin,
+  and audits `plugin_lifecycle` `"enabled"`. Enable without a matching inspection is refused with
+  the same message.
+- `inspect` runs the plugin binary under the service account in introspection mode, where
+  `source.call` and `confirm.request` are refused. It is a non-sensitive Settings action: the
+  binary is already administrator-installed, trusted code (ADR 0121), and introspection can neither
+  read data nor change state. Enabling, which lets the plugin act, is the sensitive step.
 - `disable` stops with reason `"user"`, records `disabled by you`, and audits `"disabled"`.
 - Crash-limit and hash-drift disables are recorded and audited (`"disabled: <reason>"`).
 - `rows()` gives one dict per discovered plugin: `{name, display_name, version, state, reason,
-  enabled, pages, page_url ("/plugins/<name>/" when pages and running, else ""), tools_note}`.
+  enabled, pages, page_url ("/plugins/<name>/" when pages and running, else ""), tools_note,
+  review, last_error}`.
+- **Loop.** All host work runs on the web server's loop (`web_loop`, Current state). `start()`
+  stores `self.loop = asyncio.get_running_loop()`. MCP calls (`PluginConnector.call`) and page
+  routes already run on that loop and `await` host coroutines directly.
+- **Settings never blocks.** Settings actions call controller methods synchronously **on the
+  loop**, so the controller must not wait on a host coroutine. `PluginHost.submit(coro) ->
+  concurrent.futures.Future` schedules with `asyncio.run_coroutine_threadsafe(coro, self.loop)` and
+  returns at once. `SettingsController`'s plugin methods call `submit(...)` and return the current
+  snapshot. Results reach the page by the existing snapshot push: the host calls
+  `rows_changed_listener()` (set by the controller to `self._push_snapshot`) after every state
+  change, inspection result or error.
+  - `rows()` carries `review` (the `inspect` summary, once ready, else `None`) and `last_error`
+    (the text of the last failed action, cleared by the next successful one).
+  - `enable`'s hash refusal therefore shows up as `last_error = "The plugin changed since you
+    reviewed it; review it again."`.
+- **Pages.** `async def web_request(self, name: str, path: str, query: dict[str, str],
+  principal: Principal) -> dict` returns the raw `web.request` result. It raises
+  `LookupError` when the plugin is not running or its manifest has `pages: false`.
 - **Daemon wiring** (`daemon_main.run_app`, local mode only):
   1. Construct `PluginHost` after `SettingsController` (`connector_state` reads
-     `settings_controller`'s connector rows).
+     `settings_controller`'s connector rows; `registry_provider` is the same accessor `gate.py`
+     uses for the approvals registry).
   2. Pass it to `SettingsController` (new kwarg `plugin_host=None`) and to
      `_maybe_start_web_server` (new kwarg `plugin_host=None`, forwarded to `WebServer` and
      `build_app`, which store it).
-  3. `_connectors()` returns `{**connector_host.connectors, **plugin_host.connectors()}` for the
-     local principal.
-  4. `plugin_host.set_tools_changed_listener(mcp_dispatcher.notify_tools_changed)`.
-  5. Start the host once the web server is ready, by scheduling `plugin_host.start()` on the
-     server's event loop. Find how `server.wait_until_ready` exposes the loop. If no loop is
-     reachable from `run_app`, run the host on its own asyncio loop in a daemon thread named
-     `plugin-host`, and route every host call from web handlers through
-     `asyncio.run_coroutine_threadsafe`. Record which one you used in the PHASE-REPORT.
-  6. In `run_app`'s `finally`, call `plugin_host.stop_all()` before `audit_logger.close()`,
-     bounded to 10 s.
+  3. Inside `_maybe_start_web_server`, where the local `_connectors()` closure and
+     `mcp_dispatcher` are built (`daemon_main.py:791-835`):
+     - `_connectors()` returns `{**connector_host.connectors, **plugin_host.connectors()}` for the
+       local principal;
+     - `plugin_host.set_tools_changed_listener(mcp_dispatcher.notify_tools_changed)`;
+     - `plugin_host.set_unattended_provider(mcp_dispatcher.any_unattended_session)`.
+
+     Add `McpDispatcher.any_unattended_session() -> bool` (`return bool(self._unattended_sessions)`)
+     in `web/mcp_dispatch.py`. Until a provider is set, the host uses `lambda: False`.
+  4. After `web_loop = server.wait_until_ready(timeout=5)` (`daemon_main.py:1927`):
+     `asyncio.run_coroutine_threadsafe(plugin_host.start(), web_loop)`, with a done-callback that
+     logs a failure, the `_log_cache_warm_failure` pattern at :1590. If `web_loop` is `None`,
+     plugins do not start, and a warning is logged.
+  5. In `run_app`'s `finally`, before `audit_logger.close()`, when the host started:
+     `asyncio.run_coroutine_threadsafe(plugin_host.stop_all(), web_loop).result(timeout=10)`,
+     inside `try/except Exception` that logs at warning.
 
   In org mode no host is built, and plugin routes are not mounted.
-- **Config:** `plugins.enabled` (default `true`). Add it to `resources/settings.yaml.example`
+- **Config:** `plugins.enabled` (default `true`). Add it to `src/privacyfence/resources/settings.yaml.example`
   (under `plugins:` with a one-line comment) and to `docs/configuration-reference.md` as
   `` `plugins.enabled` ``.
 
@@ -1131,8 +1277,12 @@ class PluginHost:
   `/plugins/{name}/`. It is mounted in local mode only, as one route module with the local auth
   adapter (ADR 0033), behind the same owner-only, human-session guard that the Settings page uses
   (`_owner_only_routes` and `session_auth.is_human_session`).
-  - An MCP bearer or no session gets 403, with the same response the settings page gives.
-  - Any other method gets 405, with `Allow: GET`, without reaching the plugin.
+  - No owner session (an MCP bearer, or no cookie) gets whatever `_owner_only_endpoint`
+    (`web/server.py:619-633`) answers today, which is 404. Tests assert that status and that the
+    plugin was not called.
+  - GET and HEAD are served. Starlette answers HEAD on a GET route, so HEAD is forwarded as GET
+    and its body dropped. Any other method gets 405, with `Allow: GET, HEAD`, without reaching the
+    plugin.
   - A plugin that is not running, or has `pages: false`, gets 404.
 - Path normalization (`pages.normalize_path(raw: str) -> str | None`): URL-decode once. Reject
   `..` segments, NUL, a backslash, `//`, and more than `MAX_PAGE_PATH_CHARS`. Always start with
@@ -1151,7 +1301,7 @@ class PluginHost:
 - **Headers** on every `/plugins/` response, success or error:
 
   ```
-  Content-Security-Policy: sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'
+  Content-Security-Policy: sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Cache-Control: private, no-store
@@ -1162,6 +1312,12 @@ class PluginHost:
   `/plugins/`, set this CSP instead of `build_csp(...)`. The other headers it sets stay. There is
   no `allow-same-origin`, so the page runs in an opaque origin and cannot read cookies or call the
   app's APIs.
+- **Pages are self-contained.** The session cookie is `SameSite=Strict`
+  (`web/session_auth.py:330`). A sandboxed page runs in an opaque origin, so its subresource
+  requests (`/plugins/<name>/app.js`) carry no cookie and get the owner-only 404. A plugin page
+  therefore inlines its CSS, scripts and images (`data:` URIs). The protocol doc, the SDK README
+  and `today` say so. Links and navigations between pages work: they are top-level navigations
+  that carry the cookie.
 - Settings links to `/plugins/<name>/` for a running plugin with `pages: true`.
 
 ### D15. Dynamic policy registration (`auto_accept.py`, `policy/*`, `gate.py`, `write_effects.py`)
@@ -1178,10 +1334,13 @@ class DynamicToolSpec:
     layout: str               # gate.WIDE | gate.NARROW
     effect: str               # "" for read-only tools
     scope_predicates: tuple[tuple[str, str], ...]   # (predicate, scope_type) per declared scope
+    destructive: bool = False
 
 def register_dynamic_tools(owner: str, specs: list[DynamicToolSpec]) -> None
 def unregister_dynamic_tools(owner: str) -> None
 def reset_dynamic_tools() -> None    # unregisters every owner; registered with plugins._testing
+
+STATIC_TOOL_NAMES: frozenset[str] = frozenset(TOOL_TO_GATE)   # taken at import, before any registration
 ```
 
 `register_dynamic_tools`:
@@ -1212,8 +1371,14 @@ def _plugin_scope_matches(scope_type: str) -> Callable[[Any, ReviewContext], boo
         allowed = {str(v) for v in _values_of(value) if v not in (None, "")}
         return bool(returned) and bool(allowed) and set(map(str, returned)) <= allowed
     return matches
-# ScopeSelector(predicate, scope_type=predicate, kind=ScopeKind.IDENTITY,
+# ScopeSelector(predicate, scope_type=f"{plugin}.{scope_type}", kind=ScopeKind.IDENTITY,
 #               resolves_from=ResolvesFrom.FETCHED, matches=_plugin_scope_matches(scope_type))
+# The selector's scope_type is dotted ("today.calendar") so policy/describe.py's scope_type_label
+# finds its noun; the predicate keeps the issue's "plugin:<name>:<scope_type>" form.
+
+def register_plugin_anything_selector(plugin: str) -> None
+    # predicate f"plugin:{plugin}:anything", scope_type f"{plugin}.anything", kind ATTRIBUTE,
+    # resolves_from ARGS, matches always True (the operation key is what limits it)
 ```
 
 A rule matches only when every value the call returned is in the rule. A missing scope, an empty
@@ -1224,12 +1389,17 @@ list or an empty rule value never matches.
 `PROPOSABLE_SCOPES` when `TOOL_REGISTRY[tool].operation` starts with `"plugin."`. Each entry
 covers only that one operation:
 
-- per declared scope type: `_scope(predicate, scope_type=predicate, connector=<plugin>,
+- per declared scope type: `_scope(predicate, scope_type=f"{plugin}.{scope_type}", connector=<plugin>,
   verbs=(verb,), value_of=lambda ctx: sorted(ctx.raw_data["scopes"][scope_type]) or NO_VALUE,
   hint=f"these {scope_type} values" if >1 else f"this {scope_type}", entry_id=f"{predicate}@{operation}",
   group=f"{predicate}@{operation}", widenable=False)`;
-- a tool with no scope types: one `always_allow` entry, `scope_type=f"{plugin}.anything"`,
-  `group=f"always_allow@{operation}"`, `hint=""`, `widenable=False`.
+- a tool with no scope types: one entry with predicate `f"plugin:{plugin}:anything"` (registered
+  with `register_plugin_anything_selector`), `scope_type=f"{plugin}.anything"`,
+  `group=f"plugin:{plugin}:anything@{operation}"`, `hint=""`, `widenable=False`, and value `True`.
+  It is **not** the shared `always_allow` predicate: `store.merge_rules` would merge that into the
+  Gmail and Calendar `always_allow` rows, and removing one would remove both.
+- a **destructive** tool gets no proposal at all, so there is no one-click "Always allow" for a
+  delete.
 
 `_candidate_value` must accept these entries. A dynamic entry confirms its own value by
 construction. `rules_for_proposal` must find the dynamic group in `_SCOPES_BY_GROUP`, or an
@@ -1271,8 +1441,9 @@ plugin-sdk/src/privacyfence_plugin_sdk/testing/pytest.py      # plugin_host fixt
 - `name = "privacyfence-plugin-sdk"`, `requires-python = ">=3.11"`, `dependencies = []`;
 - `dynamic = ["version"]` with `[tool.setuptools_scm] root = ".."` and `fallback_version =
   "0.0.0"`;
-- build backend `setuptools.build_meta` with `setuptools>=69` and `setuptools-scm>=8`, matching
-  the root `pyproject.toml`'s pins;
+- build backend `setuptools.build_meta` with `requires = ["setuptools>=77", "setuptools-scm>=8"]`.
+  77 is the first release that accepts the SPDX `license` string below; the root project's own
+  `setuptools>=61.0` pin stays as it is;
 - `[tool.setuptools.package-data]` includes `testing/samples/*.json` and `py.typed`;
 - `license = "Apache-2.0"`.
 
@@ -1317,7 +1488,7 @@ await plugin.tools_changed()                # sends tools.changed with the curre
     revision, mime_type)`. It loops over the cursor, restarts once on `revision_changed`, and
     writes into `dest` or `ctx.data_dir/downloads/`;
   - `ctx.confirm.request(kind, title, preview, require_step_up=True) -> str`;
-  - `ctx.confirm.await_(approval_id, timeout_ms=None) -> ConfirmResult(status, deny_note,
+  - `ctx.confirm.await_(approval_id, timeout_ms=None) -> ConfirmResult(status,
     decided_at)`.
 - `SourceError(code, detail, reason)`.
 - `blocks.heading(text, level=2)`, `blocks.fields(mapping)`, `blocks.table(columns: list[tuple[key,
@@ -1354,8 +1525,7 @@ stale. The test `tests/unit/test_gen_plugin_sdk_types.py` runs `--check`.
   fixture`. The latter serves chunks of `DRIVE_CHUNK_BYTES` with cursors exactly as D7 does.
 - `await host.get(path)`, `await host.request(method, path) -> PageResponse(status, headers,
   body)`.
-- `host.confirmations`, `await host.decide_confirmation(approval_id, "approve"|"deny",
-  deny_note=None)`.
+- `host.confirmations`, `await host.decide_confirmation(approval_id, "approve"|"deny"|"expire")`.
 - `await host.emit(event, params)`, `await host.purge(scope="all")`, `await host.shutdown()`.
 - `privacyfence_plugin_sdk.testing.pytest` defines the fixture `plugin_host`, which imports
   `pytest` lazily.
@@ -1387,7 +1557,8 @@ environments).
 ### D17. Example plugin `today` and reference plugin `echo`
 
 **`echo`** (`tests/fixtures/plugins/echo/`, test-only, built on the SDK). Its manifest is
-`echo/privacyfence-plugin.yaml` with `name: echo`, `max_gate_floor: review`, `pages: true` and
+`echo/privacyfence-plugin.yaml` with `name: echo`, `max_gate_floor: auto` (its `auto_read` needs it,
+D9), `pages: true` and
 `source_operations: [calendar.list_events]`. Tests launch it with a `command_resolver` that returns
 `[sys.executable, <dir>/echo_plugin.py]` and `PYTHONPATH=plugin-sdk/src`.
 
@@ -1406,7 +1577,10 @@ It also has a page at `/` (with an inline script that writes `document.cookie` i
 event handlers that record what they received. Manifest variants for refusals live under
 `tests/fixtures/plugins/echo-variants/<case>/`.
 
-**`today`** (`examples/plugins/today/`): the P12 table of the issue, with these exact tools:
+**`today`** (`examples/plugins/today/`): the issue's table of framework parts for the example
+plugin, with these exact tools. Do not write the issue's own label for that table into code or
+tests, since `test_code_no_history.py` rejects it. Its page uses named CSS colours or `rgb()`,
+never `#rgb` hex, because a hex colour made only of digits matches the issue-number pattern:
 
 | Tool | Gate | Read-only | Notes |
 |---|---|---|---|
@@ -1420,7 +1594,8 @@ event handlers that record what they received. Manifest variants for refusals li
 
 - Storage: per-principal `day.json` and `notes.json`, and install-wide `counter.json`.
 - Page `/`: the published day, the notes, a stale banner, a `code` block with the raw manifest,
-  and an inline script that shows whether `document.cookie` is readable.
+  and an inline script that shows whether `document.cookie` is readable. Everything is inline
+  (D14, "Pages are self-contained").
 - Events:
   - `connector.state_changed` for `calendar` marks the day stale;
   - `storage.purge` deletes its files;
@@ -1464,16 +1639,25 @@ a parallel branch takes numbers first, renumber.
   outside the app and the data root. The executable, the directory and its ancestors are checked
   on every start; sha256 hashes are recorded at enable, and drift disables the plugin. Plugins run
   only with privilege separation, enabling is sensitive, and the directory is not configurable.
-  Residual risk: the service account can read credential files.
+  Every `auto` tool, read or write, needs the manifest's `max_gate_floor: auto`, which the owner
+  approves at enable, because `source.call` is ungated. After enable, a plugin may only drop tools,
+  never add or regate them, without a new review. Introspection is not sensitive (it cannot read
+  data or act). Uninstalling deletes the plugin's data and its auto-accept rules, but only after a
+  successful listing of the plugins directory. Residual risk: the service account can read
+  credential files.
 - **0122.** Plugin tools are gated in two steps: prepare returns typed blocks (never HTML), the
-  daemon gates, and execute follows. A read releases the prepared payload itself, and a pending
-  prepared call is reused until it is decided. Floors are enforced by the daemon.
+  daemon gates, and execute follows. A read releases the prepared payload itself, and a prepared
+  call is reused while it is pending and, for a released read, for the ledger's replay window.
+  Floors are enforced by the daemon. Plugin confirmations are confirm cards that no rule can
+  accept, finalized by the plugin host. Plugin parameters are scalars only. Plugin scope rules use
+  the `plugin:<name>:<scope>` predicates, never the shared `always_allow`, and destructive tools
+  get no proposal.
 - **0123.** The source API is ungated but audited without content. Results are raw only for
   Salesforce report runs and Drive bytes; Jira, Confluence and Calendar results are the daemon's
   normalized shapes. Drive downloads are chunked from a spool file. Rejected: raw provider JSON
   for every operation, and a higher single-message cap.
-- **0124.** Plugin pages are GET-only, human-session-only, under `sandbox allow-scripts` without
-  `allow-same-origin`, with plugin headers filtered.
+- **0124.** Plugin pages are GET-only (and HEAD), owner-session-only, self-contained, under
+  `sandbox allow-scripts` without `allow-same-origin`, with plugin headers filtered.
 - **0125.** The org-mode contract (roles, service sign-ins, admin-only management) is reserved in
   protocol 1 and rejected in local mode. Org mode does not start the host.
 - **0126.** The SDK lives in this repository and is published from the same tag, with no runtime
@@ -1486,11 +1670,11 @@ The step-by-step page is the artifact linked in the manifest (`manual_steps_arti
 
 - **Before:** `mb1-pypi-pending-publishers`. Register `privacyfence-plugin-sdk` as a pending
   trusted publisher on TestPyPI and on PyPI. Nothing in the build needs it. Doing it first means
-  the next stable tag publishes the SDK without a failed job.
+  the next stable tag publishes the SDK without a failed job. **Done** (the user confirmed it on
+  2026-10-07).
 - **After:**
-  - `ma1-smoke-test-today`: the ten-step smoke test of `today` on a packaged install.
-  - `ma2-macos-windows-plugin-dir`: check that the Settings Plugins section reads the right
-    directory on macOS and Windows packaged installs. Folded into ma1 when ma1 runs on both.
+  - `ma1-smoke-test-today`: the smoke test of `today` on a packaged install.
+  - `ma2-plugin-dir-other-os`: steps 1-4 of it on a second OS (macOS or Windows).
 
 Everything else runs in phases or on runners. `build.yml` is dispatched by the orchestrator in the
 final checks, and the platform tests run in `tests.yml` on every push.
@@ -1500,29 +1684,33 @@ final checks, and the platform tests run in `tests.yml` on every push.
 Each risk has what a worker sees if it applies. Stop with `status=blocked` rather than
 improvising.
 
-- **Card wiring for `preview_blocks`.** D10 assumes `gated_call(preview_blocks=…)` reaches
-  `build_preview_body_html(blocks=…)` for a WIDE card. If the card never shows the blocks (p12's
-  `TestCardShowsPayload` fails and no `gated_call` parameter carries them), stop.
-- **Telling auto-accepted from card-approved in `gated_call`.** If it is not observable, use
-  `"card"` (D10) and report it. Do not change `gate.py` for it.
+- **Card wiring for `preview_blocks`.** `gated_call(preview_blocks=…)` (`gate.py:824`) is passed
+  through to the card (`gate.py:1108`, `:1222`, `card_builder.py:185`) for WIDE cards. If p12's
+  `TestCardShowsPayload` shows the blocks missing from the rendered card anyway, stop.
 - **`connector_of_operation` and `_SCOPES_BY_GROUP`** may be shaped differently from D15's
   assumption. p4 is an Opus phase. If a dynamic entry cannot be added without changing the
   semantics of static entries, stop.
-- **Event loop for the host** (D13 step 5). Either option is acceptable; record the choice. If
-  neither works without changing `WebServer`'s threading model, stop.
-- **`DriveClient` metadata method name** (D7). If `get_file_metadata` does not exist under that
-  name, use the client's existing metadata call that returns `headRevisionId` or `modifiedTime`.
-  If there is none, stop.
+- **The host's loop** (D13). The host runs on `web_loop`. If a test shows a Settings action
+  blocking the loop, the controller is waiting on a host future: use `submit()` and the snapshot
+  push instead. If `wait_until_ready` returns no loop in local mode, stop.
+- **Confirm finalization** (D11). If `registry.finalize` on a `kind="confirm"` card does not make
+  `await_status` report the decision, stop. Do not change `await_status`.
 - **Coverage floor.** New modules must keep `scripts/check_coverage_floor.py` green. Every phase
   measures its own modules with `--cov=src/privacyfence/plugins` and gets them to ≥ 95% line and
-  branch. OS-specific branches use `monkeypatch` on `sys.platform`, as `TestElevationScriptProblem`
-  does, or `# pragma: no cover -- <reason>` where a branch truly cannot run on Linux.
+  branch. OS-specific branches in `privilege_separation.py` and `trust.py` are tested by
+  monkeypatching `privilege_separation.current_platform` (:446), as
+  `tests/unit/test_privilege_separation.py:121` does. Other modules monkeypatch `sys.platform`.
+  `# pragma: no cover -- <reason>` is only for a branch that truly cannot run on Linux.
 - **Windows CI.** `platform-windows` runs the whole suite. Process-spawning tests must use
   `sys.executable` and no shebang, use `tmp_path` with no POSIX-only permission asserts unless
   marked, and fail within the 30 s test timeout.
-- **History rule.** A worker that writes "D10", "p12", "Phase", "#846" or a section sign into
-  code, tests or a workflow fails `test_code_no_history.py`. Use ADR numbers (0120-0126) or the
-  issue's full URL.
+- **History rule.** A worker that writes "D10", "p12", "P12", "Phase", "#846", a section sign,
+  or a digits-only hex colour such as `#333` into code, tests, examples or a workflow fails
+  `test_code_no_history.py`. Use ADR numbers (0120-0126) or the issue's full URL.
+- **Docs references.** No phase before the retirement phase may write a path of the form
+  docs-slash-name-dot-md that does not exist yet, including in GitHub URLs (the SDK README links
+  the schema JSON file and the issue instead). Otherwise `test_docs_references_exist.py` fails at
+  that merge.
 
 ## Implementation manifest
 
@@ -1534,715 +1722,865 @@ max_parallel: 3
 manual_steps_artifact: https://claude.ai/artifact/HWFGVdnbDPW4kkE75kwLz5
 manual_steps_source: docs/plugin-framework-plan-manual-steps.html
 manual_before:
-  - id: mb1-pypi-pending-publishers
-    title: Register privacyfence-plugin-sdk as a pending trusted publisher on TestPyPI and PyPI
-    why: The SDK publish jobs added by p10 use OIDC trusted publishing (ADR 0020), which cannot create a project on its own; without this the first stable tag after the merge fails the SDK publish jobs.
-    done_when: Both test.pypi.org and pypi.org list a pending publisher for project privacyfence-plugin-sdk, owner privacyfence, repository privacyfence, workflow publish-pypi.yml, environment testpypi (TestPyPI) and pypi (PyPI).
+- id: mb1-pypi-pending-publishers
+  title: Register privacyfence-plugin-sdk as a pending trusted publisher on TestPyPI and PyPI
+  why: The SDK publish jobs added by p10 use OIDC trusted publishing (ADR 0020), which cannot create a project on its own; without this the first stable tag after the merge fails the SDK publish jobs.
+  done_when: Both test.pypi.org and pypi.org list a pending publisher for project privacyfence-plugin-sdk, owner privacyfence, repository privacyfence, workflow publish-pypi.yml, environment testpypi (TestPyPI) and pypi (PyPI).
 manual_after:
-  - id: ma1-smoke-test-today
-    title: Run the ten-step smoke test of the today plugin on a packaged install
-    why: CI cannot drive a packaged install with a real Calendar sign-in, a passkey prompt and a real administrator-only plugins directory.
-  - id: ma2-plugin-dir-other-os
-    title: Repeat smoke-test steps 1 and 2 on a second OS (macOS or Windows) packaged install
-    why: The admin-only directory check and the plugins directory differ per OS; unit tests mock them.
+- id: ma1-smoke-test-today
+  title: Run the smoke test of the today plugin on a packaged install (the checklist page's twelve steps)
+  why: CI cannot drive a packaged install with a real Calendar sign-in, a passkey prompt and a real administrator-only plugins directory.
+- id: ma2-plugin-dir-other-os
+  title: Repeat smoke-test steps 1-4 on a second OS (macOS or Windows) packaged install
+  why: The admin-only directory check and the plugins directory differ per OS; unit tests mock them.
 verify_after_merge:
-  - ruff check .
-  - python3 -m pytest tests/unit/plugins tests/unit/plugin_sdk tests/unit/policy tests/unit/test_auto_accept.py tests/unit/test_code_no_history.py tests/unit/test_docs_references_exist.py -q
+- ruff check .
+- python3 -m pytest tests/unit/plugins tests/unit/plugin_sdk tests/unit/policy tests/unit/test_auto_accept.py tests/unit/test_code_no_history.py tests/unit/test_docs_references_exist.py tests/unit/test_website_docs_allowlist.py -q
 final_checks:
-  - docs/plugin-framework-plan.md and docs/plugin-framework-plan-manual-steps.html are deleted and nothing links to them
-  - docs/adr/0120-*.md to docs/adr/0126-*.md (or the next free numbers) exist with Status Accepted and are in docs/adr/README.md's index
-  - CHANGELOG.md has an [Unreleased] entry for the plugin framework and no new version heading
-  - The full /dod passes, including python3 scripts/check_coverage_floor.py coverage.json and python3 -m pytest tests/integration -v (test_mcp_daemon_contract.py, test_plugin_framework.py, test_plugin_refusals.py, test_sdk_testhost_conformance.py)
-  - build.yml dispatched against feature/plugin-framework is green in all three platform jobs, including the today build and self-test steps (link the run in the PR)
-  - python -m build plugin-sdk succeeds and python3 scripts/gen_plugin_sdk_types.py --check exits 0
+- docs/plugin-framework-plan.md and docs/plugin-framework-plan-manual-steps.html are deleted and nothing links to them
+- docs/adr/0120-*.md to docs/adr/0126-*.md (or the next free numbers) exist with Status Accepted and are in docs/adr/README.md's index
+- CHANGELOG.md has an [Unreleased] entry for the plugin framework and no new version heading
+- The full /dod passes, including python3 scripts/check_coverage_floor.py coverage.json and python3 -m pytest tests/integration -v (test_mcp_daemon_contract.py, test_plugin_framework.py, test_plugin_refusals.py, test_sdk_testhost_conformance.py)
+- build.yml dispatched against feature/plugin-framework is green in all three platform jobs, including the today build and self-test steps (link the run in the PR)
+- python -m build plugin-sdk succeeds and python3 scripts/gen_plugin_sdk_types.py --check exits 0
 phases:
-  - id: p1-protocol-core
-    title: Protocol constants, message types, JSON schema, test reset registry
-    depends_on: []
-    complexity: M
-    touches:
-      - src/privacyfence/plugins/__init__.py
-      - src/privacyfence/plugins/constants.py
-      - src/privacyfence/plugins/protocol.py
-      - src/privacyfence/plugins/_testing.py
-      - docs/plugin-protocol/protocol.schema.json
-      - tests/conftest.py
-      - tests/unit/plugins/__init__.py
-      - tests/unit/plugins/test_constants.py
-      - tests/unit/plugins/test_protocol.py
-      - tests/unit/plugins/test_testing_registry.py
-    brief: |
-      1. Create src/privacyfence/plugins/__init__.py (docstring "Out-of-process plugins (ADR 0120)." and the
-         __future__ import) and constants.py with exactly the code in the plan's Design D2 (the constants block
-         and the three name helpers), plus a module docstring. Note the ADR numbers 0120-0126 are cited in
-         docstrings even though the ADR files are written in the last phase; that is intended.
-      2. Create _testing.py with register_reset and reset_all as in D2. Add one line to tests/conftest.py's
-         _reset() function: `plugins._testing.reset_all()` (import `from privacyfence import plugins` and
-         `import privacyfence.plugins._testing` the way the file imports other modules).
-      3. Create protocol.py per D3: RpcError (code name, detail, retryable, extra; to_error()), the dataclasses
-         PrincipalContext, ToolDef, InitializeResult, PrepareResult, ExecuteResult, SourceCallParams,
-         ConfirmRequestParams, WebResponse with from_wire(obj, *, mode="local") and to_wire(), args_digest(args),
-         and principal_context(principal, storage_dir, *, mode="local"). Validators are hand-written: types,
-         required keys, D2 patterns and limits; unknown keys ignored; credential/roles in local mode raise
-         RpcError("org_only_field"). Blocks inside preview/payload are only checked to be lists of dicts here;
-         full block validation is blocks.py (next phase), so PrepareResult.from_wire accepts a
-         `validate_blocks` callable parameter defaulting to a no-op.
-      4. Write docs/plugin-protocol/protocol.schema.json (JSON Schema 2020-12) with every $defs entry listed in
-         D3 and the field tables of D3/D4/D5, `additionalProperties: false` on Block variants and Manifest, and an
-         `x-limits` object holding the D2 numbers the protocol exposes.
-      5. Tests: test_constants.py (RESERVED_PLUGIN_NAMES ⊇ settings_controller.ALL_CONNECTORS; regexes accept/
-         reject edge cases; name helpers); test_protocol.py (one class per dataclass with valid and invalid
-         transcripts copied from D3's tables, args_digest stable under key order, org_only_field in local mode,
-         and the schema check: json.load the schema and assert each listed $defs entry's property names equal
-         the fields its dataclass handles); test_testing_registry.py (idempotent register, order, reset_all).
-         Module docstrings name the invariant (e.g. "validators fail closed on malformed plugin output").
-      6. No CHANGELOG line in this phase (the retire phase writes it).
-      Stop condition: if tests/conftest.py's _reset() is not a plain function you can add a line to, stop.
-    acceptance:
-      - python3 -m pytest tests/unit/plugins -q passes
-      - python3 -c "import json;json.load(open('docs/plugin-protocol/protocol.schema.json'))" exits 0
-      - python3 -m pytest tests/unit/plugins --cov=src/privacyfence/plugins --cov-branch -q reports >= 95% for constants.py, protocol.py, _testing.py
-      - ruff check . passes and python3 -m pytest tests/unit/test_code_no_history.py -q passes
-
-  - id: p2-blocks-manifest
-    title: Block validation and card conversion, manifest loader, audit decision docs
-    depends_on: [p1-protocol-core]
-    complexity: M
-    touches:
-      - src/privacyfence/plugins/blocks.py
-      - src/privacyfence/plugins/manifest.py
-      - src/privacyfence/audit_log.py
-      - tests/unit/plugins/test_blocks.py
-      - tests/unit/plugins/test_manifest.py
-    brief: |
-      1. blocks.py exactly per Design D4: BlockError, validate_blocks (sanitizing controls and the listed bidi
-         characters, cell truncation, caps), to_card_blocks (mapping table in D4), fields_dict, flatten_text.
-      2. manifest.py per D5: Manifest dataclass, ManifestError, MANIFEST_FILENAME, load_manifest (yaml.safe_load,
-         unknown keys are errors, every field rule in D5's YAML comments, name must equal plugin_dir.name,
-         service_credentials true rejected in mode "local"), resolve_command (inside-dir check after resolve(),
-         ".exe" appended on Windows when command[0] has no suffix -- test by monkeypatching sys.platform).
-      3. audit_log.py: comment-only change. In the decision-values comment block (around lines 139-310) document
-         "plugin_source", "plugin_confirm" and "plugin_lifecycle" in the style of the existing entries, with what
-         connector/tool/summary hold for each (D7, D11, D12, D13). No code change, no schema bump.
-      4. Tests: test_blocks.py (TestValidate per type incl. unknown type/extra field rejected, TestSanitize with
-         test_bidi_override_removed and test_html_in_text_is_kept_as_text (to_card_blocks keeps "<b>" as literal
-         text), TestCaps, TestToCardBlocks, TestFieldsDict duplicate labels, TestFlatten); test_manifest.py (valid
-         manifest, each invalid field, unknown key, reserved name, name/dir mismatch, command escaping via ".." and
-         via a symlink (skip the symlink case where os.symlink is unavailable), Windows .exe).
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_blocks.py tests/unit/plugins/test_manifest.py tests/unit/test_audit_log.py -q passes
-      - TestSanitize::test_bidi_override_removed and TestSanitize::test_html_in_text_is_kept_as_text pass
-      - coverage of blocks.py and manifest.py >= 95% (python3 -m pytest tests/unit/plugins --cov=src/privacyfence/plugins --cov-branch)
-
-  - id: p3-rpc-supervisor
-    title: JSON-RPC peer and process supervisor
-    depends_on: [p1-protocol-core]
-    complexity: M
-    touches:
-      - src/privacyfence/plugins/rpc.py
-      - src/privacyfence/plugins/supervisor.py
-      - tests/unit/plugins/test_rpc.py
-      - tests/unit/plugins/test_supervisor.py
-      - tests/fixtures/plugins/stub/**
-    brief: |
-      1. rpc.py: RpcPeer exactly per Design D3 (framing, line cap via StreamReader limit and an explicit length
-         check, independent id spaces, in-flight caps both directions, per-method timeouts from TIMEOUT_SECONDS,
-         batch -> invalid_request, INVALID_LINES_LIMIT consecutive bad lines -> close with "invalid_output",
-         handler RpcError vs other exceptions). RpcError is imported from protocol.py.
-      2. supervisor.py: LaunchSpec, child_env(), Supervisor exactly per D8 (spawn flags per OS, log rotation and
-         0600, handshake checks in order -- the tool-definition check calls a `validate_tools` callable passed in
-         the constructor (add the parameter `validate_tools: Callable[[InitializeResult], None]`, default no-op;
-         the host passes tools.validate_tool_defs later), crash window and backoff with injected clock/sleep,
-         introspect(), stop sequence). The `initialize` params come from the injected callable.
-      3. tests/fixtures/plugins/stub/stub_plugin.py: stdlib-only stub with the modes listed in D8, speaking the D3
-         framing.
-      4. Tests: test_rpc.py over an in-memory pipe pair (two asyncio StreamReader/Writer pairs or
-         asyncio.open_connection on a socketpair): round trip both directions, timeout, error mapping, batch,
-         junk lines closing after 3, in-flight cap, notifications ignored when unknown. test_supervisor.py with the
-         stub plugin as a real child process ([sys.executable, stub_plugin.py, mode]): TestHandshake
-         (ok, wrong-name), TestMajorMismatch::test_plugin_not_started, TestCrashLimit::test_disabled_after_five_in_ten_minutes
-         (injected clock and a sleep that returns immediately), TestBackoffSequence, TestShutdown::test_grace_then_kill
-         (slow-shutdown mode), TestEnvironment::test_daemon_env_not_inherited (set a sentinel env var in the test
-         process; echo-env mode must not show it), TestJunkStdout (counts as a crash), TestLog (0600 on POSIX only,
-         rotation).
-      Every process test must finish well under the 30 s pytest timeout and must run on Windows (no shebangs, no
-      signals other than terminate/kill).
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_rpc.py tests/unit/plugins/test_supervisor.py -q passes
-      - TestCrashLimit::test_disabled_after_five_in_ten_minutes, TestShutdown::test_grace_then_kill, TestMajorMismatch::test_plugin_not_started and TestEnvironment::test_daemon_env_not_inherited pass
-      - coverage of rpc.py and supervisor.py >= 95%
-
-  - id: p4-policy-dynamic
-    title: Dynamic tool registration and the plugin scope selector in the policy tables
-    depends_on: [p1-protocol-core]
-    complexity: M
-    worker_model: opus
-    worker_model_reason: It extends the policy engine's static tables and the "Always allow" proposal path; a proposal that matches more than the call it came from silently widens what auto-accepts.
-    touches:
-      - src/privacyfence/auto_accept.py
-      - src/privacyfence/policy/registry.py
-      - src/privacyfence/policy/scopes.py
-      - src/privacyfence/policy/propose.py
-      - src/privacyfence/gate.py
-      - src/privacyfence/write_effects.py
-      - tests/unit/test_auto_accept.py
-      - tests/unit/policy/test_plugin_scopes.py
-      - tests/unit/policy/test_registry.py
-      - tests/unit/test_write_effects.py
-    brief: |
-      1. Read Design D15 and the Current state "Tools, gate and policy" bullets. Implement in auto_accept.py:
-         DynamicToolSpec, register_dynamic_tools, unregister_dynamic_tools, reset_dynamic_tools; register
-         reset_dynamic_tools with privacyfence.plugins._testing.register_reset at import of auto_accept (a
-         function-local import is fine if a cycle appears).
-      2. policy/registry.py: register_dynamic(tool, operation, verb, gate) / unregister_dynamic(tool) adding to
-         and removing from TOOL_TO_VERB and TOOL_REGISTRY using the same entry type _build_registry produces.
-      3. gate.py: register_dynamic_layout(tool, layout) / unregister_dynamic_layout(tool) on _TOOL_LAYOUT. No
-         other gate.py change.
-      4. write_effects.py: register_dynamic_effect(tool, effect) / unregister_dynamic_effect(tool) on
-         EFFECT_BY_TOOL. tests/unit/test_write_effects.py's coverage check must still pass for static tools and
-         must ignore dynamic ones (they are removed by reset between tests).
-      5. policy/scopes.py: register_plugin_selector / unregister_plugin_selector and _plugin_scope_matches exactly
-         as D15.
-      6. policy/propose.py: register_dynamic_scopes(owner, tool, predicates) / unregister_dynamic_scopes(owner),
-         the dynamic table consulted by proposals_for after PROPOSABLE_SCOPES for "plugin." operations,
-         _candidate_value accepting dynamic entries, rules_for_proposal finding their groups, and
-         connector_of_operation returning the plugin name for "plugin.<p>.<t>". Do not change any static entry's
-         behaviour. Do not touch policy/catalogue.py (D15 "Not in protocol 1").
-      7. Tests: tests/unit/policy/test_plugin_scopes.py with TestPluginScope::test_matching_values_accepted,
-         TestPluginScope::test_non_matching_value_not_accepted, TestPluginScope::test_empty_scope_never_matches,
-         TestPluginScope::test_missing_scope_never_matches, TestProposals::test_scoped_tool_offers_scope_rule,
-         TestProposals::test_unscoped_tool_offers_whole_tool_rule, TestProposals::test_proposal_covers_one_operation,
-         and the hypothesis property test from D15 (TestProposalMatchesItsCall). Extend test_auto_accept.py with
-         TestDynamicTools (register, unregister restores the exact prior tables, duplicate/static name refused,
-         reset_all clears). Extend tests/unit/policy/test_registry.py for register_dynamic.
-      Stop condition: if adding dynamic entries requires changing how any static PROPOSABLE_SCOPES entry is
-      proposed or matched, stop with status=blocked and describe the conflict.
-    acceptance:
-      - python3 -m pytest tests/unit/test_auto_accept.py tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_gate.py tests/unit/test_generate_always_allow_reference.py -q passes
-      - TestPluginScope::test_non_matching_value_not_accepted, TestPluginScope::test_empty_scope_never_matches and TestProposalMatchesItsCall pass
-      - git diff --stat origin/main -- src/privacyfence/policy/catalogue.py shows no change
-
-  - id: p5-sdk-core
-    title: privacyfence-plugin-sdk package (runtime, blocks, generated types)
-    depends_on: [p1-protocol-core]
-    complexity: M
-    touches:
-      - plugin-sdk/pyproject.toml
-      - plugin-sdk/README.md
-      - plugin-sdk/src/privacyfence_plugin_sdk/__init__.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/types.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/_rpc.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/plugin.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/blocks.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/responses.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/py.typed
-      - scripts/gen_plugin_sdk_types.py
-      - tests/unit/test_gen_plugin_sdk_types.py
-      - tests/unit/plugin_sdk/__init__.py
-      - tests/unit/plugin_sdk/conftest.py
-      - tests/unit/plugin_sdk/test_plugin.py
-      - tests/unit/plugin_sdk/test_blocks.py
-      - tests/unit/plugin_sdk/test_rpc.py
-    brief: |
-      1. plugin-sdk/pyproject.toml and package layout exactly per Design D16 (no testing/ subpackage yet; the
-         next SDK phase adds it). The SDK must not import privacyfence; it reimplements framing (D3), block rules
-         (D4) and tool-definition floors (D9) in its own code. Copy the numeric limits it needs into a private
-         _limits section of plugin.py, with a test asserting they equal privacyfence.plugins.constants.
-      2. scripts/gen_plugin_sdk_types.py: reads docs/plugin-protocol/protocol.schema.json, writes
-         plugin-sdk/src/privacyfence_plugin_sdk/types.py (TypedDict per $defs entry, Literal enums, header line from
-         D16); --check exits 1 and prints the first differing line when stale. Run it to produce types.py.
-      3. plugin.py: Plugin, ToolHandle (.execute decorator), Prepared, Context, the source/confirm helpers incl.
-         ctx.source.download() exactly as D16 (cursor loop, one restart on revision_changed, writes to dest or
-         data_dir/downloads), prepared-state store keyed by call_id with PREPARED_CALL_LIFETIME_SECONDS expiry and
-         args_digest check (answer digest_mismatch / unknown_call), page routing (exact path; "" == "/"), event
-         and purge handlers, tools_changed(), run() (asyncio stdio until shutdown notification or EOF; on
-         Windows use a thread-based stdin reader because asyncio pipes on stdin are not supported there).
-      4. README.md: install, a minimal plugin, the manifest, building with PyInstaller, protocol link
-         (https://github.com/privacyfence/privacyfence/blob/main/docs/plugin-protocol.md). No history wording.
-      5. Tests under tests/unit/plugin_sdk/ (conftest.py inserts <repo>/plugin-sdk/src at sys.path[0]): drive the
-         runner over an in-memory stream pair by hand (the public test host comes next phase): initialize result
-         shape, ToolDefinitionError on floor violations at registration, prepare/execute with state, digest
-         mismatch, page routing, events, download loop with a revision change. tests/unit/test_gen_plugin_sdk_types.py
-         runs the script with --check via subprocess and expects exit 0.
-    acceptance:
-      - python3 -m pytest tests/unit/plugin_sdk tests/unit/test_gen_plugin_sdk_types.py -q passes
-      - python3 scripts/gen_plugin_sdk_types.py --check exits 0
-      - python3 -m build plugin-sdk --outdir /tmp/sdk-dist succeeds (pip install build if missing in the session)
-      - ruff check . passes
-
-  - id: p6-source-api
-    title: source.call operation table, chunked Drive downloads, audit
-    depends_on: [p1-protocol-core]
-    complexity: M
-    touches:
-      - src/privacyfence/plugins/source_ops.py
-      - src/privacyfence/plugins/spool.py
-      - tests/unit/plugins/test_source_ops.py
-      - tests/unit/plugins/test_spool.py
-    brief: |
-      1. source_ops.py exactly per Design D7: SourceAdapter, SOURCE_ADAPTERS for the six operations, the param
-         validators, handle_source_call with the eight ordered checks, ConnectorState type alias, error mapping,
-         size cap, and the one audit entry per call. The manifest parameter is typed loosely as an object with a
-         `source_operations` attribute (manifest.py is written in a parallel phase; import it only under
-         TYPE_CHECKING).
-      2. spool.py: DownloadSpool per D7 (secure_mkdir root, per-plugin subdir, cursor encode/decode, revision
-         check on every call, idle sweep with injected clock, clear()). Confirm the Drive client's metadata method
-         name first (Risks: "DriveClient metadata method name").
-      3. Do not modify any client or connector. Tests use fake connector objects with the private client
-         attribute set to a stub client (MagicMock or a small class) returning shapes copied from the real
-         dataclasses (import JiraIssue, CalendarEvent, ConfluencePage from the client modules to build them).
-      4. Tests: TestAllowlist::test_operation_outside_manifest_refused, TestAllowlist::test_operation_outside_allowlist_refused,
-         TestPrincipal::test_unknown_principal, TestOrgOnly::test_credential_rejected, TestIntrospection,
-         TestConnectorUnavailable::test_reasons (disabled / not_authenticated / unavailable per D6),
-         TestUpstreamError::test_message_not_leaked, TestPayloadCap, TestAuditNoContent::test_response_bytes_absent_from_audit
-         (use init_audit_logger(str(tmp_path)), put a sentinel string in the stub's data and assert it is in no
-         audit line), one TestAdapter<Op> per operation; test_spool.py: TestDriveChunks::test_reassembles_ten_mb_file
-         (10 MiB of random bytes in two chunks), test_offset_and_cursor_together_rejected,
-         test_revision_change_is_reported, test_spool_removed_after_idle, test_file_over_64_mib_refused.
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_source_ops.py tests/unit/plugins/test_spool.py -q passes
-      - TestAuditNoContent::test_response_bytes_absent_from_audit and TestDriveChunks::test_reassembles_ten_mb_file pass
-      - git diff --stat origin/main -- 'src/privacyfence/*_client.py' src/privacyfence/connectors shows no change
-      - coverage of source_ops.py and spool.py >= 95%
-
-  - id: p7-tool-defs
-    title: Tool definition validation and floors
-    depends_on: [p1-protocol-core]
-    complexity: S
-    touches:
-      - src/privacyfence/plugins/tools.py
-      - tests/unit/plugins/test_tools.py
-    brief: |
-      1. tools.py per Design D9's first paragraph: ToolDefError, validate_scope_types, validate_tool_defs with every
-         rule and the exact error texts given there. Takes the manifest as an object with max_gate_floor.
-      2. Tests: TestFloors::test_destructive_must_be_popup, TestFloors::test_write_auto_needs_manifest_floor,
-         TestFloors::test_read_auto_allowed, TestNames (pattern, 64-char MCP name, duplicates), TestScopes
-         (undeclared scope type), TestParameters (reason property refused, non-object refused), TestLimits
-         (65 tools, long description, effect, title), TestWholeListRejected (one bad tool rejects all).
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_tools.py -q passes
-      - coverage of tools.py = 100%
-
-  - id: p8-trust-state
-    title: Plugins directory, admin-only check, hashes, enabled-plugin state
-    depends_on: [p2-blocks-manifest]
-    complexity: M
-    worker_model: opus
-    worker_model_reason: Cross-platform ownership and ACL logic extracted from the privilege-separation code; a mistake silently weakens the ADR 0058 boundary.
-    touches:
-      - src/privacyfence/privilege_separation.py
-      - src/privacyfence/plugins/trust.py
-      - src/privacyfence/plugins/state.py
-      - tests/unit/test_privilege_separation.py
-      - tests/unit/plugins/test_trust.py
-      - tests/unit/plugins/test_state.py
-      - tests/platform/test_plugin_dir_permissions.py
-    brief: |
-      1. privilege_separation.py: add public admin_only_write_problem(path) per Design D5 and make
-         _posix_script_elevation_problem and _windows_script_elevation_problem call it. Every existing test in
-         tests/unit/test_privilege_separation.py (TestElevationScriptProblem and the monkeypatched call sites) must
-         pass unchanged; add tests for the new function on directories.
-      2. trust.py per D5: plugins_dir() per OS (table), DiscoveredPlugin, discover(), admin_only_problem(plugin_dir,
-         executable) (executable, dir, ancestors up to plugins_dir().parent), sha256_file(). Problems map to the D6
-         reason strings; log the underlying detail at warning.
-      3. state.py per D5: PluginRecord, PluginStateStore with load/enable/disable/forget/check_hashes, atomic writes
-         with mode 0600, corrupt file -> empty and logged.
-      4. Tests: test_trust.py (TestLocation per OS via monkeypatch of sys.platform and env, TestDiscovery,
-         TestLocation::test_user_writable_executable_refused using a tmp dir and a monkeypatched
-         admin_only_write_problem, TestHashes); test_state.py (TestHashDrift::test_changed_hash_disables, round trip,
-         corrupt file fail-closed, mode 0600 on POSIX). tests/platform/test_plugin_dir_permissions.py
-         (pytestmark = pytest.mark.platform): on POSIX, a file owned by the current non-root user is refused by
-         admin_only_write_problem; on Windows, a file in tmp_path (user-writable ACL) is refused. Skip the POSIX
-         case when running as root.
-    acceptance:
-      - python3 -m pytest tests/unit/test_privilege_separation.py tests/unit/plugins/test_trust.py tests/unit/plugins/test_state.py tests/platform/test_plugin_dir_permissions.py -q passes
-      - TestHashDrift::test_changed_hash_disables and TestLocation::test_user_writable_executable_refused pass
-      - coverage of trust.py and state.py >= 95%
-
-  - id: p9-sdk-testhost
-    title: Public SDK test host and operation samples
-    depends_on: [p5-sdk-core]
-    complexity: M
-    touches:
-      - plugin-sdk/src/privacyfence_plugin_sdk/testing/**
-      - tests/unit/plugin_sdk/test_testhost.py
-    brief: |
-      1. Implement privacyfence_plugin_sdk.testing exactly per Design D16 "Test host": PluginTestHost, ToolOutcome,
-         PageResponse, SourceFixtureMissing, ToolDefinitionError re-export, rules.allow_scope with D15 semantics,
-         source fixtures, samples.get / samples.drive_download (chunking and cursor format identical to D7),
-         pages with D14 headers and normalization, confirmations, emit/purge/shutdown, and testing/pytest.py's
-         plugin_host fixture importing pytest lazily.
-      2. testing/samples/<operation>.json for the six operations with the D7 data shapes. Hand-written and
-         redacted: no real names, emails, ids or URLs (use example.com, "Jane Example", ids like "EXAMPLE-1").
-      3. Do not edit plugin-sdk/README.md (the retire phase documents testing in docs/plugins.md). Put usage
-         examples in the testing package's module docstring.
-      4. Tests tests/unit/plugin_sdk/test_testhost.py with a small in-test plugin: TestPluginTestHost::test_review_read_released_equals_card_payload,
-         test_scope_rule_skips_card, test_scope_rule_mismatch_shows_card, test_source_fixture_missing_raises,
-         test_page_headers_match_daemon, test_post_returns_405, test_tool_floor_violation_raises,
-         test_confirmation_round_trip, test_drive_download_sample_chunks.
-    acceptance:
-      - python3 -m pytest tests/unit/plugin_sdk -q passes
-      - every file in plugin-sdk/src/privacyfence_plugin_sdk/testing/samples/ is valid JSON (python3 -c loop) and grep -rniE '@(gmail|privacyfence)\.|https?://(?!example)' on that folder returns nothing
-
-  - id: p10-sdk-release
-    title: Publish the SDK from the release workflow
-    depends_on: [p5-sdk-core]
-    complexity: S
-    touches:
-      - .github/workflows/publish-pypi.yml
-      - docs/releasing.md
-    brief: |
-      1. publish-pypi.yml: add build-sdk, publish-sdk-testpypi and publish-sdk-pypi exactly per Design D16
-         "Release", copying the existing jobs' needs/if/permissions/environment/pinned action SHA. The SDK version
-         comes from setuptools_scm on the same tag (plugin-sdk/pyproject.toml's root = ".."), so checkout must
-         fetch tags the same way the existing build job does. No R2 upload for the SDK.
-      2. docs/releasing.md "Publishing to PyPI": add the second pending-publisher registration (project
-         privacyfence-plugin-sdk) to the numbered steps and one sentence that the SDK is built and published by
-         the same workflow from the same tag. Present tense, no history.
-      3. Validate: python3 -c "import yaml;yaml.safe_load(open('.github/workflows/publish-pypi.yml'))" and, if
-         actionlint is installable (pip install actionlint-py), run it on the file.
-      Do not touch release.yml or build.yml.
-    acceptance:
-      - python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/publish-pypi.yml'));assert {'build-sdk','publish-sdk-testpypi','publish-sdk-pypi'} <= set(d['jobs'])" exits 0
-      - python3 -m pytest tests/unit/test_code_no_history.py tests/unit/test_docs_links.py tests/unit/test_docs_no_history.py -q passes
-
-  - id: p11-confirm-cards
-    title: Plugin confirmations and code/diff blocks on cards
-    depends_on: [p2-blocks-manifest]
-    complexity: M
-    worker_model: opus
-    worker_model_reason: Confirmations must never be auto-accepted and must keep step-up; card rendering of plugin-supplied text is an injection surface.
-    touches:
-      - src/privacyfence/plugins/confirm.py
-      - src/privacyfence/dialog_window_html.py
-      - src/privacyfence/approval_window_html.py
-      - src/privacyfence/resources/approval_window/styles.css
-      - tests/unit/plugins/test_confirm.py
-      - tests/unit/test_dialog_window_html.py
-      - tests/unit/test_approval_window_html.py
-      - tests/integration/test_plugin_card_escaping_browser.py
-    brief: |
-      1. approval_window_html._render_block: add "code" and "diff" per Design D4's last paragraph (escaped text,
-         the three pf-diff-* classes). styles.css: styles for pre.pf-code and the diff classes using existing
-         design tokens only (no colour literals, no width @media; tests/unit/test_design_system.py must pass).
-      2. dialog_window_html.build_confirmation_html: new keyword body_blocks per D11, rendered through
-         build_preview_body_html(blocks=...). Existing callers and their tests unchanged.
-      3. plugins/confirm.py: ConfirmationService exactly per D11 (request returns immediately; await_ waits on the
-         card event in the injected executor; id ownership check; result mapping; deny note; plugin_confirm audit
-         entries; unattended refusal; introspection refusal).
-      4. Tests: test_confirm.py with a real PendingApprovalRegistry: TestConfirm::test_never_auto_accepted (add a
-         rule that would match anything for every operation; reevaluate_all leaves the card pending),
-         TestConfirm::test_refused_when_unattended, TestConfirm::test_step_up_marks_sensitive,
-         TestConfirm::test_await_approved / denied with deny note / expired / timeout,
-         TestConfirm::test_other_plugins_id_refused, TestConfirm::test_await_approval_meta_tool_sees_status
-         (registry.await_status returns "pending" then "approved"). test_approval_window_html.py: code and diff
-         escaping. test_dialog_window_html.py: body_blocks rendered and escaped.
-         tests/integration/test_plugin_card_escaping_browser.py (markers integration, browser; reuse the Chromium
-         launch helper used by tests/integration/test_browser_smoke.py): load a confirmation card built from
-         hostile blocks ("<script>window.pwned=1</script>", "<img src=x onerror=...>", bidi overrides) and assert no
-         element besides the expected ones exists and window.pwned is undefined.
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_confirm.py tests/unit/test_dialog_window_html.py tests/unit/test_approval_window_html.py tests/unit/test_design_system.py -q passes
-      - TestConfirm::test_never_auto_accepted and TestConfirm::test_refused_when_unattended pass
-      - python3 -m pytest tests/integration/test_plugin_card_escaping_browser.py -q passes and reports PASSED, not SKIPPED (use PRIVACYFENCE_TEST_CHROMIUM if the session hook set it)
-
-  - id: p12-plugin-connector
-    title: PluginConnector, MCP exposure and the two-step gate
-    depends_on: [p2-blocks-manifest, p3-rpc-supervisor, p4-policy-dynamic, p7-tool-defs]
-    complexity: M
-    worker_model: opus
-    worker_model_reason: Prepare-to-release consistency, pending-call reuse and single-use writes are security invariants of the gate.
-    touches:
-      - src/privacyfence/plugins/connector.py
-      - tests/unit/plugins/test_connector.py
-    brief: |
-      1. Read Design D9 (exposure, registration, rejected tools.changed) and D10 in full, and gate.py's gated_call
-         signature and its pending/ledger path, before writing code.
-      2. connector.py: PluginConnector(Connector) with constructor (plugin name, display_name, manifest-like
-         object, peer_provider: Callable[[], RpcPeer | None], principal_context_provider: Callable[[], dict],
-         on_audit_lifecycle: Callable[[str], None]); set_tools(defs) (unregister then register_dynamic_tools,
-         build ToolSpecs per D9), clear_tools(), tool_specs(), call() per D10 steps 1-5 with the exact RuntimeError
-         sentences, _pending_prepared with expiry, the auto-audit entry copied from connectors/tasks.py's
-         _auto_audit, and handle_tools_changed(params) applying D9's whole-list rule (uses
-         tools.validate_tool_defs).
-      3. Tests (fake RpcPeer object whose request() is an AsyncMock-like stub; real gate with stubbed show_popup /
-         show_read_popup per guidelines §2.4, or the gated_call_spy pattern where only the arguments matter):
-         TestExposure (names, annotations, reason param on gated tools only), TestGateFlow::test_auto_read_no_card_and_audited,
-         TestGateFlow::test_read_returns_prepared_payload_verbatim (execute returns different data; caller gets the
-         prepared payload), TestGateFlow::test_write_executes_once, TestGateFlow::test_pending_reuses_prepared_call
-         (first call raises ApprovalPending, second call does not call prepare again and releases the same payload),
-         TestGateFlow::test_denied_never_executes, TestGateFlow::test_review_scans_payload_for_pii,
-         TestGateFlow::test_scope_rule_auto_accepts_matching_call and test_scope_rule_does_not_accept_other_value
-         (real policy rules via auto_accept.add_policy_v2_rules), TestCardShowsPayload (preview_blocks passed),
-         TestErrors (prepare error codes -> sentences; unknown_call), TestToolsChanged::test_violation_keeps_previous_list,
-         and assert_all_tools_leave_an_audit_trail-style check: every tool of a 3-tool plugin writes an audit entry.
-      Stop condition: see the Risks bullets "Card wiring for preview_blocks" and "Telling auto-accepted from
-      card-approved".
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_connector.py tests/unit/test_gate.py -q passes
-      - TestGateFlow::test_read_returns_prepared_payload_verbatim, TestGateFlow::test_write_executes_once and TestGateFlow::test_pending_reuses_prepared_call pass
-      - coverage of connector.py >= 95%
-
-  - id: p13-host-wiring
-    title: PluginHost, plugin storage, daemon wiring and the plugins.enabled setting
-    depends_on: [p3-rpc-supervisor, p6-source-api, p8-trust-state, p11-confirm-cards, p12-plugin-connector]
-    complexity: M
-    touches:
-      - src/privacyfence/plugins/host.py
-      - src/privacyfence/plugins/storage.py
-      - src/privacyfence/daemon_main.py
-      - src/privacyfence/settings_controller.py
-      - src/privacyfence/web/server.py
-      - src/privacyfence/resources/settings.yaml.example
-      - docs/configuration-reference.md
-      - tests/unit/plugins/test_host.py
-      - tests/unit/plugins/test_storage.py
-      - tests/unit/test_daemon_main.py
-      - tests/unit/web/test_server.py
-    brief: |
-      1. storage.py per Design D12 "Directories" (install_dir, principal_dir, ensure_dirs, remove_all).
-      2. host.py per D13: constructor seams, start/stop_all/rescan/inspect/enable/disable/purge/connectors/rows,
-         listeners, request handlers (source.call -> source_ops.handle_source_call with the running plugin's
-         manifest and a shared DownloadSpool; confirm.request/await -> ConfirmationService), the tools.changed
-         notification -> PluginConnector.handle_tools_changed then the tools-changed listener, initialize params
-         (D3 table: daemon {name: "privacyfence", version}, plugin {name, manifest_version}, data_dir,
-         principals [principal_context(LOCAL_PRINCIPAL, principal_dir)], limits), the supervisor's validate_tools
-         wired to tools.validate_tool_defs, state transitions and plugin_lifecycle audit entries (D9, D12, D13), D6
-         reasons for feature off / no privilege separation, the enable hash recheck with its exact error text, and
-         purge per D12 steps 1-4. Event fan-out is the next settings phase; leave on_connectors_changed as a method
-         that stores the latest rows (the next phase completes it).
-      3. daemon_main.py per D13 "Daemon wiring" 1-6, local mode only. settings_controller.py: only the new
-         constructor kwarg plugin_host=None stored as self._plugin_host. web/server.py: only the new plugin_host=None
-         kwarg on WebServer and build_app, stored on app.state.plugin_host (or the module's equivalent); no route.
-      4. settings.yaml.example: a `plugins:` section with `enabled: true` and a one-line comment; docs/configuration-reference.md:
-         a `plugins.enabled` entry (what it does; plugins also need the packaged install's background service).
-      5. Tests: test_storage.py; test_host.py driving the stub plugin and a minimal in-test SDK plugin (PYTHONPATH
-         plugin-sdk/src) with plugins_dir=tmp_path, trust_check=lambda *_: None, separation_enabled=lambda: True:
-         TestStartEnabled, TestFeatureOff, TestNoSeparation (reason string), TestEnable::test_hash_changed_since_review_refused,
-         TestDisable, TestCrashLimitRecorded, TestHashDriftOnStart, TestInspectReturnsSummary,
-         TestSourceCallRouted (stub connectors_provider), TestPurge::test_deletes_after_timeout,
-         TestPurge::test_uninstall_deletes_directories, TestToolsChangedNotifiesListener. test_daemon_main.py:
-         TestDaemonPluginHost::test_plugins_stop_before_audit_close, test_plugin_connectors_merged_for_local_principal,
-         test_no_host_in_org_mode. test_server.py: plugin_host stored.
-      Stop condition: see Risks "Event loop for the host".
-    acceptance:
-      - python3 -m pytest tests/unit/plugins tests/unit/test_daemon_main.py tests/unit/web/test_server.py tests/unit/test_settings_controller.py tests/unit/test_docs_configuration_reference.py -q passes
-      - TestPurge::test_deletes_after_timeout, TestPurge::test_uninstall_deletes_directories and TestEnable::test_hash_changed_since_review_refused pass
-      - python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q passes
-      - coverage of host.py and storage.py >= 95%
-
-  - id: p14-plugin-pages
-    title: Sandboxed plugin pages
-    depends_on: [p13-host-wiring]
-    complexity: M
-    worker_model: opus
-    worker_model_reason: The sandbox CSP and the route authentication are the whole isolation story for plugin HTML.
-    touches:
-      - src/privacyfence/plugins/pages.py
-      - src/privacyfence/web/routes_plugins.py
-      - src/privacyfence/web/server.py
-      - tests/unit/plugins/test_pages.py
-      - tests/unit/web/test_routes_plugins.py
-      - tests/unit/web/test_server.py
-      - tests/integration/test_plugin_pages_browser.py
-    brief: |
-      1. pages.py per Design D14: normalize_path, parse query (last value wins), filter_response, and
-         render_plugin_page(host, name, path, query, principal) sending web.request with the 10 s timeout.
-      2. web/routes_plugins.py: build_routes(plugin_host, <the local auth adapter pieces>) per D14 (GET only, 405
-         with Allow: GET otherwise without reaching the plugin, owner-only human session like the Settings page,
-         403 for bearer/no session, 404 when not running or pages false, 400 for a rejected path, redirect
-         /plugins/<name> -> /plugins/<name>/). Read how build_app wraps settings routes with _owner_only_routes and
-         reuse that wrapping.
-      3. web/server.py: mount the routes in local mode only (not in _build_org_app), and add the /plugins/ branch to
-         _SecurityHeadersMiddleware that sets D14's CSP instead of build_csp(...) plus the four extra headers.
-         Every other path's headers must be byte-for-byte unchanged (TestSecurityHeaders and
-         TestSecurityHeadersMiddlewareReplacesNotExtends keep passing).
-      4. Tests: test_pages.py (normalization table, filter_response table, oversize body -> 502, plugin cookie and
-         CSP dropped); test_routes_plugins.py (TestRoutes::test_post_returns_405_without_calling_plugin,
-         test_bearer_gets_403, test_no_session_gets_403, test_not_running_404, test_traversal_400, test_redirect,
-         test_headers_present_on_error); test_server.py (sandbox CSP only under /plugins/; org app has no
-         /plugins route). tests/integration/test_plugin_pages_browser.py (integration, browser): serve a page whose
-         script tries document.cookie and fetch('/api/settings/state') and writes the outcome into the DOM; assert
-         the cookie is unreadable (opaque origin raises or returns "") and the fetch fails.
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_pages.py tests/unit/web/test_routes_plugins.py tests/unit/web/test_server.py -q passes
-      - python3 -m pytest tests/integration/test_plugin_pages_browser.py -q reports PASSED, not SKIPPED
-      - TestRoutes::test_post_returns_405_without_calling_plugin passes
-
-  - id: p15-settings-events
-    title: Settings Plugins section, sensitive enable and purge, connector events
-    depends_on: [p13-host-wiring]
-    complexity: M
-    touches:
-      - src/privacyfence/plugins/events.py
-      - src/privacyfence/plugins/host.py
-      - src/privacyfence/settings_controller.py
-      - src/privacyfence/web/routes_settings.py
-      - src/privacyfence/web/org_settings_scope.py
-      - src/privacyfence/settings_window_html.py
-      - tests/unit/plugins/test_events.py
-      - tests/unit/plugins/test_host.py
-      - tests/unit/test_settings_controller.py
-      - tests/unit/web/test_routes_settings.py
-      - tests/unit/web/test_org_settings_scope.py
-      - tests/unit/test_settings_window_html.py
-      - tests/integration/test_plugin_settings_browser.py
-    brief: |
-      1. events.py: EventFanout per Design D12 "Events" (diff of (enabled, authed) per connector -> the four
-         states; best effort). host.py: complete on_connectors_changed to forward to EventFanout and notify running
-         plugins. settings_controller.py: call self._plugin_host.on_connectors_changed(<rows>) inside the existing
-         refresh_connectors listener chain when a host is set, and include `plugins: plugin_host.rows()` in the
-         snapshot that _push_snapshot sends (empty list when no host).
-      2. Settings actions in web/org_settings_scope.ACTION_SCOPES (local mode only) and web/routes_settings.py:
-         rescan_plugins (non-sensitive), inspect_plugin {name} (non-sensitive; returns host.inspect summary),
-         enable_plugin {name, executable_sha256, manifest_sha256} (sensitive: human session + step-up, like
-         enable_connector), disable_plugin {name} (non-sensitive), purge_plugin_data {name} (sensitive). Each
-         calls the matching SettingsController method, which calls the host (through the loop bridge chosen in the
-         host phase). Errors return the existing settings error JSON with the host's exact message.
-      3. settings_window_html.py: a "Plugins" section (local mode only in _capabilities_for), listing each row:
-         display name, version, state, reason, a link "Open page" when page_url is set, and buttons. "Review and
-         enable" calls inspect_plugin, then shows a dialog listing every tool with its gate (auto / review / popup),
-         read-only or write, destructive, the source operations, pages yes/no, the gate floor ("Writes may run
-         without asking" when max_gate_floor is auto), and an "Enable" button that posts enable_plugin with the two
-         hashes from the summary (the existing step-up flow handles the passkey). "Disable", "Delete this plugin's
-         data" (with the existing confirm pattern), "Rescan". Use only design-system primitives and tokens.
-      4. Tests: test_events.py (each transition; no event when unchanged; send failure swallowed); test_host.py
-         additions for event forwarding; test_settings_controller.py (snapshot contains plugins; methods call the
-         host); test_routes_settings.py (TestSensitiveActionsCoverAllAllowedActions still passes,
-         TestEnablePluginSensitivity::test_requires_step_up_and_human_session, TestPurgePluginSensitivity, disable
-         is not sensitive); test_org_settings_scope.py (actions local-only); test_settings_window_html.py (section
-         present in local, absent in org; enable dialog lists gates). tests/integration/test_plugin_settings_browser.py
-         (integration, browser): a TestPhoneLayout case for the Plugins section and the enable dialog with two fake
-         rows, following the existing TestPhoneLayout pattern.
-    acceptance:
-      - python3 -m pytest tests/unit/plugins/test_events.py tests/unit/plugins/test_host.py tests/unit/test_settings_controller.py tests/unit/web/test_routes_settings.py tests/unit/web/test_org_settings_scope.py tests/unit/test_settings_window_html.py tests/unit/test_design_system.py -q passes
-      - TestEnablePluginSensitivity::test_requires_step_up_and_human_session passes
-      - python3 -m pytest tests/integration/test_plugin_settings_browser.py -q reports PASSED, not SKIPPED
-
-  - id: p16-echo-e2e
-    title: Echo reference plugin, end-to-end tests, refusals, test-host conformance
-    depends_on: [p9-sdk-testhost, p14-plugin-pages, p15-settings-events]
-    complexity: M
-    touches:
-      - tests/fixtures/plugins/echo/**
-      - tests/fixtures/plugins/echo-variants/**
-      - tests/integration/test_plugin_framework.py
-      - tests/integration/test_plugin_refusals.py
-      - tests/integration/test_sdk_testhost_conformance.py
-      - tests/unit/plugins/test_sdk_samples.py
-    brief: |
-      1. Build echo on the SDK per Design D17 (tools table, page, event recorder) and the refusal variants under
-         echo-variants/<case>/ (bad manifest key, reserved name, write tool on auto without floor, destructive
-         not popup, major "2", org-only service_credentials true).
-      2. tests/integration/test_plugin_framework.py: an in-process daemon like test_mcp_daemon_contract.py's
-         running_mcp_server, plus a PluginHost with plugins_dir=tmp copy of echo, trust_check=lambda *_: None,
-         separation_enabled=lambda: True, command_resolver returning [sys.executable, echo_plugin.py] with
-         PYTHONPATH including plugin-sdk/src, connectors_provider with a fake calendar connector whose _calendar
-         stub returns CalendarEvent objects; approvals driven by stubbing the approval UI per guidelines §2.4.
-         Classes: TestEchoAutoRead, TestEchoReviewRead::test_returns_exactly_the_approved_data,
-         TestEchoPopupWrite::test_single_use, TestPluginScopeRule (matching and non-matching), TestConfirmRoundTrip
-         (privacyfence_await_approval sees the decision), TestSourceCallAudit::test_no_content_in_audit,
-         TestEchoPage::test_sandbox_csp (HTTP GET through the server with a human session cookie, as other
-         integration tests obtain one), TestToolsListChanged, TestCrashRestart, TestDisabledAfterFive,
-         TestCleanShutdown, TestPurgeOnUninstall, TestAuditTrail (every echo tool leaves an audit entry).
-      3. tests/integration/test_plugin_refusals.py: one parametrized TestRefusals covering: operation outside the
-         allowlist, operation outside the manifest, user-writable executable (real trust_check with a monkeypatched
-         admin_only_write_problem returning a problem), changed hash, major mismatch, non-read-only auto without
-         the floor, destructive not on popup, HTML in a block rendered escaped (card HTML contains &lt;script),
-         POST to /plugins/echo/ -> 405, org-only field in local mode.
-      4. tests/integration/test_sdk_testhost_conformance.py: run the same scenarios (auto read, review read, popup
-         write, scope rule match and mismatch, floor violation, block validation, page headers, chunked download
-         from samples.drive_download vs. the daemon's spool with a stub Drive client) through PluginTestHost and
-         through the real daemon with echo; assert equal outcomes field by field.
-      5. tests/unit/plugins/test_sdk_samples.py: every SDK sample's data passes the daemon's D7 shape check.
-      If a test exposes a bug in src/privacyfence/plugins/**, do not fix it here: stop with status=blocked naming
-      the failing test and module (the orchestrator sends it back to the owning phase).
-    acceptance:
-      - python3 -m pytest tests/integration/test_plugin_framework.py tests/integration/test_plugin_refusals.py tests/integration/test_sdk_testhost_conformance.py tests/unit/plugins/test_sdk_samples.py -q passes
-      - python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q passes
-      - grep -rn "xfail\|skip(" tests/integration/test_plugin_*.py tests/integration/test_sdk_testhost_conformance.py returns nothing
-
-  - id: p17-today-example
-    title: The today example plugin, its build script and the build.yml steps
-    depends_on: [p16-echo-e2e]
-    complexity: M
-    touches:
-      - examples/plugins/today/**
-      - scripts/build_example_plugin.py
-      - .github/workflows/build.yml
-      - tests/unit/examples/__init__.py
-      - tests/unit/examples/conftest.py
-      - tests/unit/examples/test_today_plugin.py
-      - tests/unit/test_build_example_plugin.py
-      - tests/fixtures/plugins/today/**
-    brief: |
-      1. examples/plugins/today/: today_plugin.py (the plugin, built only on the SDK), privacyfence-plugin.yaml
-         (name today, display_name Today, version 1.0.0, protocol "1", command ["today-plugin"],
-         source_operations [calendar.list_events], tools dynamic, max_gate_floor auto, pages true), README.md with
-         the ten smoke-test steps from the issue (Manual after section of
-         https://github.com/privacyfence/privacyfence/issues/846), adapted to the exact tool names in Design D17
-         and the Settings flow in the settings phase ("Review and enable", passkey). Behaviour exactly per D17.
-      2. scripts/build_example_plugin.py per D17 (argparse; PyInstaller via subprocess with --onefile, --name
-         today-plugin, --paths plugin-sdk/src and --paths examples/plugins/today so the SDK is bundled without being
-         installed; writes manifest and build-flags.json; --with-crash-tool; --out).
-      3. .github/workflows/build.yml: in each of build, build-windows and build-deb add the two steps from D17
-         after that job's own build steps (shell: bash on macOS/Linux, pwsh on Windows). Keep names short:
-         "Build the today example plugin" and "Self-test the today example plugin".
-      4. Tests: tests/unit/examples/conftest.py adds plugin-sdk/src and examples/plugins/today to sys.path;
-         test_today_plugin.py uses PluginTestHost with a recorded Calendar fixture under
-         tests/fixtures/plugins/today/ (hand-written, redacted, D7 normalized shape), one class per row of the
-         issue's P12 table (initialize and scope type, source call, storage, each tool and gate, publish
-         confirmation, page incl. manifest code block and cookie check script presence, the four events, crash
-         tool present only with the build flag). test_build_example_plugin.py: argument parsing and the files
-         written, with the PyInstaller subprocess call monkeypatched.
-      5. Run python3 scripts/build_example_plugin.py today --out /tmp/pf-plugins locally (pyinstaller is in the dev
-         extra) and /tmp/pf-plugins/today/today-plugin --self-test; paste the output in the PHASE-REPORT.
-    acceptance:
-      - python3 -m pytest tests/unit/examples tests/unit/test_build_example_plugin.py -q passes
-      - python3 scripts/build_example_plugin.py --help exits 0
-      - the local Linux build and --self-test print "today ok protocol 1.0.0"
-      - python3 -c "import yaml;yaml.safe_load(open('.github/workflows/build.yml'))" exits 0
-
-  - id: p18-retire
-    title: ADRs, reference docs, changelog, retire the plan
-    depends_on: [p1-protocol-core, p2-blocks-manifest, p3-rpc-supervisor, p4-policy-dynamic, p5-sdk-core, p6-source-api, p7-tool-defs, p8-trust-state, p9-sdk-testhost, p10-sdk-release, p11-confirm-cards, p12-plugin-connector, p13-host-wiring, p14-plugin-pages, p15-settings-events, p16-echo-e2e, p17-today-example]
-    complexity: M
-    touches:
-      - docs/adr/**
-      - docs/plugin-protocol.md
-      - docs/plugins.md
-      - docs/README.md
-      - docs/approvals-and-policy.md
-      - docs/security-and-compliance.md
-      - docs/platform-support.md
-      - CHANGELOG.md
-      - docs/plugin-framework-plan.md
-      - docs/plugin-framework-plan-manual-steps.html
-    brief: |
-      1. ADRs: write the seven ADRs in the plan's ADRs section with docs/adr/README.md's template, numbered from
-         the next free number (check `ls docs/adr`), Status "Accepted — <today>. Implemented.", linking the issue
-         https://github.com/privacyfence/privacyfence/issues/846 and source files, never the plan. Take the context,
-         decision and rejected alternatives from the Design sections each ADR names. Add all seven to
-         docs/adr/README.md's index. If the numbers differ from 0120-0126, grep src/ tests/ plugin-sdk/ examples/
-         docs/ for "ADR 012" and fix every citation to the real numbers.
-      2. docs/plugin-protocol.md: the protocol reference from the final schema and code (D3, D4, D5 manifest, D7
-         operations with data shapes, D9 floors, D10 flow, D11, D12 events, D14 headers, limits and timeouts),
-         stating current behaviour only; link the schema file and the ADRs.
-      3. docs/plugins.md: for administrators and plugin authors: what a plugin is, the plugins directory per OS
-         and its permission requirement, installing, "Review and enable" with the passkey, logs location
-         (data_dir/logs/plugins/<name>.log), disabling, deleting data, removal, plugins.enabled, the reasons a
-         plugin does not start (D6 table), and writing and testing a plugin with the SDK and PluginTestHost.
-      4. List both new docs in docs/README.md. Update approvals-and-policy.md (plugin tools, gates, the
-         plugin:<name>:<scope> rule selector, confirmations never auto-accepted), security-and-compliance.md
-         (the plugin trust model and residual risk, the source API being ungated but audited, sandboxed pages) and
-         platform-support.md (plugins directory per OS). tools-reference.md and always-allow-rules-reference.md are
-         generated from static tables and do not change; confirm with their tests.
-      5. CHANGELOG.md: one entry under ## [Unreleased] for the plugin framework, the SDK and the today example.
-      6. Delete docs/plugin-framework-plan.md and docs/plugin-framework-plan-manual-steps.html. grep the repo for
-         "plugin-framework-plan" and remove any reference.
-    acceptance:
-      - test ! -e docs/plugin-framework-plan.md && test ! -e docs/plugin-framework-plan-manual-steps.html
-      - grep -rn "plugin-framework-plan" --include='*' . --exclude-dir=.git returns nothing
-      - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_allowlist.py tests/unit/test_code_no_history.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_changelog_section.py -q passes
-      - seven new docs/adr/NNNN-*.md files with Status Accepted, all in docs/adr/README.md's index
+- id: p1-protocol-core
+  title: Protocol constants, message types, JSON schema, test reset registry
+  depends_on: []
+  complexity: M
+  touches:
+  - src/privacyfence/plugins/__init__.py
+  - src/privacyfence/plugins/constants.py
+  - src/privacyfence/plugins/protocol.py
+  - src/privacyfence/plugins/_testing.py
+  - docs/plugin-protocol/protocol.schema.json
+  - tests/conftest.py
+  - tests/unit/plugins/__init__.py
+  - tests/unit/plugins/test_constants.py
+  - tests/unit/plugins/test_protocol.py
+  - tests/unit/plugins/test_testing_registry.py
+  brief: |
+    1. Create src/privacyfence/plugins/__init__.py (docstring "Out-of-process plugins (ADR 0120)." and the
+       __future__ import) and constants.py with exactly the code in the plan's Design D2 (the constants block
+       and the three name helpers), plus a module docstring. Note the ADR numbers 0120-0126 are cited in
+       docstrings even though the ADR files are written in the last phase; that is intended.
+    2. Create _testing.py with register_reset and reset_all as in D2. Add one line to tests/conftest.py's
+       _reset() function: `plugins._testing.reset_all()` (import `from privacyfence import plugins` and
+       `import privacyfence.plugins._testing` the way the file imports other modules).
+    3. Create protocol.py per D3: RpcError (code name, detail, retryable, extra; to_error()), the dataclasses
+       PrincipalContext, ToolDef, InitializeResult, PrepareResult, ExecuteResult, SourceCallParams,
+       ConfirmRequestParams, WebResponse with from_wire(obj, *, mode="local") and to_wire(), args_digest(args),
+       and principal_context(principal, storage_dir, *, mode="local"). Validators are hand-written: types,
+       required keys, D2 patterns and limits; unknown keys ignored; credential/roles in local mode raise
+       RpcError("org_only_field"). Blocks inside preview/payload are only checked to be lists of dicts here;
+       full block validation is blocks.py (next phase), so PrepareResult.from_wire accepts a
+       `validate_blocks` callable parameter defaulting to a no-op.
+    4. Write docs/plugin-protocol/protocol.schema.json (JSON Schema 2020-12) with every $defs entry listed in
+       D3 and the field tables of D3/D4/D5, `additionalProperties: false` on Block variants and Manifest, and an
+       `x-limits` object holding the D2 numbers the protocol exposes.
+    5. Tests: test_constants.py (RESERVED_PLUGIN_NAMES ⊇ settings_controller.ALL_CONNECTORS; regexes accept/
+       reject edge cases; name helpers); test_protocol.py (one class per dataclass with valid and invalid
+       transcripts copied from D3's tables, args_digest stable under key order, org_only_field in local mode,
+       and the schema check: json.load the schema and assert each listed $defs entry's property names equal
+       the fields its dataclass handles); test_testing_registry.py (idempotent register, order, reset_all).
+       Module docstrings name the invariant (e.g. "validators fail closed on malformed plugin output").
+    6. No CHANGELOG line in this phase (the retire phase writes it).
+    Stop condition: if tests/conftest.py's _reset() is not a plain function you can add a line to, stop.
+  acceptance:
+  - python3 -m pytest tests/unit/plugins -q passes
+  - python3 -c "import json;json.load(open('docs/plugin-protocol/protocol.schema.json'))" exits 0
+  - python3 -m pytest tests/unit/plugins --cov=src/privacyfence/plugins --cov-branch -q reports >= 95% for constants.py, protocol.py, _testing.py
+  - ruff check . passes and python3 -m pytest tests/unit/test_code_no_history.py -q passes
+- id: p2-blocks-manifest
+  title: Block validation and card conversion, manifest loader, audit decision docs
+  depends_on:
+  - p1-protocol-core
+  complexity: M
+  touches:
+  - src/privacyfence/plugins/blocks.py
+  - src/privacyfence/plugins/manifest.py
+  - src/privacyfence/audit_log.py
+  - tests/unit/plugins/test_blocks.py
+  - tests/unit/plugins/test_manifest.py
+  brief: |
+    1. blocks.py exactly per Design D4: BlockError, validate_blocks (sanitizing controls and the listed bidi
+       characters, cell truncation, caps), to_card_blocks (mapping table in D4), fields_dict, flatten_text.
+    2. manifest.py per D5: Manifest dataclass, ManifestError, MANIFEST_FILENAME, load_manifest (yaml.safe_load,
+       unknown keys are errors, every field rule in D5's YAML comments, name must equal plugin_dir.name,
+       service_credentials true rejected in mode "local"), resolve_command (inside-dir check after resolve(),
+       ".exe" appended on Windows when command[0] has no suffix -- test by monkeypatching sys.platform).
+    3. audit_log.py: comment-only change. In the decision-values comment block (around lines 139-310) document
+       "plugin_source", "plugin_confirm" and "plugin_lifecycle" in the style of the existing entries, with what
+       connector/tool/summary hold for each (D7, D11, D12, D13). No code change, no schema bump.
+    4. Tests: test_blocks.py (TestValidate per type incl. unknown type/extra field rejected, TestSanitize with
+       test_bidi_override_removed and test_html_in_text_is_kept_as_text (to_card_blocks keeps "<b>" as literal
+       text), TestCaps, TestToCardBlocks, TestFieldsDict duplicate labels, TestFlatten); test_manifest.py (valid
+       manifest, each invalid field, unknown key, reserved name, name/dir mismatch, command escaping via ".." and
+       via a symlink (skip the symlink case where os.symlink is unavailable), Windows .exe).
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_blocks.py tests/unit/plugins/test_manifest.py tests/unit/test_audit_log.py -q passes
+  - TestSanitize::test_bidi_override_removed and TestSanitize::test_html_in_text_is_kept_as_text pass
+  - coverage of blocks.py and manifest.py >= 95% (python3 -m pytest tests/unit/plugins --cov=src/privacyfence/plugins --cov-branch)
+- id: p3-rpc-supervisor
+  title: JSON-RPC peer and process supervisor
+  depends_on:
+  - p1-protocol-core
+  complexity: M
+  touches:
+  - src/privacyfence/plugins/rpc.py
+  - src/privacyfence/plugins/supervisor.py
+  - tests/unit/plugins/test_rpc.py
+  - tests/unit/plugins/test_supervisor.py
+  - tests/fixtures/plugins/stub/**
+  brief: |
+    1. rpc.py: RpcPeer exactly per Design D3 (framing, line cap via StreamReader limit and an explicit length
+       check, independent id spaces, in-flight caps both directions, per-method timeouts from TIMEOUT_SECONDS,
+       batch -> invalid_request, INVALID_LINES_LIMIT consecutive bad lines -> close with "invalid_output",
+       handler RpcError vs other exceptions). RpcError is imported from protocol.py.
+    2. supervisor.py: LaunchSpec, child_env(), Supervisor exactly per D8 (spawn flags per OS, log rotation and
+       0600, handshake checks in order -- the tool-definition check calls a `validate_tools` callable passed in
+       the constructor (add the parameter `validate_tools: Callable[[InitializeResult], None]`, default no-op;
+       the host passes tools.validate_tool_defs later), crash window and backoff with injected clock/sleep,
+       introspect(), stop sequence). The `initialize` params come from the injected callable.
+    3. tests/fixtures/plugins/stub/stub_plugin.py: stdlib-only stub with the modes listed in D8, speaking the D3
+       framing.
+    4. Tests: test_rpc.py over an in-memory pipe pair (two asyncio StreamReader/Writer pairs or
+       asyncio.open_connection on a socketpair): round trip both directions, timeout, error mapping, batch,
+       junk lines closing after 3, in-flight cap, notifications ignored when unknown. test_supervisor.py with the
+       stub plugin as a real child process ([sys.executable, stub_plugin.py, mode]): TestHandshake
+       (ok, wrong-name), TestMajorMismatch::test_plugin_not_started, TestCrashLimit::test_disabled_after_five_in_ten_minutes
+       (injected clock and a sleep that returns immediately), TestBackoffSequence, TestShutdown::test_grace_then_kill
+       (slow-shutdown mode), TestEnvironment::test_daemon_env_not_inherited (set a sentinel env var in the test
+       process; echo-env mode must not show it), TestJunkStdout (counts as a crash), TestLog (0600 on POSIX only,
+       rotation).
+    Every process test must finish well under the 30 s pytest timeout and must run on Windows (no shebangs, no
+    signals other than terminate/kill).
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_rpc.py tests/unit/plugins/test_supervisor.py -q passes
+  - TestCrashLimit::test_disabled_after_five_in_ten_minutes, TestShutdown::test_grace_then_kill, TestMajorMismatch::test_plugin_not_started and TestEnvironment::test_daemon_env_not_inherited pass
+  - coverage of rpc.py and supervisor.py >= 95%
+- id: p4-policy-dynamic
+  title: Dynamic tool registration and the plugin scope selector in the policy tables
+  depends_on:
+  - p1-protocol-core
+  complexity: M
+  worker_model: opus
+  worker_model_reason: It extends the policy engine's static tables and the "Always allow" proposal path; a proposal that matches more than the call it came from silently widens what auto-accepts.
+  touches:
+  - src/privacyfence/auto_accept.py
+  - src/privacyfence/policy/registry.py
+  - src/privacyfence/policy/scopes.py
+  - src/privacyfence/policy/propose.py
+  - src/privacyfence/gate.py
+  - src/privacyfence/write_effects.py
+  - tests/unit/test_auto_accept.py
+  - tests/unit/policy/test_plugin_scopes.py
+  - tests/unit/policy/test_registry.py
+  - tests/unit/test_write_effects.py
+  brief: |
+    1. Read Design D15 and the Current state "Tools, gate and policy" bullets. Implement in auto_accept.py:
+       STATIC_TOOL_NAMES (taken at import), DynamicToolSpec, register_dynamic_tools, unregister_dynamic_tools,
+       reset_dynamic_tools; register
+       reset_dynamic_tools with privacyfence.plugins._testing.register_reset at import of auto_accept (a
+       function-local import is fine if a cycle appears).
+    2. policy/registry.py: register_dynamic(tool, operation, verb, gate) / unregister_dynamic(tool) adding to
+       and removing from TOOL_TO_VERB and TOOL_REGISTRY using the same entry type _build_registry produces.
+    3. gate.py: register_dynamic_layout(tool, layout) / unregister_dynamic_layout(tool) on _TOOL_LAYOUT. No
+       other gate.py change.
+    4. write_effects.py: register_dynamic_effect(tool, effect) / unregister_dynamic_effect(tool) on
+       EFFECT_BY_TOOL. tests/unit/test_write_effects.py's coverage check must still pass for static tools and
+       must ignore dynamic ones (they are removed by reset between tests).
+    5. policy/scopes.py: register_plugin_selector / unregister_plugin_selector, register_plugin_anything_selector
+       and _plugin_scope_matches exactly as D15 (dotted scope_type "<plugin>.<type>" so
+       policy/describe.py's scope_type_label finds a noun; check it with a test, do not edit describe.py).
+    6. policy/propose.py: register_dynamic_scopes(owner, tool, predicates) / unregister_dynamic_scopes(owner),
+       the dynamic table consulted by proposals_for after PROPOSABLE_SCOPES for "plugin." operations,
+       _candidate_value accepting dynamic entries, rules_for_proposal finding their groups, and
+       connector_of_operation returning the plugin name for "plugin.<p>.<t>", the unscoped
+       "plugin:<p>:anything" entry (never the shared always_allow predicate), and no proposal at all for a
+       DynamicToolSpec with destructive=True. Do not change any static entry's
+       behaviour. Do not touch policy/catalogue.py (D15 "Not in protocol 1").
+    7. Tests: tests/unit/policy/test_plugin_scopes.py with TestPluginScope::test_matching_values_accepted,
+       TestPluginScope::test_non_matching_value_not_accepted, TestPluginScope::test_empty_scope_never_matches,
+       TestPluginScope::test_missing_scope_never_matches, TestProposals::test_scoped_tool_offers_scope_rule,
+       TestProposals::test_unscoped_tool_offers_whole_tool_rule (predicate plugin:<p>:anything, and the rule
+       does not merge with a Gmail always_allow rule in store.merge_rules), TestProposals::test_destructive_tool_offers_nothing,
+       TestProposals::test_proposal_covers_one_operation, TestProposals::test_confirmation_text_names_scope
+       (policy.describe output for a plugin rule contains the scope type's noun),
+       and the hypothesis property test from D15 (TestProposalMatchesItsCall). Extend test_auto_accept.py with
+       TestDynamicTools (register, unregister restores the exact prior tables, duplicate/static name refused,
+       reset_all clears). Extend tests/unit/policy/test_registry.py for register_dynamic.
+    Stop condition: if adding dynamic entries requires changing how any static PROPOSABLE_SCOPES entry is
+    proposed or matched, stop with status=blocked and describe the conflict.
+  acceptance:
+  - python3 -m pytest tests/unit/test_auto_accept.py tests/unit/policy tests/unit/test_write_effects.py tests/unit/test_gate.py tests/unit/test_generate_always_allow_reference.py -q passes
+  - TestPluginScope::test_non_matching_value_not_accepted, TestPluginScope::test_empty_scope_never_matches and TestProposalMatchesItsCall pass
+  - git diff --stat origin/main -- src/privacyfence/policy/catalogue.py shows no change
+- id: p5-sdk-core
+  title: privacyfence-plugin-sdk package (runtime, blocks, responses)
+  depends_on:
+  - p1-protocol-core
+  complexity: M
+  touches:
+  - plugin-sdk/pyproject.toml
+  - plugin-sdk/README.md
+  - plugin-sdk/src/privacyfence_plugin_sdk/__init__.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/_rpc.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/plugin.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/blocks.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/responses.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/py.typed
+  - tests/unit/plugin_sdk/__init__.py
+  - tests/unit/plugin_sdk/conftest.py
+  - tests/unit/plugin_sdk/test_plugin.py
+  - tests/unit/plugin_sdk/test_blocks.py
+  - tests/unit/plugin_sdk/test_rpc.py
+  brief: |
+    1. plugin-sdk/pyproject.toml and package layout exactly per Design D16 (no testing/ subpackage yet; the
+       next SDK phase adds it). The SDK must not import privacyfence; it reimplements framing (D3), block rules
+       (D4) and tool-definition floors (D9) in its own code. Copy the numeric limits it needs into a private
+       _limits section of plugin.py, with a test asserting they equal privacyfence.plugins.constants.
+    2. Do not create types.py (the next SDK phase generates it). Use plain dicts in this phase.
+    3. plugin.py: Plugin, ToolHandle (.execute decorator), Prepared, Context, the source/confirm helpers incl.
+       ctx.source.download() exactly as D16 (cursor loop, one restart on revision_changed, writes to dest or
+       data_dir/downloads), prepared-state store keyed by call_id with PREPARED_CALL_LIFETIME_SECONDS expiry and
+       args_digest check (answer digest_mismatch / unknown_call), page routing (exact path; "" == "/"), event
+       and purge handlers, tools_changed(), run() (asyncio stdio until shutdown notification or EOF; on
+       Windows use a thread-based stdin reader because asyncio pipes on stdin are not supported there).
+    4. README.md: install, a minimal plugin, the manifest, building with PyInstaller, that pages must be
+       self-contained (D14), and links to the schema
+       (https://github.com/privacyfence/privacyfence/blob/main/docs/plugin-protocol/protocol.schema.json) and the
+       issue https://github.com/privacyfence/privacyfence/issues/846. Never write a docs-slash-name-dot-md path
+       (Risks, "Docs references"). No history wording.
+    5. Tests under tests/unit/plugin_sdk/ (conftest.py inserts <repo>/plugin-sdk/src at sys.path[0]): drive the
+       runner over an in-memory stream pair by hand (the public test host comes next phase): initialize result
+       shape, ToolDefinitionError on floor violations at registration, prepare/execute with state, digest
+       mismatch, page routing, events, download loop with a revision change.
+  acceptance:
+  - python3 -m pytest tests/unit/plugin_sdk -q passes
+  - python3 -m build plugin-sdk --outdir /tmp/sdk-dist succeeds (pip install build if missing in the session)
+  - ruff check . passes and python3 -m pytest tests/unit/test_docs_references_exist.py tests/unit/test_code_no_history.py -q passes
+- id: p5b-sdk-types
+  title: Generated SDK protocol types
+  depends_on:
+  - p5-sdk-core
+  complexity: S
+  touches:
+  - plugin-sdk/src/privacyfence_plugin_sdk/types.py
+  - scripts/gen_plugin_sdk_types.py
+  - tests/unit/test_gen_plugin_sdk_types.py
+  brief: |
+    1. scripts/gen_plugin_sdk_types.py: reads docs/plugin-protocol/protocol.schema.json, writes
+       plugin-sdk/src/privacyfence_plugin_sdk/types.py (a TypedDict per $defs entry, total=False for optional keys,
+       Literal for enums, the header line from Design D16); --check exits 1 and prints the first differing line when
+       the file is stale. Run it to produce types.py. Stdlib only.
+    2. Export the generated names from the SDK only as `privacyfence_plugin_sdk.types` (do not edit __init__.py).
+    3. tests/unit/test_gen_plugin_sdk_types.py: runs the script with --check via subprocess (exit 0); a second test
+       writes a modified schema to tmp_path, points the script at it with a --schema option, and expects exit 1.
+  acceptance:
+  - python3 scripts/gen_plugin_sdk_types.py --check exits 0
+  - python3 -m pytest tests/unit/test_gen_plugin_sdk_types.py -q passes
+- id: p6-source-api
+  title: source.call operation table, chunked Drive downloads, audit
+  depends_on:
+  - p1-protocol-core
+  complexity: M
+  touches:
+  - src/privacyfence/plugins/source_ops.py
+  - src/privacyfence/plugins/spool.py
+  - tests/unit/plugins/test_source_ops.py
+  - tests/unit/plugins/test_spool.py
+  brief: |
+    1. source_ops.py exactly per Design D7: SourceAdapter, SOURCE_ADAPTERS for the six operations, the param
+       validators, handle_source_call with the eight ordered checks, ConnectorState type alias, error mapping,
+       size cap, and the one audit entry per call. The manifest parameter is typed loosely as an object with a
+       `source_operations` attribute (manifest.py is written in a parallel phase; import it only under
+       TYPE_CHECKING).
+    2. spool.py: DownloadSpool per D7 (secure_mkdir root, per-plugin subdir, cursor encode/decode, revision
+       check on every call, idle sweep with injected clock, clear()). Bytes come from download_file_bytes and are
+       written with atomic_write_bytes; revision is DriveFile.modified_time; the 64 MiB cap is checked on the
+       metadata size and again on len(data) (native files report size 0). Salesforce filters go through
+       privacyfence.connectors.salesforce._parse_report_filters (import only, no change there).
+    3. Do not modify any client or connector. Tests use fake connector objects with the private client
+       attribute set to a stub client (MagicMock or a small class) returning shapes copied from the real
+       dataclasses (import JiraIssue, CalendarEvent, ConfluencePage from the client modules to build them).
+    4. Tests: TestAllowlist::test_operation_outside_manifest_refused, TestAllowlist::test_operation_outside_allowlist_refused,
+       TestPrincipal::test_unknown_principal, TestOrgOnly::test_credential_rejected, TestIntrospection,
+       TestConnectorUnavailable::test_reasons (disabled / not_authenticated / unavailable per D6),
+       TestUpstreamError::test_message_not_leaked, TestPayloadCap, TestAuditNoContent::test_response_bytes_absent_from_audit
+       (use init_audit_logger(str(tmp_path)), put a sentinel string in the stub's data and assert it is in no
+       audit line), one TestAdapter<Op> per operation; test_spool.py: TestDriveChunks::test_reassembles_ten_mb_file
+       (10 MiB of random bytes in two chunks), test_offset_and_cursor_together_rejected,
+       test_revision_change_is_reported, test_spool_removed_after_idle, test_file_over_64_mib_refused,
+       test_native_file_size_checked_after_download; TestAdapterSalesforce::test_bad_filter_operator_is_invalid_params.
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_source_ops.py tests/unit/plugins/test_spool.py -q passes
+  - TestAuditNoContent::test_response_bytes_absent_from_audit and TestDriveChunks::test_reassembles_ten_mb_file pass
+  - git diff --stat origin/main -- 'src/privacyfence/*_client.py' src/privacyfence/connectors shows no change
+  - coverage of source_ops.py and spool.py >= 95%
+- id: p7-tool-defs
+  title: Tool definition validation and floors
+  depends_on:
+  - p1-protocol-core
+  - p4-policy-dynamic
+  complexity: S
+  touches:
+  - src/privacyfence/plugins/tools.py
+  - tests/unit/plugins/test_tools.py
+  brief: |
+    1. tools.py per Design D9's first paragraph: ToolDefError, validate_scope_types, validate_tool_defs with every
+       rule and the exact error texts given there, including: scalar-only parameters, the collision check against
+       auto_accept.STATIC_TOOL_NAMES and web.mcp_tools.META_TOOL_NAMES, the auto floor for read and write tools alike,
+       and the optional `reviewed` signature set. Also add `tool_signature(defn: ToolDef) -> tuple` returning
+       (name, gate, read_only, destructive, tuple(scopes)). Takes the manifest as an object with max_gate_floor.
+    2. Tests: TestFloors::test_destructive_must_be_popup, TestFloors::test_write_auto_needs_manifest_floor,
+       TestFloors::test_read_auto_needs_manifest_floor, TestFloors::test_auto_allowed_with_floor, TestNames (pattern,
+       64-char MCP name, duplicates, TestNames::test_collision_with_builtin_refused using "apps" + "script_get_content"),
+       TestScopes (undeclared scope type), TestParameters (reason property refused, non-object refused, array/object/
+       enum refused, the four scalars accepted), TestLimits (65 tools, long description, effect, title),
+       TestReviewed (new tool refused, changed gate refused, removed tool allowed), TestWholeListRejected.
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_tools.py -q passes
+  - coverage of tools.py = 100%
+- id: p8-trust-state
+  title: Plugins directory, admin-only check, hashes, enabled-plugin state
+  depends_on:
+  - p2-blocks-manifest
+  complexity: M
+  worker_model: opus
+  worker_model_reason: Cross-platform ownership and ACL logic extracted from the privilege-separation code; a mistake silently weakens the ADR 0058 boundary.
+  touches:
+  - src/privacyfence/privilege_separation.py
+  - src/privacyfence/plugins/trust.py
+  - src/privacyfence/plugins/state.py
+  - tests/unit/test_privilege_separation.py
+  - tests/unit/plugins/test_trust.py
+  - tests/unit/plugins/test_state.py
+  - tests/platform/test_plugin_dir_permissions.py
+  brief: |
+    1. privilege_separation.py: add public admin_only_write_problem(path) per Design D5 and make
+       _posix_script_elevation_problem and _windows_script_elevation_problem call it. Every existing test in
+       tests/unit/test_privilege_separation.py (TestElevationScriptProblem and the monkeypatched call sites) must
+       pass unchanged; add tests for the new function on directories.
+    2. trust.py per D5: plugins_dir() per OS (table; branch on privilege_separation.current_platform()),
+       DiscoveredPlugin, discover() (raises OSError when plugins_dir cannot be listed -- the host relies on that to
+       never delete data after a failed listing, D12), admin_only_problem(plugin_dir, executable) (the executable,
+       the plugin dir, then every ancestor up to and including the filesystem root), sha256_file(). Problems map
+       to the D6 reason strings; log the underlying detail at warning.
+    3. state.py per D5: PluginRecord (including reviewed_tools: list of signatures, D9), PluginStateStore with
+       load/enable(..., reviewed_tools)/disable/forget/check_hashes, atomic writes with mode 0600, corrupt file ->
+       empty and logged.
+    4. Tests: test_trust.py (TestLocation per OS via monkeypatch of privilege_separation.current_platform and env
+       (the pattern at tests/unit/test_privilege_separation.py:121), TestDiscovery,
+       TestLocation::test_user_writable_executable_refused using a tmp dir and a monkeypatched
+       admin_only_write_problem, TestHashes); test_state.py (TestHashDrift::test_changed_hash_disables, round trip,
+       corrupt file fail-closed, mode 0600 on POSIX). tests/platform/test_plugin_dir_permissions.py
+       (pytestmark = pytest.mark.platform): on POSIX, a file owned by the current non-root user is refused by
+       admin_only_write_problem; on Windows, a file in tmp_path (user-writable ACL) is refused. Skip the POSIX
+       case when running as root.
+    Stop conditions: if any existing test in tests/unit/test_privilege_separation.py or tests/unit/test_service_control.py
+    needs a change other than an added test, stop with status=blocked -- the refactor must not change the
+    elevation-script behaviour. If ancestors up to the root are not admin-only on a normal developer machine
+    (/home is fine on Linux; tmp_path is not), tests must monkeypatch the check, never relax it.
+  acceptance:
+  - python3 -m pytest tests/unit/test_privilege_separation.py tests/unit/plugins/test_trust.py tests/unit/plugins/test_state.py tests/platform/test_plugin_dir_permissions.py -q passes
+  - TestHashDrift::test_changed_hash_disables and TestLocation::test_user_writable_executable_refused pass
+  - coverage of trust.py and state.py >= 95%
+- id: p9-sdk-testhost
+  title: 'Public SDK test host: gate simulation, scope rules, source fixtures, samples'
+  depends_on:
+  - p5-sdk-core
+  complexity: M
+  touches:
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/__init__.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_host.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_gate.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_source.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/samples/**
+  - tests/unit/plugin_sdk/test_testhost.py
+  brief: |
+    1. Implement the core of privacyfence_plugin_sdk.testing per Design D16 "Test host": PluginTestHost (async
+       context manager over an in-memory stream pair running the plugin's real runner; initialize with tool-definition
+       floors from D9 raising ToolDefinitionError), ToolOutcome, SourceFixtureMissing, call_tool with the simulated gate
+       (auto / review card / popup card decided by `decide`; reads release the prepared payload; writes execute once),
+       rules.allow_scope with D15 matching (_gate.py), source fixtures (.load/.when/.fail/.calls, _source.py), and
+       samples.get / samples.drive_download (chunking and cursor format identical to D7).
+       Pages, confirmations, events, purge, shutdown and the pytest fixture are the next phase: leave PluginTestHost
+       with clearly separated private hook points (_handle_confirm_request, _handle_web) that raise
+       NotImplementedError for now.
+    2. testing/samples/<operation>.json for the six operations with the D7 data shapes. Hand-written and redacted: no
+       real names, emails, ids or URLs (use example.com, "Jane Example", ids like "EXAMPLE-1").
+    3. Usage examples go in the testing package's module docstring (do not edit plugin-sdk/README.md).
+    4. Tests tests/unit/plugin_sdk/test_testhost.py with a small in-test plugin: TestPluginTestHost::test_review_read_released_equals_card_payload,
+       test_scope_rule_skips_card, test_scope_rule_mismatch_shows_card, test_source_fixture_missing_raises,
+       test_tool_floor_violation_raises, test_auto_read_needs_floor, test_write_executes_once, test_drive_download_sample_chunks.
+  acceptance:
+  - python3 -m pytest tests/unit/plugin_sdk -q passes
+  - python3 -c "import json,glob;[json.load(open(f)) for f in glob.glob('plugin-sdk/src/privacyfence_plugin_sdk/testing/samples/*.json')]" exits 0
+  - grep -rhoiE '[a-z0-9._-]+@[a-z0-9.-]+|https?://[a-z0-9.-]+' plugin-sdk/src/privacyfence_plugin_sdk/testing/samples | grep -viE 'example\.(com|org|net)' prints nothing
+- id: p9b-sdk-testhost-surfaces
+  title: 'SDK test host: pages, confirmations, events, pytest fixture'
+  depends_on:
+  - p9-sdk-testhost
+  complexity: M
+  touches:
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/__init__.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_host.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_pages.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_confirm.py
+  - plugin-sdk/src/privacyfence_plugin_sdk/testing/pytest.py
+  - tests/unit/plugin_sdk/test_testhost_surfaces.py
+  brief: |
+    1. Complete privacyfence_plugin_sdk.testing per Design D16 "Test host": host.get / host.request with PageResponse,
+       D14's headers (exact CSP string), path normalization (same rules as D14) and 405 for anything but GET/HEAD
+       (_pages.py); host.confirmations and decide_confirmation with statuses approved / denied / expired and no deny
+       note (D11) (_confirm.py); host.emit, host.purge, host.shutdown; the pytest fixture plugin_host in
+       testing/pytest.py importing pytest lazily. Replace the NotImplementedError hook points left by the previous phase.
+    2. Tests tests/unit/plugin_sdk/test_testhost_surfaces.py: test_page_headers_match_daemon, test_post_returns_405,
+       test_head_is_served, test_traversal_rejected, test_confirmation_round_trip, test_confirmation_expired,
+       test_events_reach_handlers, test_purge_calls_handler, test_pytest_fixture_importable_without_pytest_loaded.
+  acceptance:
+  - python3 -m pytest tests/unit/plugin_sdk -q passes
+  - ruff check . passes
+- id: p10-sdk-release
+  title: Publish the SDK from the release workflow
+  depends_on:
+  - p5-sdk-core
+  complexity: S
+  touches:
+  - .github/workflows/publish-pypi.yml
+  - docs/releasing.md
+  brief: |
+    1. publish-pypi.yml: add build-sdk, publish-sdk-testpypi and publish-sdk-pypi exactly per Design D16
+       "Release", copying the existing jobs' needs/if/permissions/environment/pinned action SHA. The SDK version
+       comes from setuptools_scm on the same tag (plugin-sdk/pyproject.toml's root = ".."), so checkout must
+       fetch tags the same way the existing build job does. No R2 upload for the SDK.
+    2. docs/releasing.md "Publishing to PyPI": add the second pending-publisher registration (project
+       privacyfence-plugin-sdk) to the numbered steps and one sentence that the SDK is built and published by
+       the same workflow from the same tag. Present tense, no history.
+    3. Validate: python3 -c "import yaml;yaml.safe_load(open('.github/workflows/publish-pypi.yml'))" and, if
+       actionlint is installable (pip install actionlint-py), run it on the file.
+    Do not touch release.yml or build.yml.
+  acceptance:
+  - python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/publish-pypi.yml'));assert {'build-sdk','publish-sdk-testpypi','publish-sdk-pypi'} <= set(d['jobs'])" exits 0
+  - python3 -m pytest tests/unit/test_code_no_history.py tests/unit/test_docs_links.py tests/unit/test_docs_no_history.py -q passes
+- id: p11-confirm-cards
+  title: Plugin confirmations and code/diff blocks on cards
+  depends_on:
+  - p2-blocks-manifest
+  complexity: M
+  worker_model: opus
+  worker_model_reason: Confirmations must never be auto-accepted and must keep step-up; card rendering of plugin-supplied text is an injection surface.
+  touches:
+  - src/privacyfence/plugins/confirm.py
+  - src/privacyfence/dialog_window_html.py
+  - src/privacyfence/approval_window_html.py
+  - src/privacyfence/resources/approval_window/styles.css
+  - tests/unit/plugins/test_confirm.py
+  - tests/unit/test_dialog_window_html.py
+  - tests/unit/test_approval_window_html.py
+  - tests/integration/test_plugin_card_escaping_browser.py
+  - src/privacyfence/approvals.py
+  - tests/unit/test_approvals.py
+  brief: |
+    1. approval_window_html._render_block: add "code" and "diff" per Design D4's last paragraph (escaped text,
+       the three pf-diff-* classes). styles.css: styles for pre.pf-code and the diff classes using existing
+       design tokens only (no colour literals, no width @media; tests/unit/test_design_system.py must pass).
+    2. dialog_window_html.build_confirmation_html: new keyword body_blocks per D11, rendered through
+       build_preview_body_html(blocks=...). Existing callers and their tests unchanged.
+    3. approvals.py: add the keyword notify: bool = False to PendingApprovalRegistry.register_confirm per D11
+       step 5. Existing callers and tests unchanged; add a test that notify=True calls the created-listener.
+       plugins/confirm.py: ConfirmationService exactly per D11 (request returns immediately and starts the
+       finalizer in the injected executor; the finalizer calls registry.finalize with accept / deny / expired;
+       await_ polls registry.await_status; id ownership check; no deny note; plugin_confirm audit entries;
+       unattended refusal via the injected provider; introspection refusal).
+    4. Tests: test_confirm.py with a real PendingApprovalRegistry: TestConfirm::test_never_auto_accepted (add a
+       rule that would match anything for every operation; reevaluate_all leaves the card pending),
+       TestConfirm::test_finalized_after_answer (answer("confirm") -> await_status "approved"; answer("cancel") ->
+       "denied"; no answer before expiry -> "expired"), TestConfirm::test_notifies_human,
+       TestConfirm::test_refused_when_unattended, TestConfirm::test_step_up_marks_sensitive,
+       TestConfirm::test_await_approved / denied / expired / timeout,
+       TestConfirm::test_other_plugins_id_refused, TestConfirm::test_await_approval_meta_tool_sees_status
+       (registry.await_status returns "pending" then "approved"). test_approval_window_html.py: code and diff
+       escaping. test_dialog_window_html.py: body_blocks rendered and escaped.
+       tests/integration/test_plugin_card_escaping_browser.py (markers integration, browser; reuse the Chromium
+       launch helper used by tests/integration/test_browser_smoke.py): load a confirmation card built from
+       hostile blocks ("<script>window.pwned=1</script>", "<img src=x onerror=...>", bidi overrides) and assert no
+       element besides the expected ones exists and window.pwned is undefined.
+    Stop conditions: see Risks "Confirm finalization". If build_preview_body_html cannot be called from
+    dialog_window_html without a circular import, stop rather than duplicating the renderer.
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_confirm.py tests/unit/test_dialog_window_html.py tests/unit/test_approval_window_html.py tests/unit/test_design_system.py -q passes
+  - TestConfirm::test_never_auto_accepted and TestConfirm::test_refused_when_unattended pass
+  - python3 -m pytest tests/integration/test_plugin_card_escaping_browser.py -q passes and reports PASSED, not SKIPPED (use PRIVACYFENCE_TEST_CHROMIUM if the session hook set it)
+- id: p12-plugin-connector
+  title: PluginConnector, MCP exposure and the two-step gate
+  depends_on:
+  - p2-blocks-manifest
+  - p3-rpc-supervisor
+  - p4-policy-dynamic
+  - p7-tool-defs
+  complexity: M
+  worker_model: opus
+  worker_model_reason: Prepare-to-release consistency, pending-call reuse and single-use writes are security invariants of the gate.
+  touches:
+  - src/privacyfence/plugins/connector.py
+  - tests/unit/plugins/test_connector.py
+  brief: |
+    1. Read Design D9 (exposure, registration, rejected tools.changed) and D10 in full, and gate.py's gated_call
+       signature and its pending/ledger path, before writing code.
+    2. connector.py: PluginConnector(Connector) with constructor (plugin name, display_name, manifest-like
+       object, peer_provider: Callable[[], RpcPeer | None], principal_context_provider: Callable[[], dict],
+       on_audit_lifecycle: Callable[[str], None]); set_tools(defs) (unregister then register_dynamic_tools,
+       build ToolSpecs per D9 with scalar ToolParams and the connectors' exact reason ToolParam), clear_tools(),
+       tool_specs(), call() per D10 steps 1-5 with the exact RuntimeError sentences, the metadata-only preview dict,
+       every block in preview_blocks, _prepared with keep_until (pending: lifetime; released read: now +
+       registry.ledger_ttl; released write or denial: deleted), approval ids "auto-"/"card-" + call_id, the auto-audit entry copied from connectors/tasks.py's
+       _auto_audit, and handle_tools_changed(params) applying D9's whole-list rule (uses
+       tools.validate_tool_defs).
+    3. Tests (fake RpcPeer object whose request() is an AsyncMock-like stub; real gate with stubbed show_popup /
+       show_read_popup per guidelines §2.4, or the gated_call_spy pattern where only the arguments matter):
+       TestExposure (names, annotations, reason param on gated tools only), TestGateFlow::test_auto_read_no_card_and_audited,
+       TestGateFlow::test_read_returns_prepared_payload_verbatim (execute returns different data; caller gets the
+       prepared payload), TestGateFlow::test_write_executes_once, TestGateFlow::test_pending_reuses_prepared_call
+       (first call raises ApprovalPending, second call does not call prepare again and releases the same payload),
+       TestGateFlow::test_released_read_replays_same_payload (approve a read, call again within ledger_ttl with a
+       plugin whose next prepare would return different data: no second prepare, same payload; after ledger_ttl
+       with freezegun: a new prepare), TestGateFlow::test_preview_dict_has_no_plugin_content,
+       TestGateFlow::test_denied_never_executes, TestGateFlow::test_review_scans_payload_for_pii,
+       TestGateFlow::test_scope_rule_auto_accepts_matching_call and test_scope_rule_does_not_accept_other_value
+       (real policy rules via auto_accept.add_policy_v2_rules), TestCardShowsPayload (preview_blocks passed),
+       TestErrors (prepare error codes -> sentences; unknown_call), TestToolsChanged::test_violation_keeps_previous_list,
+       and assert_all_tools_leave_an_audit_trail-style check: every tool of a 3-tool plugin writes an audit entry.
+    Stop condition: see the Risks bullet "Card wiring for preview_blocks".
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_connector.py tests/unit/test_gate.py -q passes
+  - TestGateFlow::test_read_returns_prepared_payload_verbatim, TestGateFlow::test_write_executes_once, TestGateFlow::test_pending_reuses_prepared_call and TestGateFlow::test_released_read_replays_same_payload pass
+  - coverage of connector.py >= 95%
+- id: p13-host
+  title: PluginHost and plugin storage
+  depends_on:
+  - p3-rpc-supervisor
+  - p6-source-api
+  - p8-trust-state
+  - p11-confirm-cards
+  - p12-plugin-connector
+  complexity: M
+  touches:
+  - src/privacyfence/plugins/host.py
+  - src/privacyfence/plugins/storage.py
+  - tests/unit/plugins/test_host.py
+  - tests/unit/plugins/test_storage.py
+  brief: |
+    1. storage.py per Design D12 "Directories" (install_dir, principal_dir, ensure_dirs, remove_all).
+    2. host.py per D13 (everything except "Daemon wiring" and "Config"): constructor seams, start/stop_all/rescan/
+       inspect/enable/disable/purge/connectors/rows/web_request/submit, the three set_* listeners/providers,
+       request handlers (source.call -> source_ops.handle_source_call with the running plugin's manifest and a shared
+       DownloadSpool; confirm.request/await -> ConfirmationService with the unattended provider), the tools.changed
+       notification -> PluginConnector.handle_tools_changed with the reviewed signature set from state, then the
+       tools-changed listener; initialize params (D3 table: daemon {name: "privacyfence", version}, plugin {name,
+       manifest_version}, data_dir, principals [principal_context(LOCAL_PRINCIPAL, principal_dir)], limits); the
+       supervisor's validate_tools wired to tools.validate_tool_defs with reviewed=<state's reviewed_tools> (a tool
+       outside it fails the start with the D9 reason); state transitions and plugin_lifecycle audit entries (D9, D12,
+       D13); D6 reasons for feature off / no privilege separation; enable requiring a matching inspection and its hash
+       recheck; purge per D12 steps 1-4; uninstall per D12 (only after a successful listing; removes data and the
+       plugin's stored auto-accept rules); rows() with review and last_error; rows_changed listener after every change.
+       Event fan-out is a later phase: on_connectors_changed only stores the latest rows for now.
+    3. Tests: test_storage.py; test_host.py driving the stub plugin and a minimal in-test SDK plugin (PYTHONPATH
+       plugin-sdk/src) with plugins_dir=tmp_path, trust_check=lambda *_: None, separation_enabled=lambda: True:
+       TestStartEnabled, TestFeatureOff, TestNoSeparation (reason string), TestEnable::test_requires_inspection,
+       TestEnable::test_hash_changed_since_review_refused, TestEnable::test_unreviewed_tool_fails_start, TestDisable,
+       TestCrashLimitRecorded, TestHashDriftOnStart, TestInspectReturnsSummary, TestSourceCallRouted (stub
+       connectors_provider), TestConfirmRefusedWhenUnattended, TestPurge::test_deletes_after_timeout,
+       TestUninstall::test_deletes_directories_and_rules, TestUninstall::test_unreadable_dir_deletes_nothing,
+       TestToolsChangedNotifiesListener, TestToolsChangedOutsideReviewRejected, TestWebRequest, TestRowsChangedListener.
+       Stop condition: see Risks "The host's loop".
+  acceptance:
+  - python3 -m pytest tests/unit/plugins -q passes
+  - TestPurge::test_deletes_after_timeout, TestUninstall::test_unreadable_dir_deletes_nothing, TestEnable::test_hash_changed_since_review_refused and TestToolsChangedOutsideReviewRejected pass
+  - coverage of host.py and storage.py >= 95%
+- id: p13b-daemon-wiring
+  title: Daemon wiring, the plugins.enabled setting, any_unattended_session
+  depends_on:
+  - p13-host
+  complexity: M
+  touches:
+  - src/privacyfence/daemon_main.py
+  - src/privacyfence/settings_controller.py
+  - src/privacyfence/web/server.py
+  - src/privacyfence/web/mcp_dispatch.py
+  - src/privacyfence/resources/settings.yaml.example
+  - docs/configuration-reference.md
+  - tests/unit/test_daemon_main.py
+  - tests/unit/web/test_server.py
+  - tests/unit/web/test_mcp_dispatch.py
+  - tests/unit/test_settings_controller.py
+  brief: |
+    1. daemon_main.py per Design D13 "Daemon wiring" 1-5, local mode only, using web_loop (D13 "Loop").
+       settings_controller.py: only the new constructor kwarg plugin_host=None stored as self._plugin_host, and when set,
+       plugin_host.set_rows_changed_listener(self._push_snapshot). web/server.py: only the new plugin_host=None kwarg on
+       WebServer and build_app, stored for the routes added later (on app.state.plugin_host, or the module's
+       equivalent); no route. web/mcp_dispatch.py: McpDispatcher.any_unattended_session().
+    2. src/privacyfence/resources/settings.yaml.example: a `plugins:` section with `enabled: true` and a one-line
+       comment; docs/configuration-reference.md: a `plugins.enabled` entry (what it does; plugins also need the
+       packaged install's background service). Read plugins.enabled in run_app and pass feature_enabled.
+    3. Tests: test_daemon_main.py TestDaemonPluginHost::test_plugins_stop_before_audit_close,
+       test_plugin_connectors_merged_for_local_principal, test_listeners_wired_to_dispatcher, test_no_host_in_org_mode,
+       test_host_started_on_web_loop, test_plugins_enabled_false_passed_through; test_server.py: plugin_host stored;
+       test_mcp_dispatch.py: any_unattended_session false/true; test_settings_controller.py: rows listener registered.
+       Stop condition: see Risks "The host's loop".
+  acceptance:
+  - python3 -m pytest tests/unit/test_daemon_main.py tests/unit/web/test_server.py tests/unit/web/test_mcp_dispatch.py tests/unit/test_settings_controller.py tests/unit/test_docs_configuration_reference.py tests/unit/plugins -q passes
+  - 'python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q passes (web/mcp_dispatch.py changed: guidelines §2.7 conditional row)'
+- id: p14-plugin-pages
+  title: Sandboxed plugin pages
+  depends_on:
+  - p13b-daemon-wiring
+  complexity: M
+  worker_model: opus
+  worker_model_reason: The sandbox CSP and the route authentication are the whole isolation story for plugin HTML.
+  touches:
+  - src/privacyfence/plugins/pages.py
+  - src/privacyfence/web/routes_plugins.py
+  - src/privacyfence/web/server.py
+  - tests/unit/plugins/test_pages.py
+  - tests/unit/web/test_routes_plugins.py
+  - tests/unit/web/test_server.py
+  - tests/integration/test_plugin_pages_browser.py
+  brief: |
+    1. pages.py per Design D14: normalize_path, parse query (last value wins), filter_response, and
+       render_plugin_page(host, name, path, query, principal) calling host.web_request (LookupError -> 404,
+       RpcError -> 502).
+    2. web/routes_plugins.py: build_routes(plugin_host, <the local auth adapter pieces>) per D14 (GET and HEAD,
+       405 with Allow: GET, HEAD otherwise without reaching the plugin, owner-only human session like the Settings
+       page so no session gets _owner_only_endpoint's answer (404), 404 when not running or pages false, 400 for a
+       rejected path, redirect /plugins/<name> -> /plugins/<name>/). Read how build_app wraps settings routes with _owner_only_routes and
+       reuse that wrapping.
+    3. web/server.py: mount the routes in local mode only (not in _build_org_app), and add the /plugins/ branch to
+       _SecurityHeadersMiddleware that sets D14's exact CSP string instead of build_csp(...) plus the four extra
+       headers.
+       Every other path's headers must be byte-for-byte unchanged (TestSecurityHeaders and
+       TestSecurityHeadersMiddlewareReplacesNotExtends keep passing).
+    4. Tests: test_pages.py (normalization table, filter_response table, oversize body -> 502, plugin cookie and
+       CSP dropped); test_routes_plugins.py (TestRoutes::test_post_returns_405_without_calling_plugin,
+       test_bearer_not_served, test_no_session_not_served, test_head_served, test_not_running_404, test_traversal_400, test_redirect,
+       test_headers_present_on_error); test_server.py (sandbox CSP only under /plugins/; org app has no
+       /plugins route). tests/integration/test_plugin_pages_browser.py (integration, browser): serve a page whose
+       script tries document.cookie and fetch('/api/settings/state') and writes the outcome into the DOM; assert
+       the cookie is unreadable (opaque origin raises or returns "") and the fetch fails.
+    Stop condition: if the /plugins/ CSP branch cannot be added without changing the headers of any other
+    path (TestSecurityHeaders or TestSecurityHeadersMiddlewareReplacesNotExtends would need editing), stop.
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_pages.py tests/unit/web/test_routes_plugins.py tests/unit/web/test_server.py -q passes
+  - python3 -m pytest tests/integration/test_plugin_pages_browser.py -q reports PASSED, not SKIPPED
+  - TestRoutes::test_post_returns_405_without_calling_plugin passes
+- id: p15-settings-events
+  title: Settings Plugins section, sensitive enable and purge, connector events
+  depends_on:
+  - p13b-daemon-wiring
+  complexity: M
+  touches:
+  - src/privacyfence/plugins/events.py
+  - src/privacyfence/plugins/host.py
+  - src/privacyfence/settings_controller.py
+  - src/privacyfence/web/routes_settings.py
+  - src/privacyfence/web/org_settings_scope.py
+  - src/privacyfence/settings_window_html.py
+  - tests/unit/plugins/test_events.py
+  - tests/unit/plugins/test_host.py
+  - tests/unit/test_settings_controller.py
+  - tests/unit/web/test_routes_settings.py
+  - tests/unit/web/test_org_settings_scope.py
+  - tests/unit/test_settings_window_html.py
+  - tests/integration/test_plugin_settings_browser.py
+  brief: |
+    1. events.py: EventFanout per Design D12 "Events" (diff of (enabled, authed) per connector -> the four
+       states; best effort). host.py: complete on_connectors_changed to forward to EventFanout and notify running
+       plugins. settings_controller.py: call self._plugin_host.on_connectors_changed(<rows>) inside the existing
+       refresh_connectors listener chain when a host is set, and include `plugins: plugin_host.rows()` in the
+       snapshot that _push_snapshot sends (empty list when no host).
+    2. Settings actions in web/org_settings_scope.ACTION_SCOPES (local mode only) and web/routes_settings.py:
+       rescan_plugins (non-sensitive), inspect_plugin {name} (non-sensitive; returns host.inspect summary),
+       enable_plugin {name, executable_sha256, manifest_sha256} (sensitive: human session + step-up, like
+       enable_connector), disable_plugin {name} (non-sensitive), purge_plugin_data {name} (sensitive). Each
+       calls the matching SettingsController method, which calls plugin_host.submit(...) and returns the snapshot
+       at once, never waiting on the future (D13 "Settings never blocks"); results arrive through the rows
+       listener and the existing snapshot push (row review / last_error).
+    3. settings_window_html.py: a "Plugins" section (local mode only in _capabilities_for), listing each row:
+       display name, version, state, reason, a link "Open page" when page_url is set, and buttons. "Review and
+       enable" calls inspect_plugin, then shows a dialog listing every tool with its gate (auto / review / popup),
+       read-only or write, destructive, the source operations, pages yes/no, the gate floor ("Some tools run
+       without asking" when max_gate_floor is auto), and an "Enable" button that posts enable_plugin with the two
+       hashes from the summary (the existing step-up flow handles the passkey). The dialog opens when the row's
+       `review` arrives in a pushed snapshot; `last_error` shows under the row. "Disable", "Delete this plugin's
+       data" (with the existing confirm pattern), "Rescan". Use only design-system primitives and tokens.
+    4. Tests: test_events.py (each transition; no event when unchanged; send failure swallowed); test_host.py
+       additions for event forwarding; test_settings_controller.py (snapshot contains plugins; methods call the
+       host); test_routes_settings.py (TestSensitiveActionsCoverAllAllowedActions still passes,
+       TestEnablePluginSensitivity::test_requires_step_up_and_human_session, TestPurgePluginSensitivity, disable
+       is not sensitive); test_org_settings_scope.py (actions local-only); test_settings_window_html.py (section
+       present in local, absent in org; enable dialog lists gates). tests/integration/test_plugin_settings_browser.py
+       (integration, browser): a TestPhoneLayout case for the Plugins section and the enable dialog with two fake
+       rows, following the existing TestPhoneLayout pattern.
+    Stop condition: if a plugin action would need to block the loop to return its result, stop (Risks "The
+    host's loop").
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_events.py tests/unit/plugins/test_host.py tests/unit/test_settings_controller.py tests/unit/web/test_routes_settings.py tests/unit/web/test_org_settings_scope.py tests/unit/test_settings_window_html.py tests/unit/test_design_system.py -q passes
+  - TestEnablePluginSensitivity::test_requires_step_up_and_human_session passes
+  - python3 -m pytest tests/integration/test_plugin_settings_browser.py -q reports PASSED, not SKIPPED
+- id: p16-echo-e2e
+  title: Echo reference plugin, end-to-end tests, refusals, test-host conformance
+  depends_on:
+  - p9b-sdk-testhost-surfaces
+  - p14-plugin-pages
+  - p15-settings-events
+  complexity: M
+  touches:
+  - tests/fixtures/plugins/echo/**
+  - tests/fixtures/plugins/echo-variants/**
+  - tests/integration/test_plugin_framework.py
+  - tests/integration/test_plugin_refusals.py
+  - tests/integration/test_sdk_testhost_conformance.py
+  - tests/unit/plugins/test_sdk_samples.py
+  brief: |
+    1. Build echo on the SDK per Design D17 (tools table, page, event recorder) and the refusal variants under
+       echo-variants/<case>/ (bad manifest key, reserved name, write tool on auto without floor, read tool on auto
+       without floor, destructive not popup, major "2", org-only service_credentials true, an array parameter).
+       echo's own manifest has max_gate_floor: auto.
+    2. tests/integration/test_plugin_framework.py: an in-process daemon like test_mcp_daemon_contract.py's
+       running_mcp_server, plus a PluginHost with plugins_dir=tmp copy of echo, trust_check=lambda *_: None,
+       separation_enabled=lambda: True, command_resolver returning [sys.executable, echo_plugin.py] with
+       PYTHONPATH including plugin-sdk/src, connectors_provider with a fake calendar connector whose _calendar
+       stub returns CalendarEvent objects; approvals driven by stubbing the approval UI per guidelines §2.4.
+       Classes: TestEchoAutoRead, TestEchoReviewRead::test_returns_exactly_the_approved_data,
+       TestEchoPopupWrite::test_single_use, TestPluginScopeRule (matching and non-matching), TestConfirmRoundTrip
+       (privacyfence_await_approval sees the decision), TestSourceCallAudit::test_no_content_in_audit,
+       TestEchoPage::test_sandbox_csp (HTTP GET through the server with a human session cookie, as other
+       integration tests obtain one), TestToolsListChanged (echo drops a tool and re-adds it: both accepted and
+       tools/list_changed sent; adding a never-reviewed tool is rejected and the old list stays),
+       TestReadReplay (an approved review read repeated within the ledger window releases the same payload), TestCrashRestart, TestDisabledAfterFive,
+       TestCleanShutdown, TestPurgeOnUninstall, TestAuditTrail (every echo tool leaves an audit entry).
+    3. tests/integration/test_plugin_refusals.py: one parametrized TestRefusals covering: operation outside the
+       allowlist, operation outside the manifest, user-writable executable (real trust_check with a monkeypatched
+       admin_only_write_problem returning a problem), changed hash, major mismatch, non-read-only auto without
+       the floor, destructive not on popup, HTML in a block rendered escaped (card HTML contains &lt;script),
+       POST to /plugins/echo/ -> 405, org-only field in local mode, an auto read tool without the floor, a
+       tools.changed adding an unreviewed tool, an MCP name colliding with a built-in tool.
+    4. tests/integration/test_sdk_testhost_conformance.py: run the same scenarios (auto read, review read, popup
+       write, scope rule match and mismatch, floor violation, block validation, page headers, chunked download
+       from samples.drive_download vs. the daemon's spool with a stub Drive client) through PluginTestHost and
+       through the real daemon with echo; assert equal outcomes field by field.
+    5. tests/unit/plugins/test_sdk_samples.py: every SDK sample's data passes the daemon's D7 shape check.
+    If a test exposes a bug in src/privacyfence/plugins/**, do not fix it here: stop with status=blocked naming
+    the failing test and module (the orchestrator sends it back to the owning phase).
+  acceptance:
+  - python3 -m pytest tests/integration/test_plugin_framework.py tests/integration/test_plugin_refusals.py tests/integration/test_sdk_testhost_conformance.py tests/unit/plugins/test_sdk_samples.py -q passes
+  - python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q passes
+  - grep -rn "xfail\|skip(" tests/integration/test_plugin_*.py tests/integration/test_sdk_testhost_conformance.py returns nothing
+- id: p17-today-example
+  title: The today example plugin, its build script and the build.yml steps
+  depends_on:
+  - p16-echo-e2e
+  complexity: M
+  touches:
+  - examples/plugins/today/**
+  - scripts/build_example_plugin.py
+  - .github/workflows/build.yml
+  - tests/unit/examples/__init__.py
+  - tests/unit/examples/conftest.py
+  - tests/unit/examples/test_today_plugin.py
+  - tests/unit/test_build_example_plugin.py
+  - tests/fixtures/plugins/today/**
+  brief: |
+    1. examples/plugins/today/: today_plugin.py (the plugin, built only on the SDK), privacyfence-plugin.yaml
+       (name today, display_name Today, version 1.0.0, protocol "1", command ["today-plugin"],
+       source_operations [calendar.list_events], tools dynamic, max_gate_floor auto, pages true), README.md with
+       the ten smoke-test steps from the issue (Manual after section of
+       https://github.com/privacyfence/privacyfence/issues/846), adapted to the exact tool names in Design D17
+       and the Settings flow ("Review and enable", passkey), matching the published checklist page's steps.
+       Behaviour exactly per D17: self-contained page, named or rgb() colours only, and never the issue's own
+       label for its table.
+    2. scripts/build_example_plugin.py per D17 (argparse; PyInstaller via subprocess with --onefile, --name
+       today-plugin, --paths plugin-sdk/src and --paths examples/plugins/today so the SDK is bundled without being
+       installed; writes manifest and build-flags.json; --with-crash-tool; --out).
+    3. .github/workflows/build.yml: in each of build, build-windows and build-deb add the two steps from D17
+       after that job's own build steps (shell: bash on macOS/Linux, pwsh on Windows). Keep names short:
+       "Build the today example plugin" and "Self-test the today example plugin".
+    4. Tests: tests/unit/examples/conftest.py adds plugin-sdk/src and examples/plugins/today to sys.path;
+       test_today_plugin.py uses PluginTestHost with a recorded Calendar fixture under
+       tests/fixtures/plugins/today/ (hand-written, redacted, D7 normalized shape), one class per row of the
+       issue's table of framework parts (initialize and scope type, source call, storage, each tool and gate, publish
+       confirmation, page incl. manifest code block and cookie check script presence, the four events, crash
+       tool present only with the build flag). test_build_example_plugin.py: argument parsing and the files
+       written, with the PyInstaller subprocess call monkeypatched.
+    5. Run python3 scripts/build_example_plugin.py today --out /tmp/pf-plugins locally (pyinstaller is in the dev
+       extra) and /tmp/pf-plugins/today/today-plugin --self-test; paste the output in the PHASE-REPORT.
+  acceptance:
+  - python3 -m pytest tests/unit/examples tests/unit/test_build_example_plugin.py -q passes
+  - python3 scripts/build_example_plugin.py --help exits 0
+  - the local Linux build and --self-test print "today ok protocol 1.0.0"
+  - python3 -c "import yaml;yaml.safe_load(open('.github/workflows/build.yml'))" exits 0
+- id: p18-retire
+  title: ADRs, reference docs, changelog, retire the plan
+  depends_on:
+  - p1-protocol-core
+  - p2-blocks-manifest
+  - p3-rpc-supervisor
+  - p4-policy-dynamic
+  - p5-sdk-core
+  - p6-source-api
+  - p7-tool-defs
+  - p8-trust-state
+  - p9-sdk-testhost
+  - p10-sdk-release
+  - p11-confirm-cards
+  - p12-plugin-connector
+  - p13-host
+  - p14-plugin-pages
+  - p15-settings-events
+  - p16-echo-e2e
+  - p17-today-example
+  - p5b-sdk-types
+  - p9b-sdk-testhost-surfaces
+  - p13b-daemon-wiring
+  complexity: M
+  touches:
+  - docs/adr/**
+  - docs/plugin*.md
+  - docs/README.md
+  - docs/approvals-and-policy.md
+  - docs/security-and-compliance.md
+  - docs/platform-support.md
+  - CHANGELOG.md
+  - docs/plugin-framework-plan-manual-steps.html
+  - scripts/build_site.py
+  brief: |
+    1. ADRs: write the seven ADRs in the plan's ADRs section with docs/adr/README.md's template, numbered from
+       the next free number (check `ls docs/adr`), Status "Accepted — <today>. Implemented.", linking the issue
+       https://github.com/privacyfence/privacyfence/issues/846 and source files, never the plan. Take the context,
+       decision and rejected alternatives from the Design sections each ADR names. Add all seven to
+       docs/adr/README.md's index. If the numbers differ from 0120-0126, grep src/ tests/ plugin-sdk/ examples/
+       docs/ for "ADR 012" and fix every citation to the real numbers.
+    2. A new plugin-protocol.md in docs/: the protocol reference from the final schema and code (D3, D4, D5 manifest, D7
+       operations with data shapes, D9 floors, D10 flow, D11, D12 events, D14 headers, limits and timeouts),
+       stating current behaviour only; link the schema file and the ADRs.
+    3. A new plugins.md in docs/: for administrators and plugin authors: what a plugin is, the plugins directory per OS
+       and its permission requirement, installing, "Review and enable" with the passkey, logs location
+       (data_dir/logs/plugins/<name>.log), disabling, deleting data, removal, plugins.enabled, the reasons a
+       plugin does not start (D6 table), and writing and testing a plugin with the SDK and PluginTestHost.
+    4. List both new docs in docs/README.md's "User and operator docs" half (plugins.md under "Using
+       PrivacyFence", plugin-protocol.md under "Reference appendices"), and remove the plan's own entry from its
+       "Contributor docs" half and from scripts/build_site.py's CONTRIBUTOR_DOCS. Update approvals-and-policy.md (plugin tools, gates, the
+       plugin:<name>:<scope> rule selector, confirmations never auto-accepted), security-and-compliance.md
+       (the plugin trust model and residual risk, the source API being ungated but audited, sandboxed pages) and
+       platform-support.md (plugins directory per OS). tools-reference.md and always-allow-rules-reference.md are
+       generated from static tables and do not change; confirm with their tests.
+    5. CHANGELOG.md: one entry under ## [Unreleased] for the plugin framework, the SDK and the today example.
+    6. Delete docs/plugin-framework-plan.md and docs/plugin-framework-plan-manual-steps.html. grep the repo for
+       "plugin-framework-plan" and remove any reference.
+  acceptance:
+  - test ! -e docs/plugin-framework-plan.md && test ! -e docs/plugin-framework-plan-manual-steps.html
+  - grep -rn "plugin-framework-plan" --include='*' . --exclude-dir=.git returns nothing
+  - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_website_docs_allowlist.py tests/unit/test_code_no_history.py tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_changelog_section.py -q passes
+  - seven new docs/adr/NNNN-*.md files with Status Accepted, all in docs/adr/README.md's index
 ```
