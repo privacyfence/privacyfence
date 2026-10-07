@@ -53,7 +53,7 @@ bridge share.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
 from ..auto_accept import ReviewContext, _domain_of, _file_from
@@ -75,9 +75,16 @@ NO_VALUE: Any = object()
 _NAMESPACE_CONNECTOR: dict[str, str] = {"sheets": "drive", "docs": "drive"}
 
 
+# A plugin tool's operation key is ``plugin.<plugin>.<tool>``; the plugin, not the ``plugin``
+# namespace, is what its scopes belong to.
+PLUGIN_OPERATION_PREFIX = "plugin."
+
+
 def connector_of_operation(operation: str) -> str:
-    """The connector whose scopes can govern ``operation`` -- its namespace, or ``drive`` for the
-    Sheets/Docs keys that address a Drive file."""
+    """The connector whose scopes can govern ``operation`` -- its namespace, ``drive`` for the
+    Sheets/Docs keys that address a Drive file, or the plugin for a plugin tool's key."""
+    if operation.startswith(PLUGIN_OPERATION_PREFIX):
+        return operation[len(PLUGIN_OPERATION_PREFIX):].split(".", 1)[0]
     namespace = operation.split(".", 1)[0]
     return _NAMESPACE_CONNECTOR.get(namespace, namespace)
 
@@ -479,7 +486,7 @@ class RuleProposal:
         return frozenset({self.operation})
 
 
-def _candidate_value(scope: ProposableScope, ctx: ReviewContext) -> Any:
+def _candidate_value(scope: ProposableScope, ctx: ReviewContext, *, dynamic: bool = False) -> Any:
     """``scope``'s value for this call, or ``NO_VALUE`` if it is not a candidate.
 
     The value builder only finds the field; whether the scope actually contains this item is the
@@ -489,6 +496,9 @@ def _candidate_value(scope: ProposableScope, ctx: ReviewContext) -> Any:
     a valued scope is only proposed when the value derived from the item would have accepted that
     same item. A selector that raises is a non-match, never a crash in a popup -- the same
     fail-closed posture ``policy.engine.evaluate`` takes.
+
+    A ``dynamic`` (plugin) entry's selector lives in ``scopes.NEW_SCOPE_SELECTORS``, where the
+    engine looks it up too, so its value is confirmed by the same selector a stored rule will use.
     """
     value = scope.value_of(ctx)
     if value is NO_VALUE:
@@ -499,7 +509,10 @@ def _candidate_value(scope: ProposableScope, ctx: ReviewContext) -> Any:
             if selector is None or not selector.holds(scope.condition[1], ctx):
                 return NO_VALUE
             return value
-        scope_selector = scopes.SCOPE_SELECTORS.get(scope.predicate)
+        if dynamic:
+            scope_selector = scopes.NEW_SCOPE_SELECTORS.get(scope.predicate)
+        else:
+            scope_selector = scopes.SCOPE_SELECTORS.get(scope.predicate)
         if scope_selector is None or not scope_selector.matches(value, ctx):
             return NO_VALUE
     except Exception:
@@ -538,6 +551,8 @@ def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
     entry = TOOL_REGISTRY.get(tool)
     if entry is None or entry.operation is None or entry.verb is None:
         return []
+    if entry.operation.startswith(PLUGIN_OPERATION_PREFIX):
+        return _dynamic_proposals_for(tool, entry.operation, entry.verb, ctx)
     connector = connector_of_operation(entry.operation)
     proposals: list[RuleProposal] = []
     for scope in PROPOSABLE_SCOPES:
@@ -554,6 +569,103 @@ def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
                 widenings=_widenings_for(scope, entry.verb, entry.operation),
             )
         )
+    return proposals
+
+
+# ── Plugin scopes (registered at runtime) ──────────────────────────────────────────────────────
+#
+# A plugin tool's proposals live outside ``PROPOSABLE_SCOPES``, keyed by owner and tool, and are
+# consulted only for a ``plugin.`` operation key. Each entry covers only that tool's own operation
+# key, is never widenable, and has a widening group of its own, so accepting one never reaches past
+# the call it came from. They are not added to ``SCOPES_BY_GROUP``: the Settings scope picker and
+# ``policy/catalogue.py`` stay static, and only the card's "Always allow" button writes plugin rules.
+
+# owner -> tool -> its entries, narrowest first.
+_DYNAMIC_SCOPES: dict[str, dict[str, tuple[ProposableScope, ...]]] = {}
+# owner -> the ``plugin:<plugin>:anything`` predicates registered for it, one per tool.
+_DYNAMIC_ANYTHING: dict[str, list[str]] = {}
+
+
+def _plugin_scope_values(scope_type: str) -> Callable[[ReviewContext], Any]:
+    """The values of ``scope_type`` the plugin reported for this call, as the rule's value."""
+
+    def build(ctx: ReviewContext) -> Any:
+        reported = ctx.raw_data.get("scopes") if isinstance(ctx.raw_data, dict) else None
+        returned = reported.get(scope_type) if isinstance(reported, dict) else None
+        if not returned:
+            return NO_VALUE
+        return sorted({str(v) for v in scopes._values_of(returned)}) or NO_VALUE
+
+    return build
+
+
+def _always_true(_ctx: ReviewContext) -> Any:
+    return True
+
+
+def register_dynamic_scopes(owner: str, tool: str, predicates: Iterable[tuple[str, str]]) -> None:
+    """Add the proposals for a plugin tool already in ``TOOL_REGISTRY``: one per declared
+    ``(predicate, scope type)``, or, with none declared, one ``plugin:<plugin>:anything`` entry.
+    A tool with no plugin operation key or no verb gets nothing to propose."""
+    entry = TOOL_REGISTRY.get(tool)
+    if entry is None or entry.operation is None or entry.verb is None:
+        return
+    if not entry.operation.startswith(PLUGIN_OPERATION_PREFIX):
+        raise ValueError(f"tool {tool} is not a plugin tool")
+    operation, verb = entry.operation, entry.verb
+    plugin = connector_of_operation(operation)
+    entries: list[ProposableScope] = []
+    for predicate, scope_type in predicates:
+        entries.append(_scope(
+            predicate, f"{plugin}.{scope_type}", plugin, (verb,), _plugin_scope_values(scope_type),
+            f"this {scope_type.replace('_', ' ')}",
+            entry_id=f"{predicate}@{operation}", group=f"{predicate}@{operation}", widenable=False,
+        ))
+    if not entries:
+        predicate = f"{scopes.PLUGIN_PREDICATE_PREFIX}{plugin}:{scopes.PLUGIN_ANYTHING_SCOPE_TYPE}"
+        scopes.register_plugin_anything_selector(plugin)
+        _DYNAMIC_ANYTHING.setdefault(owner, []).append(predicate)
+        entries.append(_scope(
+            predicate, f"{plugin}.{scopes.PLUGIN_ANYTHING_SCOPE_TYPE}", plugin, (verb,), _always_true, "",
+            entry_id=f"{predicate}@{operation}", group=f"{predicate}@{operation}", widenable=False,
+        ))
+    _DYNAMIC_SCOPES.setdefault(owner, {})[tool] = tuple(entries)
+
+
+def unregister_dynamic_scopes(owner: str) -> None:
+    """Remove every proposal ``register_dynamic_scopes`` added for ``owner``."""
+    _DYNAMIC_SCOPES.pop(owner, None)
+    for predicate in _DYNAMIC_ANYTHING.pop(owner, []):
+        scopes.unregister_plugin_selector(predicate)
+
+
+def _dynamic_entries_for(tool: str) -> tuple[ProposableScope, ...]:
+    for tools in _DYNAMIC_SCOPES.values():
+        if tool in tools:
+            return tools[tool]
+    return ()
+
+
+def _dynamic_group(group: str) -> tuple[ProposableScope, ...]:
+    return tuple(
+        entry
+        for tools in _DYNAMIC_SCOPES.values()
+        for entries in tools.values()
+        for entry in entries
+        if entry.widening_group == group
+    )
+
+
+def _dynamic_proposals_for(tool: str, operation: str, verb: Verb, ctx: ReviewContext) -> list[RuleProposal]:
+    proposals: list[RuleProposal] = []
+    for scope in _dynamic_entries_for(tool):
+        value = _candidate_value(scope, ctx, dynamic=True)
+        if value is NO_VALUE:
+            continue
+        if isinstance(value, list) and len(value) > 1:
+            # The button names the width it is about to allow: more than one value is a set.
+            scope = replace(scope, hint=f"these {scope.scope_type.partition('.')[2].replace('_', ' ')} values")
+        proposals.append(RuleProposal(scope=scope, value=value, verb=verb, operation=operation))
     return proposals
 
 
@@ -593,9 +705,12 @@ def rules_for_proposal(proposal: RuleProposal, widenings: Iterable[Widening] = (
     pairs = set(proposal.pairs)
     for widening in widenings:
         pairs |= widening.pairs
+    group = _SCOPES_BY_GROUP.get(proposal.scope.widening_group)
+    if group is None:
+        group = _dynamic_group(proposal.scope.widening_group)
     conditions_of = {
         entry.predicate: (entry.condition,)
-        for entry in _SCOPES_BY_GROUP[proposal.scope.widening_group]
+        for entry in group
         if entry.condition is not None
     }
     return _rules_from_pairs(pairs, proposal.value, conditions_of)
@@ -635,7 +750,9 @@ __all__ = [
     "verb_sort_key",
     "operations_for",
     "proposals_for",
+    "register_dynamic_scopes",
     "rules_for_proposal",
     "rules_for_scope_group",
     "scope_needs_value",
+    "unregister_dynamic_scopes",
 ]
