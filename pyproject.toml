@@ -271,7 +271,7 @@ test = [
 # build never installs the package or its runtime dependencies. See
 # docs/adr/0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md.
 docs = [
-    "zensical==0.0.65",
+    "zensical==0.0.67",
 ]
 # Static analysis gate. ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
 # [tool.bandit] below); mypy runs in CI twice -- non-blocking over the whole tree, and blocking
