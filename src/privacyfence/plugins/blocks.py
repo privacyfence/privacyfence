@@ -1,4 +1,4 @@
-"""Block validation and conversion for plugin previews and payloads (D4).
+"""Block validation and conversion for plugin previews and payloads.
 
 A block is data, never markup. Everything a plugin sends is validated on arrival, sanitized (control
 and bidirectional-override characters removed, so a plugin cannot reorder or hide text on an

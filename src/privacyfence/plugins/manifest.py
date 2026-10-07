@@ -1,4 +1,4 @@
-"""The plugin manifest ``privacyfence-plugin.yaml`` (D5).
+"""The plugin manifest ``privacyfence-plugin.yaml``.
 
 Loaded with ``yaml.safe_load``; an unknown key is an error, and so is every field that does not
 meet its rule. Whatever the manifest says is only a claim: what a plugin may actually do is still
