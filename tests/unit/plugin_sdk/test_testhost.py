@@ -228,14 +228,6 @@ class TestPluginTestHost:
             outcome = await host.call_tool("greedy")
         assert outcome.error["code"] == "invalid_preview" and outcome.released is None
 
-    async def test_hooks_for_the_next_part_raise(self):
-        plugin, _ = build_plugin()
-        async with PluginTestHost(plugin) as host:
-            with pytest.raises(NotImplementedError):
-                await host._handle_confirm_request({})
-            with pytest.raises(NotImplementedError):
-                await host._handle_web("GET", "/", {})
-
     async def test_drive_download_sample_chunks(self):
         plugin, seen = build_plugin()
         chunk = constants.DRIVE_CHUNK_BYTES

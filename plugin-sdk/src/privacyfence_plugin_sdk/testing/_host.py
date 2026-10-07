@@ -17,6 +17,8 @@ from .. import blocks as _blocks
 from .._rpc import Peer, RpcError
 from ..plugin import PROTOCOL_VERSION, Plugin, args_digest
 from ..responses import ToolDefinitionError
+from . import _pages
+from ._confirm import Confirmation, Confirmations
 from ._gate import Card, Decision, Rules, ToolOutcome, resolve_decision
 from ._source import SourceFixtures
 
@@ -50,6 +52,10 @@ _INVALID_PREVIEW = "The plugin returned an invalid preview."
 _LOST_CALL = "The plugin lost track of this call; ask again."
 
 _DEFAULT_PRINCIPAL = {"id": "local", "display_name": "Local user"}
+_EVENT_NAMES = ("connector.state_changed", "plugin.disabling", "shutdown", "principal.removed")
+_PURGE_SCOPES = ("all", "install", "principal")
+_PURGE_TIMEOUT = 30.0
+_SETTLE_TIMEOUT = 5.0
 
 
 class _PipeWriter:
@@ -187,6 +193,10 @@ class PluginTestHost:
         self.source = SourceFixtures()
         self.rules = Rules(lambda: set(self._scope_types))
         self.audit: list[dict] = []
+        self._confirmations = Confirmations(
+            plugin.name, lambda: set(self._principals), lambda entry: self.audit.append(entry)
+        )
+        self._stopped = False
         self._tmp: Path | None = None
         self._principals: dict[str, dict] = {}
         self._peer: Peer | None = None
@@ -244,8 +254,8 @@ class PluginTestHost:
             _PipeWriter(to_plugin),
             handlers={
                 "source.call": self._handle_source,
-                "confirm.request": self._handle_confirm_request,
-                "confirm.await": self._handle_confirm_await,
+                "confirm.request": self._confirmations.request,
+                "confirm.await": self._confirmations.await_,
             },
             max_line_bytes=_MAX_LINE_BYTES,
             max_in_flight=_MAX_IN_FLIGHT,
@@ -450,13 +460,82 @@ class PluginTestHost:
 
         return self.source.handle(params, mode=self.mode, audit=audit)
 
-    # Hook points for the parts of the daemon this host does not play yet. Each is one place to fill in.
+    # ------------------------------------------------------------------ pages
 
-    async def _handle_confirm_request(self, params: dict) -> dict:
-        raise NotImplementedError("confirmations are not simulated yet")
+    def _running_peer(self) -> Peer:
+        peer = self._peer
+        if peer is None:
+            raise RuntimeError("the host is not running")
+        return peer
 
-    async def _handle_confirm_await(self, params: dict) -> dict:
-        raise NotImplementedError("confirmations are not simulated yet")
+    async def get(
+        self, path: str, *, principal: str | None = None, query: dict[str, str] | None = None
+    ) -> _pages.PageResponse:
+        """Fetch a plugin page the way the owner's browser would: ``GET`` with the daemon's rules and headers."""
+        return await self.request("GET", path, principal=principal, query=query)
 
-    async def _handle_web(self, method: str, path: str, query: dict[str, str]) -> Any:
-        raise NotImplementedError("pages are not simulated yet")
+    async def request(
+        self, method: str, path: str, *, principal: str | None = None, query: dict[str, str] | None = None
+    ) -> _pages.PageResponse:
+        """One request to a plugin page. ``path`` is relative to the plugin and may carry a ``?query``.
+
+        ``GET`` and ``HEAD`` reach the plugin (a ``HEAD`` keeps the headers and drops the body); any
+        other method gets 405 and a path the daemon rejects gets 400, and neither reaches the plugin.
+        """
+        peer = self._running_peer()
+        return await _pages.serve(peer, self._principal(principal), method, path, query)
+
+    # ------------------------------------------------------------------ confirmations
+
+    @property
+    def confirmations(self) -> list[Confirmation]:
+        """Every confirmation the plugin opened, oldest first, with its current ``status``."""
+        return self._confirmations.cards
+
+    async def decide_confirmation(self, approval_id: str, decision: str) -> Confirmation:
+        """Answer a confirmation card: ``"approve"``, ``"deny"`` or ``"expire"``. A confirm card takes no deny note."""
+        card = self._confirmations.decide(approval_id, decision)
+        await asyncio.sleep(0)  # let a plugin that awaits the card see the answer
+        return card
+
+    # ------------------------------------------------------------------ events, purge, shutdown
+
+    async def emit(self, event: str, params: dict | None = None) -> None:
+        """Send the plugin an event and wait until its handlers have run."""
+        peer = self._running_peer()
+        if event not in _EVENT_NAMES:
+            raise ValueError(f"unknown event {event}; expected one of {', '.join(_EVENT_NAMES)}")
+        serving = getattr(getattr(self.plugin, "_host", None), "peer", None)
+        before = set(getattr(serving, "_tasks", ()))
+        await peer.notify(event, dict(params or {}))
+        fresh: set[asyncio.Task] = set()
+        for _ in range(50):
+            await asyncio.sleep(0)
+            fresh = set(getattr(serving, "_tasks", ())) - before
+            if fresh:
+                break
+        if fresh:
+            await asyncio.wait(fresh, timeout=_SETTLE_TIMEOUT)
+
+    async def purge(self, scope: str = "all", principal: str | None = None) -> bool:
+        """Ask the plugin to delete its data, as the Settings action does. Returns the plugin's ``purged``."""
+        peer = self._running_peer()
+        if scope not in _PURGE_SCOPES:
+            raise ValueError(f"scope must be one of {', '.join(_PURGE_SCOPES)}")
+        params: dict[str, Any] = {"scope": scope}
+        if principal is not None:
+            params["principal"] = self._principal(principal)["id"]
+        elif scope == "principal":
+            raise ValueError("a principal purge needs a principal")
+        result = await peer.request("storage.purge", params, timeout=_PURGE_TIMEOUT)
+        return bool(isinstance(result, dict) and result.get("purged") is True)
+
+    async def shutdown(self, grace_ms: int = 0) -> None:
+        """Send ``shutdown`` and wait for the plugin's runner to stop. Leaving the ``async with`` is still fine."""
+        if self._stopped:
+            return
+        await self.emit("shutdown", {"grace_ms": grace_ms})
+        task = self._serve_task
+        if task is not None:
+            await asyncio.wait_for(asyncio.shield(task), _SETTLE_TIMEOUT)
+        self._stopped = True

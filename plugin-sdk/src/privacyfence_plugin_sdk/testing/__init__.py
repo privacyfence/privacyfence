@@ -53,6 +53,25 @@ that no fixture answers raises ``SourceFixtureMissing`` out of ``call_tool``::
     host.source.load(samples.drive_download(b"workbook bytes", revision="r1"))
     # after a call_tool: host.source.calls lists every source.call the plugin made
 
+Pages, confirmations, events, purge and shutdown go through the same host. A page comes back with
+the daemon's security headers; a path the daemon refuses never reaches the plugin::
+
+    async with PluginTestHost(plugin) as host:
+        page = await host.get("/")
+        assert page.status == 200 and page.headers["x-frame-options"] == "DENY"
+        assert (await host.request("POST", "/")).status == 405
+
+        await host.emit("connector.state_changed",
+                        {"connector": "gmail", "state": "signed_out", "principal": "local"})
+        await host.purge()
+
+        # a plugin that asked a human to confirm something: nothing decides the card until you do
+        card = host.confirmations[0]
+        await host.decide_confirmation(card.approval_id, "approve")  # or "deny", "expire"
+
+With pytest, ``pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]`` provides a
+``plugin_host`` fixture that builds the host: ``async with plugin_host(plugin) as host``.
+
 A tool that is on the ``auto`` gate needs the manifest's ``max_gate_floor: auto``. Tell the host
 with ``PluginTestHost(plugin, max_gate_floor="auto")``; without it the host raises
 ``ToolDefinitionError`` when it starts.
@@ -60,11 +79,15 @@ with ``PluginTestHost(plugin, max_gate_floor="auto")``; without it the host rais
 from __future__ import annotations
 
 from ._gate import Card, Rules, ToolOutcome
+from ._confirm import Confirmation
 from ._host import PluginTestHost
+from ._pages import PageResponse
 from ._source import SourceCall, SourceFixtureMissing, SourceFixtures, samples
 
 __all__ = [
     "Card",
+    "Confirmation",
+    "PageResponse",
     "PluginTestHost",
     "Rules",
     "SourceCall",
