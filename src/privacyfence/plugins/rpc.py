@@ -3,8 +3,12 @@
 One ``RpcPeer`` sits on each end of a plugin's stdin/stdout. Framing is one JSON object per line,
 capped at ``MAX_LINE_BYTES``. Each side numbers its own requests, so the two id spaces never meet.
 Everything read from the other end is untrusted: lines that are not valid JSON-RPC are counted, and
-``INVALID_LINES_LIMIT`` of them in a row close the peer with the reason ``"invalid_output"``.
-Handler failures never leak their text to the other side, only ``RpcError`` details travel.
+``INVALID_LINES_LIMIT`` of them in a row close the peer with the reason ``"invalid_output"``. A line
+over the cap is discarded up to its newline and counted once, however it was split on the way.
+Handler failures never leak their text to the other side, only ``RpcError`` details travel, and the
+log records only the exception's type, since its message can carry request data. Incoming requests
+and notifications share the ``MAX_IN_FLIGHT`` cap: a request over it is refused, a notification over
+it is dropped and counted in ``dropped_notifications``.
 """
 from __future__ import annotations
 
@@ -83,6 +87,7 @@ class RpcPeer:
         self._reader_task: asyncio.Task[None] | None = None
         self._invalid_streak = 0
         self._closed = False
+        self.dropped_notifications = 0
 
     @property
     def closed(self) -> bool:
@@ -173,19 +178,28 @@ class RpcPeer:
                 logger.debug("could not send an error response", exc_info=True)
 
     async def _read_line(self) -> bytes | None:
-        """The next line, ``_OVERSIZE`` for one over the cap, ``None`` at end of stream."""
-        try:
-            line = await self._reader.readline()
-        except ValueError:
-            # StreamReader's own limit: it has already discarded what it buffered.
-            return _OVERSIZE
-        except (ConnectionError, OSError):
-            return None
-        if not line:
-            return None
-        if len(line) > MAX_LINE_BYTES:
-            return _OVERSIZE
-        return line
+        """The next line, ``_OVERSIZE`` for one over the cap, ``None`` at end of stream.
+
+        A line over the StreamReader's own limit is dropped piece by piece up to its newline, so
+        it is one oversize line however many reads it took to arrive.
+        """
+        oversize = False
+        while True:
+            try:
+                line = await self._reader.readuntil(b"\n")
+            except asyncio.IncompleteReadError as exc:
+                line = exc.partial  # the stream ended; whatever came before that is the last line
+                if not line and not oversize:
+                    return None
+            except asyncio.LimitOverrunError as exc:
+                oversize = True
+                await self._reader.readexactly(exc.consumed)
+                continue
+            except (ConnectionError, OSError):
+                return None
+            if oversize or len(line) > MAX_LINE_BYTES:
+                return _OVERSIZE
+            return line
 
     async def _read_loop(self) -> None:
         try:
@@ -279,8 +293,8 @@ class RpcPeer:
                 result = await handler(params)
             except RpcError:
                 raise
-            except Exception:
-                logger.warning("handler for %s failed", method, exc_info=True)
+            except Exception as exc:
+                logger.warning("handler for %s failed: %s", method, type(exc).__name__)
                 raise RpcError("internal_error", "handler failed") from None
             response: dict = {"jsonrpc": "2.0", "id": message_id, "result": result}
         except RpcError as exc:
@@ -293,11 +307,17 @@ class RpcPeer:
         handler = self._notification_handlers.get(method)
         if handler is None:
             return
+        if self._in_flight >= MAX_IN_FLIGHT:
+            self.dropped_notifications += 1
+            logger.debug("dropped a %s notification: too many messages in flight", method)
+            return
+        self._in_flight += 1
         self._spawn(self._notified(handler, method, params if isinstance(params, dict) else {}))
 
-    @staticmethod
-    async def _notified(handler: NotificationHandler, method: str, params: dict) -> None:
+    async def _notified(self, handler: NotificationHandler, method: str, params: dict) -> None:
         try:
             await handler(params)
-        except Exception:
-            logger.warning("notification handler for %s failed", method, exc_info=True)
+        except Exception as exc:
+            logger.warning("notification handler for %s failed: %s", method, type(exc).__name__)
+        finally:
+            self._in_flight -= 1

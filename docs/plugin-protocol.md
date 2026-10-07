@@ -30,8 +30,11 @@ stdin and stdout.
   unknown request gets `method_not_found`.
 - **In flight.** At most 16 requests in each direction. A sender waits for a free slot; a receiver
   that is already handling 16 answers the next `invalid_request` ("too many requests in flight").
+  The daemon counts the notifications it is still handling against the same 16, and drops a
+  notification that arrives while all of them are busy.
 - **Bad lines.** Three consecutive lines that are not valid JSON-RPC (bad JSON, over the size cap,
-  or not an object) close the connection, and that counts as a crash.
+  or not an object) close the connection, and that counts as a crash. A line over the size cap is
+  discarded up to its newline and counts once, however many pieces it arrives in.
 - **Unknown fields** are ignored by both sides, so a minor version can add fields. The exceptions
   are the organization-mode fields (see [Organization-mode fields](#organization-mode-fields)).
 - **Environment.** The plugin runs with an allow-listed environment: `PATH`, `SYSTEMROOT`,
@@ -39,6 +42,13 @@ stdin and stdout.
   plus `PRIVACYFENCE_PLUGIN=1`. Nothing else of the daemon's environment is passed on. A packaged
   plugin must therefore not depend on `PYTHONPATH` or any other variable. The working directory is
   the plugin's own directory.
+- **Processes.** On macOS and Linux the plugin runs in a process group of its own, and the daemon
+  kills that group whenever the plugin stops or exits, so nothing the plugin started outlives it.
+  On Windows the daemon terminates the plugin's own process only.
+- **Every start is checked.** Before each start, restarts after a crash included, the daemon checks
+  again that only an administrator can change the plugin and that its executable and manifest
+  still hash to what was reviewed. A plugin that fails is disabled with "executable is writable by
+  non-administrators" or "executable or manifest changed, enable again", and is not restarted.
 
 ## Versioning
 
@@ -327,7 +337,8 @@ default 300,000) and answers `{"status": "approved" | "denied" | "expired", "dec
 
 `web.request` carries `principal`, `method` (always `GET`), `path` and `query`, and the plugin
 answers `{"status", "headers", "body", "body_encoding"}` with `body_encoding` `utf8` (default) or
-`base64`. Only a plugin whose manifest sets `pages: true` and that is running is asked.
+`base64`. Only a plugin whose manifest sets `pages: true` and that is running (its `initialize`
+succeeded) is asked; any other page request gets 404.
 
 - A HEAD request is forwarded as GET and its body dropped. Any other method gets 405 with `Allow:
   GET, HEAD` and never reaches the plugin.
