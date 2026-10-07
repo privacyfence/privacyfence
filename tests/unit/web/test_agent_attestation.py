@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -30,7 +31,7 @@ from privacyfence.agent_identity import (
     entry_for_id,
     identify_registry_id,
 )
-from privacyfence.audit_log import AuditEntry, get_audit_logger
+from privacyfence.audit_log import AuditEntry, current_week, get_audit_logger
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.settings_controller import audit_rows
 from privacyfence.step_up_config import StepUpConfig
@@ -539,7 +540,8 @@ class TestAgentsPageState:
 
 def _entry(**agent) -> AuditEntry:
     return AuditEntry(
-        timestamp="2026-09-24T10:00:00+00:00", week="2026-W39", request_id="r1",
+        # Now, not a fixed date: the settings page lists only the current and previous ISO week.
+        timestamp=datetime.now(timezone.utc).isoformat(), week=current_week(), request_id="r1",
         connector="gmail", tool="gmail_get_message", tool_name="Read Gmail message",
         summary="s", sender="a@example.com", decision="approved", auto_accept_rule="",
         latency_seconds=0.0, pii_detected=False, **agent,
