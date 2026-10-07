@@ -67,7 +67,7 @@ button:hover{border-color:var(--accent)}
 <header class="stack">
   <div class="eyebrow">privacyfence · plugin framework change requests · issue #846</div>
   <h1>Plugin change requests: your manual steps</h1>
-  <p class="lede">One check before <code>/implement</code> starts, and one smoke test once the stacked pull request is open. Nothing in between waits for you. Ticks are saved in this browser only.</p>
+  <p class="lede">Two checks before <code>/implement</code> starts, and one smoke test once the stacked pull request is open. Nothing in between waits for you. Ticks are saved in this browser only.</p>
   <div class="note"><p>Run <code>/implement https://github.com/privacyfence/privacyfence/blob/plan/plugin-framework-cr/docs/plugin-framework-cr-plan.md</code> after <b>Before implementation</b> is done. The orchestrator asks you once.</p></div>
   <div><button type="button" id="reset">Clear all ticks</button></div>
 </header>
@@ -83,6 +83,18 @@ button:hover{border-color:var(--accent)}
       <li><input type="checkbox" id="mb1-3" aria-label="Step 3 done"><div class="body"><span class="what">Open <a href="https://github.com/privacyfence/privacyfence/blob/feature/plugin-framework/docs/adr/README.md">docs/adr/README.md on feature/plugin-framework</a>.</span><span class="see">The index lists ADR 0120 and the six after it.</span></div></li>
     </ol>
     <div class="done-when"><p><b>Done when</b> the plugin-framework PR is open and the ADR index on its branch lists 0120. Then reply "done" to the orchestrator.</p></div>
+  </article>
+
+  <article class="item" data-item="mb2">
+    <header><h3>mb2 · Put a non-Google file in the QA Sandbox</h3><span class="chip time">~3 min</span><span class="chip prog" aria-live="polite"></span></header>
+    <p class="why">The live connector check now reads 16 bytes of a binary Drive file with an HTTP Range request, the new way plugins download large files. It looks in the QA account's <b>PrivacyFence QA Sandbox</b> folder and fails if that folder only has Google Docs, Sheets or Slides. Nothing secret is involved.</p>
+    <p class="see">Reference: <a href="https://github.com/privacyfence/privacyfence/blob/plan/plugin-framework-cr/docs/connector-qa.md">docs/connector-qa.md</a> describes the QA accounts and the Sandbox folder.</p>
+    <ol class="steps">
+      <li><input type="checkbox" id="mb2-1" aria-label="Step 1 done"><div class="body"><span class="what">Sign in to <a href="https://drive.google.com/drive/my-drive">Google Drive</a> as the QA account.</span></div></li>
+      <li><input type="checkbox" id="mb2-2" aria-label="Step 2 done"><div class="body"><span class="what">Open the folder <b>PrivacyFence QA Sandbox</b>.</span><span class="see">If it already lists a PDF, an image or any other non-Google file, you are done.</span></div></li>
+      <li><input type="checkbox" id="mb2-3" aria-label="Step 3 done"><div class="body"><span class="what">Otherwise drag a small file with no personal content into it, for example a one-page PDF named <code>qa-range-check.pdf</code>.</span><span class="see">The file appears in the folder with a PDF icon, not a Google Docs icon.</span></div></li>
+    </ol>
+    <div class="done-when"><p><b>Done when</b> the QA Sandbox folder lists at least one file that is not a Google Doc, Sheet or Slides file.</p></div>
   </article>
 </section>
 

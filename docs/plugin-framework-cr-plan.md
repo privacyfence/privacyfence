@@ -42,6 +42,12 @@ then adds the changes below.
 
 CR4 is skipped, as the comment says. CR5 is covered by CR3.
 
+**About the stacked PR.** `/implement` always opens its PR to `main`. Until the plugin-framework
+PR merges, this PR's diff therefore contains the whole framework as well. Merge the framework PR
+first; this PR's diff then shrinks to these changes. p0's merge commit changes many paths outside
+its `touches`. That is expected, and the orchestrator's diff review of p0 checks only that the
+merge brought in `origin/feature/plugin-framework` unchanged.
+
 The user decided four things when this plan was made:
 
 - a stacked PR;
@@ -310,8 +316,11 @@ ADRs by number, or the issue by full URL.
   Regenerate `types.py` with `python3 scripts/gen_plugin_sdk_types.py`.
 - New dataclasses in `protocol.py`, each with `from_wire(obj, *, mode="local")` and `to_wire()` in
   the file's existing style: `ApprovalRequestParams`, `ApprovalCheckParams` and
-  `ApprovalAwaitParams` (fields in D6). `PrincipalContext` gains `output_dir: str | None = None`,
-  and `principal_context(..., output_dir: Path | None = None)` gains the same keyword.
+  `ApprovalAwaitParams` (fields in D6). `PrincipalContext` gains `output_dir: str | None = None`
+  and `output_types: tuple[str, ...] = ()`, both present only for a plugin with `outputs: true`.
+  `principal_context(..., output_dir: Path | None = None, output_types: tuple[str, ...] = ())`
+  gains the same keywords. The SDK reads `output_types` from the context, so the plugin never
+  declares them a second time.
 - Manifest (`manifest.py`):
   - two new optional keys: `outputs: bool` (default false) and `output_types: list[str]`;
   - every entry of `output_types` must be a key of `OUTPUT_TYPES`, else `ManifestError("output
@@ -339,7 +348,9 @@ def decode(cursor: str, operation: str, bound: dict) -> dict
     # CursorError("cursor belongs to a different call") when op or digest differ
 ```
 
-`source_ops` turns a `CursorError` into `RpcError("invalid_params", str(exc))`. The cursor is not
+`source_ops` turns a `CursorError` into `RpcError("invalid_params", str(exc))`. Each adapter
+then validates its own state (D3, "State checks") and raises the same `invalid_params` with
+`"cursor is not valid"` when the state does not fit. The cursor is not
 secret and not signed. Binding it to the parameters stops a plugin from carrying a cursor over to
 a different query by mistake; it is not a security boundary, since the plugin reads with its own
 rights either way.
@@ -358,12 +369,24 @@ larger than the page limit")`. That is the only size refusal left. The budget is
 
 | Operation | Params (new in bold) | `bound` | Cursor state | Behaviour |
 |---|---|---|---|---|
-| `jira.search` | `jql`; **`page_size`** 1..`JIRA_PAGE_SIZE_MAX`, default 100; `max_results` is accepted as an alias for `page_size` when `page_size` is absent, and its upper bound drops from 500 to 100; **`cursor`** | `{jql, page_size}` | `{"t": provider token or null, "k": skip}` | `items, next_t = client.search_issues_page(jql, page_size, t)`, then `items = items[k:]`, then fit. If everything left on the provider page fits, `next = {"t": next_t, "k": 0}` when `next_t` is set, else `null`. If not, `next = {"t": t, "k": k + n}` |
-| `calendar.list_events` | `calendar_id`, `time_min`, `time_max`; **`page_size`** 1..`CALENDAR_PAGE_SIZE_MAX`, default 250; `max_results` is an alias as above; **`cursor`** | `{calendar_id, time_min, time_max, page_size}` | same as Jira | `client.list_events_page(calendar_id, page_size, time_min, time_max, t)`; the rest as Jira |
+| `jira.search` | `jql`; **`page_size`** 1..`JIRA_PAGE_SIZE_MAX`, default 100; `max_results` (1..500, as in 1.0) is accepted as an alias when `page_size` is absent and is clamped to 100, so a 1.0 plugin keeps working and gets its rest through the cursor; **`cursor`** | `{jql, page_size}` | `{"t": provider token or null, "k": skip}` | `items, next_t = client.search_issues_page(jql, page_size, t)`, then `items = items[k:]`, then fit. If everything left on the provider page fits, `next = {"t": next_t, "k": 0}` when `next_t` is set, else `null`. If not, `next = {"t": t, "k": k + n}` |
+| `calendar.list_events` | `calendar_id`, `time_min`, `time_max`; **`page_size`** 1..`CALENDAR_PAGE_SIZE_MAX`, default 250; `max_results` is an alias as above (1..250 already fits); **`cursor`** | `{calendar_id, time_min, time_max, page_size}` | same as Jira | `client.list_events_page(calendar_id, page_size, time_min, time_max, t)`; the rest as Jira |
 | `sheets.get_values` | as today, plus **`cursor`** | `{spreadsheet_id, range, value_render_option}` | `{"k": first row}` | Fetch the whole range (the client returns it whole), take `rows[k:]`, fit, and return `{"values": rows[k:k+n], "first_row": k}`. `next = {"k": k+n}` while rows remain |
 | `confluence.get_page` | as today, plus **`cursor`** | `{page_id}` | `{"o": body char offset}` | `page = asdict(...)`, then `body = page["body"]`. With the body empty, fit the rest of the page alone. Otherwise find the largest body slice `body[o:o+m]` that fits (binary search on `m`), and return the page with `body` replaced by the slice plus `body_offset: o` and `body_total_chars: len(body)`. Both fields are always present. `next = {"o": o+m}` while `o+m < len(body)` |
 | `drive.download` | `file_id`, `length`, `offset` or `cursor` as today | `{file_id}` | `{"r": revision, "o": offset}` | D4. The old `{"f","r","o"}` cursor format is gone |
 | `salesforce.report_run` | unchanged | — | — | Unchanged. It is the one operation that can still return `payload_too_large` for a large report. Paging is [privacyfence/privacyfence#854](https://github.com/privacyfence/privacyfence/issues/854). The protocol doc says so |
+
+**State checks.** Every check below failing means `invalid_params` with `"cursor is not
+valid"`:
+
+- `t` is a string or `null`.
+- `k` and `o` are integers ≥ 0, and never bools.
+- For Jira and Calendar, `k` ≤ the number of items on the provider page it names. A `k` equal to
+  the page length is only valid when `t` is that page's token, and it then returns an empty page
+  whose `next_cursor` moves to the provider's next token.
+- For Sheets, `k` ≤ the number of rows.
+- For Confluence, `o` ≤ the body length.
+- For Drive, `o` ≤ the file size, and `r` is a string.
 
 The size check in `_serve` (`len(payload) > MAX_SOURCE_RESULT_BYTES`) stays as a backstop. The
 adapters already fit their pages under the budget.
@@ -384,9 +407,10 @@ def search_issues_page(self, jql: str, page_size: int = 100,
 
 # calendar_client.py
 def list_events_page(self, calendar_id: str, page_size: int = 250, time_min: str = "",
-                     time_max: str = "", page_token: str | None = None) -> tuple[list[CalendarEvent], str | None]:
+                     time_max: str = "", page_token: str | None = None,
+                     query: str = "") -> tuple[list[CalendarEvent], str | None]:
     # one service.events().list(calendarId, singleEvents=True, orderBy="startTime", maxResults=page_size,
-    #   timeMin/timeMax when non-empty, pageToken when set).execute(); returns (parsed, nextPageToken or None);
+    #   timeMin/timeMax/q when non-empty, pageToken when set).execute(); returns (parsed, nextPageToken or None);
     # HttpError -> CalendarClientError(f"list_events_page({calendar_id}) failed: ...")
 ```
 
@@ -445,9 +469,11 @@ It encodes `next = {"r": revision, "o": next_offset}` while `next_offset` is not
 `connector-live-check.yml` must exercise the new methods, so `scripts/qa_fixture_recorder.py`
 changes:
 
-- `check_drive` calls `download_range(seed_file_id, 0, 16)` when the QA manifest has a binary
-  seed file. It reads the manifest's existing `drive` section; if there is no binary seed file,
-  it skips that call with a note in the report.
+- `check_drive` lists the QA Sandbox folder it already resolves (`folder_id`, or `folder_name`),
+  takes the first file whose `mime_type` is not in `drive_client._GOOGLE_DOC_EXPORTS` and is not
+  a folder, and calls `download_range(file_id, 0, 16)`. It checks that 16 bytes, or the whole
+  file if it is smaller, come back. With no such file, the check **fails** with "QA Sandbox has
+  no non-Google file for the Range check". `manual_before` mb2 makes sure there is one.
 - `check_jira` calls `search_issues_page(jql, 1)`, using the same JQL as its existing fallback.
 - `check_calendar` calls `list_events_page(calendar_id, 1, time_min, time_max)`.
 
@@ -502,6 +528,9 @@ has three methods: `async request(plugin, display_name, manifest, params, *, int
 
 1. Refuse while introspecting. Parse the params with `ApprovalRequestParams.from_wire`. A `page`
    when `manifest.pages` is false is `invalid_params` ("page needs pages: true in the manifest").
+   The page goes through `pages.normalize_path`. A rejected path, or a normalized path containing
+   `?` or `#`, is `invalid_params` ("page is not a valid path"). That catches an encoded `%3F` or
+   `%23`, which would otherwise hide `pf_approval` in the fragment.
 2. If `store.find(...)` returns an unrevoked record, return `{approval_id: record.approval_id,
    status: "approved"}` and show no card.
 3. If a card for the same `(plugin, principal, kind, subject_id, digest)` is still pending, return
@@ -517,10 +546,14 @@ has three methods: `async request(plugin, display_name, manifest, params, *, int
    - audit `"<kind>; requested"`;
    - return `{approval_id, status: "pending", expires_at}`.
 6. The finalizer:
-   - `"confirm"` → `registry.finalize(id, "accept")`, then `store.add(record)` with
-     `decided_at = now`, then audit `"<kind>; approved"`;
+   - `"confirm"` → `store.add(record)` with `decided_at = now` **first**, then
+     `registry.finalize(id, "accept")`, then audit `"<kind>; approved"`. Storing first means
+     `approval.check` already answers `approved` by the time `approval.await` does;
    - `"cancel"` → `finalize(id, "deny")` and audit `"<kind>; denied"`;
    - a timeout → `finalize(id, "expired")` and audit `"<kind>; expired"`.
+
+   In every case the finalizer then removes the pending tuple, so a later request for the same
+   tuple either finds the stored approval or opens a new card.
 
 `check` returns `approved` for a record without `revoked_at`, `revoked` when the latest record for
 the tuple has `revoked_at`, and `unknown` otherwise.
@@ -549,8 +582,10 @@ and the status. The tuple stays in the store.
 
   It uses the same `_document` as `build_confirmation_html`, with these parts in order:
   1. the escaped title;
-  2. a `fields` table of escaped label and value pairs: Plugin, Kind, Subject, Digest (the full
-     `sha256:` string, in a `pf-code` style);
+  2. a `fields` table of escaped label and value pairs: Plugin (`f"{display_name} ({name})"`,
+     because `display_name` is plugin-controlled and `name` is the directory name the
+     administrator installed), Kind, Subject, Digest (the full `sha256:` string, in a `pf-code`
+     style);
   3. the blocks through `build_preview_body_html(blocks=…)`;
   4. when `frame_src` is set, `<iframe class="pf-plugin-frame" sandbox="allow-scripts"
      src="<escaped frame_src>" referrerpolicy="no-referrer" title="<escaped frame_title>"
@@ -560,7 +595,8 @@ and the status. The tuple stays in the store.
   The frame's height is a CSS token-based size (`min-block-size: 24rem`) in
   `resources/approval_window/styles.css`, with no colour literals.
 - The fields render **outside** the frame and before it, so the plugin page cannot hide or
-  change what is being approved.
+  change what is being approved. PrivacyFence cannot check that the digest matches the preview
+  or the page. The digest is what binds the approval, and ADR 0127 says so.
 - `frame_src` is built only by `ApprovalService` from a validated plugin name, a normalized path
   and the card id, and is escaped once more here.
 
@@ -595,6 +631,9 @@ The goal is to loosen framing only for one card's response and only for that plu
   the right subject. A `pf_approval` that does not qualify is ignored: the page is served with the
   normal `frame-ancestors 'none'` and the frame stays blank.
 - `PageHost` (`pages.py:44`) gains `approval_embed_allowed(name, approval_id, path) -> bool`.
+  `routes_plugins` looks it up with `getattr(host, "approval_embed_allowed", None)` and treats a
+  missing method as "not allowed". The real `PluginHost` only gains it in the host phase, and the
+  route must not answer 500 in between.
 
 ### D9. Outputs (`src/privacyfence/plugins/outputs.py`, new)
 
@@ -609,8 +648,19 @@ The goal is to loosen framing only for one card's response and only for that plu
   ignored), under the directory once resolved, at most `OUTPUT_MAX_DEPTH` segments deep, with no
   path segment starting with `.`, and with an extension that belongs to one of the plugin's
   `output_types` (via `OUTPUT_TYPES`).
-- Plugins write `.name.tmp` and then rename. The SDK does this (D11).
-- Paths are POSIX-style, relative to the output directory, with no leading `/`.
+- Plugins write `.name.tmp` and then rename. The SDK does this (D13).
+- **Canonical paths.** A requested path is accepted only if all of these hold:
+  - it contains no `\`, no `:`, no NUL and no empty segment (`//`, or a leading or trailing
+    `/`);
+  - no segment starts with `.`;
+  - it is at most `OUTPUT_MAX_DEPTH` segments;
+  - `(root / path).resolve(strict=True)` is a regular file (`os.lstat` on every component: no
+    symlinked directory or file anywhere on the way);
+  - `PurePosixPath(resolved.relative_to(root.resolve())).as_posix() == path` exactly.
+
+  Anything else is `ValueError("No such output file.")`. The canonical path is what goes into
+  `raw_data` and the folder-rule check, so `reports/a\..\..\other\x.csv` on Windows never
+  reaches a `reports/` rule.
 
 ```python
 @dataclass(frozen=True)
@@ -629,7 +679,7 @@ def read_output(root: Path, output_types: tuple[str, ...], path: str, *, offset:
 ```
 
 **Tools.** `PluginOutputsConnector(Connector)`, `name = "plugin_outputs"`, built by the host
-(D10) and present in `connectors()` while at least one **enabled** plugin has `outputs: true`.
+(D11) and present in `connectors()` while at least one **enabled** plugin has `outputs: true`.
 
 | Tool | Gate | Params | Returns |
 |---|---|---|---|
@@ -664,15 +714,37 @@ def read_output(root: Path, output_types: tuple[str, ...], path: str, *, offset:
   `AUDIT_PLUGIN_OUTPUT` entry, `connector=f"plugin:{name}"` with summary
   `f"read {path}; offset={offset}; bytes={length}"`, attributes the read to the plugin's output
   source, as the issue asks.
-- **Registration.** While the outputs connector exists, the host registers it with
-  `auto_accept.register_dynamic_tools("plugin_outputs", [...])`:
-  - list: gate auto, no operation key;
-  - read: gate review, operation `plugin_outputs.read`, verb `READ`, layout WIDE.
+- **Registration.** `auto_accept.register_dynamic_tools` only takes plugin operation keys
+  (`plugin.<p>.<t>`) and registers plugin scope proposals. So the outputs connector uses a new,
+  narrower function in `auto_accept.py` (D10):
 
-  It unregisters when the last outputs plugin is disabled or removed.
+  ```python
+  def register_internal_dynamic_tools(owner: str, specs: list[DynamicToolSpec]) -> None
+  def unregister_internal_dynamic_tools(owner: str) -> None
+  ```
+
+  It writes `TOOL_TO_GATE`, `TOOL_TO_OPERATION`, the registry verb, the layout and the effect for
+  each spec, and nothing else: no scope selector and no proposal. It refuses, with `ValueError`
+  and nothing written:
+  - a tool name in `STATIC_TOOL_NAMES`, or one held by any other owner (plugin or internal);
+  - an operation not starting with `f"{owner}."`;
+  - any `scope_predicates`.
+
+  The outputs connector calls it with owner `"plugin_outputs"` and two specs:
+  - `DynamicToolSpec(tool="plugin_outputs_list", gate="auto", operation=None, verb=None,
+    layout=gate.NARROW, effect="", scope_predicates=())`;
+  - `DynamicToolSpec(tool="plugin_outputs_read", gate="review", operation="plugin_outputs.read",
+    verb=Verb.READ, layout=gate.WIDE, effect="", scope_predicates=())`.
+
+  The selectors and proposals per plugin are D10's own functions. Everything is unregistered
+  when the last outputs plugin is disabled or removed.
 
 ### D10. Output scope (`policy/scopes.py`, `policy/propose.py`)
 
+- **`output` is a reserved scope type.** `scopes.check_plugin_selector` refuses scope type
+  `"output"`, as it already refuses `"anything"`. `plugins/tools.validate_scope_types` refuses a
+  plugin-declared scope type named `output` (`"scope type output is reserved"`). A plugin tool
+  can therefore never own the predicate the output selector uses.
 - Predicate `f"plugin:{name}:output"` (`constants.scope_predicate(name, "output")`), registered
   by `scopes.register_plugin_output_selector(name)` and removed by
   `unregister_plugin_output_selector(name)`. The selector has
@@ -703,8 +775,16 @@ def read_output(root: Path, output_types: tuple[str, ...], path: str, *, offset:
   `plugin_outputs_read`:
   - predicate `plugin:<name>:output`, `scope_type=f"{name}.output"`, `connector="plugin_outputs"`,
     verbs `(READ,)`;
-  - `value_of = lambda ctx: (posixpath.dirname(ctx.raw_data["path"]) + "/" if "/" in path else
-    path) if ctx.raw_data.get("plugin") == name else NO_VALUE`;
+  - `value_of` is:
+
+    ```python
+    def value_of(ctx):
+        raw = ctx.raw_data if isinstance(ctx.raw_data, dict) else {}
+        path = raw.get("path")
+        if raw.get("plugin") != name or not isinstance(path, str) or not path:
+            return NO_VALUE
+        return [posixpath.dirname(path) + "/"] if "/" in path else [path]
+    ```
   - `hint="this folder"`, or `"this file"` at the root;
   - `entry_id` and `group` are `f"plugin:{name}:output@plugin_outputs.read"`, and
     `widenable=False`.
@@ -726,7 +806,8 @@ def read_output(root: Path, output_types: tuple[str, ...], path: str, *, offset:
   confirms.
 - **Initialize.**
   - `_initialize_params` creates `storage.output_dir(name, LOCAL_PRINCIPAL)` (mode `0700`) when
-    `manifest.outputs` is true, and passes `output_dir=` to `principal_context`.
+    `manifest.outputs` is true, and passes `output_dir=` and
+    `output_types=manifest.output_types` to `principal_context`.
   - The review summary from `inspect` gains `"outputs": bool` and
     `"output_types": [...]`.
 - **Embedding.** `approval_embed_allowed(name, approval_id, path)` delegates to
@@ -767,7 +848,7 @@ def read_output(root: Path, output_types: tuple[str, ...], path: str, *, offset:
 ### D13. SDK (`plugin-sdk/src/privacyfence_plugin_sdk/`)
 
 - `PROTOCOL_VERSION = "1.1.0"`.
-- `Principal` gains `output_dir: Path | None`.
+- `Principal` gains `output_dir: Path | None` and `output_types: tuple[str, ...]`.
 - `_EVENTS` gains `"approval.revoked"`, and so does the test host's `_EVENT_NAMES`.
 - `ctx.source.pages(operation, **params) -> AsyncIterator[SourceResult]`:
   - calls `call` with the params, then with `cursor=next_cursor`, until `next_cursor` is `None`;
@@ -789,8 +870,8 @@ def read_output(root: Path, output_types: tuple[str, ...], path: str, *, offset:
   - `publish(relpath: str, data: bytes | str) -> str` writes `<output_dir>/<dir>/.<name>.tmp`,
     fsyncs, then `os.replace`s it to the final name. It refuses an existing final path
     (`FileExistsError`; a new version is a new name), a path with `..` or a leading `/`, and an
-    extension the manifest's `output_types` do not allow, which the plugin declares in the SDK as
-    `Plugin(..., output_types=(...))`. It returns the relative path.
+    extension the `output_types` of the `PrincipalContext` do not allow. It returns the relative
+    path.
   - `ctx.outputs.dir -> Path`.
   - Both raise `RuntimeError("this plugin has no output folder")` when `output_dir` is `None`.
 - New exports: `ApprovalTicket`.
@@ -861,7 +942,9 @@ ADRs (expected 0127):
 - **0127.** A plugin approval binds to `(plugin, principal, kind, subject_id, digest)`, persists
   until revoked in Settings, is never auto-accepted, is refused while unattended, and has step-up
   on by default. The card shows PrivacyFence's fields outside a sandboxed frame of the plugin's
-  page. Framing is loosened only for that card's response (`frame-src 'self'`) and for a plugin
+  page, labelled with both its display name and its installed name. PrivacyFence cannot check that
+  the digest matches what the preview or the page shows; the digest is what binds. Framing is
+  loosened only for that card's response (`frame-src 'self'`) and for a plugin
   response tied to a pending approval of that plugin (`frame-ancestors 'self'`). Rejected:
   - allowing framing of every plugin page;
   - rendering plugin HTML inside the card document;
@@ -876,7 +959,8 @@ ADRs (expected 0127):
   where the first chunk waits for the whole file. Amends 0123.
 - **0130.** Plugin outputs are a per-principal folder that PrivacyFence reads through its own
   tools: `plugin_outputs_list` is auto and `plugin_outputs_read` is review. The
-  `plugin:<name>:output` scope is a path prefix. Large results go through outputs, and the 100 KB
+  `plugin:<name>:output` scope is a folder prefix, covering that folder and everything under it,
+  or one exact file. Requested paths must be canonical. Large results go through outputs, and the 100 KB
   inline limit on prepared payloads stays (ADR 0092). Rejected: raising the inline limit.
 - **0131.** A plugin's child processes run under the plugin's account, unsupervised, and the
   plugin confines them. Amends 0121.
@@ -885,8 +969,11 @@ ADRs (expected 0127):
 
 The checklist page is linked in the manifest (`manual_steps_artifact`).
 
-- **Before:** `mb1-framework-run-finished`. The plugin-framework `/implement` run must have
-  merged every phase, through the retirement phase, and opened its PR. p0 merges that branch.
+- **Before:**
+  - `mb1-framework-run-finished`. The plugin-framework `/implement` run must have merged every
+    phase, through the retirement phase, and opened its PR. p0 merges that branch.
+  - `mb2-qa-sandbox-binary-file`. The QA Sandbox Drive folder must hold at least one
+    non-Google file, such as a small PDF, so the live check exercises the Drive Range read.
 - **After:** `ma1-smoke-test-cr`. On a packaged install, with Drive, Jira and Calendar connected:
   - approve the `today` layout, including the embedded page, then check, revoke and re-check it;
   - read a `today` export through `plugin_outputs_list`/`plugin_outputs_read` and add a folder
@@ -913,6 +1000,8 @@ Each one has what a worker sees. Stop with `status=blocked` instead of improvisi
 - **Docs references.** No phase before the retirement phase writes a docs-slash-name-dot-md path
   that does not exist on its branch at that moment. The plugins and protocol reference docs exist
   only after p0.
+- **CHANGELOG.** No phase but the retirement phase edits `CHANGELOG.md`, so parallel phases never
+  conflict on it. The retirement phase writes every line.
 - **ADR numbers.** If 0127 is taken when the retirement phase runs, renumber and fix every
   citation (`grep -rn "ADR 01[23]" src plugin-sdk tests examples`).
 
@@ -930,6 +1019,10 @@ manual_before:
   title: The plugin-framework /implement run has merged every phase (including its retire phase) and opened its PR
   why: p0 merges origin/feature/plugin-framework into this branch; started earlier, this branch would miss phases and the ADRs and reference docs every later phase builds on.
   done_when: The plugin-framework PR to main is open, and docs/adr/README.md on feature/plugin-framework lists ADR 0120.
+- id: mb2-qa-sandbox-binary-file
+  title: Put one small non-Google file (for example a PDF) in the QA Sandbox Drive folder of the QA account
+  why: The Drive phase's live check reads 16 bytes of a binary file in that folder with an HTTP Range request; with only Google Docs there it fails and the final connector-live-check.yml dispatch stays red.
+  done_when: The QA account's "PrivacyFence QA Sandbox" Drive folder lists at least one file that is not a Google Doc, Sheet or Slides file.
 manual_after:
 - id: ma1-smoke-test-cr
   title: Run the change-request smoke test (today plugin steps 13-16) on a packaged install
@@ -942,7 +1035,7 @@ final_checks:
 - the five ADRs from the plan's ADRs section exist with Status Accepted and are in docs/adr/README.md's index
 - CHANGELOG.md has [Unreleased] entries for approvals, paging, outputs and child processes and no new version heading
 - The full /dod passes, including python3 scripts/check_coverage_floor.py coverage.json and python3 -m pytest tests/integration -v
-- connector-live-check.yml dispatched against feature/plugin-framework-cr is green (client files changed; link the run in the PR)
+- connector-live-check.yml dispatched against feature/plugin-framework-cr is green, including the new Drive Range, Jira page and Calendar page checks (client files changed; link the run in the PR)
 - build.yml dispatched against feature/plugin-framework-cr is green (today example changed)
 phases:
 - id: p0-sync
@@ -961,62 +1054,89 @@ phases:
        docs/README.md and scripts/build_site.py mechanically: keep the entry for this plan
        (plugin-framework-cr-plan.md) and drop the entry for the framework's own plan, which its retire phase
        removed. Any conflict in any other file: abort and stop with status=blocked.
-    3. Record in the PHASE-REPORT: the merged SHA, the ADR numbers the framework took (ls docs/adr | tail), and
+    3. The merge changes many files outside this phase's touches; that is expected. In the PHASE-REPORT say so, so the
+       orchestrator's diff review only checks that the merge brought in origin/feature/plugin-framework unchanged.
+       Record in the PHASE-REPORT: the merged SHA, the ADR numbers the framework took (ls docs/adr | tail), and
        whether 0127 is free.
     4. Run ruff check . and python3 -m pytest tests/unit -q; both must pass (the known base failure listed in the
        framework ledger, tests/unit/web/test_agent_attestation.py::TestAuditRows::test_org_mode_audit_page_shows_the_principals_own_rows_with_agents,
        may still fail if it fails on origin/main too; say so in the report).
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - git log --oneline -1 --merges shows the merge of origin/feature/plugin-framework
   - ls docs/adr/0120-*.md succeeds
   - python3 -m pytest tests/unit/test_website_docs_allowlist.py tests/unit/test_docs_references_exist.py tests/unit/plugins -q passes
-- id: p1-protocol
-  title: Protocol 1.1 constants, cursors, message types, manifest keys, schema and SDK types
-  depends_on: [p0-sync]
-  complexity: M
+- id: p1a-constants-cursors
+  title: Protocol 1.1 constants and the cursor envelope
+  depends_on:
+  - p0-sync
+  complexity: S
   touches:
   - src/privacyfence/plugins/constants.py
   - src/privacyfence/plugins/cursors.py
+  - tests/unit/plugins/test_constants.py
+  - tests/unit/plugins/test_cursors.py
+  brief: |
+    1. constants.py per Design D1: the new constants verbatim and "approval.request" in TIMEOUT_SECONDS. Do NOT change
+       PROTOCOL_VERSION here (the next phase bumps it together with every pin) and do NOT remove DRIVE_MAX_FILE_BYTES
+       (the paging phase removes it).
+    2. cursors.py per D2 (CursorError, params_digest, encode, decode), module docstring citing ADR 0128.
+    3. Tests: tests/unit/plugins/test_cursors.py (round trip; wrong op; wrong params; bad base64; bad JSON shape; overlong;
+       a state edited by hand still decodes, but the same cursor with other params is refused) and test_constants.py for the
+       new regexes and OUTPUT_TYPES.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
+  acceptance:
+  - python3 -m pytest tests/unit/plugins/test_cursors.py tests/unit/plugins/test_constants.py tests/unit/plugins -q passes
+- id: p1b-protocol-types
+  title: Protocol 1.1 message types, manifest keys, schema, SDK types and version pins
+  depends_on:
+  - p1a-constants-cursors
+  complexity: M
+  touches:
+  - src/privacyfence/plugins/constants.py
   - src/privacyfence/plugins/protocol.py
   - src/privacyfence/plugins/manifest.py
   - docs/plugin-protocol/protocol.schema.json
   - plugin-sdk/src/privacyfence_plugin_sdk/types.py
   - plugin-sdk/src/privacyfence_plugin_sdk/plugin.py
-  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_host.py
-  - plugin-sdk/src/privacyfence_plugin_sdk/testing/_source.py
-  - tests/unit/plugins/test_constants.py
-  - tests/unit/plugins/test_cursors.py
   - tests/unit/plugins/test_protocol.py
   - tests/unit/plugins/test_manifest.py
+  - tests/unit/plugins/test_host.py
   - tests/unit/plugin_sdk/test_plugin.py
   - tests/unit/plugin_sdk/test_testhost.py
+  - examples/plugins/today/**
+  - tests/unit/examples/**
   brief: |
-    1. constants.py per Design D1: PROTOCOL_VERSION "1.1.0", the new constants verbatim, and "approval.request" in
-       TIMEOUT_SECONDS. Keep DRIVE_MAX_FILE_BYTES in constants.py (spool.py still imports it; the Drive phase
-       deletes it), but drop it from the schema's x-limits in step 5.
-    2. cursors.py per D2 (CursorError, params_digest, encode, decode), with a module docstring citing ADR 0128.
-    3. protocol.py per D1: ApprovalRequestParams, ApprovalCheckParams, ApprovalAwaitParams with the D6 field rules
-       (APPROVAL_KIND_RE, SUBJECT_ID_MAX_CHARS and control/bidi rejection by running the subject through
-       blocks' sanitizer and refusing if it changed, DIGEST_RE, title, preview via the validate_blocks parameter,
-       page: a string starting with "/", no "?", at most MAX_PAGE_PATH_CHARS -- full normalization happens in the
-       service), PrincipalContext.output_dir and principal_context(..., output_dir=None).
-    4. manifest.py per D1: outputs, output_types, the Manifest fields, the error texts.
-    5. protocol.schema.json per D1 (new and changed $defs, x-limits, x-protocol-version 1.1.0, drop
-       DRIVE_MAX_FILE_BYTES from x-limits); run python3 scripts/gen_plugin_sdk_types.py to regenerate types.py.
-    6. SDK: plugin.py PROTOCOL_VERSION "1.1.0" only (one line); testing/_host.py and testing/_source.py: add copies
-       of the new limits only where the limits tests compare them, and leave DRIVE_MAX_FILE_BYTES in _source.py
-       (the SDK test host phase removes it).
-    7. Tests: test_cursors.py (round trip; wrong op; wrong params; bad base64; overlong; tampered state still
-       decodes but a different digest is refused), test_protocol.py (each new dataclass valid/invalid; TestSchema
-       still passes with the new defs), test_manifest.py (outputs/output_types rules), test_constants.py, and
-       update tests/unit/plugin_sdk/test_plugin.py and test_testhost.py limit/version pins for 1.1.0.
+    1. constants.py: PROTOCOL_VERSION = "1.1.0" (one line).
+    2. protocol.py per Design D1: ApprovalRequestParams, ApprovalCheckParams, ApprovalAwaitParams with the D6 field rules
+       (APPROVAL_KIND_RE; subject_id 1..SUBJECT_ID_MAX_CHARS, refused when blocks' sanitizer would change it (control or
+       bidi characters); DIGEST_RE; title as ConfirmRequestParams; preview through the validate_blocks parameter; page: a
+       string starting with "/", at most MAX_PAGE_PATH_CHARS -- full normalization happens in the service);
+       PrincipalContext.output_dir and output_types; principal_context(..., output_dir=None, output_types=()).
+    3. manifest.py per D1: outputs, output_types, the Manifest fields and error texts.
+    4. protocol.schema.json per D1 (new and changed $defs, x-limits additions, x-protocol-version "1.1.0", and drop
+       DRIVE_MAX_FILE_BYTES from x-limits only); then run python3 scripts/gen_plugin_sdk_types.py to regenerate types.py.
+    5. plugin-sdk plugin.py: PROTOCOL_VERSION = "1.1.0" (one line).
+    6. Every test or example that pins the protocol version string: run `grep -rn '1\.0\.0' tests/unit/plugins
+       tests/unit/plugin_sdk tests/unit/examples examples/plugins/today plugin-sdk/src` and update each pin of the protocol
+       version (not of a plugin's own version 1.0.0) to 1.1.0 -- at least tests/unit/plugins/test_host.py (initialize
+       params), tests/unit/plugin_sdk/test_plugin.py (TestLimits::test_block_limits_and_version) and today's --self-test
+       line "today ok protocol ..." with its test. If a pin is in a file not in this phase's touches, stop with
+       status=blocked naming it.
+    7. Tests: test_protocol.py (each new dataclass valid and invalid; PrincipalContext.output_dir/output_types; TestSchema
+       still passes) and test_manifest.py (outputs/output_types rules).
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
-  - python3 -m pytest tests/unit/plugins tests/unit/plugin_sdk tests/unit/test_gen_plugin_sdk_types.py -q passes
+  - python3 -m pytest tests/unit/plugins tests/unit/plugin_sdk tests/unit/examples tests/unit/test_gen_plugin_sdk_types.py -q passes
   - python3 scripts/gen_plugin_sdk_types.py --check exits 0
   - grep -c DRIVE_MAX_FILE_BYTES docs/plugin-protocol/protocol.schema.json prints 0
 - id: p2-client-pages
   title: Single-page Jira and Calendar client methods and the live check calls
-  depends_on: [p0-sync]
+  depends_on:
+  - p0-sync
   complexity: S
   touches:
   - src/privacyfence/jira_client.py
@@ -1028,8 +1148,8 @@ phases:
   brief: |
     1. jira_client.py: search_issues_page exactly per Design D3; refactor search_issues to call it in its loop so
        the request code exists once. Every existing TestSearchIssues and TestRequest test passes unchanged.
-    2. calendar_client.py: list_events_page per D3; refactor list_events onto it the same way. Every existing
-       TestListEvents test passes unchanged.
+    2. calendar_client.py: list_events_page per D3 (with the query parameter, sent as q when non-empty); refactor
+       list_events onto it the same way. Every existing TestListEvents test passes unchanged.
     3. scripts/qa_fixture_recorder.py: check_jira also calls search_issues_page(<the JQL its fallback already
        uses>, 1) and check_calendar also calls list_events_page(<its calendar id>, 1, <its time range or "">, ...),
        each reporting pass/fail like the surrounding checks and recording nothing new (EXPECTED_FIXTURES
@@ -1039,47 +1159,50 @@ phases:
        made (follow the file's existing check tests).
     No change to src/privacyfence/connectors/**. The §2.7 live-check row is covered by the final check that
     dispatches connector-live-check.yml.
+    Stop condition: if an existing TestSearchIssues/TestListEvents/TestRequest test needs a change for the refactor, stop
+    with status=blocked instead of editing it.
   acceptance:
   - python3 -m pytest tests/unit/test_jira_client.py tests/unit/test_calendar_client.py tests/unit/test_qa_fixture_recorder.py -q passes
   - git diff --stat HEAD~1 -- src/privacyfence/connectors shows nothing
 - id: p3-drive-range
   title: Drive Range reads with no size cap
-  depends_on: [p1-protocol, p2-client-pages]
+  depends_on:
+  - p1b-protocol-types
+  - p2-client-pages
   complexity: M
   touches:
   - src/privacyfence/drive_client.py
   - src/privacyfence/plugins/spool.py
-  - src/privacyfence/plugins/constants.py
   - scripts/qa_fixture_recorder.py
   - tests/unit/test_drive_client.py
   - tests/unit/plugins/test_spool.py
   - tests/unit/test_qa_fixture_recorder.py
-  - tests/unit/plugin_sdk/test_testhost.py
   brief: |
-    1. drive_client.py: download_range exactly per Design D4, built like _stream_full_content (AuthorizedSession
-       from _load_credentials, stream=True). Tests in tests/unit/test_drive_client.py class TestDownloadRange,
-       monkeypatching drive_client_module.AuthorizedSession like TestDownloadFileBytes (:2514) does: 206 body,
-       Range header value, 416 -> b"", 200 -> DriveClientError, other errors.
-    2. spool.py: add DownloadSpool.read_chunk_at with the D4 signature and behaviour (binary: Range, no spool, no
-       cap, short read -> revision_changed; native: spool as today without the cap). Re-implement the existing
-       read_chunk (same signature and old cursor format, which source_ops still uses until the paging phase) as a
-       thin wrapper over read_chunk_at. Update the module docstring (no "Drive has no range reads").
-    3. constants.py: delete DRIVE_MAX_FILE_BYTES. tests/unit/plugin_sdk/test_testhost.py: drop only its comparison
-       of the test host's DRIVE_MAX_FILE_BYTES with the daemon constant (the test host keeps its own copy until the
-       SDK test host phase).
-    4. Do not touch source_ops.py or host.py.
-    5. scripts/qa_fixture_recorder.py: check_drive calls download_range(seed_file_id, 0, 16) when its manifest
-       section has a binary seed file (read the existing drive section keys; if none fits, skip with a note).
-    6. Tests: tests/unit/plugins/test_spool.py extended for read_chunk_at: TestBinaryRange (no spool file written; a
-       100 MiB fake size reads its last chunk without any full download; short read -> revision_changed),
-       TestRevision, TestNativeSpool (spooled, swept), TestOldCursorStillWorks.
+    1. drive_client.py: download_range exactly per Design D4, built like _stream_full_content (AuthorizedSession from
+       _load_credentials, stream=True). Tests in tests/unit/test_drive_client.py class TestDownloadRange, monkeypatching
+       drive_client_module.AuthorizedSession like TestDownloadFileBytes (:2514) does: 206 body, the exact Range header, 416
+       -> b"", 200 -> DriveClientError, other errors.
+    2. spool.py: ADD DownloadSpool.read_chunk_at with the D4 signature and behaviour (binary: Range, no spool, no cap, short
+       read -> revision_changed; native: the existing spool path without any cap). Do NOT change the existing read_chunk,
+       encode_cursor, decode_cursor or the DRIVE_MAX_FILE_BYTES cap: source_ops and the echo harness's FakeDrive still use
+       them, and the paging phase switches over and removes them.
+    3. scripts/qa_fixture_recorder.py: check_drive per D4 (list the QA Sandbox folder it already resolves, first non-Google,
+       non-folder file, download_range(file_id, 0, 16), fail with the exact message when there is none).
+    4. Tests: tests/unit/plugins/test_spool.py adds TestReadChunkAt (binary: no spool file written; a fake file of 100 MiB
+       reported size returns its last chunk with only Range calls; short read -> revision_changed; offset past the end ->
+       invalid_params; native: spooled and swept; expected_revision mismatch) and keeps every existing test;
+       tests/unit/test_qa_fixture_recorder.py for the new check (found / not found).
     Stop condition: plan Risks "Drive Range with AuthorizedSession".
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
-  - python3 -m pytest tests/unit/test_drive_client.py tests/unit/plugins/test_spool.py tests/unit/plugins/test_source_ops.py tests/unit/test_qa_fixture_recorder.py tests/unit/test_google_http.py -q passes
-  - grep -rn DRIVE_MAX_FILE_BYTES src/ prints nothing
+  - python3 -m pytest tests/unit/test_drive_client.py tests/unit/plugins tests/unit/test_qa_fixture_recorder.py tests/unit/test_google_http.py -q passes
 - id: p4-source-paging
   title: Cursor paging for every source operation
-  depends_on: [p1-protocol, p2-client-pages, p3-drive-range]
+  depends_on:
+  - p1b-protocol-types
+  - p2-client-pages
+  - p3-drive-range
   complexity: M
   touches:
   - src/privacyfence/plugins/source_ops.py
@@ -1089,30 +1212,42 @@ phases:
   - tests/unit/plugins/test_sdk_samples.py
   - plugin-sdk/src/privacyfence_plugin_sdk/testing/samples/sheets.get_values.json
   - plugin-sdk/src/privacyfence_plugin_sdk/testing/samples/confluence.get_page.json
+  - src/privacyfence/plugins/constants.py
+  - tests/unit/plugin_sdk/test_testhost.py
+  - tests/fixtures/plugins/echo/harness.py
   brief: |
-    1. source_ops.py per Design D3: a `bound` callable on SourceAdapter, the cursor param on every adapter, the
-       page_size params with the max_results aliases, _fit_prefix, the per-operation state machines in the D3
-       table, drive via DownloadSpool.read_chunk_at with the D4 cursor state, the audit summary additions, and the
-       backstop size check. Use cursors.encode/decode; CursorError -> RpcError("invalid_params", str(exc)).
-    2. spool.py: delete the old read_chunk wrapper and encode_cursor/decode_cursor.
-    3. Update the SDK samples whose data shape D3 changes (sheets.get_values.json gains "first_row": 0;
-       confluence.get_page.json gains "body_offset": 0 and "body_total_chars": <len of its body>) and
-       tests/unit/plugins/test_sdk_samples.py if its shape check needs the new keys.
-    3. Tests in tests/unit/plugins/test_source_ops.py: TestPaging per operation -- jira (two provider pages,
-       skip within a page when the budget is small: monkeypatch SOURCE_PAGE_BUDGET_BYTES, last page null),
-       calendar (same), sheets (rows split), confluence (body split; body_offset/body_total_chars always present;
-       a small page has them 0 and len), drive (cursor carries revision and offset; random offset still works),
-       TestCursorBinding (cursor from another query -> invalid_params), TestSingleRecordTooLarge, TestAlias
-       (max_results maps to page_size; max_results above 100 for jira is invalid_params). Keep every existing
-       test class passing (update expected data shapes where D3 changed them: sheets first_row, confluence
-       body_offset/body_total_chars).
+    1. source_ops.py per Design D3: a `bound` callable on SourceAdapter, the cursor param on every adapter, the page_size
+       params with the clamped max_results aliases, _fit_prefix, the per-operation state machines in the D3 table with
+       every "State checks" rule, drive via DownloadSpool.read_chunk_at with the D4 cursor state, the audit summary
+       additions, and the backstop size check. Use cursors.encode/decode; CursorError -> RpcError("invalid_params",
+       str(exc)).
+    2. spool.py: delete the old read_chunk, encode_cursor and decode_cursor; constants.py: delete DRIVE_MAX_FILE_BYTES.
+    3. tests/fixtures/plugins/echo/harness.py: give FakeDrive a `mime_type` on its metadata and a
+       `download_range(file_id, offset, length)` serving slices of its bytes, so test_plugin_framework.py and
+       test_sdk_testhost_conformance.py keep passing.
+    4. tests/unit/plugin_sdk/test_testhost.py: drop only the comparison of the test host's DRIVE_MAX_FILE_BYTES with the
+       daemon constant, and update the sheets sample shape assertion (set(data) now includes "first_row").
+    5. SDK samples whose data shape D3 changes: sheets.get_values.json gains "first_row": 0; confluence.get_page.json gains
+       "body_offset": 0 and "body_total_chars": <len of its body>; tests/unit/plugins/test_sdk_samples.py adjusted if its
+       shape check needs it.
+    6. Tests in tests/unit/plugins/test_source_ops.py: TestPaging per operation -- jira (two provider pages; skip within a
+       page when the budget is small: monkeypatch SOURCE_PAGE_BUDGET_BYTES; last page null), calendar (same), sheets (rows
+       split), confluence (body split; body_offset/body_total_chars always present), drive (cursor carries revision and
+       offset; random offset still works; a file larger than 64 MiB is served), TestCursorBinding, TestCursorState (each
+       "State checks" rule), TestSingleRecordTooLarge, TestAlias (max_results maps to page_size; jira max_results 500 is
+       clamped to 100). Replace TestAdapterDrive's oversize test with the no-cap test; keep every other existing class.
+    Stop condition: if a provider page cannot be re-fetched by its own token (the fake or the client returns a different
+    page for the same token), stop with status=blocked -- the skip-within-a-page design depends on it.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/plugins tests/unit/plugin_sdk -q passes
   - python3 -m pytest tests/integration/test_sdk_testhost_conformance.py tests/integration/test_plugin_framework.py tests/integration/test_plugin_refusals.py -q passes
   - grep -n "encode_cursor\|decode_cursor" src/privacyfence/plugins/spool.py prints nothing
 - id: p5-approvals-core
   title: Approval store, service, card builder and the pending-card frame field
-  depends_on: [p1-protocol]
+  depends_on:
+  - p1b-protocol-types
   complexity: M
   worker_model: opus
   worker_model_reason: Approvals must never be auto-accepted, must bind to the digest and survive restarts exactly; the card puts plugin content next to the trusted fields.
@@ -1137,17 +1272,21 @@ phases:
        corrupt file fails closed, revoke, forget_plugin, mode 0600 on POSIX), TestRequest (card shown; already
        approved -> no card; pending duplicate -> same id; unattended refused; introspection refused; page without
        pages: true refused; frame_src set only with a page), TestNeverAutoAccepted (a rule matching every
-       operation leaves the card pending), TestFinalize (confirm -> stored approved; cancel -> nothing stored;
-       expiry), TestCheck (approved / revoked / unknown; a different digest is unknown), TestEmbedAllowed (pending
+       operation leaves the card pending), TestFinalize (confirm -> stored before the registry reports approved, checked by
+       asserting store.find inside a finalize spy; cancel -> nothing stored; expiry; the pending tuple is removed in every case), TestCheck (approved / revoked / unknown; a different digest is unknown), TestEmbedAllowed (pending
        and matching path only; finalized -> false; other plugin -> false). tests/unit/test_dialog_window_html.py:
        fields escaped and outside the frame, frame attributes exact (sandbox="allow-scripts", no
        allow-same-origin), no frame without frame_src. tests/unit/test_approvals.py: frame_src default.
+    Stop condition: if register_confirm's card cannot carry frame_src without changing how existing confirm cards render or are listed, stop with status=blocked.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/plugins/test_approvals.py tests/unit/test_approvals.py tests/unit/test_dialog_window_html.py tests/unit/test_design_system.py -q passes
   - TestNeverAutoAccepted and TestFinalize pass
 - id: p6-approval-frame
   title: Let exactly the approval card frame its plugin page
-  depends_on: [p5-approvals-core]
+  depends_on:
+  - p5-approvals-core
   complexity: M
   worker_model: opus
   worker_model_reason: It loosens two framing defences (the card's frame-src and the plugin page's frame-ancestors) and must do so for one response each, never globally.
@@ -1170,7 +1309,7 @@ phases:
        pages.CSP_EMBEDDED and X-Frame-Options SAMEORIGIN; nothing else changes.
     3. routes_approvals.show_approval: csp.set_frame_self(request) when card.frame_src.
     4. pages.py: CSP_EMBEDDED verbatim; PageHost gains approval_embed_allowed. routes_plugins.plugin_page: the
-       pf_approval check per D8 (await host.approval_embed_allowed(...)), then csp.set_plugin_embed(request); the
+       pf_approval check per D8 (getattr(host, "approval_embed_allowed", None); missing means not allowed), then csp.set_plugin_embed(request); the
        query is forwarded unchanged.
     5. Tests: test_csp.py (frame_self adds 'self' to frame-src only); test_server.py (default headers unchanged:
        TestCspNonce::test_object_src_and_frame_src_allow_data_uris and TestPluginPagesSandboxCsp still pass as they
@@ -1185,35 +1324,55 @@ phases:
        same plugin URL opened in an iframe from a page without a matching pending approval stays blocked
        (violation or empty frame).
     Stop condition: plan Risks "The card frame and the CSP".
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/web tests/unit/plugins/test_pages.py -q passes
   - python3 -m pytest tests/integration/test_plugin_approval_frame_browser.py tests/integration/test_plugin_pages_browser.py -q reports PASSED, not SKIPPED (use PRIVACYFENCE_TEST_CHROMIUM)
 - id: p7-output-policy
   title: The plugin output scope selector and its proposals
-  depends_on: [p1-protocol]
-  complexity: S
+  depends_on:
+  - p1b-protocol-types
+  complexity: M
   worker_model: opus
   worker_model_reason: A prefix scope that matches more than the folder it names silently widens what auto-accepts.
   touches:
   - src/privacyfence/policy/scopes.py
   - src/privacyfence/policy/propose.py
+  - src/privacyfence/auto_accept.py
+  - src/privacyfence/plugins/tools.py
   - tests/unit/policy/test_plugin_output_scope.py
+  - tests/unit/test_auto_accept.py
+  - tests/unit/plugins/test_tools.py
   brief: |
-    1. policy/scopes.py: register_plugin_output_selector / unregister_plugin_output_selector per Design D10 (the
-       matches function verbatim). Leave register_plugin_selector unchanged.
-    2. policy/propose.py: register_dynamic_scope_entry / unregister_dynamic_scope_entries per D10, consulted by
-       proposals_for for "plugin_outputs.read" the way the framework's dynamic entries are, and
-       connector_of_operation("plugin_outputs.read") == "plugin_outputs". No static entry changes.
-    3. Tests tests/unit/policy/test_plugin_output_scope.py: folder prefix matches files below it and not
-       "reports2/x"; exact file matches only itself; empty value never matches; other plugin never matches; the
-       proposal for "reports/2026/q3.csv" is "reports/2026/" and for "q3.csv" is "q3.csv"; a rule built from the
-       proposal matches its call (hypothesis, as the framework's TestProposalMatchesItsCall does) and not a
-       sibling folder; unregister removes the selector and the entry.
+    1. policy/scopes.py: register_plugin_output_selector / unregister_plugin_output_selector per Design D10 (the matches
+       function verbatim), and make check_plugin_selector refuse scope type "output" as it refuses "anything". Leave
+       register_plugin_selector's matching unchanged.
+    2. policy/propose.py: register_dynamic_scope_entry / unregister_dynamic_scope_entries per D10 (value_of verbatim),
+       consulted by proposals_for for "plugin_outputs.read" the way the framework's dynamic entries are. No static entry
+       changes.
+    3. auto_accept.py: register_internal_dynamic_tools / unregister_internal_dynamic_tools per D9 "Registration", with
+       their reset registered through plugins._testing like reset_dynamic_tools.
+    4. plugins/tools.py: validate_scope_types refuses a scope type named "output" ("scope type output is reserved").
+    5. Tests: tests/unit/policy/test_plugin_output_scope.py (folder prefix matches files below it and not "reports2/x";
+       exact file matches only itself; empty value never matches; other plugin never matches; proposal for
+       "reports/2026/q3.csv" is ["reports/2026/"] and for "q3.csv" is ["q3.csv"]; a rule built from the proposal matches its
+       call (hypothesis, like the framework's TestProposalMatchesItsCall) and not a sibling folder; unregister removes the
+       selector and the entry; a plugin scope type "output" is refused by check_plugin_selector);
+       tests/unit/test_auto_accept.py TestInternalDynamicTools (registers gate/operation/verb/layout/effect; refuses a
+       static name, another owner's name, a foreign operation prefix and any scope_predicates; unregister restores the
+       tables); tests/unit/plugins/test_tools.py (reserved "output").
+    Stop condition: if register_internal_dynamic_tools cannot reuse the existing per-table register_dynamic helpers
+    without changing register_dynamic_tools's behaviour, stop with status=blocked.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
-  - python3 -m pytest tests/unit/policy tests/unit/test_generate_always_allow_reference.py -q passes
+  - python3 -m pytest tests/unit/policy tests/unit/test_auto_accept.py tests/unit/plugins/test_tools.py tests/unit/test_generate_always_allow_reference.py -q passes
 - id: p8-outputs
   title: Output index, the plugin_outputs connector and its tools
-  depends_on: [p1-protocol, p7-output-policy]
+  depends_on:
+  - p1b-protocol-types
+  - p7-output-policy
   complexity: M
   touches:
   - src/privacyfence/plugins/outputs.py
@@ -1222,27 +1381,35 @@ phases:
   - tests/unit/plugins/test_storage.py
   brief: |
     1. storage.py: output_dir(name, principal) per Design D9.
-    2. outputs.py per D9: OutputFile, list_outputs, read_output (UTF-8 boundary back-off; sha256 of the whole
-       file; ValueError texts verbatim), and PluginOutputsConnector(Connector) with the two ToolSpecs (exact
+    2. outputs.py per D9: OutputFile, list_outputs, read_output (the canonical-path rule verbatim; UTF-8 boundary
+       back-off; sha256 of the whole file; ValueError texts verbatim), and PluginOutputsConnector(Connector) with the two ToolSpecs (exact
        descriptions from D9, reason param on the read tool exactly as the connectors spell it), the list cursor via
        cursors.encode/decode, the gated_call for reads, the auto audit for lists and the extra AUDIT_PLUGIN_OUTPUT
-       entry for reads, and a `register()` / `unregister()` pair that does the D9 dynamic tool registration and,
-       per outputs plugin, the D10 selector and proposal entry. The constructor takes a provider
+       entry for reads, and a `register()` / `unregister()` pair that does the D9 registration through
+       auto_accept.register_internal_dynamic_tools and, per outputs plugin, the D10 selector and proposal entry. The constructor takes a provider
        `plugins: Callable[[], dict[str, tuple[str, Path, tuple[str, ...]]]]` mapping plugin name -> (display name,
        output root, output types) for enabled outputs plugins.
-    3. Tests tests/unit/plugins/test_outputs.py: TestVisibility (dot files, .tmp, symlinks, wrong extension,
-       depth, outside root all hidden), TestList (sorting, prefix, cursor paging at OUTPUT_LIST_PAGE), TestRead
+    3. Tests tests/unit/plugins/test_outputs.py: TestVisibility (dot files, .tmp, symlinks to files and to directories, wrong extension,
+       depth, outside root all hidden), TestCanonicalPath ("a\\..\\b.csv", "a//b.csv", "/a.csv", "a/./b.csv", "C:x.csv" and a
+       path differing only by a trailing slash are all "No such output file."), TestList (sorting, prefix, cursor paging at OUTPUT_LIST_PAGE), TestRead
        (paging, UTF-8 boundary, sha256, offset past end), TestTools (list is auto and audited; read goes through
        gated_call with metadata-only preview and details_text = text, using the gated_call_spy pattern; unknown
        plugin message), TestRuleAllowsFolder (with real policy rules via auto_accept.add_policy_v2_rules: a read
        under the folder is released without a card, outside it shows one), TestRegistration (register/unregister
        restore the tables), and assert_all_tools_leave_an_audit_trail over the connector.
+    Stop condition: if gated_call or the gated_call_spy pattern cannot carry raw_data with the canonical path into the policy context, stop with status=blocked.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/plugins/test_outputs.py tests/unit/plugins/test_storage.py -q passes
   - coverage of outputs.py >= 95% (python3 -m pytest tests/unit/plugins --cov=src/privacyfence/plugins --cov-branch)
 - id: p9-host-cr
   title: Host wiring for approvals, outputs and output directories
-  depends_on: [p4-source-paging, p5-approvals-core, p6-approval-frame, p8-outputs]
+  depends_on:
+  - p4-source-paging
+  - p5-approvals-core
+  - p6-approval-frame
+  - p8-outputs
   complexity: M
   touches:
   - src/privacyfence/plugins/host.py
@@ -1262,12 +1429,17 @@ phases:
        TestPurgeForgetsApprovals, TestUninstallForgetsApprovals, TestOutputDir (created 0700 only with outputs:
        true; passed in initialize), TestOutputsConnector (appears when an outputs plugin is enabled, disappears
        when disabled, tools-changed listener fired both times), TestRowsApprovals.
+    Hoist the confirm executor (built inline at host.py:160) into self._executor so both services share it. Pass output_types with output_dir.
+    Stop condition: if wiring approvals or outputs needs a change in a module outside this phase's touches (other than calling the APIs the earlier phases added), stop with status=blocked naming it.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/plugins -q passes
   - python3 -m pytest tests/integration/test_plugin_framework.py tests/integration/test_plugin_refusals.py tests/integration/test_sdk_testhost_conformance.py -q passes
 - id: p10-settings-cr
   title: Settings approvals list with Revoke, and outputs on the review dialog
-  depends_on: [p9-host-cr]
+  depends_on:
+  - p9-host-cr
   complexity: M
   touches:
   - src/privacyfence/settings_controller.py
@@ -1287,12 +1459,15 @@ phases:
     2. Tests: TestSensitiveActionsCoverAllAllowedActions still passes; revoke is not sensitive; controller submits
        to the host; the window HTML renders the approvals list and the Revoke action payload; a TestPhoneLayout
        case for a row with three approvals in tests/integration/test_plugin_settings_browser.py.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/test_settings_controller.py tests/unit/web/test_routes_settings.py tests/unit/web/test_org_settings_scope.py tests/unit/test_settings_window_html.py tests/unit/test_design_system.py -q passes
   - python3 -m pytest tests/integration/test_plugin_settings_browser.py -q reports PASSED, not SKIPPED
 - id: p11-sdk-cr
   title: SDK paging iterator, approvals and outputs clients
-  depends_on: [p1-protocol]
+  depends_on:
+  - p1b-protocol-types
   complexity: M
   touches:
   - plugin-sdk/src/privacyfence_plugin_sdk/plugin.py
@@ -1304,7 +1479,7 @@ phases:
   brief: |
     1. plugin.py per Design D13: Principal.output_dir (from PrincipalContext.output_dir), "approval.revoked" in
        _EVENTS, ctx.source.pages / collect, ctx.approvals (request/check/await_/digest), ctx.outputs
-       (publish/dir) with Plugin(..., output_types=...), and the error texts given there. responses.py:
+       (publish/dir) using the output_types from the PrincipalContext, and the error texts given there. responses.py:
        ApprovalTicket. __init__.py: export it.
     2. README.md: sections on paging, approvals (including that an approval page receives pf_approval in its
        query), outputs, and child processes (Design D14's rules). Link the schema JSON and the issue URL; never a
@@ -1313,12 +1488,16 @@ phases:
        passes cursor; collect concatenates; collect refuses sheets), TestApprovals (digest of str and bytes;
        request/check/await wire messages), TestOutputs (atomic publish leaves no .tmp; existing path refused;
        ".." refused; wrong extension refused; no output_dir -> RuntimeError), TestRevokedEvent.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/plugin_sdk -q passes
   - python3 -m pytest tests/unit/test_docs_references_exist.py tests/unit/test_code_no_history.py -q passes
 - id: p12-sdk-testhost-cr
   title: Test host paging fixtures, approvals, outputs and samples
-  depends_on: [p11-sdk-cr, p4-source-paging]
+  depends_on:
+  - p11-sdk-cr
+  - p4-source-paging
   complexity: M
   touches:
   - plugin-sdk/src/privacyfence_plugin_sdk/testing/**
@@ -1334,11 +1513,16 @@ phases:
     2. Tests: test_testhost.py and test_testhost_surfaces.py additions for each; tests/unit/plugins/test_sdk_samples.py
        checks the page-2 samples against the adapters' shapes and that the first sample's cursor decodes with
        cursors.decode for the sample's own params.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/plugin_sdk tests/unit/plugins/test_sdk_samples.py -q passes
 - id: p13-e2e-cr
   title: Echo additions and end-to-end tests for approvals, outputs and paging
-  depends_on: [p9-host-cr, p10-settings-cr, p12-sdk-testhost-cr]
+  depends_on:
+  - p9-host-cr
+  - p10-settings-cr
+  - p12-sdk-testhost-cr
   complexity: M
   touches:
   - tests/fixtures/plugins/echo/**
@@ -1365,11 +1549,16 @@ phases:
     5. tests/integration/test_sdk_testhost_conformance.py: add TestSamePaging (returns_pages vs the daemon's
        calendar paging: same item counts and same number of calls) and TestSameApprovals (request/decide/check
        statuses equal).
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/integration/test_plugin_approvals.py tests/integration/test_plugin_outputs.py tests/integration/test_plugin_paging.py tests/integration/test_sdk_testhost_conformance.py tests/integration/test_plugin_framework.py -q passes
 - id: p14-today-cr
   title: today example export and layout approval
-  depends_on: [p11-sdk-cr, p9-host-cr]
+  depends_on:
+  - p11-sdk-cr
+  - p12-sdk-testhost-cr
+  - p9-host-cr
   complexity: S
   touches:
   - examples/plugins/today/**
@@ -1381,14 +1570,32 @@ phases:
        page; Settings shows it under Approvals; revoke and see the page note change; export and read it through
        plugin_outputs_list/read and add a folder rule). Self-contained page, named or rgb() colours only.
     2. Tests in tests/unit/examples/test_today_plugin.py with PluginTestHost(outputs=True,
-       output_types=("text/csv",)): export publishes exports/<date>.csv; approve_layout requests with page
+       output_types=("text/csv",)) (added by the SDK test host phase): export publishes exports/<date>.csv; approve_layout requests with page
        "/approval"; the page reflects check status; approval.revoked handled.
+
+    No CHANGELOG.md line in this phase: the retirement phase writes them all.
   acceptance:
   - python3 -m pytest tests/unit/examples -q passes
   - python3 scripts/build_example_plugin.py --help exits 0
 - id: p15-retire
   title: ADRs, reference docs, changelog, retire the plan
-  depends_on: [p0-sync, p1-protocol, p2-client-pages, p3-drive-range, p4-source-paging, p5-approvals-core, p6-approval-frame, p7-output-policy, p8-outputs, p9-host-cr, p10-settings-cr, p11-sdk-cr, p12-sdk-testhost-cr, p13-e2e-cr, p14-today-cr]
+  depends_on:
+  - p0-sync
+  - p2-client-pages
+  - p3-drive-range
+  - p4-source-paging
+  - p5-approvals-core
+  - p6-approval-frame
+  - p7-output-policy
+  - p8-outputs
+  - p9-host-cr
+  - p10-settings-cr
+  - p11-sdk-cr
+  - p12-sdk-testhost-cr
+  - p13-e2e-cr
+  - p14-today-cr
+  - p1a-constants-cursors
+  - p1b-protocol-types
   complexity: M
   touches:
   - docs/adr/**
