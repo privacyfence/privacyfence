@@ -103,7 +103,8 @@ service_credentials: false       # optional, default false; true is an error in 
   of the connectors (`gmail`, `drive`, `contacts`, `calendar`, `tasks`, `apps_script`, `slack`,
   `jira`, `confluence`, `salesforce`, `telegram`).
 - `command[0]` is resolved inside the plugin's directory and must stay inside it; a symlink that
-  points out is refused. On Windows, `.exe` is appended when it has no suffix.
+  points out is refused, and so is a command that resolves to the directory itself. On Windows,
+  `.exe` is appended when it has no suffix.
 - `source_operations` may list only the six operations under [Source calls](#source-calls).
 - `max_gate_floor: auto` lets the plugin declare tools on the `auto` gate (see
   [Tool definitions](#tool-definitions)). The owner sees the floor when enabling the plugin.

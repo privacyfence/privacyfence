@@ -64,10 +64,16 @@ On POSIX a folder is administrator-only when it is owned by root and has no grou
 permission. Some older Debian installs make `/usr/local` and `/usr/local/lib` group-writable by
 `staff` (mode 2775); plugins are refused there until you make those directories administrator-only
 (`sudo chmod g-w /usr/local /usr/local/lib`). On Windows, a folder is administrator-only when no
-account but administrators, SYSTEM and TrustedInstaller can write to it. For the folders above the
-plugin's own, PrivacyFence ignores two grants a default drive root gives every signed-in user:
-inherited-only entries and the right to create subfolders, because neither lets anyone swap an
-existing folder. The executable and the plugin's own folder get the strict rule.
+account but administrators, SYSTEM and TrustedInstaller can write to it. The executable gets that
+strict rule. The plugin's own folder, any folder inside it on the way to the executable, and every
+folder above it ignore inherit-only entries, which grant nothing on the folder that carries them
+(every folder under `%ProgramFiles%` has one for `CREATOR OWNER`); what such an entry grants a file
+or subfolder is checked there. The folders above the plugin's own also ignore the right to create
+subfolders, which a default drive root gives every signed-in user, because it does not let anyone
+swap an existing folder.
+
+A plugin's folder must be a real folder inside the plugins directory, not a symbolic link, and its
+`command` must name a file inside it.
 
 ## Installing a plugin
 
@@ -145,6 +151,8 @@ Settings shows a plugin's state and, unless it is running, the reason.
 |---|---|---|
 | Rejected | `manifest invalid: <detail>` | The manifest is missing, unreadable or breaks a rule; the detail names it. |
 | Rejected | `executable is writable by non-administrators` | The executable, the plugin's folder or a folder above it can be changed by someone other than an administrator. The details are in the daemon log. |
+| Rejected | `plugin directory is a symbolic link` | The plugin's folder in the plugins directory is a symbolic link. Install the plugin as a real folder. |
+| Rejected | `executable is outside the plugins directory` | The executable resolves to a path outside the plugins directory, for example through a junction. Install the plugin as a real folder. |
 | Rejected or disabled | `protocol major mismatch` | The plugin speaks a different protocol major version than PrivacyFence (the manifest's `protocol` is not `"1"`, or the plugin reported another). |
 | Disabled | `executable or manifest changed, enable again` | A file differs from what you reviewed, or the plugin reported a tool you did not review. Review it again. |
 | Disabled | `crashed 5 times in 10 minutes` | The plugin exited five times within ten minutes. The log shows why. |
