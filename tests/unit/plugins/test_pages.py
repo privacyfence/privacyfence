@@ -69,6 +69,10 @@ class TestFilterResponse:
     def test_allowed_statuses_pass(self, status):
         assert pages.filter_response(_ok(status=status))[0] == status
 
+    def test_204_is_sent_without_a_body(self):
+        status, _, body = pages.filter_response(_ok(status=204, body="not allowed"))
+        assert (status, body) == (204, b"")
+
     @pytest.mark.parametrize("status", [201, 301, 302, 401, 403, 418, 502, 503, True, "200", None])
     def test_other_statuses_become_502(self, status):
         code, headers, body = pages.filter_response(_ok(status=status))

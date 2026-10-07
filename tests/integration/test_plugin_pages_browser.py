@@ -49,13 +49,21 @@ PAGE = f"""<!doctype html>
 <body><pre id="out">pending</pre><script>{PROBE_SCRIPT}</script></body></html>"""
 
 
+LINK_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Links</title></head>
+<body><a id="two" href="/plugins/demo/two">two</a></body></html>"""
+
+SECOND_PAGE = '<!doctype html><html><body><p id="second">second page</p></body></html>'
+
+
 class _PageHost:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
     async def web_request(self, name, path, query, principal):
         self.calls.append((name, path))
-        return {"status": 200, "headers": {"content-type": "text/html; charset=utf-8"}, "body": PAGE}
+        body = {"/links": LINK_PAGE, "/two": SECOND_PAGE}.get(path, PAGE)
+        return {"status": 200, "headers": {"content-type": "text/html; charset=utf-8"}, "body": body}
 
 
 def _free_port() -> int:
@@ -142,5 +150,34 @@ class TestSandboxedPage:
             assert out["fetch_api"].startswith("failed")
             assert out["fetch_self"].startswith("failed")
             assert host.calls == [("demo", "/")]  # the page's own fetch never reached the plugin
+        finally:
+            context.close()
+
+
+class TestLinksBetweenPages:
+    def test_a_link_to_another_page_of_the_plugin_does_not_carry_the_session(self, browser, server):
+        srv, host = server
+        context = browser.new_context()
+        try:
+            page = context.new_page()
+            page.goto(f"{srv.base_url}/approvals?bootstrap={srv.bootstrap.mint(provenance=PROVENANCE_HUMAN)}")
+            page.wait_for_load_state("load")
+
+            # Opened directly, the owner reaches the first page.
+            response = page.goto(f"{srv.base_url}/plugins/demo/links")
+            assert response is not None and response.status == 200
+            assert host.calls == [("demo", "/links")]
+
+            # A navigation from the opaque-origin page is cross-site: no cookie, so the owner-only 404.
+            with page.expect_navigation() as navigation:
+                page.locator("#two").click()
+            assert navigation.value.status == 404
+            assert page.url == f"{srv.base_url}/plugins/demo/two"
+            assert host.calls == [("demo", "/links")]  # the plugin was never asked for the second page
+
+            # The same URL typed in directly carries the session and reaches the plugin.
+            response = page.goto(f"{srv.base_url}/plugins/demo/two")
+            assert response is not None and response.status == 200
+            assert host.calls == [("demo", "/links"), ("demo", "/two")]
         finally:
             context.close()

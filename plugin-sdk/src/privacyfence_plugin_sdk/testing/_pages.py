@@ -11,7 +11,7 @@ from .._rpc import Peer, RpcError
 
 MAX_PAGE_PATH_CHARS = 512
 MAX_PAGE_BODY_BYTES = 8 * 1024 * 1024
-_WEB_REQUEST_TIMEOUT = 30.0
+_WEB_REQUEST_TIMEOUT = 10.0
 
 CSP = (
     "sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; "
@@ -96,6 +96,8 @@ def filter_response(result: Any) -> tuple[int, dict[str, str], bytes]:
         return 502, {**headers, "content-type": _PLAIN}, _BAD_RESPONSE
     if status not in _ALLOWED_STATUSES or len(data) > MAX_PAGE_BODY_BYTES:
         return 502, {**headers, "content-type": _PLAIN}, _BAD_RESPONSE
+    if status == 204:
+        data = b""  # a 204 has no body; one would break the response's declared length
     return status, {**headers, "content-type": _content_type(content_type)}, data
 
 

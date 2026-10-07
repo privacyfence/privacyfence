@@ -39,8 +39,10 @@ daemon forwards the request as `web.request` and filters the answer.
   cookie or call the app's APIs.
 - **Self-contained pages.** The session cookie is `SameSite=Strict`, and an opaque-origin page's
   subresource requests carry no cookie, so they get the owner-only 404. A page must inline its CSS,
-  scripts and images (`data:` URIs). Links and navigations between pages work, because they are
-  top-level navigations that carry the cookie.
+  scripts and images (`data:` URIs). A navigation started from the opaque-origin page counts as
+  cross-site, so it does not carry the cookie either: a link to another page of the plugin, or back
+  into the app, gets the owner-only 404. A page keeps its state in the page itself (script or
+  `#fragment`); other pages open only from Settings or a typed URL.
 
 ## Alternatives considered
 

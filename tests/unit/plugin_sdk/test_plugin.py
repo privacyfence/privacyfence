@@ -8,6 +8,7 @@ import json
 import pytest
 
 from privacyfence.plugins import constants
+from privacyfence_plugin_sdk.testing import _pages as pages_module
 from privacyfence.plugins.protocol import InitializeResult, PrepareResult, args_digest
 from privacyfence_plugin_sdk import (
     Bytes,
@@ -102,6 +103,7 @@ class TestLimits:
     def test_timeouts_and_patterns(self):
         assert sdk_plugin._SOURCE_CALL_TIMEOUT_SECONDS == constants.TIMEOUT_SECONDS["source.call"]
         assert sdk_plugin._CONFIRM_REQUEST_TIMEOUT_SECONDS == constants.TIMEOUT_SECONDS["confirm.request"]
+        assert pages_module._WEB_REQUEST_TIMEOUT == constants.TIMEOUT_SECONDS["web.request"]
         for name in ("PLUGIN_NAME_RE", "TOOL_NAME_RE", "SCOPE_TYPE_RE"):
             assert getattr(sdk_plugin, "_" + name).pattern == getattr(constants, name).pattern
 
