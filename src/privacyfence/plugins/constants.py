@@ -1,0 +1,97 @@
+"""Every number, name and pattern the plugin protocol shares between the daemon and a plugin.
+
+One module so the wire limits, the timeouts and the naming rules cannot drift apart between the
+supervisor, the validators and the published JSON schema (ADR 0120, ADR 0122). Names that end up in
+an MCP tool name or a policy key are built only by the helpers at the bottom, so the first
+underscore of an MCP tool name always splits the plugin from the tool: plugin names hold no
+underscore. The model-facing consequences of the gate limits are in ADR 0121.
+"""
+from __future__ import annotations
+
+import re
+
+PROTOCOL_VERSION = "1.0.0"
+PROTOCOL_MAJOR = 1
+
+MAX_LINE_BYTES = 16 * 1024 * 1024
+MAX_IN_FLIGHT = 16
+INVALID_LINES_LIMIT = 3
+INLINE_RESULT_BYTES = 100_000              # ADR 0092
+MAX_PREVIEW_BYTES = 64 * 1024
+MAX_PREVIEW_BLOCKS = 50
+MAX_CELL_CHARS = 4096
+MAX_TITLE_CHARS = 120
+MAX_EFFECT_CHARS = 200
+MAX_DESCRIPTION_CHARS = 1024               # tests/unit/web/test_tool_schema_portability.py's limit
+MAX_SOURCE_RESULT_BYTES = 12 * 1024 * 1024
+DRIVE_CHUNK_BYTES = 8 * 1024 * 1024
+DRIVE_MAX_FILE_BYTES = 64 * 1024 * 1024
+DRIVE_SPOOL_IDLE_SECONDS = 600
+MAX_PAGE_BODY_BYTES = 8 * 1024 * 1024
+MAX_PAGE_PATH_CHARS = 512
+MAX_TOOLS = 64
+MAX_SCOPE_VALUES = 100
+MAX_SCOPE_VALUE_CHARS = 200
+MCP_TOOL_NAME_MAX = 64
+
+TIMEOUT_SECONDS: dict[str, float] = {
+    "initialize": 10.0,
+    "tool.prepare": 30.0,
+    "tool.execute": 60.0,
+    "web.request": 10.0,
+    "storage.purge": 30.0,
+    "source.call": 120.0,
+    "confirm.request": 5.0,
+}
+CONFIRM_AWAIT_MAX_MS = 300_000
+SHUTDOWN_GRACE_SECONDS = 5.0
+TERMINATE_GRACE_SECONDS = 2.0
+RESTART_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
+CRASH_LIMIT = 5
+CRASH_WINDOW_SECONDS = 600.0
+PREPARED_CALL_LIFETIME_SECONDS = 900.0     # = approvals' pending TTL, so a deferred card can still release
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
+
+PLUGIN_NAME_RE = re.compile(r"[a-z][a-z0-9-]{1,30}")     # always .fullmatch()
+TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")       # always .fullmatch()
+SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")      # always .fullmatch()
+RESERVED_PLUGIN_NAMES = frozenset({
+    "privacyfence", "plugin", "plugins", "settings", "mcp",
+    "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
+    "slack", "jira", "confluence", "salesforce", "telegram",
+})
+
+SOURCE_OPERATIONS: tuple[str, ...] = (
+    "salesforce.report_run", "jira.search", "drive.download",
+    "sheets.get_values", "confluence.get_page", "calendar.list_events",
+)
+
+GATES = ("auto", "review", "popup")
+BLOCK_TYPES = ("heading", "fields", "table", "text", "code", "diff")
+
+AUDIT_PLUGIN_SOURCE = "plugin_source"
+AUDIT_PLUGIN_CONFIRM = "plugin_confirm"
+AUDIT_PLUGIN_LIFECYCLE = "plugin_lifecycle"
+
+ERROR_CODES: dict[str, int] = {
+    "parse_error": -32700, "invalid_request": -32600, "method_not_found": -32601,
+    "invalid_params": -32602, "internal_error": -32603,
+    "operation_not_allowed": -32001, "connector_unavailable": -32002, "unknown_principal": -32003,
+    "payload_too_large": -32004, "upstream_error": -32005, "org_only_field": -32006,
+    "confirmation_refused": -32007, "unknown_tool": -32008, "invalid_blocks": -32009,
+    "version_mismatch": -32010, "unknown_call": -32011, "digest_mismatch": -32012,
+    "timeout": -32013, "introspection_only": -32014,
+}
+
+
+def mcp_tool_name(plugin: str, tool: str) -> str:
+    return f"{plugin}_{tool}"
+
+
+def operation_key(plugin: str, tool: str) -> str:
+    return f"plugin.{plugin}.{tool}"
+
+
+def scope_predicate(plugin: str, scope_type: str) -> str:
+    return f"plugin:{plugin}:{scope_type}"
