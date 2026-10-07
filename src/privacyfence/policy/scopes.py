@@ -629,11 +629,8 @@ def _plugin_selector(predicate: str, scope_type: str) -> ScopeSelector:
 def check_plugin_selector(predicate: str, scope_type: str) -> None:
     """Raise ``ValueError`` if ``register_plugin_selector(predicate, scope_type)`` would fail,
     without registering anything."""
+    # No built-in predicate has the ``plugin:`` shape, so passing this check also rules them out.
     _plugin_of_predicate(predicate, scope_type)
-    if predicate in SCOPE_SELECTORS:
-        raise ValueError(f"{predicate!r} is a built-in predicate")
-    if predicate in NEW_SCOPE_SELECTORS and predicate not in _PLUGIN_SELECTOR_REFS:
-        raise ValueError(f"{predicate!r} is a built-in predicate")
 
 
 def _register(predicate: str, scope_type: str) -> None:

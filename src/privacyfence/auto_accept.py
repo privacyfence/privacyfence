@@ -308,7 +308,6 @@ TOOL_TO_GATE: dict[str, str] = {
 # Every tool name the connectors ship, taken before any plugin registers one. A plugin tool whose
 # MCP name lands in here would shadow a built-in tool, so it is refused.
 STATIC_TOOL_NAMES: frozenset[str] = frozenset(TOOL_TO_GATE)
-_STATIC_OPERATIONS: frozenset[str] = frozenset(TOOL_TO_OPERATION.values())
 
 # The operation key prefix every plugin tool's operation carries ("plugin.<plugin>.<tool>").
 # Requiring it is what keeps a plugin tool from ever answering to a rule written for a connector.
@@ -363,8 +362,6 @@ def _check_dynamic_specs(owner: str, specs: list[DynamicToolSpec]) -> None:
         operation = spec.operation or ""
         if not operation.startswith(DYNAMIC_OPERATION_PREFIX) or not _plugin_of_operation(operation):
             raise ValueError(f"tool {spec.tool} needs a plugin operation key, got {spec.operation!r}")
-        if operation in _STATIC_OPERATIONS:
-            raise ValueError(f"tool {spec.tool} reuses the built-in operation {operation}")
         other = next(
             (o for o, held in _DYNAMIC_TOOLS.items() if o != owner and any(s.operation == operation for s in held)),
             None,

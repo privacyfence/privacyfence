@@ -213,6 +213,13 @@ class TestProposals:
         ]
         assert not any(group.startswith("plugin:") for group in propose.SCOPES_BY_GROUP)
 
+    def test_register_dynamic_scopes_ignores_an_ungoverned_tool_and_refuses_a_static_one(self):
+        propose.register_dynamic_scopes("other", "today_unknown", ())
+        propose.register_dynamic_scopes("other", "gmail_list_messages", ())
+        assert "other" not in propose._DYNAMIC_SCOPES
+        with pytest.raises(ValueError, match="not a plugin tool"):
+            propose.register_dynamic_scopes("other", "gmail_get_message", ())
+
     def test_unregister_removes_the_proposals(self):
         auto_accept.unregister_dynamic_tools(_PLUGIN)
         assert propose.proposals_for("today_get_day", _ctx(calendar=["work"])) == []
