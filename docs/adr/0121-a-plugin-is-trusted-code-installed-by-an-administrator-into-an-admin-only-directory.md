@@ -5,7 +5,8 @@
 Accepted — 2026-10-07. Implemented: `src/privacyfence/plugins/trust.py`,
 `src/privacyfence/plugins/state.py`, `src/privacyfence/plugins/host.py`,
 `src/privacyfence/plugins/tools.py`, `src/privacyfence/privilege_separation.py`
-(`admin_only_write_problem`, `admin_only_ancestor_write_problem`), `src/privacyfence/web/routes_settings.py`.
+(`admin_only_write_problem`, `admin_only_plugin_dir_write_problem`,
+`admin_only_ancestor_write_problem`), `src/privacyfence/web/routes_settings.py`.
 
 ## Context
 
@@ -29,17 +30,24 @@ configurable path could point somewhere the user can write.
 **What is checked, on every start.** The executable, every directory between it and the plugin
 directory, the plugin directory and every ancestor of it up to the filesystem root must be writable
 by administrators only. A symlink on the way is followed, so the directories checked are the ones
-the operating system walks. On POSIX the rule is the one the elevation scripts already use: owned
-by root, with no group or other write bit. On Windows it is the DACL rule: no write-granting entry
-for a trustee outside the trusted set.
+the operating system walks. A plugin directory that is itself a symbolic link is refused, as is an
+executable that does not resolve inside the plugins directory or that resolves to the plugin
+directory itself, so the plugins directory is always one of the directories checked. On POSIX
+the rule is the one the elevation scripts already use: owned by root, with no group or other write
+bit. On Windows it is the DACL rule: no write-granting entry for a trustee outside the trusted
+set.
 
-For directory ancestors only, the Windows rule ignores inherit-only entries and the right to create
-a subdirectory (add-subdirectory), because neither lets a non-administrator rename, replace or
-delete a directory that already exists, and a default `C:\` grants both to every signed-in user.
-The executable and the plugin directory keep the strict rule, and POSIX has the same rule for all
-of them. A consequence on POSIX: some older Debian installs make `/usr/local` and `/usr/local/lib`
-group-writable by `staff` (mode 2775), and plugins are refused there until the directory is made
-administrator-only.
+On Windows the executable keeps the strict rule. The plugin directory, any directory between it
+and the executable, and every ancestor ignore inherit-only entries: an entry flagged inherit-only
+grants nothing on the directory that carries it, and what it grants a child once inherited is
+checked on that child. Every folder created under `%ProgramFiles%` inherits one, full control for
+`CREATOR OWNER`. An entry without that flag applies to the directory and counts, whatever its
+inherit flags. The ancestors also ignore the right to create a subdirectory (add-subdirectory),
+because it does not let a non-administrator rename, replace or delete a directory that already
+exists, and a default `C:\` grants it, along with an inherit-only Modify, to every signed-in user.
+POSIX has the same rule for all of them. A consequence on POSIX: some older Debian installs make
+`/usr/local` and `/usr/local/lib` group-writable by `staff` (mode 2775), and plugins are refused
+there until the directory is made administrator-only.
 
 **What runs.** Plugins start only when privilege separation is on, which every packaged install
 has. `plugins.enabled: false` stops them all. A plugin is never started until a human has enabled
@@ -79,6 +87,8 @@ unreadable, nothing is deleted and every known plugin shows "plugins directory u
   chain to a harmless-looking executable.
 - **Hold Windows ancestors to the strict rule.** Rejected. No plugin on a standard Windows install
   could pass: `C:\` grants every signed-in user the right to create folders.
+- **Hold the Windows plugin directory to the strict rule.** Rejected. No plugin installed under
+  `%ProgramFiles%` could pass: every folder there inherits an inherit-only `CREATOR OWNER` entry.
 - **Run plugins as their own OS account, or in a sandbox.** Rejected for protocol 1. It needs an
   account and a sandbox per OS and is not what the first consumer needs. The residual risk is
   recorded below.

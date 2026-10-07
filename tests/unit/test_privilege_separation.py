@@ -4107,6 +4107,98 @@ class TestAdminOnlyAncestorWriteProblem:
         assert problem == f"{tmp_path} is group- or world-writable (mode 2775)"
 
 
+
+def _program_files_subfolder_acl() -> list:
+    """What ``icacls`` shows on a folder an administrator creates under ``%ProgramFiles%``:
+    everything inherited, the administrators in full, Users read-and-execute, and a
+    ``CREATOR OWNER`` full control that is inherit-only, so it lands on children and never on the
+    folder itself."""
+    return [
+        windows_acl.Ace(trustee="NT SERVICE\\TrustedInstaller", mask=0x1F01FF, inherited=True),
+        windows_acl.Ace(trustee="NT AUTHORITY\\SYSTEM", mask=0x1F01FF, inherited=True),
+        windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF, inherited=True),
+        windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1200A9, inherited=True),
+        windows_acl.Ace(
+            trustee="BUILTIN\\Users", mask=windows_acl.GENERIC_READ | windows_acl.GENERIC_EXECUTE,
+            inherited=True, inherit_only=True,
+        ),
+        windows_acl.Ace(trustee="CREATOR OWNER", mask=windows_acl.GENERIC_ALL, inherited=True, inherit_only=True),
+    ]
+
+
+class TestAdminOnlyPluginDirWriteProblem:
+    """A plugin's own directory ignores inherit-only allow entries on Windows, which grant nothing
+    on it; everything else is judged as strictly as the executable (ADR 0058)."""
+
+    @staticmethod
+    def _windows_acl(monkeypatch, aces: list) -> None:
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(windows_acl, "read_dacl", lambda path: aces)
+
+    def test_windows_accepts_a_folder_under_program_files(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, _program_files_subfolder_acl())
+
+        assert privilege_separation.admin_only_plugin_dir_write_problem(tmp_path) is None
+
+    def test_the_strict_rule_still_refuses_the_creator_owner_entry(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, _program_files_subfolder_acl())
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is writable by CREATOR OWNER"
+
+    def test_the_elevation_check_still_refuses_the_creator_owner_entry(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, _program_files_subfolder_acl())
+
+        problem = privilege_separation._elevation_script_problem(tmp_path / "x.ps1")
+
+        assert problem == f"{tmp_path / 'x.ps1'} is writable by CREATOR OWNER"
+
+    @pytest.mark.parametrize("trustee", ["BUILTIN\\Users", "NT AUTHORITY\\Authenticated Users"])
+    @pytest.mark.parametrize("mask", [0x1301BF, windows_acl.FILE_WRITE_DATA, windows_acl.FILE_APPEND_DATA])
+    @pytest.mark.parametrize("inherited", [False, True])
+    def test_windows_refuses_a_write_entry_that_applies_to_the_folder(
+        self, monkeypatch, tmp_path, trustee, mask, inherited,
+    ):
+        # Inherit flags without inherit-only still apply here, so an (OI)(CI) Modify counts, and
+        # create-folder counts on the plugin's own directory, unlike on an ancestor.
+        self._windows_acl(monkeypatch, [
+            *_program_files_subfolder_acl(),
+            windows_acl.Ace(trustee=trustee, mask=mask, inherited=inherited),
+        ])
+
+        problem = privilege_separation.admin_only_plugin_dir_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is writable by {trustee}"
+
+    def test_windows_ignores_a_deny_entry(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, [
+            windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1F01FF, allowed=False),
+            windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1F01FF, allowed=False, inherit_only=True),
+        ])
+
+        assert privilege_separation.admin_only_plugin_dir_write_problem(tmp_path) is None
+
+    def test_windows_refuses_an_acl_it_cannot_read(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, None)
+
+        problem = privilege_separation.admin_only_plugin_dir_write_problem(tmp_path)
+
+        assert problem == f"could not read {tmp_path}'s ACL"
+
+    @pytest.mark.parametrize("platform", ["linux", "darwin"])
+    def test_posix_is_unchanged(self, monkeypatch, tmp_path, platform):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: platform)
+        monkeypatch.setattr(
+            privilege_separation.os, "stat",
+            lambda path: os.stat_result((stat.S_IFDIR | 0o2775, 0, 0, 1, 0, 50, 0, 0, 0, 0)),
+        )
+
+        problem = privilege_separation.admin_only_plugin_dir_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is group- or world-writable (mode 2775)"
+
+
 def _command_line_to_argv(command_line: str) -> list[str]:
     """``CommandLineToArgvW``, in Python, for the arguments half of a Windows
     command line (no executable name).
