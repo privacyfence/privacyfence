@@ -735,6 +735,22 @@ class TestRegisterConfirm:
         # Would raise if this were charged against the same cap as cards.
         registry.register_confirm()
 
+    def test_does_not_notify_by_default(self):
+        registry = make_registry()
+        seen: list = []
+        registry.add_created_listener(seen.append)
+        registry.register_confirm()
+        assert seen == []
+
+    def test_notify_calls_the_created_listener(self):
+        registry = make_registry()
+        seen: list = []
+        registry.add_created_listener(seen.append)
+        approval = registry.register_confirm(sensitive=True, notify=True)
+        assert seen == [approval]
+        assert approval.kind == "confirm"
+        assert approval.sensitive is True
+
 
 class TestListPendingAndGet:
     def test_list_pending_excludes_answered_cards(self):
