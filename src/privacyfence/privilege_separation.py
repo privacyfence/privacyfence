@@ -2077,14 +2077,36 @@ def _windows_script_elevation_problem(script: Path) -> str | None:
     return _windows_admin_only_write_problem(script)
 
 
-def _windows_admin_only_write_problem(path: Path) -> str | None:
+def _windows_ancestor_ace_can_rewrite(ace) -> bool:  # noqa: ANN001 -- a windows_acl.Ace
+    """Whether ``ace``, on a directory somewhere above a plugin's directory, lets its trustee
+    rename, replace or delete what that directory already holds.
+
+    Two things a default ``C:\\`` grants ``Authenticated Users`` do not: an inherit-only entry,
+    which grants nothing on the directory carrying it (whatever its object- and
+    container-inherit flags say about children), and ``FILE_APPEND_DATA``, which on a directory
+    is only the right to create a new subdirectory. Every other write right still counts,
+    creating a file included.
+    """
+    from . import windows_acl
+
+    if not ace.allowed or ace.inherit_only:
+        return False
+    return bool(ace.mask & (
+        windows_acl.FILE_WRITE_DATA | windows_acl.FILE_WRITE_EA | windows_acl.FILE_WRITE_ATTRIBUTES
+        | windows_acl.FILE_DELETE_CHILD | windows_acl.DELETE | windows_acl.WRITE_DAC
+        | windows_acl.WRITE_OWNER | windows_acl.GENERIC_WRITE | windows_acl.GENERIC_ALL
+    ))
+
+
+def _windows_admin_only_write_problem(path: Path, *, ancestor: bool = False) -> str | None:
     from . import windows_acl
 
     aces = windows_acl.read_dacl(path)
     if aces is None:
         return f"could not read {path}'s ACL"
+    can_rewrite = _windows_ancestor_ace_can_rewrite if ancestor else windows_acl.Ace.grants_write
     writable = sorted(
-        {ace.trustee for ace in aces if ace.grants_write() and not windows_acl.is_trusted(ace.trustee)}
+        {ace.trustee for ace in aces if can_rewrite(ace) and not windows_acl.is_trusted(ace.trustee)}
     )
     if writable:
         return f"{path} is writable by {', '.join(writable)}"
@@ -2101,11 +2123,29 @@ def admin_only_write_problem(path: Path) -> str | None:
 
     The per-path half of the elevation check, without macOS's bundle
     signature check, which belongs to the elevation alone. Plugins use it
-    for their executable and every directory above it.
+    for their executable and their own directory, and
+    ``admin_only_ancestor_write_problem()`` for the directories above that.
     """
     if current_platform() == "win32":
         return _windows_admin_only_write_problem(path)
     return _posix_admin_only_write_problem(path)
+
+
+def admin_only_ancestor_write_problem(path: Path) -> str | None:
+    """``admin_only_write_problem()`` for a directory somewhere above a plugin's own directory,
+    where only the right to rename, replace or delete an existing entry matters.
+
+    On Windows that forgives two grants nothing else may hold: an inherit-only entry, and the
+    right to create a subdirectory, both of which a default ``C:\\`` gives every signed-in user.
+    Neither lets a non-administrator swap a directory on the way to the plugin, which is what
+    the privilege boundary (ADR 0058) has to rule out; without this, no plugin on a standard
+    Windows install could ever pass. The executable and the plugin's own directory keep the
+    strict rule, as does the elevation check. POSIX has no such grants, so there the rule is
+    unchanged, and a group-writable ``/usr/local`` is still refused.
+    """
+    if current_platform() == "win32":
+        return _windows_admin_only_write_problem(path, ancestor=True)
+    return admin_only_write_problem(path)
 
 
 def _elevation_script_problem(script: Path) -> str | None:

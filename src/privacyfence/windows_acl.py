@@ -152,7 +152,7 @@ OWNER_RIGHTS_TRUSTEE = "OWNER RIGHTS"
 
 @dataclass(frozen=True)
 class Ace:
-    """One access-control entry, reduced to the four things any check here
+    """One access-control entry, reduced to the five things any check here
     asks about. Deliberately not a wrapper around a pywin32 ACE object: the
     audit functions below have to be constructible from a test on a machine
     that has no such object, and the real reader (``read_dacl()``) is what
@@ -162,6 +162,11 @@ class Ace:
     mask: int
     allowed: bool = True
     inherited: bool = False
+    # INHERIT_ONLY_ACE: the entry exists only to be copied onto children and
+    # grants nothing on the object that carries it. Only the plugins'
+    # ancestor-directory check reads it; every other check here counts such
+    # an entry as if it applied, which errs towards reporting.
+    inherit_only: bool = False
 
     def grants_read(self) -> bool:
         """True when this ACE would let its trustee *enumerate* a directory
@@ -519,6 +524,7 @@ def read_dacl(path: Path) -> list[Ace] | None:
                 mask=mask,
                 allowed=ace_type == win32security.ACCESS_ALLOWED_ACE_TYPE,
                 inherited=bool(ace_flags & win32security.INHERITED_ACE),
+                inherit_only=bool(ace_flags & win32security.INHERIT_ONLY_ACE),
             )
         )
     return aces
