@@ -6,7 +6,8 @@ is the readable example for plugin authors. The framework itself is described in
 https://github.com/privacyfence/privacyfence/issues/846.
 
 Nothing here ships in PrivacyFence's installers. You build it yourself and copy it into the plugins
-directory.
+directory. Where that directory is, how to review and enable a plugin, and why one does not start are
+in [the plugins guide](../../../docs/plugins.md).
 
 ## What it does
 
