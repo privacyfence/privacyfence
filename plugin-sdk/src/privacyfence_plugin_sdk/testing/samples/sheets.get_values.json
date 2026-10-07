@@ -1,0 +1,21 @@
+{
+  "operation": "sheets.get_values",
+  "params": {},
+  "data": {
+    "values": [
+      [
+        "Name",
+        "Amount"
+      ],
+      [
+        "Jane Example",
+        "12"
+      ],
+      [
+        "John Sample",
+        "7"
+      ]
+    ]
+  },
+  "next_cursor": null
+}

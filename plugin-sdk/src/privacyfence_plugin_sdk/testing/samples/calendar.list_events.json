@@ -1,0 +1,50 @@
+{
+  "operation": "calendar.list_events",
+  "params": {},
+  "data": [
+    {
+      "id": "EXAMPLE-1",
+      "calendar_id": "primary",
+      "title": "Example meeting",
+      "description": "An example agenda.",
+      "start_time": "2026-10-07T09:00:00+00:00",
+      "end_time": "2026-10-07T09:30:00+00:00",
+      "all_day": false,
+      "organizer_email": "jane@example.com",
+      "attendees": [
+        {
+          "email": "jane@example.com",
+          "display_name": "Jane Example",
+          "response_status": "accepted",
+          "organizer": true
+        },
+        {
+          "email": "john@example.com",
+          "display_name": "John Sample",
+          "response_status": "needsAction",
+          "organizer": false
+        }
+      ],
+      "location": "Example room",
+      "hangout_link": "",
+      "conference_link": "",
+      "status": "confirmed",
+      "html_link": "https://example.com/calendar/event/EXAMPLE-1",
+      "attachments": [
+        {
+          "file_id": "EXAMPLE-2",
+          "title": "Example notes",
+          "mime_type": "text/plain",
+          "file_url": "https://example.com/files/EXAMPLE-2",
+          "icon_link": ""
+        }
+      ],
+      "visibility": "default",
+      "color_id": "",
+      "recurrence": [],
+      "recurring_event_id": "",
+      "original_start_time": ""
+    }
+  ],
+  "next_cursor": null
+}
