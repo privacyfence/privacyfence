@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from html import escape as _html_escape
 
-from .approval_window_html import _STYLES_CSS, _new_nonce
+from .approval_window_html import _STYLES_CSS, _new_nonce, build_preview_body_html
 from .design_css import DOCUMENT_CSS
 
 # The widest each dialog's card gets; a narrower screen gets all of its
@@ -187,6 +187,7 @@ html, body {{ overflow-y: auto; }}
 .pf-card-root {{ width: min({width}px, 100%); }}
 .pf-dialog {{ padding: 24px 20px; }}
 h2 {{ font-size: 19px; margin-bottom: 12px; overflow-wrap: anywhere; }}
+.pf-dialog-blocks {{ margin: 0 0 15px; overflow-wrap: anywhere; }}
 .pf-choice-list {{ display: flex; flex-direction: column; gap: 6px; margin: 4px 0 15px; }}
 /* An option is visibly a control at rest -- a bordered row the height of a
    tap target -- and the highlight a mouse gets on hover, a keyboard gets on
@@ -211,13 +212,26 @@ h2 {{ font-size: 19px; margin-bottom: 12px; overflow-wrap: anywhere; }}
 
 def build_confirmation_html(
     *, title: str, message_lines: list[str], cancel_label: str, confirm_label: str,
+    body_blocks: list[dict] | None = None,
 ) -> str:
     """Two-button Cancel/<confirm_label> dialog. See module docstring for
-    why Cancel is the default."""
+    why Cancel is the default.
+
+    ``body_blocks`` are card blocks (the vocabulary
+    ``approval_window_html.build_preview_body_html`` renders, every string
+    escaped there), shown between the message and the buttons. A plugin's
+    confirmation (ADR 0122) is the one caller: its preview arrives as typed
+    blocks and is rendered by the same code as a card's preview pane, never
+    as markup of its own."""
+    blocks_html = (
+        f'<div class="pf-dialog-blocks">{build_preview_body_html(blocks=body_blocks)}</div>'
+        if body_blocks else ""
+    )
     body_html = (
         '<div class="pf-kicker"><span>PrivacyFence</span></div>'
         f'<h2>{_html_escape(title)}</h2>'
         f'<div class="pf-dialog-message">{_message_html(message_lines)}</div>'
+        f'{blocks_html}'
         f'{_confirm_button_row_html(cancel_label, confirm_label)}'
     )
     return _document(width=CONFIRM_WIDTH, body_html=body_html)

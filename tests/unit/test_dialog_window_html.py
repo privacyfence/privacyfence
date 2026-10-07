@@ -111,6 +111,48 @@ class TestBuildConfirmationHtml:
         assert "window.webkit.messageHandlers.pf.postMessage" in html
 
 
+class TestConfirmationBodyBlocks:
+    """``body_blocks``: a plugin confirmation's typed preview, rendered by the
+    card's own preview renderer between the message and the buttons."""
+
+    def _html(self, blocks):
+        return build_confirmation_html(
+            title="Today: Publish", message_lines=["m"], cancel_label="Deny", confirm_label="Approve",
+            body_blocks=blocks,
+        )
+
+    def test_blocks_render_between_message_and_buttons(self):
+        html = self._html([
+            {"type": "heading", "label": "Note"},
+            {"type": "field", "label": "To", "value": "team"},
+            {"type": "code", "text": "x = 1", "language": ""},
+            {"type": "diff", "text": "+added"},
+        ])
+        assert 'class="pf-dialog-blocks"' in html
+        assert html.index('class="pf-dialog-message"') < html.index('class="pf-dialog-blocks"')
+        assert html.index('class="pf-dialog-blocks"') < html.index('class="pf-btn-row"')
+        assert ">Note</div>" in html
+        assert '<span class="pf-preview-label">To:</span>' in html
+        assert '<pre class="pf-code"><code>x = 1</code></pre>' in html
+        assert '<span class="pf-diff-add">+added</span>' in html
+
+    def test_blocks_are_escaped(self):
+        html = self._html([
+            {"type": "text", "text": "<script>window.pwned=1</script>"},
+            {"type": "field", "label": "<b>L</b>", "value": "<img src=x onerror=alert(1)>"},
+            {"type": "table", "headers": ["<i>h</i>"], "rows": [["<u>c</u>"]]},
+        ])
+        assert "window.pwned=1</script>" not in html
+        assert "<img" not in html
+        for tag in ("<b>", "<i>", "<u>"):
+            assert tag not in html
+        assert "&lt;script&gt;window.pwned=1&lt;/script&gt;" in html
+
+    def test_no_blocks_renders_no_blocks_container(self):
+        assert 'class="pf-dialog-blocks"' not in self._html(None)
+        assert 'class="pf-dialog-blocks"' not in self._html([])
+
+
 class TestBuildChoiceHtml:
     def test_title_and_prompt_render(self):
         html = build_choice_html(
