@@ -3905,6 +3905,93 @@ class TestElevationScriptProblem:
         assert privilege_separation._elevation_script_problem(tmp_path / "x.ps1") is None
 
 
+class TestAdminOnlyWriteProblem:
+    """The per-path half of the elevation check, public so plugins can apply it to an executable
+    and every directory above it. Directories get exactly the rule files do."""
+
+    @staticmethod
+    def _fake_stat(monkeypatch, st_uid: int, st_mode: int) -> None:
+        monkeypatch.setattr(
+            privilege_separation.os, "stat",
+            lambda path: os.stat_result((st_mode, 0, 0, 1, st_uid, 0, 0, 0, 0, 0)),
+        )
+
+    def test_posix_accepts_a_root_owned_directory_without_group_or_other_write(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        self._fake_stat(monkeypatch, 0, stat.S_IFDIR | 0o755)
+
+        assert privilege_separation.admin_only_write_problem(tmp_path) is None
+
+    def test_posix_refuses_a_directory_this_account_owns(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        self._fake_stat(monkeypatch, 501, stat.S_IFDIR | 0o755)
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is owned by uid 501, not root"
+
+    def test_posix_refuses_a_world_writable_root_owned_directory(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        self._fake_stat(monkeypatch, 0, stat.S_IFDIR | 0o1777)
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem is not None
+        assert "group- or world-writable (mode 1777)" in problem
+
+    def test_posix_refuses_a_directory_that_is_not_there(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path / "gone")
+
+        assert problem is not None
+        assert "could not stat" in problem
+
+    def test_macos_applies_the_posix_rule_without_the_bundle_signature(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        self._fake_stat(monkeypatch, 0, stat.S_IFDIR | 0o755)
+        monkeypatch.setattr(
+            privilege_separation, "_macos_auto_enable_script_problem",
+            lambda script: pytest.fail("the bundle signature belongs to the elevation alone"),
+        )
+
+        assert privilege_separation.admin_only_write_problem(tmp_path) is None
+
+    def test_windows_refuses_a_user_writable_directory(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: [
+                windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF),
+                windows_acl.Ace(trustee="NT AUTHORITY\\Authenticated Users", mask=0x1301BF),
+            ],
+        )
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem == f"{tmp_path} is writable by NT AUTHORITY\\Authenticated Users"
+
+    def test_windows_accepts_an_administrators_only_directory(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: [
+                windows_acl.Ace(trustee="NT SERVICE\\TrustedInstaller", mask=0x1F01FF),
+                windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1200A9),
+            ],
+        )
+
+        assert privilege_separation.admin_only_write_problem(tmp_path) is None
+
+    def test_windows_refuses_an_acl_it_cannot_read(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(windows_acl, "read_dacl", lambda path: None)
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem == f"could not read {tmp_path}'s ACL"
+
+
 def _command_line_to_argv(command_line: str) -> list[str]:
     """``CommandLineToArgvW``, in Python, for the arguments half of a Windows
     command line (no executable name).
