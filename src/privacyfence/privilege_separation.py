@@ -122,7 +122,7 @@ import stat
 import subprocess  # nosec B404  # osascript elevation prompt below -- fixed argv, no shell, see that call site
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -2098,13 +2098,28 @@ def _windows_ancestor_ace_can_rewrite(ace) -> bool:  # noqa: ANN001 -- a windows
     ))
 
 
-def _windows_admin_only_write_problem(path: Path, *, ancestor: bool = False) -> str | None:
+def _windows_plugin_dir_ace_can_rewrite(ace) -> bool:  # noqa: ANN001 -- a windows_acl.Ace
+    """Whether ``ace``, on a plugin's own directory or a directory inside it on the way to the
+    executable, grants its trustee write on that directory.
+
+    The strict rule minus inherit-only entries. An entry carrying ``INHERIT_ONLY_ACE`` grants
+    nothing on the directory itself, whatever its object- and container-inherit flags copy onto
+    children; the ``CREATOR OWNER`` full control every folder under ``%ProgramFiles%`` inherits is
+    one. What such an entry grants once copied is judged on the child that receives it. An entry
+    without that flag applies to the directory, with or without inherit flags, and still counts.
+    """
+    return ace.grants_write() and not ace.inherit_only
+
+
+def _windows_admin_only_write_problem(
+    path: Path, *, can_rewrite: Callable[[Any], bool] | None = None,
+) -> str | None:
     from . import windows_acl
 
     aces = windows_acl.read_dacl(path)
     if aces is None:
         return f"could not read {path}'s ACL"
-    can_rewrite = _windows_ancestor_ace_can_rewrite if ancestor else windows_acl.Ace.grants_write
+    can_rewrite = can_rewrite or windows_acl.Ace.grants_write
     writable = sorted(
         {ace.trustee for ace in aces if can_rewrite(ace) and not windows_acl.is_trusted(ace.trustee)}
     )
@@ -2123,7 +2138,8 @@ def admin_only_write_problem(path: Path) -> str | None:
 
     The per-path half of the elevation check, without macOS's bundle
     signature check, which belongs to the elevation alone. Plugins use it
-    for their executable and their own directory, and
+    for their executable, ``admin_only_plugin_dir_write_problem()`` for their
+    own directory and the directories inside it, and
     ``admin_only_ancestor_write_problem()`` for the directories above that.
     """
     if current_platform() == "win32":
@@ -2139,12 +2155,30 @@ def admin_only_ancestor_write_problem(path: Path) -> str | None:
     right to create a subdirectory, both of which a default ``C:\\`` gives every signed-in user.
     Neither lets a non-administrator swap a directory on the way to the plugin, which is what
     the privilege boundary (ADR 0058) has to rule out; without this, no plugin on a standard
-    Windows install could ever pass. The executable and the plugin's own directory keep the
-    strict rule, as does the elevation check. POSIX has no such grants, so there the rule is
-    unchanged, and a group-writable ``/usr/local`` is still refused.
+    Windows install could ever pass. The executable keeps the strict rule, as does the elevation
+    check, and the plugin's own directory has ``admin_only_plugin_dir_write_problem()``. POSIX
+    has no such grants, so there the rule is unchanged, and a group-writable ``/usr/local`` is
+    still refused.
     """
     if current_platform() == "win32":
-        return _windows_admin_only_write_problem(path, ancestor=True)
+        return _windows_admin_only_write_problem(path, can_rewrite=_windows_ancestor_ace_can_rewrite)
+    return admin_only_write_problem(path)
+
+
+def admin_only_plugin_dir_write_problem(path: Path) -> str | None:
+    """``admin_only_write_problem()`` for a plugin's own directory, and for any directory between
+    it and the plugin's executable.
+
+    On Windows that forgives one kind of entry: an inherit-only allow entry, which grants nothing
+    on the directory carrying it. Every folder created under ``%ProgramFiles%`` inherits one,
+    ``CREATOR OWNER`` full control, so without this no plugin installed there could pass. What
+    that entry hands a child is checked on the child, and the executable keeps the strict rule.
+    The create-folder right still counts here, unlike on an ancestor; deny entries grant nothing
+    and are ignored, as by the strict rule; and an entry that applies to the directory, inherited
+    or not, is still refused. POSIX has no such entries, so there the rule is unchanged.
+    """
+    if current_platform() == "win32":
+        return _windows_admin_only_write_problem(path, can_rewrite=_windows_plugin_dir_ace_can_rewrite)
     return admin_only_write_problem(path)
 
 

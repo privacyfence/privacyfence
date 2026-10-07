@@ -33,12 +33,16 @@ title, never plugin content, because notifications read it.
 plugin that returned something else from `execute` would bypass the gate. The payload's PII scan
 runs on its flattened text.
 
-**No unseen re-prepare.** A prepared call is kept while its card is pending (up to 15 minutes, the
-pending lifetime), and for an approved read for the decision ledger's replay window
-([ADR 0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md)). A repeat call in
-either window reuses it, so a released payload is always the one a human saw. Two identical calls
-racing share one `prepare`. An approved write's prepared call is dropped before `execute` is sent,
-and `execute` is never retried, so a second identical call prepares afresh and gets its own card.
+**An approval belongs to one prepared call.** The gate's decision-ledger key carries the prepared
+call's id, so the ledger ([ADR 0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md))
+replays a decision only to a repeat call that reuses that same prepared call. A fresh `prepare`
+always gets its own card, so a released payload is always the one a human saw, also after the
+plugin restarts or a tool is removed and added again. A prepared call is kept for the card's pending
+lifetime plus the ledger's replay window, both measured from when `prepare` returned; an approved or
+denied read is kept for one more replay window after it is decided, so a repeat call in that window
+gets the same payload, or the same denial, with no new card. Two identical calls racing share one
+`prepare`. An approved write's prepared call is dropped before `execute` is sent, and `execute` is
+never retried, so a second identical call prepares afresh and gets its own card.
 
 **Floors are the daemon's.** Tool definitions are validated as a whole and refused on the first
 violation, whether they arrive at start or in `tools.changed`: names fit the MCP name limit and do

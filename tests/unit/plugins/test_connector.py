@@ -196,6 +196,24 @@ def registry():
 
 
 @pytest.fixture
+def deferred_registry():
+    """Makes a registry with the given TTLs and, at teardown, denies every card still open, so a
+    failing test cannot leave a popup worker waiting forever."""
+    made: list[PendingApprovalRegistry] = []
+
+    def make(**ttls) -> PendingApprovalRegistry:
+        reg = PendingApprovalRegistry(**ttls)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=reg))
+        made.append(reg)
+        return reg
+
+    yield make
+    for reg in made:
+        for approval in reg.list_pending():
+            reg.answer(approval.id, "deny")
+
+
+@pytest.fixture
 def popups(monkeypatch):
     return Popups(monkeypatch)
 
@@ -426,6 +444,89 @@ class TestGateFlow:
         assert len(popups.read) == 3
         assert popups.read[2][1]["preview_blocks"] == to_card_blocks(LOOKUP_PREVIEW + [{"type": "text", "text": "fresh"}])
 
+    async def test_late_collect_releases_only_what_was_approved(self, audit_dir, deferred_registry):
+        # Approved near the end of the card's pending lifetime and collected after it: the repeat
+        # call still reuses the prepared call the human saw, never a fresh prepare under that
+        # approval.
+        registry = deferred_registry(hold_window=0.05, pending_ttl=900.0, ledger_ttl=300.0)
+        peer = FakePeer()
+        conn = make_connector(peer)
+        start = datetime(2026, 10, 7, 10, 0, tzinfo=timezone.utc)
+
+        with freeze_time(start, tick=True) as frozen:
+            approvals = []
+            for tool, args in (("today_lookup", {"day": "2026-10-07"}), ("today_note", {"text": "buy milk"})):
+                with pytest.raises(ApprovalPending) as raised:
+                    await conn.call(tool, args)
+                approvals.append(registry.get(raised.value.result["approval_id"]))
+            for prepared in conn._prepared.values():
+                assert prepared.keep_until >= start.timestamp() + registry.pending_ttl + registry.ledger_ttl
+
+            frozen.move_to(start + timedelta(seconds=700))
+            for approval in approvals:
+                registry.answer(approval.id, "accept")
+            assert await wait_until(lambda: all(a.final_decision is not None for a in approvals))
+            peer.prepare["lookup"] = lookup_result(payload=[{"type": "text", "text": "never shown"}])
+
+            frozen.move_to(start + timedelta(seconds=950))
+            read = await conn.call("today_lookup", {"day": "2026-10-07"})
+            write = await conn.call("today_note", {"text": "buy milk"})
+
+            assert read == {"blocks": LOOKUP_PAYLOAD}
+            assert write == {"ok": True}
+            prepares = peer.calls("tool.prepare")
+            assert len(prepares) == 2
+            assert [e["call_id"] for e in peer.calls("tool.execute")] == [p["call_id"] for p in prepares]
+
+            # The write was single use: the same call again prepares afresh and gets its own card.
+            with pytest.raises(ApprovalPending) as raised:
+                await conn.call("today_note", {"text": "buy milk"})
+            assert raised.value.result["approval_id"] != approvals[1].id
+            assert len(peer.calls("tool.prepare")) == 3
+            assert len(peer.calls("tool.execute")) == 2
+
+    async def test_a_new_connector_instance_does_not_inherit_an_approval(self, audit_dir, deferred_registry):
+        # A crash restart, purge restart or re-enable builds a new PluginConnector while the
+        # ledger still holds the old approvals: each fresh prepare goes on a new card.
+        registry = deferred_registry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        peer = FakePeer()
+        before = make_connector(peer)
+        calls = (("today_lookup", {"day": "2026-10-07"}), ("today_note", {"text": "buy milk"}))
+        approvals = []
+        for tool, args in calls:
+            with pytest.raises(ApprovalPending) as raised:
+                await before.call(tool, args)
+            approvals.append(registry.get(raised.value.result["approval_id"]))
+        for approval in approvals:
+            registry.answer(approval.id, "accept")
+        assert await wait_until(lambda: all(a.final_decision is not None for a in approvals))
+
+        peer.prepare["lookup"] = lookup_result(payload=[{"type": "text", "text": "never shown"}])
+        after = make_connector(peer)
+        for (tool, args), approval in zip(calls, approvals, strict=True):
+            with pytest.raises(ApprovalPending) as raised:
+                await after.call(tool, args)
+            assert raised.value.result["approval_id"] != approval.id
+
+        assert len(peer.calls("tool.prepare")) == 4
+        assert peer.calls("tool.execute") == []
+
+    async def test_a_removed_and_added_tool_does_not_inherit_an_approval(self, audit_dir, registry, popups):
+        peer = FakePeer()
+        conn = make_connector(peer)
+        args = {"day": "2026-10-07"}
+
+        assert await conn.call("today_lookup", args) == {"blocks": LOOKUP_PAYLOAD}
+        assert conn.handle_tools_changed({"tools": [NOTE, PING]})
+        assert conn.handle_tools_changed({"tools": TOOLDEFS})
+        fresh = [{"type": "text", "text": "fresh"}]
+        peer.prepare["lookup"] = lookup_result(payload=fresh)
+
+        assert await conn.call("today_lookup", args) == {"blocks": fresh}
+        assert len(peer.calls("tool.prepare")) == 2
+        assert len(popups.read) == 2
+        assert popups.read[1][1]["preview_blocks"] == to_card_blocks(LOOKUP_PREVIEW + fresh)
+
     async def test_released_read_without_a_registry_is_not_kept(self, audit_dir, gated_call_spy):
         approval_ui.init_approval_ui(SimpleNamespace(deferred_registry=None))
         peer = FakePeer()
@@ -463,7 +564,7 @@ class TestGateFlow:
         assert gated_call_spy[0]["summary"] == "Lookup"
 
     async def test_denied_never_executes(self, monkeypatch, audit_dir, registry):
-        Popups(monkeypatch, decision="deny")
+        popups = Popups(monkeypatch, decision="deny")
         peer = FakePeer()
         conn = make_connector(peer)
 
@@ -473,7 +574,19 @@ class TestGateFlow:
             await conn.call("today_lookup", {"day": "2026-10-07"})
 
         assert peer.calls("tool.execute") == []
-        assert conn._prepared == {}
+
+        # A repeat read reuses the denied prepared call, so the ledger replays the same denial
+        # with no new card. A write's denial is single use: a repeat prepares afresh and asks again.
+        for _ in range(2):
+            with pytest.raises(GateDeniedError, match="reused the user.s denial"):
+                await conn.call("today_lookup", {"day": "2026-10-07"})
+        assert [p.tool for p in conn._prepared.values()] == ["today_lookup"]
+        with pytest.raises(GateDeniedError):
+            await conn.call("today_note", {"text": "buy milk"})
+        assert len(peer.calls("tool.prepare")) == 3
+        assert len(popups.read) == 1
+        assert len(popups.write) == 2
+        assert peer.calls("tool.execute") == []
 
     async def test_review_scans_payload_for_pii(self, audit_dir, registry, popups):
         peer = FakePeer()

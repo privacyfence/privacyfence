@@ -4,7 +4,9 @@ The child gets a minimal environment (``child_env``), its stderr goes to a priva
 its stdout carries protocol messages only. A crash is an unexpected exit, or a peer that closes
 while the process is still there; five crashes inside ten minutes disable the plugin. A failed
 handshake check (protocol major, identity, tool definitions) is not a crash: it will fail the same
-way every time, so the plugin is disabled with the reason and not restarted.
+way every time, so the plugin is disabled with the reason and not restarted. Neither is a refusal
+from the ``before_spawn`` hook, which runs before every spawn, restarts included, so the host can
+repeat its trust and hash checks on each start (ADR 0121).
 """
 from __future__ import annotations
 
@@ -71,7 +73,8 @@ class LaunchSpec:
 
 
 class StartError(Exception):
-    """``introspect`` could not get an initialize result; ``reason`` is the settings text."""
+    """``introspect`` could not get an initialize result, or ``before_spawn`` refused a start;
+    ``reason`` is the settings text."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -168,6 +171,7 @@ class Supervisor:
         on_state: Callable[[str, str | None], None],
         on_ready: Callable[[InitializeResult], Awaitable[None]],
         validate_tools: Callable[[InitializeResult], None] = lambda _result: None,
+        before_spawn: Callable[[], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -178,6 +182,7 @@ class Supervisor:
         self._on_state = on_state
         self._on_ready = on_ready
         self._validate_tools = validate_tools
+        self._before_spawn = before_spawn
         self._clock = clock
         self._sleep = sleep
         self._state = "discovered"
@@ -333,6 +338,7 @@ class Supervisor:
         self._set_state("starting")
         child: _Child | None = None
         try:
+            await self._check_before_spawn()
             child = await self._spawn(self._handlers, self._notification_handlers)
             result = await self._handshake(child, "run")
             await self._on_ready(result)
@@ -361,11 +367,31 @@ class Supervisor:
             if child is not None:
                 await self._reap(child)
 
+    async def _check_before_spawn(self) -> None:
+        """Run the ``before_spawn`` hook; any failure refuses the start for good."""
+        if self._before_spawn is None:
+            return
+        try:
+            await self._before_spawn()
+        except StartError as exc:
+            raise _Fatal(exc.reason) from None
+        except Exception as exc:
+            logger.warning("plugin %s: start check failed (%s)", self._spec.name, type(exc).__name__)
+            raise _Fatal("could not start") from None
+
     @staticmethod
     async def _reap(child: _Child) -> None:
-        """Make sure the process is gone and the peer closed."""
-        if child.proc.returncode is None:
+        """Make sure the process and its process group are gone and the peer closed.
+
+        On POSIX the whole group is killed even when the plugin itself has already exited, so
+        nothing it started outlives it.
+        """
+        if sys.platform != "win32":
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(child.proc.pid, signal.SIGKILL)
+        elif child.proc.returncode is None:  # pragma: no cover -- Windows only
             _signal_child(child.proc, kill=True)
+        if child.proc.returncode is None:
             await child.proc.wait()
         await child.exit_watch
         await child.peer.close()

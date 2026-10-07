@@ -805,8 +805,9 @@ def _maybe_start_web_server(
             principal = current_principal()
             if principal.id == LOCAL_PRINCIPAL_ID:
                 if plugin_host is not None:
-                    # Running plugins' connectors are the owner's alone, like the built-in ones.
-                    return {**connector_host.connectors, **plugin_host.connectors()}
+                    # Running plugins' connectors are the owner's alone, like the built-in ones. A
+                    # built-in connector wins a name clash, so no plugin can stand in for one.
+                    return {**plugin_host.connectors(), **connector_host.connectors}
                 return connector_host.connectors
             return connector_registry.get(principal).connectors
 
@@ -1618,6 +1619,25 @@ def _plugin_connector_state(controller: Any, name: str) -> tuple[bool, str | Non
     return False, None
 
 
+def _plugins_feature_enabled(config: dict[str, Any]) -> bool:
+    """``plugins.enabled``: only a real boolean counts; a missing value or anything else is the
+    default (true), and a value of the wrong shape is logged."""
+    plugins_config = config.get("plugins")
+    if plugins_config is None:
+        return True
+    if not isinstance(plugins_config, dict):
+        logger.warning("Ignoring plugins: in settings.yaml: expected a mapping, got %s", type(plugins_config).__name__)
+        return True
+    enabled = plugins_config.get("enabled", True)
+    if not isinstance(enabled, bool):
+        logger.warning(
+            "Ignoring plugins.enabled in settings.yaml: expected true or false, got %s; plugins stay enabled",
+            type(enabled).__name__,
+        )
+        return True
+    return enabled
+
+
 def _build_plugin_host(config: dict[str, Any], connector_host: ConnectorHost, connector_state: Any) -> Any:
     """The local-mode PluginHost. ``plugins.enabled`` (default true) off leaves every plugin
     showing why it is not running."""
@@ -1630,12 +1650,11 @@ def _build_plugin_host(config: dict[str, Any], connector_host: ConnectorHost, co
             raise RuntimeError("No approvals registry is available.")
         return registry
 
-    plugins_config = config.get("plugins", {}) or {}
     return PluginHost(
         connectors_provider=lambda: connector_host.connectors,
         connector_state=connector_state,
         registry_provider=registry_provider,
-        feature_enabled=bool(plugins_config.get("enabled", True)),
+        feature_enabled=_plugins_feature_enabled(config),
     )
 
 

@@ -213,7 +213,7 @@ is required for settings changes, changing this needs one too. See ADR 0091.
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `plugins.enabled` | boolean | `true` | `true` | Lets the administrator-installed plugins run. Set it to `false` and no plugin starts; each shows in Settings that plugins are switched off. Plugins also need the packaged install's background service (the privilege-separated install); without it they do not run whatever this says. Local mode only; needs a restart. |
+| `plugins.enabled` | boolean | `true` | `true` | Lets the administrator-installed plugins run. Set it to `false` and no plugin starts; each shows in Settings that plugins are switched off. Plugins also need the packaged install's background service (the privilege-separated install); without it they do not run whatever this says. Any value other than `true` or `false`, or a `plugins:` that is not a mapping, is ignored with a warning in the daemon log and the default applies. Local mode only; needs a restart. |
 
 ## Organization config bundle (org_config.json)
 

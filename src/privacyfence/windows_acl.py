@@ -164,8 +164,8 @@ class Ace:
     inherited: bool = False
     # INHERIT_ONLY_ACE: the entry exists only to be copied onto children and
     # grants nothing on the object that carries it. Only the plugins'
-    # ancestor-directory check reads it; every other check here counts such
-    # an entry as if it applied, which errs towards reporting.
+    # own-directory and ancestor-directory checks read it; every other check
+    # here counts such an entry as if it applied, which errs towards reporting.
     inherit_only: bool = False
 
     def grants_read(self) -> bool:
