@@ -151,7 +151,8 @@ class AuditEntry:
                             # "webauthn_enrollment_refused" | "webauthn_recovery_code_used" |
                             # "webauthn_recovery_refused" |
                             # "sign_in_code_minted" |
-                            # "step_up_requirement_enabled" | "step_up_requirement_disabled"
+                            # "step_up_requirement_enabled" | "step_up_requirement_disabled" |
+                            # "plugin_source" | "plugin_confirm" | "plugin_lifecycle"
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
                             #  web/routes_security.py's register_verify/delete_credential,
                             #  recorded for either mode's own passkey enrollment surface. Tamper-
@@ -308,6 +309,29 @@ class AuditEntry:
                             #  same "don't rename what's already written into someone's audit
                             #  history" principle the note on "rule_changed_via_bridge_proposal" above
                             #  already gives for keeping its own legacy "bridge_proposal" vocabulary)
+                            # ("plugin_source": plugins/source_ops.py, one entry per ``source.call`` a
+                            #  plugin makes against a PrivacyFence connector (ADR 0120). ``connector``
+                            #  is "plugin:<name>", ``tool`` the source operation (e.g.
+                            #  "calendar.list_events"), ``tool_name`` "<name> source read" and
+                            #  ``summary`` "<targets>; bytes=<n>", or "<targets>; error=<code>" when
+                            #  the call failed. ``request_id`` and ``sender`` are empty. The data the
+                            #  plugin read is never put in an entry or a log line, only the target
+                            #  names and the byte count.)
+                            # ("plugin_confirm": plugins/confirm.py, the human-confirmation cards a
+                            #  plugin asks for through ``confirm.request``. Two entries per card, one
+                            #  when it is raised and one when it is answered, sharing ``connector``
+                            #  "plugin:<name>" and the card's id as ``request_id``. ``summary`` is
+                            #  "<kind>; requested" and then "<kind>; approved", "<kind>; denied" or
+                            #  "<kind>; expired", where <kind> is the confirmation kind the plugin
+                            #  named. Nothing the plugin put in the card body is recorded.)
+                            # ("plugin_lifecycle": plugins/host.py and plugins/supervisor.py, a change
+                            #  in a plugin's own standing that is not one call: ``connector`` is
+                            #  "plugin:<name>" and ``summary`` says what happened -- "enabled",
+                            #  "disabled", "disabled: <reason>" (crash limit or hash drift), "data
+                            #  purged (ack)" or "data purged (timeout)", "tools changed: +a,+b,-c" and
+                            #  "tools change rejected: <detail>". Enabling is the step that lets a
+                            #  plugin act, so it is recorded like the other posture changes above even
+                            #  though no tool call was involved.)
     auto_accept_rule: str   # rule name if auto_accepted, else ""
     latency_seconds: float
     pii_detected: bool = False  # True if pii_detector.py flagged the content before this decision
