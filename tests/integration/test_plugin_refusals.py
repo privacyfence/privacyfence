@@ -240,12 +240,9 @@ async def _(stack, monkeypatch):
     )
 
 
-@case("tool name colliding with a built-in tool")
+@case("plugin named after the start of a built-in tool")
 async def _(stack, monkeypatch):
-    await variant_refused(
-        stack, "apps", "builtin-collision", rejected_at_scan=False,
-        reason="tool apps_script_get_content collides with a built-in tool",
-    )
+    await variant_refused(stack, "apps", "builtin-collision", rejected_at_scan=True, reason="name 'apps' is reserved")
 
 
 @case("tools.changed adding an unreviewed tool")

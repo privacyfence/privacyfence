@@ -22,6 +22,7 @@ _BLOCK_KEY_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 _STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩‎‏؜]")
 _LANGUAGE = re.compile(r"[a-z0-9+#-]{1,20}")
+_LINE_BREAK = re.compile(r"[\n\t\u2028\u2029]+")
 
 __all__ = [
     "code", "diff", "fields", "heading", "table", "text", "validate_blocks",
@@ -30,6 +31,12 @@ __all__ = [
 
 def _clean(value: str) -> str:
     return _STRIP.sub("", value)
+
+
+def clean_line(value: str) -> str:
+    """``value`` cleaned, then every run of line breaks and tabs replaced by one space: for text a card
+    shows on one line (a title, a header field)."""
+    return _LINE_BREAK.sub(" ", _clean(value))
 
 
 def _only(block: dict, allowed: set[str], where: str) -> None:
