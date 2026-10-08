@@ -256,3 +256,40 @@ def build_choice_html(
         f'{_cancel_only_button_row_html(cancel_label)}'
     )
     return _document(width=PICKER_WIDTH, body_html=body_html)
+
+
+def build_plugin_approval_html(
+    *, title: str, fields: list[tuple[str, str]], body_blocks: list[dict],
+    frame_src: str = "", frame_title: str = "",
+) -> str:
+    """A plugin's approval card (ADR 0127): the title, PrivacyFence's own fields, the plugin's
+    preview blocks, optionally the plugin's page in a sandboxed frame, then Deny and Approve.
+
+    The fields come first and outside the frame, so the plugin's page can neither hide nor change
+    what is being approved. A ``Digest`` value is shown whole, in the code style. Every string is
+    escaped here, ``frame_src`` included, although only the approval service builds it. The frame
+    gets ``allow-scripts`` and never ``allow-same-origin``, so the page runs in an opaque origin."""
+    rows = "".join(
+        f'<tr><th scope="row">{_html_escape(label)}</th><td>'
+        + (f'<code class="pf-code">{_html_escape(value)}</code>' if label == "Digest" else _html_escape(value))
+        + "</td></tr>"
+        for label, value in fields
+    )
+    blocks_html = (
+        f'<div class="pf-dialog-blocks">{build_preview_body_html(blocks=body_blocks)}</div>'
+        if body_blocks else ""
+    )
+    frame_html = (
+        f'<iframe class="pf-plugin-frame" sandbox="allow-scripts" src="{_html_escape(frame_src)}" '
+        f'referrerpolicy="no-referrer" title="{_html_escape(frame_title)}" loading="eager"></iframe>'
+        if frame_src else ""
+    )
+    body_html = (
+        '<div class="pf-kicker"><span>PrivacyFence</span></div>'
+        f'<h2>{_html_escape(title)}</h2>'
+        f'<table class="pf-table pf-approval-fields"><tbody>{rows}</tbody></table>'
+        f'{blocks_html}'
+        f'{frame_html}'
+        f'{_confirm_button_row_html("Deny", "Approve")}'
+    )
+    return _document(width=CONFIRM_WIDTH, body_html=body_html)

@@ -187,6 +187,15 @@ img { display: block; max-width: 100%; }
 }
 .pf-code:last-child { margin-bottom: 0; }
 .pf-code code { font: inherit; }
+/* A plugin approval card (ADR 0127): PrivacyFence's own fields above the
+   plugin's page, and the page itself in a frame with a fixed minimum height
+   so it is visibly there before it loads. */
+.pf-approval-fields { margin: 0 0 var(--space-s); }
+.pf-plugin-frame {
+  display: block; inline-size: 100%; min-block-size: 24rem;
+  border: 1px solid var(--line); border-radius: var(--radius-s);
+  background: var(--surface); margin: 0 0 var(--space-s);
+}
 .pf-diff-add { background: var(--accent-soft); color: var(--accent-dark); }
 .pf-diff-del { background: var(--danger-soft); color: var(--danger); }
 .pf-diff-hunk { color: var(--muted); }
