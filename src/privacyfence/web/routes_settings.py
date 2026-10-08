@@ -266,6 +266,8 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # Listing, introspecting and stopping a plugin lets nothing new act: the binary is already
     # administrator-installed (ADR 0121), and introspection can neither read data nor change state.
     "rescan_plugins", "inspect_plugin", "disable_plugin",
+    # Revoking an approval only takes trust away, like disable_plugin.
+    "revoke_plugin_approval",
 })
 
 # The org-only actions (ADR 0035 decision 3), classified the same

@@ -123,6 +123,9 @@ class FakePluginHost:
     async def purge(self, name):
         return ("purge", name)
 
+    async def revoke_approval(self, name, approval_id):
+        return ("revoke_approval", name, approval_id)
+
 
 @pytest.fixture
 def plugin_controller(tmp_path, controller):
@@ -230,6 +233,13 @@ class TestPluginActions:
         ctrl.purge_plugin_data("demo")
 
         assert self._run(host) == ("purge", "demo")
+
+    def test_revoke_approval_goes_to_the_host(self, plugin_controller):
+        ctrl, host = plugin_controller
+
+        ctrl.revoke_plugin_approval("demo", "ap1")
+
+        assert self._run(host) == ("revoke_approval", "demo", "ap1")
 
     def test_a_host_that_is_not_running_is_reported_not_raised(self, plugin_controller):
         ctrl, host = plugin_controller

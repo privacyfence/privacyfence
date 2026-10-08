@@ -138,7 +138,8 @@ def test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_setting
     assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=ORG_MODE) is False
 
 
-_PLUGIN_ACTIONS = ("rescan_plugins", "inspect_plugin", "enable_plugin", "disable_plugin", "purge_plugin_data")
+_PLUGIN_ACTIONS = ("rescan_plugins", "inspect_plugin", "enable_plugin", "disable_plugin", "purge_plugin_data",
+                   "revoke_plugin_approval")
 
 
 @pytest.mark.parametrize("action", _PLUGIN_ACTIONS)

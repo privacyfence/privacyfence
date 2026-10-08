@@ -254,6 +254,7 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-plugin-tool { display: flex; flex-direction: column; gap: 2px; font-size: var(--step-small); }
 .pf-plugin-tool-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs); }
 .pf-plugin-tool-name { font-weight: 650; color: var(--ink); overflow-wrap: anywhere; }
+.pf-plugin-approvals > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
 .pf-plugin-facts { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.5; overflow-wrap: anywhere; }
 .pf-modal.pf-plugin-modal { width: min(560px, 100%); max-height: 100%; overflow-y: auto; }
 
@@ -1186,6 +1187,34 @@ _JS = r"""
   };
   var PLUGIN_GATE_LABELS = { auto: 'Runs without asking', review: 'Review', popup: 'Popup' };
 
+  var PLUGIN_OUTPUT_LABELS = {
+    'application/json': 'JSON', 'text/csv': 'CSV', 'text/html': 'HTML', 'text/plain': 'text', 'text/markdown': 'Markdown',
+  };
+
+  function shortDigest(d) {
+    d = String(d || '');
+    var m = d.match(/^sha256:([0-9a-f]{12})/i);
+    return m ? 'sha256:' + m[1] : d.slice(0, 19);
+  }
+
+  function renderPluginApprovals(p) {
+    var list = p.approvals || [];
+    if (list.length === 0) return '';
+    var html = '<details class="pf-plugin-approvals"><summary class="pf-plugin-meta">Approvals (' + list.length + ')</summary><ul class="pf-plugin-tools">';
+    list.forEach(function (a) {
+      html += '<li class="pf-plugin-tool"><div class="pf-plugin-meta"><strong>' + esc(a.kind) + '</strong> ' + esc(a.subject_id) +
+        ' <span title="' + esc(a.digest) + '">' + esc(shortDigest(a.digest)) + '</span> ' + esc(a.decided_at || '') + '</div>';
+      if (a.revoked_at) {
+        html += '<div class="pf-plugin-meta">Revoked ' + esc(a.revoked_at) + '</div>';
+      } else {
+        html += '<div class="button secondary" role="button" tabindex="0" aria-label="Revoke approval of ' + esc(a.subject_id) + '" ' +
+          dataAttr('revoke_plugin_approval', { name: p.name, approval_id: a.approval_id }) + '>Revoke</div>';
+      }
+      html += '</li>';
+    });
+    return html + '</ul></details>';
+  }
+
   function pluginRows(state) { return state.plugins || []; }
 
   function renderPluginRow(p) {
@@ -1197,6 +1226,7 @@ _JS = r"""
     if (p.reason) html += '<div class="pf-plugin-meta">' + esc(p.reason) + '</div>';
     if (p.tools_note) html += '<div class="pf-plugin-meta">' + esc(p.tools_note) + '</div>';
     if (p.last_error) html += '<div class="pf-plugin-error" role="alert">' + esc(p.last_error) + '</div>';
+    html += renderPluginApprovals(p);
     html += '<div class="pf-plugin-controls">';
     if (p.page_url) {
       html += '<a class="pf-link" href="' + esc(p.page_url) + '" target="_blank" rel="noopener" aria-label="Open page for ' +
@@ -1258,6 +1288,10 @@ _JS = r"""
     html += '<div class="pf-plugin-facts">Reads from your connectors: ' +
       (r.source_operations.length ? esc(r.source_operations.join(', ')) : 'nothing') + '.</div>';
     html += '<div class="pf-plugin-facts">Serves its own pages: ' + (r.pages ? 'yes' : 'no') + '.</div>';
+    if (r.outputs) {
+      var kinds = (r.output_types || []).map(function (t) { return PLUGIN_OUTPUT_LABELS[t] || t; });
+      html += '<div class="pf-plugin-facts">Publishes output files' + (kinds.length ? ': ' + esc(kinds.join(', ')) : '') + '.</div>';
+    }
     if (r.service_credentials) html += '<div class="pf-plugin-facts">Uses its own service credentials.</div>';
     if (r.max_gate_floor === 'auto') html += '<div class="pf-plugin-facts"><strong>Some tools run without asking.</strong></div>';
     html += '<div class="pf-modal-buttons">';

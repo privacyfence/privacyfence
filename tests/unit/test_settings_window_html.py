@@ -657,7 +657,7 @@ class TestPluginsSection:
     def test_the_plugin_actions_are_not_applicable_in_org_mode(self):
         not_applicable = self._caps(build_html(_make_state(), mode="org", is_admin=True))["not_applicable_actions"]
 
-        assert {"rescan_plugins", "inspect_plugin", "enable_plugin", "disable_plugin", "purge_plugin_data"} <= set(not_applicable)
+        assert {"rescan_plugins", "inspect_plugin", "enable_plugin", "disable_plugin", "purge_plugin_data", "revoke_plugin_approval"} <= set(not_applicable)
 
     def test_each_row_shows_what_the_host_reports_and_the_buttons(self):
         html = build_html(_make_state())
@@ -667,6 +667,23 @@ class TestPluginsSection:
             "Review and enable", "data-plugin-review", "'disable_plugin'", "Delete this plugin\\'s data",
             "data-plugin-purge", "'rescan_plugins'",
         ):
+            assert needle in html, needle
+
+    def test_each_row_lists_its_approvals_with_a_revoke_action(self):
+        html = build_html(_make_state())
+
+        for needle in (
+            "renderPluginApprovals(p)", "p.approvals", "<details", "a.kind", "a.subject_id", "shortDigest(a.digest)",
+            "title=\"' + esc(a.digest)", "Revoked ' + esc(a.revoked_at)",
+            "dataAttr('revoke_plugin_approval', { name: p.name, approval_id: a.approval_id })", ">Revoke</div>",
+        ):
+            assert needle in html, needle
+
+    def test_the_enable_dialog_names_the_output_types(self):
+        html = build_html(_make_state())
+
+        for needle in ("r.outputs", "r.output_types", "Publishes output files", "'application/json': 'JSON'",
+                       "'text/csv': 'CSV'", "'text/html': 'HTML'", "'text/plain': 'text'", "'text/markdown': 'Markdown'"):
             assert needle in html, needle
 
     def test_the_enable_dialog_lists_every_tool_with_its_gate_and_the_floor(self):
