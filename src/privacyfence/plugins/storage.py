@@ -21,6 +21,7 @@ from privacyfence.secure_files import secure_mkdir
 PLUGIN_DATA_DIRNAME = "plugin-data"
 _SHARED = "shared"
 _USER = "user"
+_OUTPUTS = "outputs"
 
 
 def install_dir(name: str) -> Path:
@@ -29,6 +30,14 @@ def install_dir(name: str) -> Path:
 
 def principal_dir(name: str, principal: Principal) -> Path:
     return paths.user_dir(principal) / PLUGIN_DATA_DIRNAME / name / _USER
+
+
+def output_dir(name: str, principal: Principal) -> Path:
+    """Where a plugin with ``outputs: true`` publishes files for one principal (ADR 0130).
+
+    Under ``plugin-data/<name>``, so ``remove_all`` covers it. The caller creates it ``0700``.
+    """
+    return paths.user_dir(principal) / PLUGIN_DATA_DIRNAME / name / _OUTPUTS
 
 
 def ensure_dirs(name: str, principals: list[Principal]) -> tuple[Path, dict[str, Path]]:
@@ -61,4 +70,4 @@ def remove_all(name: str) -> None:
             shutil.rmtree(root)
 
 
-__all__ = ["ensure_dirs", "install_dir", "principal_dir", "remove_all"]
+__all__ = ["ensure_dirs", "install_dir", "output_dir", "principal_dir", "remove_all"]

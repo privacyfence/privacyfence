@@ -37,6 +37,27 @@ class TestPaths:
         assert storage.principal_dir("today", ALICE) == root / "users" / "alice" / "plugin-data" / "today" / "user"
 
 
+class TestOutputDir:
+    def test_output_dir_is_under_the_plugins_data_dir(self, root):
+        assert storage.output_dir("today", LOCAL_PRINCIPAL) == root / "plugin-data" / "today" / "outputs"
+
+    def test_other_principal_has_its_own_output_dir(self, root):
+        assert storage.output_dir("today", ALICE) == root / "users" / "alice" / "plugin-data" / "today" / "outputs"
+
+    def test_output_dir_is_distinct_from_the_other_two(self, root):
+        dirs = {storage.install_dir("today"), storage.principal_dir("today", LOCAL_PRINCIPAL), storage.output_dir("today", LOCAL_PRINCIPAL)}
+        assert len(dirs) == 3
+
+    def test_remove_all_deletes_the_output_dir(self, root):
+        out = storage.output_dir("today", ALICE)
+        out.mkdir(parents=True)
+        (out / "a.csv").write_text("x")
+
+        storage.remove_all("today")
+
+        assert not out.exists()
+
+
 class TestEnsureDirs:
     def test_creates_the_install_dir_and_one_per_principal(self, root):
         shared, per_principal = storage.ensure_dirs("today", [LOCAL_PRINCIPAL, ALICE])
