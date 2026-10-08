@@ -1,13 +1,15 @@
 """Stand-in plugin for supervisor tests: stdlib only, speaks the line-framed JSON-RPC protocol.
 
 Usage: ``stub_plugin.py <mode>`` with a mode of ``ok``, ``crash-on-start``, ``crash-after-init``,
-``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env`` or ``wrong-name``.
+``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env``, ``wrong-name`` or
+``spawn-child`` (starts a sleeping child process and writes ``CHILD:<pid>`` to stderr).
 """
 from __future__ import annotations
 
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -37,6 +39,12 @@ def main() -> int:
     if MODE == "crash-on-start":
         print("stub: crashing on start", file=sys.stderr, flush=True)
         return 1
+    if MODE == "spawn-child":
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(20)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        )
+        print(f"CHILD:{child.pid}", file=sys.stderr, flush=True)
     if MODE == "echo-env":
         print("ENV:" + ",".join(sorted(os.environ)), file=sys.stderr, flush=True)
     if MODE == "slow-shutdown" and hasattr(signal, "SIGTERM"):

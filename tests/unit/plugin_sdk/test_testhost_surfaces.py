@@ -169,6 +169,26 @@ def test_filter_response_rules():
     assert _pages.filter_response("nope")[0] == 502
 
 
+def test_filter_response_drops_a_204_body():
+    status, _, body = _pages.filter_response({"status": 204, "body": "not allowed"})
+    assert (status, body) == (204, b"")
+
+
+async def test_page_slower_than_the_timeout_is_502(monkeypatch):
+    monkeypatch.setattr(_pages, "_WEB_REQUEST_TIMEOUT", 0.2)
+    plugin = Plugin(name="slow", version="1.0.0")
+
+    @plugin.page("/")
+    async def home(ctx, request):
+        await asyncio.sleep(2)
+        return Html("late")
+
+    async with PluginTestHost(plugin) as host:
+        response = await host.get("/")
+    assert response.status == 502
+    assert response.body == b"The plugin did not answer."
+
+
 async def test_confirmation_round_trip():
     plugin, seen = build_plugin()
     async with PluginTestHost(plugin) as host:

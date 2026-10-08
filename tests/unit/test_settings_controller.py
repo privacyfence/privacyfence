@@ -33,6 +33,8 @@ import pytest
 
 from privacyfence import auto_accept, daemon_main, org_mode, resource_names, settings_controller as sc, update_checker
 from privacyfence.auto_accept import ReviewContext
+from privacyfence.plugins.events import EventFanout
+from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.policy import engine as policy_engine
 from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import store as policy_store
@@ -259,10 +261,10 @@ class TestConnectorChangesReachThePluginHost:
 
         ctrl.refresh_connectors()
 
-        assert wait_until(lambda: host.connector_changes)
-        assert len(host.connector_changes) == 1
-        assert {r["key"] for r in host.connector_changes[0]} == set(sc.ALL_CONNECTORS)
-        assert all({"enabled", "authed"} <= set(r) for r in host.connector_changes[0])
+        # The first report is the baseline seeded at construction, the second is the refresh.
+        assert wait_until(lambda: len(host.connector_changes) == 2)
+        assert {r["key"] for r in host.connector_changes[1]} == set(sc.ALL_CONNECTORS)
+        assert all({"enabled", "authed"} <= set(r) for r in host.connector_changes[1])
 
     def test_a_failed_rebuild_forwards_nothing(self, plugin_controller, monkeypatch):
         ctrl, host = plugin_controller
@@ -275,7 +277,7 @@ class TestConnectorChangesReachThePluginHost:
         ctrl.refresh_connectors()
 
         time.sleep(0.2)
-        assert host.connector_changes == []
+        assert len(host.connector_changes) == 1  # only the startup baseline
 
 
 class TestRunAsyncMarshaling:
@@ -2342,3 +2344,63 @@ class TestAnyConnectorAuthenticated:
         controller._connectors = ["gmail"]
         rows = controller.snapshot()["connectors"]
         assert any(r["authed"] for r in rows) is controller.any_connector_authenticated()
+
+
+class _FanoutHost(FakePluginHost):
+    """A host stand-in that diffs reported rows with the real ``EventFanout``."""
+
+    def __init__(self):
+        super().__init__()
+        self.fanout = EventFanout(lambda: [])
+        self.events = []
+
+    def on_connectors_changed(self, rows):
+        self.events.extend(self.fanout.changes(rows))
+
+
+@pytest.mark.usefixtures("stub_connector_build")
+class TestFirstConnectorChangeIsSent:
+    @staticmethod
+    def _build(controller):
+        host = _FanoutHost()
+        ctrl = sc.SettingsController(
+            controller._config_path, connectors=[], connector_host=SimpleNamespace(set_connectors=lambda conns: None),
+            plugin_host=host,
+        )
+        return ctrl, host
+
+    def test_construction_alone_sends_nothing(self, controller):
+        _, host = self._build(controller)
+
+        assert host.events == []
+
+    def test_the_first_toggle_after_start_sends_one_event(self, controller):
+        ctrl, host = self._build(controller)
+
+        ctrl.disable_connector("gmail")
+
+        assert wait_until(lambda: host.events)
+        assert host.events == [{"connector": "gmail", "state": "disabled", "principal": LOCAL_PRINCIPAL.id}]
+
+    def test_a_refresh_with_no_change_sends_nothing(self, controller):
+        ctrl, host = self._build(controller)
+
+        ctrl.refresh_connectors()
+
+        time.sleep(0.2)
+        assert host.events == []
+
+    def test_a_second_toggle_sends_a_second_event(self, controller):
+        ctrl, host = self._build(controller)
+
+        ctrl.disable_connector("gmail")
+        assert wait_until(lambda: len(host.events) == 1)
+        ctrl.enable_connector("gmail")
+
+        assert wait_until(lambda: len(host.events) == 2)
+        assert host.events[1]["state"] == "enabled"
+
+    def test_no_host_is_no_error(self, controller):
+        controller.enable_connector("gmail")
+
+        assert controller._plugin_host is None

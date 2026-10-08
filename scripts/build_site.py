@@ -177,7 +177,6 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "ai-client-qa.md",
         "downloads-and-release-kpi.md",
         "releasing.md",
-        "plugin-framework-plan.md",
         "plugin-framework-cr-plan.md",
     }
 )

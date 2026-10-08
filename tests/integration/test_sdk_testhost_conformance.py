@@ -1,4 +1,4 @@
-"""The SDK's ``PluginTestHost`` and the real daemon must agree (ADR 0125).
+"""The SDK's ``PluginTestHost`` and the real daemon must agree (ADR 0126).
 
 Plugin authors test against ``PluginTestHost`` and ship against PrivacyFence, so a scenario that
 passes on one must pass on the other. Each test runs one scenario twice, once on the SDK test host

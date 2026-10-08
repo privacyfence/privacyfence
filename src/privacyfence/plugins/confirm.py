@@ -17,8 +17,9 @@ Three properties hold by construction:
 
 ``request`` returns at once. A finalizer, run in the injected executor, waits for the human's
 answer and calls ``registry.finalize``, which is what ``registry.await_status`` (and so
-``privacyfence_await_approval`` and ``confirm.await``) reads; nothing else finalizes a confirm
-card. There is no deny note: a confirm dialog posts only ``confirm`` or ``cancel``.
+``privacyfence_await_approval`` and ``confirm.await``) reads. The only other finalize is the
+host's shutdown, which expires the cards nobody answered. There is no deny note: a confirm dialog
+posts only ``confirm`` or ``cancel``.
 """
 from __future__ import annotations
 
@@ -35,8 +36,13 @@ from typing import Any
 
 from privacyfence.approvals import CONFIRM_RESULTS, PendingApprovalRegistry
 from privacyfence.dialog_window_html import build_confirmation_html
-from privacyfence.plugins.blocks import to_card_blocks, validate_blocks
-from privacyfence.plugins.constants import CONFIRM_AWAIT_MAX_MS
+from privacyfence.plugins.blocks import clean_text, to_card_blocks, validate_blocks
+from privacyfence.plugins.constants import (
+    CONFIRM_AWAIT_MAX_MS,
+    MAX_PENDING_CONFIRMS,
+    MAX_PENDING_CONFIRMS_PER_PLUGIN,
+    PREPARED_CALL_LIFETIME_SECONDS,
+)
 from privacyfence.plugins.protocol import ConfirmRequestParams, RpcError
 from privacyfence.principal import LOCAL_PRINCIPAL_ID
 
@@ -52,12 +58,6 @@ _AWAIT_STATUS = {"approved": "approved", "denied": "denied", "expired": "expired
 
 def _rfc3339(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def _clean_title(title: str) -> str:
-    # The same control and bidi stripping every block string gets, so a title cannot reorder the
-    # text a human reads on the card.
-    return validate_blocks([{"type": "text", "text": title}])[0]["text"]
 
 
 @dataclass(frozen=True)
@@ -85,6 +85,10 @@ class ConfirmationService:
         self._audit_fn = audit
         self._lock = threading.Lock()
         self._owned: dict[str, _Owned] = {}
+        self._finished: dict[str, float] = {}      # approval id -> monotonic time it finished
+        self._active_total = 0
+        self._active_by_plugin: dict[str, int] = {}
+        self.retain_finished_seconds = PREPARED_CALL_LIFETIME_SECONDS
         self._finalizers: set[asyncio.Future] = set()
         self.poll_seconds = POLL_SECONDS
 
@@ -100,10 +104,20 @@ class ConfirmationService:
             raise RpcError(
                 "confirmation_refused", "an unattended session is active", extra={"reason": "unattended_session"},
             )
-        registry = self._registry_provider()
-        card = registry.register_confirm(sensitive=parsed.require_step_up, notify=True)
+        # Cleaned as one string, with the same stripping every block string gets, so neither the
+        # display name nor the title can reorder the text a human reads on the card.
+        title = clean_text(f"{display_name}: {parsed.title}")
+        if not clean_text(parsed.title).strip():
+            raise RpcError("invalid_params", "confirm.request.title is empty after cleaning")
+        self._reserve(plugin)
+        try:
+            registry = self._registry_provider()
+            card = registry.register_confirm(sensitive=parsed.require_step_up, notify=True)
+        except BaseException:
+            self._release(plugin)
+            raise
         registry.set_html(card.id, build_confirmation_html(
-            title=f"{display_name}: {_clean_title(parsed.title)}",
+            title=title,
             message_lines=[],
             cancel_label="Deny",
             confirm_label="Approve",
@@ -112,10 +126,17 @@ class ConfirmationService:
         with self._lock:
             self._owned[card.id] = _Owned(plugin, parsed.kind, registry)
         self._audit(plugin, parsed.kind, "requested")
-        loop = asyncio.get_running_loop()
-        finalizer = loop.run_in_executor(self._executor, self._finalize_when_answered, card.id)
+        try:
+            loop = asyncio.get_running_loop()
+            finalizer = loop.run_in_executor(self._executor, self._finalize_when_answered, card.id)
+        except Exception:
+            logger.warning("A plugin confirmation finalizer could not be scheduled", exc_info=True)
+            registry.finalize(card.id, "deny")
+            self._audit(plugin, parsed.kind, "denied")
+            self._finish(card.id, plugin)
+            raise
         self._finalizers.add(finalizer)
-        finalizer.add_done_callback(self._finalizer_done)
+        finalizer.add_done_callback(lambda f, i=card.id, p=plugin: self._finalizer_done(f, i, p))
         return {"approval_id": card.id, "expires_at": _rfc3339(card.expires_at)}
 
     async def await_(self, plugin: str, params: dict) -> dict:
@@ -141,6 +162,17 @@ class ConfirmationService:
             result["decided_at"] = _rfc3339(card.decided_at)
         return result
 
+    async def close(self, timeout: float = 5.0) -> None:
+        """Expire every confirmation still waiting for a human and wait for its finalizer, so the
+        outcome is audited before the audit log closes and no finalizer outlives the host."""
+        with self._lock:
+            waiting = [(i, o.registry) for i, o in self._owned.items() if i not in self._finished]
+        for approval_id, registry in waiting:
+            registry.finalize(approval_id, "expired")
+        finalizers = list(self._finalizers)
+        if finalizers:
+            await asyncio.wait(finalizers, timeout=timeout)
+
     def _finalize_when_answered(self, approval_id: str) -> None:
         with self._lock:
             owned = self._owned[approval_id]
@@ -161,8 +193,42 @@ class ConfirmationService:
         status = _AWAIT_STATUS.get(registry.await_status(approval_id), "expired")
         self._audit(owned.plugin, owned.kind, status)
 
-    def _finalizer_done(self, future: asyncio.Future | Future) -> None:
+    def _reserve(self, plugin: str) -> None:
+        """Take one finalizer slot, or refuse; called before anything is registered."""
+        with self._lock:
+            if (self._active_total >= MAX_PENDING_CONFIRMS
+                    or self._active_by_plugin.get(plugin, 0) >= MAX_PENDING_CONFIRMS_PER_PLUGIN):
+                raise RpcError(
+                    "confirmation_refused", "too many confirmations are pending",
+                    extra={"reason": "too_many_pending"},
+                )
+            self._active_total += 1
+            self._active_by_plugin[plugin] = self._active_by_plugin.get(plugin, 0) + 1
+
+    def _release(self, plugin: str) -> None:
+        with self._lock:
+            self._active_total -= 1
+            left = self._active_by_plugin.get(plugin, 1) - 1
+            if left > 0:
+                self._active_by_plugin[plugin] = left
+            else:
+                self._active_by_plugin.pop(plugin, None)
+
+    def _finish(self, approval_id: str, plugin: str) -> None:
+        """Give the slot back and drop ownership records that finished long enough ago for a
+        ``confirm.await`` to have collected the answer."""
+        self._release(plugin)
+        now = time.monotonic()
+        with self._lock:
+            self._finished[approval_id] = now
+            for done, at in list(self._finished.items()):
+                if now - at >= self.retain_finished_seconds:
+                    del self._finished[done]
+                    self._owned.pop(done, None)
+
+    def _finalizer_done(self, future: asyncio.Future | Future, approval_id: str, plugin: str) -> None:
         self._finalizers.discard(future)  # type: ignore[arg-type]
+        self._finish(approval_id, plugin)
         if not future.cancelled() and future.exception() is not None:
             logger.warning("A plugin confirmation finalizer failed", exc_info=future.exception())
 

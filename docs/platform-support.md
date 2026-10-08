@@ -50,6 +50,23 @@ else needs `sudo` or an elevated PowerShell. The program files live elsewhere:
 Each additional OS account added to an install ([below](#adding-a-second-account)) gets its own
 policy, audit log, passkeys and credentials under `users/os-<id>/` in the same data directory.
 
+## Plugins directory
+
+[Plugins](plugins.md) are installed by an administrator into one directory per OS. It is outside the
+installed app, so upgrades keep it, and it must be writable by administrators only, as must every
+folder above it:
+
+| OS | Plugins directory |
+|---|---|
+| Linux (`.deb`) | `/usr/local/lib/privacyfence/plugins` |
+| macOS | `/Library/PrivacyFence/plugins` |
+| Windows | `%ProgramFiles%\PrivacyFence Plugins` |
+
+The path is not configurable. A plugin's log is `logs/plugins/<name>.log` in the data directory
+([above](#data-locations)), and its files are under `plugin-data/<name>/` there. On some older Debian
+installs `/usr/local` and `/usr/local/lib` are group-writable by `staff`, and plugins are refused
+until they are administrator-only.
+
 ## Logs
 
 | Platform | Where to look |

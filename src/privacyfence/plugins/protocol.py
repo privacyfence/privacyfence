@@ -6,7 +6,7 @@ partial is returned. Unknown keys are ignored (a newer minor version may add som
 org-only fields, which local mode rejects with ``org_only_field``. Error details name keys and
 limits, never the values a plugin sent, so a hostile plugin cannot smuggle content into logs or
 audit entries. The validators are hand-written and stdlib only; ``docs/plugin-protocol/
-protocol.schema.json`` is the published description of the same shapes (ADR 0122).
+protocol.schema.json`` is the published description of the same shapes (ADR 0120).
 
 Blocks inside ``preview`` and ``payload`` are checked here only to be lists of objects. Full block
 validation is injected through ``validate_blocks`` so this module stays free of the sanitizer.

@@ -129,7 +129,9 @@ class TestErrors:
         assert exc.value.code == "internal_error"
         assert exc.value.detail == "handler failed"
         assert "secret detail" not in exc.value.detail
-        assert any(r.exc_info for r in caplog.records)
+        assert "handler for m failed: ValueError" in caplog.text
+        assert "secret detail" not in caplog.text
+        assert not any(r.exc_info for r in caplog.records)
 
     async def test_unknown_method(self, pair):
         left, _ = await pair()
@@ -229,6 +231,48 @@ class TestNotifications:
         assert not right.closed
         assert any("notification handler" in r.message for r in caplog.records)
 
+    async def test_handler_failure_logs_only_the_type(self, pair, caplog):
+        done = asyncio.Event()
+
+        async def boom(params):
+            done.set()
+            raise ValueError(params["secret"])
+
+        left, right = await pair({}, {}, right_notifs={"n": boom})
+        with caplog.at_level(logging.DEBUG, logger=rpc.logger.name):
+            await left.notify("n", {"secret": "hunter2"})
+            await asyncio.wait_for(done.wait(), 2)
+            await asyncio.sleep(0.05)
+        assert "notification handler for n failed: ValueError" in caplog.text
+        assert "hunter2" not in caplog.text
+        assert not any(r.exc_info for r in caplog.records)
+
+    async def test_over_the_in_flight_cap_dropped_and_counted(self):
+        peer, rb, wb, closes = await _raw()
+        release = asyncio.Event()
+        seen: list[dict] = []
+
+        async def hold(params):
+            seen.append(params)
+            await release.wait()
+
+        peer._notification_handlers["n"] = hold
+        for i in range(MAX_IN_FLIGHT + 2):
+            wb.write(json.dumps({"jsonrpc": "2.0", "method": "n", "params": {"i": i}}).encode() + b"\n")
+        await asyncio.wait_for(_until(lambda: peer.dropped_notifications == 2), 2)
+        assert len(seen) == MAX_IN_FLIGHT
+        # Notifications hold slots the same way requests do.
+        peer._handlers["m"] = hold
+        wb.write(b'{"jsonrpc":"2.0","id":1,"method":"m","params":{}}\n')
+        reply = json.loads(await asyncio.wait_for(rb.readline(), 2))
+        assert reply["error"]["data"]["detail"] == "too many requests in flight"
+        release.set()
+        await asyncio.wait_for(_until(lambda: peer._in_flight == 0), 2)
+        wb.write(b'{"jsonrpc":"2.0","method":"n","params":{"i":"after"}}\n')
+        await asyncio.wait_for(_until(lambda: {"i": "after"} in seen), 2)
+        assert peer.dropped_notifications == 2 and closes == []
+        await peer.close()
+
 
 class TestBatch:
     async def test_batch_gets_invalid_request_and_is_not_processed(self):
@@ -284,6 +328,29 @@ class TestInvalidLines:
             wb.write(b"x" * 200 + b"\n")
         await asyncio.wait_for(_until(lambda: peer.closed), 2)
         assert closes == ["invalid_output"]
+
+    async def test_oversize_line_in_pieces_counts_once(self):
+        peer, rb, wb, closes = await _raw(limit=64)
+        for _ in range(INVALID_LINES_LIMIT - 1):
+            # Each piece is over the reader's limit and arrives on its own.
+            for piece in (b"x" * 100, b"x" * 100, b"x" * 100, b"x" * 10 + b"\n"):
+                wb.write(piece)
+                await wb.drain()
+                await asyncio.sleep(0.02)
+        await asyncio.wait_for(_until(lambda: peer._invalid_streak == INVALID_LINES_LIMIT - 1), 2)
+        await asyncio.sleep(0.05)
+        assert not peer.closed
+        wb.write(b'{"jsonrpc":"2.0","method":"ok"}\n')
+        await asyncio.wait_for(_until(lambda: peer._invalid_streak == 0), 2)
+        assert closes == []
+        await peer.close()
+
+    async def test_oversize_line_then_end_of_stream(self):
+        peer, rb, wb, closes = await _raw(limit=64)
+        wb.write(b"x" * 200)
+        wb.close()
+        await asyncio.wait_for(_until(lambda: peer.closed), 2)
+        assert closes == ["eof"]
 
     async def test_explicit_length_check(self, monkeypatch):
         monkeypatch.setattr(rpc, "MAX_LINE_BYTES", 40)
@@ -392,7 +459,7 @@ class TestBrokenStreams:
 
     async def test_reset_while_reading_closes_as_eof(self):
         class Reader:
-            async def readline(self):
+            async def readuntil(self, separator=b"\n"):
                 raise ConnectionResetError
 
         (_, wa), _other = await _streams()
@@ -404,7 +471,7 @@ class TestBrokenStreams:
 
     async def test_reader_crash_closes(self, caplog):
         class Reader:
-            async def readline(self):
+            async def readuntil(self, separator=b"\n"):
                 raise RuntimeError("boom")
 
         (_, wa), _other = await _streams()

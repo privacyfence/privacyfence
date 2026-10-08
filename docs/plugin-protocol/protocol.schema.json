@@ -202,7 +202,8 @@
                 "type": "object",
                 "properties": {
                   "key": {
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.-]{1,64}$"
                   },
                   "label": {
                     "type": "string"

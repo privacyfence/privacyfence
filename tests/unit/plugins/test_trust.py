@@ -229,6 +229,83 @@ class TestWindowsAncestors:
         )
 
 
+
+# A folder an administrator creates under %ProgramFiles%: everything inherited, and a CREATOR OWNER
+# full control that is inherit-only, so it lands on the folder's children and never on the folder.
+_PROGRAM_FILES_SUBFOLDER_ACL = [
+    windows_acl.Ace(trustee="NT SERVICE\\TrustedInstaller", mask=0x1F01FF, inherited=True),
+    windows_acl.Ace(trustee="NT AUTHORITY\\SYSTEM", mask=0x1F01FF, inherited=True),
+    windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF, inherited=True),
+    windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1200A9, inherited=True),
+    windows_acl.Ace(trustee="CREATOR OWNER", mask=windows_acl.GENERIC_ALL, inherited=True, inherit_only=True),
+]
+# What a file in that folder inherits once the creator, an administrator, owns it.
+_PROGRAM_FILES_FILE_ACL = [
+    windows_acl.Ace(trustee="NT AUTHORITY\\SYSTEM", mask=0x1F01FF, inherited=True),
+    windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF, inherited=True),
+    windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1200A9, inherited=True),
+]
+
+
+class TestWindowsProgramFiles:
+    """A plugin installed the normal way, into a folder under ``%ProgramFiles%``."""
+
+    @staticmethod
+    def _layout(monkeypatch, tmp_path, *, exe_acl=None, folder_acl=None, bin_dir=False):
+        plugin_dir = tmp_path / "plugins" / "today"
+        exe_parent = plugin_dir / "bin" if bin_dir else plugin_dir
+        exe_parent.mkdir(parents=True)
+        exe = exe_parent / f"today-plugin{_EXE_SUFFIX}"
+        exe.write_bytes(b"x")
+        real_dir = plugin_dir.resolve()
+        acls = {
+            exe: exe_acl or _PROGRAM_FILES_FILE_ACL,
+            real_dir: folder_acl or _PROGRAM_FILES_SUBFOLDER_ACL,
+            real_dir / "bin": _PROGRAM_FILES_SUBFOLDER_ACL,
+            real_dir.parent: _PROGRAM_FILES_SUBFOLDER_ACL,
+        }
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl", lambda path: acls.get(Path(path), _DEFAULT_DRIVE_ROOT_ACL),
+        )
+        return plugin_dir, exe
+
+    def test_a_folder_under_program_files_passes(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(monkeypatch, tmp_path)
+
+        assert trust.admin_only_problem(plugin_dir, exe) is None
+
+    def test_a_subfolder_holding_the_executable_passes(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(monkeypatch, tmp_path, bin_dir=True)
+
+        assert trust.admin_only_problem(plugin_dir, exe) is None
+
+    @pytest.mark.parametrize("trustee", ["BUILTIN\\Users", "NT AUTHORITY\\Authenticated Users"])
+    @pytest.mark.parametrize("mask", [0x1301BF, windows_acl.FILE_WRITE_DATA])
+    def test_a_real_write_entry_on_the_folder_is_refused(self, monkeypatch, tmp_path, trustee, mask):
+        plugin_dir, exe = self._layout(
+            monkeypatch, tmp_path,
+            folder_acl=[*_PROGRAM_FILES_SUBFOLDER_ACL, windows_acl.Ace(trustee=trustee, mask=mask, inherited=True)],
+        )
+
+        # Reported with the strict reason, which also names the inherit-only entry.
+        writable = ", ".join(sorted([trustee, "CREATOR OWNER"]))
+        assert trust.admin_only_problem(plugin_dir, exe) == f"{plugin_dir.resolve()} is writable by {writable}"
+
+    def test_a_user_writable_executable_is_refused(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(
+            monkeypatch, tmp_path,
+            exe_acl=[*_PROGRAM_FILES_FILE_ACL, windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1301BF)],
+        )
+
+        assert trust.admin_only_problem(plugin_dir, exe) == f"{exe} is writable by BUILTIN\\Users"
+
+    def test_an_inherit_only_entry_on_the_executable_is_refused(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(monkeypatch, tmp_path, exe_acl=_PROGRAM_FILES_SUBFOLDER_ACL)
+
+        assert trust.admin_only_problem(plugin_dir, exe) == f"{exe} is writable by CREATOR OWNER"
+
+
 class TestAncestorRule:
     """How the strict and the ancestor rule combine, independent of platform."""
 
@@ -356,6 +433,61 @@ class TestDiscovery:
         trust.discover(tmp_path, trust_check=lambda d, e: calls.append((d, e)))
 
         assert calls == [(plugin_dir, (plugin_dir / f"today-plugin{_EXE_SUFFIX}").resolve())]
+
+
+    def test_command_equal_to_the_plugin_directory_is_refused(self, tmp_path):
+        _install(tmp_path, command=["."])
+
+        [found] = trust.discover(tmp_path, trust_check=lambda *_: pytest.fail("not reached"))
+
+        assert found.problem == "manifest invalid: command[0] resolves to the plugin directory itself"
+        assert found.manifest is None
+
+    def test_executable_outside_the_plugins_directory_is_refused(self, monkeypatch, tmp_path):
+        # Where a junction, which os.scandir does not report as a symbolic link, leads.
+        _install(tmp_path / "plugins")
+        elsewhere = tmp_path / "elsewhere" / "today-plugin"
+        monkeypatch.setattr(trust, "resolve_command", lambda manifest, plugin_dir: [str(elsewhere)])
+
+        [found] = trust.discover(tmp_path / "plugins", trust_check=lambda *_: pytest.fail("not reached"))
+
+        assert found.problem == "executable is outside the plugins directory"
+        assert found.manifest is not None
+
+    def test_symlinked_plugin_directory_is_refused(self, tmp_path):
+        real = _install(tmp_path / "elsewhere")
+        (tmp_path / "plugins").mkdir()
+        link = tmp_path / "plugins" / "today"
+        try:
+            link.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot create symlinks here")
+
+        [found] = trust.discover(tmp_path / "plugins", trust_check=lambda *_: pytest.fail("not reached"))
+
+        assert found == trust.DiscoveredPlugin("today", link, None, "plugin directory is a symbolic link", "", "")
+
+    def test_symlink_to_a_plugin_in_the_same_directory_is_refused(self, tmp_path):
+        _install(tmp_path, "today")
+        try:
+            (tmp_path / "alias").symlink_to(tmp_path / "today", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot create symlinks here")
+
+        found = trust.discover(tmp_path, trust_check=_no_problem)
+
+        assert [(p.dir_name, p.problem) for p in found] == [
+            ("alias", "plugin directory is a symbolic link"), ("today", None),
+        ]
+
+    def test_symlink_to_a_file_is_skipped(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+        try:
+            (tmp_path / "link").symlink_to(tmp_path / "notes.txt")
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot create symlinks here")
+
+        assert trust.discover(tmp_path, trust_check=_no_problem) == []
 
 
 class TestHashes:

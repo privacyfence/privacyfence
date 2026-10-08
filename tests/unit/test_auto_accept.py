@@ -466,7 +466,7 @@ class TestConcurrentRulePersistence:
 
 
 class TestDynamicTools:
-    """Plugin tools added to, and removed from, every static policy table (ADR 0120)."""
+    """Plugin tools added to, and removed from, every static policy table (ADR 0122)."""
 
     @staticmethod
     def _specs():

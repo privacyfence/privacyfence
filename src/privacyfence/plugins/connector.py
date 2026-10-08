@@ -10,9 +10,12 @@ hold:
 - **A read releases the prepared payload.** The human approved exactly those blocks, so whatever
   ``tool.execute`` returns for a read-only tool is ignored. A plugin cannot hand the AI anything
   the card did not show.
-- **No unseen re-prepare.** A prepared call is kept while its card is pending, and an approved
-  read is kept for the ledger's replay window. A repeat call in either window reuses it instead of
-  asking the plugin again, so a released payload is always the one a human saw.
+- **An approval belongs to one prepared call.** The gate's dedupe key carries the prepared
+  call's id, so the decision ledger replays an approval only to a repeat call that reuses that
+  same prepared call. A fresh prepare always gets its own card, so a released payload is always
+  the one a human saw. A prepared call is kept for the card's pending lifetime plus the ledger's
+  replay window, and a decided read for another replay window, so a repeat call in those windows
+  reuses it instead of asking the plugin again, and gets the same payload or the same denial.
 - **A write runs once.** An approved write's prepared call is dropped before ``tool.execute`` is
   sent, and execute is never retried. A second identical call prepares afresh and gets its own
   card.
@@ -34,7 +37,7 @@ from privacyfence.approval_window_html import NARROW, WIDE
 from privacyfence.approvals import ApprovalPending, canonical_key
 from privacyfence.audit_log import AuditEntry, current_week, get_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
-from privacyfence.gate import current_reason, gated_call
+from privacyfence.gate import GateDeniedError, current_reason, gated_call
 from privacyfence.plugins.blocks import fields_dict, flatten_text, to_card_blocks, validate_blocks
 from privacyfence.plugins.constants import (
     INLINE_RESULT_BYTES,
@@ -273,6 +276,10 @@ class PluginConnector(Connector):
         else:
             future.set_result(prepared)
             if defn.gate != "auto":
+                registry = approval_ui.get_approval_ui().deferred_registry
+                if registry is not None:
+                    # Long enough for the card to stay pending and its decision to be replayed.
+                    prepared.keep_until = time.time() + registry.pending_ttl + registry.ledger_ttl
                 self._prepared[key] = prepared
             return prepared
         finally:
@@ -317,6 +324,7 @@ class PluginConnector(Connector):
         self, key: str, tool: str, defn: ToolDef, title: str, summary: str, prepared: PreparedCall, args: dict,
     ) -> None:
         payload = prepared.payload or []
+        registry = approval_ui.get_approval_ui().deferred_registry
         try:
             await gated_call(
                 connector=self._plugin, tool=tool, tool_name=title,
@@ -328,15 +336,23 @@ class PluginConnector(Connector):
                 preview_blocks=to_card_blocks(prepared.preview + payload),
                 pii_scan_text=flatten_text(payload) if defn.read_only else None,
                 args=args,
+                dedupe_extra=prepared.call_id,
             )
         except (ApprovalPending, asyncio.CancelledError):
             # Still pending, or the caller went away while it was: the card may yet be approved,
             # and its release must find the payload it shows.
             raise
+        except GateDeniedError:
+            if defn.read_only and registry is not None:
+                # Kept for the window in which the ledger replays this denial, so a repeat call
+                # gets the same denial rather than a new card. A write's denial is single use.
+                prepared.keep_until = min(prepared.keep_until, time.time() + registry.ledger_ttl)
+            else:
+                self._drop(key, prepared)
+            raise
         except Exception:
             self._drop(key, prepared)
             raise
-        registry = approval_ui.get_approval_ui().deferred_registry
         if defn.read_only and registry is not None:
             # The same window in which the decision ledger replays this approval, so a repeat
             # call releases the payload the human saw rather than a fresh, unseen prepare.

@@ -12,7 +12,7 @@ import math
 import re
 from typing import Any
 
-from privacyfence.plugins.constants import MAX_CELL_CHARS, MAX_PREVIEW_BLOCKS, MAX_PREVIEW_BYTES
+from privacyfence.plugins.constants import BLOCK_KEY_RE, MAX_CELL_CHARS, MAX_PREVIEW_BLOCKS, MAX_PREVIEW_BYTES
 
 _LANGUAGE_RE = re.compile(r"[a-z0-9+#-]{1,20}")
 _MAX_FIELD_ITEMS = 50
@@ -27,8 +27,12 @@ class BlockError(ValueError):
     """The block list is not valid."""
 
 
-def _clean(value: str) -> str:
+def clean_text(value: str) -> str:
+    """``value`` without control and bidirectional-override characters (newline and tab stay)."""
     return _STRIP_RE.sub("", value)
+
+
+_clean = clean_text
 
 
 def _obj(value: Any, where: str, required: frozenset[str] | set[str], optional: frozenset[str] = frozenset()) -> dict:
@@ -50,8 +54,10 @@ def _str(value: Any, where: str) -> str:
 
 
 def _key(value: Any, where: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise BlockError(f"{where} must be a non-empty string")
+    # A key is never shown on the card but reaches the AI in a released payload, so it may carry
+    # no free text: an identifier only.
+    if not isinstance(value, str) or not BLOCK_KEY_RE.fullmatch(value):
+        raise BlockError(f"{where} must match {BLOCK_KEY_RE.pattern}")
     return value
 
 
