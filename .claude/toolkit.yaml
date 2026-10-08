@@ -1,0 +1,120 @@
+# devflow toolkit profile (andras-tkcs/claude-toolkit at toolkit.ref; the toolkit's profile reference documents every key).
+# verify.* mirrors docs/coding-and-testing-guidelines.md §2.7: change both together. toolkit.ref and the hook URL in settings.json move together.
+toolkit:
+  ref: v0.1.0
+
+project:
+  name: PrivacyFence
+
+docs:
+  must_read:
+    - CLAUDE.md
+    - CONTRIBUTING.md
+    - docs/releasing.md
+    - docs/coding-and-testing-guidelines.md
+    - docs/testing-policy.md
+    - docs/adr/README.md
+  plan_dir: docs/
+  adr_dir: docs/adr
+  adr_index: docs/adr/README.md
+  adr_bar: CONTRIBUTING.md#decisions-plans-and-adrs
+  changelog:
+    file: CHANGELOG.md
+    section: "## [Unreleased]"
+
+git:
+  main_branch: main
+  branch_pattern: "<type>/<kebab-case>"
+  branch_types: [feature, fix, chore, tests]
+  merge_style: merge-commit
+
+verify:
+  fast:
+    - ruff check .
+    - python3 -m pytest tests/unit -q
+  dod:
+    - run: pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
+      narrow: pytest -v {args}
+    - run: python3 scripts/check_coverage_floor.py coverage.json
+      skip_when_narrowed: true
+    - ruff check .
+    - bandit -c pyproject.toml -r src
+    - python3 scripts/mypy_strict_modules.py
+    - run: npm test
+      cwd: mcpb/shim
+    - run: npm run typecheck
+      cwd: mcpb/shim
+  dod_conditional:
+    - when: ["src/privacyfence/*_client.py", "src/privacyfence/connectors/**"]
+      do: >-
+        A `scripts/qa_fixture_recorder.py --check <connector>` report against a dedicated QA account per
+        docs/connector-qa.md is owed. No live credentials in a session: dispatch connector-live-check.yml
+        (see ci.dispatchable) instead of marking the row done.
+    - when: ["src/privacyfence/web/mcp_dispatch.py", "src/privacyfence/web/routes_mcp.py", "src/privacyfence/connector.py", "src/privacyfence/web/server.py"]
+      do: >-
+        If the change is to ToolSpec/ToolParam in connector.py, or to web/server.py's socket-binding or
+        lifecycle: `pytest tests/integration -v`, and test_mcp_daemon_contract.py must pass.
+    - when: ["src/privacyfence/web/mcp_auth.py", "src/privacyfence/web/server.py", "mcpb/shim/src/**"]
+      do: >-
+        If the change is to web/mcp_auth.py, to web/server.py's mcp_url discovery-file writing, or to
+        mcpb/shim/src/: `pytest tests/integration -v`, and test_shim_mcp_contract.py must pass.
+    - when: ["pyproject.toml"]
+      do: >-
+        If a dependency changed: run scripts/update_dependency_locks.sh (needs uv) and commit the resulting
+        requirements/*.lock.txt.
+    - when: ["cloudflare/downloads/**"]
+      do: "In cloudflare/downloads/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
+  dod_manual:
+    - >-
+      Is there a user-visible change? It needs a line under CHANGELOG.md's `## [Unreleased]`, never under a
+      concrete version heading. Internal-only changes don't need one.
+    - >-
+      A decision that is hard to reverse, moves a trust boundary, changes the build/release/distribution
+      path, or rejects a non-obvious alternative needs an ADR in docs/adr/. A deleted plan document needs its
+      decisions extracted into ADRs first, or a PR description saying it made none (docs/adr/README.md).
+    - >-
+      Every new or changed tool call still resolves through `gated_call` or an explicit always-auto-approve
+      connector, and leaves an audit trail either way.
+    - No preview dict carries full content; no log line carries a credential or a message/document body.
+    - >-
+      New client code has a matching `<Name>ClientError`; new connector code catches it and re-raises as
+      `RuntimeError`.
+    - New module-level state has a reset added to tests/conftest.py.
+    - Comments only where the *why* is non-obvious; no restated-*what* comments.
+  dod_doc: docs/coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo
+
+ci:
+  dispatchable:
+    - workflow: qa-record-fixture.yml
+      use_when: A fixture for a newly added connector
+      notes: >-
+        Input `connector` names one of CONNECTOR_CHECKS in scripts/qa_fixture_recorder.py. Runs on the
+        self-hosted runner and commits the recorded fixture back to the dispatched branch: pull before continuing.
+    - workflow: connector-live-check.yml
+      use_when: "`qa_fixture_recorder.py --check` for the definition-of-done QA row"
+      notes: No inputs. The report lands as the `connector-live-check-report` artifact; link the run in the PR.
+    - workflow: windows-graphical-session.yml
+      use_when: Windows autostart / Task Scheduler behaviour
+      notes: No inputs.
+    - workflow: linux-graphical-session.yml
+      use_when: Linux systemd --user / XDG autostart behaviour
+      notes: No inputs.
+    - workflow: macos-graphical-session.yml
+      use_when: macOS LaunchAgent autostart, .pkg install
+      notes: No inputs.
+    - workflow: build.yml
+      use_when: A real DMG, .pkg, .mcpb, Windows installer or .deb
+      notes: No inputs. Each platform job runs its own packaged-artifact smoke test before upload.
+    - workflow: release.yml
+      use_when: Cutting a release tag (never from a session without the maintainer's say-so)
+      notes: Inputs `version` and `dry_run` (default true). Dispatch the dry run, report it, wait to be told.
+
+stacks: [python]
+
+models:
+  planner: opus
+  orchestrator: sonnet
+  worker: sonnet
+  reviewer: opus
+
+project_steward: .claude/skills/steward/SKILL.md

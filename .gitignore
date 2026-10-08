@@ -66,6 +66,7 @@ tests/fixtures/qa_environment.yaml
 !.claude/hooks/
 !.claude/skills/
 !.claude/commands/
+!.claude/toolkit.yaml
 # Still ignored, deliberately: settings.local.json (per-machine overrides) and everything else
 # Claude Code writes into .claude/ as session state.
 
