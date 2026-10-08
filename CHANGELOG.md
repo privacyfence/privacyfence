@@ -51,11 +51,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Plugin output files.** A plugin can publish result files into an output folder, and your AI client reads them through two new tools: `plugin_outputs_list` runs without asking and `plugin_outputs_read` shows a card with the text and a PII check. "Always allow" can cover one folder of one plugin. Large results reach the AI this way instead of through a tool result.
 - **Plugin child processes.** The plugin documentation now states that a plugin's child processes run under the service account, are not supervised and are the plugin's to confine.
 
+### Changed
+
+- Settings → Plugins: the enable dialog says that a newly enabled plugin's tools may only appear in a new conversation, or after the AI client restarts.
+- Plugins: `apps`, `sheets` and `docs` are reserved plugin names, and the plugin protocol refuses `NaN` and `Infinity`, which are not JSON.
+- Plugin SDK:
+  - it measures sizes as PrivacyFence does;
+  - it refuses non-finite table cells and reserved plugin names, and checks scope type descriptions;
+  - it enforces the line limit when sending;
+  - a source error raised from a tool reaches PrivacyFence as that error;
+  - `PluginTestHost.introspect()` runs the review start.
+- Plugins: a plugin whose display name, tool title or tool effect contains a line break or a tab is refused, and so is an approval subject that does.
+
 ### Fixed
 
 - With an approvals tab or MCP client still connected, stopping the web server left it serving
   those connections until the process exited. It now gives open event streams two seconds to
   finish, then closes them.
+- Plugins: a line break or tab in a confirmation or approval title no longer splits an approval card's header.
+- Plugins: a confirmation or approval card whose set-up failed no longer keeps one of the plugin's pending-card slots.
+- Drive: a Range read stops as soon as the server sends more than the requested bytes.
+
+### Security
+
+- Plugin outputs: a published file swapped for a symbolic link or another file after it was checked is not read.
 
 ## [5.5.0] — 2026-10-01
 
