@@ -1544,7 +1544,17 @@ class DriveClient:
                 if resp.status_code == 200:
                     raise DriveClientError("download_range: the server ignored the Range header")
                 resp.raise_for_status()
-                chunks = [chunk for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024) if chunk]
+                chunks: list[bytes] = []
+                received = 0
+                for chunk in resp.iter_content(chunk_size=min(length + 1, 8 * 1024 * 1024)):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    received += len(chunk)
+                    if received > length:
+                        raise DriveClientError(
+                            "download_range: the server returned more than the requested range"
+                        )
         except DriveClientError:
             raise
         except Exception as exc:
