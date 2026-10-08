@@ -1,10 +1,11 @@
 """Chunked Drive downloads for ``source.call`` (ADR 0123).
 
-Drive has no range reads, so the first call for a file fetches the whole thing once, writes it
-under a spool directory the plugin cannot see (owner-only, never named after the Drive file) and
-serves 8 MiB chunks from there. Each later call re-reads the file's metadata and compares its
-``modified_time`` with the one the spool holds, so a file edited between chunks is reported rather
-than served as a Frankenstein of two versions. Spool files idle for ten minutes are swept on every
+Binary files are read with ranged requests and are never stored. Google-native files cannot be
+ranged, so the first call for one exports it once, writes it under a spool directory the plugin
+cannot see (owner-only, never named after the Drive file) and serves 8 MiB chunks from there. Each
+later call re-reads the file's metadata and compares its ``modified_time`` with the one the spool
+holds, so a file edited between chunks is reported rather than served as a Frankenstein of two
+versions. Spool files idle for ten minutes are swept on every
 call, and everything is removed when the host shuts down.
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from privacyfence.drive_client import _GOOGLE_DOC_EXPORTS
 from privacyfence.plugins.constants import DRIVE_CHUNK_BYTES, DRIVE_MAX_FILE_BYTES, DRIVE_SPOOL_IDLE_SECONDS
 from privacyfence.plugins.protocol import RpcError
 from privacyfence.secure_files import atomic_write_bytes, secure_mkdir
@@ -50,6 +52,14 @@ def decode_cursor(cursor: str) -> tuple[str, str, int]:
     ):
         raise RpcError("invalid_params", "cursor is not valid")
     return file_id, revision, offset
+
+
+def _revision_changed() -> RpcError:
+    return RpcError(
+        "upstream_error",
+        "the file changed while it was being downloaded",
+        extra={"reason": "revision_changed"},
+    )
 
 
 @dataclass
@@ -143,14 +153,77 @@ class DownloadSpool:
         }
         return data, None if eof else encode_cursor(file_id, revision, end)
 
-    def _fetch(self, client: Any, plugin: str, file_id: str, metadata: Any) -> _Entry:
+    def read_chunk_at(
+        self,
+        client: Any,
+        plugin: str,
+        file_id: str,
+        *,
+        offset: int,
+        length: int,
+        expected_revision: str | None,
+    ) -> tuple[dict, int | None, str]:
+        """Serve one chunk at ``offset``. Returns ``(data, next_offset or None at eof, revision)``.
+
+        Binary files are read with a ranged request and never spooled, so there is no size
+        limit. Google-native files cannot be ranged: they are exported once into the spool and
+        served from there.
+        """
+        self.sweep()
+        metadata = client.get_file_metadata(file_id)
         revision = metadata.modified_time
-        if metadata.size > DRIVE_MAX_FILE_BYTES:
+        key = (plugin, file_id)
+        if expected_revision is not None and expected_revision != revision:
+            self._drop(key)
+            raise _revision_changed()
+
+        if metadata.mime_type not in _GOOGLE_DOC_EXPORTS:
+            total = metadata.size
+            mime_type = metadata.mime_type or "application/octet-stream"
+            if offset > total:
+                raise RpcError("invalid_params", "offset is past the end of the file")
+            wanted = min(length, total - offset)
+            chunk = client.download_range(file_id, offset, wanted) if wanted > 0 else b""
+            if len(chunk) != wanted:
+                raise _revision_changed()
+        else:
+            with self._lock:
+                entry = self._entries.get(key)
+            if entry is None or entry.revision != revision or not entry.path.is_file():
+                entry = self._fetch(client, plugin, file_id, metadata, limit=None)
+            entry.last_used = self._clock()
+            total = entry.size
+            mime_type = entry.mime_type
+            if offset > total:
+                raise RpcError("invalid_params", "offset is past the end of the file")
+            with entry.path.open("rb") as handle:
+                handle.seek(offset)
+                chunk = handle.read(min(length, total - offset))
+
+        end = offset + len(chunk)
+        eof = end >= total
+        data = {
+            "file_id": file_id,
+            "mime_type": mime_type,
+            "revision": revision,
+            "total_size_bytes": total,
+            "offset": offset,
+            "length": len(chunk),
+            "eof": eof,
+            "content_base64": base64.b64encode(chunk).decode("ascii"),
+        }
+        return data, None if eof else end, revision
+
+    def _fetch(
+        self, client: Any, plugin: str, file_id: str, metadata: Any, *, limit: int | None = DRIVE_MAX_FILE_BYTES
+    ) -> _Entry:
+        revision = metadata.modified_time
+        if limit is not None and metadata.size > limit:
             raise RpcError("payload_too_large", "the file is larger than the 64 MiB limit")
         fetched = client.download_file_bytes(file_id)
         data = fetched["data"]
         # Google-native files report size 0 in metadata, so the export is measured too.
-        if len(data) > DRIVE_MAX_FILE_BYTES:
+        if limit is not None and len(data) > limit:
             raise RpcError("payload_too_large", "the file is larger than the 64 MiB limit")
         path = self._root / plugin / f"{_digest(file_id, 16)}-{_digest(revision, 12)}"
         atomic_write_bytes(path, data, mode=0o600)
