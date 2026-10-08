@@ -872,7 +872,7 @@ phases:
   - tests/integration/test_plugin_refusals.py
   - tests/fixtures/plugins/echo-variants/builtin-collision/**
   brief: |
-    1. First run: grep -rnE "Plugin\(\s*['\"](apps|sheets|docs)['\"]|^name: (apps|sheets|docs)$" tests examples plugin-sdk.
+    1. First run: grep -rnE "Plugin\(\s*['\"](apps|sheets|docs)\b|^name: (apps|sheets|docs)$" tests examples plugin-sdk.
        The only expected hit is tests/fixtures/plugins/echo-variants/builtin-collision (handled in step 9). Any other
        hit outside this phase's touches: stop with status=blocked (plan Risks).
     2. constants.py and tools.py: Design D7.1 (three names added; MAX_SCOPE_TYPE_DESCRIPTION_CHARS moved and imported).
