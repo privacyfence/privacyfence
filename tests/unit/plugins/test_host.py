@@ -840,11 +840,11 @@ class TestInspectReturnsSummary:
 
 class TestSourceCallRouted:
     async def test_runs_through_the_source_operations(self, env):
-        env.calendar.list_events.return_value = [CalendarEvent(
+        env.calendar.list_events_page.return_value = ([CalendarEvent(
             id="e1", calendar_id="primary", title="Standup", description="", start_time="2026-01-01T09:00:00Z",
             end_time="2026-01-01T09:30:00Z", all_day=False, organizer_email="", attendees=[], location="",
             hangout_link="", conference_link="", status="confirmed", html_link="",
-        )]
+        )], None)
         env.add(SDK, sdk=True)
         host = env.host()
         await host.start()
@@ -853,7 +853,7 @@ class TestSourceCallRouted:
         response = await env.page(host, "/source")
 
         assert json.loads(response["body"])[0]["title"] == "Standup"
-        assert env.calendar.list_events.call_args.args == ("primary", 250, "a", "b")
+        assert env.calendar.list_events_page.call_args.args == ("primary", 250, "a", "b", None)
         assert env.audit.summaries("plugin_source")[-1].startswith("primary; a; b; bytes=")
 
     async def test_operation_outside_the_manifest_is_refused(self, env):
@@ -865,7 +865,7 @@ class TestSourceCallRouted:
         response = await env.page(host, "/source")
 
         assert response["body"] == "operation_not_allowed"
-        env.calendar.list_events.assert_not_called()
+        env.calendar.list_events_page.assert_not_called()
 
     async def test_connector_state_comes_from_the_provider(self, env):
         env.calendar_state = (False, None)
