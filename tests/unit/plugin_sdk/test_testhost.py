@@ -165,7 +165,7 @@ class TestPluginTestHost:
             host.source.fail("calendar.list_events", "upstream_error", reason="rate_limited", time_min="2026-10-07T00:00:00Z")
             failed = await host.call_tool("agenda")
         assert specific.released["blocks"][0]["text"] == "Specific"
-        assert failed.error["code"] == "internal_error"  # the plugin let the SourceError escape
+        assert failed.error["code"] == "upstream_error"  # the plugin let the SourceError escape; its code is passed through
 
     async def test_source_refuses_org_fields_and_unknown_principals(self):
         plugin, _ = build_plugin()
@@ -452,3 +452,37 @@ class TestPaging:
             with pytest.raises(cursors_module.CursorError) as ours:
                 cursors_module.decode(bad, operation, bound)
             assert str(ours.value) == str(theirs.value)
+
+
+class TestCheckToolDefs:
+    @staticmethod
+    def result(p, scope_types):
+        return {"plugin": {"name": p.name, "version": p.version}, "scope_types": scope_types, "tools": []}
+
+    def test_scope_type_output_is_reserved(self):
+        p, _ = build_plugin()
+        with pytest.raises(ToolDefinitionError, match="scope type output is reserved"):
+            host_module._check_tool_defs(p, self.result(p, [{"name": "output", "description": "x"}]), "review")
+
+    def test_scope_type_description_is_1_to_500_characters(self):
+        p, _ = build_plugin()
+        for description in ("", "x" * 501, None):
+            with pytest.raises(ToolDefinitionError, match="needs a description of 1 to 500 characters"):
+                host_module._check_tool_defs(p, self.result(p, [{"name": "cal", "description": description}]), "review")
+
+    def test_a_reserved_plugin_name_is_refused(self):
+        p, _ = build_plugin()
+        p.name = "apps"
+        with pytest.raises(ToolDefinitionError, match="name 'apps' is reserved"):
+            host_module._check_tool_defs(p, self.result(p, []), "review")
+
+    @pytest.mark.parametrize("field", ["title", "effect"])
+    def test_a_title_or_effect_with_a_line_break_is_refused(self, field):
+        p, _ = build_plugin()
+        tool = {
+            "name": "tt", "description": "d", "parameters": {"type": "object", "properties": {}},
+            "read_only": True, "destructive": False, "gate": "review", field: "A\nB",
+        }
+        result = {**self.result(p, []), "tools": [tool]}
+        with pytest.raises(ToolDefinitionError, match=f"tool.{field} must not contain line breaks"):
+            host_module._check_tool_defs(p, result, "review")

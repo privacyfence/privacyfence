@@ -103,3 +103,9 @@ def test_preview_size_is_measured_with_compact_separators():
     assert len(blocks.validate_blocks([blocks.text("x" * pad)])) == 1
     with pytest.raises(ValueError, match="limit"):
         blocks.validate_blocks([blocks.text("x" * (pad + 1))])
+
+
+def test_clean_line_turns_line_breaks_and_tabs_into_one_space():
+    assert blocks.clean_line("a\n\tb") == "a b"
+    assert blocks.clean_line("a b c") == "a b c"
+    assert blocks.clean_line("a‮b\x00c") == "abc"

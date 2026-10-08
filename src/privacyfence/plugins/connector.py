@@ -65,6 +65,7 @@ _PREPARE_ERRORS = {
     "connector_unavailable": "A service this plugin reads from is not connected.",
     "payload_too_large": "The plugin's result is too large to return.",
     "timeout": "The plugin did not answer in time.",
+    "upstream_error": "A service this plugin reads from returned an error.",
 }
 PREPARE_FAILED = "The plugin could not prepare this call."
 INVALID_PREVIEW = "The plugin returned an invalid preview."

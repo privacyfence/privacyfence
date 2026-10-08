@@ -15,7 +15,13 @@ from typing import Any
 
 from .. import blocks as _blocks
 from .._rpc import Peer, RpcError
-from ..plugin import PROTOCOL_VERSION, Plugin, args_digest
+from ..plugin import (
+    _MAX_SCOPE_TYPE_DESCRIPTION_CHARS,
+    _RESERVED_PLUGIN_NAMES,
+    PROTOCOL_VERSION,
+    Plugin,
+    args_digest,
+)
 from ..responses import ToolDefinitionError
 from . import _pages
 from ._approvals import Approval, Approvals
@@ -48,6 +54,7 @@ _PREPARE_SENTENCES = {
     "connector_unavailable": "A service this plugin reads from is not connected.",
     "payload_too_large": "The plugin's result is too large to return.",
     "timeout": "The plugin did not answer in time.",
+    "upstream_error": "A service this plugin reads from returned an error.",
 }
 _PREPARE_FALLBACK = "The plugin could not prepare this call."
 _INVALID_PREVIEW = "The plugin returned an invalid preview."
@@ -89,6 +96,8 @@ def _check_tool_defs(plugin: Plugin, result: Any, max_gate_floor: str) -> list[d
     named = result.get("plugin")
     if not isinstance(named, dict) or (named.get("name"), named.get("version")) != (plugin.name, plugin.version):
         raise ToolDefinitionError("name or version differs from the plugin's own")
+    if plugin.name in _RESERVED_PLUGIN_NAMES:
+        raise ToolDefinitionError(f"name {plugin.name!r} is reserved")
     scope_types = result.get("scope_types")
     if not isinstance(scope_types, list) or len(scope_types) > _MAX_SCOPE_TYPES:
         raise ToolDefinitionError(f"scope_types must be a list of at most {_MAX_SCOPE_TYPES} entries")
@@ -97,6 +106,13 @@ def _check_tool_defs(plugin: Plugin, result: Any, max_gate_floor: str) -> list[d
         name = entry.get("name") if isinstance(entry, dict) else None
         if not isinstance(name, str) or not _SCOPE_TYPE_RE.fullmatch(name):
             raise ToolDefinitionError(f"scope type {name!r} does not match the scope type pattern")
+        if name == "output":
+            raise ToolDefinitionError("scope type output is reserved")
+        description = entry.get("description")
+        if not isinstance(description, str) or not 1 <= len(description) <= _MAX_SCOPE_TYPE_DESCRIPTION_CHARS:
+            raise ToolDefinitionError(
+                f"scope type {name} needs a description of 1 to {_MAX_SCOPE_TYPE_DESCRIPTION_CHARS} characters"
+            )
         declared.add(name)
     defs = result.get("tools")
     if not isinstance(defs, list) or len(defs) > _MAX_TOOLS:
@@ -146,6 +162,11 @@ def _check_tool(plugin: str, tool: Any, declared: set[str], seen: set[str], max_
         raise ToolDefinitionError(f"the effect of {name} must be at most {_MAX_EFFECT_CHARS} characters")
     if title is not None and (not isinstance(title, str) or len(title) > _MAX_TITLE_CHARS):
         raise ToolDefinitionError(f"the title of {name} must be at most {_MAX_TITLE_CHARS} characters")
+    for field_name, text in (("title", title), ("effect", effect)):
+        if text is not None and _blocks.clean_line(text) != text:
+            raise ToolDefinitionError(
+                f"tool.{field_name} must not contain line breaks, tabs, control or bidirectional characters"
+            )
 
 
 def _check_parameters(tool: str, parameters: Any) -> None:
@@ -460,7 +481,7 @@ class PluginTestHost:
             return None
         if tool["read_only"] != (payload is not None):
             return None
-        if payload is not None and len(json.dumps({"blocks": payload}, ensure_ascii=False).encode()) > _INLINE_RESULT_BYTES:
+        if payload is not None and len(json.dumps({"blocks": payload}, separators=(",", ":"), ensure_ascii=False).encode()) > _INLINE_RESULT_BYTES:
             return None
         scopes = prepared.get("scopes", {})
         if not isinstance(scopes, dict):

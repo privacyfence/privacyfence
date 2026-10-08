@@ -31,6 +31,7 @@ MAX_PAGE_PATH_CHARS = 512
 MAX_TOOLS = 64
 MAX_SCOPE_VALUES = 100
 MAX_SCOPE_VALUE_CHARS = 200
+MAX_SCOPE_TYPE_DESCRIPTION_CHARS = 500
 MCP_TOOL_NAME_MAX = 64
 SOURCE_PAGE_BUDGET_BYTES = MAX_SOURCE_RESULT_BYTES - 64 * 1024   # room for the envelope
 CURSOR_MAX_CHARS = 4096
@@ -81,6 +82,7 @@ RESERVED_PLUGIN_NAMES = frozenset({
     "privacyfence", "plugin", "plugins", "settings", "mcp",
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
     "slack", "jira", "confluence", "salesforce", "telegram",
+    "apps", "sheets", "docs",
 })
 
 SOURCE_OPERATIONS: tuple[str, ...] = (
