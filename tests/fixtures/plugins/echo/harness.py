@@ -27,6 +27,7 @@ from privacyfence import approval_ui, auto_accept, gate, paths
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.calendar_client import CalendarEvent
+from privacyfence.jira_client import JiraIssue
 from privacyfence.plugins.host import PluginHost
 from privacyfence.plugins.manifest import MANIFEST_FILENAME
 from privacyfence.principal import LOCAL_PRINCIPAL
@@ -97,20 +98,58 @@ def resolve_command(manifest, plugin_dir: Path) -> list[str]:
 
 
 class FakeDrive:
-    def __init__(self, data: bytes = b"", revision: str = "2026-10-07T10:00:00Z") -> None:
+    """A Drive client. ``size`` makes a file of that many bytes without holding them: a repeating
+    pattern is generated for the range asked for, and ``full_downloads`` counts any whole-file read."""
+
+    PATTERN = bytes(range(251))
+
+    def __init__(self, data: bytes = b"", revision: str = "2026-10-07T10:00:00Z", size: int | None = None) -> None:
         self.data = data
         self.revision = revision
+        self.size = size
+        self.ranges: list[tuple[int, int]] = []
+        self.full_downloads = 0
+
+    def _length(self) -> int:
+        return len(self.data) if self.size is None else self.size
 
     def get_file_metadata(self, file_id: str):
         return SimpleNamespace(
-            id=file_id, size=len(self.data), mime_type="application/octet-stream", modified_time=self.revision
+            id=file_id, size=self._length(), mime_type="application/octet-stream", modified_time=self.revision
         )
 
     def download_range(self, file_id: str, offset: int, length: int) -> bytes:
-        return self.data[offset:offset + length]
+        self.ranges.append((offset, length))
+        if self.size is None:
+            return self.data[offset:offset + length]
+        length = max(0, min(length, self.size - offset))
+        start = offset % len(self.PATTERN)
+        repeats = (start + length) // len(self.PATTERN) + 1
+        return (self.PATTERN * repeats)[start:start + length]
 
     def download_file_bytes(self, file_id: str) -> dict:
+        self.full_downloads += 1
         return {"data": self.data, "name": "x", "mime_type": "application/octet-stream", "size_bytes": len(self.data)}
+
+
+class FakeJira:
+    """A Jira client whose ``search_issues_page`` serves ``issues`` in provider pages with real tokens.
+
+    The token is the offset of the next page, as a string, so a wrong token is an error.
+    """
+
+    def __init__(self, issues: list[JiraIssue] | None = None) -> None:
+        self.issues = issues if issues is not None else [
+            JiraIssue(key=f"ECHO-{n}", summary=f"Issue {n}", status="Open", issue_type="Task") for n in range(1, 6)
+        ]
+        self.calls: list[tuple[str, int, str | None]] = []
+
+    def search_issues_page(self, jql: str, page_size: int = 100, page_token: str | None = None):
+        self.calls.append((jql, page_size, page_token))
+        start = 0 if page_token is None else int(page_token.removeprefix("jira-page-"))
+        end = start + page_size
+        more = end < len(self.issues)
+        return self.issues[start:end], (f"jira-page-{end}" if more else None)
 
 
 class Popups:
@@ -215,6 +254,7 @@ class Stack:
         events.return_value = [calendar_event()]
         events.side_effect = lambda *args, **kwargs: (events.return_value, None)
         self.drive = FakeDrive()
+        self.jira = FakeJira()
         self.calendar_state: tuple[bool, str | None] = (True, None)
         self.problem: str | None = None
         self.tools_changed = 0
@@ -239,6 +279,7 @@ class Stack:
             "connectors_provider": lambda: {
                 "calendar": SimpleNamespace(_calendar=self.calendar),
                 "drive": SimpleNamespace(_drive=self.drive),
+                "jira": SimpleNamespace(_jira=self.jira),
             },
             "connector_state": lambda name: self.calendar_state,
             "registry_provider": lambda: self.registry,
