@@ -1249,6 +1249,9 @@ class SettingsController:
     def disable_plugin(self, name: str) -> dict[str, Any]:
         return self._submit_plugin(lambda host: host.disable(name))
 
+    def revoke_plugin_approval(self, name: str, approval_id: str) -> dict[str, Any]:
+        return self._submit_plugin(lambda host: host.revoke_approval(name, approval_id))
+
     def purge_plugin_data(self, name: str) -> dict[str, Any]:
         return self._submit_plugin(lambda host: host.purge(name))
 

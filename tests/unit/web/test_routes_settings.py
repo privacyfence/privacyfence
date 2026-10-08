@@ -887,6 +887,7 @@ class _PluginHostStub:
     async def enable(self, name, *, executable_sha256, manifest_sha256): ...
     async def disable(self, name): ...
     async def purge(self, name): ...
+    async def revoke_approval(self, name, approval_id): ...
 
 
 @pytest.fixture
@@ -919,6 +920,7 @@ class TestPluginActionsDispatch:
             ("enable_plugin", _ENABLE_BODY, "enable"),
             ("disable_plugin", {"name": "demo"}, "disable"),
             ("purge_plugin_data", {"name": "demo"}, "purge"),
+            ("revoke_plugin_approval", {"name": "demo", "approval_id": "ap1"}, "revoke_approval"),
         ]:
             r = client.post(f"/api/settings/{action}", json={**body, "csrf": csrf})
             assert r.status_code == 200, action
@@ -937,7 +939,8 @@ class TestPluginActionsDispatch:
 class TestEnablePluginSensitivity:
     def test_enable_and_purge_are_sensitive_the_rest_are_not(self):
         assert {"enable_plugin", "purge_plugin_data"} <= _SENSITIVE_ACTIONS
-        assert {"rescan_plugins", "inspect_plugin", "disable_plugin"} <= _NON_SENSITIVE_ACTIONS
+        assert {"rescan_plugins", "inspect_plugin", "disable_plugin", "revoke_plugin_approval"} <= _NON_SENSITIVE_ACTIONS
+        assert "revoke_plugin_approval" not in _SENSITIVE_ACTIONS
 
     def test_requires_step_up_and_human_session(self, plugin_controller, plugin_host, sessions):
         # Without a human session the action is refused before anything else...

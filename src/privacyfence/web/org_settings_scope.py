@@ -117,6 +117,7 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     "enable_plugin": ActionScope(modes=frozenset({LOCAL_MODE})),
     "disable_plugin": ActionScope(modes=frozenset({LOCAL_MODE})),
     "purge_plugin_data": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "revoke_plugin_approval": ActionScope(modes=frozenset({LOCAL_MODE})),
 
     # ---------------------------------------------------------------- #
     # Meaningless, or actively wrong, on a headless server -- the

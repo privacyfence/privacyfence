@@ -43,6 +43,8 @@ _REVIEW = {
     "source_operations": ["calendar.list_events", "gmail.search_messages"],
     "pages": True,
     "service_credentials": False,
+    "outputs": True,
+    "output_types": ["application/json", "text/csv"],
     "tools": [
         {"name": "beta_summary", "gate": "auto", "read_only": True, "destructive": False,
          "description": "A summary of the week."},
@@ -56,7 +58,13 @@ _REVIEW = {
 _ROWS = [
     {"name": "alpha", "display_name": "Alpha Notes", "version": "1.0.0", "state": "running", "reason": "",
      "enabled": True, "pages": True, "page_url": "/plugins/alpha/", "tools_note": "", "review": None,
-     "last_error": None},
+     "last_error": None,
+     "approvals": [
+         {"approval_id": f"ap{i}", "kind": "report", "subject_id": f"weekly-report-{i}-with-a-long-subject-name",
+          "digest": "sha256:" + "ab" * 32, "decided_at": "2026-10-01T09:00:00Z",
+          "revoked_at": "2026-10-02T09:00:00Z" if i == 2 else None}
+         for i in range(3)
+     ]},
     {"name": "beta", "display_name": "Beta Reports", "version": "2.1.0", "state": "discovered", "reason": "",
      "enabled": False, "pages": True, "page_url": "", "tools_note": "", "review": _REVIEW,
      "last_error": "The plugin changed since you reviewed it; review it again."},
@@ -88,6 +96,7 @@ class _TwoRowHost:
     async def enable(self, name, *, executable_sha256, manifest_sha256): ...
     async def disable(self, name): ...
     async def purge(self, name): ...
+    async def revoke_approval(self, name, approval_id): ...
 
 
 @pytest.fixture
@@ -127,6 +136,21 @@ class TestPhoneLayout:
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=".pf-page")
 
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["settings-plugins-approvals"]))
+    def test_a_row_with_three_approvals(self, phone_page, plugin_server, case, width):  # noqa: F811
+        server, host = plugin_server
+        _open_plugins(phone_page, server)
+
+        phone_page.locator(".pf-plugin-approvals summary").evaluate("(el) => el.click()")
+        assert phone_page.locator(".pf-plugin-approvals li").count() == 3
+        assert phone_page.get_by_role("button", name="Revoke approval of weekly-report-0-with-a-long-subject-name").is_visible()
+        assert phone_page.get_by_text("Revoked 2026-10-02T09:00:00Z").is_visible()
+        phone_page.get_by_role("button", name="Revoke approval of weekly-report-0-with-a-long-subject-name").evaluate("(el) => el.click()")
+        phone_page.wait_for_function("() => true")
+        assert host.submitted == ["revoke_approval"]
+        _phone_screenshot(phone_page, f"{case}-{width}")
+        _assert_phone_layout(phone_page, width, main=".pf-page")
+
     @pytest.mark.parametrize(("case", "width"), _phone_cases(["settings-plugins-enable-dialog"]))
     def test_enable_dialog(self, phone_page, plugin_server, case, width):  # noqa: F811
         server, host = plugin_server
@@ -142,7 +166,7 @@ class TestPhoneLayout:
             "Enable Beta Reports 2.1.0?", "beta_summary", "Runs without asking", "beta_send_report", "Review",
             "beta_wipe_cache", "Popup", "Destructive", "Read-only", "Writes",
             "calendar.list_events, gmail.search_messages", "Serves its own pages: yes",
-            "Some tools run without asking",
+            "Some tools run without asking", "Publishes output files: JSON, CSV",
         ):
             assert expected in text, expected
         _phone_screenshot(phone_page, f"{case}-{width}")
