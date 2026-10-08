@@ -56,9 +56,35 @@ def _client(host: FakeHost, *, provenance: str | None = PROVENANCE_HUMAN, princi
     return client
 
 
+EMBEDDED_HEADERS = {
+    **SANDBOX_HEADERS,
+    "content-security-policy": pages.CSP_EMBEDDED,
+    "x-frame-options": "SAMEORIGIN",
+}
+
+
 def _assert_sandbox_headers(response) -> None:
     for name, value in SANDBOX_HEADERS.items():
         assert response.headers.get_list(name) == [value], name
+
+
+def _assert_embedded_headers(response) -> None:
+    for name, value in EMBEDDED_HEADERS.items():
+        assert response.headers.get_list(name) == [value], name
+
+
+class ApprovalHost(FakeHost):
+    """A host with one pending approval card per ``(plugin, approval_id)`` that frames ``path``,
+    answering ``approval_embed_allowed`` the way the approval service does."""
+
+    def __init__(self, cards: dict[tuple[str, str], str] | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.cards = dict(cards or {})
+        self.embed_calls: list[tuple] = []
+
+    async def approval_embed_allowed(self, name, approval_id, path):
+        self.embed_calls.append((name, approval_id, path))
+        return self.cards.get((name, approval_id)) == path
 
 
 class TestRoutes:
@@ -204,6 +230,87 @@ class TestRoutes:
         })
         r = _client(host).get("/plugins/today/")
         _assert_sandbox_headers(r)
+
+
+class TestApprovalEmbed:
+    """``pf_approval``: only the page a pending card of that plugin frames may be framed, and only
+    by this origin; the query reaches the plugin unchanged either way."""
+
+    def test_pending_card_page_gets_the_embedded_headers(self):
+        host = ApprovalHost({("today", "a1"): "/approval"})
+        r = _client(host).get("/plugins/today/approval?pf_approval=a1&subject=x")
+        assert r.status_code == 200
+        _assert_embedded_headers(r)
+        assert host.embed_calls == [("today", "a1", "/approval")]
+        assert host.calls == [("today", "/approval", {"pf_approval": "a1", "subject": "x"}, LOCAL_PRINCIPAL_ID)]
+
+    def test_head_gets_the_embedded_headers_too(self):
+        host = ApprovalHost({("today", "a1"): "/approval"})
+        r = _client(host).head("/plugins/today/approval?pf_approval=a1")
+        assert r.status_code == 200
+        _assert_embedded_headers(r)
+
+    def test_the_path_is_normalized_before_the_check(self):
+        host = ApprovalHost({("today", "a1"): "/an approval"})
+        r = _client(host).get("/plugins/today/an%20approval?pf_approval=a1")
+        _assert_embedded_headers(r)
+        assert host.embed_calls == [("today", "a1", "/an approval")]
+
+    @pytest.mark.parametrize("url", [
+        "/plugins/today/approval?pf_approval=other",  # not a pending card (finalized or unknown)
+        "/plugins/today/other?pf_approval=a1",  # another page of the same plugin
+        "/plugins/today/approval/?pf_approval=a1",  # not exactly the framed path
+        "/plugins/today/approval",  # no pf_approval at all
+        "/plugins/today/approval?pf_approval=",  # an empty one
+    ])
+    def test_anything_else_keeps_the_sandbox_headers(self, url):
+        host = ApprovalHost({("today", "a1"): "/approval"})
+        r = _client(host).get(url)
+        assert r.status_code == 200
+        _assert_sandbox_headers(r)
+        assert host.calls[0][2] == pages.parse_query(url.partition("?")[2])
+
+    def test_another_plugins_card_does_not_count(self):
+        host = ApprovalHost({("other", "a1"): "/approval"}, running=("today", "other"))
+        r = _client(host).get("/plugins/today/approval?pf_approval=a1")
+        _assert_sandbox_headers(r)
+        assert host.embed_calls == [("today", "a1", "/approval")]
+
+    def test_a_card_that_was_finalized_stops_counting(self):
+        host = ApprovalHost({("today", "a1"): "/approval"})
+        client = _client(host)
+        _assert_embedded_headers(client.get("/plugins/today/approval?pf_approval=a1"))
+        del host.cards[("today", "a1")]
+        _assert_sandbox_headers(client.get("/plugins/today/approval?pf_approval=a1"))
+
+    def test_a_host_without_the_method_is_not_allowed(self):
+        host = FakeHost()
+        r = _client(host).get("/plugins/today/approval?pf_approval=a1")
+        assert r.status_code == 200
+        _assert_sandbox_headers(r)
+        assert host.calls == [("today", "/approval", {"pf_approval": "a1"}, LOCAL_PRINCIPAL_ID)]
+
+    def test_a_rejected_path_is_never_checked(self):
+        host = ApprovalHost({("today", "a1"): "/approval"})
+        r = _client(host).get("/plugins/today/%2e%2e?pf_approval=a1")
+        assert r.status_code == 400
+        _assert_sandbox_headers(r)
+        assert host.embed_calls == []
+
+    def test_no_owner_session_is_never_checked(self):
+        host = ApprovalHost({("today", "a1"): "/approval"})
+        r = _client(host, provenance=None).get("/plugins/today/approval?pf_approval=a1")
+        assert r.status_code == 404
+        _assert_sandbox_headers(r)
+        assert host.embed_calls == []
+
+    def test_the_plugin_cannot_send_its_own_framing_headers(self):
+        host = ApprovalHost({("today", "a1"): "/approval"}, result={
+            "status": 200, "body": "x",
+            "headers": {"content-type": "text/plain", "content-security-policy": "frame-ancestors *",
+                        "x-frame-options": "ALLOWALL"},
+        })
+        _assert_embedded_headers(_client(host).get("/plugins/today/approval?pf_approval=a1"))
 
 
 class TestNotMountedWithoutHost:

@@ -23,6 +23,11 @@ CSP = (
     "sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; "
     "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
 )
+# The same policy for the one response that may be framed: the page a pending approval card shows,
+# requested with that card's ``pf_approval`` id (web/routes_plugins.py). Only ``frame-ancestors``
+# differs, and it names this origin only; the page still runs sandboxed in an opaque origin.
+CSP_EMBEDDED = ("sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; "
+                "base-uri 'none'; frame-ancestors 'self'")
 CACHE_CONTROL = "private, no-store"
 
 _ALLOWED_STATUSES = frozenset({200, 204, 400, 404, 500})
@@ -39,9 +44,18 @@ BAD_RESPONSE = b"The plugin returned an invalid response."
 
 
 class PageHost(Protocol):
-    """The one ``PluginHost`` method a page needs."""
+    """The ``PluginHost`` methods a page needs.
+
+    web/routes_plugins.py looks ``approval_embed_allowed`` up with ``getattr`` and treats a host
+    without it as answering no, so a host that predates approvals still serves its pages.
+    """
 
     async def web_request(self, name: str, path: str, query: dict[str, str], principal: Principal) -> dict: ...
+
+    async def approval_embed_allowed(self, name: str, approval_id: str, path: str) -> bool:
+        """True only while ``approval_id`` is ``name``'s pending approval card and that card frames
+        exactly ``path``, the normalized page path."""
+        ...
 
 
 def normalize_path(raw: str) -> str | None:
@@ -138,6 +152,6 @@ async def render_plugin_page(
 
 
 __all__ = [
-    "CACHE_CONTROL", "CSP", "PageHost", "filter_response", "normalize_path", "parse_query",
+    "CACHE_CONTROL", "CSP", "CSP_EMBEDDED", "PageHost", "filter_response", "normalize_path", "parse_query",
     "render_plugin_page",
 ]

@@ -37,6 +37,8 @@ block) is left as it was.
 from __future__ import annotations
 
 import secrets
+from collections.abc import MutableMapping
+from typing import Any
 
 from starlette.requests import Request
 
@@ -45,6 +47,10 @@ from starlette.requests import Request
 # the raw scope key name drifting out of sync between web/server.py and
 # whichever route module.
 _STATE_KEY = "csp_nonce"
+# The two per-response framing flags. Each is set by one route for one response and read by
+# _SecurityHeadersMiddleware when it builds that response's headers; neither is ever set by default.
+_FRAME_SELF_KEY = "csp_frame_self"
+_PLUGIN_EMBED_KEY = "csp_plugin_embed"
 
 
 def new_nonce() -> str:
@@ -82,7 +88,39 @@ def set_nonce(request: Request, nonce: str) -> None:
     setattr(request.state, _STATE_KEY, nonce)
 
 
-def build_csp(nonce: str, *, app_origin: str = "") -> str:
+def _state_flag(scope_or_request: Request | MutableMapping[str, Any], key: str) -> bool:
+    scope = scope_or_request.scope if isinstance(scope_or_request, Request) else scope_or_request
+    state = scope.get("state")
+    return isinstance(state, MutableMapping) and state.get(key) is True
+
+
+def set_frame_self(request: Request) -> None:
+    """Let this one response's document frame same-origin pages (``frame-src data: 'self'``).
+    web/routes_approvals.py's ``show_approval`` sets it only for a plugin approval card that frames
+    the plugin's own page; every other response keeps ``frame-src data:``."""
+    setattr(request.state, _FRAME_SELF_KEY, True)
+
+
+def frame_self_for(scope_or_request: Request | MutableMapping[str, Any]) -> bool:
+    """Whether ``set_frame_self`` was called for this response. Takes the ``Request`` or, as the
+    middleware has it, the raw ASGI scope."""
+    return _state_flag(scope_or_request, _FRAME_SELF_KEY)
+
+
+def set_plugin_embed(request: Request) -> None:
+    """Let this one ``/plugins/`` response be framed by a same-origin document: the middleware
+    sends plugins/pages.py's ``CSP_EMBEDDED`` and ``X-Frame-Options: SAMEORIGIN`` instead of
+    ``CSP`` and ``DENY``. web/routes_plugins.py sets it only for the page a pending approval card
+    frames."""
+    setattr(request.state, _PLUGIN_EMBED_KEY, True)
+
+
+def plugin_embed_for(scope_or_request: Request | MutableMapping[str, Any]) -> bool:
+    """Whether ``set_plugin_embed`` was called for this response."""
+    return _state_flag(scope_or_request, _PLUGIN_EMBED_KEY)
+
+
+def build_csp(nonce: str, *, app_origin: str = "", frame_self: bool = False) -> str:
     """The full policy for a fully self-contained document (see
     approval_window_html.py's own module docstring: fonts/icons/PDFs are
     base64 ``data:`` URIs, never a network fetch) -- ``default-src 'none'``
@@ -123,20 +161,29 @@ def build_csp(nonce: str, *, app_origin: str = "") -> str:
     sign-out lands on ``/signed-out``, not on ``/login``'s bounce to the IdP), and browsers check
     ``form-action`` on each redirect a submission follows. Local mode renders no native form at
     all, so it keeps ``'none'``.
+
+    ``frame_self`` adds ``'self'`` to ``frame-src`` and changes nothing else: a plugin approval
+    card frames that plugin's page from this origin (``set_frame_self``). Whether the page agrees
+    to be framed is its own response's ``frame-ancestors``, which only the matching card's page
+    loosens (``set_plugin_embed``).
     """
     form_action = "'self'" if app_origin else "'none'"
     img_src = f"data: {app_origin.rstrip('/')}/icons/" if app_origin else "data:"
     manifest_src = "manifest-src 'self'; " if app_origin else ""
+    frame_src = "data: 'self'" if frame_self else "data:"
     return (
         "default-src 'none'; "
         f"script-src 'nonce-{nonce}'; "
         f"style-src-elem 'nonce-{nonce}'; "
         "style-src-attr 'unsafe-inline'; "
-        f"img-src {img_src}; font-src data:; object-src data:; frame-src data:; "
+        f"img-src {img_src}; font-src data:; object-src data:; frame-src {frame_src}; "
         "connect-src 'self'; worker-src 'self'; "
         f"{manifest_src}"
         f"base-uri 'none'; form-action {form_action}; frame-ancestors 'none'"
     )
 
 
-__all__ = ["build_csp", "new_nonce", "nonce_for", "set_nonce"]
+__all__ = [
+    "build_csp", "frame_self_for", "new_nonce", "nonce_for", "plugin_embed_for", "set_frame_self",
+    "set_nonce", "set_plugin_embed",
+]
