@@ -695,6 +695,12 @@ class TestPluginsSection:
         ):
             assert needle in html, needle
 
+    def test_the_enable_dialog_tells_the_user_to_start_a_new_conversation(self):
+        html = build_html(_make_state())
+
+        assert ("After you enable it, start a new conversation in your AI client. "
+                "Some clients list new tools only after they restart.") in html
+
     def test_enable_posts_the_hashes_from_the_summary(self):
         html = build_html(_make_state())
 

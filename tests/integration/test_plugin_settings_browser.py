@@ -167,6 +167,7 @@ class TestPhoneLayout:
             "beta_wipe_cache", "Popup", "Destructive", "Read-only", "Writes",
             "calendar.list_events, gmail.search_messages", "Serves its own pages: yes",
             "Some tools run without asking", "Publishes output files: JSON, CSV",
+            "start a new conversation in your AI client",
         ):
             assert expected in text, expected
         _phone_screenshot(phone_page, f"{case}-{width}")

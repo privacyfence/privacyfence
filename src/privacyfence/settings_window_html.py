@@ -1294,6 +1294,7 @@ _JS = r"""
     }
     if (r.service_credentials) html += '<div class="pf-plugin-facts">Uses its own service credentials.</div>';
     if (r.max_gate_floor === 'auto') html += '<div class="pf-plugin-facts"><strong>Some tools run without asking.</strong></div>';
+    html += '<div class="pf-plugin-facts">After you enable it, start a new conversation in your AI client. Some clients list new tools only after they restart.</div>';
     html += '<div class="pf-modal-buttons">';
     html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel" data-plugin-cancel="1">Cancel</div>';
     html += '<div class="button primary" role="button" tabindex="0" aria-label="Enable ' + esc(r.display_name) +
