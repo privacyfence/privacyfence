@@ -908,6 +908,9 @@ async def gated_call(
     my_email: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
+    dedupe_extra: str = "",  # Appended to the decision-ledger / coalescing key when set, so an
+        # approval belongs to one prepared plugin call rather than to every call with these args
+        # (ADR 0122). "" (every other caller) leaves the key exactly canonical_key()'s.
     delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- which
         # transport actually moved (or would move) this call's file bytes (ADR 0017), recorded
         # on the audit entry alongside the ordinary accept/deny decision. "" (every
@@ -1030,6 +1033,8 @@ async def gated_call(
     # not a registry is active.
     registry = _deferred_registry()
     dedupe_key = canonical_key(connector, tool, args)
+    if dedupe_extra:
+        dedupe_key = f"{dedupe_key}:{dedupe_extra}"
     _pop_registry_expirations(registry)
 
     # Every exit from this function -- including one triggered by an

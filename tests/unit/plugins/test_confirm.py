@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Executor, ThreadPoolExecutor
 
 import pytest
 
@@ -287,3 +287,99 @@ class TestConfirm:
         await harness.settled()
         harness.service._finalize_when_answered(approval_id)
         assert harness.audits[0] == (PLUGIN, "publish_note", "requested")
+
+
+class TestClose:
+    async def test_expires_and_audits_unanswered_confirmations(self, harness):
+        waiting = (await harness.request())["approval_id"]
+        answered = (await harness.request())["approval_id"]
+        harness.registry.answer(answered, "confirm")
+        for _ in range(500):
+            if (PLUGIN, "publish_note", "approved") in harness.audits:
+                break
+            await asyncio.sleep(0.01)
+
+        await harness.service.close()
+
+        assert not harness.service._finalizers
+        assert harness.registry.await_status(waiting) == "expired"
+        assert harness.registry.await_status(answered) == "approved"
+        assert harness.audits.count((PLUGIN, "publish_note", "expired")) == 1
+        assert harness.service._active_total == 0
+
+    async def test_with_nothing_pending_returns_at_once(self, harness):
+        await harness.service.close()
+        assert harness.audits == []
+
+
+class _RefusingExecutor(Executor):
+    def submit(self, *args, **kwargs):
+        raise RuntimeError("no threads left")
+
+
+class TestCapacity:
+    async def test_global_cap_refuses_before_registering(self, harness, monkeypatch):
+        monkeypatch.setattr("privacyfence.plugins.confirm.MAX_PENDING_CONFIRMS", 3)
+        monkeypatch.setattr("privacyfence.plugins.confirm.MAX_PENDING_CONFIRMS_PER_PLUGIN", 3)
+        for _ in range(3):
+            await harness.request()
+        before = len(harness.registry._pending)
+        seen = []
+        harness.registry.add_created_listener(seen.append)
+        with pytest.raises(RpcError) as info:
+            await harness.request("other")
+        assert info.value.code == "confirmation_refused"
+        assert info.value.extra == {"reason": "too_many_pending"}
+        assert len(harness.registry._pending) == before and seen == []
+        assert len(harness.audits) == 3
+
+    async def test_per_plugin_cap_leaves_room_for_others(self, harness, monkeypatch):
+        monkeypatch.setattr("privacyfence.plugins.confirm.MAX_PENDING_CONFIRMS_PER_PLUGIN", 2)
+        first = [(await harness.request())["approval_id"] for _ in range(2)]
+        with pytest.raises(RpcError) as info:
+            await harness.request()
+        assert info.value.extra == {"reason": "too_many_pending"}
+        await harness.request("other")
+        harness.registry.answer(first[0], "confirm")
+        for _ in range(500):
+            if harness.service._active_by_plugin.get(PLUGIN) == 1:
+                break
+            await asyncio.sleep(0.01)
+        await harness.request()
+
+    async def test_scheduling_failure_denies_the_card(self, harness):
+        harness.service._executor = _RefusingExecutor()
+        with pytest.raises(RuntimeError):
+            await harness.request()
+        (card,) = harness.registry._pending.values()
+        assert harness.registry.await_status(card.id) == "denied"
+        assert harness.service._active_total == 0
+        assert harness.audits[-1] == (PLUGIN, "publish_note", "denied")
+
+    async def test_finished_confirmations_are_pruned(self, harness):
+        harness.service.retain_finished_seconds = 0.0
+        first = (await harness.request())["approval_id"]
+        harness.registry.answer(first, "confirm")
+        await harness.settled()
+        assert first not in harness.service._owned
+        assert harness.service._active_total == 0 and not harness.service._active_by_plugin
+
+    async def test_finished_confirmation_can_still_be_awaited(self, harness):
+        approval_id = (await harness.request())["approval_id"]
+        harness.registry.answer(approval_id, "confirm")
+        await harness.settled()
+        assert (await harness.await_(approval_id))["status"] == "approved"
+
+
+class TestTitleCleaning:
+    async def test_display_name_and_title_are_cleaned_together(self, harness):
+        result = await harness.service.request(
+            PLUGIN, "To\u202eday", _params(title="Pub\x07lish"), introspecting=False)
+        html = harness.registry.get(result["approval_id"]).html
+        assert "Today: Publish" in html and "\u202e" not in html
+
+    async def test_title_empty_after_cleaning_is_refused(self, harness):
+        with pytest.raises(RpcError) as info:
+            await harness.request(title="\u202e\x07")
+        assert info.value.code == "invalid_params"
+        assert harness.registry._pending == {}

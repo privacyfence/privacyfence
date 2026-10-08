@@ -310,7 +310,7 @@ class AuditEntry:
                             #  history" principle the note on "rule_changed_via_bridge_proposal" above
                             #  already gives for keeping its own legacy "bridge_proposal" vocabulary)
                             # ("plugin_source": plugins/source_ops.py, one entry per ``source.call`` a
-                            #  plugin makes against a PrivacyFence connector (ADR 0120). ``connector``
+                            #  plugin makes against a PrivacyFence connector (ADR 0123). ``connector``
                             #  is "plugin:<name>", ``tool`` the source operation (e.g.
                             #  "calendar.list_events"), ``tool_name`` "<name> source read" and
                             #  ``summary`` "<targets>; bytes=<n>", or "<targets>; error=<code>" when

@@ -35,6 +35,7 @@ from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.server import WebServer
 from privacyfence.web.session_auth import PROVENANCE_HUMAN
 from privacyfence.web_approval_ui import WebApprovalUI
+from tests.loop_watch import pending_io
 
 FIXTURES = Path(__file__).resolve().parents[1]
 ECHO_DIR = FIXTURES / "echo"
@@ -169,6 +170,14 @@ async def until(predicate, timeout: float = 15.0) -> None:
         await asyncio.sleep(0.02)
 
 
+async def drain_io(loop: asyncio.AbstractEventLoop, timeout: float = 5.0) -> list[str]:
+    """Let the loop finish the I/O its closed clients left behind; what remains after ``timeout``."""
+    deadline = time.monotonic() + timeout
+    while (leftover := pending_io(loop)) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    return leftover
+
+
 class Stack:
     """The daemon's pieces around plugins, in this process."""
 
@@ -206,6 +215,7 @@ class Stack:
         self.web_loop: asyncio.AbstractEventLoop | None = None
         self.dispatcher: McpDispatcher | None = None
         self.hosts: list[PluginHost] = []
+        self.stopped = False
 
     # ------------------------------------------------------------------ building
 
@@ -260,21 +270,32 @@ class Stack:
         return self.host
 
     async def stop(self) -> None:
+        if self.stopped:
+            return
+        self.stopped = True
         for host in self.hosts:
             try:
                 await self.run(host.stop_all(), host)
             except Exception:  # noqa: BLE001  # best-effort teardown
                 pass
+        # Clients first: a socket still open when the server goes away is cut by the server, and
+        # on Windows its cancelled read can keep the test loop from closing.
+        leftover = await drain_io(asyncio.get_running_loop())
         if self.server is not None:
-            self.server.stop()
+            # Off this loop: the server waits on the connections this loop's clients hold.
+            await asyncio.to_thread(self.server.stop)
+            assert self.server.stopped, "the web server thread outlived Stack.stop()"
+        assert not leftover, f"the test loop still waits on I/O after the clients closed: {leftover}"
 
     # ------------------------------------------------------------------ running on the host's loop
 
     async def run(self, coro: Coroutine, host: PluginHost | None = None) -> Any:
-        """Await ``coro`` on the loop the host runs on: the web server's when serving."""
-        if self.web_loop is None or (host or self.host).loop is not self.web_loop:
+        """Await ``coro`` on the loop the host runs on: the web server's when serving, as in the
+        daemon, so the plugin processes' pipes never belong to the test's own loop."""
+        loop = (host or self.host).loop or self.web_loop
+        if loop is None or loop is asyncio.get_running_loop():
             return await coro
-        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self.web_loop))
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
 
     async def inspect(self, name: str = "echo") -> dict:
         return await self.run(self.host.inspect(name))

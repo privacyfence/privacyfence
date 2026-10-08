@@ -6,6 +6,7 @@ decided by the human who enables it and by the gate.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from privacyfence.plugins.blocks import clean_text
 from privacyfence.plugins.constants import (
     PLUGIN_NAME_RE,
     RESERVED_PLUGIN_NAMES,
@@ -88,6 +90,8 @@ def load_manifest(plugin_dir: Path, *, mode: str = "local") -> Manifest:
         raise ManifestError(f"name {name!r} must equal the directory name {plugin_dir.name!r}")
 
     display_name = _str(data, "display_name")
+    if clean_text(display_name) != display_name:
+        raise ManifestError("display_name must not contain control or bidirectional characters")
     if not 1 <= len(display_name) <= 60:
         raise ManifestError("display_name must be 1 to 60 characters")
     version = _str(data, "version")
@@ -129,10 +133,10 @@ def load_manifest(plugin_dir: Path, *, mode: str = "local") -> Manifest:
 def resolve_command(manifest: Manifest, plugin_dir: Path) -> list[str]:
     """Absolute argv for the plugin; ``command[0]`` must resolve inside ``plugin_dir``."""
     root = plugin_dir.resolve()
-    first = manifest.command[0]
-    if sys.platform == "win32" and not Path(first).suffix:
-        first += ".exe"
-    exe = (plugin_dir / first).resolve()
+    named = plugin_dir / manifest.command[0]
+    if sys.platform == "win32" and not named.suffix and not os.path.lexists(named):
+        named = named.with_name(named.name + ".exe")
+    exe = named.resolve()
     if exe != root and root not in exe.parents:
         raise ManifestError("command[0] resolves outside the plugin directory")
     return [str(exe), *manifest.command[1:]]

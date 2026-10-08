@@ -4,7 +4,7 @@
 A plugin reports, with every gated call, which values of each declared scope type the call
 touched (``raw_data["scopes"]``). The point under test is that a rule proposed from one call can
 never match more than that call: every value the call returned must be in the rule, an empty
-anything never matches, and a proposal covers the one operation key that was gated (ADR 0120).
+anything never matches, and a proposal covers the one operation key that was gated (ADR 0122).
 """
 from __future__ import annotations
 

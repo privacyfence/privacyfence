@@ -225,3 +225,10 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted |
 | [0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
 | [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |
+| [0120](0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) | Plugins are out-of-process executables speaking newline-delimited JSON-RPC 2.0 over stdio | Accepted |
+| [0121](0121-a-plugin-is-trusted-code-installed-by-an-administrator-into-an-admin-only-directory.md) | A plugin is trusted code, installed by an administrator into an admin-only directory | Accepted |
+| [0122](0122-plugin-tools-are-gated-in-two-steps-and-a-read-releases-the-prepared-payload.md) | Plugin tools are gated in two steps, and a read releases the prepared payload | Accepted |
+| [0123](0123-the-plugin-source-api-is-ungated-but-audited-without-content.md) | The plugin source API is ungated but audited without content | Accepted |
+| [0124](0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md) | Plugin pages are GET-only, owner-session-only, self-contained and sandboxed | Accepted |
+| [0125](0125-the-org-mode-plugin-contract-is-reserved-in-protocol-1-and-rejected-in-local-mode.md) | The org-mode plugin contract is reserved in protocol 1 and rejected in local mode | Accepted |
+| [0126](0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md) | The plugin SDK lives in this repository and is published from the same tag | Accepted |

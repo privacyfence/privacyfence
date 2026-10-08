@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import stat
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -220,6 +222,56 @@ class _FakePeer:
         return self.outcome
 
 
+class TestBeforeSpawn:
+    async def test_runs_before_every_spawn_including_restarts(self, make):
+        calls: list[int] = []
+
+        async def check() -> None:
+            calls.append(len(calls))
+
+        h = make("crash-on-start", before_spawn=check)
+        await h.sup.start()
+        await h.sup.join()
+        assert len(calls) == sv.CRASH_LIMIT == h.names.count("starting")
+
+    async def test_refused_restart_disables_without_retrying(self, make):
+        calls: list[int] = []
+
+        async def refuse_the_second() -> None:
+            calls.append(1)
+            if len(calls) == 2:
+                raise StartError("executable or manifest changed, enable again")
+
+        h = make("crash-after-init", before_spawn=refuse_the_second)
+        await h.sup.start()
+        await h.sup.join()
+        assert h.names == ["starting", "running", "backoff", "starting", "disabled"]
+        assert h.states[-1] == ("disabled", "executable or manifest changed, enable again")
+        assert h.sleeps == [1.0]
+        assert len(h.ready) == 1
+
+    async def test_refused_first_start_spawns_nothing(self, make):
+        async def refuse() -> None:
+            raise StartError("executable is writable by non-administrators")
+
+        h = make("ok", before_spawn=refuse)
+        await h.sup.start()
+        await h.sup.join()
+        assert h.states == [("starting", None), ("disabled", "executable is writable by non-administrators")]
+        assert h.sup._child is None
+        assert h.sleeps == []
+
+    async def test_unexpected_failure_refuses_the_start(self, make):
+        async def broken() -> None:
+            raise OSError("disk gone")
+
+        h = make("ok", before_spawn=broken)
+        await h.sup.start()
+        await h.sup.join()
+        assert h.states[-1] == ("disabled", "could not start")
+        assert h.sup._child is None and h.sleeps == []
+
+
 class TestHandshakeChecks:
     async def _run(self, make, outcome):
         h = make("ok")
@@ -377,6 +429,52 @@ class TestShutdown:
         await h.sup.start()
         await h.sup.stop(reason="shutdown")
         assert h.states[-1] == ("disabled", None)
+
+
+def _alive(pid: int) -> bool:
+    """Whether ``pid`` is a live process; a zombie nobody has reaped yet counts as gone."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    status = subprocess.run(  # noqa: S603 -- fixed argv
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False,  # noqa: S607
+    ).stdout.strip()
+    return bool(status) and not status.startswith("Z")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups; Windows terminates the plugin only")
+class TestProcessGroup:
+    async def _grandchild(self, h: Harness) -> int:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if h.log_path.exists():
+                line = next((x for x in h.log.splitlines() if x.startswith("CHILD:")), None)
+                if line is not None:
+                    return int(line[len("CHILD:"):])
+            await asyncio.sleep(0.05)
+        raise AssertionError("the stub did not report its child")
+
+    async def _gone(self, pid: int) -> bool:
+        deadline = time.monotonic() + 5
+        while _alive(pid):
+            if time.monotonic() > deadline:
+                return False
+            await asyncio.sleep(0.05)
+        return True
+
+    async def test_children_die_after_a_graceful_exit(self, make):
+        h = make("spawn-child")
+        await h.sup.start()
+        pid = await self._grandchild(h)
+        try:
+            assert _alive(pid)
+            await h.sup.stop()
+            assert h.sup._child.proc.returncode == 0  # the plugin exited by itself
+            assert await self._gone(pid)
+        finally:
+            if _alive(pid):
+                os.kill(pid, 9)
 
 
 class TestEnvironment:

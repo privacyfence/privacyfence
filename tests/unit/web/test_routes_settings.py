@@ -869,6 +869,9 @@ class _PluginHostStub:
     def set_rows_changed_listener(self, fn) -> None:
         pass
 
+    def on_connectors_changed(self, rows) -> None:
+        pass
+
     def rows(self) -> list[dict]:
         return [{"name": "demo", "display_name": "Demo", "state": "discovered", "review": None, "last_error": None}]
 

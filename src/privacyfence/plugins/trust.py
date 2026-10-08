@@ -35,6 +35,8 @@ _WINDOWS_PROGRAM_FILES_FALLBACK = "C:\\Program Files"
 
 PROTOCOL_MAJOR_MISMATCH = "protocol major mismatch"
 NOT_ADMIN_ONLY = "executable is writable by non-administrators"
+SYMLINKED_PLUGIN_DIR = "plugin directory is a symbolic link"
+OUTSIDE_PLUGINS_DIR = "executable is outside the plugins directory"
 _SUPPORTED_PROTOCOL = "1"
 
 _HASH_BLOCK_BYTES = 1024 * 1024
@@ -84,10 +86,16 @@ def _sha256_or_empty(path: Path) -> str:
         return ""
 
 
-def _paths_to_check(plugin_dir: Path, executable: Path) -> list[tuple[Path, bool]]:
+_STRICT = "strict"
+_INSIDE = "inside"
+_ANCESTOR = "ancestor"
+
+
+def _paths_to_check(plugin_dir: Path, executable: Path) -> list[tuple[Path, str]]:
     """The executable, any directory between it and the plugin directory, the plugin directory,
-    then every directory above it up to and including the filesystem root, each paired with
-    whether it is one of those directories above.
+    then every directory above it up to and including the filesystem root, each paired with the
+    rule it is held to: strict for the executable, the plugin directory's for the directories up to
+    and including it, the ancestors' above that.
 
     Real paths: a symlink anywhere on the way is followed, so the directories checked are the ones
     the operating system actually walks to reach the file it runs.
@@ -96,8 +104,9 @@ def _paths_to_check(plugin_dir: Path, executable: Path) -> list[tuple[Path, bool
     real_exe = executable.resolve()
     between = [p for p in real_exe.parents if real_dir in p.parents]
     return [
-        *((path, False) for path in (executable, *between, real_dir)),
-        *((path, True) for path in real_dir.parents),
+        (executable, _STRICT),
+        *((path, _INSIDE) for path in (*between, real_dir)),
+        *((path, _ANCESTOR) for path in real_dir.parents),
     ]
 
 
@@ -110,20 +119,22 @@ def admin_only_problem(plugin_dir: Path, executable: Path) -> str | None:
     root. Any one of them writable by the user would let the user, and so the AI client, swap
     the code the service account runs (ADR 0058, ADR 0121).
 
-    The ancestors are held to a narrower question than the rest: only whether someone else can
-    rename, replace or delete what is already in them, which is all it takes to swap the chain
-    of directories leading to the plugin. On Windows that forgives the create-folder and
-    inherit-only grants a default ``C:\\`` gives every signed-in user; on POSIX the two rules are
-    the same. An ancestor the strict rule refuses is therefore asked again under the narrower
-    one, and still reported with the strict reason when that refuses it too.
+    The executable is held to the strict rule. On Windows every directory, from the one holding
+    the executable up to the filesystem root, ignores inherit-only entries, which grant nothing
+    on the directory carrying them (every folder under ``%ProgramFiles%`` inherits one for
+    ``CREATOR OWNER``; what it grants a child is checked on that child). The ancestors of
+    ``plugin_dir`` also ignore the create-folder right a default ``C:\\`` gives every signed-in
+    user, since they only have to be safe from having an entry renamed, replaced or deleted. On
+    POSIX all three rules are the same. A directory the strict rule refuses is asked again under
+    its narrower rule, and still reported with the strict reason when that refuses it too.
     """
-    for path, ancestor in _paths_to_check(plugin_dir, executable):
+    narrower = {
+        _INSIDE: privilege_separation.admin_only_plugin_dir_write_problem,
+        _ANCESTOR: privilege_separation.admin_only_ancestor_write_problem,
+    }
+    for path, rule in _paths_to_check(plugin_dir, executable):
         problem = privilege_separation.admin_only_write_problem(path)
-        if (
-            problem is not None
-            and ancestor
-            and privilege_separation.admin_only_ancestor_write_problem(path) is None
-        ):
+        if problem is not None and rule in narrower and narrower[rule](path) is None:
             problem = None
         if problem is not None:
             return problem
@@ -131,18 +142,24 @@ def admin_only_problem(plugin_dir: Path, executable: Path) -> str | None:
 
 
 def _inspect(
-    entry_path: Path, trust_check: Callable[[Path, Path], str | None],
+    plugins_dir: Path, entry_path: Path, trust_check: Callable[[Path, Path], str | None],
 ) -> DiscoveredPlugin:
     name = entry_path.name
     manifest_sha256 = _sha256_or_empty(entry_path / MANIFEST_FILENAME)
     try:
         manifest = load_manifest(entry_path)
         executable = Path(resolve_command(manifest, entry_path)[0])
+        if executable == entry_path.resolve():
+            raise ManifestError("command[0] resolves to the plugin directory itself")
     except ManifestError as exc:
         return DiscoveredPlugin(name, entry_path, None, f"manifest invalid: {exc}", "", manifest_sha256)
     executable_sha256 = _sha256_or_empty(executable)
     problem: str | None = None
-    if manifest.protocol != _SUPPORTED_PROTOCOL:
+    if plugins_dir.resolve() not in executable.parents:
+        # A junction, or anything else that leads out of the plugins directory, would leave the
+        # directory holding it out of the checked chain.
+        problem = OUTSIDE_PLUGINS_DIR
+    elif manifest.protocol != _SUPPORTED_PROTOCOL:
         problem = PROTOCOL_MAJOR_MISMATCH
     else:
         detail = trust_check(entry_path, executable)
@@ -160,13 +177,19 @@ def discover(
     """Every plugin in ``plugins_dir``, sorted by directory name.
 
     Each immediate subdirectory is one plugin; hidden (``.``-prefixed) entries and plain files
-    are skipped. Raises ``OSError`` when ``plugins_dir`` itself cannot be listed, so a caller can
-    tell "no plugins" from "could not look" and never treats a failed listing as an uninstall.
+    are skipped. A symbolic link to a directory is listed but refused: following it would check
+    the directories above its target instead of the plugins directory that holds the link.
+    Raises ``OSError`` when ``plugins_dir`` itself cannot be listed, so a caller can tell "no
+    plugins" from "could not look" and never treats a failed listing as an uninstall.
     """
     with os.scandir(plugins_dir) as entries:
-        dirs = sorted(
-            (Path(entry.path) for entry in entries
+        listed = sorted(
+            ((Path(entry.path), entry.is_symlink()) for entry in entries
              if not entry.name.startswith(".") and entry.is_dir()),
-            key=lambda p: p.name,
+            key=lambda item: item[0].name,
         )
-    return [_inspect(path, trust_check) for path in dirs]
+    return [
+        DiscoveredPlugin(path.name, path, None, SYMLINKED_PLUGIN_DIR, "", "") if symlink
+        else _inspect(plugins_dir, path, trust_check)
+        for path, symlink in listed
+    ]

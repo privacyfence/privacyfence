@@ -466,6 +466,13 @@ A test that instead drives a real system-wide install (`dpkg -i`, not a `tmp_pat
 needs its own small capture call into `tests.diagnostics.failure_dir()`/`suite_name_for()` — see
 `test_deb_packaged_lifecycle.py`'s `_capture_installed_file_manifest` for the pattern.
 
+On Windows, closing a test's `ProactorEventLoop` waits for every overlapped operation it still
+owns. `tests/conftest.py` installs `tests/loop_watch.py`'s watchdog, which prints
+`Closing <...IocpProactor ...> has waited ... s. Still pending:` with each pending operation and
+task when that close takes more than 5 s. A test that runs servers or subprocesses on other loops
+and talks to them over real sockets from its own loop should leave `pending_io(loop)` empty before
+it returns; the plugin harness's `Stack.stop` checks this before stopping its web server.
+
 ## 3. Adding a connector
 
 Use an existing connector of the same kind as the template — `apps_script` for a Google-backed

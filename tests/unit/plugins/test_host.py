@@ -65,10 +65,19 @@ SDK_PLUGIN = textwrap.dedent('''
         return Prepared(preview=blocks("ping"), payload=blocks("pong"))
 
 
-    @plugin.tool("lookup", description="Look something up.", gate="review", read_only=True,
-                 scopes=["calendar"])
+    CHANGED = os.path.exists(os.path.join(HERE, "destructive-" + NAME))
+
+
+    @plugin.tool("lookup", description="Look something up.", gate="popup" if CHANGED else "review",
+                 read_only=not CHANGED, destructive=CHANGED, scopes=["calendar"])
     async def lookup(ctx, args):
         return Prepared(preview=blocks("lookup"), payload=blocks("found"), scopes={{"calendar": ["primary"]}})
+
+
+    if CHANGED:
+        @lookup.execute
+        async def run_lookup(ctx, payload):
+            return blocks("done")
 
 
     if os.path.exists(os.path.join(HERE, "grow-" + NAME)):
@@ -555,6 +564,126 @@ class TestEnable:
         assert env.row(host, "stub")["last_error"] == "The action failed; the log has the details."
 
 
+class TestEnableDropsStaleRules:
+    @staticmethod
+    def _rules(env) -> None:
+        config = env.root / "settings.yaml"
+        config.write_text(yaml.safe_dump({}), encoding="utf-8")
+        auto_accept.init_config_path(str(config))
+        auto_accept.add_policy_v2_rules(policy_rules({
+            f"plugin.{SDK}.lookup": [{"predicate": f"plugin:{SDK}:calendar", "value": "primary"}],
+            f"plugin.{SDK}.ping": [{"predicate": f"plugin:{SDK}:anything"}],
+            "gmail.send": [{"predicate": "gmail.anything"}],
+        }))
+
+    @staticmethod
+    def _remaining() -> list[tuple[str, list[str]]]:
+        return sorted((r.predicate, sorted(r.operations)) for r in auto_accept.get_policy_v2_store_rules())
+
+    async def test_unchanged_tools_keep_their_rules(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        self._rules(env)
+        before = self._remaining()
+
+        await env.enable(host, SDK)
+
+        assert self._remaining() == before and len(before) == 3
+
+    async def test_tool_turned_destructive_loses_its_rules(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        self._rules(env)
+        (env.root / f"destructive-{SDK}").write_text("")
+
+        await env.enable(host, SDK)
+
+        assert self._remaining() == [
+            ("gmail.anything", ["gmail.send"]),
+            (f"plugin:{SDK}:anything", [f"plugin.{SDK}.ping"]),
+        ]
+        lookup = next(s for s in host._store.load()[SDK].reviewed_tools if s[0] == "lookup")
+        assert lookup[1:4] == ("popup", False, True)
+        assert env.row(host, SDK)["state"] == "running"
+
+    async def test_no_rule_survives_for_a_destructive_tool(self, env):
+        env.add(SDK, sdk=True)
+        (env.root / f"destructive-{SDK}").write_text("")
+        host = env.host()
+        await host.start()
+        self._rules(env)
+
+        await env.enable(host, SDK)
+
+        assert f"plugin.{SDK}.lookup" not in {op for _p, ops in self._remaining() for op in ops}
+
+
+class TestRestartRechecks:
+    async def test_changed_executable_is_not_restarted(self, env, monkeypatch):
+        monkeypatch.setattr(supervisor_mod, "RESTART_BACKOFF_SECONDS", (0.0,))
+        plugin_dir = env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        supervisor = host._plugins["stub"].supervisor
+        spawns: list[int] = []
+        original = supervisor._spawn
+
+        async def counting(*args):
+            spawns.append(1)
+            return await original(*args)
+
+        monkeypatch.setattr(supervisor, "_spawn", counting)
+        (plugin_dir / f"plugin-bin{EXE_SUFFIX}").write_bytes(b"swapped while running")
+
+        supervisor._child.proc.kill()
+        await until(lambda: env.row(host, "stub")["state"] == "disabled")
+
+        row = env.row(host, "stub")
+        assert row["reason"] == HASH_DRIFT_REASON and row["enabled"] is False
+        assert host._store.load()["stub"].disabled_reason == HASH_DRIFT_REASON
+        assert spawns == []
+        assert f"disabled: {HASH_DRIFT_REASON}" in env.audit.summaries("plugin_lifecycle")
+        assert host.connectors() == {}
+
+    async def test_writable_executable_is_not_restarted(self, env, monkeypatch):
+        monkeypatch.setattr(supervisor_mod, "RESTART_BACKOFF_SECONDS", (0.0,))
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        supervisor = host._plugins["stub"].supervisor
+        env.problem = "the plugin directory is group-writable"
+
+        supervisor._child.proc.kill()
+        await until(lambda: env.row(host, "stub")["state"] == "disabled")
+
+        reason = "executable is writable by non-administrators"
+        assert env.row(host, "stub")["reason"] == reason
+        assert host._store.load()["stub"].disabled_reason == reason
+
+    async def test_removed_plugin_is_not_restarted(self, env, monkeypatch):
+        monkeypatch.setattr(supervisor_mod, "RESTART_BACKOFF_SECONDS", (0.0,))
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        supervisor = host._plugins["stub"].supervisor
+        # Pointing the host elsewhere stands in for removing the directory, which Windows refuses
+        # while it is the running plugin's working directory.
+        host._plugins_dir = env.root / "empty"
+        host._plugins_dir.mkdir()
+
+        supervisor._child.proc.kill()
+        await until(lambda: env.row(host, "stub")["state"] == "disabled")
+
+        assert env.row(host, "stub")["reason"] == "plugin is no longer installed"
+
+
 class TestDisable:
     async def test_disable(self, env):
         env.add(SDK, sdk=True)
@@ -862,6 +991,9 @@ class TestUninstall:
         }))
         (storage.install_dir(SDK) / "cache.db").write_text("x")
         assert env.row(host, SDK)["state"] == "running"
+        # Windows refuses to delete a running plugin's folder (it is the process's working
+        # directory), so the administrator disables it first.
+        await host.disable(SDK)
 
         self._remove(plugin_dir)
         await host.rescan()
@@ -873,6 +1005,23 @@ class TestUninstall:
         assert remaining == ["gmail.anything"]
         assert env.audit.summaries("plugin_lifecycle")[-1] == "removed; data and rules deleted"
         assert host.connectors() == {}
+
+    async def test_a_running_plugin_that_disappears_is_stopped_and_uninstalled(self, env, monkeypatch):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        proc = host._plugins["stub"].supervisor._child.proc
+        assert env.row(host, "stub")["state"] == "running"
+        # The folder stays on disk: a running plugin's folder cannot be deleted on Windows.
+        monkeypatch.setattr(host_mod.trust, "discover", lambda *_a, **_k: [])
+
+        await host.rescan()
+
+        assert proc.returncode is not None
+        assert host.rows() == []
+        assert host._store.load() == {}
+        assert env.audit.summaries("plugin_lifecycle")[-1] == "removed; data and rules deleted"
 
     async def test_unreadable_dir_deletes_nothing(self, env):
         plugin_dir = env.add("stub")
@@ -1007,6 +1156,16 @@ class TestWebRequest:
         await env.enable(host, SDK)
 
         assert (await env.page(host, "/nothing"))["status"] == 404
+
+    async def test_not_until_the_plugin_is_running(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        host._plugins[SDK].state = "starting"
+
+        with pytest.raises(LookupError):
+            await env.page(host, "/info")
 
     async def test_not_running(self, env):
         env.add(SDK, sdk=True)
@@ -1166,7 +1325,8 @@ class TestDaemonThreadExecutor:
             def start(self) -> None:
                 started.append(self.target)
 
-        monkeypatch.setattr(host_mod.threading, "Thread", FakeThread)
+        # Only the host module's view of threading: the test runner's own threads stay real.
+        monkeypatch.setattr(host_mod, "threading", SimpleNamespace(**{**vars(threading), "Thread": FakeThread}))
         executor = host_mod._DaemonThreadExecutor(1)
         ran: list[str] = []
         future = executor.submit(lambda: ran.append("late"))

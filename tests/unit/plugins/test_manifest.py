@@ -105,6 +105,8 @@ class TestLoad:
         ({"display_name": ""}, "1 to 60"),
         ({"display_name": "x" * 61}, "1 to 60"),
         ({"display_name": 3}, "display_name must be a string"),
+        ({"display_name": "To\u202eday"}, "control or bidirectional"),
+        ({"display_name": "To\x07day"}, "control or bidirectional"),
         ({"version": "1.2"}, "MAJOR.MINOR.PATCH"),
         ({"version": "v1.2.3"}, "MAJOR.MINOR.PATCH"),
         ({"version": "01.2.3"}, "MAJOR.MINOR.PATCH"),
@@ -197,6 +199,30 @@ class TestResolveCommand:
         monkeypatch.setattr(manifest_mod.sys, "platform", "win32")
         argv = resolve_command(self._manifest("today-plugin"), tmp_path)
         assert Path(argv[0]).name == "today-plugin.exe"
+
+    def test_windows_keeps_an_existing_name_without_suffix(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(manifest_mod.sys, "platform", "win32")
+        (tmp_path / "run").write_text("x")
+        (tmp_path / "run.exe").write_text("x")
+        assert resolve_command(self._manifest("run"), tmp_path)[0] == str((tmp_path / "run").resolve())
+
+    def test_windows_never_suffixes_the_directory(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(manifest_mod.sys, "platform", "win32")
+        assert resolve_command(self._manifest("."), tmp_path)[0] == str(tmp_path.resolve())
+
+    @pytest.mark.skipif(not hasattr(os, "symlink"), reason="os.symlink unavailable")
+    def test_windows_symlink_out_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(manifest_mod.sys, "platform", "win32")
+        d = tmp_path / "today"
+        d.mkdir()
+        target = tmp_path / "outside"
+        target.write_text("x")
+        try:
+            (d / "run").symlink_to(target)
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot create symlinks here")
+        with pytest.raises(ManifestError, match="outside"):
+            resolve_command(self._manifest("run"), d)
 
     def test_windows_keeps_existing_suffix(self, tmp_path, monkeypatch):
         monkeypatch.setattr(manifest_mod.sys, "platform", "win32")

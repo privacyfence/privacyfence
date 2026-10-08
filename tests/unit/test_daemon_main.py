@@ -1672,6 +1672,28 @@ class TestMaybeStartWebServer:
         with principal_scope(Principal(id="os-1002")):
             assert "plugin-x" not in result.mcp_dispatcher.connectors
 
+    def test_plugin_connector_cannot_replace_a_builtin(self, monkeypatch, tmp_path):
+        from privacyfence.connectors.gmail import GmailConnector
+
+        self._no_bind(monkeypatch, tmp_path)
+        connector_host = self._connector_host()
+        builtin = object.__new__(GmailConnector)
+        connector_host.set_connectors([builtin])
+        impostor = object()
+        host = SimpleNamespace(
+            connectors=lambda: {builtin.name: impostor, "plugin-x": impostor},
+            set_tools_changed_listener=lambda fn: None, set_unattended_provider=lambda fn: None,
+        )
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, connector_host, unattended_sessions_enabled=False,
+            plugin_host=host,
+        )
+
+        merged = result.mcp_dispatcher.connectors
+        assert merged[builtin.name] is builtin
+        assert merged["plugin-x"] is impostor
+
     def test_listeners_wired_to_dispatcher(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         recorded = {}
@@ -2956,6 +2978,9 @@ class _FakePluginHost:
         self.fail_start = fail_start
         self.start_thread: int | None = None
 
+    def on_connectors_changed(self, rows: list) -> None:
+        pass
+
     async def start(self) -> None:
         self.start_thread = threading.get_ident()
         self.events.append("plugins start")
@@ -3056,6 +3081,7 @@ class TestDaemonPluginHost:
 
     def test_no_host_in_org_mode(self, monkeypatch, loop_thread):
         events, built = self._setup(monkeypatch, loop_thread, org_config={"mode": "org"})
+        monkeypatch.setattr(daemon_main, "check_storage_permissions", lambda org_mode_active: None)
 
         daemon_main.run_app({}, "config.yaml")
 
@@ -3081,6 +3107,33 @@ class TestDaemonPluginHost:
         assert seen[0]["feature_enabled"] is False
         assert seen[1]["feature_enabled"] is True
         assert seen[0]["connectors_provider"]() == connector_host.connectors
+
+    @pytest.mark.parametrize(
+        "config, expected, warned",
+        [
+            ({}, True, False),
+            ({"plugins": None}, True, False),
+            ({"plugins": {}}, True, False),
+            ({"plugins": {"enabled": True}}, True, False),
+            ({"plugins": {"enabled": False}}, False, False),
+            ({"plugins": True}, True, True),
+            ({"plugins": "false"}, True, True),
+            ({"plugins": {"enabled": "no"}}, True, True),
+            ({"plugins": {"enabled": "false"}}, True, True),
+            ({"plugins": {"enabled": 0}}, True, True),
+        ],
+    )
+    def test_plugins_setting_shapes(self, monkeypatch, caplog, config, expected, warned):
+        from privacyfence.plugins import host as host_module
+
+        seen: list = []
+        monkeypatch.setattr(host_module, "PluginHost", lambda **kw: seen.append(kw))
+
+        with caplog.at_level(logging.WARNING, logger=daemon_main.logger.name):
+            daemon_main._build_plugin_host(config, SimpleNamespace(connectors={}), lambda name: (True, None))
+
+        assert seen[0]["feature_enabled"] is expected
+        assert ("Ignoring plugins" in caplog.text) is warned
 
     def test_registry_provider_refuses_without_a_registry(self, monkeypatch):
         from privacyfence import gate

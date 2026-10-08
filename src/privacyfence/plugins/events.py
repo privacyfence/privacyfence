@@ -2,6 +2,8 @@
 
 ``on_connectors_changed(rows)`` diffs each connector's ``(enabled, authed)`` against the previous
 call. The first call only records a baseline: nothing changed, the daemon just started looking.
+The settings controller makes that call at construction with the state as it is then, so the
+first real change after a start is diffed against it and sent.
 Every event is best-effort, a failed send is logged at debug and never reaches the caller.
 
 ``plugin.disabling`` and ``shutdown`` are the supervisor's, ``principal.removed`` is never sent in

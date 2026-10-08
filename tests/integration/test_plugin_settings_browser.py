@@ -70,6 +70,9 @@ class _TwoRowHost:
     def set_rows_changed_listener(self, fn) -> None:
         pass
 
+    def on_connectors_changed(self, rows) -> None:
+        pass
+
     def rows(self) -> list[dict]:
         return [dict(r) for r in _ROWS]
 
