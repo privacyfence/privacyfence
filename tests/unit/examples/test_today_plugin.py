@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from datetime import datetime, time, timedelta
@@ -26,11 +27,18 @@ GATES = {
     "add_note": "popup",
     "clear_notes": "popup",
     "publish": "popup",
+    "export": "popup",
+    "approve_layout": "popup",
 }
 
 
 def make_host(crash_tool: bool = False) -> PluginTestHost:
-    return PluginTestHost(today_plugin.build_plugin(crash_tool=crash_tool), max_gate_floor="auto")
+    return PluginTestHost(
+        today_plugin.build_plugin(crash_tool=crash_tool),
+        max_gate_floor="auto",
+        outputs=True,
+        output_types=("text/csv",),
+    )
 
 
 def load_calendar(host: PluginTestHost) -> None:
@@ -70,6 +78,7 @@ class TestInitializeAndScopeType:
         manifest = MANIFEST.read_text(encoding="utf-8")
         assert "name: today" in manifest and 'protocol: "1"' in manifest and "max_gate_floor: auto" in manifest
         assert f"version: {today_plugin.VERSION}" in manifest
+        assert "outputs: true" in manifest and "- text/csv" in manifest
 
 
 class TestSourceCall:
@@ -299,6 +308,90 @@ class TestPublishConfirmation:
             diff = host.confirmations[1].preview[1]["text"]
         assert "+note on EXAMPLE-2: book a table" in diff
         assert "+09:00-09:30 Planning" not in diff
+
+
+class TestExportTool:
+    async def test_it_publishes_todays_events_as_a_csv_file(self):
+        async with make_host() as host:
+            load_calendar(host)
+            await host.call_tool("refresh", {})
+            outcome = await host.call_tool("export", {})
+            (listed,) = host.list_outputs("exports/")
+            text = (host.output_dir / listed.path).read_text(encoding="utf-8")
+        date = datetime.now().astimezone().date().isoformat()
+        assert outcome.error is None and outcome.result == {"exported": True, "path": f"exports/{date}.csv"}
+        assert listed.path == f"exports/{date}.csv"
+        assert text.splitlines()[0] == "start,end,title,attendees"
+        assert "Team lunch" in text
+
+    async def test_a_second_export_the_same_day_says_so_and_keeps_the_file(self):
+        async with make_host() as host:
+            load_calendar(host)
+            await host.call_tool("refresh", {})
+            await host.call_tool("export", {})
+            outcome = await host.call_tool("export", {})
+            assert len(host.list_outputs("exports/")) == 1
+        assert outcome.result["exported"] is False
+
+    async def test_without_a_fetched_day_nothing_is_published(self):
+        async with make_host() as host:
+            outcome = await host.call_tool("export", {})
+            assert host.list_outputs() == []
+        assert outcome.result["exported"] is False
+
+
+class TestApproveLayoutTool:
+    async def test_it_requests_the_layout_with_the_embedded_page(self):
+        async with make_host() as host:
+            outcome = await host.call_tool("approve_layout", {})
+            (card,) = host.approvals
+            frame = await host.get("/approval", query={"pf_approval": card.approval_id})
+        assert outcome.result["approval_id"] == card.approval_id
+        assert card.kind == "page-layout" and card.subject_id == "today/layout"
+        assert card.page == "/approval" and card.frame_path.startswith("/approval?pf_approval=")
+        assert card.digest == "sha256:" + hashlib.sha256(today_plugin._LAYOUT.encode()).hexdigest()
+        assert frame.status == 200 and card.approval_id in frame.text and "Section 1" in frame.text
+        assert not re.search(r"#[0-9a-fA-F]{3,8}\b", frame.text)
+
+    async def test_an_approved_layout_is_not_asked_again(self):
+        async with make_host() as host:
+            await host.call_tool("approve_layout", {})
+            await host.decide_approval(host.approvals[0].approval_id, "approve")
+            outcome = await host.call_tool("approve_layout", {})
+            assert len(host.approvals) == 1
+        assert outcome.result["status"] == "approved"
+
+
+class TestLayoutNote:
+    async def test_the_page_follows_the_approval(self):
+        async with make_host() as host:
+            assert "not approved" in (await host.get("/")).text
+            await host.call_tool("approve_layout", {})
+            card = host.approvals[0]
+            assert "not approved" in (await host.get("/")).text
+            await host.decide_approval(card.approval_id, "approve")
+            approved = (await host.get("/")).text
+            await host.revoke_approval(card.approval_id)
+            revoked = (await host.get("/")).text
+        assert 'id="layout"' in approved and "<b>approved</b>" in approved and "not approved" not in approved
+        assert "<b>not approved</b>" in revoked and "revoked 20" in revoked
+
+    async def test_a_denied_layout_stays_unapproved(self):
+        async with make_host() as host:
+            await host.call_tool("approve_layout", {})
+            await host.decide_approval(host.approvals[0].approval_id, "deny")
+            page = (await host.get("/")).text
+        assert "<b>not approved</b>" in page and "revoked" not in page
+
+    async def test_a_purge_forgets_the_revocation(self):
+        async with make_host() as host:
+            await host.call_tool("approve_layout", {})
+            card = host.approvals[0]
+            await host.decide_approval(card.approval_id, "approve")
+            await host.revoke_approval(card.approval_id)
+            assert host.data_dir.joinpath("layout-revoked.json").exists()
+            await host.purge()
+            assert not host.data_dir.joinpath("layout-revoked.json").exists()
 
 
 class TestPage:

@@ -8,3 +8,6 @@ source_operations:
 tools: dynamic
 max_gate_floor: auto
 pages: true
+outputs: true
+output_types:
+  - text/csv

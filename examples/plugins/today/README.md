@@ -22,8 +22,10 @@ in [the plugins guide](../../../docs/plugins.md).
 | Tool, `popup` | `today_add_note`: attaches a note to one event, stored by the plugin only. The calendar is never written. |
 | Tool, `popup`, destructive | `today_clear_notes`: deletes all of today's notes. |
 | Confirmation | `today_publish`: asks a human to confirm, with a heading and a diff of what changes on the page, then publishes. It returns the `approval_id`, so the AI client waits with `privacyfence_await_approval`. |
-| Page | `/plugins/today/` shows the published day, the notes, a stale banner when needed, a code block with the raw manifest, and a script that reports whether `document.cookie` is readable. The page is self-contained: the sandbox gives it no session cookie, so it cannot load anything else from PrivacyFence. |
-| Events | `connector.state_changed` for Calendar marks the cached day stale. `storage.purge` deletes its files. `plugin.disabling` and `shutdown` flush the counter. |
+| Approval | `today_approve_layout`: asks a human to approve the page's layout template (kind `page-layout`, subject `today/layout`). The card embeds the plugin's `/approval` page, which shows the template. The approval stays valid until the template changes or it is revoked in Settings. |
+| Outputs | `today_export`: publishes today's events as `exports/<date>.csv`. The manifest declares `outputs: true` and `output_types: [text/csv]`; the AI client lists and reads the file with `plugin_outputs_list` and `plugin_outputs_read`. |
+| Page | `/plugins/today/` shows the published day, the notes, a stale banner when needed, a code block with the raw manifest, and a script that reports whether `document.cookie` is readable, and a note saying whether the layout is approved. The page is self-contained: the sandbox gives it no session cookie, so it cannot load anything else from PrivacyFence. |
+| Events | `connector.state_changed` for Calendar marks the cached day stale. `approval.revoked` records when the layout approval was revoked, for the page note. `storage.purge` deletes its files. `plugin.disabling` and `shutdown` flush the counter. |
 | Supervision | The hidden tool `today_crash` exits the process. It is listed only in a build made with `--with-crash-tool`. |
 
 ## Build
@@ -51,7 +53,7 @@ Linux; only an administrator can write there.
    an administrator. Then try it from a user-writable copy and confirm PrivacyFence refuses to start
    it.
 2. In Settings, open Plugins and choose "Review and enable" on `today`. Check that the card lists the
-   six tools (seven with the crash tool) with their gates, the `auto` floor, `calendar.list_events`
+   eight tools (nine with the crash tool) with their gates, the `auto` floor, `calendar.list_events`
    and the page, and that it asks for the passkey.
 3. Ask the AI client for `today_status`, then `today_refresh`. The audit log shows a
    `calendar.list_events` entry attributed to `today`, with no content.
@@ -70,6 +72,31 @@ Linux; only an administrator can write there.
 9. Replace the executable with a rebuilt one and check `today` is disabled until you re-enable it.
 10. Choose "Delete this plugin's data" in Settings, then remove the plugin folder. Its data folders
     are gone and its tools disappear from the AI client.
+
+Steps 13 to 16 try approvals and outputs; run them before step 10 on an install where `today` is
+still enabled.
+
+13. Click "Review and enable" on `today` and check that the dialog lists `today_export` and
+    `today_approve_layout` and shows "Publishes output files: CSV". Enable it. Then ask the AI client
+    to call `today_approve_layout` and approve the popup card. An approval card follows. At the top,
+    outside the framed area, it shows Plugin Today, Kind `page-layout`, Subject `today/layout` and a
+    full `sha256:` digest. Below them, the framed plugin page shows the layout template. Approve it
+    with your passkey.
+14. Open the `today` page (Settings → Plugins → Open page), then expand Approvals under `today` in
+    Settings. The page says the layout is approved, and Approvals lists one entry with kind, subject,
+    a shortened digest and today's date. Ask for `today_approve_layout` again: there is no second
+    approval card, because the same digest is already approved.
+15. Click Revoke next to the approval, then reload the `today` page. The entry shows "Revoked
+    <date>" and the page says the layout is not approved. Ask for `today_approve_layout` again: a new
+    card appears. Deny it.
+16. Ask for `today_export` and approve the popup. Then ask the AI client to call
+    `plugin_outputs_list` for plugin `today`: no card, and it shows `exports/<today>.csv` with its
+    size. Ask it to call `plugin_outputs_read` for that file: a review card shows the CSV text in its
+    expandable pane. Approve it, and the AI client gets the same text. Ask again and pick Always
+    allow → "this folder" (`exports/`). A third read shows no card. Finally open Export Audit Log…
+    in Settings: it has `plugin_approval` rows ("page-layout; requested / approved / revoked /
+    denied") and `plugin_output` rows ("read exports/…; offset=0; bytes=…"), and no row contains the
+    CSV content or the digest.
 
 ## Tests
 
