@@ -599,3 +599,156 @@ class TestDownload:
             with pytest.raises(SourceError) as info:
                 await ctx.source.download("f")
             assert info.value.code == "internal_error"
+
+
+def paged_handler(pages):
+    """A daemon-side paged operation: serves ``pages`` for the cursor each page returned."""
+    def handler(message):
+        params = message["params"]["params"]
+        index = int(params["cursor"].split(":")[1]) if "cursor" in params else 0
+        last = index == len(pages) - 1
+        return {"result": {"operation": message["params"]["operation"], "data": pages[index], "bytes": 1,
+                           "next_cursor": None if last else f"p:{index + 1}"}}
+    return handler
+
+
+class TestSourcePaging:
+    async def test_pages_iterate_until_null_and_pass_the_cursor(self, daemon, principal):
+        await daemon.initialize()
+        daemon.source_handler = paged_handler([[1, 2], [3], [4]])
+        ctx = daemon.plugin._ctx(principal)
+        seen = [page.data async for page in ctx.source.pages("jira.search", jql="x", page_size=2)]
+        assert seen == [[1, 2], [3], [4]]
+        sent = [m["params"]["params"] for m in daemon.incoming if m["method"] == "source.call"]
+        assert sent == [{"jql": "x", "page_size": 2}, {"jql": "x", "page_size": 2, "cursor": "p:1"},
+                        {"jql": "x", "page_size": 2, "cursor": "p:2"}]
+
+    async def test_pages_refuse_max_results_and_cursor(self, daemon, principal):
+        await daemon.initialize()
+        ctx = daemon.plugin._ctx(principal)
+        for name in ("max_results", "cursor"):
+            with pytest.raises(ValueError):
+                async for _ in ctx.source.pages("jira.search", **{name: 5}):
+                    pass
+
+    async def test_collect_concatenates(self, daemon, principal):
+        await daemon.initialize()
+        daemon.source_handler = paged_handler([[1, 2], [3]])
+        ctx = daemon.plugin._ctx(principal)
+        assert await ctx.source.collect("calendar.list_events", time_min="a") == [1, 2, 3]
+
+    async def test_collect_refuses_sheets(self, daemon, principal):
+        await daemon.initialize()
+        ctx = daemon.plugin._ctx(principal)
+        with pytest.raises(ValueError, match="collect supports only"):
+            await ctx.source.collect("sheets.get_values", spreadsheet_id="s")
+        assert not [m for m in daemon.incoming if m["method"] == "source.call"]
+
+
+class TestApprovals:
+    def test_digest_of_str_and_bytes(self):
+        import hashlib
+        from privacyfence_plugin_sdk.plugin import ApprovalsClient
+        expected = "sha256:" + hashlib.sha256("héllo".encode()).hexdigest()
+        assert ApprovalsClient.digest("héllo") == expected
+        assert ApprovalsClient.digest("héllo".encode()) == expected
+
+    async def test_wire_messages(self, daemon, principal):
+        await daemon.initialize()
+
+        def handler(message):
+            if message["method"] == "approval.request":
+                return {"result": {"approval_id": "a1", "status": "pending"}}
+            if message["method"] == "approval.check":
+                return {"result": {"status": "approved", "approval_id": "a1"}}
+            return {"result": {"status": "approved", "decided_at": "now"}}
+
+        daemon.source_handler = handler
+        ctx = daemon.plugin._ctx(principal)
+        digest = ctx.approvals.digest("body")
+        ticket = await ctx.approvals.request(
+            "template", "t/1", "body", "Approve", [blocks.text("hi")], page="/approval")
+        assert (ticket.approval_id, ticket.status) == ("a1", "pending")
+        assert await ctx.approvals.check("template", "t/1", b"body") == "approved"
+        outcome = await ctx.approvals.await_("a1", timeout_ms=10**9)
+        assert (outcome.status, outcome.decided_at) == ("approved", "now")
+        sent = {m["method"]: m["params"] for m in daemon.incoming if m["method"].startswith("approval.")}
+        assert sent["approval.request"] == {
+            "principal": "local", "kind": "template", "subject_id": "t/1", "digest": digest, "title": "Approve",
+            "preview": [blocks.text("hi")], "require_step_up": True, "page": "/approval"}
+        assert sent["approval.check"] == {
+            "principal": "local", "kind": "template", "subject_id": "t/1", "digest": digest}
+        assert sent["approval.await"] == {"approval_id": "a1", "timeout_ms": 300_000}
+
+    async def test_invalid_blocks(self, daemon, principal):
+        await daemon.initialize()
+        ctx = daemon.plugin._ctx(principal)
+        with pytest.raises(SourceError) as info:
+            await ctx.approvals.request("k", "s", "c", "t", [{"type": "html"}])
+        assert info.value.code == "invalid_blocks"
+
+
+class TestOutputs:
+    def ctx(self, daemon, principal, tmp_path, **extra):
+        out = tmp_path / "out"
+        out.mkdir()
+        return daemon.plugin._ctx({**principal, "output_dir": str(out), "output_types": ["text/csv"], **extra}), out
+
+    async def test_atomic_publish_leaves_no_tmp(self, daemon, principal, tmp_path):
+        await daemon.initialize()
+        ctx, out = self.ctx(daemon, principal, tmp_path)
+        assert ctx.outputs.dir == out
+        assert ctx.outputs.publish("reports/a.csv", "x,y\n") == "reports/a.csv"
+        assert ctx.outputs.publish("b.csv", b"1") == "b.csv"
+        assert (out / "reports" / "a.csv").read_text() == "x,y\n"
+        assert not [p for p in out.rglob("*") if p.name.endswith(".tmp")]
+
+    async def test_existing_path_refused(self, daemon, principal, tmp_path):
+        await daemon.initialize()
+        ctx, out = self.ctx(daemon, principal, tmp_path)
+        ctx.outputs.publish("a.csv", "1")
+        with pytest.raises(FileExistsError):
+            ctx.outputs.publish("a.csv", "2")
+        assert (out / "a.csv").read_text() == "1"
+
+    @pytest.mark.parametrize("path", ["../a.csv", "a/../b.csv", "/abs.csv", ".hidden.csv", "a//b.csv", "a\\b.csv"])
+    async def test_unsafe_paths_refused(self, daemon, principal, tmp_path, path):
+        await daemon.initialize()
+        ctx, out = self.ctx(daemon, principal, tmp_path)
+        with pytest.raises(ValueError):
+            ctx.outputs.publish(path, "x")
+        assert not list(out.iterdir())
+        assert not (tmp_path / "a.csv").exists()
+
+    async def test_wrong_extension_refused(self, daemon, principal, tmp_path):
+        await daemon.initialize()
+        ctx, out = self.ctx(daemon, principal, tmp_path)
+        for name in ("a.json", "a.exe", "noext"):
+            with pytest.raises(ValueError, match="extension"):
+                ctx.outputs.publish(name, "x")
+        assert not list(out.iterdir())
+
+    async def test_no_output_dir(self, daemon, principal):
+        await daemon.initialize()
+        ctx = daemon.plugin._ctx(principal)
+        with pytest.raises(RuntimeError, match="no output folder"):
+            ctx.outputs.publish("a.csv", "x")
+        with pytest.raises(RuntimeError, match="no output folder"):
+            _ = ctx.outputs.dir
+
+
+class TestRevokedEvent:
+    async def test_revoked_reaches_handlers(self, make_daemon):
+        plugin = Plugin(name="demo", version="1")
+        seen = []
+
+        @plugin.on("approval.revoked")
+        async def revoked(ctx, params):
+            seen.append((params["approval_id"], ctx.principal.id))
+
+        daemon = await make_daemon(plugin)
+        await daemon.initialize()
+        daemon.notify("approval.revoked", {"approval_id": "a1", "principal": "local"})
+        await daemon.result("storage.purge", {"scope": "all"})
+        assert seen == [("a1", "local")]
+        await daemon.stop()

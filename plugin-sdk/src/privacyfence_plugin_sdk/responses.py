@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
-    "Bytes", "ConfirmResult", "DownloadedFile", "Html", "SourceError", "SourceResult", "Text",
+    "ApprovalTicket", "Bytes", "ConfirmResult", "DownloadedFile", "Html", "SourceError", "SourceResult", "Text",
     "ToolDefinitionError",
 ]
 
@@ -31,6 +31,14 @@ class SourceResult:
     data: Any
     bytes: int
     next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class ApprovalTicket:
+    """What ``ctx.approvals.request`` returns; ``status`` is ``approved`` when nothing needs asking."""
+
+    approval_id: str
+    status: str
 
 
 @dataclass(frozen=True)
