@@ -20,15 +20,15 @@ never returns a partial, silently cut result. Without `page_by`, nothing changes
 
 ## Current state
 
-- `src/privacyfence/salesforce_client.py:117` `build_report_metadata(saved, columns, filters)`
+- `src/privacyfence/salesforce_client.py:138` `build_report_metadata(saved, columns, filters)`
   narrows one run. `columns` must be a subset of the saved `detailColumns`. Each filter becomes one
   or more `reportFilters` entries. Saved `reportBooleanFilter` logic is wrapped in parentheses and
-  ANDed with the new groups (`:183-191`). Values with a comma are refused (`:150-155`), and there
-  are at most `MAX_REPORT_FILTERS = 20` filters (`:110`).
-- `salesforce_client.py:548` `SalesforceClient.run_report(report_id, columns, filters,
+  ANDed with the new groups (`:201-209`). Values with a comma are refused (`:180-184`), and there
+  are at most `MAX_REPORT_FILTERS = 20` filters (`:119`).
+- `salesforce_client.py:554` `SalesforceClient.run_report(report_id, columns, filters,
   summary_only)` does a GET for a plain run. With overrides it does `describe` and then a POST with
   `{"reportMetadata": ...}`, always with `includeDetails`. It has no sort and no paging.
-- `src/privacyfence/connectors/salesforce.py:388` `_run_report` parses before gating, fetches, and
+- `src/privacyfence/connectors/salesforce.py:400` `_run_report` parses before gating, fetches, and
   then calls `gated_call` with `gate="review"`. When `allData is False` (`:449-457`), it prefixes the
   details with "Salesforce returned only the first 2,000 detail rows…" and sets
   `new_info["Rows"] = "Cut off at Salesforce's 2,000-row limit"`. The ToolSpec description is at
@@ -83,20 +83,21 @@ class ReportPagingError(SalesforceClientError):
     def __init__(self, reason: str, message: str) -> None: ...
     # attribute: reason: str
 
-REPORT_PAGING_REASONS = frozenset({"bad_page_by", "not_unique", "not_advancing", "page_limit", "not_flat"})
+REPORT_PAGING_REASONS = frozenset({"bad_page_by", "not_unique", "not_advancing", "page_limit", "not_flat", "rows_lost"})
 
 @dataclass
 class ReportPage:
     result: dict          # the run's report result, as Salesforce returned it
     keys: list[str]       # the page_by key text of each detail row, in row order
     all_data: bool        # Salesforce's allData for this run
+    row_count: int        # the run's RowCount aggregate: every row matching this run, not only those returned
 
 def build_keyset_metadata(
     saved: dict, columns: list[str] | None, filters: list[ReportFilter] | None,
     page_by: str, after: str | None,
 ) -> dict: ...
 
-def report_page_keys(result: dict, page_by: str, after: str | None) -> list[str]: ...
+def report_page_keys(result: dict, page_by: str, after: str | None, remaining: int | None) -> tuple[list[str], int]: ...
 
 def report_page_info(number: int, rows_before: int, count: int, more: bool) -> dict: ...
 
@@ -105,6 +106,7 @@ class SalesforceClient:
     def run_report_page(
         self, report_id: str, page_by: str, columns: list[str] | None = None,
         filters: list[ReportFilter] | None = None, after: str | None = None, pages_done: int = 0,
+        remaining: int | None = None,
     ) -> ReportPage: ...
 ```
 
@@ -113,22 +115,32 @@ class SalesforceClient:
 1. If `saved.get("topRows")` is truthy, raise
    `ReportPagingError("bad_page_by", "page_by cannot page a report that has a row limit; remove the row limit from the saved report")`.
    Removing a row limit would widen the report.
-2. **Flatten for the run** (only when `saved.get("reportFormat")` is not `"TABULAR"`). Take
+2. If `saved.get("reportFormat") == "MULTI_BLOCK"` (a joined report), raise
+   `ReportPagingError("bad_page_by", "page_by cannot page a joined report")`.
+   **Flatten for the run** only when `saved.get("reportFormat")` is not `"TABULAR"`. Take
    `grouping_columns` as the `name` of each entry of `saved["groupingsDown"]` and then
-   `saved["groupingsAcross"]` (missing lists count as empty), in order, without duplicates.
+   `saved["groupingsAcross"]` (missing lists count as empty), in order, without duplicates. If any
+   grouping has a `dateGranularity` other than `None`, `"None"` or `"Day"`, raise
+   `ReportPagingError("bad_page_by", "page_by cannot page a report grouped by week, month, quarter or year: reading it as one table would show exact dates the saved report does not")`.
+   Flattening must never show more than the saved report: a coarser date grouping would.
 3. Call `build_report_metadata(saved, columns, extra_filters)`. `extra_filters` is
    `list(filters or [])`, plus `ReportFilter(page_by, "greaterThan", [after])` when `after` is not
    `None`. This keeps the saved boolean logic and the caller's filters, and adds the key filter as
-   one more ANDed group. The 20-filter limit and its message apply unchanged.
+   one more ANDed group. The 20-filter limit and its message apply unchanged. When `after` is
+   `None` (the first page), still reserve the key filter's slot: call `build_report_metadata`
+   once more with `ReportFilter(page_by, "greaterThan", ["0"])` appended and discard its result,
+   so a read that would exceed 20 filters on page 2 fails on page 1, before any card.
 4. If the report was flattened: set `metadata["reportFormat"] = "TABULAR"`,
    `metadata["groupingsDown"] = []`, `metadata["groupingsAcross"] = []`,
-   `metadata["aggregates"] = ["RowCount"]`, and
+   `metadata["aggregates"] = ["RowCount"]`, `metadata["chart"] = None`,
+   `metadata["customSummaryFormula"] = None` (both refer to groupings), and
    `metadata["detailColumns"] = [g for g in grouping_columns if g not in cols] + cols`, where `cols`
    is the `detailColumns` that `build_report_metadata` produced. The grouping columns come first.
    Their values were already visible as group labels, so the run shows nothing new.
 5. If `page_by` is not in the final `metadata["detailColumns"]`, raise
    `ReportPagingError("bad_page_by", f"page_by {page_by!r} is not a column of this run: {', '.join(final_columns)}")`.
-6. Set `metadata["sortBy"] = [{"sortColumn": page_by, "sortOrder": "Asc"}]`.
+6. Set `metadata["sortBy"] = [{"sortColumn": page_by, "sortOrder": "Asc"}]`. If `"RowCount"` is
+   not in `metadata.get("aggregates") or []`, append it. This adds a count, not data.
 
 `saved` is never mutated. This is pure and unit-testable.
 
@@ -140,7 +152,8 @@ class SalesforceClient:
 2. `index = result["reportMetadata"]["detailColumns"].index(page_by)`. If it is missing, raise
    `not_flat` with the same message.
 3. For each row, take `cell = row["dataCells"][index]` and `key = _key_text(cell.get("value"))`.
-   `_key_text` returns a `str` value that is non-empty and has no comma unchanged, an `int` (not
+   `_key_text` returns a `str` value that is non-empty, has no comma and equals its own `strip()`
+   unchanged, an `int` (not
    `bool`) as `str(v)`, and a `float` as `str(int(v))` when `v.is_integer()` and `repr(v)`
    otherwise. Anything else returns `None`. A `None` key raises
    `ReportPagingError("bad_page_by", f"page_by {page_by!r} has a value that cannot be paged by (empty, containing a comma, or not text or a number); choose an auto-number column")`.
@@ -150,6 +163,17 @@ class SalesforceClient:
    `ReportPagingError("not_advancing", f"page_by {page_by!r} did not advance: Salesforce returned the previous page's last value again, so the column cannot be paged with greaterThan; choose an auto-number column")`.
 6. If `keys == []` and `result.get("allData") is False`, raise
    `ReportPagingError("not_advancing", f"page_by {page_by!r} did not advance: a page had no rows but Salesforce reported more")`.
+7. **Row-count continuity.** `row_count` is the value of the `"RowCount"` aggregate in
+   `result["factMap"]["T!T"]["aggregates"]`, at the index of `"RowCount"` in
+   `result["reportMetadata"]["aggregates"]`. Salesforce computes aggregates over every matching
+   row, even when it returns only 2,000. If it is missing or not an `int`, raise `not_flat` with the
+   step 1 message. If `remaining is not None and row_count != remaining`, raise
+   `ReportPagingError("rows_lost", f"page_by {page_by!r} lost rows between pages: {remaining} rows were left but the next page matched {row_count}; the column has repeated or blank values, compares case-insensitively, or the report changed during the read")`.
+   If `result.get("allData") is not False and len(keys) != row_count`, raise `rows_lost` with
+   `f"page_by {page_by!r} lost rows: the last page returned {len(keys)} of {row_count} rows"`.
+   This check needs no text collation. It catches equal keys on both sides of a page boundary,
+   blank keys (which `greaterThan` drops) and case-only differences, none of which a seen-set can
+   catch, because the lost row never arrives. Return `(keys, row_count)`.
 
 **No error message ever contains a cell value**, only column API names and counts. MCP errors
 reach the AI client before any card, so a value in a message would bypass the gate.
@@ -166,8 +190,8 @@ reach the AI client before any card, so a value in a message would bypass the ga
 3. Inside `self._call`: `describe`, then `build_keyset_metadata(saved, columns, filters, page_by, after)`,
    then `sf.restful(path, params={"includeDetails": "true"}, method="POST", json={"reportMetadata": metadata})`.
    This is the same request shape as `run_report`'s override path.
-4. `keys = report_page_keys(result, page_by, after)`. Return
-   `ReportPage(result, keys, result.get("allData") is not False)`.
+4. `keys, row_count = report_page_keys(result, page_by, after, remaining)`. Return
+   `ReportPage(result, keys, result.get("allData") is not False, row_count)`.
 5. `ReportPagingError` raised inside `fn` must propagate unchanged. `_call` already re-raises
    `SalesforceClientError` subclasses.
 6. Log line: `logger.info("run_report_page %s completed (%d rows)", report_id, len(keys))`. This is
@@ -181,20 +205,23 @@ Both surfaces use `privacyfence.plugins.cursors` (`encode`, `decode`, `CursorErr
 - `bound = {"report_id": ..., "page_by": ..., "columns": [...], "filters": [...]}`. MCP uses
   `column_list` and `[dataclasses.asdict(f) for f in filter_list]`. The plugin uses the validated
   `columns` (default `[]`) and `filters` (default `[]`) params as given.
-- `state = {"n": <report runs done, ≥ 1>, "a": <rows returned so far, ≥ 0>, "l": <last key returned, a non-empty str>}`.
-  A cursor with other keys or types is "cursor is not valid".
-- The next run passes `after=state["l"]` and `pages_done=state["n"]`.
+- `state = {"n": <report runs done, ≥ 1>, "a": <rows returned so far, ≥ 0>, "l": <last key returned, a non-empty str>, "r": <rows still to come, ≥ 0>}`.
+  A cursor with other keys or types is "cursor is not valid". On the first page, `remaining` is
+  `None`. The next cursor's `r` is `page.row_count - <rows returned on this page>`.
+- The next run passes `after=state["l"]`, `pages_done=state["n"]` and `remaining=state["r"]`.
 
 The cursor is stateless, so rows are not de-duplicated across pages by memory. Instead, the
 `greaterThan` filter plus the D1 checks make a repeat impossible unless Salesforce ignored the
-filter, and that case is refused (`not_advancing`). The SDK helper (D5) also refuses a key it has
-already seen, as a second guard.
+filter, and that case is refused (`not_advancing`). The row-count check (D1 step 7) refuses lost
+rows. The SDK helper (D5) also refuses a key it has already seen, as a second guard. The cursor is
+unsigned, so a caller could reset `n`. `report_max_pages` is a cost cap against mistakes, not a
+security boundary (ADR 0128's reasoning: the caller reads with its own rights).
 
 ### D3. MCP tool `salesforce_run_report` (`connectors/salesforce.py`)
 
 New params, in this order after `summary_only` and before `reason`:
 
-- `ToolParam("page_by", "str", required=False, default="", description="Report column API name whose values are unique per row (an auto-number or ID column the report includes), e.g. 'Opportunity.Opp_Number__c'. Reads every row of the report, page by page in order of this column; a grouped report is read as one flat table. Leave empty for one run as saved.")`
+- `ToolParam("page_by", "str", required=False, default="", description="Report column API name whose values are unique per row (best an auto-number column the report includes), e.g. 'Opportunity.Opp_Number__c'. Reads every row of the report, page by page in order of this column; a grouped report is read as one flat table. Leave empty for one run as saved.")`
 - `ToolParam("cursor", "str", required=False, default="", description="Opaque cursor from a previous paged result's next_cursor. Pass it with the same report_id, columns, filters and page_by. Leave empty for the first page.")`
 
 New ToolSpec description (replace the whole string):
@@ -217,15 +244,15 @@ New ToolSpec description (replace the whole string):
    Both are raised before any fetch or card.
 3. Without `page_by`, the existing path runs byte-for-byte unchanged, including the "Cut off" text.
 4. With `page_by`:
-   1. Decode `cursor` per D2, or start from `n=0, a=0, l=None`. A `CursorError` or invalid state
+   1. Decode `cursor` per D2, or start from `n=0, a=0, l=None, r=None`. A `CursorError` or invalid state
       raises `ValueError(f"salesforce_run_report: {exc}")` (or `"salesforce_run_report: cursor is not valid"`)
       before any fetch or card.
-   2. Call `page = await self._fetch(self._sf.run_report_page, report_id, page_by, column_list or None, filter_list or None, l, n)`.
+   2. Call `page = await self._fetch(self._sf.run_report_page, report_id, page_by, column_list or None, filter_list or None, l, n, r)`.
       `_fetch` turns `ReportPagingError` into `RuntimeError` with the same message. No rows are
       returned and no card is shown.
    3. Compute `number = n + 1`, `count = len(page.keys)` and `more = not page.all_data`. Build
       `result_dict = dict(page.result)`, then set `result_dict["page"] = report_page_info(number, a, count, more)`
-      and `result_dict["next_cursor"] = cursors.encode("salesforce_run_report", bound, {"n": number, "a": a + count, "l": page.keys[-1]})`
+      and `result_dict["next_cursor"] = cursors.encode("salesforce_run_report", bound, {"n": number, "a": a + count, "l": page.keys[-1], "r": page.row_count - count})`
       if `more`, else `None`.
    4. Card: `preview` adds `"Paged by": page_by` after the Filters entry. `new_info["Rows"]` is
       `f"Page {number}: rows {first:,}–{last:,}, more pages follow"` when `more`,
@@ -233,7 +260,10 @@ New ToolSpec description (replace the whole string):
       `f"Page {number}: no rows, last page"` when `count == 0`. The dash is an en dash (U+2013).
       There is no "Cut off" prefix and no "Cut off" row on a paged read. `summary` stays
       `f"Run report: {report_name}"`. `report_data` follows today's rules.
-   5. `gated_call(... raw_data=page.result, filtered_data=result_dict, args={... existing ..., "page_by": page_by, "cursor": cursor})`.
+   5. `gated_call(... raw_data=page.result, filtered_data=result_dict, args=...)`. `args` gains the
+      keys `"page_by"` and `"cursor"` **only when `page_by` is set**. The non-paged `args` stay
+      exactly `{"report_id", "columns", "filters", "summary_only"}`
+      (`test_salesforce_connector.py:281` asserts this).
       Every other argument is as today, with `preview_tables=_report_tables(result_dict)`. Each page
       is its own card. The approved-report rule auto-approves pages exactly as it auto-approves a
       single run, because paging only narrows.
@@ -274,10 +304,10 @@ params this is exactly today's string.
   `client.run_report(report_id, filters=...)` is still the exact call when there are no columns.
   It returns `(result, None)`.
 - With `page_by`:
-  1. With no state, start from `n=0, a=0, l=None`. Otherwise call
-     `_state_keys(state, {"n", "a", "l"})`, take `n` and `a` through `_state_count`, require
-     `n >= 1`, and require `l` to be a non-empty `str`. Anything else is `_bad_cursor()`.
-  2. Call `page = client.run_report_page(report_id, page_by, columns or None, filters or None, l, n)`.
+  1. With no state, start from `n=0, a=0, l=None, r=None`. Otherwise call
+     `_state_keys(state, {"n", "a", "l", "r"})`, take `n`, `a` and `r` through `_state_count`,
+     require `n >= 1`, and require `l` to be a non-empty `str`. Anything else is `_bad_cursor()`.
+  2. Call `page = client.run_report_page(report_id, page_by, columns or None, filters or None, l, n, r)`.
      Catch `ReportPagingError` and raise `RpcError("invalid_params", str(exc), extra={"reason": exc.reason})`.
      Other client errors still become `upstream_error` in `_serve`.
   3. Take `rows = page.result["factMap"]["T!T"]["rows"]` (D1 guarantees this path). Build
@@ -286,7 +316,7 @@ params this is exactly today's string.
      row over budget raises `payload_too_large` through `_fit_prefix`.
   4. Set `more = fitted < len(rows) or not page.all_data`. `data` is the shell with
      `rows[:fitted]` and `"page": report_page_info(n + 1, a, fitted, more)`. The cursor is
-     `cursors.encode("salesforce.report_run", _bound_salesforce(params), {"n": n + 1, "a": a + fitted, "l": page.keys[fitted - 1]})`
+     `cursors.encode("salesforce.report_run", _bound_salesforce(params), {"n": n + 1, "a": a + fitted, "l": page.keys[fitted - 1], "r": page.row_count - fitted})`
      if `more`, else `None`. Rows that did not fit are picked up by the next run, because it
      starts after the last key served. No offset is kept.
 - `data` keeps Salesforce's `allData` as returned for that run. A plugin reads `page.more` or
@@ -315,10 +345,13 @@ Test host: add the samples `testing/samples/salesforce.report_run.paged.json` an
 `salesforce.report_run.paged.page2.json`. Page 1 has `params {"report_id": "00OEXAMPLE0000001", "page_by": "Account.PF_QA_Number__c"}`
 and 3 rows with keys `PFQA-00001`…`PFQA-00003`. Its `data["page"]` is
 `{"number": 1, "first_row": 1, "last_row": 3, "more": true}`, and its `next_cursor` is a real
-daemon cursor: `cursors.encode("salesforce.report_run", {"report_id": ..., "page_by": ..., "columns": [], "filters": []}, {"n": 1, "a": 3, "l": "PFQA-00003"})`.
-Page 2 carries that cursor in `params`, has 2 rows `PFQA-00004`…`PFQA-00005`,
+daemon cursor: `cursors.encode("salesforce.report_run", {"report_id": ..., "page_by": ..., "columns": [], "filters": []}, {"n": 1, "a": 3, "l": "PFQA-00003", "r": 2})`.
+Page 2's `params` are exactly `{"report_id", "page_by", "cursor"}` (all three, so the test host's
+most-specific-rule match picks page 2 for the cursor call, and not page 1 again). Page 2 has 2 rows `PFQA-00004`…`PFQA-00005`,
 `{"number": 2, "first_row": 4, "last_row": 5, "more": false}` and `next_cursor: null`. Both use
-the `data` shape of the existing `salesforce.report_run.json` sample (tabular, `T!T`). Add
+the `data` shape of the existing `salesforce.report_run.json` sample (tabular, `T!T`), with
+`reportMetadata.aggregates` `["RowCount"]` and a `T!T` aggregate whose value is the rows matching that
+run: 5 on page 1 and 2 on page 2. Add
 `_Samples.salesforce_report_pages(self) -> list[dict]`, which returns both fixtures as fresh
 copies and has the docstring "The two pages of a paged ``salesforce.report_run``: load both, and
 the first page's ``next_cursor`` fetches the second."
@@ -349,42 +382,49 @@ def tabular_report(**overrides) -> dict: ...   # saved reportMetadata: TABULAR, 
      does. Comparison is plain `str` comparison.
   2. Sorts by `m["sortBy"][0]["sortColumn"]` ascending when present.
   3. Cuts the rows to `row_limit`. `allData` is `len(matched) <= row_limit`.
-  4. Returns `{"attributes": {...}, "allData": ..., "hasDetailRows": True, "reportMetadata": m, "reportExtendedMetadata": extended or {}, "groupingsDown": {"groupings": []}, "groupingsAcross": {"groupings": []}, "factMap": {"T!T": {"rows": [{"dataCells": [{"value": r[c], "label": r[c]} for c in m["detailColumns"]]} ...], "aggregates": [{"label": str(len(matched)), "value": len(matched)}]}}}`.
+  4. Returns `{"attributes": {...}, "allData": ..., "hasDetailRows": True, "reportMetadata": m, "reportExtendedMetadata": extended or {}, "groupingsDown": {"groupings": []}, "groupingsAcross": {"groupings": []}, "factMap": {"T!T": {"rows": [{"dataCells": [{"value": r[c], "label": r[c]} for c in m["detailColumns"]]} ...], "aggregates": [...]}}}`. There is one aggregate per entry of `m.get("aggregates") or []`: for
+     `"RowCount"` it is `{"label": str(len(matched)), "value": len(matched)}`, and for any other
+     `{"label": "0", "value": 0}`. `len(matched)` is counted before the cut, as Salesforce does.
   5. Raises `AssertionError` for a non-TABULAR `m` with groupings. The client must flatten before
      posting.
 - When `tests/fixtures/live/salesforce/run_report_page.json` exists (recorded in p2), a test checks
-  that the fake's result has the same top-level keys and the same `factMap["T!T"]` row and cell key
-  sets as the recording. It skips with a reason when the file is missing, the way
+  that the fake's top-level keys, `factMap["T!T"]` keys and cell keys are each a subset of the
+  recording's. It skips with a reason when the file is missing, the way
   `TestLiveFixtureParsing` does.
 
 ### D7. Live check and recorded shape (`scripts/qa_fixture_recorder.py`)
 
-- QA manifest keys, with defaults (`tests/fixtures/qa_environment.yaml.example` documents them
-  under `salesforce:`): `page_by_label: "PF QA Number"` and
-  `summary_report_name: "PrivacyFence QA Summary Report"`.
-- `_check_salesforce_report_paging(client, report_id, summary_report_id, page_by_label) -> CheckResult`
-  produces row `("salesforce", "run_report_page", label, ok, note)`:
+- `_check_salesforce_report_paging(client: SalesforceClient, report_id: str, summary_report_id: str, page_by_label: str, label: str, record: bool) -> CheckResult`
+  produces `CheckResult("salesforce", "run_report_page", label, ok, note, raw, "run_report_page.json")`.
+  `raw` is `None` unless `record` and the check passed:
   1. `describe` the QA report through `client._call(lambda sf: sf.restful(f"analytics/reports/{report_id}/describe"))`.
      Find the detail column whose `reportExtendedMetadata.detailColumnInfo[col]["label"] == page_by_label`.
      If there is none: `ok=False`, note
      `"no column labelled <label> in the QA report -- see connector-qa.md, Seed: Salesforce"`.
-  2. Call `first = client.run_report_page(report_id, col)`. Fail with
-     `"fewer than 2 rows in the QA report"` when `len(first.keys) < 2`, and with
+  2. Run `first = client.run_report_page(report_id, col)` inside `with RawCaptureCall(client) as cap:`.
+     Fail with `"fewer than 2 rows in the QA report"` when `len(first.keys) < 2`, with
      `"sortBy not honoured -- keys are not in ascending order"` when
-     `first.keys != sorted(first.keys)`. Auto-number values are zero-padded, so `str` order is
-     correct here.
-  3. Call `rest = client.run_report_page(report_id, col, after=first.keys[0], pages_done=1)`. Fail
-     with `"greaterThan on page_by not honoured"` when `rest.keys != first.keys[1:]`.
+     `first.keys != sorted(first.keys)` (auto-number values are zero-padded, so `str` order is
+     correct here), and with `"RowCount aggregate does not match the rows returned"` when
+     `first.row_count != len(first.keys)`.
+  3. Call `rest = client.run_report_page(report_id, col, after=first.keys[0], pages_done=1, remaining=first.row_count - 1)`.
+     Fail with `"greaterThan on page_by not honoured"` when `rest.keys != first.keys[1:]`. A
+     `rows_lost` error here means RowCount does not count the filtered run; it is reported as is.
   4. When `summary_report_id` is set, call `s = client.run_report_page(summary_report_id, col)`.
      Fail with `"flattened summary report returned no rows"` when `not s.keys`.
   5. On `ReportPagingError` or `SalesforceClientError`, return `ok=False` with `str(exc)`. A
      `ReportPagingError` message holds no values. The success note is
-     `"sortBy, greaterThan and flattening honoured"`. No note ever holds a cell value.
+     `"sortBy, greaterThan, RowCount and flattening honoured"`. No note ever holds a cell value.
+  6. Recording (`record` and success): from `cap.captured`, keep only the `factMap["T!T"]["rows"]`
+     with at least one cell whose `label` contains `QATEST_TAG`. If none are left, fail with
+     `"no [QATEST] rows in the QA report run -- nothing safe to record"`. Then set
+     `raw = deidentify_structural_fields(redact(filtered))`. The QA report covers all Accounts,
+     so untagged rows must never be recorded.
+- QA manifest keys, with defaults (`tests/fixtures/qa_environment.yaml.example` documents them
+  under `salesforce:`): `page_by_label: "PF QA Number"` and
+  `summary_report_name: "PrivacyFence QA Summary Report"`.
 - `check_salesforce` resolves `summary_report_name` through the same `list_reports` result as the
-  main report, and adds the new row after `run_report`.
-- Recording: in `--record` mode, capture the raw response of `first`'s run with
-  `RawCaptureCall(client)`, the same way `list_reports` does. Write it as `run_report_page.json`
-  after `deidentify_structural_fields(redact(...))`. Add `"run_report_page.json"` to
+  main report, and adds the new row after `run_report`. Add `"run_report_page.json"` to
   `EXPECTED_FIXTURES["salesforce"]`.
 
 ### Rejected alternatives (for the ADR)
@@ -412,8 +452,10 @@ def tabular_report(**overrides) -> dict: ...   # saved reportMetadata: TABULAR, 
   keyset paging: one run per page, sorted by the column, `greaterThan` the last key, ANDed onto the
   saved and caller filters. Grouped reports are flattened for the run. The cursor is stateless and
   bound to the parameters. A read fails with no rows on a bad, non-unique or non-advancing column
-  or past `salesforce.report_max_pages` (default 50). It amends ADR 0128's "Salesforce report runs
-  do not page yet". The rejected alternatives are listed above.
+  or past `salesforce.report_max_pages` (default 50). A RowCount continuity check refuses lost
+  rows. Grouped reports are flattened only when that shows no more than the saved report. The page
+  cap is a cost cap, not a boundary: the cursor is unsigned. It amends ADR 0128's "Salesforce
+  report runs do not page yet". The rejected alternatives are listed above.
 
 ## Manual steps
 
@@ -443,7 +485,13 @@ The manual-steps page is at https://claude.ai/artifact/ANJmZoK5KbeZeCEkXb8Vhi (s
   is refused or the run fails, p2 stops with `status=blocked`. Do not hand-write
   `run_report_page.json`, because `EXPECTED_FIXTURES` makes CI depend on it.
 - **ID columns.** Sorting and `greaterThan` on a record-ID column are not verified anywhere before
-  `ma1`. The docs recommend an auto-number column and say ID columns are not guaranteed.
+  `ma1`. Salesforce compares text case-insensitively, so 15-character IDs can collide at a page
+  boundary. The RowCount check then refuses the read instead of losing a row. The docs recommend
+  an auto-number column.
+- **RowCount semantics.** D1 step 7 assumes the RowCount aggregate counts every matching row even
+  when only 2,000 come back. p2's live check proves it on 2-3 rows (`row_count == len(keys)`, and
+  the after-run's count). `ma1` proves it past 2,000. If `ma1` shows `rows_lost` on a column known
+  to be unique, the assumption is wrong. Report it and do not weaken the check.
 - **Aggregates on later pages** cover the rows after the previous key, not the whole report.
   Document it. Do not change Salesforce's result.
 - **Base branch.** Phases are cut from this plan branch (PR #856's head). If #856 changes
@@ -471,13 +519,13 @@ manual_after:
     why: proves on a production-sized org what the QA org cannot hold -- sortBy honoured past 2,000 rows, greaterThan on your key column, the 2,000-row cap, every row exactly once
 verify_after_merge:
   - ruff check .
-  - python3 -m pytest tests/unit/test_salesforce_client.py tests/unit/connectors/test_salesforce_connector.py tests/unit/plugins tests/unit/plugin_sdk tests/unit/test_qa_fixture_recorder.py tests/unit/test_daemon_main.py tests/unit/test_docs_configuration_reference.py -q
+  - python3 -m pytest tests/unit/test_salesforce_client.py tests/unit/test_salesforce_report_paging.py tests/unit/connectors/test_salesforce_connector.py tests/unit/plugins tests/unit/plugin_sdk tests/unit/test_qa_fixture_recorder.py tests/unit/test_daemon_main.py tests/unit/test_docs_configuration_reference.py tests/unit/test_docs_tools_reference.py tests/unit/web -q
   - python3 -m pytest tests/integration/test_plugin_paging.py tests/integration/test_sdk_testhost_conformance.py -q
 final_checks:
   - docs/salesforce-report-paging-plan.md and docs/salesforce-report-paging-plan-manual-steps.html are deleted and nothing links to them
   - docs/adr/0132-*.md exists, is Accepted, and is listed in docs/adr/README.md
   - CHANGELOG.md has [Unreleased] entries and no version heading
-  - grep -rn "do not page yet\|Not paged" docs CHANGELOG.md returns nothing about Salesforce
+  - grep -rn --exclude-dir=adr "do not page yet\|Not paged" docs CHANGELOG.md returns nothing
   - the PR body says it is stacked on #856 (and #855) and links the connector-live-check.yml run
 phases:
   - id: p1-client-keyset
@@ -507,7 +555,13 @@ phases:
          - flattening a SUMMARY report: reportFormat TABULAR, groupings emptied, aggregates
            ["RowCount"], grouping columns prepended once; a TABULAR report keeps its aggregates;
          - page_by not a column -> bad_page_by with the column list; topRows -> bad_page_by;
-         - report_page_keys: str/int/float keys; empty, comma, dict, bool values -> bad_page_by;
+         - flattening refused for MULTI_BLOCK and for a dateGranularity Month grouping
+           (bad_page_by); allowed for "Day" and "None"; chart and customSummaryFormula nulled;
+           RowCount appended to a tabular report's aggregates when missing; 20 filters (19 caller
+           + saved) plus page_by fails on the first page (after=None) with the 20-filter message;
+         - report_page_keys: str/int/float keys; empty, comma, " padded ", dict, bool values -> bad_page_by;
+           RowCount != remaining -> rows_lost; allData true with len(keys) != RowCount -> rows_lost;
+           missing RowCount aggregate -> not_flat;
            duplicate -> not_unique; after in keys -> not_advancing; [] with allData False ->
            not_advancing; factMap key other than T!T -> not_flat;
          - every ReportPagingError message in these tests contains none of the row values used;
@@ -520,7 +574,8 @@ phases:
       rejects greaterThan on the column), stop with status=blocked and say what it rejected.
     acceptance:
       - python3 -m pytest tests/unit/test_salesforce_client.py -q passes
-      - git diff --stat origin/plan/salesforce-report-paging -- tests/unit/test_salesforce_client.py shows only additions (no existing test edited)
+      - git diff origin/plan/salesforce-report-paging -- tests/unit/test_salesforce_client.py | grep -c '^-[^-]' prints 0
+      - python3 -m pytest tests/unit/test_salesforce_client.py --cov=privacyfence.salesforce_client --cov-branch --cov-report=term-missing -q reports 100% for salesforce_client.py
       - grep -n "class ReportPagingError\|def run_report_page\|def build_keyset_metadata\|def report_page_keys\|def report_page_info\|DEFAULT_REPORT_MAX_PAGES = 50" src/privacyfence/salesforce_client.py finds all six
       - ruff check src/privacyfence/salesforce_client.py tests/unit/test_salesforce_client.py passes
       - python3 scripts/mypy_strict_modules.py passes
@@ -537,10 +592,10 @@ phases:
       - docs/connector-qa.md
     brief: |
       Implement Design D7.
-      1. scripts/qa_fixture_recorder.py: add _check_salesforce_report_paging (exact notes from D7),
-         call it from check_salesforce after the run_report row, resolve summary_report_name via the
-         same list_reports result, add the record-mode capture of the first run as
-         run_report_page.json, and add "run_report_page.json" to EXPECTED_FIXTURES["salesforce"].
+      1. scripts/qa_fixture_recorder.py: add _check_salesforce_report_paging with the full D7
+         signature, notes, RawCaptureCall capture and [QATEST]-row filter; call it from
+         check_salesforce (passing record) after the run_report row; resolve summary_report_name via
+         the same list_reports result; add "run_report_page.json" to EXPECTED_FIXTURES["salesforce"].
       2. tests/fixtures/qa_environment.yaml.example: under salesforce:, add page_by_label and
          summary_report_name with their defaults and a one-line comment pointing at connector-qa.md.
       3. docs/connector-qa.md "Seed: Salesforce": add the two checklist items of mb1 (Auto Number
@@ -551,8 +606,12 @@ phases:
       4. tests/unit/test_qa_fixture_recorder.py: add test_report_paging_check_* tests next to the
          existing test_run_report_check_* (:987-1050), covering: success; missing label column;
          fewer than 2 rows; unsorted keys; greaterThan not honoured; summary report with no rows;
-         ReportPagingError surfaced; and that no note contains a row value.
-      5. Run the unit tests. Commit and push the phase branch.
+         ReportPagingError surfaced; RowCount mismatch; record mode drops untagged rows and fails
+         when no [QATEST] row is left; and that no note contains a row value.
+      5. Run the unit tests. Until the recording is pulled (step 6), the fixture-presence test
+         (TestFixturePresence, every EXPECTED_FIXTURES file exists) fails for run_report_page.json.
+         That is expected here and only here. Every other test must pass. Commit and push the
+         phase branch.
       6. Dispatch qa-record-fixture.yml with input connector=salesforce against this phase branch
          (GitHub MCP actions_run_trigger, ref = the phase branch). Wait for it (it may queue behind
          connector-live-check). Pull: it commits tests/fixtures/live/salesforce/*.json back.
@@ -561,18 +620,18 @@ phases:
       7. Dispatch connector-live-check.yml against this phase branch and record the run URL and the
          salesforce rows (run_report, run_report_page) in your phase report for the final PR body.
       Stop conditions: the run_report_page row fails with a Salesforce error about reportFormat,
-      groupings or sortBy, or with "greaterThan on page_by not honoured" -> status=blocked, quote the
-      note. The QA org lacks the column or the summary report (mb1 not done) -> status=blocked. A
+      groupings, chart or sortBy, with "greaterThan on page_by not honoured", with the RowCount note
+      or with rows_lost -> status=blocked, quote the note. The QA org lacks the column or the summary report (mb1 not done) -> status=blocked. A
       dispatch is refused or the recording run fails -> status=blocked; never hand-write the fixture.
     acceptance:
-      - python3 -m pytest tests/unit/test_qa_fixture_recorder.py -q passes
+      - after the recording is pulled, python3 -m pytest tests/unit/test_qa_fixture_recorder.py tests/unit/test_salesforce_client.py -q passes
       - tests/fixtures/live/salesforce/run_report_page.json exists, is valid JSON and has factMap with a T!T entry
-      - the connector-live-check.yml run against the phase branch is green and its report has a passing salesforce run_report_page row (URL in the phase report)
+      - in the connector-live-check.yml run against the phase branch, every salesforce row (list_reports, run_report, run_report_page, get_record) passes (URL in the phase report; other connectors' rows do not gate this phase)
       - ruff check scripts/qa_fixture_recorder.py tests/unit/test_qa_fixture_recorder.py passes
 
   - id: p3-analytics-fake
     title: Synthetic Analytics server and the 4,500-row paging tests at client level
-    depends_on: [p1-client-keyset]
+    depends_on: [p1-client-keyset, p2-live-check]
     complexity: M
     touches:
       - tests/fixtures/salesforce_analytics.py
@@ -597,14 +656,17 @@ phases:
          - refusals, each asserting no ReportPage is returned and the reason: unknown page_by
            (bad_page_by); non-unique column TYPE (not_unique); a fake variant that ignores
            greaterThan (not_advancing on page 2); page limit with report_max_pages = 2 on 4,500 rows
-           (page_limit on the third call).
+           (page_limit on the third call); a boundary-straddling duplicate (rows 2000 and 2001 share
+           a key, all others unique -> rows_lost on page 2); blank keys sorting last (the fake
+           sorts "" after every other value for this test -> rows_lost on the run after page 1);
+           each loop passes remaining = previous row_count - len(previous keys).
          - test_fake_matches_recorded_shape: compares with tests/fixtures/live/salesforce/
            run_report_page.json per D6; pytest.skip("run_report_page.json not recorded yet") when
            absent.
       Stop condition: if a test needs a change to salesforce_client.py to pass, stop with
       status=blocked and describe the mismatch with D1; do not edit p1's code here.
     acceptance:
-      - python3 -m pytest tests/unit/test_salesforce_report_paging.py -q passes (the shape test may skip only if p2 has not merged yet)
+      - python3 -m pytest tests/unit/test_salesforce_report_paging.py -q -rs passes and test_fake_matches_recorded_shape is not skipped
       - grep -n "eval(" tests/fixtures/salesforce_analytics.py finds nothing
       - ruff check tests/fixtures/salesforce_analytics.py tests/unit/test_salesforce_report_paging.py passes
 
@@ -646,7 +708,7 @@ phases:
            called and gated_call was not reached, as test_invalid_filters_json_rejected_before_fetch
            does);
          - ReportPagingError from the client becomes RuntimeError with the same message and no card;
-         - args passed to gated_call include page_by and cursor.
+         - args passed to gated_call include page_by and cursor on paged calls only.
          tests/unit/test_daemon_main.py TestBuildConnectorsSalesforce: report_max_pages default 50,
          config value 7 applied, values 0, -1, "x" and True fall back to 50 with the warning.
       Stop condition: tests/unit/web/test_tool_schema_portability.py or the tool-definition tests
@@ -656,6 +718,7 @@ phases:
       - python3 -m pytest tests/unit/connectors/test_salesforce_connector.py tests/unit/test_daemon_main.py tests/unit/test_docs_configuration_reference.py tests/unit/web -q passes
       - git diff origin/plan/salesforce-report-paging -- tests/unit/connectors/test_salesforce_connector.py shows no removed lines
       - python3 -m pytest tests/unit/test_docs_tools_reference.py -q passes
+      - python3 -m pytest tests/unit/connectors/test_salesforce_connector.py tests/unit/test_daemon_main.py --cov=privacyfence.connectors.salesforce --cov-branch --cov-report=term-missing -q reports 100% for connectors/salesforce.py
       - grep -n "page_by" docs/tools-reference.md finds the salesforce_run_report row
       - ruff check . passes
 
@@ -680,12 +743,13 @@ phases:
       2. tests/unit/plugins/test_source_ops.py, new classes next to TestAdapterSalesforce (do not
          edit existing tests): a client backed by FakeAnalytics (tests/fixtures/salesforce_analytics.py)
          with 4,500 rows; follow next_cursor with the existing _follow helper: every row once in key
-         order, 3 calls, audit summaries end "; page_by=<col>; bytes=..." with "; more" on the first
-         two. A budget test: monkeypatch SOURCE_PAGE_BUDGET_BYTES in source_ops so a run's rows do not
+         order, 3 calls. The audit summaries are "<report_id>; filters=0; page_by=<col>; bytes=<n>; more"
+         for call 1, "<report_id>; filters=0; page_by=<col>; page; bytes=<n>; more" for call 2 (_serve
+         appends "; page" whenever a cursor is given) and "...; page; bytes=<n>" for call 3. A budget test: monkeypatch SOURCE_PAGE_BUDGET_BYTES in source_ops so a run's rows do not
          fit; pages still deliver every row once and the cursor's next run starts after the last
          served key (assert FakeAnalytics.calls' greaterThan values). Refusals: cursor without
          page_by; cursor with changed columns/filters/page_by (the "different call" message); a
-         garbled state (keys, n=0, l="" or l=5); each ReportPagingError reason comes back as
+         garbled state (missing "r", n=0, l="", l=5, r=-1); each ReportPagingError reason comes back as
          invalid_params with extra reason; columns validation messages. Without page_by: the
          existing tests still pass, and passing columns calls run_report with columns=.
       3. Integration. tests/fixtures/plugins/echo/echo_plugin.py: add a page "/report" next to
@@ -708,7 +772,8 @@ phases:
          for Salesforce), and the "What a page is" row: "One report run sorted by page_by, starting
          after the previous page's last value, cut to fit; grouped reports are read as one table.
          A column that is not unique, does not advance or is not a column of the run is
-         invalid_params with reason bad_page_by, not_unique, not_advancing or not_flat; more than
+         invalid_params with reason bad_page_by, not_unique, not_advancing or not_flat; a read that
+         would lose rows (RowCount check) is invalid_params with reason rows_lost; more than
          salesforce.report_max_pages runs is invalid_params with reason page_limit." Remove the
          issue-854 link.
       Stop condition: the Stack's connector_state lambda or the plugin host refuses
@@ -716,6 +781,7 @@ phases:
       rejects it) -> status=blocked naming the check; do not loosen the validator.
     acceptance:
       - python3 -m pytest tests/unit/plugins -q passes
+      - python3 -m pytest tests/unit/plugins/test_source_ops.py --cov=privacyfence.plugins.source_ops --cov-branch --cov-report=term-missing -q reports 100% for source_ops.py
       - python3 -m pytest tests/integration/test_plugin_paging.py -q passes with TestSalesforce collected and not skipped
       - git diff origin/plan/salesforce-report-paging -- tests/unit/plugins/test_source_ops.py shows no removed lines
       - grep -n "Not paged" docs/plugin-protocol.md finds nothing
@@ -747,10 +813,13 @@ phases:
       4. Tests: test_plugin.py -- report_pages yields both pages and passes cursor; a key repeated
          across pages raises SourceError reason "not_unique"; malformed data raises internal_error;
          columns/filters omitted when None. test_testhost.py -- loading salesforce_report_pages()
-         and iterating ctx.source.report_pages gives 5 rows; a cursor for other params is refused
-         (pattern: test_a_cursor_for_another_query_or_none_of_ours_is_refused).
+         and iterating ctx.source.report_pages gives 5 rows; with
+         host.source.when("salesforce.report_run", report_id=..., page_by=...).returns_pages([...two
+         page datas...]), a cursor from that query sent with another page_by is refused with
+         invalid_params (pattern: test_a_cursor_for_another_query_or_none_of_ours_is_refused,
+         which also uses returns_pages; fixtures added with load() carry no binding).
          test_sdk_samples.py -- run the daemon adapter on each paged sample's params against a
-         FakeAnalytics-backed client serving the same 5 rows with row_limit 3 and assert the daemon
+         FakeAnalytics-backed client serving the same 5 rows with row_limit 3 (page 2 called with the sample's own cursor) and assert the daemon
          returns the sample's data["page"] and the same next_cursor (pattern: the parametrized
          cursor tests at :159-190).
       5. plugin-sdk/README.md: a report_pages example after the pages/collect examples, saying
@@ -785,16 +854,22 @@ phases:
          Alternatives considered; Consequences; Verification naming tests/unit/test_salesforce_report_paging.py,
          TestRunReportPaged, the source_ops tests, tests/integration/test_plugin_paging.py
          TestSalesforce, and the live check row run_report_page). Link issue #854, never this plan.
-         Add it to the index in docs/adr/README.md.
+         Add a line "Amends [ADR 0128](0128-plugin-source-reads-never-truncate.md)." under Status.
+         Add it to the index in docs/adr/README.md, and change 0128's index row status to
+         "Accepted; amended by 0132", following the existing convention (see the 0002 row).
+         Under Consequences, say that report_max_pages is a cost cap, not a boundary, because the
+         cursor is unsigned.
       2. ADR 0128: change only its Status line to add "Salesforce report paging: [ADR 0132](0132-salesforce-reports-page-by-a-unique-key-column.md)."
          (accepted ADR bodies stay frozen; PR #856 did the same for 0121 and 0123).
       3. docs/plugins.md: replace the "Salesforce report runs do not page yet… issue 854" text
          (around :131) with one sentence on page_by and ctx.source.report_pages; add report_pages
          to the ctx.source list (around :297).
       4. docs/salesforce-setup.md: add a "Reading large reports" section before Troubleshooting:
-         the 2,000-row limit; page_by needs a column unique per row, an Auto Number field added to
-         the report is best, record-ID columns are not guaranteed to work; grouped reports are read
-         as one table with the grouping columns first; each page is one report run and counts
+         the 2,000-row limit; page_by needs a column unique per row with no blanks, an Auto Number
+         field added to the report is best, record-ID columns are not guaranteed to work
+         (Salesforce compares text case-insensitively) and a read that would lose rows fails; grouped
+         reports are read as one table with the grouping columns first, except reports grouped by
+         week, month, quarter or year and joined reports, which cannot be paged; each page is one report run and counts
          against the org's hourly report-run limits; salesforce.report_max_pages (default 50,
          100,000 rows); later pages' totals cover only the rows from that page on.
       5. CHANGELOG.md [Unreleased]: in the "Plugin reads no longer truncate" entry delete
@@ -812,5 +887,6 @@ phases:
       - test ! -e docs/salesforce-report-paging-plan.md and test ! -e docs/salesforce-report-paging-plan-manual-steps.html
       - grep -rn "salesforce-report-paging-plan" --exclude-dir=.git . finds nothing
       - grep -n "do not page yet" CHANGELOG.md docs/plugins.md finds nothing
+      - grep -n "amended by 0132" docs/adr/README.md finds the 0128 row
       - python3 -m pytest tests/unit/test_docs_no_history.py tests/unit -k "adr or docs or changelog" -q passes
 ```
