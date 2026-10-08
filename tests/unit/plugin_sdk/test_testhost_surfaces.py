@@ -13,7 +13,9 @@ import pytest
 from privacyfence_plugin_sdk._rpc import RpcError
 from privacyfence_plugin_sdk import Bytes, Html, Plugin, Prepared, Text, blocks
 from privacyfence_plugin_sdk.testing import PluginTestHost
+from privacyfence_plugin_sdk.testing import _host as host_module
 from privacyfence_plugin_sdk.testing import _pages
+from privacyfence_plugin_sdk.plugin import ApprovalsClient
 
 pytestmark = pytest.mark.unit
 
@@ -338,3 +340,257 @@ def test_pytest_fixture_builds_a_host(tmp_path):
     result = _run("", "-m", "pytest", "-p", "privacyfence_plugin_sdk.testing.pytest", "-p", "no:cacheprovider",
                   "-q", "--rootdir", str(tmp_path), str(tmp_path / "test_it.py"))
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def build_approval_plugin(with_page: bool = True) -> tuple[Plugin, dict]:
+    seen: dict = {"revoked": [], "tickets": [], "checks": []}
+    plugin = Plugin(name="approver", version="1.0.0")
+
+    if with_page:
+        @plugin.page("/approval")
+        async def approval_page(ctx, request):
+            return Text(request.query.get("pf_approval", ""))
+
+    @plugin.tool("approve", description="Ask for approval.", gate="popup",
+                 params={"text": {"type": "string"}, "page": {"type": "string"}}, required=["text"])
+    async def approve(ctx, args):
+        return Prepared(preview=[blocks.text("approve")], state=args)
+
+    @approve.execute
+    async def do_approve(ctx, prepared, approval):
+        args = prepared.state
+        before = await ctx.approvals.check("template", "templates/a", args["text"])
+        ticket = await ctx.approvals.request(
+            "template", "templates/a", args["text"], "Approve template", [blocks.text("template")],
+            page=args.get("page"),
+        )
+        seen["tickets"].append(ticket)
+        return {"before": before, "approval_id": ticket.approval_id, "status": ticket.status}
+
+    @plugin.tool("wait", description="Wait for an approval.", gate="popup",
+                 params={"approval_id": {"type": "string"}, "text": {"type": "string"}}, required=["approval_id", "text"])
+    async def wait(ctx, args):
+        return Prepared(preview=[blocks.text("wait")], state=args)
+
+    @wait.execute
+    async def do_wait(ctx, prepared, approval):
+        result = await ctx.approvals.await_(prepared.state["approval_id"], timeout_ms=5000)
+        after = await ctx.approvals.check("template", "templates/a", prepared.state["text"])
+        return {"status": result.status, "decided_at": result.decided_at, "after": after}
+
+    @plugin.on("approval.revoked")
+    async def revoked(ctx, params):
+        seen["revoked"].append(params)
+
+    return plugin, seen
+
+
+class TestApprovals:
+    async def test_request_opens_a_card_and_approving_it_stores_the_approval(self):
+        plugin, seen = build_approval_plugin()
+        async with PluginTestHost(plugin) as host:
+            first = (await host.call_tool("approve", {"text": "v1", "page": "/approval"})).result
+            assert first["before"] == "unknown" and first["status"] == "pending"
+            [card] = host.approvals
+            assert card.status == "pending" and card.kind == "template" and card.subject_id == "templates/a"
+            assert card.approval_id == first["approval_id"] and card.digest == _digest("v1")
+            assert card.frame_path == f"/approval?pf_approval={card.approval_id}"
+            shown = await host.get("/approval", query={"pf_approval": card.approval_id})
+            assert shown.text == card.approval_id
+
+            # the same request while the card waits is the same card
+            again = (await host.call_tool("approve", {"text": "v1"})).result
+            assert again["approval_id"] == card.approval_id and len(host.approvals) == 1
+
+            decided = await host.decide_approval(card.approval_id, "approve")
+            assert decided.status == "approved" and decided.decided_at
+            waited = (await host.call_tool("wait", {"approval_id": card.approval_id, "text": "v1"})).result
+            assert waited["status"] == "approved" and waited["after"] == "approved"
+
+            # approved: no new card, and await answers for the id without a card
+            stored = (await host.call_tool("approve", {"text": "v1"})).result
+            assert stored["before"] == "approved" and stored["status"] == "approved"
+            assert stored["approval_id"] == card.approval_id and len(host.approvals) == 1
+            # other content is another thing
+            other = (await host.call_tool("approve", {"text": "v2"})).result
+            assert other["before"] == "unknown" and other["status"] == "pending" and len(host.approvals) == 2
+        assert [a["decision"] for a in host.audit if a["decision"] == "plugin_approval"] == [
+            "plugin_approval"] * 3
+        assert [a["summary"] for a in host.audit if a["decision"] == "plugin_approval"] == [
+            "template; requested", "template; approved", "template; requested"]
+
+    async def test_denied_and_expired_cards_store_nothing(self):
+        plugin, _ = build_approval_plugin()
+        async with PluginTestHost(plugin) as host:
+            for decision, status in (("deny", "denied"), ("expire", "expired")):
+                ticket = (await host.call_tool("approve", {"text": "v1"})).result
+                assert ticket["status"] == "pending"
+                await host.decide_approval(ticket["approval_id"], decision)
+                waited = (await host.call_tool("wait", {"approval_id": ticket["approval_id"], "text": "v1"})).result
+                assert waited["status"] == status and waited["after"] == "unknown"
+            assert [a.status for a in host.approvals] == ["denied", "expired"]  # each retry opened a new card
+            with pytest.raises(ValueError, match="already"):
+                await host.decide_approval(host.approvals[0].approval_id, "approve")
+            with pytest.raises(ValueError, match="decision must be"):
+                await host.decide_approval(host.approvals[0].approval_id, "maybe")
+            with pytest.raises(KeyError):
+                await host.decide_approval("nope", "approve")
+
+    async def test_revoking_sends_the_event_and_check_says_revoked(self):
+        plugin, seen = build_approval_plugin()
+        async with PluginTestHost(plugin) as host:
+            ticket = (await host.call_tool("approve", {"text": "v1"})).result
+            with pytest.raises(KeyError):
+                await host.revoke_approval(ticket["approval_id"])  # nothing stored yet
+            await host.decide_approval(ticket["approval_id"], "approve")
+            record = await host.revoke_approval(ticket["approval_id"])
+            assert record.revoked_at and host.approvals[0].revoked_at == record.revoked_at
+            assert seen["revoked"] == [{
+                "approval_id": ticket["approval_id"], "kind": "template", "subject_id": "templates/a",
+                "digest": _digest("v1"),
+            }]
+            await host.revoke_approval(ticket["approval_id"])
+            assert len(seen["revoked"]) == 1  # revoking twice changes and sends nothing
+            checked = (await host.call_tool("approve", {"text": "v1"})).result
+            assert checked["before"] == "revoked" and checked["status"] == "pending"  # a revoked one asks again
+            await host.decide_approval(checked["approval_id"], "approve")
+            again = (await host.call_tool("approve", {"text": "v1"})).result
+            assert again["before"] == "approved" and again["approval_id"] == checked["approval_id"]
+
+    async def test_request_validation_matches_the_daemons(self):
+        plugin, _ = build_approval_plugin()
+        good = {"principal": "local", "kind": "template", "subject_id": "a", "digest": _digest("x"),
+                "title": "T", "preview": [blocks.text("p")]}
+        async with PluginTestHost(plugin) as host:
+            service = host._approvals
+            for change, code in (
+                ({"kind": "Bad Kind"}, "invalid_params"), ({"subject_id": ""}, "invalid_params"),
+                ({"subject_id": "a‮b"}, "invalid_params"), ({"subject_id": "x" * 201}, "invalid_params"),
+                ({"digest": "sha256:ABC"}, "invalid_params"), ({"title": ""}, "invalid_params"),
+                ({"title": "t" * 121}, "invalid_params"), ({"require_step_up": "yes"}, "invalid_params"),
+                ({"preview": [{"type": "nope"}]}, "invalid_blocks"), ({"principal": "bob"}, "unknown_principal"),
+                ({"page": "approval"}, "invalid_params"), ({"page": "/a?x=1"}, "invalid_params"),
+                ({"page": "/a%3Fx"}, "invalid_params"), ({"page": "/a%23x"}, "invalid_params"),
+                ({"page": "/../x"}, "invalid_params"),
+            ):
+                with pytest.raises(RpcError) as bad:
+                    await service.request({**good, **change})
+                assert bad.value.code == code, change
+            ok = await service.request({**good, "page": "/approval"})
+            assert ok["status"] == "pending"
+            with pytest.raises(RpcError) as bad:
+                await service.check({**{k: good[k] for k in ("principal", "kind", "subject_id")}, "digest": "nope"})
+            assert bad.value.code == "invalid_params"
+            with pytest.raises(RpcError) as unknown:
+                await service.await_({"approval_id": "approval-nope"})
+            assert unknown.value.code == "invalid_params"
+            with pytest.raises(RpcError) as slow:
+                await service.await_({"approval_id": ok["approval_id"], "timeout_ms": 0})
+            assert slow.value.code == "timeout" and slow.value.retryable
+            with pytest.raises(RpcError):
+                await service.await_({"approval_id": ok["approval_id"], "timeout_ms": 300_001})
+
+    async def test_a_page_needs_the_plugin_to_have_pages(self):
+        plugin, _ = build_approval_plugin(with_page=False)
+        async with PluginTestHost(plugin) as host:
+            with pytest.raises(RpcError, match="pages: true") as refused:
+                await host._approvals.request({
+                    "principal": "local", "kind": "template", "subject_id": "a", "digest": _digest("x"),
+                    "title": "T", "preview": [blocks.text("p")], "page": "/approval"})
+            assert refused.value.code == "invalid_params" and host.approvals == []
+
+    def test_revoked_is_an_event_the_host_can_send(self):
+        assert "approval.revoked" in host_module._EVENT_NAMES
+
+
+def _digest(text: str) -> str:
+    return ApprovalsClient.digest(text)
+
+
+def build_output_plugin() -> Plugin:
+    plugin = Plugin(name="reporter", version="1.0.0")
+
+    @plugin.tool("publish", description="Publish a file.", gate="popup",
+                 params={"name": {"type": "string"}, "text": {"type": "string"}}, required=["name", "text"])
+    async def publish(ctx, args):
+        return Prepared(preview=[blocks.text("publish")], state=args)
+
+    @publish.execute
+    async def do_publish(ctx, prepared, approval):
+        return {"path": ctx.outputs.publish(prepared.state["name"], prepared.state["text"]),
+                "dir": str(ctx.outputs.dir)}
+
+    return plugin
+
+
+class TestOutputs:
+    async def test_publish_lands_in_the_folder_and_is_listed(self):
+        async with PluginTestHost(build_output_plugin(), outputs=True) as host:
+            result = (await host.call_tool("publish", {"name": "reports/a.csv", "text": "x,y\n1,2\n"})).result
+            assert result["path"] == "reports/a.csv" and result["dir"] == str(host.output_dir)
+            assert (host.output_dir / "reports" / "a.csv").read_text() == "x,y\n1,2\n"
+            await host.call_tool("publish", {"name": "reports/b.json", "text": "{}"})
+            await host.call_tool("publish", {"name": "top.csv", "text": "z"})
+            files = host.list_outputs()
+            assert [f.path for f in files] == ["reports/a.csv", "reports/b.json", "top.csv"]
+            assert [f.mime_type for f in files] == ["text/csv", "application/json", "text/csv"]
+            assert files[0].size == 8 and files[0].modified.endswith("Z")
+            assert [f.path for f in host.list_outputs("reports/")] == ["reports/a.csv", "reports/b.json"]
+            assert host.list_outputs("nothing/") == []
+
+    async def test_the_listing_hides_what_the_daemon_hides(self, tmp_path):
+        async with PluginTestHost(build_output_plugin(), outputs=True, output_types=("text/csv",)) as host:
+            root = host.output_dir
+            (root / "ok.csv").write_text("1")
+            (root / "wrong.json").write_text("{}")
+            (root / ".hidden.csv").write_text("1")
+            (root / ".a.csv.tmp").write_text("1")
+            (root / ".dot").mkdir()
+            (root / ".dot" / "in.csv").write_text("1")
+            (root / "ok.CSV.bak").write_text("1")
+            (root / "dir").mkdir()
+            (root / "dir" / "deep.csv").write_text("1")
+            outside = tmp_path / "secret.csv"
+            outside.write_text("s")
+            (root / "link.csv").symlink_to(outside)
+            (root / "linked").symlink_to(tmp_path, target_is_directory=True)
+            deep = root.joinpath(*"abcdefghi")
+            deep.mkdir(parents=True)
+            (deep / "too.csv").write_text("1")
+            (root.joinpath(*"abcdefg") / "fits.csv").write_text("1")
+            assert [f.path for f in host.list_outputs()] == ["a/b/c/d/e/f/g/fits.csv", "dir/deep.csv", "ok.csv"]
+
+    async def test_publish_refusals_come_from_the_output_types(self):
+        async with PluginTestHost(build_output_plugin(), outputs=True, output_types=("text/csv",)) as host:
+            outcome = await host.call_tool("publish", {"name": "a.json", "text": "{}"})
+            assert outcome.error is not None and host.list_outputs() == []
+            await host.call_tool("publish", {"name": "a.csv", "text": "1"})
+            again = await host.call_tool("publish", {"name": "a.csv", "text": "2"})
+            assert again.error is not None and (host.output_dir / "a.csv").read_text() == "1"
+
+    async def test_each_principal_has_its_own_folder(self):
+        principals = [{"id": "alice"}, {"id": "bob"}]
+        async with PluginTestHost(build_output_plugin(), mode="org", principals=principals, outputs=True) as host:
+            await host.call_tool("publish", {"name": "a.csv", "text": "1"}, principal="alice")
+            await host.call_tool("publish", {"name": "b.csv", "text": "1"}, principal="bob")
+            assert [f.path for f in host.list_outputs(principal="alice")] == ["a.csv"]
+            assert [f.path for f in host.list_outputs(principal="bob")] == ["b.csv"]
+            assert host.output_dir == host._output_dir("alice") != host._output_dir("bob")
+
+    async def test_a_host_without_outputs_has_no_folder(self):
+        async with PluginTestHost(build_output_plugin()) as host:
+            with pytest.raises(RuntimeError, match="outputs=True"):
+                _ = host.output_dir
+            with pytest.raises(RuntimeError):
+                host.list_outputs()
+            outcome = await host.call_tool("publish", {"name": "a.csv", "text": "1"})
+            assert outcome.error is not None
+
+    def test_constructor_validation(self):
+        plugin = build_output_plugin()
+        with pytest.raises(ValueError, match="needs outputs=True"):
+            PluginTestHost(plugin, output_types=("text/csv",))
+        with pytest.raises(ValueError, match="unknown output type"):
+            PluginTestHost(plugin, outputs=True, output_types=("image/png",))
+        with pytest.raises(ValueError, match="non-empty"):
+            PluginTestHost(plugin, outputs=True, output_types=())

@@ -1,14 +1,16 @@
 {
   "operation": "calendar.list_events",
-  "params": {},
+  "params": {
+    "cursor": "eyJ2IjoxLCJvcCI6ImNhbGVuZGFyLmxpc3RfZXZlbnRzIiwiZCI6IjMwNjBhZWEzMGU0MDY3MmI0Yjg1ODcwZTViODY5MTE3MDM0NzVkOTZhM2UyZDBhNjk0NTVhYTUxNGQxMjM1MGMiLCJzIjp7InQiOiJFWEFNUExFLVBBR0UtMiIsImsiOjB9fQ"
+  },
   "data": [
     {
-      "id": "EXAMPLE-1",
+      "id": "EXAMPLE-3",
       "calendar_id": "primary",
-      "title": "Example meeting",
+      "title": "Second example meeting",
       "description": "An example agenda.",
-      "start_time": "2026-10-07T09:00:00+00:00",
-      "end_time": "2026-10-07T09:30:00+00:00",
+      "start_time": "2026-10-07T14:00:00+00:00",
+      "end_time": "2026-10-07T14:30:00+00:00",
       "all_day": false,
       "organizer_email": "jane@example.com",
       "attendees": [
@@ -29,7 +31,7 @@
       "hangout_link": "",
       "conference_link": "",
       "status": "confirmed",
-      "html_link": "https://example.com/calendar/event/EXAMPLE-1",
+      "html_link": "https://example.com/calendar/event/EXAMPLE-3",
       "attachments": [
         {
           "file_id": "EXAMPLE-2",
@@ -46,5 +48,5 @@
       "original_start_time": ""
     }
   ],
-  "next_cursor": "eyJ2IjoxLCJvcCI6ImNhbGVuZGFyLmxpc3RfZXZlbnRzIiwiZCI6IjMwNjBhZWEzMGU0MDY3MmI0Yjg1ODcwZTViODY5MTE3MDM0NzVkOTZhM2UyZDBhNjk0NTVhYTUxNGQxMjM1MGMiLCJzIjp7InQiOiJFWEFNUExFLVBBR0UtMiIsImsiOjB9fQ"
+  "next_cursor": null
 }

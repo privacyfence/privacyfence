@@ -18,8 +18,10 @@ from .._rpc import Peer, RpcError
 from ..plugin import PROTOCOL_VERSION, Plugin, args_digest
 from ..responses import ToolDefinitionError
 from . import _pages
+from ._approvals import Approval, Approvals
 from ._confirm import Confirmation, Confirmations
 from ._gate import Card, Decision, Rules, ToolOutcome, resolve_decision
+from ._outputs import DEFAULT_OUTPUT_TYPES, OutputFile, check_types, list_outputs
 from ._source import SourceFixtures
 
 # Copied from the protocol, like the limits in plugin.py. The daemon's own tests compare them.
@@ -52,7 +54,9 @@ _INVALID_PREVIEW = "The plugin returned an invalid preview."
 _LOST_CALL = "The plugin lost track of this call; ask again."
 
 _DEFAULT_PRINCIPAL = {"id": "local", "display_name": "Local user"}
-_EVENT_NAMES = ("connector.state_changed", "plugin.disabling", "shutdown", "principal.removed")
+_EVENT_NAMES = (
+    "connector.state_changed", "plugin.disabling", "shutdown", "principal.removed", "approval.revoked",
+)
 _PURGE_SCOPES = ("all", "install", "principal")
 _PURGE_TIMEOUT = 30.0
 _SETTLE_TIMEOUT = 5.0
@@ -165,6 +169,11 @@ class PluginTestHost:
 
     ``max_gate_floor`` is the manifest's ``max_gate_floor``: ``"review"`` (the default) refuses a
     tool on the ``auto`` gate, as PrivacyFence does unless the owner approved ``"auto"`` at enable.
+
+    ``outputs=True`` is the manifest's ``outputs: true``: every principal gets an output folder
+    (``host.output_dir``) that ``ctx.outputs`` writes to, and ``output_types`` (the manifest's
+    ``output_types``, ``application/json`` and ``text/csv`` by default) decides which extensions it
+    may use and which files ``host.list_outputs`` shows.
     """
 
     def __init__(
@@ -174,11 +183,17 @@ class PluginTestHost:
         principals: list[dict] | None = None,
         *,
         max_gate_floor: str = "review",
+        outputs: bool = False,
+        output_types: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         if mode not in ("local", "org"):
             raise ValueError("mode must be 'local' or 'org'")
         if max_gate_floor not in ("review", "auto"):
             raise ValueError("max_gate_floor must be 'review' or 'auto'")
+        if output_types is not None and not outputs:
+            raise ValueError("output_types needs outputs=True")
+        self.outputs = bool(outputs)
+        self._output_types = check_types(DEFAULT_OUTPUT_TYPES if output_types is None else output_types) if outputs else ()
         raw = principals if principals is not None else [dict(_DEFAULT_PRINCIPAL)]
         if not raw or any(not isinstance(p, dict) or not p.get("id") for p in raw):
             raise ValueError("principals must be dicts with an id")
@@ -195,6 +210,10 @@ class PluginTestHost:
         self.audit: list[dict] = []
         self._confirmations = Confirmations(
             plugin.name, lambda: set(self._principals), lambda entry: self.audit.append(entry)
+        )
+        self._approvals = Approvals(
+            plugin.name, lambda: set(self._principals), lambda: bool(plugin._reg.pages),
+            lambda entry: self.audit.append(entry),
         )
         self._stopped = False
         self._tmp: Path | None = None
@@ -241,6 +260,11 @@ class PluginTestHost:
             storage.mkdir(parents=True)
             context = {"id": spec["id"], "display_name": spec.get("display_name", spec["id"]),
                        "storage_dir": str(storage)}
+            if self.outputs:
+                output = self._tmp / "outputs" / spec["id"]
+                output.mkdir(parents=True, mode=0o700)
+                context["output_dir"] = str(output)
+                context["output_types"] = list(self._output_types)
             if self.mode == "org" and "roles" in spec:
                 context["roles"] = list(spec["roles"])
             self._principals[spec["id"]] = context
@@ -256,6 +280,9 @@ class PluginTestHost:
                 "source.call": self._handle_source,
                 "confirm.request": self._confirmations.request,
                 "confirm.await": self._confirmations.await_,
+                "approval.request": self._approvals.request,
+                "approval.check": self._approvals.check,
+                "approval.await": self._approvals.await_,
             },
             max_line_bytes=_MAX_LINE_BYTES,
             max_in_flight=_MAX_IN_FLIGHT,
@@ -497,6 +524,53 @@ class PluginTestHost:
         card = self._confirmations.decide(approval_id, decision)
         await asyncio.sleep(0)  # let a plugin that awaits the card see the answer
         return card
+
+    # ------------------------------------------------------------------ approvals
+
+    @property
+    def approvals(self) -> list[Approval]:
+        """Every approval card the plugin opened, oldest first, with its current ``status``.
+
+        A request for something already approved shows no card, so it adds nothing here.
+        """
+        return self._approvals.cards
+
+    async def decide_approval(self, approval_id: str, decision: str) -> Approval:
+        """Answer an approval card: ``"approve"`` (which stores it), ``"deny"`` or ``"expire"``."""
+        card = self._approvals.decide(approval_id, decision)
+        await asyncio.sleep(0)  # let a plugin that awaits the card see the answer
+        return card
+
+    async def revoke_approval(self, approval_id: str) -> Approval:
+        """Take back a stored approval: ``check`` answers ``revoked`` and the plugin gets ``approval.revoked``.
+
+        Revoking one that is already revoked changes nothing and sends nothing.
+        """
+        before = next((a for a in self._approvals.cards if a.approval_id == approval_id), None)
+        record = self._approvals.revoke(approval_id)
+        if before is None or before.revoked_at is None:
+            await self.emit("approval.revoked", {
+                "approval_id": record.approval_id, "kind": record.kind,
+                "subject_id": record.subject_id, "digest": record.digest,
+            })
+        return record
+
+    # ------------------------------------------------------------------ outputs
+
+    def _output_dir(self, principal: str | None) -> Path:
+        if not self.outputs:
+            raise RuntimeError("the host has no output folder; pass outputs=True")
+        ctx = self._principal(principal)
+        return Path(ctx["output_dir"])
+
+    @property
+    def output_dir(self) -> Path:
+        """The first principal's output folder, where ``ctx.outputs.publish`` writes."""
+        return self._output_dir(None)
+
+    def list_outputs(self, prefix: str = "", *, principal: str | None = None) -> list[OutputFile]:
+        """The files an agent could list: published, not hidden, and of one of the ``output_types``."""
+        return list_outputs(self._output_dir(principal), self._output_types, prefix)
 
     # ------------------------------------------------------------------ events, purge, shutdown
 
