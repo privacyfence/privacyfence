@@ -41,7 +41,7 @@ from typing import Any
 from privacyfence.approvals import CONFIRM_RESULTS, PendingApprovalRegistry
 from privacyfence.dialog_window_html import build_plugin_approval_html
 from privacyfence.plugins import pages
-from privacyfence.plugins.blocks import clean_text, to_card_blocks, validate_blocks
+from privacyfence.plugins.blocks import clean_line, to_card_blocks, validate_blocks
 from privacyfence.plugins.constants import (
     CONFIRM_AWAIT_MAX_MS,
     MAX_PENDING_CONFIRMS,
@@ -272,7 +272,7 @@ class ApprovalService:
             raise RpcError("unknown_principal", "no such principal")
         # Cleaned as one string, with the same stripping every block string gets, so neither the
         # display name nor the title can reorder the text a human reads on the card.
-        if not clean_text(parsed.title).strip():
+        if not clean_line(parsed.title).strip():
             raise RpcError("invalid_params", "approval.request.title is empty after cleaning")
         key: _Key = (plugin, parsed.principal, parsed.kind, parsed.subject_id, parsed.digest)
 
@@ -292,28 +292,32 @@ class ApprovalService:
             )
 
         self._reserve(plugin)
+        registry = None
+        card = None
         try:
             registry = self._registry_provider()
             card = registry.register_confirm(sensitive=parsed.require_step_up, notify=True)
+            card.frame_src = f"/plugins/{plugin}{page}?pf_approval={card.id}" if page else ""
+            registry.set_html(card.id, build_plugin_approval_html(
+                title=clean_line(f"{display_name}: {parsed.title}"),
+                fields=[
+                    ("Plugin", clean_line(f"{display_name} ({plugin})")),
+                    ("Kind", parsed.kind),
+                    ("Subject", parsed.subject_id),
+                    ("Digest", parsed.digest),
+                ],
+                body_blocks=to_card_blocks(parsed.preview),
+                frame_src=card.frame_src,
+                frame_title=clean_line(f"Page from {display_name}"),
+            ))
+            with self._lock:
+                self._owned[card.id] = _Pending(key, clean_line(parsed.title), card.frame_src, registry)
+                self._pending[key] = card.id
         except BaseException:
+            if registry is not None and card is not None:
+                registry.finalize(card.id, "deny")
             self._release(plugin)
             raise
-        card.frame_src = f"/plugins/{plugin}{page}?pf_approval={card.id}" if page else ""
-        registry.set_html(card.id, build_plugin_approval_html(
-            title=clean_text(f"{display_name}: {parsed.title}"),
-            fields=[
-                ("Plugin", clean_text(f"{display_name} ({plugin})")),
-                ("Kind", parsed.kind),
-                ("Subject", parsed.subject_id),
-                ("Digest", parsed.digest),
-            ],
-            body_blocks=to_card_blocks(parsed.preview),
-            frame_src=card.frame_src,
-            frame_title=clean_text(f"Page from {display_name}"),
-        ))
-        with self._lock:
-            self._owned[card.id] = _Pending(key, clean_text(parsed.title), card.frame_src, registry)
-            self._pending[key] = card.id
         self._audit(plugin, parsed.kind, "requested")
         try:
             loop = asyncio.get_running_loop()

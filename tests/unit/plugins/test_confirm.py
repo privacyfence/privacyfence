@@ -383,3 +383,24 @@ class TestTitleCleaning:
             await harness.request(title="\u202e\x07")
         assert info.value.code == "invalid_params"
         assert harness.registry._pending == {}
+
+
+class TestCardText:
+    async def test_title_line_breaks_become_spaces(self, harness):
+        result = await harness.request(title="Line one\nLine two")
+        html = harness.registry.get(result["approval_id"]).html
+        assert "Line one Line two" in html
+
+
+class TestSetupFailure:
+    async def test_failed_set_html_denies_the_card_and_frees_the_slot(self, harness, monkeypatch):
+        def boom(*args, **kwargs):
+            raise RuntimeError("set_html failed")
+
+        monkeypatch.setattr(harness.registry, "set_html", boom)
+        with pytest.raises(RuntimeError):
+            await harness.request()
+        (card,) = harness.registry._pending.values()
+        assert harness.registry.await_status(card.id) == "denied"
+        assert harness.service._active_total == 0
+        assert not any(status == "requested" for _, _, status in harness.audits)

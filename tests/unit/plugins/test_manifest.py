@@ -120,6 +120,8 @@ class TestLoad:
         ({"display_name": 3}, "display_name must be a string"),
         ({"display_name": "To\u202eday"}, "control or bidirectional"),
         ({"display_name": "To\x07day"}, "control or bidirectional"),
+        ({"display_name": "To\nday"}, "must not contain line breaks, tabs, control or bidirectional"),
+        ({"display_name": "To\tday"}, "must not contain line breaks, tabs, control or bidirectional"),
         ({"version": "1.2"}, "MAJOR.MINOR.PATCH"),
         ({"version": "v1.2.3"}, "MAJOR.MINOR.PATCH"),
         ({"version": "01.2.3"}, "MAJOR.MINOR.PATCH"),

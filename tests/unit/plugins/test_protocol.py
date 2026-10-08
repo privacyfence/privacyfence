@@ -164,6 +164,12 @@ class TestToolDef:
     def test_invalid(self, over):
         _raises("invalid_params", p.ToolDef.from_wire, _tool(**over))
 
+    @pytest.mark.parametrize("over", [{"title": "A\nB"}, {"effect": "Sends\tit."}])
+    def test_title_and_effect_are_one_line(self, over):
+        (field,) = over
+        error = _raises("invalid_params", p.ToolDef.from_wire, _tool(**over))
+        assert error.detail == f"tool.{field} must not contain line breaks, tabs, control or bidirectional characters"
+
     @pytest.mark.parametrize("key", ["name", "description", "parameters", "read_only", "destructive", "gate"])
     def test_missing_required_key(self, key):
         wire = _tool()
@@ -447,6 +453,7 @@ class TestApprovalRequestParams:
             lambda w: w.update(subject_id="s" * (c.SUBJECT_ID_MAX_CHARS + 1)),
             lambda w: w.update(subject_id="a\x07b"),
             lambda w: w.update(subject_id="a\u202eb"),
+            lambda w: w.update(subject_id="a\nb"),
             lambda w: w.update(digest="sha256:" + "AB" * 32),
             lambda w: w.update(digest="sha256:" + "ab" * 31),
             lambda w: w.update(digest="ab" * 32),
