@@ -53,6 +53,7 @@ bridge share.
 """
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
@@ -551,7 +552,7 @@ def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
     entry = TOOL_REGISTRY.get(tool)
     if entry is None or entry.operation is None or entry.verb is None:
         return []
-    if entry.operation.startswith(PLUGIN_OPERATION_PREFIX):
+    if entry.operation.startswith(PLUGIN_OPERATION_PREFIX) or _dynamic_entries_for(tool):
         return _dynamic_proposals_for(tool, entry.operation, entry.verb, ctx)
     connector = connector_of_operation(entry.operation)
     proposals: list[RuleProposal] = []
@@ -639,17 +640,90 @@ def unregister_dynamic_scopes(owner: str) -> None:
         scopes.unregister_plugin_selector(predicate)
 
 
+# owner -> tool -> entries added one at a time by ``register_dynamic_scope_entry``, for a tool
+# PrivacyFence registers itself at runtime (``auto_accept.register_internal_dynamic_tools``)
+# rather than a plugin's.
+_DYNAMIC_SCOPE_ENTRIES: dict[str, dict[str, tuple[ProposableScope, ...]]] = {}
+
+
+def register_dynamic_scope_entry(owner: str, tool: str, entry: ProposableScope) -> None:
+    """Add one proposal ``entry`` for a runtime-registered tool already in ``TOOL_REGISTRY``.
+
+    The entry must govern exactly the tool's own verb on its own connector and must not widen, so
+    accepting it never reaches past the call it came from. An entry with the same id under the same
+    owner and tool is replaced. Raises ``ValueError`` (and adds nothing) for a static tool, one
+    with no operation key or verb, a plugin tool (``register_dynamic_scopes`` owns those), or an
+    entry that does not fit the tool.
+    """
+    from ..auto_accept import STATIC_TOOL_NAMES
+
+    registered = TOOL_REGISTRY.get(tool)
+    if tool in STATIC_TOOL_NAMES or registered is None or registered.operation is None or registered.verb is None:
+        raise ValueError(f"tool {tool} is not a runtime-registered tool with an operation key")
+    if registered.operation.startswith(PLUGIN_OPERATION_PREFIX):
+        raise ValueError(f"tool {tool} is a plugin tool")
+    if (
+        entry.verbs != frozenset({registered.verb})
+        or entry.connector != connector_of_operation(registered.operation)
+        or entry.widenable
+        or registered.operation in entry.excludes
+    ):
+        raise ValueError(f"entry {entry.id} does not fit tool {tool}")
+    tools = _DYNAMIC_SCOPE_ENTRIES.setdefault(owner, {})
+    tools[tool] = tuple(e for e in tools.get(tool, ()) if e.id != entry.id) + (entry,)
+
+
+def unregister_dynamic_scope_entries(owner: str) -> None:
+    """Remove every entry ``register_dynamic_scope_entry`` added for ``owner``."""
+    _DYNAMIC_SCOPE_ENTRIES.pop(owner, None)
+
+
+def reset_dynamic_scope_entries() -> None:
+    """Unregister every owner's entries. Registered with ``plugins._testing``."""
+    _DYNAMIC_SCOPE_ENTRIES.clear()
+
+
+def plugin_output_scope_entry(name: str) -> ProposableScope:
+    """The ``plugin_outputs_read`` proposal for plugin ``name``'s output folder: the folder of the
+    file just read, or the file itself when it sits at the root. Its selector is
+    ``scopes.register_plugin_output_selector(name)``."""
+    predicate = scopes.plugin_output_predicate(name)
+
+    def value_of(ctx: ReviewContext) -> Any:
+        raw = ctx.raw_data if isinstance(ctx.raw_data, dict) else {}
+        path = raw.get("path")
+        if raw.get("plugin") != name or not isinstance(path, str) or not path:
+            return NO_VALUE
+        return [posixpath.dirname(path) + "/"] if "/" in path else [path]
+
+    entry_id = f"{predicate}@plugin_outputs.read"
+    return _scope(
+        predicate, f"{name}.{scopes.PLUGIN_OUTPUT_SCOPE_TYPE}", "plugin_outputs", (Verb.READ,), value_of,
+        "this folder", entry_id=entry_id, group=entry_id, widenable=False,
+    )
+
+
+def _register_test_reset() -> None:
+    from ..plugins import _testing
+
+    _testing.register_reset(reset_dynamic_scope_entries)
+
+
+_register_test_reset()
+
+
 def _dynamic_entries_for(tool: str) -> tuple[ProposableScope, ...]:
     for tools in _DYNAMIC_SCOPES.values():
         if tool in tools:
             return tools[tool]
-    return ()
+    return tuple(entry for tools in _DYNAMIC_SCOPE_ENTRIES.values() for entry in tools.get(tool, ()))
 
 
 def _dynamic_group(group: str) -> tuple[ProposableScope, ...]:
     return tuple(
         entry
-        for tools in _DYNAMIC_SCOPES.values()
+        for owners in (_DYNAMIC_SCOPES, _DYNAMIC_SCOPE_ENTRIES)
+        for tools in owners.values()
         for entries in tools.values()
         for entry in entries
         if entry.widening_group == group
@@ -665,6 +739,12 @@ def _dynamic_proposals_for(tool: str, operation: str, verb: Verb, ctx: ReviewCon
         if isinstance(value, list) and len(value) > 1:
             # The button names the width it is about to allow: more than one value is a set.
             scope = replace(scope, hint=f"these {scope.scope_type.partition('.')[2].replace('_', ' ')} values")
+        elif (
+            scope.scope_type.partition(".")[2] == scopes.PLUGIN_OUTPUT_SCOPE_TYPE
+            and isinstance(value, list) and value and not str(value[0]).endswith("/")
+        ):
+            # An output file at the root has no folder to name.
+            scope = replace(scope, hint="this file")
         proposals.append(RuleProposal(scope=scope, value=value, verb=verb, operation=operation))
     return proposals
 
@@ -749,10 +829,13 @@ __all__ = [
     "connector_of_operation",
     "verb_sort_key",
     "operations_for",
+    "plugin_output_scope_entry",
     "proposals_for",
+    "register_dynamic_scope_entry",
     "register_dynamic_scopes",
     "rules_for_proposal",
     "rules_for_scope_group",
     "scope_needs_value",
+    "unregister_dynamic_scope_entries",
     "unregister_dynamic_scopes",
 ]
