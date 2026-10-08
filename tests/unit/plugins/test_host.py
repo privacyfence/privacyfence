@@ -1014,7 +1014,7 @@ class TestApprovalEmbedAllowed:
         await host.start()
         await env.enable(host, SDK)
 
-        assert host.approval_embed_allowed(SDK, "missing", "/approval") is False
+        assert await host.approval_embed_allowed(SDK, "missing", "/approval") is False
 
 
 class TestPurgeForgetsApprovals:

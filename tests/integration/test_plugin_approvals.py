@@ -11,7 +11,7 @@ import json
 import pytest
 
 from privacyfence.plugins import storage
-from tests.fixtures.plugins.echo.harness import Stack, install_echo, mcp_session, until
+from tests.fixtures.plugins.echo.harness import Stack, install_echo, mcp_session, until, web_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(30)]
 
@@ -66,6 +66,28 @@ class TestRequestAndApprove:
         assert card.frame_src == f"/plugins/echo/approval?pf_approval={ticket['approval_id']}"
         assert "Approve template" in card.html and "echo-template" in card.html
         assert await check(stack) == "unknown"
+
+    async def test_the_cards_frame_loads_while_waiting_and_is_a_normal_page_once_answered(self, stack):
+        async with mcp_session(stack.server) as mcp:
+            ticket = await request(mcp)
+            card = stack.registry.get(ticket["approval_id"])
+            client = await web_session(stack.server)
+            try:
+                waiting = await client.get(card.frame_src)
+                assert waiting.status_code == 200
+                assert "frame-ancestors 'self'" in waiting.headers["content-security-policy"]
+                assert waiting.headers["x-frame-options"] == "SAMEORIGIN"
+
+                assert stack.registry.answer(ticket["approval_id"], "confirm")
+                await until(lambda: len(approval_audit(stack)) == 2)
+                answered = await client.get(card.frame_src)
+            finally:
+                await client.aclose()
+
+        assert answered.status_code == 200
+        assert "frame-ancestors 'none'" in answered.headers["content-security-policy"]
+        assert "frame-ancestors 'self'" not in answered.headers["content-security-policy"]
+        assert answered.headers["x-frame-options"] != "SAMEORIGIN"
 
     async def test_approving_it_makes_the_check_say_approved(self, stack):
         async with mcp_session(stack.server) as mcp:
