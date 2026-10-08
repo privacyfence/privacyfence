@@ -274,6 +274,25 @@ class TestNotifications:
         await peer.close()
 
 
+class TestNonFinite:
+    async def test_nan_on_the_wire_is_a_parse_error(self):
+        peer, rb, wb, closes = await _raw()
+        wb.write(b'{"jsonrpc":"2.0","id":1,"method":"x","params":{"v":NaN}}\n')
+        reply = json.loads(await asyncio.wait_for(rb.readline(), 2))
+        assert reply["error"]["data"]["code"] == "parse_error"
+        assert closes == []
+        await peer.close()
+
+    async def test_nan_in_a_result_becomes_internal_error(self, pair):
+        async def nan(params):
+            return {"v": float("nan")}
+
+        left, _ = await pair({}, {"m": nan})
+        with pytest.raises(RpcError) as exc:
+            await left.request("m", {})
+        assert (exc.value.code, exc.value.detail) == ("internal_error", "message is not JSON")
+
+
 class TestBatch:
     async def test_batch_gets_invalid_request_and_is_not_processed(self):
         peer, rb, wb, closes = await _raw()

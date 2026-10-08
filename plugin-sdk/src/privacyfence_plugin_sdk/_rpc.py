@@ -65,12 +65,18 @@ def _error_from_wire(error: Any) -> RpcError:
     )
 
 
+def _no_constant(name: str) -> None:
+    raise ValueError(f"{name} is not JSON")
+
+
 def _is_id(value: Any) -> bool:
     return isinstance(value, (int, str)) and not isinstance(value, bool)
 
 
 class _Reader(Protocol):
     async def readline(self) -> bytes: ...
+    async def readuntil(self, separator: bytes = b"\n") -> bytes: ...
+    async def readexactly(self, n: int) -> bytes: ...
 
 
 class _Writer(Protocol):
@@ -176,29 +182,58 @@ class Peer:
                 logger.warning("on_close callback failed", exc_info=True)
 
     async def _send(self, message: dict) -> None:
-        line = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
+        try:
+            line = (
+                json.dumps(message, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+                + b"\n"
+            )
+        except (TypeError, ValueError):
+            raise RpcError("internal_error", "message is not JSON") from None
+        if len(line) > self._max_line_bytes:
+            raise RpcError("payload_too_large", "message exceeds the line limit")
         async with self._send_lock:
-            self._writer.write(line)
-            await self._writer.drain()
+            try:
+                self._writer.write(line)
+                await self._writer.drain()
+            except (ConnectionError, OSError) as exc:
+                self._shutdown("write_failed")
+                raise RpcError("internal_error", "peer closed") from exc
 
     async def _send_quiet(self, message: dict) -> None:
+        if self._closed:
+            return
         try:
             await self._send(message)
-        except Exception:
-            self._shutdown("write_failed")
+        except RpcError as exc:
+            if "result" in message:
+                # Too big, or not JSON: the caller gets an error instead of waiting for a timeout.
+                await self._send_quiet(self._error_message(message["id"], exc))
+            else:
+                logger.debug("could not send an error response", exc_info=True)
 
     async def _read_line(self) -> bytes | None:
-        try:
-            line = await self._reader.readline()
-        except ValueError:
-            return _OVERSIZE
-        except (ConnectionError, OSError):
-            return None
-        if not line:
-            return None
-        if len(line) > self._max_line_bytes:
-            return _OVERSIZE
-        return line
+        """The next line, ``_OVERSIZE`` for one over the cap, ``None`` at end of stream.
+
+        A line over the StreamReader's own limit is dropped piece by piece up to its newline, so
+        it is one oversize line however many reads it took to arrive.
+        """
+        oversize = False
+        while True:
+            try:
+                line = await self._reader.readuntil(b"\n")
+            except asyncio.IncompleteReadError as exc:
+                line = exc.partial  # the stream ended; whatever came before that is the last line
+                if not line and not oversize:
+                    return None
+            except asyncio.LimitOverrunError as exc:
+                oversize = True
+                await self._reader.readexactly(exc.consumed)
+                continue
+            except (ConnectionError, OSError):
+                return None
+            if oversize or len(line) > self._max_line_bytes:
+                return _OVERSIZE
+            return line
 
     async def _read_loop(self) -> None:
         try:
@@ -224,7 +259,7 @@ class Peer:
         if line is _OVERSIZE:
             return False
         try:
-            message = json.loads(line)
+            message = json.loads(line, parse_constant=_no_constant)
         except ValueError:
             await self._send_quiet(self._error_message(None, RpcError("parse_error", "invalid JSON")))
             return False
