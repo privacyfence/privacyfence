@@ -43,6 +43,11 @@ _MAX_SCOPE_VALUES = 100
 _MAX_SCOPE_VALUE_CHARS = 200
 _MCP_TOOL_NAME_MAX = 64
 _MAX_SCOPE_TYPES = 20
+
+async def _refuse_while_introspecting(_params: dict) -> Any:
+    raise RpcError("introspection_only", "not available while introspecting")
+
+
 _TIMEOUTS = {"initialize": 10.0, "tool.prepare": 30.0, "tool.execute": 60.0}
 _TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")
 _SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")
@@ -272,9 +277,25 @@ class PluginTestHost:
     async def __aexit__(self, *exc_info: Any) -> None:
         await self._teardown()
 
-    async def _start(self) -> None:
+    async def introspect(self) -> list[dict]:
+        """Start the plugin with purpose ``introspect``, as PrivacyFence does when you review a plugin,
+        check its tool list, stop it and return the tools. ``source.call`` and ``confirm.request`` are
+        refused with ``introspection_only``. Runs before the host is entered, and leaves it ready for
+        ``async with``."""
+        if self._started or self._peer is not None:
+            raise RuntimeError("introspect() runs before the host starts")
+        self.plugin.tool_definitions()
+        self._tmp = Path(tempfile.mkdtemp(prefix="pf-testhost-"))
+        try:
+            await self._start(purpose="introspect")
+            return self.tools
+        finally:
+            await self._teardown()
+
+    async def _start(self, purpose: str = "run") -> None:
         data_dir = self.data_dir
         data_dir.mkdir()
+        self._principals = {}
         contexts = []
         for spec in self._principal_specs:
             storage = self._tmp / "principals" / spec["id"]
@@ -294,17 +315,22 @@ class PluginTestHost:
         to_plugin = asyncio.StreamReader(limit=_MAX_LINE_BYTES)
         from_plugin = asyncio.StreamReader(limit=_MAX_LINE_BYTES)
         self._serve_task = asyncio.ensure_future(self.plugin.serve(to_plugin, _PipeWriter(from_plugin)))
-        self._peer = Peer(
-            from_plugin,
-            _PipeWriter(to_plugin),
-            handlers={
+        if purpose == "introspect":
+            handlers = {"source.call": _refuse_while_introspecting,
+                        "confirm.request": _refuse_while_introspecting}
+        else:
+            handlers = {
                 "source.call": self._handle_source,
                 "confirm.request": self._confirmations.request,
                 "confirm.await": self._confirmations.await_,
                 "approval.request": self._approvals.request,
                 "approval.check": self._approvals.check,
                 "approval.await": self._approvals.await_,
-            },
+            }
+        self._peer = Peer(
+            from_plugin,
+            _PipeWriter(to_plugin),
+            handlers=handlers,
             max_line_bytes=_MAX_LINE_BYTES,
             max_in_flight=_MAX_IN_FLIGHT,
             invalid_lines_limit=_INVALID_LINES_LIMIT,
@@ -312,7 +338,7 @@ class PluginTestHost:
         await self._peer.start()
         result = await self._peer.request("initialize", {
             "protocol_version": PROTOCOL_VERSION,
-            "purpose": "run",
+            "purpose": purpose,
             "mode": self.mode,
             "daemon": {"name": "privacyfence-test-host", "version": "0.0.0"},
             "plugin": {"name": self.plugin.name, "manifest_version": self.plugin.version},
