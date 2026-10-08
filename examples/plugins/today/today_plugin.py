@@ -11,8 +11,10 @@ checks that the plugin builds and exits, without touching stdio.
 from __future__ import annotations
 
 import asyncio
+import csv
 import difflib
 import html
+import io
 import json
 import os
 import sys
@@ -29,6 +31,15 @@ FLAGS_FILENAME = "build-flags.json"
 _DAY = "day.json"
 _NOTES = "notes.json"
 _COUNTER = "counter.json"
+_REVOKED = "layout-revoked.json"
+_LAYOUT_KIND = "page-layout"
+_LAYOUT_SUBJECT = "today/layout"
+_LAYOUT = """Today page layout
+- Header: the word Today
+- Section 1: the published day, one row per event with its attendees
+- Section 2: notes, one line each
+- Footer: the number of fetches so far
+"""
 _OPERATION = "calendar.list_events"
 
 
@@ -90,11 +101,38 @@ def _published_lines(snapshot: dict | None) -> list[str]:
     return lines
 
 
+def _layout_note(status: str, revoked_at: str | None) -> str:
+    if status == "approved":
+        return '<p id="layout" class="layout-approved">The layout is <b>approved</b>.</p>'
+    detail = f" (revoked {html.escape(revoked_at)})" if status == "revoked" and revoked_at else ""
+    return f'<p id="layout" class="layout-not-approved">The layout is <b>not approved</b>{detail}.</p>'
+
+
+def _approval_page_html(approval_id: str) -> str:
+    return (
+        '<!doctype html><html><head><meta charset="utf-8"><title>Approve the layout</title><style>'
+        "body{font-family:sans-serif;margin:1rem;color:rgb(30,30,30);background:white}"
+        "pre{background:whitesmoke;padding:1rem;overflow:auto}"
+        "</style></head><body><h1>Page layout</h1>"
+        f'<p>Approval <code id="approval-id">{html.escape(approval_id)}</code></p>'
+        f'<pre id="template">{html.escape(_LAYOUT)}</pre></body></html>'
+    )
+
+
+def _csv_text(events: list[dict]) -> str:
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(["start", "end", "title", "attendees"])
+    for e in events:
+        writer.writerow([e.get("start_time", ""), e.get("end_time", ""), e.get("title", ""), _attendee_names(e)])
+    return out.getvalue()
+
+
 def _attendee_names(event: dict) -> str:
     return ", ".join(a.get("display_name") or a.get("email", "") for a in event.get("attendees", []))
 
 
-def _page_html(day: dict, notes: list[dict], fetches: int, manifest_text: str) -> str:
+def _page_html(day: dict, notes: list[dict], fetches: int, manifest_text: str, layout_note: str) -> str:
     esc = html.escape
     published = day.get("published")
     parts = [
@@ -103,7 +141,9 @@ def _page_html(day: dict, notes: list[dict], fetches: int, manifest_text: str) -
         "table{border-collapse:collapse}td,th{border:1px solid silver;padding:.3rem .6rem;text-align:left}",
         ".stale{background:gold;border:1px solid darkorange;padding:.5rem;margin-bottom:1rem}",
         "pre{background:whitesmoke;padding:1rem;overflow:auto}",
+        ".layout-approved{color:darkgreen}.layout-not-approved{color:firebrick}",
         "</style></head><body><h1>Today</h1>",
+        layout_note,
     ]
     if day.get("stale"):
         parts.append(
@@ -359,6 +399,57 @@ def build_plugin(crash_tool: bool = False) -> Plugin:
         task.add_done_callback(background.discard)
         return {"approval_id": approval_id}
 
+    @plugin.tool(
+        "export",
+        gate="popup",
+        title="Export today",
+        description="Write today's fetched events to exports/<date>.csv, a file the AI client can list and read "
+        "with plugin_outputs_list and plugin_outputs_read.",
+        effect="Publishes a CSV file of today's events.",
+    )
+    async def export(ctx, args):
+        day = _load_day(ctx)
+        if day is None:
+            return Prepared(preview=[blocks.text("Nothing to export: run today_refresh first.")])
+        return Prepared(
+            preview=[blocks.fields({"Events": len(day["events"]), "File": f"exports/{day['date']}.csv"})],
+            state={"date": day["date"], "events": day["events"]},
+        )
+
+    @export.execute
+    async def export_run(ctx, prepared, approval):
+        if prepared.state is None:
+            return {"exported": False, "reason": "Nothing was fetched; run today_refresh first."}
+        path = f"exports/{prepared.state['date']}.csv"
+        try:
+            ctx.outputs.publish(path, _csv_text(prepared.state["events"]))
+        except FileExistsError:
+            return {"exported": False, "path": path, "reason": "Today was already exported."}
+        return {"exported": True, "path": path}
+
+    @plugin.tool(
+        "approve_layout",
+        gate="popup",
+        title="Approve the page layout",
+        description="Ask a human to approve the layout template of the Today page. The approval stays valid "
+        "until the template changes or the human revokes it in Settings.",
+        effect="Records a human's approval of the page layout.",
+    )
+    async def approve_layout(ctx, args):
+        return Prepared(preview=[blocks.text("Ask for approval of the Today page layout")])
+
+    @approve_layout.execute
+    async def approve_layout_run(ctx, prepared, approval):
+        ticket = await ctx.approvals.request(
+            _LAYOUT_KIND,
+            _LAYOUT_SUBJECT,
+            content=_LAYOUT,
+            title="Approve the Today page layout",
+            preview=[blocks.code(_LAYOUT)],
+            page="/approval",
+        )
+        return {"approval_id": ticket.approval_id, "status": ticket.status}
+
     if crash_tool:
 
         @plugin.tool(
@@ -384,7 +475,19 @@ def build_plugin(crash_tool: bool = False) -> Plugin:
         except OSError:
             manifest_text = "The manifest is not next to the executable."
         day = _load_day(ctx) or {}
-        return Html(_page_html(day, _load_notes(ctx), _total_fetches(ctx), manifest_text))
+        try:
+            status = await ctx.approvals.check(_LAYOUT_KIND, _LAYOUT_SUBJECT, _LAYOUT)
+        except SourceError:
+            status = "unknown"
+        revoked = _read_json(ctx.data_dir / _REVOKED, {})
+        revoked_at = revoked.get("at") if isinstance(revoked, dict) else None
+        return Html(
+            _page_html(day, _load_notes(ctx), _total_fetches(ctx), manifest_text, _layout_note(status, revoked_at))
+        )
+
+    @plugin.page("/approval")
+    async def approval_page(ctx, request):
+        return Html(_approval_page_html(request.query.get("pf_approval", "")))
 
     # ------------------------------------------------------------------ events and purge
 
@@ -396,6 +499,11 @@ def build_plugin(crash_tool: bool = False) -> Plugin:
         if day is not None:
             day["stale"] = True
             _write_json(_principal_dir(ctx) / _DAY, day)
+
+    @plugin.on("approval.revoked")
+    async def approval_revoked(ctx, params):
+        if params.get("kind") == _LAYOUT_KIND and params.get("subject_id") == _LAYOUT_SUBJECT:
+            _write_json(ctx.data_dir / _REVOKED, {"at": datetime.now().astimezone().isoformat()})
 
     @plugin.on("plugin.disabling")
     async def disabling(ctx, params):
@@ -414,6 +522,7 @@ def build_plugin(crash_tool: bool = False) -> Plugin:
         if scope in ("all", "install"):
             pending["fetches"] = 0
             (ctx.data_dir / _COUNTER).unlink(missing_ok=True)
+            (ctx.data_dir / _REVOKED).unlink(missing_ok=True)
         if scope in ("all", "principal"):
             for directory in directories:
                 for name in (_DAY, _NOTES):
@@ -429,7 +538,7 @@ def self_test() -> str:
     """Build every part of the plugin without starting it; the line the build prints on success."""
     tools = plugin.tool_definitions()
     names = {t["name"] for t in tools}
-    expected = {"status", "refresh", "list_events", "add_note", "clear_notes", "publish"}
+    expected = {"status", "refresh", "list_events", "add_note", "clear_notes", "publish", "export", "approve_layout"}
     if not expected <= names:
         raise SystemExit(f"today: missing tools {sorted(expected - names)}")
     return f"{NAME} ok protocol {PROTOCOL_VERSION}"
