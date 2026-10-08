@@ -2554,6 +2554,27 @@ class TestDownloadRange:
         with pytest.raises(DriveClientError, match=r"download_range\(f1\) failed"):
             client.download_range("f1", 0, 4)
 
+    def test_a_body_longer_than_the_range_is_refused_without_reading_on(self, monkeypatch):
+        length = 8
+        yielded = []
+
+        def chunks():
+            for _ in range((length + 10) // 4 + 1):
+                yielded.append(1)
+                yield b"abcd"
+
+        response = _FakeStreamResponse([], status_code=206)
+        response.iter_content = lambda chunk_size: chunks()
+        client, _ = self._client(monkeypatch, response)
+
+        with pytest.raises(DriveClientError, match="more than the requested range"):
+            client.download_range("f1", 0, length)
+        assert len(yielded) == 3  # the third 4-byte chunk crossed 8 bytes
+
+    def test_a_body_of_exactly_the_range_is_returned_whole(self, monkeypatch):
+        client, _ = self._client(monkeypatch, _FakeStreamResponse([b"abcd", b"efgh"], status_code=206))
+        assert client.download_range("f1", 0, 8) == b"abcdefgh"
+
     @pytest.mark.parametrize("args", [("", 0, 4), ("f1", -1, 4), ("f1", 0, 0)])
     def test_bad_arguments_raise(self, args):
         client = make_client(MagicMock())
