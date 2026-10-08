@@ -26,9 +26,9 @@ on:
                         # version segment (+g<sha>) that both indexes reject
 
 # Restrictive default for GITHUB_TOKEN, per CodeQL's actions/missing-workflow-
-# permissions check -- only `build` actually inherits this (it checks out the
-# repo); the two publish jobs below declare their own narrower job-level
-# `permissions:` (id-token: write only, no contents access at all), which
+# permissions check -- `build`, `build-sdk` and `publish-r2` inherit this; `dedupe`,
+# `wait_for_build` and the four publish jobs below (publish-testpypi, publish-pypi,
+# publish-sdk-testpypi, publish-sdk-pypi) declare their own job-level `permissions:`, which
 # replaces this default for them rather than adding to it.
 permissions:
   contents: read
@@ -346,11 +346,11 @@ jobs:
         with:
           skip-existing: true
 
-  # Independent of the two PyPI jobs above (doesn't `needs:` either one, and isn't gated on
+  # Independent of the four PyPI jobs above (doesn't `needs:` any of them, and isn't gated on
   # channel) -- this is where *every* channel's sdist/wheel actually lands, stable included: R2 is
   # the one archive that has everything, same as build.yml's DMG/SBOM uploads. It only needs the
   # `build` job's artifact and version/channel output, not a successful PyPI publish. It does,
-  # like the two PyPI jobs, still wait on `wait_for_build`: R2 is meant to be a
+  # like the four PyPI jobs, still wait on `wait_for_build`: R2 is meant to be a
   # complete record of what a tag actually shipped, not a place a broken build's bits land anyway
   # just because nothing public depends on them.
   publish-r2:

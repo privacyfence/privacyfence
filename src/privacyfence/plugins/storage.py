@@ -1,4 +1,4 @@
-"""Where a plugin keeps its files, and removing them (ADR 0120).
+"""Where a plugin keeps its files, and removing them (ADR 0121).
 
 Two directories per plugin, both handed over at ``initialize`` and created ``0700`` first:
 

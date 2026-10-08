@@ -318,8 +318,8 @@ class AuditEntry:
                             #  the call failed. ``request_id`` and ``sender`` are empty. The data the
                             #  plugin read is never put in an entry or a log line, only the target
                             #  names and the byte count.)
-                            # ("plugin_confirm": plugins/confirm.py, the human-confirmation cards a
-                            #  plugin asks for through ``confirm.request``. Two entries per card, one
+                            # ("plugin_confirm": plugins/host.py, for the cards plugins/confirm.py raises,
+                            #  the human-confirmation cards a plugin asks for through ``confirm.request``. Two entries per card, one
                             #  when it is raised and one when it is answered, sharing ``connector``
                             #  "plugin:<name>"; ``request_id`` is empty. ``summary`` is
                             #  "<kind>; requested" and then "<kind>; approved", "<kind>; denied" or
@@ -327,7 +327,7 @@ class AuditEntry:
                             #  named; a request refused while a session is unattended is recorded
                             #  once as "<kind>; refused". Nothing the plugin put in the card body
                             #  is recorded.)
-                            # ("plugin_approval": plugins/approvals.py and plugins/host.py, the
+                            # ("plugin_approval": plugins/host.py, for plugins/approvals.py, the
                             #  persistent approvals a plugin asks for through ``approval.request``.
                             #  ``connector`` is "plugin:<name>", ``tool`` "approval", ``tool_name``
                             #  "<name> approval", ``request_id`` empty. ``summary`` is
@@ -341,8 +341,8 @@ class AuditEntry:
                             #  entry. ``connector`` is "plugin:<name>", ``tool`` "plugin_outputs_read",
                             #  ``summary`` "read <path>; offset=<n>; bytes=<n>". File contents are never
                             #  recorded.)
-                            # ("plugin_lifecycle": plugins/host.py and plugins/supervisor.py, a change
-                            #  in a plugin's own standing that is not one call: ``connector`` is
+                            # ("plugin_lifecycle": plugins/host.py, including the state changes
+                            #  plugins/supervisor.py reports, a change in a plugin's own standing that is not one call: ``connector`` is
                             #  "plugin:<name>" and ``summary`` says what happened -- "enabled",
                             #  "disabled", "disabled: <reason>" (crash limit or hash drift), "data
                             #  purged (ack)" or "data purged (timeout)", "removed; data and rules
