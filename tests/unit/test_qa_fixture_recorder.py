@@ -1230,6 +1230,61 @@ class TestCheckDrive:
         assert get_meta.raw is None
 
 
+class _RangeDriveClient:
+    def __init__(self, files, chunk=b"0123456789abcdef"):
+        self._files = files
+        self._chunk = chunk
+        self.range_calls = []
+
+    def get_file_metadata(self, file_id):
+        return SimpleNamespace(id=file_id, name="PrivacyFence QA Sandbox")
+
+    def list_files(self, query, max_results=20):
+        assert "'f1' in parents" in query
+        return self._files
+
+    def download_range(self, file_id, offset, length):
+        self.range_calls.append((file_id, offset, length))
+        return self._chunk[:length]
+
+
+def _drive_file(file_id, mime_type, size=100):
+    return SimpleNamespace(id=file_id, mime_type=mime_type, size=size)
+
+
+class TestCheckDriveRange:
+    def _run(self, monkeypatch, client):
+        monkeypatch.setattr(recorder, "_build_drive_client", lambda: client)
+        results = recorder.check_drive(record=False, manifest={"drive": {"folder_id": "f1"}})
+        return next(r for r in results if r.method == "download_range")
+
+    def test_reads_16_bytes_of_the_first_non_google_file(self, monkeypatch):
+        client = _RangeDriveClient([
+            _drive_file("sub", "application/vnd.google-apps.folder"),
+            _drive_file("doc", "application/vnd.google-apps.document"),
+            _drive_file("pdf", "application/pdf"),
+            _drive_file("png", "image/png"),
+        ])
+        result = self._run(monkeypatch, client)
+        assert result.ok
+        assert client.range_calls == [("pdf", 0, 16)]
+
+    def test_a_file_smaller_than_16_bytes_is_read_whole(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("tiny", "text/plain", size=5)], chunk=b"hello")
+        assert self._run(monkeypatch, client).ok
+
+    def test_a_short_read_fails(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("pdf", "application/pdf")], chunk=b"short")
+        assert not self._run(monkeypatch, client).ok
+
+    def test_no_non_google_file_fails_with_the_exact_message(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("doc", "application/vnd.google-apps.document")])
+        result = self._run(monkeypatch, client)
+        assert not result.ok
+        assert result.note == "QA Sandbox has no non-Google file for the Range check"
+        assert client.range_calls == []
+
+
 class TestCheckCalendar:
     def test_organizer_and_attendee_identity_redacted(self, monkeypatch):
         raw_event = {
