@@ -496,6 +496,40 @@ class TestSearchIssues:
         assert calls[1].kwargs == {"nextPageToken": "tok2", "limit": 2}
 
 
+class TestSearchIssuesPage:
+    def test_requires_jql(self):
+        client = make_client()
+        with pytest.raises(JiraClientError, match="non-empty JQL"):
+            client.search_issues_page("")
+
+    def test_one_request_and_token_returned(self):
+        client = make_client()
+        client._client.enhanced_jql.return_value = {
+            "issues": [{"key": "ENG-1", "fields": {"summary": "x"}}],
+            "nextPageToken": "tok2", "isLast": False,
+        }
+        issues, token = client.search_issues_page("project = ENG", 7, "tok1")
+        assert [i.key for i in issues] == ["ENG-1"]
+        assert token == "tok2"
+        client._client.enhanced_jql.assert_called_once_with(
+            "project = ENG", nextPageToken="tok1", limit=7
+        )
+
+    def test_is_last_gives_no_token(self):
+        client = make_client()
+        client._client.enhanced_jql.return_value = {
+            "issues": [], "nextPageToken": "stale", "isLast": True,
+        }
+        _, token = client.search_issues_page("project = ENG")
+        assert token is None
+
+    def test_error_becomes_jira_client_error(self):
+        client = make_client()
+        client._client.enhanced_jql.side_effect = RuntimeError("boom")
+        with pytest.raises(JiraClientError, match="search_issues_page failed"):
+            client.search_issues_page("project = ENG")
+
+
 class TestGetIssue:
     def test_requires_issue_key(self):
         client = make_client()

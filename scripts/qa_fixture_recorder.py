@@ -918,6 +918,15 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except JiraClientError as exc:
         results.append(CheckResult("jira", "get_issue", seed_issue_summary, False, str(exc)))
 
+    # search_issues_page -- the single-request page call the connector's paged
+    # search will use; exercised live, nothing recorded.
+    page_jql = f'project = {project_key} AND summary ~ "{seed_issue_summary}"'
+    try:
+        client.search_issues_page(page_jql, 1)
+        results.append(CheckResult("jira", "search_issues_page", project_key, True, "one page returned"))
+    except JiraClientError as exc:
+        results.append(CheckResult("jira", "search_issues_page", project_key, False, str(exc)))
+
     return results
 
 
@@ -1246,6 +1255,14 @@ def check_calendar(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         results.append(CheckResult("calendar", "get_event", seed_event_title, ok, note, raw, "get_event.json"))
     except CalendarClientError as exc:
         results.append(CheckResult("calendar", "get_event", seed_event_title, False, str(exc)))
+
+    # list_events_page -- the single-request page call the connector's paged
+    # listing will use; exercised live, nothing recorded.
+    try:
+        client.list_events_page(calendar_id, 1, "", "")
+        results.append(CheckResult("calendar", "list_events_page", calendar_id, True, "one page returned"))
+    except CalendarClientError as exc:
+        results.append(CheckResult("calendar", "list_events_page", calendar_id, False, str(exc)))
 
     return results
 
