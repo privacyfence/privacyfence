@@ -7,6 +7,7 @@ import json
 import pytest
 
 from privacyfence.plugins import constants, cursors
+from privacyfence_plugin_sdk._rpc import RpcError
 from privacyfence_plugin_sdk import Plugin, Prepared, ToolDefinitionError, blocks
 from privacyfence_plugin_sdk.testing import PluginTestHost, SourceFixtureMissing, samples
 from privacyfence_plugin_sdk.testing import _host as host_module
@@ -347,6 +348,33 @@ class TestPluginTestHost:
         with pytest.raises(ValueError):
             PluginTestHost(plugin, principals=[{"id": "alice"}])
         PluginTestHost(plugin, mode="org", principals=[{"id": "alice", "display_name": "Alice Example"}])
+
+
+class TestIntrospect:
+    async def test_it_returns_the_tools_a_later_run_reports(self):
+        plugin, _ = build_plugin()
+        host = PluginTestHost(plugin)
+        introspected = await host.introspect()
+        async with host:
+            assert introspected == host.tools
+
+    async def test_the_sdk_records_the_purpose(self):
+        plugin, _ = build_plugin()
+        host = PluginTestHost(plugin)
+        await host.introspect()
+        assert plugin._host.introspecting is True
+
+    async def test_source_and_confirm_calls_are_refused(self):
+        with pytest.raises(RpcError) as raised:
+            await host_module._refuse_while_introspecting({})
+        assert raised.value.code == "introspection_only"
+        assert raised.value.detail == "not available while introspecting"
+
+    async def test_it_cannot_run_inside_the_host(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin) as host:
+            with pytest.raises(RuntimeError, match=r"introspect\(\) runs before the host starts"):
+                await host.introspect()
 
 
 class TestPaging:
