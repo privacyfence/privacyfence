@@ -324,8 +324,19 @@ class TestPrepareExecute:
         async def run_big(ctx, prepared, approval):
             return "x" * 200_000
 
+        @plugin.tool("nanresult", description="d", gate="popup")
+        async def nanresult(ctx, args):
+            return Prepared(preview=[])
+
+        @nanresult.execute
+        async def run_nan(ctx, prepared, approval):
+            return {"v": float("nan")}
+
         daemon = await make_daemon(plugin)
         await daemon.initialize()
+        await daemon.result("tool.prepare", prepare_params(principal, "n1", "nanresult"))
+        data = await daemon.error("tool.execute", execute_params(principal, "n1", "nanresult"))
+        assert (data["code"], data["detail"]) == ("internal_error", "the execute result is not JSON")
         for tool, code in [("scoped", "invalid_params"), ("nopayload", "invalid_params"),
                            ("hugepayload", "payload_too_large"), ("badblocks", "invalid_blocks")]:
             assert (await daemon.error("tool.prepare", prepare_params(principal, tool=tool)))["code"] == code

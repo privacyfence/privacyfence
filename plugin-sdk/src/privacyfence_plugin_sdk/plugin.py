@@ -727,7 +727,11 @@ class Plugin:
             raise RpcError("invalid_params", "a read-only tool must return a payload")
         if not handle.read_only and payload is not None:
             raise RpcError("invalid_params", "only a read-only tool may return a payload")
-        if payload is not None and len(json.dumps({"blocks": payload}, ensure_ascii=False).encode()) > _INLINE_RESULT_BYTES:
+        if (
+            payload is not None
+            and len(json.dumps({"blocks": payload}, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode())
+            > _INLINE_RESULT_BYTES
+        ):
             raise RpcError("payload_too_large", "the payload is larger than the inline result limit")
         scopes = self._check_scopes(handle, prepared.scopes)
         self._prepared[call_id] = _PreparedEntry(
@@ -779,7 +783,7 @@ class Plugin:
         if handle._execute is not None:
             result = await handle._execute(ctx, entry.prepared, approval)
         try:
-            size = len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            size = len(json.dumps(result, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8"))
         except (TypeError, ValueError):
             raise RpcError("internal_error", "the execute result is not JSON") from None
         if size > _INLINE_RESULT_BYTES:

@@ -7,6 +7,7 @@ wrong type or field, so a mistake shows up in the plugin's own tests instead of 
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -123,6 +124,8 @@ def _validate_table(block: dict, where: str) -> dict:
                     cell = cell[: _MAX_CELL_CHARS - 1] + "…"
             elif cell is not None and not isinstance(cell, (int, float, bool)):
                 raise ValueError(f"{where}: a cell must be a string, number, boolean or null")
+            elif isinstance(cell, float) and not math.isfinite(cell):
+                raise ValueError(f"{where}: must be a finite number")
             cleaned_row[key] = cell
         cleaned_rows.append(cleaned_row)
     return {"type": "table", "columns": cleaned_columns, "rows": cleaned_rows}
@@ -143,7 +146,7 @@ def validate_blocks(
         raise ValueError(f"at most {max_blocks} blocks are allowed")
     out = [_validate_one(block, index) for index, block in enumerate(blocks)]
     if max_bytes is not None:
-        size = len(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+        size = len(json.dumps(out, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8"))
         if size > max_bytes:
             raise ValueError(f"blocks serialize to {size} bytes; the limit is {max_bytes}")
     return out

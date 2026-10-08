@@ -37,6 +37,10 @@ _OVERSIZE = b"\x00oversize"
 _CODE_NAMES = {number: name for name, number in ERROR_CODES.items()}
 
 
+def _no_constant(name: str) -> None:
+    raise ValueError(f"{name} is not JSON")
+
+
 def _is_id(value: Any) -> bool:
     return isinstance(value, (int, str)) and not isinstance(value, bool)
 
@@ -152,7 +156,7 @@ class RpcPeer:
 
     async def _send(self, message: dict) -> None:
         try:
-            line = json.dumps(message, separators=(",", ":")).encode() + b"\n"
+            line = json.dumps(message, separators=(",", ":"), allow_nan=False).encode() + b"\n"
         except (TypeError, ValueError):
             raise RpcError("internal_error", "message is not JSON") from None
         if len(line) > MAX_LINE_BYTES:
@@ -224,7 +228,7 @@ class RpcPeer:
         if line is _OVERSIZE:
             return False
         try:
-            message = json.loads(line)
+            message = json.loads(line, parse_constant=_no_constant)
         except ValueError:
             await self._send_quiet(self._error_message(None, RpcError("parse_error", "invalid JSON")))
             return False
