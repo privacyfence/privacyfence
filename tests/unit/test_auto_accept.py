@@ -609,3 +609,146 @@ class TestDynamicTools:
         _testing.reset_all()
         assert self._tables() == before
         assert auto_accept._DYNAMIC_TOOLS == {}
+
+
+class TestInternalDynamicTools:
+    """PrivacyFence's own runtime tools: the gate, operation, verb, layout and effect rows, and no
+    plugin selector or proposal."""
+
+    @staticmethod
+    def _specs():
+        from privacyfence import gate
+        from privacyfence.policy.registry import Verb
+
+        return [
+            auto_accept.DynamicToolSpec(
+                tool="plugin_outputs_list", gate="auto", operation=None, verb=None,
+                layout=gate.NARROW, effect="", scope_predicates=(),
+            ),
+            auto_accept.DynamicToolSpec(
+                tool="plugin_outputs_read", gate="review", operation="plugin_outputs.read", verb=Verb.READ,
+                layout=gate.WIDE, effect="", scope_predicates=(),
+            ),
+            auto_accept.DynamicToolSpec(
+                tool="plugin_outputs_note", gate="popup", operation="plugin_outputs.note", verb=Verb.UPDATE,
+                layout=gate.WIDE, effect="A note is added.", scope_predicates=(),
+            ),
+        ]
+
+    _tables = staticmethod(TestDynamicTools._tables)
+
+    def test_register_writes_gate_operation_verb_layout_and_effect(self):
+        from privacyfence import gate, write_effects
+        from privacyfence.policy import propose, registry, scopes
+        from privacyfence.policy.registry import Verb
+
+        selectors = dict(scopes.NEW_SCOPE_SELECTORS)
+        auto_accept.register_internal_dynamic_tools("plugin_outputs", self._specs())
+        assert TOOL_TO_GATE["plugin_outputs_list"] == "auto"
+        assert TOOL_TO_GATE["plugin_outputs_read"] == "review"
+        assert "plugin_outputs_list" not in TOOL_TO_OPERATION
+        assert TOOL_TO_OPERATION["plugin_outputs_read"] == "plugin_outputs.read"
+        entry = registry.TOOL_REGISTRY["plugin_outputs_read"]
+        assert (entry.gate, entry.operation, entry.verb) == ("review", "plugin_outputs.read", Verb.READ)
+        assert registry.TOOL_TO_VERB["plugin_outputs_read"] is Verb.READ
+        assert registry.TOOL_REGISTRY["plugin_outputs_list"].verb is None
+        assert gate._TOOL_LAYOUT["plugin_outputs_list"] == gate.NARROW
+        assert gate._TOOL_LAYOUT["plugin_outputs_read"] == gate.WIDE
+        assert write_effects.effect_for("plugin_outputs_note") == "A note is added."
+        assert "plugin_outputs_read" not in write_effects.EFFECT_BY_TOOL
+        # No selector and no proposal: the caller registers the ones it needs.
+        assert scopes.NEW_SCOPE_SELECTORS == selectors
+        assert "plugin_outputs" not in propose._DYNAMIC_SCOPES
+        assert propose.proposals_for("plugin_outputs_read", make_ctx(tool="plugin_outputs_read")) == []
+
+    def test_unregister_restores_the_exact_prior_tables(self):
+        before = self._tables()
+        auto_accept.register_internal_dynamic_tools("plugin_outputs", self._specs())
+        assert self._tables() != before
+        auto_accept.unregister_internal_dynamic_tools("plugin_outputs")
+        assert self._tables() == before
+        assert auto_accept._INTERNAL_DYNAMIC_TOOLS == {}
+
+    def test_registering_again_replaces_the_owner_s_list(self):
+        auto_accept.register_internal_dynamic_tools("plugin_outputs", self._specs())
+        auto_accept.register_internal_dynamic_tools("plugin_outputs", self._specs()[:1])
+        assert "plugin_outputs_list" in TOOL_TO_GATE
+        assert "plugin_outputs_read" not in TOOL_TO_GATE
+
+    def test_unregistering_an_unknown_owner_is_a_no_op(self):
+        before = self._tables()
+        auto_accept.unregister_internal_dynamic_tools("nobody")
+        assert self._tables() == before
+
+    def test_static_name_refused(self):
+        import dataclasses
+
+        before = self._tables()
+        clash = dataclasses.replace(self._specs()[0], tool="gmail_list_messages")
+        with pytest.raises(ValueError, match="collides with a built-in tool"):
+            auto_accept.register_internal_dynamic_tools("plugin_outputs", [*self._specs(), clash])
+        assert self._tables() == before
+
+    def test_a_name_another_internal_owner_holds_is_refused(self):
+        auto_accept.register_internal_dynamic_tools("plugin_outputs", self._specs())
+        before = self._tables()
+        with pytest.raises(ValueError, match="already registered by plugin_outputs"):
+            auto_accept.register_internal_dynamic_tools("other", self._specs()[:1])
+        assert self._tables() == before
+
+    def test_a_name_a_plugin_holds_is_refused_both_ways(self):
+        import dataclasses
+
+        auto_accept.register_dynamic_tools("today", TestDynamicTools._specs())
+        before = self._tables()
+        clash = dataclasses.replace(self._specs()[0], tool="today_get_day")
+        with pytest.raises(ValueError, match="already registered by today"):
+            auto_accept.register_internal_dynamic_tools("plugin_outputs", [clash])
+        assert self._tables() == before
+        auto_accept.unregister_dynamic_tools("today")
+
+        auto_accept.register_internal_dynamic_tools("plugin_outputs", self._specs())
+        before = self._tables()
+        plugin = dataclasses.replace(TestDynamicTools._specs()[0], tool="plugin_outputs_read")
+        with pytest.raises(ValueError, match="already registered by plugin_outputs"):
+            auto_accept.register_dynamic_tools("today", [plugin])
+        assert self._tables() == before
+
+    @pytest.mark.parametrize("change", [
+        {"operation": "gmail.read_message"},
+        {"operation": "plugin.plugin_outputs.read"},
+        {"operation": "plugin_outputsx.read"},
+        {"operation": None},
+        {"gate": "sometimes"},
+        {"scope_predicates": (("plugin:today:output", "output"),)},
+        {"scope_predicates": (("plugin:today:calendar", "calendar"),)},
+    ])
+    def test_a_spec_that_could_reach_another_rule_is_refused(self, change):
+        import dataclasses
+
+        before = self._tables()
+        spec = dataclasses.replace(self._specs()[1], **change)
+        with pytest.raises(ValueError):
+            auto_accept.register_internal_dynamic_tools("plugin_outputs", [spec])
+        assert self._tables() == before
+
+    def test_an_auto_tool_cannot_carry_scope_predicates_or_an_operation(self):
+        import dataclasses
+
+        with pytest.raises(ValueError, match="scope predicates"):
+            auto_accept.register_internal_dynamic_tools("plugin_outputs", [
+                dataclasses.replace(self._specs()[0], scope_predicates=(("plugin:today:output", "output"),)),
+            ])
+        with pytest.raises(ValueError, match="auto tool"):
+            auto_accept.register_internal_dynamic_tools("plugin_outputs", [
+                dataclasses.replace(self._specs()[0], operation="plugin_outputs.list"),
+            ])
+
+    def test_reset_all_clears(self):
+        from privacyfence.plugins import _testing
+
+        before = self._tables()
+        auto_accept.register_internal_dynamic_tools("plugin_outputs", self._specs())
+        _testing.reset_all()
+        assert self._tables() == before
+        assert auto_accept._INTERNAL_DYNAMIC_TOOLS == {}

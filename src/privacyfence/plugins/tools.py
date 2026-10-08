@@ -50,6 +50,8 @@ def validate_scope_types(raw: Any) -> list[dict]:
         description = entry.get("description")
         if not isinstance(name, str) or not SCOPE_TYPE_RE.fullmatch(name):
             raise ToolDefError("scope type name does not match the scope type pattern")
+        if name == "output":
+            raise ToolDefError("scope type output is reserved")
         if name in seen:
             raise ToolDefError(f"scope type {name} is declared twice")
         if not isinstance(description, str) or not 1 <= len(description) <= MAX_SCOPE_TYPE_DESCRIPTION_CHARS:

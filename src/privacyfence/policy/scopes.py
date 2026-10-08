@@ -583,6 +583,9 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
 
 PLUGIN_PREDICATE_PREFIX = "plugin:"
 PLUGIN_ANYTHING_SCOPE_TYPE = "anything"
+# The scope type of a plugin's output folder rules. Reserved: only
+# ``register_plugin_output_selector`` adds a predicate for it, never a plugin's own tool.
+PLUGIN_OUTPUT_SCOPE_TYPE = "output"
 
 # predicate -> how many registrations hold it. Two tools of one plugin share a scope type's
 # predicate, so the selector goes only when the last of them is unregistered.
@@ -630,6 +633,8 @@ def check_plugin_selector(predicate: str, scope_type: str) -> None:
     """Raise ``ValueError`` if ``register_plugin_selector(predicate, scope_type)`` would fail,
     without registering anything."""
     # No built-in predicate has the ``plugin:`` shape, so passing this check also rules them out.
+    if scope_type == PLUGIN_OUTPUT_SCOPE_TYPE:
+        raise ValueError(f"scope type {scope_type!r} is reserved")
     _plugin_of_predicate(predicate, scope_type)
 
 
@@ -666,3 +671,74 @@ def unregister_plugin_selector(predicate: str) -> None:
         return
     del _PLUGIN_SELECTOR_REFS[predicate]
     NEW_SCOPE_SELECTORS.pop(predicate, None)
+
+
+# ── Plugin output folders (registered at runtime) ──────────────────────────────────────────────
+#
+# ``plugin:<plugin>:output`` governs ``plugin_outputs_read`` for one plugin's published files. Its
+# value is a path prefix, not the set ``_plugin_scope_matches`` checks: a value ending in ``/`` is
+# a folder and covers every file below it, any other value is one exact file. Each is matched
+# against the canonical path the outputs connector put in ``raw_data``, so ``reports/`` never
+# matches ``reports2/x``.
+
+# Plugins whose output selector is registered.
+_PLUGIN_OUTPUT_SELECTORS: set[str] = set()
+
+
+def plugin_output_predicate(plugin: str) -> str:
+    return f"{PLUGIN_PREDICATE_PREFIX}{plugin}:{PLUGIN_OUTPUT_SCOPE_TYPE}"
+
+
+def _plugin_output_matches(name: str) -> Callable[[Any, ReviewContext], bool]:
+    def matches(value: Any, ctx: ReviewContext) -> bool:
+        raw = ctx.raw_data if isinstance(ctx.raw_data, dict) else {}
+        if raw.get("plugin") != name or not isinstance(raw.get("path"), str):
+            return False
+        path = raw["path"]
+        for v in _values_of(value):
+            if not isinstance(v, str) or not v:
+                continue
+            if v.endswith("/") and path.startswith(v):
+                return True
+            if path == v:
+                return True
+        return False
+
+    return matches
+
+
+def register_plugin_output_selector(name: str) -> None:
+    """Add ``plugin:<name>:output``. Registering a plugin already registered changes nothing."""
+    predicate = plugin_output_predicate(name)
+    _plugin_of_predicate(predicate, PLUGIN_OUTPUT_SCOPE_TYPE)
+    if name in _PLUGIN_OUTPUT_SELECTORS:
+        return
+    NEW_SCOPE_SELECTORS[predicate] = ScopeSelector(
+        predicate=predicate, scope_type=f"{name}.{PLUGIN_OUTPUT_SCOPE_TYPE}", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.ARGS, matches=_plugin_output_matches(name),
+    )
+    _PLUGIN_OUTPUT_SELECTORS.add(name)
+
+
+def unregister_plugin_output_selector(name: str) -> None:
+    """Remove the selector ``register_plugin_output_selector`` added; a plugin never registered is
+    a no-op."""
+    if name not in _PLUGIN_OUTPUT_SELECTORS:
+        return
+    _PLUGIN_OUTPUT_SELECTORS.discard(name)
+    NEW_SCOPE_SELECTORS.pop(plugin_output_predicate(name), None)
+
+
+def reset_plugin_output_selectors() -> None:
+    """Unregister every output selector. Registered with ``plugins._testing``."""
+    for name in list(_PLUGIN_OUTPUT_SELECTORS):
+        unregister_plugin_output_selector(name)
+
+
+def _register_test_reset() -> None:
+    from ..plugins import _testing
+
+    _testing.register_reset(reset_plugin_output_selectors)
+
+
+_register_test_reset()

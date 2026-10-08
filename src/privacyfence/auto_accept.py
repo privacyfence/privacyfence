@@ -330,6 +330,9 @@ class DynamicToolSpec:
 
 # owner -> the specs registered under it, so unregistering removes exactly those rows.
 _DYNAMIC_TOOLS: dict[str, tuple[DynamicToolSpec, ...]] = {}
+# owner -> the specs ``register_internal_dynamic_tools`` registered under it: PrivacyFence's own
+# runtime tools, which take no plugin selectors or proposals.
+_INTERNAL_DYNAMIC_TOOLS: dict[str, tuple[DynamicToolSpec, ...]] = {}
 _DYNAMIC_LOCK = threading.RLock()
 
 
@@ -352,6 +355,9 @@ def _check_dynamic_specs(owner: str, specs: list[DynamicToolSpec]) -> None:
         holder = next((o for o, held in _DYNAMIC_TOOLS.items() if any(s.tool == spec.tool for s in held)), None)
         if holder is not None and holder != owner:
             raise ValueError(f"tool {spec.tool} is already registered by {holder}")
+        internal = _internal_holder_of(spec.tool)
+        if internal is not None:
+            raise ValueError(f"tool {spec.tool} is already registered by {internal}")
         if spec.gate not in ("auto", "review", "popup"):
             raise ValueError(f"tool {spec.tool} has an unknown gate {spec.gate!r}")
         if spec.gate == "auto":
@@ -431,6 +437,85 @@ def unregister_dynamic_tools(owner: str) -> None:
             TOOL_TO_GATE.pop(spec.tool, None)
 
 
+def _internal_holder_of(tool: str) -> str | None:
+    return next((o for o, held in _INTERNAL_DYNAMIC_TOOLS.items() if any(s.tool == tool for s in held)), None)
+
+
+def _check_internal_specs(owner: str, specs: list[DynamicToolSpec]) -> None:
+    """Raise ``ValueError`` for the first spec ``register_internal_dynamic_tools`` refuses, before
+    anything is written."""
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.tool in STATIC_TOOL_NAMES:
+            raise ValueError(f"tool {spec.tool} collides with a built-in tool")
+        if spec.tool in seen:
+            raise ValueError(f"tool {spec.tool} is listed twice")
+        seen.add(spec.tool)
+        holder = next((o for o, held in _DYNAMIC_TOOLS.items() if any(s.tool == spec.tool for s in held)), None)
+        if holder is None:
+            internal = _internal_holder_of(spec.tool)
+            holder = internal if internal != owner else None
+        if holder is not None:
+            raise ValueError(f"tool {spec.tool} is already registered by {holder}")
+        if spec.gate not in ("auto", "review", "popup"):
+            raise ValueError(f"tool {spec.tool} has an unknown gate {spec.gate!r}")
+        if spec.scope_predicates:
+            raise ValueError(f"tool {spec.tool} cannot declare scope predicates")
+        if spec.gate == "auto":
+            if spec.operation is not None:
+                raise ValueError(f"auto tool {spec.tool} cannot carry an operation key")
+            continue
+        if not (spec.operation or "").startswith(f"{owner}."):
+            raise ValueError(f"tool {spec.tool} needs an operation key under {owner}., got {spec.operation!r}")
+
+
+def register_internal_dynamic_tools(owner: str, specs: list[DynamicToolSpec]) -> None:
+    """Add PrivacyFence's own runtime tools to the gate, operation, verb, layout and effect tables,
+    and nothing else: no scope selector and no proposal (the caller registers those it needs).
+
+    Replaces whatever ``owner`` registered here before. Raises ``ValueError`` (and changes nothing)
+    for a static tool name, a tool any other owner holds (plugin or internal), an operation key not
+    under ``<owner>.``, or any scope predicates.
+    """
+    from . import gate, write_effects
+    from .policy import registry as policy_registry
+
+    specs = list(specs)
+    with _DYNAMIC_LOCK:
+        _check_internal_specs(owner, specs)
+        unregister_internal_dynamic_tools(owner)
+        for spec in specs:
+            TOOL_TO_GATE[spec.tool] = spec.gate
+            if spec.operation is not None:
+                TOOL_TO_OPERATION[spec.tool] = spec.operation
+            policy_registry.register_dynamic(spec.tool, spec.operation, spec.verb, spec.gate)
+            gate.register_dynamic_layout(spec.tool, spec.layout)
+            write_effects.register_dynamic_effect(spec.tool, spec.effect)
+        _INTERNAL_DYNAMIC_TOOLS[owner] = tuple(specs)
+
+
+def unregister_internal_dynamic_tools(owner: str) -> None:
+    """Remove exactly the rows ``register_internal_dynamic_tools`` added for ``owner``; an owner
+    with nothing registered is a no-op."""
+    from . import gate, write_effects
+    from .policy import registry as policy_registry
+
+    with _DYNAMIC_LOCK:
+        for spec in _INTERNAL_DYNAMIC_TOOLS.pop(owner, ()):
+            write_effects.unregister_dynamic_effect(spec.tool)
+            gate.unregister_dynamic_layout(spec.tool)
+            policy_registry.unregister_dynamic(spec.tool)
+            TOOL_TO_OPERATION.pop(spec.tool, None)
+            TOOL_TO_GATE.pop(spec.tool, None)
+
+
+def reset_internal_dynamic_tools() -> None:
+    """Unregister every internal owner. Registered with ``plugins._testing``."""
+    with _DYNAMIC_LOCK:
+        for owner in list(_INTERNAL_DYNAMIC_TOOLS):
+            unregister_internal_dynamic_tools(owner)
+
+
 def reset_dynamic_tools() -> None:
     """Unregister every owner. Registered with ``plugins._testing`` so no test leaks a plugin tool
     into the next."""
@@ -443,6 +528,7 @@ def _register_test_reset() -> None:
     from .plugins import _testing
 
     _testing.register_reset(reset_dynamic_tools)
+    _testing.register_reset(reset_internal_dynamic_tools)
 
 
 _register_test_reset()

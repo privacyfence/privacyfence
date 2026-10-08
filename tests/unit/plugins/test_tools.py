@@ -104,6 +104,10 @@ class TestScopes:
         with pytest.raises(ToolDefError):
             validate_scope_types(raw)
 
+    def test_output_scope_type_is_reserved(self):
+        with pytest.raises(ToolDefError, match="scope type output is reserved"):
+            validate_scope_types([*SCOPES, {"name": "output", "description": "d"}])
+
 
 def _params(**props):
     return {"type": "object", "properties": props}
