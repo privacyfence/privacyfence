@@ -30,7 +30,8 @@
       "web.request": 10.0,
       "storage.purge": 30.0,
       "source.call": 120.0,
-      "confirm.request": 5.0
+      "confirm.request": 5.0,
+      "approval.request": 5.0
     }
   },
   "$defs": {

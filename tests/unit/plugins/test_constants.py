@@ -81,3 +81,51 @@ class TestTables:
 
     def test_protocol_major_matches_version(self):
         assert int(c.PROTOCOL_VERSION.split(".")[0]) == c.PROTOCOL_MAJOR
+
+
+class TestProtocolOneOneConstants:
+    @pytest.mark.parametrize("value", ["sha256:" + "0" * 64, "sha256:" + "abcdef0123456789" * 4])
+    def test_digest_accepts(self, value):
+        assert c.DIGEST_RE.fullmatch(value)
+
+    @pytest.mark.parametrize(
+        "value",
+        ["", "sha256:" + "0" * 63, "sha256:" + "0" * 65, "sha256:" + "G" * 64,
+         "SHA256:" + "0" * 64, "sha256:" + "0" * 64 + "\n", "0" * 64],
+    )
+    def test_digest_rejects(self, value):
+        assert not c.DIGEST_RE.fullmatch(value)
+
+    @pytest.mark.parametrize("kind", ["a", "layout", "a-b_c", "a" + "b" * 40])
+    def test_approval_kind_accepts(self, kind):
+        assert c.APPROVAL_KIND_RE.fullmatch(kind)
+
+    @pytest.mark.parametrize("kind", ["", "A", "1a", "_a", "-a", "a b", "a\n", "a" + "b" * 41])
+    def test_approval_kind_rejects(self, kind):
+        assert not c.APPROVAL_KIND_RE.fullmatch(kind)
+
+    def test_output_types_map_to_dotted_lowercase_extensions(self):
+        assert set(c.OUTPUT_TYPES) == {
+            "application/json", "text/csv", "text/html", "text/plain", "text/markdown",
+        }
+        for exts in c.OUTPUT_TYPES.values():
+            assert exts and all(e.startswith(".") and e == e.lower() for e in exts)
+        assert c.OUTPUT_TYPES["text/html"] == (".html", ".htm")
+
+    def test_default_output_types_are_supported(self):
+        assert c.DEFAULT_OUTPUT_TYPES == ("application/json", "text/csv")
+        assert set(c.DEFAULT_OUTPUT_TYPES) <= set(c.OUTPUT_TYPES)
+
+    def test_page_budget_leaves_room_for_the_envelope(self):
+        assert c.SOURCE_PAGE_BUDGET_BYTES == c.MAX_SOURCE_RESULT_BYTES - 64 * 1024
+        assert c.OUTPUT_READ_PAGE_BYTES < c.INLINE_RESULT_BYTES
+
+    def test_approval_request_has_a_timeout(self):
+        assert c.TIMEOUT_SECONDS["approval.request"] == 5.0
+
+    def test_audit_sources(self):
+        assert (c.AUDIT_PLUGIN_APPROVAL, c.AUDIT_PLUGIN_OUTPUT) == ("plugin_approval", "plugin_output")
+
+    def test_protocol_version_and_drive_cap_are_untouched(self):
+        assert c.PROTOCOL_VERSION == "1.0.0"
+        assert c.DRIVE_MAX_FILE_BYTES == 64 * 1024 * 1024
