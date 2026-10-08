@@ -30,7 +30,7 @@ from .responses import (
 
 logger = logging.getLogger("privacyfence_plugin_sdk")
 
-PROTOCOL_VERSION = "1.0.0"
+PROTOCOL_VERSION = "1.1.0"
 _PROTOCOL_MAJOR = 1
 
 # --- _limits: copied from the protocol; a test compares each with the daemon's constants ---------

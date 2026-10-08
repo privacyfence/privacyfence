@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-PROTOCOL_VERSION = "1.0.0"
+PROTOCOL_VERSION = "1.1.0"
 PROTOCOL_MAJOR = 1
 
 MAX_LINE_BYTES = 16 * 1024 * 1024

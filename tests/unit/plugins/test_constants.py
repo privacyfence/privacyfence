@@ -126,6 +126,6 @@ class TestProtocolOneOneConstants:
     def test_audit_sources(self):
         assert (c.AUDIT_PLUGIN_APPROVAL, c.AUDIT_PLUGIN_OUTPUT) == ("plugin_approval", "plugin_output")
 
-    def test_protocol_version_and_drive_cap_are_untouched(self):
-        assert c.PROTOCOL_VERSION == "1.0.0"
+    def test_protocol_version_and_drive_cap(self):
+        assert c.PROTOCOL_VERSION == "1.1.0"
         assert c.DRIVE_MAX_FILE_BYTES == 64 * 1024 * 1024
