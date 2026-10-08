@@ -1,0 +1,103 @@
+<title>Salesforce Report Paging Checklist</title>
+<style>
+/* Layout: one narrow reading column; two parts (before / after), each item a numbered section with checkable steps. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1b2330; --muted: #5a6577; --line: #dde2ea;
+  --accent: #0b6bcb; --accent-soft: #e6f0fb; --ok: #1e7a46;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --surface: #1a2029; --fg: #e5e9f0; --muted: #9aa5b5; --line: #2c3542;
+  --accent: #5aa7f0; --accent-soft: #1d2c3d; --ok: #5cc98a; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e5e9f0; --muted: #9aa5b5; --line: #2c3542;
+  --accent: #5aa7f0; --accent-soft: #1d2c3d; --ok: #5cc98a; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55; padding: 0 16px; }
+main { max-width: 760px; margin: 0 auto; padding-block: 32px 64px; display: grid; gap: 28px; }
+h1 { font-size: 1.6rem; margin: 0; text-wrap: balance; }
+h2 { font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 8px 0 0; }
+h3 { font-size: 1.1rem; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 65ch; }
+code { font-family: var(--font-mono); font-size: 0.88em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.item header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; }
+.meta { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; counter-reset: s; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; counter-increment: s; }
+ol.steps li > div { min-width: 0; }
+ol.steps li > div::before { content: counter(s) ". "; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+ol.steps input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--ok); }
+ol.steps li.done > div { color: var(--muted); }
+.see { font-size: 0.9rem; color: var(--muted); }
+.result { border-top: 1px solid var(--line); padding-top: 12px; font-size: 0.92rem; }
+.result strong { color: var(--ok); }
+pre { font-family: var(--font-mono); font-size: 0.85rem; background: var(--accent-soft); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; white-space: pre; }
+</style>
+
+<main>
+  <div style="display:grid;gap:8px">
+    <h1>Salesforce report paging: your steps</h1>
+    <p class="lede">These are the two things only you can do for <a href="https://github.com/privacyfence/privacyfence/issues/854">issue #854</a>. Do the first one before running <code>/implement</code>, and the second once the feature PR is ready. No step involves a secret.</p>
+  </div>
+
+  <h2>Before implementation</h2>
+
+  <section class="item" id="mb1">
+    <header><h3>1. Give the QA org a key column and a grouped report</h3><span class="meta">about 15 min · <code>mb1-qa-org-key-column</code></span></header>
+    <p>The live check pages the QA report by an auto-number column and reads a grouped report as one table. Without both, phase p2 stops.</p>
+    <ol class="steps">
+      <li><input type="checkbox" id="mb1-1"><div>Sign in to the <strong>QA</strong> Salesforce org at <a href="https://login.salesforce.com">login.salesforce.com</a>, as the account that <code>connector-live-check.yml</code> uses. Do not use your production org.</div></li>
+      <li><input type="checkbox" id="mb1-2"><div>Open <strong>Setup → Object Manager → Account → Fields &amp; Relationships</strong>. On your org that is <code>https://&lt;your-domain&gt;.lightning.force.com/lightning/setup/ObjectManager/Account/FieldsAndRelationships/view</code>. Click <strong>New</strong>.</div></li>
+      <li><input type="checkbox" id="mb1-3"><div>Choose <strong>Auto Number</strong> and click Next. Set Field Label to <code>PF QA Number</code> and Display Format to <code>PFQA-{00000}</code>, with starting number <code>1</code>. Tick <strong>Generate Auto Number for existing records</strong>. Click Next, keep the default field-level security (visible to the QA user's profile), and click Save.<p class="see">You should see: the field <code>PF_QA_Number__c</code> in the list. Your [QATEST] Accounts now have values like PFQA-00001.</p></div></li>
+      <li><input type="checkbox" id="mb1-4"><div>Open the <a href="https://login.salesforce.com/lightning/o/Report/home">Reports tab</a>, open <strong>PrivacyFence QA Report</strong> and click <strong>Edit</strong>. Add the column <strong>PF QA Number</strong>, then click <strong>Save &amp; Run</strong>.<p class="see">You should see: the report still tabular, with at least 2 rows and a PF QA Number value in each.</p></div></li>
+      <li><input type="checkbox" id="mb1-5"><div>Click <strong>New Report</strong>, choose report type <strong>Accounts</strong> and click Start Report. Add the columns <strong>Account Name</strong> and <strong>PF QA Number</strong>, and under <strong>Group Rows</strong> add <strong>Billing City</strong>.</div></li>
+      <li><input type="checkbox" id="mb1-6"><div>Save it as exactly <code>PrivacyFence QA Summary Report</code>, in the same folder as the QA report and shared the same way, then click Run.<p class="see">You should see: rows grouped by Billing City. If your [QATEST] Accounts have no Billing City, one "-" group is fine.</p></div></li>
+      <li><input type="checkbox" id="mb1-7"><div>Optionally, compare with <a href="https://github.com/privacyfence/privacyfence/blob/plan/salesforce-report-paging/docs/connector-qa.md#seed-salesforce">connector-qa.md, Seed: Salesforce</a>. Phase p2 adds these two items there. The recorder finds the column by its label, <code>PF QA Number</code>, so the runner's <code>qa_environment.yaml</code> needs no edit.</div></li>
+    </ol>
+    <p class="result"><strong>Done when:</strong> "PrivacyFence QA Report" shows a PF QA Number column with values like PFQA-00001, and "PrivacyFence QA Summary Report" (grouped by Billing City, with PF QA Number) runs. Then tell the <code>/implement</code> session "mb1 done".</p>
+  </section>
+
+  <h2>After implementation</h2>
+
+  <section class="item" id="ma1">
+    <header><h3>2. Page a large report on your real org</h3><span class="meta">about 30 min · <code>ma1-real-org-paging</code></span></header>
+    <p>The QA org cannot hold 2,000+ rows, so this step checks the issue's three "verify first" items on a real report: sortBy is honoured, greaterThan works on your key column, and each run stops at 2,000 rows.</p>
+    <ol class="steps">
+      <li><input type="checkbox" id="ma1-1"><div>Install the build of the feature PR. <code>build.yml</code> dispatched against <code>feature/salesforce-report-paging</code> produces it; the PR links the run. Alternatively, run from source per <a href="https://github.com/privacyfence/privacyfence/blob/plan/salesforce-report-paging/docs/dev-vs-live-setup.md">dev-vs-live-setup.md</a>. Connect Salesforce to your real org as usual.</div></li>
+      <li><input type="checkbox" id="ma1-2"><div>In Salesforce, pick a <strong>tabular</strong> report with more than 2,000 rows that has a column with a unique value per row, ideally an Auto Number field. Note its total row count (the report's Record Count) and the column's API name, for example from the report's <code>describe</code> or the column name the tool error lists.</div></li>
+      <li><input type="checkbox" id="ma1-3"><div>Ask your AI client: <em>"Run Salesforce report &lt;id&gt; with page_by &lt;column&gt; and follow next_cursor until it is null. Tell me each page's number, first_row and last_row, and whether any key value repeated."</em> Approve each card.<p class="see">You should see: each card's Rows line reads "Page N: rows a–b, more pages follow", and the last one reads "…, last page". No card mentions "Cut off". The last page's last_row equals the report's record count.</p></div></li>
+      <li><input type="checkbox" id="ma1-4"><div>Spot-check the order. Page 1's first key is the smallest value of the column in Salesforce (sort the report by it in the UI), and page 2 starts right after page 1's last key.</div></li>
+      <li><input type="checkbox" id="ma1-5"><div>Repeat steps 3 and 4 with a <strong>summary</strong> report (grouped) that has more than 2,000 rows.<p class="see">You should see: the grouping columns as the first columns of each row, and the same count check passes.</p></div></li>
+      <li><input type="checkbox" id="ma1-6"><div>Try a non-unique column, such as Stage or Owner, as <code>page_by</code>.<p class="see">You should see: an error "page_by '…' is not unique…" or "…did not advance…", and no rows or card.</p></div></li>
+      <li><input type="checkbox" id="ma1-7"><div>If your report's key is a record-ID column rather than an auto-number, try it too, and note whether it pages correctly. The docs currently say ID columns are not guaranteed.</div></li>
+    </ol>
+    <div class="result"><strong>Report back:</strong> paste this into the PR, under the <code>ma1-real-org-paging</code> item:
+<pre>ma1-real-org-paging: PASS|FAIL
+tabular report: rows=&lt;n&gt; pages=&lt;p&gt; every row once=&lt;yes/no&gt;
+summary report: rows=&lt;n&gt; pages=&lt;p&gt; every row once=&lt;yes/no&gt;
+non-unique column refused: &lt;yes/no&gt;
+ID column as page_by: &lt;works / fails / not tried&gt;</pre>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY = "sf-report-paging-steps";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  document.querySelectorAll('ol.steps input[type="checkbox"]').forEach(function (box) {
+    box.checked = !!state[box.id];
+    box.closest("li").classList.toggle("done", box.checked);
+    box.addEventListener("change", function () {
+      state[box.id] = box.checked;
+      box.closest("li").classList.toggle("done", box.checked);
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    });
+  });
+})();
+</script>
