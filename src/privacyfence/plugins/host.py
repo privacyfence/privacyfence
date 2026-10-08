@@ -782,7 +782,7 @@ class PluginHost:
             plugin.state, plugin.reason = "disabled", "disabled by you"
             self._audit_lifecycle(plugin.name, "disabled")
 
-    def approval_embed_allowed(self, name: str, approval_id: str, path: str) -> bool:
+    async def approval_embed_allowed(self, name: str, approval_id: str, path: str) -> bool:
         """Whether the plugin's page at ``path`` may be framed on this approval's card."""
         return self._approvals.embed_allowed(name, approval_id, path)
 
