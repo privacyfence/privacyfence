@@ -11,9 +11,7 @@ call, and everything is removed when the host shuts down.
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
-import json
 import logging
 import shutil
 import threading
@@ -24,34 +22,11 @@ from pathlib import Path
 from typing import Any
 
 from privacyfence.drive_client import _GOOGLE_DOC_EXPORTS
-from privacyfence.plugins.constants import DRIVE_CHUNK_BYTES, DRIVE_MAX_FILE_BYTES, DRIVE_SPOOL_IDLE_SECONDS
+from privacyfence.plugins.constants import DRIVE_SPOOL_IDLE_SECONDS
 from privacyfence.plugins.protocol import RpcError
 from privacyfence.secure_files import atomic_write_bytes, secure_mkdir
 
 logger = logging.getLogger(__name__)
-
-
-def encode_cursor(file_id: str, revision: str, offset: int) -> str:
-    raw = json.dumps({"f": file_id, "r": revision, "o": offset}, separators=(",", ":"))
-    return base64.urlsafe_b64encode(raw.encode()).decode()
-
-
-def decode_cursor(cursor: str) -> tuple[str, str, int]:
-    """Return ``(file_id, revision, offset)``; anything malformed is ``invalid_params``."""
-    try:
-        data = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-        file_id, revision, offset = data["f"], data["r"], data["o"]
-    except (ValueError, KeyError, TypeError, binascii.Error):
-        raise RpcError("invalid_params", "cursor is not valid") from None
-    if (
-        not isinstance(file_id, str)
-        or not isinstance(revision, str)
-        or isinstance(offset, bool)
-        or not isinstance(offset, int)
-        or offset < 0
-    ):
-        raise RpcError("invalid_params", "cursor is not valid")
-    return file_id, revision, offset
 
 
 def _revision_changed() -> RpcError:
@@ -93,66 +68,6 @@ class DownloadSpool:
         # file content, so it goes first.
         self._remove_all_files()
 
-    def read_chunk(
-        self,
-        client: Any,
-        plugin: str,
-        file_id: str,
-        *,
-        offset: int | None = None,
-        cursor: str | None = None,
-        length: int = DRIVE_CHUNK_BYTES,
-    ) -> tuple[dict, str | None]:
-        """Serve one chunk of ``file_id``. Returns ``(data, next_cursor)``."""
-        if cursor is not None and offset is not None:
-            raise RpcError("invalid_params", "offset and cursor cannot both be given")
-        cursor_revision: str | None = None
-        if cursor is not None:
-            cursor_file, cursor_revision, offset = decode_cursor(cursor)
-            if cursor_file != file_id:
-                raise RpcError("invalid_params", "cursor belongs to a different file")
-        continuing = cursor is not None or offset is not None
-        start = offset or 0
-        self.sweep()
-
-        metadata = client.get_file_metadata(file_id)
-        revision = metadata.modified_time
-        key = (plugin, file_id)
-        with self._lock:
-            entry = self._entries.get(key)
-        if continuing and (
-            (entry is not None and entry.revision != revision)
-            or (cursor_revision is not None and cursor_revision != revision)
-        ):
-            self._drop(key)
-            raise RpcError(
-                "upstream_error",
-                "the file changed while it was being downloaded",
-                extra={"reason": "revision_changed"},
-            )
-        if entry is None or entry.revision != revision or not entry.path.is_file():
-            entry = self._fetch(client, plugin, file_id, metadata)
-        entry.last_used = self._clock()
-
-        if start > entry.size:
-            raise RpcError("invalid_params", "offset is past the end of the file")
-        end = min(start + length, entry.size)
-        with entry.path.open("rb") as handle:
-            handle.seek(start)
-            chunk = handle.read(end - start)
-        eof = end >= entry.size
-        data = {
-            "file_id": file_id,
-            "mime_type": entry.mime_type,
-            "revision": revision,
-            "total_size_bytes": entry.size,
-            "offset": start,
-            "length": len(chunk),
-            "eof": eof,
-            "content_base64": base64.b64encode(chunk).decode("ascii"),
-        }
-        return data, None if eof else encode_cursor(file_id, revision, end)
-
     def read_chunk_at(
         self,
         client: Any,
@@ -190,7 +105,7 @@ class DownloadSpool:
             with self._lock:
                 entry = self._entries.get(key)
             if entry is None or entry.revision != revision or not entry.path.is_file():
-                entry = self._fetch(client, plugin, file_id, metadata, limit=None)
+                entry = self._fetch(client, plugin, file_id, metadata)
             entry.last_used = self._clock()
             total = entry.size
             mime_type = entry.mime_type
@@ -214,17 +129,10 @@ class DownloadSpool:
         }
         return data, None if eof else end, revision
 
-    def _fetch(
-        self, client: Any, plugin: str, file_id: str, metadata: Any, *, limit: int | None = DRIVE_MAX_FILE_BYTES
-    ) -> _Entry:
+    def _fetch(self, client: Any, plugin: str, file_id: str, metadata: Any) -> _Entry:
         revision = metadata.modified_time
-        if limit is not None and metadata.size > limit:
-            raise RpcError("payload_too_large", "the file is larger than the 64 MiB limit")
         fetched = client.download_file_bytes(file_id)
         data = fetched["data"]
-        # Google-native files report size 0 in metadata, so the export is measured too.
-        if limit is not None and len(data) > limit:
-            raise RpcError("payload_too_large", "the file is larger than the 64 MiB limit")
         path = self._root / plugin / f"{_digest(file_id, 16)}-{_digest(revision, 12)}"
         atomic_write_bytes(path, data, mode=0o600)
         entry = _Entry(

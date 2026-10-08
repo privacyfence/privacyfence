@@ -13,7 +13,9 @@
     "body": "<p>An example paragraph.</p>",
     "url": "https://example.com/wiki/spaces/EXAMPLE/pages/1",
     "author_name": "Jane Example",
-    "mentions": {}
+    "mentions": {},
+    "body_offset": 0,
+    "body_total_chars": 28
   },
   "next_cursor": null
 }

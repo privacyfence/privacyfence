@@ -15,7 +15,8 @@
         "John Sample",
         "7"
       ]
-    ]
+    ],
+    "first_row": 0
   },
   "next_cursor": null
 }

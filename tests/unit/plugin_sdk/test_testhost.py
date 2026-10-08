@@ -281,7 +281,7 @@ class TestPluginTestHost:
         assert reply["data"] == fixture["data"] and reply["bytes"] == len(json.dumps(fixture["data"]))
 
     def test_sample_data_shapes(self):
-        assert set(samples.get("sheets.get_values")["data"]) == {"values"}
+        assert set(samples.get("sheets.get_values")["data"]) == {"values", "first_row"}
         assert set(samples.get("drive.download")["data"]) == {
             "file_id", "mime_type", "revision", "total_size_bytes", "offset", "length", "eof", "content_base64"}
         with pytest.raises(ValueError, match="unknown source operation"):
@@ -293,7 +293,7 @@ class TestPluginTestHost:
                      "MAX_SCOPE_VALUE_CHARS", "MCP_TOOL_NAME_MAX"):
             assert getattr(host_module, "_" + name) == getattr(constants, name), name
         assert host_module._MAX_SCOPE_TYPES == 20
-        for name in ("SOURCE_OPERATIONS", "DRIVE_CHUNK_BYTES", "DRIVE_MAX_FILE_BYTES", "MAX_SOURCE_RESULT_BYTES"):
+        for name in ("SOURCE_OPERATIONS", "DRIVE_CHUNK_BYTES", "MAX_SOURCE_RESULT_BYTES"):
             assert getattr(source_module, name) == getattr(constants, name), name
         assert host_module._GATES == constants.GATES
         assert {k: host_module._TIMEOUTS[k] for k in host_module._TIMEOUTS} == {

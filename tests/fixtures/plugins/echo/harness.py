@@ -102,7 +102,12 @@ class FakeDrive:
         self.revision = revision
 
     def get_file_metadata(self, file_id: str):
-        return SimpleNamespace(id=file_id, size=len(self.data), modified_time=self.revision)
+        return SimpleNamespace(
+            id=file_id, size=len(self.data), mime_type="application/octet-stream", modified_time=self.revision
+        )
+
+    def download_range(self, file_id: str, offset: int, length: int) -> bytes:
+        return self.data[offset:offset + length]
 
     def download_file_bytes(self, file_id: str) -> dict:
         return {"data": self.data, "name": "x", "mime_type": "application/octet-stream", "size_bytes": len(self.data)}
@@ -204,7 +209,11 @@ class Stack:
         self.popups = None if capture_cards else Popups(monkeypatch)
         self.cards = CardCapture(monkeypatch) if capture_cards else None
         self.calendar = MagicMock()
-        self.calendar.list_events.return_value = [calendar_event()]
+        # One mock under both names: the daemon reads a page at a time, and the tests set
+        # ``list_events.return_value`` to a plain list and assert on ``list_events``.
+        events = self.calendar.list_events_page = self.calendar.list_events
+        events.return_value = [calendar_event()]
+        events.side_effect = lambda *args, **kwargs: (events.return_value, None)
         self.drive = FakeDrive()
         self.calendar_state: tuple[bool, str | None] = (True, None)
         self.problem: str | None = None
