@@ -51,6 +51,9 @@ that no fixture answers raises ``SourceFixtureMissing`` out of ``call_tool``::
     host.source.when("jira.search", jql="project = EXAMPLE").returns([])
     host.source.fail("sheets.get_values", "upstream_error", reason="rate_limited")
     host.source.load(samples.drive_download(b"workbook bytes", revision="r1"))
+    # pages: page i answers the cursor page i-1 returned, and a cursor from another query is refused
+    host.source.when("jira.search", jql="project = EXAMPLE").returns_pages([[{"key": "A-1"}], [{"key": "A-2"}]])
+    # or the two hand-written pages of a sample: host.source.load(samples.get("jira.search", page=2))
     # after a call_tool: host.source.calls lists every source.call the plugin made
 
 Pages, confirmations, events, purge and shutdown go through the same host. A page comes back with
@@ -69,6 +72,21 @@ the daemon's security headers; a path the daemon refuses never reaches the plugi
         card = host.confirmations[0]
         await host.decide_confirmation(card.approval_id, "approve")  # or "deny", "expire"
 
+A plugin that asks for an approval that stays approved (``ctx.approvals``) gets a card the test
+decides, and the daemon's ``check`` semantics once it did. ``revoke_approval`` takes it back and sends
+the plugin ``approval.revoked``::
+
+    ticket = ...  # the plugin called ctx.approvals.request(...)
+    card = host.approvals[0]
+    await host.decide_approval(card.approval_id, "approve")  # or "deny", "expire"
+    await host.revoke_approval(card.approval_id)
+
+A plugin with ``outputs: true`` publishes files with ``ctx.outputs``. Start the host with
+``PluginTestHost(plugin, outputs=True, output_types=("text/csv",))``, then look at the folder
+(``host.output_dir``) or at what an agent could list::
+
+    assert [f.path for f in host.list_outputs("reports/")] == ["reports/today.csv"]
+
 With pytest, ``pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]`` provides a
 ``plugin_host`` fixture that builds the host: ``async with plugin_host(plugin) as host``.
 
@@ -79,14 +97,18 @@ with ``PluginTestHost(plugin, max_gate_floor="auto")``; without it the host rais
 from __future__ import annotations
 
 from ._gate import Card, Rules, ToolOutcome
+from ._approvals import Approval
 from ._confirm import Confirmation
 from ._host import PluginTestHost
+from ._outputs import OutputFile
 from ._pages import PageResponse
 from ._source import SourceCall, SourceFixtureMissing, SourceFixtures, samples
 
 __all__ = [
+    "Approval",
     "Card",
     "Confirmation",
+    "OutputFile",
     "PageResponse",
     "PluginTestHost",
     "Rules",

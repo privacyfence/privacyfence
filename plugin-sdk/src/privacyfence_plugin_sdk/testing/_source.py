@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import copy
 import json
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .._rpc import ERROR_CODES, RpcError
+from . import _cursors
 
 # Copied from the protocol, like the limits in plugin.py. The daemon's own tests compare them.
 SOURCE_OPERATIONS: tuple[str, ...] = (
@@ -17,9 +17,9 @@ SOURCE_OPERATIONS: tuple[str, ...] = (
     "sheets.get_values", "confluence.get_page", "calendar.list_events",
 )
 DRIVE_CHUNK_BYTES = 8 * 1024 * 1024
-DRIVE_MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_RESULT_BYTES = 12 * 1024 * 1024
 
+_PAGED_SAMPLES = ("jira.search", "calendar.list_events")
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
 
 
@@ -36,23 +36,6 @@ class SourceCall:
     principal: str
 
 
-def encode_cursor(file_id: str, revision: str, offset: int) -> str:
-    raw = json.dumps({"f": file_id, "r": revision, "o": offset}, separators=(",", ":"))
-    return base64.urlsafe_b64encode(raw.encode()).decode()
-
-
-def decode_cursor(cursor: str) -> tuple[str, str, int]:
-    try:
-        data = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-        file_id, revision, offset = data["f"], data["r"], data["o"]
-    except (ValueError, KeyError, TypeError, binascii.Error):
-        raise RpcError("invalid_params", "cursor is not valid") from None
-    if not isinstance(file_id, str) or not isinstance(revision, str) or isinstance(offset, bool) \
-            or not isinstance(offset, int) or offset < 0:
-        raise RpcError("invalid_params", "cursor is not valid")
-    return file_id, revision, offset
-
-
 @dataclass
 class _Rule:
     operation: str
@@ -60,6 +43,7 @@ class _Rule:
     data: Any = None
     next_cursor: str | None = None
     error: RpcError | None = None
+    bound: dict | None = None  # set on the first page of ``returns_pages``: the call its cursors belong to
 
 
 class _When:
@@ -72,6 +56,41 @@ class _When:
 
     def returns(self, data: Any, next_cursor: str | None = None) -> None:
         self._fixtures._add(_Rule(self._operation, self._params, data=data, next_cursor=next_cursor))
+
+    def returns_pages(self, pages: list) -> None:
+        """Serve ``pages`` one after the other: page *i* answers the cursor that page *i-1* returned.
+
+        The cursors are real envelopes bound to this ``when(...)`` call, as the daemon issues them:
+        a cursor from another query is refused with ``invalid_params``. The last page has
+        ``next_cursor: null``.
+        """
+        if not isinstance(pages, (list, tuple)) or not pages:
+            raise ValueError("returns_pages needs a non-empty list of pages")
+        operation, params = self._operation, self._params
+        if "cursor" in params:
+            raise ValueError("returns_pages issues the cursors itself; do not pass cursor")
+        rules = []
+        for index, data in enumerate(pages):
+            following = (
+                _cursors.encode(operation, params, {"page": index + 1}) if index + 1 < len(pages) else None
+            )
+            rules.append(_Rule(
+                operation,
+                dict(params) if index == 0 else {**params, "cursor": _cursors.encode(operation, params, {"page": index})},
+                data=copy.deepcopy(data), next_cursor=following,
+                bound=dict(params) if index == 0 else None,
+            ))
+        for rule in rules:
+            self._fixtures._add(rule)
+
+
+def _bad_cursor(cursor: Any, operation: str, bound: dict) -> RpcError:
+    """The ``invalid_params`` the daemon answers for a cursor that does not belong to this call."""
+    try:
+        _cursors.decode(cursor, operation, bound)
+    except _cursors.CursorError as exc:
+        return RpcError("invalid_params", str(exc))
+    return RpcError("invalid_params", "cursor is not valid")
 
 
 def _error(code: str, reason: str | None) -> RpcError:
@@ -165,6 +184,9 @@ class SourceFixtures:
         rule = self._best_rule(operation, call_params)
         if rule is not None and rule.error is not None:
             raise rule.error
+        if rule is not None and rule.bound is not None and call_params.get("cursor") is not None:
+            # A cursor reached the first page of a paged fixture: only one of its own gets this far.
+            raise _bad_cursor(call_params["cursor"], operation, rule.bound)
         if rule is not None:
             data, cursor = copy.deepcopy(rule.data), rule.next_cursor
         elif operation == "drive.download" and str(call_params.get("file_id")) in self._drive_files:
@@ -208,15 +230,25 @@ class SourceFixtures:
         if offset is not None and cursor is not None:
             raise RpcError("invalid_params", "offset and cursor cannot both be given")
         revision = file["revision"]
+        bound = {"file_id": file_id}
         if cursor is not None:
-            cursor_file, cursor_revision, offset = decode_cursor(cursor)
-            if cursor_file != file_id:
-                raise RpcError("invalid_params", "cursor belongs to a different file")
+            try:
+                state = _cursors.decode(cursor, "drive.download", bound)
+            except _cursors.CursorError as exc:
+                raise RpcError("invalid_params", str(exc)) from None
+            cursor_revision, offset = state.get("r"), state.get("o")
+            if (
+                set(state) != {"r", "o"} or not isinstance(cursor_revision, str)
+                or isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+            ):
+                raise RpcError("invalid_params", "cursor is not valid")
             if cursor_revision != revision:
                 raise RpcError(
                     "upstream_error", "the file changed while it was being downloaded",
                     extra={"reason": "revision_changed"},
                 )
+            if offset > len(content):
+                raise RpcError("invalid_params", "cursor is not valid")
         start = offset or 0
         if start > len(content):
             raise RpcError("invalid_params", "offset is past the end of the file")
@@ -233,16 +265,28 @@ class SourceFixtures:
             "eof": eof,
             "content_base64": base64.b64encode(chunk).decode("ascii"),
         }
-        return data, None if eof else encode_cursor(file_id, revision, end)
+        return data, None if eof else _cursors.encode("drive.download", bound, {"r": revision, "o": end})
 
 
 class _Samples:
     """``samples``: hand-written, redacted data in the shape each source operation returns."""
 
-    def get(self, operation: str) -> dict:
-        """A fixture for ``operation`` that ``host.source.load`` accepts. Each call returns a fresh copy."""
+    def get(self, operation: str, page: int = 1) -> dict:
+        """A fixture for ``operation`` that ``host.source.load`` accepts. Each call returns a fresh copy.
+
+        ``jira.search`` and ``calendar.list_events`` have a second page: load ``get(op)`` and
+        ``get(op, page=2)`` together, and the first page's ``next_cursor`` fetches the second.
+        """
         _check_operation(operation)
-        return json.loads((_SAMPLES_DIR / f"{operation}.json").read_text(encoding="utf-8"))
+        if page == 1:
+            name = operation
+        elif page == 2 and operation in _PAGED_SAMPLES:
+            name = f"{operation}.page2"
+        else:
+            raise ValueError(
+                f"{operation} has no page {page!r}; only {', '.join(_PAGED_SAMPLES)} have a page 2"
+            )
+        return json.loads((_SAMPLES_DIR / f"{name}.json").read_text(encoding="utf-8"))
 
     def drive_download(
         self, data: bytes, *, revision: str = "r1", file_id: str = "EXAMPLE-1",
@@ -251,8 +295,6 @@ class _Samples:
         """A fixture that serves ``data`` in chunks of ``DRIVE_CHUNK_BYTES`` with the daemon's cursors."""
         if not isinstance(data, (bytes, bytearray)):
             raise ValueError("data must be bytes")
-        if len(data) > DRIVE_MAX_FILE_BYTES:
-            raise ValueError(f"a Drive download is at most {DRIVE_MAX_FILE_BYTES} bytes")
         return {
             "operation": "drive.download",
             "drive_file": {

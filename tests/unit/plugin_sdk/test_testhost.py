@@ -6,11 +6,14 @@ import json
 
 import pytest
 
-from privacyfence.plugins import constants
+from privacyfence.plugins import constants, cursors
 from privacyfence_plugin_sdk import Plugin, Prepared, ToolDefinitionError, blocks
 from privacyfence_plugin_sdk.testing import PluginTestHost, SourceFixtureMissing, samples
 from privacyfence_plugin_sdk.testing import _host as host_module
 from privacyfence_plugin_sdk.testing import _source as source_module
+from privacyfence_plugin_sdk.testing import _approvals as approvals_module
+from privacyfence_plugin_sdk.testing import _cursors as cursors_module
+from privacyfence_plugin_sdk.testing import _outputs as outputs_module
 
 
 def build_plugin() -> tuple[Plugin, dict]:
@@ -239,8 +242,7 @@ class TestPluginTestHost:
             calls = [c.params for c in host.source.calls]
         assert seen["downloaded"] == data and seen["revision"] == "r1"
         assert len(calls) == 2 and "cursor" not in calls[0]
-        cursor = json.loads(base64.urlsafe_b64decode(calls[1]["cursor"]))
-        assert cursor == {"f": "EXAMPLE-1", "r": "r1", "o": chunk}
+        assert cursors.decode(calls[1]["cursor"], "drive.download", {"file_id": "EXAMPLE-1"}) == {"r": "r1", "o": chunk}
 
     def test_drive_download_sample_matches_the_daemons_chunk_shape(self):
         fixtures = source_module.SourceFixtures()
@@ -255,7 +257,7 @@ class TestPluginTestHost:
             "file_id": "EXAMPLE-9", "mime_type": "text/plain", "revision": "r2", "total_size_bytes": 6,
             "offset": 0, "length": 4, "eof": False, "content_base64": base64.b64encode(b"abcd").decode(),
         }
-        assert first["next_cursor"] == source_module.encode_cursor("EXAMPLE-9", "r2", 4)
+        assert first["next_cursor"] == cursors.encode("drive.download", {"file_id": "EXAMPLE-9"}, {"r": "r2", "o": 4})
         last = serve(cursor=first["next_cursor"])
         assert last["data"]["eof"] is True and last["next_cursor"] is None
         assert base64.b64decode(last["data"]["content_base64"]) == b"ef"
@@ -269,6 +271,33 @@ class TestPluginTestHost:
             with pytest.raises(Exception) as bad:
                 serve(**params)
             assert bad.value.code == "invalid_params"
+
+    def test_drive_cursor_state_is_checked_like_the_daemons(self):
+        fixtures = source_module.SourceFixtures()
+        fixtures.load(samples.drive_download(b"abcdef", revision="r1", file_id="EXAMPLE-9"))
+        bound = {"file_id": "EXAMPLE-9"}
+
+        def serve(cursor):
+            return fixtures._serve({"principal": "local", "operation": "drive.download",
+                                    "params": {"file_id": "EXAMPLE-9", "cursor": cursor}}, "local")
+
+        for state in ({"r": "r1"}, {"r": "r1", "o": -1}, {"r": "r1", "o": True}, {"r": 1, "o": 1},
+                      {"f": "EXAMPLE-9", "r": "r1", "o": 1}, {"r": "r1", "o": 7}):
+            with pytest.raises(Exception, match="cursor is not valid") as bad:
+                serve(cursors.encode("drive.download", bound, state))
+            assert bad.value.code == "invalid_params", state
+        with pytest.raises(Exception, match="different call") as foreign:
+            serve(cursors.encode("drive.download", {"file_id": "OTHER"}, {"r": "r1", "o": 1}))
+        assert foreign.value.code == "invalid_params"
+        assert serve(cursors.encode("drive.download", bound, {"r": "r1", "o": 6}))["data"]["eof"] is True
+
+    async def test_a_drive_file_has_no_size_cap(self):
+        fixtures = source_module.SourceFixtures()
+        assert not hasattr(source_module, "DRIVE_MAX_FILE_BYTES")
+        fixtures.load(samples.drive_download(bytes(constants.DRIVE_CHUNK_BYTES * 8 + 1), file_id="BIG-1"))
+        reply = fixtures._serve({"principal": "local", "operation": "drive.download",
+                                 "params": {"file_id": "BIG-1", "length": 1}}, "local")
+        assert reply["data"]["total_size_bytes"] == constants.DRIVE_CHUNK_BYTES * 8 + 1 and reply["next_cursor"]
 
     @pytest.mark.parametrize("operation", constants.SOURCE_OPERATIONS)
     def test_every_operation_has_a_sample(self, operation):
@@ -295,6 +324,14 @@ class TestPluginTestHost:
         assert host_module._MAX_SCOPE_TYPES == 20
         for name in ("SOURCE_OPERATIONS", "DRIVE_CHUNK_BYTES", "MAX_SOURCE_RESULT_BYTES"):
             assert getattr(source_module, name) == getattr(constants, name), name
+        assert cursors_module.CURSOR_MAX_CHARS == constants.CURSOR_MAX_CHARS
+        assert outputs_module.OUTPUT_TYPES == constants.OUTPUT_TYPES
+        assert outputs_module.DEFAULT_OUTPUT_TYPES == constants.DEFAULT_OUTPUT_TYPES
+        assert outputs_module.OUTPUT_MAX_DEPTH == constants.OUTPUT_MAX_DEPTH
+        assert approvals_module._KIND_RE.pattern == constants.APPROVAL_KIND_RE.pattern
+        assert approvals_module._DIGEST_RE.pattern == constants.DIGEST_RE.pattern
+        assert approvals_module._SUBJECT_ID_MAX_CHARS == constants.SUBJECT_ID_MAX_CHARS
+        assert approvals_module._AWAIT_MAX_MS == constants.CONFIRM_AWAIT_MAX_MS
         assert host_module._GATES == constants.GATES
         assert {k: host_module._TIMEOUTS[k] for k in host_module._TIMEOUTS} == {
             k: constants.TIMEOUT_SECONDS[k] for k in host_module._TIMEOUTS}
@@ -310,3 +347,108 @@ class TestPluginTestHost:
         with pytest.raises(ValueError):
             PluginTestHost(plugin, principals=[{"id": "alice"}])
         PluginTestHost(plugin, mode="org", principals=[{"id": "alice", "display_name": "Alice Example"}])
+
+
+class TestPaging:
+    @staticmethod
+    def paging_plugin() -> tuple[Plugin, dict]:
+        seen: dict = {}
+        plugin = Plugin(name="paging", version="1.0.0")
+
+        @plugin.tool("count", description="Count issues.", read_only=True,
+                     params={"jql": {"type": "string"}}, required=["jql"])
+        async def count(ctx, args):
+            pages = [page async for page in ctx.source.pages("jira.search", jql=args["jql"])]
+            seen["cursors"] = [p.next_cursor for p in pages]
+            seen["keys"] = [[i["key"] for i in p.data] for p in pages]
+            return Prepared(preview=[blocks.text("count")], payload=[blocks.text(str(len(pages)))])
+
+        @plugin.tool("collect", description="Collect events.", read_only=True)
+        async def collect(ctx, args):
+            events = await ctx.source.collect(
+                "calendar.list_events", time_min="2026-10-07T00:00:00Z", time_max="2026-10-08T00:00:00Z")
+            seen["titles"] = [e["title"] for e in events]
+            return Prepared(preview=[blocks.text("collect")], payload=[blocks.text("ok")])
+
+        return plugin, seen
+
+    async def test_returns_pages_serves_each_page_for_the_cursor_before_it(self):
+        plugin, seen = self.paging_plugin()
+        async with PluginTestHost(plugin) as host:
+            host.source.when("jira.search", jql="project = A").returns_pages(
+                [[{"key": "A-1"}], [{"key": "A-2"}], [{"key": "A-3"}]])
+            outcome = await host.call_tool("count", {"jql": "project = A"})
+            calls = [c.params for c in host.source.calls]
+        assert outcome.error is None and seen["keys"] == [["A-1"], ["A-2"], ["A-3"]]
+        assert "cursor" not in calls[0] and [c["cursor"] for c in calls[1:]] == seen["cursors"][:2]
+        assert seen["cursors"][2] is None
+        bound = {"jql": "project = A"}
+        assert cursors.decode(seen["cursors"][0], "jira.search", bound) == {"page": 1}
+        assert cursors.decode(seen["cursors"][1], "jira.search", bound) == {"page": 2}
+
+    async def test_a_cursor_for_another_query_or_none_of_ours_is_refused(self):
+        plugin, _ = self.paging_plugin()
+        async with PluginTestHost(plugin) as host:
+            host.source.when("jira.search", jql="project = A").returns_pages([[{"key": "A-1"}], [{"key": "A-2"}]])
+            host.source.when("jira.search", jql="project = B").returns_pages([[{"key": "B-1"}], [{"key": "B-2"}]])
+            first = host.source.handle(
+                {"principal": "local", "operation": "jira.search", "params": {"jql": "project = A"}},
+                mode="local", audit=lambda *a: None)
+            for foreign in (first["next_cursor"], "!!", cursors.encode("jira.search", {"jql": "x"}, {"page": 1})):
+                with pytest.raises(Exception) as bad:
+                    host.source.handle(
+                        {"principal": "local", "operation": "jira.search",
+                         "params": {"jql": "project = B", "cursor": foreign}},
+                        mode="local", audit=lambda *a: None)
+                assert bad.value.code == "invalid_params"
+            second = host.source.handle(
+                {"principal": "local", "operation": "jira.search",
+                 "params": {"jql": "project = A", "cursor": first["next_cursor"]}},
+                mode="local", audit=lambda *a: None)
+        assert second["data"] == [{"key": "A-2"}] and second["next_cursor"] is None
+
+    def test_returns_pages_needs_pages_and_issues_its_own_cursors(self):
+        fixtures = source_module.SourceFixtures()
+        with pytest.raises(ValueError, match="non-empty"):
+            fixtures.when("jira.search", jql="x").returns_pages([])
+        with pytest.raises(ValueError, match="itself"):
+            fixtures.when("jira.search", jql="x", cursor="c").returns_pages([[]])
+        fixtures.when("jira.search", jql="x").returns_pages([[1]])
+        reply = fixtures._serve({"principal": "local", "operation": "jira.search", "params": {"jql": "x"}}, "local")
+        assert reply["data"] == [1] and reply["next_cursor"] is None
+
+    async def test_the_sample_pages_fetch_each_other(self):
+        plugin, seen = self.paging_plugin()
+        async with PluginTestHost(plugin) as host:
+            host.source.load(samples.get("calendar.list_events"))
+            host.source.load(samples.get("calendar.list_events", page=2))
+            await host.call_tool("collect")
+            host.source.load(samples.get("jira.search"))
+            host.source.load(samples.get("jira.search", page=2))
+            await host.call_tool("count", {"jql": "project = EXAMPLE"})
+        assert seen["titles"] == ["Example meeting", "Second example meeting"]
+        assert seen["keys"] == [["EXAMPLE-1"], ["EXAMPLE-2"]]
+
+    def test_only_two_samples_have_a_second_page(self):
+        for operation in ("jira.search", "calendar.list_events"):
+            first, second = samples.get(operation), samples.get(operation, page=2)
+            assert first["next_cursor"] and second["next_cursor"] is None
+            assert second["params"] == {"cursor": first["next_cursor"]}
+        for operation in ("sheets.get_values", "drive.download"):
+            with pytest.raises(ValueError, match="no page 2"):
+                samples.get(operation, page=2)
+
+    def test_the_private_cursor_copy_matches_the_daemons(self):
+        bound = {"jql": "project = A", "page_size": 100}
+        state = {"t": "token", "k": 3}
+        mine = cursors_module.encode("jira.search", bound, state)
+        assert mine == cursors.encode("jira.search", bound, state)
+        assert cursors_module.params_digest("jira.search", bound) == cursors.params_digest("jira.search", bound)
+        assert cursors_module.decode(mine, "jira.search", bound) == state
+        for bad, operation in ((mine, "calendar.list_events"), ("!!", "jira.search"), ("", "jira.search"),
+                               ("A" * (constants.CURSOR_MAX_CHARS + 1), "jira.search")):
+            with pytest.raises(cursors.CursorError) as theirs:
+                cursors.decode(bad, operation, bound)
+            with pytest.raises(cursors_module.CursorError) as ours:
+                cursors_module.decode(bad, operation, bound)
+            assert str(ours.value) == str(theirs.value)
