@@ -4,6 +4,15 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict
 
 
+PrincipalContextOutputTypesItem = Literal[
+    "application/json",
+    "text/csv",
+    "text/html",
+    "text/plain",
+    "text/markdown",
+]
+
+
 class _PrincipalContextRequired(TypedDict):
     id: str
     display_name: str
@@ -12,6 +21,8 @@ class _PrincipalContextRequired(TypedDict):
 
 class PrincipalContext(_PrincipalContextRequired, total=False):
     roles: list[str]
+    output_dir: str
+    output_types: list[PrincipalContextOutputTypesItem]
 
 
 class _ScopeTypeRequired(TypedDict):
@@ -181,6 +192,15 @@ ManifestSourceOperationsItem = Literal[
 ]
 
 
+ManifestOutputTypesItem = Literal[
+    "application/json",
+    "text/csv",
+    "text/html",
+    "text/plain",
+    "text/markdown",
+]
+
+
 class _ManifestRequired(TypedDict):
     name: str
     display_name: str
@@ -195,6 +215,8 @@ class Manifest(_ManifestRequired, total=False):
     max_gate_floor: Literal["review", "auto"]
     pages: bool
     service_credentials: bool
+    outputs: bool
+    output_types: list[ManifestOutputTypesItem]
 
 
 class InitializeParamsDaemon(TypedDict):
@@ -338,6 +360,68 @@ class _ConfirmAwaitResultRequired(TypedDict):
 
 class ConfirmAwaitResult(_ConfirmAwaitResultRequired, total=False):
     decided_at: str
+
+
+class _ApprovalRequestParamsRequired(TypedDict):
+    principal: str
+    kind: str
+    subject_id: str
+    digest: str
+    title: str
+    preview: list[Block]
+
+
+class ApprovalRequestParams(_ApprovalRequestParamsRequired, total=False):
+    page: str
+    require_step_up: bool
+
+
+class _ApprovalRequestResultRequired(TypedDict):
+    approval_id: str
+    status: Literal["pending", "approved"]
+
+
+class ApprovalRequestResult(_ApprovalRequestResultRequired, total=False):
+    expires_at: str
+
+
+class ApprovalCheckParams(TypedDict):
+    principal: str
+    kind: str
+    subject_id: str
+    digest: str
+
+
+class _ApprovalCheckResultRequired(TypedDict):
+    status: Literal["approved", "revoked", "unknown"]
+
+
+class ApprovalCheckResult(_ApprovalCheckResultRequired, total=False):
+    approval_id: str
+    decided_at: str
+
+
+class _ApprovalAwaitParamsRequired(TypedDict):
+    approval_id: str
+
+
+class ApprovalAwaitParams(_ApprovalAwaitParamsRequired, total=False):
+    timeout_ms: int
+
+
+class _ApprovalAwaitResultRequired(TypedDict):
+    status: Literal["approved", "denied", "expired"]
+
+
+class ApprovalAwaitResult(_ApprovalAwaitResultRequired, total=False):
+    decided_at: str
+
+
+class ApprovalRevokedParams(TypedDict):
+    approval_id: str
+    kind: str
+    subject_id: str
+    digest: str
 
 
 class WebRequestParams(TypedDict):

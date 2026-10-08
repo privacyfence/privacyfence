@@ -125,7 +125,7 @@ class TestInitialize:
     async def test_result_shape_parses_with_the_daemons_validator(self, daemon):
         result = await daemon.initialize()
         parsed = InitializeResult.from_wire(result)
-        assert parsed.protocol_version == "1.0.0"
+        assert parsed.protocol_version == "1.1.0"
         assert (parsed.plugin_name, parsed.plugin_version) == ("demo", "1.2.0")
         assert {t.name for t in parsed.tools} == {"list_events", "rename"}
         assert result["plugin"] == {"name": "demo", "version": "1.2.0"}

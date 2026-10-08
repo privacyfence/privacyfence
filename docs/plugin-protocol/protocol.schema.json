@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PrivacyFence plugin protocol",
   "description": "Messages exchanged between the PrivacyFence daemon and an out-of-process plugin, JSON-RPC 2.0, one object per line. Receivers ignore unknown fields, except Block and Manifest.",
-  "x-protocol-version": "1.0.0",
+  "x-protocol-version": "1.1.0",
   "x-limits": {
     "MAX_LINE_BYTES": 16777216,
     "MAX_IN_FLIGHT": 16,
@@ -15,7 +15,6 @@
     "MAX_DESCRIPTION_CHARS": 1024,
     "MAX_SOURCE_RESULT_BYTES": 12582912,
     "DRIVE_CHUNK_BYTES": 8388608,
-    "DRIVE_MAX_FILE_BYTES": 67108864,
     "MAX_PAGE_BODY_BYTES": 8388608,
     "MAX_PAGE_PATH_CHARS": 512,
     "MAX_TOOLS": 64,
@@ -23,6 +22,14 @@
     "MAX_SCOPE_VALUE_CHARS": 200,
     "MCP_TOOL_NAME_MAX": 64,
     "CONFIRM_AWAIT_MAX_MS": 300000,
+    "SOURCE_PAGE_BUDGET_BYTES": 12517376,
+    "CURSOR_MAX_CHARS": 4096,
+    "JIRA_PAGE_SIZE_MAX": 100,
+    "CALENDAR_PAGE_SIZE_MAX": 250,
+    "SUBJECT_ID_MAX_CHARS": 200,
+    "OUTPUT_READ_PAGE_BYTES": 90000,
+    "OUTPUT_LIST_PAGE": 200,
+    "OUTPUT_MAX_DEPTH": 8,
     "TIMEOUT_SECONDS": {
       "initialize": 10.0,
       "tool.prepare": 30.0,
@@ -55,6 +62,24 @@
             "type": "string"
           },
           "description": "Org mode only. Local mode rejects it with org_only_field."
+        },
+        "output_dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only for a plugin whose manifest sets outputs: true. The plugin's output directory for this principal."
+        },
+        "output_types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "application/json",
+              "text/csv",
+              "text/html",
+              "text/plain",
+              "text/markdown"
+            ]
+          },
+          "description": "Present only for a plugin whose manifest sets outputs: true. The media types the plugin may publish."
         }
       },
       "required": [
@@ -471,6 +496,22 @@
         },
         "service_credentials": {
           "type": "boolean"
+        },
+        "outputs": {
+          "type": "boolean"
+        },
+        "output_types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "application/json",
+              "text/csv",
+              "text/html",
+              "text/plain",
+              "text/markdown"
+            ]
+          },
+          "description": "Only allowed with outputs: true. Default: application/json and text/csv."
         }
       },
       "required": [
@@ -787,7 +828,8 @@
           ]
         },
         "params": {
-          "type": "object"
+          "type": "object",
+          "description": "Operation parameters. Every paged operation also accepts cursor (the next_cursor of an earlier result of the same operation with the same other parameters, at most 4096 characters), and jira.search and calendar.list_events accept page_size."
         },
         "credential": {
           "description": "Org mode only. Local mode rejects it with org_only_field."
@@ -908,6 +950,196 @@
       },
       "required": [
         "status"
+      ]
+    },
+    "ApprovalRequestParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,40}$"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "No control or bidirectional characters."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "preview": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          },
+          "maxItems": 50
+        },
+        "page": {
+          "type": "string",
+          "pattern": "^/",
+          "maxLength": 512,
+          "description": "Path of the plugin's own page to embed in the card. Needs pages: true in the manifest."
+        },
+        "require_step_up": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "principal",
+        "kind",
+        "subject_id",
+        "digest",
+        "title",
+        "preview"
+      ]
+    },
+    "ApprovalRequestResult": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "approved"
+          ]
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "status"
+      ]
+    },
+    "ApprovalCheckParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,40}$"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "No control or bidirectional characters."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "principal",
+        "kind",
+        "subject_id",
+        "digest"
+      ]
+    },
+    "ApprovalCheckResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "approved",
+            "revoked",
+            "unknown"
+          ]
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decided_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "ApprovalAwaitParams": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000
+        }
+      },
+      "required": [
+        "approval_id"
+      ]
+    },
+    "ApprovalAwaitResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "approved",
+            "denied",
+            "expired"
+          ]
+        },
+        "decided_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "ApprovalRevokedParams": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,40}$"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "No control or bidirectional characters."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "approval_id",
+        "kind",
+        "subject_id",
+        "digest"
       ]
     },
     "WebRequestParams": {

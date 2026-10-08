@@ -88,6 +88,24 @@ class TestPrincipalContext:
         assert ctx.roles == ("admin",)
         assert ctx.to_wire()["roles"] == ["admin"]
 
+    def test_output_fields_round_trip(self):
+        wire = {**self.WIRE, "output_dir": "/data/p/out", "output_types": ["text/csv"]}
+        ctx = p.PrincipalContext.from_wire(wire)
+        assert (ctx.output_dir, ctx.output_types) == ("/data/p/out", ("text/csv",))
+        assert ctx.to_wire() == wire
+
+    def test_output_fields_default_to_absent(self):
+        ctx = p.PrincipalContext.from_wire(self.WIRE)
+        assert (ctx.output_dir, ctx.output_types) == (None, ())
+        assert "output_dir" not in ctx.to_wire() and "output_types" not in ctx.to_wire()
+
+    @pytest.mark.parametrize(
+        "extra",
+        [{"output_dir": ""}, {"output_dir": 3}, {"output_types": "text/csv"}, {"output_types": [1]}],
+    )
+    def test_invalid_output_fields(self, extra):
+        _raises("invalid_params", p.PrincipalContext.from_wire, {**self.WIRE, **extra})
+
     @pytest.mark.parametrize(
         "bad",
         [
@@ -169,7 +187,7 @@ class TestToolDef:
 
 class TestInitializeResult:
     WIRE = {
-        "protocol_version": "1.0.0",
+        "protocol_version": "1.1.0",
         "plugin": {"name": "today", "version": "1.2.0"},
         "scope_types": [{"name": "calendar", "description": "A calendar id"}],
         "tools": [_tool()],
@@ -388,6 +406,143 @@ class TestConfirmRequestParams:
         assert result.preview == []
 
 
+DIGEST = "sha256:" + "ab" * 32
+
+
+class TestApprovalRequestParams:
+    WIRE = {
+        "principal": "local",
+        "kind": "template",
+        "subject_id": "report-template",
+        "digest": DIGEST,
+        "title": "Approve the template",
+        "preview": [{"type": "text", "text": "code"}],
+        "page": "/review",
+        "require_step_up": False,
+    }
+
+    def test_valid_round_trip(self):
+        assert p.ApprovalRequestParams.from_wire(self.WIRE).to_wire() == self.WIRE
+
+    def test_optional_fields_default(self):
+        wire = {k: v for k, v in self.WIRE.items() if k not in ("page", "require_step_up")}
+        parsed = p.ApprovalRequestParams.from_wire(wire)
+        assert (parsed.page, parsed.require_step_up) == (None, True)
+        assert "page" not in parsed.to_wire()
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda w: w.pop("principal"),
+            lambda w: w.pop("kind"),
+            lambda w: w.pop("subject_id"),
+            lambda w: w.pop("digest"),
+            lambda w: w.pop("title"),
+            lambda w: w.pop("preview"),
+            lambda w: w.update(kind=""),
+            lambda w: w.update(kind="Template"),
+            lambda w: w.update(kind="1x"),
+            lambda w: w.update(kind="k" * 42),
+            lambda w: w.update(subject_id=""),
+            lambda w: w.update(subject_id="s" * (c.SUBJECT_ID_MAX_CHARS + 1)),
+            lambda w: w.update(subject_id="a\x07b"),
+            lambda w: w.update(subject_id="a\u202eb"),
+            lambda w: w.update(digest="sha256:" + "AB" * 32),
+            lambda w: w.update(digest="sha256:" + "ab" * 31),
+            lambda w: w.update(digest="ab" * 32),
+            lambda w: w.update(digest=DIGEST + "\n"),
+            lambda w: w.update(title=""),
+            lambda w: w.update(title="t" * (c.MAX_TITLE_CHARS + 1)),
+            lambda w: w.update(preview={}),
+            lambda w: w.update(preview=[1]),
+            lambda w: w.update(page=""),
+            lambda w: w.update(page="review"),
+            lambda w: w.update(page="/" + "p" * c.MAX_PAGE_PATH_CHARS),
+            lambda w: w.update(page=3),
+            lambda w: w.update(require_step_up="yes"),
+        ],
+    )
+    def test_invalid(self, mutate):
+        wire = copy.deepcopy(self.WIRE)
+        mutate(wire)
+        _raises("invalid_params", p.ApprovalRequestParams.from_wire, wire)
+
+    def test_limits_are_inclusive(self):
+        wire = {**self.WIRE, "subject_id": "s" * c.SUBJECT_ID_MAX_CHARS, "page": "/" + "p" * (c.MAX_PAGE_PATH_CHARS - 1)}
+        assert p.ApprovalRequestParams.from_wire(wire).page == wire["page"]
+
+    def test_validator_failure_is_invalid_blocks(self):
+        def validator(blocks, *, max_bytes):
+            raise ValueError("nope")
+
+        _raises("invalid_blocks", p.ApprovalRequestParams.from_wire, self.WIRE, validate_blocks=validator)
+
+    def test_validator_result_is_used(self):
+        result = p.ApprovalRequestParams.from_wire(self.WIRE, validate_blocks=lambda b, *, max_bytes: [])
+        assert result.preview == []
+
+    def test_unknown_mode(self):
+        with pytest.raises(ValueError):
+            p.ApprovalRequestParams.from_wire(self.WIRE, mode="x")
+
+
+class TestApprovalCheckParams:
+    WIRE = {"principal": "local", "kind": "template", "subject_id": "report-template", "digest": DIGEST}
+
+    def test_valid_round_trip(self):
+        assert p.ApprovalCheckParams.from_wire(self.WIRE).to_wire() == self.WIRE
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda w: w.pop("principal"),
+            lambda w: w.pop("kind"),
+            lambda w: w.pop("subject_id"),
+            lambda w: w.pop("digest"),
+            lambda w: w.update(principal=""),
+            lambda w: w.update(kind="Bad kind"),
+            lambda w: w.update(subject_id="a\x00b"),
+            lambda w: w.update(digest="sha256:xyz"),
+        ],
+    )
+    def test_invalid(self, mutate):
+        wire = copy.deepcopy(self.WIRE)
+        mutate(wire)
+        _raises("invalid_params", p.ApprovalCheckParams.from_wire, wire)
+
+    def test_not_an_object(self):
+        _raises("invalid_params", p.ApprovalCheckParams.from_wire, [])
+
+
+class TestApprovalAwaitParams:
+    def test_valid_round_trip(self):
+        assert p.ApprovalAwaitParams.from_wire({"approval_id": "a1", "timeout_ms": 5}).to_wire() == {
+            "approval_id": "a1", "timeout_ms": 5}
+
+    def test_timeout_is_optional(self):
+        parsed = p.ApprovalAwaitParams.from_wire({"approval_id": "a1"})
+        assert parsed.timeout_ms is None and parsed.to_wire() == {"approval_id": "a1"}
+
+    def test_timeout_bounds_are_inclusive(self):
+        for ms in (0, c.CONFIRM_AWAIT_MAX_MS):
+            assert p.ApprovalAwaitParams.from_wire({"approval_id": "a", "timeout_ms": ms}).timeout_ms == ms
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {},
+            {"approval_id": ""},
+            {"approval_id": 1},
+            {"approval_id": "a", "timeout_ms": -1},
+            {"approval_id": "a", "timeout_ms": c.CONFIRM_AWAIT_MAX_MS + 1},
+            {"approval_id": "a", "timeout_ms": "5"},
+            {"approval_id": "a", "timeout_ms": True},
+        ],
+    )
+    def test_invalid(self, bad):
+        _raises("invalid_params", p.ApprovalAwaitParams.from_wire, bad)
+
+
 class TestWebResponse:
     WIRE = {"status": 200, "headers": {"content-type": "text/html"}, "body": "<p>hi</p>", "body_encoding": "utf8"}
 
@@ -463,6 +618,15 @@ class TestPrincipalContextBuilder:
         assert p.principal_context(admin, Path("/d"), mode="org")["roles"] == ["admin"]
         assert p.principal_context(user, Path("/d"), mode="org")["roles"] == []
 
+    def test_output_keywords(self):
+        wire = p.principal_context(LOCAL_PRINCIPAL, Path("/d"), output_dir=Path("/d/out"), output_types=("text/csv",))
+        assert wire["output_dir"] == str(Path("/d/out")) and wire["output_types"] == ["text/csv"]
+        assert p.PrincipalContext.from_wire(wire).output_types == ("text/csv",)
+
+    def test_output_keys_absent_by_default(self):
+        wire = p.principal_context(LOCAL_PRINCIPAL, Path("/d"))
+        assert "output_dir" not in wire and "output_types" not in wire
+
     def test_result_parses_back(self):
         wire = p.principal_context(LOCAL_PRINCIPAL, Path("/d"))
         assert p.PrincipalContext.from_wire(wire).id == "local"
@@ -482,7 +646,9 @@ class TestSchema:
     PROTOCOL_DEFS = [
         "InitializeParams", "InitializeResult", "ToolPrepareParams", "ToolPrepareResult", "ToolExecuteParams",
         "ToolExecuteResult", "SourceCallParams", "SourceCallResult", "ConfirmRequestParams",
-        "ConfirmRequestResult", "ConfirmAwaitParams", "ConfirmAwaitResult", "WebRequestParams",
+        "ConfirmRequestResult", "ConfirmAwaitParams", "ConfirmAwaitResult", "ApprovalRequestParams",
+        "ApprovalRequestResult", "ApprovalCheckParams", "ApprovalCheckResult", "ApprovalAwaitParams",
+        "ApprovalAwaitResult", "ApprovalRevokedParams", "WebRequestParams",
         "WebRequestResult", "StoragePurgeParams", "StoragePurgeResult", "ToolsChangedParams",
         "ConnectorStateChangedParams", "PrincipalRemovedParams", "PluginDisablingParams", "ShutdownParams",
     ]
@@ -504,6 +670,9 @@ class TestSchema:
             ("ToolExecuteResult", p.ExecuteResult),
             ("SourceCallParams", p.SourceCallParams),
             ("ConfirmRequestParams", p.ConfirmRequestParams),
+            ("ApprovalRequestParams", p.ApprovalRequestParams),
+            ("ApprovalCheckParams", p.ApprovalCheckParams),
+            ("ApprovalAwaitParams", p.ApprovalAwaitParams),
             ("WebRequestResult", p.WebResponse),
         ],
     )
@@ -520,6 +689,9 @@ class TestSchema:
             ("ToolExecuteResult", p.ExecuteResult),
             ("SourceCallParams", p.SourceCallParams),
             ("ConfirmRequestParams", p.ConfirmRequestParams),
+            ("ApprovalRequestParams", p.ApprovalRequestParams),
+            ("ApprovalCheckParams", p.ApprovalCheckParams),
+            ("ApprovalAwaitParams", p.ApprovalAwaitParams),
             ("WebRequestResult", p.WebResponse),
         ],
     )
@@ -544,10 +716,20 @@ class TestSchema:
         assert limits["TIMEOUT_SECONDS"] == c.TIMEOUT_SECONDS
         assert schema["x-protocol-version"] == c.PROTOCOL_VERSION
 
+    def test_schema_patterns_match_the_constants(self, schema):
+        defs = schema["$defs"]
+        assert defs["ApprovalRequestParams"]["properties"]["kind"]["pattern"] == f"^{c.APPROVAL_KIND_RE.pattern}$"
+        assert defs["ApprovalCheckParams"]["properties"]["digest"]["pattern"] == f"^{c.DIGEST_RE.pattern}$"
+        assert defs["PrincipalContext"]["properties"]["output_types"]["items"]["enum"] == list(c.OUTPUT_TYPES)
+        assert defs["Manifest"]["properties"]["output_types"]["items"]["enum"] == list(c.OUTPUT_TYPES)
+
+    def test_drive_has_no_size_cap_in_the_limits(self, schema):
+        assert "DRIVE_MAX_FILE_BYTES" not in schema["x-limits"]
+
     def test_manifest_properties(self, schema):
         assert set(schema["$defs"]["Manifest"]["properties"]) == {
             "name", "display_name", "version", "protocol", "command", "source_operations", "tools",
-            "max_gate_floor", "pages", "service_credentials",
+            "max_gate_floor", "pages", "service_credentials", "outputs", "output_types",
         }
 
     def test_documented_example_transcripts_validate(self):

@@ -22,18 +22,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
+from privacyfence.plugins.blocks import clean_text
 from privacyfence.plugins.constants import (
+    APPROVAL_KIND_RE,
+    CONFIRM_AWAIT_MAX_MS,
+    DIGEST_RE,
     ERROR_CODES,
     GATES,
     INLINE_RESULT_BYTES,
     MAX_DESCRIPTION_CHARS,
     MAX_EFFECT_CHARS,
     MAX_PAGE_BODY_BYTES,
+    MAX_PAGE_PATH_CHARS,
     MAX_PREVIEW_BYTES,
     MAX_SCOPE_VALUE_CHARS,
     MAX_SCOPE_VALUES,
     MAX_TITLE_CHARS,
     SCOPE_TYPE_RE,
+    SUBJECT_ID_MAX_CHARS,
     TOOL_NAME_RE,
 )
 from privacyfence.principal import Principal
@@ -155,8 +161,12 @@ class PrincipalContext:
     display_name: str
     storage_dir: str
     roles: tuple[str, ...] | None = None
+    output_dir: str | None = None
+    output_types: tuple[str, ...] = ()
 
-    WIRE_KEYS: ClassVar[frozenset[str]] = frozenset({"id", "display_name", "storage_dir", "roles"})
+    WIRE_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"id", "display_name", "storage_dir", "roles", "output_dir", "output_types"}
+    )
 
     @classmethod
     def from_wire(cls, obj: Any, *, mode: str = "local") -> Self:
@@ -167,17 +177,25 @@ class PrincipalContext:
             if mode == "local":
                 raise RpcError("org_only_field", "principal.roles is only valid in org mode")
             roles = tuple(_str_list(data["roles"], "principal.roles"))
+        output_dir = _opt_str(data, "output_dir", "principal")
+        output_types = tuple(_str_list(data.get("output_types", []), "principal.output_types"))
         return cls(
             id=_str(_req(data, "id", "principal"), "principal.id", min_len=1),
             display_name=_str(_req(data, "display_name", "principal"), "principal.display_name"),
             storage_dir=_str(_req(data, "storage_dir", "principal"), "principal.storage_dir", min_len=1),
             roles=roles,
+            output_dir=output_dir,
+            output_types=output_types,
         )
 
     def to_wire(self) -> dict:
         out: dict[str, Any] = {"id": self.id, "display_name": self.display_name, "storage_dir": self.storage_dir}
         if self.roles is not None:
             out["roles"] = list(self.roles)
+        if self.output_dir is not None:
+            out["output_dir"] = self.output_dir
+        if self.output_types:
+            out["output_types"] = list(self.output_types)
         return out
 
 
@@ -444,6 +462,138 @@ class ConfirmRequestParams:
         }
 
 
+def _approval_tuple(data: dict, where: str) -> tuple[str, str, str, str]:
+    """``principal, kind, subject_id, digest`` of an approval message, each checked."""
+    principal = _str(_req(data, "principal", where), f"{where}.principal", min_len=1)
+    kind = _str(_req(data, "kind", where), f"{where}.kind", min_len=1)
+    if not APPROVAL_KIND_RE.fullmatch(kind):
+        raise _bad(f"{where}.kind does not match {APPROVAL_KIND_RE.pattern}")
+    subject_id = _str(
+        _req(data, "subject_id", where), f"{where}.subject_id", min_len=1, max_len=SUBJECT_ID_MAX_CHARS
+    )
+    if clean_text(subject_id) != subject_id:
+        raise _bad(f"{where}.subject_id must not contain control or bidirectional characters")
+    digest = _str(_req(data, "digest", where), f"{where}.digest")
+    if not DIGEST_RE.fullmatch(digest):
+        raise _bad(f"{where}.digest must be sha256: followed by 64 lowercase hex digits")
+    return principal, kind, subject_id, digest
+
+
+@dataclass(frozen=True)
+class ApprovalRequestParams:
+    principal: str
+    kind: str
+    subject_id: str
+    digest: str
+    title: str
+    preview: list[dict]
+    page: str | None = None
+    require_step_up: bool = True
+
+    WIRE_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"principal", "kind", "subject_id", "digest", "title", "preview", "page", "require_step_up"}
+    )
+
+    @classmethod
+    def from_wire(
+        cls,
+        obj: Any,
+        *,
+        mode: str = "local",
+        validate_blocks: ValidateBlocks = _noop_validate_blocks,
+    ) -> Self:
+        _check_mode(mode)
+        data = _obj(obj, "approval.request params")
+        where = "approval.request"
+        principal, kind, subject_id, digest = _approval_tuple(data, where)
+        title = _str(_req(data, "title", where), f"{where}.title", min_len=1, max_len=MAX_TITLE_CHARS)
+        preview = _block_list(_req(data, "preview", where), "preview")
+        try:
+            preview = validate_blocks(preview, max_bytes=MAX_PREVIEW_BYTES)
+        except ValueError as exc:
+            raise RpcError("invalid_blocks", str(exc)) from None
+        page = _opt_str(data, "page", where, max_len=MAX_PAGE_PATH_CHARS)
+        if page is not None and not page.startswith("/"):
+            raise _bad(f"{where}.page must start with \"/\"")
+        return cls(
+            principal=principal,
+            kind=kind,
+            subject_id=subject_id,
+            digest=digest,
+            title=title,
+            preview=preview,
+            page=page,
+            require_step_up=_bool(data.get("require_step_up", True), f"{where}.require_step_up"),
+        )
+
+    def to_wire(self) -> dict:
+        out: dict[str, Any] = {
+            "principal": self.principal,
+            "kind": self.kind,
+            "subject_id": self.subject_id,
+            "digest": self.digest,
+            "title": self.title,
+            "preview": self.preview,
+            "require_step_up": self.require_step_up,
+        }
+        if self.page is not None:
+            out["page"] = self.page
+        return out
+
+
+@dataclass(frozen=True)
+class ApprovalCheckParams:
+    principal: str
+    kind: str
+    subject_id: str
+    digest: str
+
+    WIRE_KEYS: ClassVar[frozenset[str]] = frozenset({"principal", "kind", "subject_id", "digest"})
+
+    @classmethod
+    def from_wire(cls, obj: Any, *, mode: str = "local") -> Self:
+        _check_mode(mode)
+        data = _obj(obj, "approval.check params")
+        principal, kind, subject_id, digest = _approval_tuple(data, "approval.check")
+        return cls(principal=principal, kind=kind, subject_id=subject_id, digest=digest)
+
+    def to_wire(self) -> dict:
+        return {
+            "principal": self.principal,
+            "kind": self.kind,
+            "subject_id": self.subject_id,
+            "digest": self.digest,
+        }
+
+
+@dataclass(frozen=True)
+class ApprovalAwaitParams:
+    approval_id: str
+    timeout_ms: int | None = None
+
+    WIRE_KEYS: ClassVar[frozenset[str]] = frozenset({"approval_id", "timeout_ms"})
+
+    @classmethod
+    def from_wire(cls, obj: Any, *, mode: str = "local") -> Self:
+        _check_mode(mode)
+        data = _obj(obj, "approval.await params")
+        timeout_ms = None
+        if data.get("timeout_ms") is not None:
+            timeout_ms = _int(data["timeout_ms"], "approval.await.timeout_ms")
+            if not 0 <= timeout_ms <= CONFIRM_AWAIT_MAX_MS:
+                raise _bad(f"approval.await.timeout_ms must be between 0 and {CONFIRM_AWAIT_MAX_MS}")
+        return cls(
+            approval_id=_str(_req(data, "approval_id", "approval.await"), "approval.await.approval_id", min_len=1),
+            timeout_ms=timeout_ms,
+        )
+
+    def to_wire(self) -> dict:
+        out: dict[str, Any] = {"approval_id": self.approval_id}
+        if self.timeout_ms is not None:
+            out["timeout_ms"] = self.timeout_ms
+        return out
+
+
 @dataclass(frozen=True)
 class WebResponse:
     status: int
@@ -492,7 +642,14 @@ def args_digest(args: dict) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def principal_context(principal: Principal, storage_dir: Path, *, mode: str = "local") -> dict:
+def principal_context(
+    principal: Principal,
+    storage_dir: Path,
+    *,
+    mode: str = "local",
+    output_dir: Path | None = None,
+    output_types: tuple[str, ...] = (),
+) -> dict:
     """The ``PrincipalContext`` the daemon sends with a request made for ``principal``."""
     _check_mode(mode)
     ctx = PrincipalContext(
@@ -500,11 +657,16 @@ def principal_context(principal: Principal, storage_dir: Path, *, mode: str = "l
         display_name=principal.display_name,
         storage_dir=str(storage_dir),
         roles=None if mode == "local" else (("admin",) if principal.is_admin else ()),
+        output_dir=None if output_dir is None else str(output_dir),
+        output_types=output_types,
     )
     return ctx.to_wire()
 
 
 __all__ = [
+    "ApprovalAwaitParams",
+    "ApprovalCheckParams",
+    "ApprovalRequestParams",
     "ConfirmRequestParams",
     "ExecuteResult",
     "InitializeResult",

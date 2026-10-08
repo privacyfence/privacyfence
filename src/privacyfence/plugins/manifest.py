@@ -16,6 +16,8 @@ import yaml
 
 from privacyfence.plugins.blocks import clean_text
 from privacyfence.plugins.constants import (
+    DEFAULT_OUTPUT_TYPES,
+    OUTPUT_TYPES,
     PLUGIN_NAME_RE,
     RESERVED_PLUGIN_NAMES,
     SOURCE_OPERATIONS,
@@ -25,7 +27,7 @@ MANIFEST_FILENAME = "privacyfence-plugin.yaml"
 
 _SEMVER_RE = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?")
 _KEYS = {"name", "display_name", "version", "protocol", "command", "source_operations", "tools",
-         "max_gate_floor", "pages", "service_credentials"}
+         "max_gate_floor", "pages", "service_credentials", "outputs", "output_types"}
 _REQUIRED = {"name", "display_name", "version", "protocol", "command", "tools"}
 _MAX_MANIFEST_BYTES = 64 * 1024
 
@@ -45,6 +47,8 @@ class Manifest:
     max_gate_floor: str
     pages: bool
     service_credentials: bool
+    outputs: bool = False
+    output_types: tuple[str, ...] = ()
 
 
 def _str(data: dict, key: str) -> str:
@@ -122,11 +126,25 @@ def load_manifest(plugin_dir: Path, *, mode: str = "local") -> Manifest:
     service_credentials = _bool(data, "service_credentials")
     if service_credentials and mode == "local":
         raise ManifestError("service_credentials is not allowed in local mode")
+    outputs = _bool(data, "outputs")
+    output_types: tuple[str, ...] = ()
+    if "output_types" in data:
+        declared = data["output_types"]
+        if not isinstance(declared, list) or not all(isinstance(o, str) for o in declared):
+            raise ManifestError("output_types must be a list of strings")
+        for output_type in declared:
+            if output_type not in OUTPUT_TYPES:
+                raise ManifestError(f"output type {output_type} is not supported")
+        if not outputs:
+            raise ManifestError("output_types needs outputs: true")
+        output_types = tuple(dict.fromkeys(declared))
+    elif outputs:
+        output_types = DEFAULT_OUTPUT_TYPES
 
     return Manifest(
         name=name, display_name=display_name, version=version, protocol=protocol,
         command=tuple(command), source_operations=frozenset(ops), max_gate_floor=floor,
-        pages=pages, service_credentials=service_credentials,
+        pages=pages, service_credentials=service_credentials, outputs=outputs, output_types=output_types,
     )
 
 

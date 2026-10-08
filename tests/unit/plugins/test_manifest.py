@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from privacyfence.plugins import manifest as manifest_mod
+from privacyfence.plugins.constants import DEFAULT_OUTPUT_TYPES
 from privacyfence.plugins.manifest import (
     MANIFEST_FILENAME,
     Manifest,
@@ -54,6 +55,18 @@ class TestLoad:
         m = load_manifest(_write(tmp_path, data))
         assert (m.source_operations, m.max_gate_floor, m.pages, m.service_credentials) == (
             frozenset(), "review", False, False)
+
+    def test_outputs_default_off(self, tmp_path):
+        m = load_manifest(_write(tmp_path, VALID))
+        assert (m.outputs, m.output_types) == (False, ())
+
+    def test_outputs_default_types(self, tmp_path):
+        m = load_manifest(_write(tmp_path, _with(outputs=True)))
+        assert (m.outputs, m.output_types) == (True, DEFAULT_OUTPUT_TYPES)
+
+    def test_outputs_with_types(self, tmp_path):
+        m = load_manifest(_write(tmp_path, _with(outputs=True, output_types=["text/html", "text/plain", "text/html"])))
+        assert m.output_types == ("text/html", "text/plain")
 
     def test_prerelease_version(self, tmp_path):
         assert load_manifest(_write(tmp_path, _with(version="1.0.0-rc.1"))).version == "1.0.0-rc.1"
@@ -126,6 +139,13 @@ class TestLoad:
         ({"max_gate_floor": "popup"}, "max_gate_floor"),
         ({"pages": "yes"}, "pages must be true or false"),
         ({"service_credentials": 1}, "service_credentials must be true or false"),
+        ({"outputs": "yes"}, "outputs must be true or false"),
+        ({"outputs": True, "output_types": ["image/png"]}, "output type image/png is not supported"),
+        ({"outputs": True, "output_types": "text/csv"}, "output_types must be a list of strings"),
+        ({"outputs": True, "output_types": [3]}, "output_types must be a list of strings"),
+        ({"output_types": ["text/csv"]}, "output_types needs outputs: true"),
+        ({"outputs": False, "output_types": ["text/csv"]}, "output_types needs outputs: true"),
+        ({"output_types": ["image/png"]}, "output type image/png is not supported"),
     ])
     def test_invalid_field(self, tmp_path, over, match):
         with pytest.raises(ManifestError, match=match):
