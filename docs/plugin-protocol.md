@@ -1,7 +1,7 @@
 # Plugin protocol reference
 
 How PrivacyFence and a plugin talk to each other: the transport, the manifest, every message with
-its data shapes, the limits and the timeouts. This is protocol version `1.0.0`. For installing and
+its data shapes, the limits and the timeouts. This is protocol version `1.1.0`. For installing and
 running a plugin, see [`plugins.md`](plugins.md); for writing one, the
 [`privacyfence-plugin-sdk`](https://github.com/privacyfence/privacyfence/tree/main/plugin-sdk) does
 the protocol for you. The machine-readable description of every message is
@@ -13,7 +13,12 @@ the protocol for you. The machine-readable description of every message is
 [ADR 0123](adr/0123-the-plugin-source-api-is-ungated-but-audited-without-content.md),
 [ADR 0124](adr/0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md),
 [ADR 0125](adr/0125-the-org-mode-plugin-contract-is-reserved-in-protocol-1-and-rejected-in-local-mode.md)
-and [ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md).
+[ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
+[ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md),
+[ADR 0128](adr/0128-plugin-source-reads-never-truncate.md),
+[ADR 0129](adr/0129-drive-binary-downloads-for-plugins-are-http-range-reads-with-no-size-cap.md),
+[ADR 0130](adr/0130-plugin-outputs-are-a-folder-that-privacyfence-reads-through-its-own-tools.md)
+and [ADR 0131](adr/0131-a-plugins-child-processes-run-under-its-account-unsupervised.md).
 
 ## Transport
 
@@ -44,7 +49,8 @@ stdin and stdout.
   the plugin's own directory.
 - **Processes.** On macOS and Linux the plugin runs in a process group of its own, and the daemon
   kills that group whenever the plugin stops or exits, so nothing the plugin started outlives it.
-  On Windows the daemon terminates the plugin's own process only.
+  On Windows the daemon terminates the plugin's own process only. A plugin may start child processes;
+  PrivacyFence does not supervise them (see [`plugins.md`](plugins.md#child-processes)).
 - **Every start is checked.** Before each start, restarts after a crash included, the daemon checks
   again that only an administrator can change the plugin and that its executable and manifest
   still hash to what was reviewed. A plugin that fails is disabled with "executable is writable by
@@ -55,6 +61,12 @@ stdin and stdout.
 `protocol_version` is semver. The manifest's `protocol` is the major version only, as a string
 (`"1"`). The daemon and the plugin must share the major version, or the plugin is not started and
 Settings shows "protocol major mismatch". The effective version is the lower minor of the two.
+
+Version `1.1` adds, without changing any `1.0` message: the approval methods and the
+`approval.revoked` notification, cursor paging for every source operation, Drive Range reads, the
+manifest keys `outputs` and `output_types`, and `PrincipalContext.output_dir` and `output_types`. A
+`1.0` plugin keeps working. The daemon sends `approval.revoked`, `output_dir` and `output_types` only
+to a plugin whose manifest asks for the feature (`outputs: true` for the last two).
 
 ## Errors
 
@@ -78,10 +90,10 @@ A failed request is answered with a JSON-RPC error whose `data` carries the stab
 | `operation_not_allowed` | -32001 | A source operation outside the manifest's list |
 | `connector_unavailable` | -32002 | The service is not connected (`data.reason`: `disabled`, `not_authenticated` or `unavailable`) |
 | `unknown_principal` | -32003 | A principal other than `local` |
-| `payload_too_large` | -32004 | A result over its limit |
+| `payload_too_large` | -32004 | A result over its limit, or one record larger than a page |
 | `upstream_error` | -32005 | The service answered with an error (`data.reason` is `revision_changed` for a Drive file that changed) |
 | `org_only_field` | -32006 | An organization-mode field in local mode |
-| `confirmation_refused` | -32007 | A confirmation refused (`data.reason` is `unattended_session` or `too_many_pending`) |
+| `confirmation_refused` | -32007 | A confirmation or approval refused (`data.reason` is `unattended_session` or `too_many_pending`) |
 | `unknown_tool` | -32008 | A tool name the plugin does not have |
 | `invalid_blocks` | -32009 | A block list that fails validation |
 | `version_mismatch` | -32010 | The protocol major differs |
@@ -107,6 +119,8 @@ tools: dynamic                   # required; the only value
 max_gate_floor: auto             # optional: "review" (default) or "auto"
 pages: true                      # optional, default false
 service_credentials: false       # optional, default false; true is an error in local mode
+outputs: true                    # optional, default false: the plugin publishes files (see Outputs)
+output_types: [text/csv]         # optional, only with outputs: true; default [application/json, text/csv]
 ```
 
 - `name` must not be reserved: `privacyfence`, `plugin`, `plugins`, `settings`, `mcp`, and the names
@@ -118,6 +132,11 @@ service_credentials: false       # optional, default false; true is an error in 
 - `source_operations` may list only the six operations under [Source calls](#source-calls).
 - `max_gate_floor: auto` lets the plugin declare tools on the `auto` gate (see
   [Tool definitions](#tool-definitions)). The owner sees the floor when enabling the plugin.
+- `outputs: true` gives the plugin an output folder ([Outputs](#outputs)). `output_types` lists the
+  media types it may publish, each one of `application/json` (`.json`), `text/csv` (`.csv`),
+  `text/html` (`.html`, `.htm`), `text/plain` (`.txt`) and `text/markdown` (`.md`); another value is
+  an error, and so is `output_types` without `outputs: true`. Settings shows both when the owner
+  reviews the plugin.
 
 ## Messages
 
@@ -134,6 +153,10 @@ principal is `local`.
 | `source.call` | P to D | request | Read from a connected service |
 | `confirm.request` | P to D | request | Ask a human to confirm something |
 | `confirm.await` | P to D | request | Wait for that answer |
+| `approval.request` | P to D | request | Ask a human to approve a thing that stays approved |
+| `approval.check` | P to D | request | Ask whether a thing is approved |
+| `approval.await` | P to D | request | Wait for that answer |
+| `approval.revoked` | D to P | notification | A human revoked an approval |
 | `web.request` | D to P | request | A page request |
 | `storage.purge` | D to P | request | Release and delete the plugin's data |
 | `connector.state_changed` | D to P | notification | A connector was enabled, disabled, signed in or out |
@@ -146,7 +169,7 @@ principal is `local`.
 Parameters:
 
 ```json
-{"protocol_version": "1.0.0", "purpose": "run", "mode": "local",
+{"protocol_version": "1.1.0", "purpose": "run", "mode": "local",
  "daemon": {"name": "privacyfence", "version": "5.6.0"},
  "plugin": {"name": "today", "manifest_version": "1.2.0"},
  "data_dir": "/var/lib/privacyfence/plugin-data/today/shared",
@@ -156,12 +179,15 @@ Parameters:
 
 `purpose` is `run` for a normal start and `introspect` when the owner is reviewing the plugin (see
 [Inspection](#inspection)). `data_dir` is the plugin's install-wide directory and each principal's
-`storage_dir` its per-principal one; both exist and are private to the service account.
+`storage_dir` its per-principal one; both exist and are private to the service account. For a plugin
+with `outputs: true` each principal also carries `output_dir` (its output folder, created with mode
+`0700` before `initialize`) and `output_types` (the media types from the manifest, so the plugin never
+declares them twice); neither is sent to any other plugin.
 
 Result:
 
 ```json
-{"protocol_version": "1.0.0",
+{"protocol_version": "1.1.0",
  "plugin": {"name": "today", "version": "1.2.0"},
  "scope_types": [{"name": "calendar", "description": "Calendar id a call reads"}],
  "tools": [ToolDef, …]}
@@ -299,25 +325,56 @@ The checks run in this order, and the first failure is the error: the plugin is 
 (`introspection_only`); the parameters parse (`invalid_params`, `org_only_field`); the principal is
 `local` (`unknown_principal`); the operation is one of the six and in the manifest's
 `source_operations` (`operation_not_allowed`); the connector is enabled and signed in
-(`connector_unavailable`); the call runs (`upstream_error` with the fixed detail "the service
-returned an error"); the result is at most 12 MiB serialized (`payload_too_large`). Every outcome
+(`connector_unavailable`); the cursor, when given, belongs to this call (`invalid_params`); the call
+runs (`upstream_error` with the fixed detail "the service returned an error"); the result is a
+whole result or a page that fits (`payload_too_large` only for a single record larger than a page,
+or a Salesforce report over 12 MiB). Every outcome
 writes one audit entry that holds the targets and the byte count, never the data.
 
 | Operation | Parameters | `data` |
 |---|---|---|
 | `salesforce.report_run` | `report_id` (required); `filters`: a list of `{column, operator, value}` | Salesforce's raw report JSON, `allData` included |
-| `jira.search` | `jql` (required); `max_results` 1 to 500, default 100 | The matching issues, as a list of objects |
+| `jira.search` | `jql` (required); `page_size` 1 to 100, default 100; `max_results` 1 to 500 (an alias, used when `page_size` is absent and clamped to 100); `cursor` | The matching issues, as a list of objects |
 | `drive.download` | `file_id` (required); `length` 1 to 8,388,608 (default the maximum); `offset` (at least 0) or `cursor`, not both | `{file_id, mime_type, revision, total_size_bytes, offset, length, eof, content_base64}` |
-| `sheets.get_values` | `spreadsheet_id` and `range` (required); `value_render_option`: `FORMATTED_VALUE` (default), `UNFORMATTED_VALUE` or `FORMULA` | `{"values": [[…], …]}`, Google's raw values array |
-| `confluence.get_page` | `page_id` (required) | The page as an object; `body` is Confluence storage-format XHTML |
-| `calendar.list_events` | `calendar_id` (default `primary`); `time_min` and `time_max` (RFC 3339, required); `max_results` 1 to 250, default 250 | The events, as a list of objects |
+| `sheets.get_values` | `spreadsheet_id` and `range` (required); `value_render_option`: `FORMATTED_VALUE` (default), `UNFORMATTED_VALUE` or `FORMULA`; `cursor` | `{"values": [[…], …], "first_row": n}`, Google's raw values array for rows `first_row` onward |
+| `confluence.get_page` | `page_id` (required); `cursor` | The page as an object; `body` is Confluence storage-format XHTML, a slice of it when paged, with `body_offset` and `body_total_chars` always present |
+| `calendar.list_events` | `calendar_id` (default `primary`); `time_min` and `time_max` (RFC 3339, required); `page_size` 1 to 250, default 250; `max_results` (an alias, as for Jira); `cursor` | The events, as a list of objects |
 
-`next_cursor` is `null` except for `drive.download`, where it is set until `eof`. A Drive file is
-fetched whole on the first call (a file over 64 MiB is `payload_too_large`; Google Docs and Slides
-are exported as text and Sheets as CSV), spooled to a private file and served in chunks of at most 8
-MiB. Every later call re-reads the file's modified time (`revision`), and a changed revision fails
-with `upstream_error` and `data.reason` `revision_changed`. Spool files idle for 10 minutes are
-deleted.
+### Paging
+
+Every source operation but `salesforce.report_run` either returns all of its data or a page with a
+`next_cursor`. A size limit is a page size, not a failure, and `next_cursor` is `null` exactly when
+nothing is left.
+
+- **The cursor is opaque** (at most 4,096 characters). It is bound to the operation and to the
+  parameters it was issued for: `jql` and `page_size` for Jira; `calendar_id`, `time_min`, `time_max`
+  and `page_size` for Calendar; `spreadsheet_id`, `range` and `value_render_option` for Sheets;
+  `page_id` for Confluence; `file_id` for Drive. Pass it back with the same other parameters. A
+  cursor that is malformed, was issued for another operation or other parameters, or whose position
+  does not fit is `invalid_params`. A cursor is neither secret nor signed: binding it protects a
+  plugin from carrying it to the wrong query, nothing more.
+- **A page is as large as fits** in the `source.call` result limit minus room for the envelope. A
+  single record larger than that is `payload_too_large`.
+
+| Operation | What a page is |
+|---|---|
+| `jira.search` | Issues from one provider page (the provider's own page token), cut to fit; the cursor continues inside a provider page or moves to the next |
+| `calendar.list_events` | The same, with the provider's page token |
+| `sheets.get_values` | A run of rows from `first_row`; the next cursor starts after the last row returned |
+| `confluence.get_page` | The page with `body` cut to a slice that fits; `body_offset` and `body_total_chars` say where the slice sits |
+| `drive.download` | A byte range of the file, up to `length` (8 MiB at most) |
+| `salesforce.report_run` | **Not paged.** It returns the whole report, or `payload_too_large`. Paging it is [the Salesforce paging issue](https://github.com/privacyfence/privacyfence/issues/854) |
+
+The audit entry's targets gain `; page` when a cursor was given, and the summary gains `; more` when
+`next_cursor` is set.
+
+**Drive.** A binary file is read with HTTP Range requests, one per call, with no limit on the file's
+size. Each call re-reads the file's modified time (`revision`); a changed revision, or a chunk
+shorter than asked, fails with `upstream_error` and `data.reason` `revision_changed`. An offset past
+the end of the file is `invalid_params`. A Google-native file (Docs and Slides exported as text,
+Sheets as CSV) cannot be ranged: it is exported whole to a private spool file, with no size cap of
+PrivacyFence's own, served in chunks of at most 8 MiB, and deleted after 10 idle minutes. An export
+Google refuses is `upstream_error`.
 
 ### Confirmations
 
@@ -338,6 +395,73 @@ may be pending at once, and at most 8 per plugin; a request over either cap is r
 default 300,000) and answers `{"status": "approved" | "denied" | "expired", "decided_at": "…"}`, or
 `timeout` when still pending. A confirmation carries no deny note. The same `approval_id` works with
 `privacyfence_await_approval`.
+
+### Approvals
+
+`approval.request` asks a human to approve a thing and keeps the answer until a human revokes it.
+Parameters: `principal` (`local`), `kind` (`[a-z][a-z0-9_-]{0,40}`), `subject_id` (1 to 200
+characters, no control or bidirectional characters), `digest` (`sha256:` and 64 lowercase hex digits
+of the content), `title` (at most 120 characters), `preview` (blocks), optional `page` (a path of the
+plugin's own page, needs `pages: true`) and `require_step_up` (default `true`). An approval binds to
+`(plugin, principal, kind, subject_id, digest)`.
+
+Result: `{"approval_id": "…", "status": "pending" | "approved", "expires_at": "…"}`. Rules:
+
+- Something already approved answers `approved` with its id and shows no card. A card still pending
+  for the same tuple returns its id with `pending`.
+- No rule can accept the card, and the request is refused with `confirmation_refused`
+  (`data.reason` `unattended_session`) while any session is unattended. The pending limits are the
+  confirmation limits (64, 8 per plugin) and are counted apart, with the same `too_many_pending`
+  reason.
+- `page` is normalized like a page request. A path that is rejected, or that contains `?` or `#`
+  once normalized (an encoded `%3F` or `%23` included), is `invalid_params`, as is `page` without
+  `pages: true`.
+- The finalizer stores the approval before the card is marked answered, so `approval.check` already
+  says `approved` when `approval.await` does. Denied and expired requests leave no record.
+
+`approval.check` takes `principal`, `kind`, `subject_id` and `digest` and answers `{"status":
+"approved" | "revoked" | "unknown", "approval_id"?, "decided_at"?}`: `revoked` when the latest
+record for the tuple was revoked, and `unknown` for an unseen tuple, a different digest, or a store
+that could not be read. `approval.await` takes `approval_id` and `timeout_ms` (0 to 300,000) and
+answers `{"status": "approved" | "denied" | "expired", "decided_at"?}`, or `timeout` while pending; for
+an id that was answered without a card it answers `approved`. When a human revokes an approval in
+Settings, a running plugin gets the notification `approval.revoked` with `approval_id`, `kind`,
+`subject_id` and `digest`, best effort. Purging or uninstalling a plugin deletes its approvals.
+
+**The embedding rule.** The card shows PrivacyFence's fields (plugin, kind, subject, digest) first,
+outside any frame. When `page` is given, the plugin's page loads in a sandboxed frame at
+`/plugins/<name><page>?pf_approval=<approval_id>`; the query reaches the plugin unchanged, so the
+page can show the right subject. Only a request that carries a `pf_approval` naming a pending
+approval of this plugin for exactly this normalized path is served with `frame-ancestors 'self'` and
+`X-Frame-Options: SAMEORIGIN`; any other request for a page gets the headers in [Pages](#pages) and
+cannot be framed. The card's own response allows `frame-src 'self'` only when it has a page. The
+digest is what binds: PrivacyFence cannot check that the preview or the page shows what was hashed.
+
+### Outputs
+
+A plugin with `outputs: true` writes files into `PrincipalContext.output_dir`. A file is published
+when it is a regular file (a symbolic link is ignored) that is at most 8 path segments below the
+folder, has no segment starting with `.`, and has an extension of one of the plugin's
+`output_types`. A plugin writes `.name.tmp` and renames it; a leading-dot name is never published.
+
+PrivacyFence reads the folder through two of its own tools, not through the protocol:
+
+- `plugin_outputs_list` (`plugin`, `prefix`, `cursor`) runs without asking and returns `{plugin,
+  files: [{path, size, modified, mime_type}], next_cursor}`, 200 files per page in path order.
+  `next_cursor` is set only when more files follow.
+- `plugin_outputs_read` (`plugin`, `path`, `offset`, `reason`) shows an approval card with the text
+  and a PII scan, and returns `{plugin, path, mime_type, size, sha256, offset, length, next_offset,
+  text}`, about 90,000 bytes per call, cut at a UTF-8 character boundary; `sha256` is of the whole
+  file. The file is read once before the card, and the card's bytes are the ones released. A negative
+  offset ("Offset must not be negative.") or one past the end ("Offset is past the end of the
+  file.") is an error; invalid UTF-8 is decoded with replacement characters.
+- A requested path is accepted only if it is canonical: no backslash, colon or NUL, no empty segment,
+  no segment starting with `.`, at most 8 segments, no symbolic link on the way, and equal to the
+  resolved path. Anything else is "No such output file.".
+- An "Always allow" rule for the scope `plugin:<name>:output` takes values ending in `/`, which
+  cover that folder and everything under it, or a path, which is that one file.
+- Audit: the read is audited like any gated read; a `plugin_output` entry for `plugin:<name>` with
+  `read <path>; offset=<n>; bytes=<n>` is written after the gate returns, so a denied read has none.
 
 ### Pages
 
@@ -360,7 +484,9 @@ succeeded) is asked; any other page request gets 404.
   MiB (more becomes 502). Every other header the plugin sends, `set-cookie`, `cache-control` and
   any CSP included, is dropped. No answer within 10 seconds, or an error, becomes a 502 with the body
   "The plugin did not answer."
-- Every response under `/plugins/` carries these headers:
+- Every response under `/plugins/` carries these headers (the embedding rule in
+  [Approvals](#approvals) is the one exception, for `Content-Security-Policy`'s `frame-ancestors`
+  and `X-Frame-Options`):
 
   ```
   Content-Security-Policy: sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
@@ -433,10 +559,15 @@ mode does not start plugins.
 | Tools per plugin | 64 |
 | Scope values per scope type | 100, each at most 200 characters |
 | `source.call` result | 12 MiB |
-| Drive chunk, Drive file | 8 MiB, 64 MiB |
+| Drive chunk | 8 MiB (no limit on the file) |
+| Cursor | 4,096 characters |
+| `jira.search` and `calendar.list_events` page size | 100 and 250 |
+| Approval subject | 200 characters |
+| Output folder depth | 8 segments |
+| Output list page, read page | 200 files, 90,000 bytes |
 | Page body | 8 MiB |
 | Page path | 512 characters |
-| Pending confirmations | 64 |
+| Pending confirmations, pending approvals | 64 each |
 
 | Request | Timeout (seconds) |
 |---|---|
@@ -447,7 +578,8 @@ mode does not start plugins.
 | `storage.purge` | 30 |
 | `source.call` | 120 |
 | `confirm.request` | 5 |
-| `confirm.await` | the `timeout_ms` it carries, at most 300 |
+| `approval.request` | 5 |
+| `confirm.await`, `approval.await` | the `timeout_ms` it carries, at most 300 |
 
 A plugin that crashes is restarted after 1, 2, 4, 8, 16 and then 30 seconds, and disabled after five
 crashes in ten minutes. The numbers are also in the schema's `x-limits`.
@@ -460,7 +592,9 @@ Plugin activity is written to the audit log with `connector` set to `plugin:<nam
 |---|---|---|
 | `plugin_source` | Every `source.call`, success or error | The targets and `bytes=<n>`, or `error=<code>`; never the data |
 | `plugin_confirm` | A confirmation is requested, answered or refused | `<kind>; requested`, `<kind>; approved`, `<kind>; denied`, `<kind>; expired` or `<kind>; refused`; `request_id` is empty |
-| `plugin_lifecycle` | A plugin is enabled, disabled, removed or purged, or its tool list changes | For example `enabled`, `disabled: <reason>`, `tools changed: +a,-b`, `tools change rejected: <detail>`, `data purged (ack)`, `removed; data and rules deleted` |
+| `plugin_approval` | An approval is requested, answered, refused or revoked | `<kind>; requested`, `<kind>; approved`, `<kind>; denied`, `<kind>; expired`, `<kind>; refused` or `<kind>; revoked`; never the subject or the digest |
+| `plugin_output` | A plugin output file is read | `read <path>; offset=<n>; bytes=<n>`, written after the gate returns |
+| `plugin_lifecycle` | A plugin is enabled, disabled, removed or purged, or its tool list changes | For example `enabled`, `disabled: <reason>`, `tools changed: +a,-b`, `tools change rejected: <detail>`, `data purged (ack)`, `approvals deleted: <n>`, `removed; data and rules deleted` |
 
 A gated plugin tool call is audited like any connector tool call, with the operation key
 `plugin.<name>.<tool>`; an `auto` tool writes an auto-accepted entry.

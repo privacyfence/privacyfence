@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-07. Implemented: `src/privacyfence/plugins/source_ops.py`,
 `src/privacyfence/plugins/spool.py`.
+Amended by [ADR 0128](0128-plugin-source-reads-never-truncate.md) (paging) and [ADR 0129](0129-drive-binary-downloads-for-plugins-are-http-range-reads-with-no-size-cap.md) (Drive downloads).
 
 ## Context
 

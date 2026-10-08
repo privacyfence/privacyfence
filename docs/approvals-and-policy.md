@@ -386,6 +386,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Apps Script project | identity | script ids | `apps_script.project` | the script is one of these |
 | Plugin scope | identity | the values the call returned for one of the tool's scope types | `plugin:<name>:<scope>` | every value the call returned for that scope type is one of these; a missing or empty value never matches |
 | Plugin tool — anything | attribute | — | `plugin:<name>:anything` | always, for the one plugin tool the rule names |
+| Plugin output folder | identity | the path of the output file read | `plugin:<name>:output` | the file is under a value that ends in `/`, or equals a value that does not; an empty value never matches |
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
@@ -469,6 +470,21 @@ approvals list with the plugin's name and the details the plugin sent. No rule c
 asks for your passkey wherever the install requires one for sensitive actions, and it is refused
 while any AI session is marked [unattended](security-and-compliance.md#human-and-unattested-sessions).
 A refusal is written to the audit log.
+
+**Plugin approvals.** A plugin can also ask you to approve a thing (a script, a template, a mapping)
+once, identified by its kind, subject and content digest. The card is built like a confirmation card,
+so it is never auto-accepted: no rule, including a plugin rule, can approve it, and it is refused
+while any AI session is unattended. It keeps step-up by default. Unlike a confirmation, an approved
+one is stored and stays valid until you revoke it in **Settings → Plugins**; a changed content
+digest needs a new approval. Approvals reuse the confirmation limits but are counted separately. See
+[Plugins](plugins.md#approvals).
+
+**Output folders.** `plugin_outputs_read` opens a card for a file a plugin published. "Always allow"
+on that card proposes the scope `plugin:<name>:output` with the file's folder (a value ending in
+`/`, which covers that folder and everything under it) or, for a file at the top level, the file
+itself. The scope matches by path prefix, not as a set of values, and the proposal cannot be widened.
+The path is checked to be canonical before any rule sees it. `plugin_outputs_list` runs without
+asking. See [Plugins](plugins.md#outputs).
 
 ---
 

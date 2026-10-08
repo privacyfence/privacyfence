@@ -7,6 +7,7 @@ Accepted — 2026-10-07. Implemented: `src/privacyfence/plugins/trust.py`,
 `src/privacyfence/plugins/tools.py`, `src/privacyfence/privilege_separation.py`
 (`admin_only_write_problem`, `admin_only_plugin_dir_write_problem`,
 `admin_only_ancestor_write_problem`), `src/privacyfence/web/routes_settings.py`.
+Amended by [ADR 0131](0131-a-plugins-child-processes-run-under-its-account-unsupervised.md): a plugin's child processes.
 
 ## Context
 

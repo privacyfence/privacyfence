@@ -288,7 +288,9 @@ development against a source checkout and must never be set in a real deployment
 
 A [plugin](plugins.md) is a separate program an administrator installs and you enable. The design
 is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
-[ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md).
+[ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
+and in [ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) to
+[ADR 0131](adr/0131-a-plugins-child-processes-run-under-its-account-unsupervised.md).
 
 **Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
 every connector credential, so whoever can replace it can read your data. The privacy boundary of
@@ -326,9 +328,35 @@ and HEAD are served.
 **Confirmations** are cards that no rule can accept, with step-up kept, and they are refused while
 any AI session is unattended.
 
+**Approvals and the card frame.** A plugin approval is a stored, revocable approval of a thing,
+bound to its content digest. Its card is never auto-accepted and keeps step-up by default.
+PrivacyFence's own fields (the plugin's display name and installed name, the kind, the subject and
+the full digest) are rendered outside any frame, above the plugin's preview. A plugin may also have
+its own page shown in a frame on the card. Framing is otherwise forbidden, and two headers are
+loosened for one response each: the card's response allows `frame-src 'self'`, and only when it has
+a page; a plugin page response allows `frame-ancestors 'self'` (and `X-Frame-Options: SAMEORIGIN`)
+only when its request names a pending approval of that plugin for exactly that page. The page stays
+in the same sandbox as any plugin page. PrivacyFence cannot check that the digest matches what the
+preview or the page shows: the approval is only as honest as the plugin, which is already trusted
+code.
+
+**Outputs are a read path.** A plugin with `outputs: true` writes files into a folder that only the
+service account can write, and PrivacyFence hands them to the AI through its own tools:
+`plugin_outputs_list` shows names, sizes and times without a card, and `plugin_outputs_read` shows a
+card with the text and a PII check, unless a folder rule you created allows it. Only regular files of
+the declared types, not symbolic links and not dot-prefixed, are published, and the path is checked
+to be canonical before a rule sees it. A plugin can therefore get its own data to the AI only through
+a card or a rule you wrote; the file names are visible without one.
+
+**Child processes.** A plugin may start child processes. They run under the service account with the
+plugin's environment and the plugin's trust, and PrivacyFence does not supervise, restart or confine
+them. Stopping the plugin kills its process group on Linux and macOS but only the plugin's process on
+Windows. Confining children is the plugin's job.
+
 **Residual risk.** PrivacyFence does not sandbox a plugin and gives it no account of its own. An
-enabled plugin can read what the service account can read, connector credential files included, and
-can use the source API silently within its approved operations. The controls are the administrator
+enabled plugin, and anything it starts, can read what the service account can read, connector
+credential files included, and can use the source API silently within its approved operations. It
+can show a card one thing and bind its approval to the digest of another. The controls are the administrator
 who installs it and your decision to enable it. Review a plugin as you would review any program run
 by an administrator. Organization deployments do not run plugins.
 
