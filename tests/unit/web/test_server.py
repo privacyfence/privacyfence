@@ -9,11 +9,13 @@ from __future__ import annotations
 import sys
 
 import pytest
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
 from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
-from privacyfence.web.csp import build_csp
+from privacyfence.plugins import pages as plugin_pages
+from privacyfence.web.csp import build_csp, set_frame_self, set_plugin_embed
 from privacyfence.web.server import (
     DEFAULT_PORT,
     SHUTDOWN_GRACE_SECONDS,
@@ -545,6 +547,92 @@ class TestPluginPagesSandboxCsp:
         r = TestClient(app, base_url=issuer).get("/plugins/today/")
         assert r.status_code == 404
         assert host.calls == []
+
+
+def _flagging_app(*flags):
+    """An app behind the middleware that sets the given web/csp.py flags on its response, the way
+    a route would."""
+    async def app(scope, receive, send):
+        request = Request(scope)
+        for flag in flags:
+            flag(request)
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    return app
+
+
+def _csp_directives(csp: str) -> dict[str, str]:
+    return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
+
+
+class TestPluginEmbed:
+    """The embed flag swaps exactly the plugin page's framing headers, for that response only."""
+
+    @staticmethod
+    def _client(app):
+        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
+
+    def test_flag_gives_the_embedded_csp_and_sameorigin(self):
+        r = self._client(_flagging_app(set_plugin_embed)).get("/plugins/echo/approval")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP_EMBEDDED]
+        assert r.headers.get_list("x-frame-options") == ["SAMEORIGIN"]
+        assert r.headers["cache-control"] == "private, no-store"
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "no-referrer"
+        assert r.headers["cross-origin-opener-policy"] == "same-origin"
+
+    def test_no_flag_keeps_the_sandbox_and_deny(self):
+        r = self._client(_flagging_app()).get("/plugins/echo/approval")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
+
+    def test_flag_outside_plugins_changes_nothing(self):
+        r = self._client(_flagging_app(set_plugin_embed)).get("/approvals")
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
+        directives = _csp_directives(r.headers["content-security-policy"])
+        assert directives["frame-src"] == "data:"
+        assert directives["frame-ancestors"] == "'none'"
+
+    def test_flag_does_not_outlive_its_response(self):
+        calls = []
+
+        async def app(scope, receive, send):
+            if not calls:
+                set_plugin_embed(Request(scope))
+            calls.append(1)
+            await JSONResponse({"ok": True})(scope, receive, send)
+
+        client = self._client(app)
+        assert client.get("/plugins/echo/approval").headers["content-security-policy"] == plugin_pages.CSP_EMBEDDED
+        second = client.get("/plugins/echo/approval")
+        assert second.headers["content-security-policy"] == plugin_pages.CSP
+        assert second.headers["x-frame-options"] == "DENY"
+
+
+class TestCardFrameSelf:
+    """The frame-self flag adds 'self' to frame-src for that response, and nothing else."""
+
+    @staticmethod
+    def _client(app):
+        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
+
+    def test_flag_adds_self_to_frame_src_only(self):
+        framed = self._client(_flagging_app(set_frame_self)).get("/approvals/abc")
+        plain = self._client(_flagging_app()).get("/approvals/abc")
+        framed_directives = _csp_directives(framed.headers["content-security-policy"])
+        plain_directives = _csp_directives(plain.headers["content-security-policy"])
+        assert framed_directives.pop("frame-src") == "data: 'self'"
+        assert plain_directives.pop("frame-src") == "data:"
+        # The nonce differs per response; every other directive is the same.
+        framed_directives.pop("script-src"), framed_directives.pop("style-src-elem")
+        plain_directives.pop("script-src"), plain_directives.pop("style-src-elem")
+        assert framed_directives == plain_directives
+        assert framed.headers.get_list("x-frame-options") == ["DENY"]
+
+    def test_flag_on_a_plugin_path_changes_nothing(self):
+        r = self._client(_flagging_app(set_frame_self)).get("/plugins/echo/approval")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
 
 
 class TestBuildCsp:

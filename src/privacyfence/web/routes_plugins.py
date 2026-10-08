@@ -11,6 +11,13 @@ GET and HEAD are served; HEAD is forwarded as GET and its body dropped. Every ot
 405 with ``Allow: GET, HEAD``, answered before any auth check or plugin call. The sandbox CSP and
 the other fixed headers on every response under ``/plugins/`` are ``_SecurityHeadersMiddleware``'s,
 not this module's: a route cannot set its own CSP there.
+
+The one exception is the page a pending plugin approval card frames. A request carrying
+``pf_approval=<id>`` gets web/csp.py's ``set_plugin_embed`` flag, so the middleware lets this
+origin frame that one response, only when the host says ``<id>`` is this plugin's card, still
+waiting for a human, and framing exactly this normalized path. Any other ``pf_approval`` is
+ignored and the page is served unframeable, as always. The query, ``pf_approval`` included, reaches
+the plugin unchanged either way.
 """
 from __future__ import annotations
 
@@ -22,10 +29,12 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import Receive, Scope, Send
 
 from ..plugins.constants import PLUGIN_NAME_RE
-from ..plugins.pages import PageHost, parse_query, render_plugin_page
+from ..plugins.pages import PageHost, normalize_path, parse_query, render_plugin_page
 from ..principal import current_principal
+from . import csp
 
 _ALLOWED_METHODS = "GET, HEAD"
+_APPROVAL_PARAM = "pf_approval"
 
 
 class _GetHeadRoute(Route):
@@ -60,6 +69,17 @@ def _raw_remainder(request: Request, name: str) -> str | None:
     return raw_path[len(prefix):]
 
 
+async def _embed_allowed(host: PageHost, name: str, raw: str, query: dict[str, str]) -> bool:
+    """Whether this page request is the one a pending approval card of ``name`` frames. A host
+    without ``approval_embed_allowed`` answers no."""
+    approval_id = query.get(_APPROVAL_PARAM)
+    path = normalize_path(raw)
+    check = getattr(host, "approval_embed_allowed", None)
+    if not approval_id or path is None or check is None:
+        return False
+    return await check(name, approval_id, path) is True
+
+
 def build_routes(plugin_host: PageHost, *, is_owner_session: Callable[[Request], bool]) -> list[BaseRoute]:
     """The page routes, for ``build_app`` to wrap with ``_owner_only_routes`` and mount.
 
@@ -76,9 +96,10 @@ def build_routes(plugin_host: PageHost, *, is_owner_session: Callable[[Request],
         if raw is None:
             return _not_found()
         query_string = request.scope.get("query_string", b"").decode("latin-1")
-        status, headers, body = await render_plugin_page(
-            plugin_host, name, raw, parse_query(query_string), current_principal(),
-        )
+        query = parse_query(query_string)
+        if await _embed_allowed(plugin_host, name, raw, query):
+            csp.set_plugin_embed(request)
+        status, headers, body = await render_plugin_page(plugin_host, name, raw, query, current_principal())
         if request.method == "HEAD":
             body = b""
         return Response(body, status_code=status, headers=headers)

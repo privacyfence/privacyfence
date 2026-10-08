@@ -118,7 +118,7 @@ from .control_channel import (
     send_mcp_token,
     send_recovery_code,
 )
-from .csp import build_csp
+from .csp import build_csp, frame_self_for, plugin_embed_for
 from .csp import new_nonce as _new_csp_nonce
 from . import mcp_auth
 from .mcp_auth import PerUserTokenVerifier, load_or_create_mcp_token
@@ -492,11 +492,19 @@ class _SecurityHeadersMiddleware:
                 headers["referrer-policy"] = "no-referrer"
                 if scope.get("path", "").startswith(_PLUGIN_PAGES_PREFIX):
                     # A plugin's page runs sandboxed in an opaque origin (ADR 0124): no cookies,
-                    # no same-origin API calls, and nothing from it is cached.
-                    headers["content-security-policy"] = plugin_pages.CSP
+                    # no same-origin API calls, and nothing from it is cached. The one page a
+                    # pending approval card frames may be framed by this origin, for this
+                    # response only (web/routes_plugins.py sets the flag).
+                    if plugin_embed_for(scope):
+                        headers["content-security-policy"] = plugin_pages.CSP_EMBEDDED
+                        headers["x-frame-options"] = "SAMEORIGIN"
+                    else:
+                        headers["content-security-policy"] = plugin_pages.CSP
                     headers["cache-control"] = plugin_pages.CACHE_CONTROL
                 else:
-                    headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
+                    headers["content-security-policy"] = build_csp(
+                        nonce, app_origin=self._app_origin, frame_self=frame_self_for(scope),
+                    )
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
                 headers["cross-origin-opener-policy"] = (
                     "unsafe-none" if scope.get("path") in _OAUTH_POPUP_PATHS else "same-origin"

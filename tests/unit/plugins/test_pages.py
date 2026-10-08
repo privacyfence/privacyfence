@@ -218,3 +218,13 @@ class TestCsp:
             "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
         )
         assert "allow-same-origin" not in pages.CSP
+
+    def test_embedded_exact_string(self):
+        assert pages.CSP_EMBEDDED == (
+            "sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; "
+            "base-uri 'none'; frame-ancestors 'self'"
+        )
+        assert "allow-same-origin" not in pages.CSP_EMBEDDED
+
+    def test_embedded_differs_only_in_frame_ancestors(self):
+        assert pages.CSP_EMBEDDED.replace("frame-ancestors 'self'", "frame-ancestors 'none'") == pages.CSP
