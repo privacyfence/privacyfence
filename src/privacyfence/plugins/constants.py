@@ -33,6 +33,24 @@ MAX_TOOLS = 64
 MAX_SCOPE_VALUES = 100
 MAX_SCOPE_VALUE_CHARS = 200
 MCP_TOOL_NAME_MAX = 64
+SOURCE_PAGE_BUDGET_BYTES = MAX_SOURCE_RESULT_BYTES - 64 * 1024   # room for the envelope
+CURSOR_MAX_CHARS = 4096
+JIRA_PAGE_SIZE_MAX = 100
+CALENDAR_PAGE_SIZE_MAX = 250
+SUBJECT_ID_MAX_CHARS = 200
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")      # always .fullmatch()
+APPROVAL_KIND_RE = re.compile(r"[a-z][a-z0-9_-]{0,40}")   # always .fullmatch()
+OUTPUT_TYPES: dict[str, tuple[str, ...]] = {
+    "application/json": (".json",),
+    "text/csv": (".csv",),
+    "text/html": (".html", ".htm"),
+    "text/plain": (".txt",),
+    "text/markdown": (".md",),
+}
+DEFAULT_OUTPUT_TYPES = ("application/json", "text/csv")
+OUTPUT_READ_PAGE_BYTES = 90_000                     # under INLINE_RESULT_BYTES with the envelope
+OUTPUT_LIST_PAGE = 200
+OUTPUT_MAX_DEPTH = 8
 
 TIMEOUT_SECONDS: dict[str, float] = {
     "initialize": 10.0,
@@ -42,6 +60,7 @@ TIMEOUT_SECONDS: dict[str, float] = {
     "storage.purge": 30.0,
     "source.call": 120.0,
     "confirm.request": 5.0,
+    "approval.request": 5.0,
 }
 CONFIRM_AWAIT_MAX_MS = 300_000
 MAX_PENDING_CONFIRMS = 64                  # all plugins together; the host's finalizer threads
@@ -76,6 +95,8 @@ BLOCK_TYPES = ("heading", "fields", "table", "text", "code", "diff")
 AUDIT_PLUGIN_SOURCE = "plugin_source"
 AUDIT_PLUGIN_CONFIRM = "plugin_confirm"
 AUDIT_PLUGIN_LIFECYCLE = "plugin_lifecycle"
+AUDIT_PLUGIN_APPROVAL = "plugin_approval"
+AUDIT_PLUGIN_OUTPUT = "plugin_output"
 
 ERROR_CODES: dict[str, int] = {
     "parse_error": -32700, "invalid_request": -32600, "method_not_found": -32601,
