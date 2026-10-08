@@ -1,7 +1,7 @@
 """Drift guard between the definition of done and the two files that repeat it.
 
 docs/coding-and-testing-guidelines.md §2.7 is the authoritative definition of done. The PR template
-repeats it as a checklist and the /dod command runs it, and both used to fall behind when §2.7
+repeats it as a checklist and `.claude/toolkit.yaml`'s `verify` section feeds /dod, and both used to fall behind when §2.7
 gained a row. This checks that every command §2.7 names also appears in each copy, so adding one to
 §2.7 without the other two fails here.
 """
@@ -17,10 +17,7 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUIDELINES = REPO_ROOT / "docs" / "coding-and-testing-guidelines.md"
-COPIES = (
-    REPO_ROOT / ".github" / "pull_request_template.md",
-    REPO_ROOT / ".claude" / "commands" / "dod.md",
-)
+COPIES = (REPO_ROOT / ".github" / "pull_request_template.md",)
 
 # A code span is a command when it starts with one of these; §2.7's other spans are paths, file
 # names and identifiers, which the copies may legitimately phrase differently.
@@ -59,4 +56,18 @@ def test_section_2_7_names_the_commands_this_guard_depends_on():
 def test_every_section_2_7_command_appears_in_each_copy(command, copy):
     assert f"`{command}`" in _normalize(copy.read_text(encoding="utf-8")), (
         f"§2.7 of {GUIDELINES.name} names `{command}`, but {copy.relative_to(REPO_ROOT)} does not"
+    )
+
+
+# §2.7 calls `mypy src/privacyfence` informational and the profile does not carry it.
+_NOT_IN_PROFILE = {"mypy src/privacyfence"}
+
+
+@pytest.mark.parametrize("command", _commands(_section_2_7()))
+def test_every_section_2_7_command_appears_in_the_toolkit_profile(command):
+    if command in _NOT_IN_PROFILE:
+        pytest.skip("informational in §2.7; not in the profile")
+    profile = REPO_ROOT / ".claude" / "toolkit.yaml"
+    assert command in _normalize(profile.read_text(encoding="utf-8")), (
+        f"§2.7 of {GUIDELINES.name} names `{command}`, but .claude/toolkit.yaml does not"
     )
