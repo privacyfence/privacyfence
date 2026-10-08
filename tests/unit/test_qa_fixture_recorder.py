@@ -875,6 +875,37 @@ class TestCheckJira:
         assert not get_issue.ok
         assert get_issue.raw is None
 
+    def test_search_issues_page_called_with_fallback_jql(self, monkeypatch):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {
+            "key": "PFQA-1",
+            "fields": {"summary": "PrivacyFence QA seed issue [QATEST]", "status": {"name": "To Do"}},
+        }
+        client._client.enhanced_jql.return_value = {"issues": [], "isLast": True}
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+
+        page = next(r for r in results if r.method == "search_issues_page")
+        assert page.ok
+        assert page.raw is None
+        args, kwargs = client._client.enhanced_jql.call_args
+        assert args[0] == 'project = PFQA AND summary ~ "PrivacyFence QA seed issue [QATEST]"'
+        assert kwargs["limit"] == 1
+
+    def test_search_issues_page_failure_reported(self, monkeypatch):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {"key": "PFQA-1", "fields": {"summary": "x"}}
+        client._client.enhanced_jql.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+
+        page = next(r for r in results if r.method == "search_issues_page")
+        assert not page.ok
+
 
 class TestCheckSalesforce:
     def _client(self, sf: MagicMock) -> SalesforceClient:
@@ -1235,6 +1266,26 @@ class TestCheckCalendar:
         get_event = next(r for r in results if r.method == "get_event")
         assert not get_event.ok
         assert get_event.raw is None
+
+    def test_list_events_page_called(self, monkeypatch):
+        raw_event = {
+            "id": "e1", "summary": "PrivacyFence QA seed event [QATEST]",
+            "start": {"dateTime": "x"}, "end": {"dateTime": "y"},
+            "organizer": {"email": "real.user@company.com"},
+        }
+        client = CalendarClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = _offline_google_service("calendar", "v3", raw_event)
+        monkeypatch.setattr(recorder, "_build_calendar_client", lambda: client)
+        calls = []
+        real = client.list_events_page
+        client.list_events_page = lambda *a, **k: calls.append((a, k)) or real(*a, **k)
+
+        results = recorder.check_calendar(record=True, manifest={"calendar": {"seed_event_id": "e1"}})
+
+        page = next(r for r in results if r.method == "list_events_page")
+        assert page.ok
+        assert page.raw is None
+        assert calls == [(("primary", 1, "", ""), {})]
 
 
 class TestCheckContacts:
