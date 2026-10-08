@@ -265,7 +265,7 @@ Manual release checks, and the rule for what may stay manual, are in
 
 ## Running the gate yourself
 
-- **`/dod`** (`.claude/commands/dod.md`) — runs the blocking gate of
+- **`/dod`** (from the devflow toolkit; its rows are `verify` in `.claude/toolkit.yaml`) — runs the blocking gate of
   [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)
   (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy_strict_modules.py`, the shim's
   `npm test`/`typecheck`), then checks the diff for the conditional items (live `--check` report,

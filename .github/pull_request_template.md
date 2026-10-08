@@ -63,7 +63,8 @@ run, here if the row above applies; delete this section otherwise.
 
 No live QA credentials to hand (a Claude Code on the web session never has them)? Don't skip the
 row — dispatch `connector-live-check.yml` or `qa-record-fixture.yml` and link the run instead of
-pasting. See .claude/skills/steward/SKILL.md, "Work that has to leave this machine".
+pasting. See `ci.dispatchable` in .claude/toolkit.yaml, and .claude/skills/steward/SKILL.md,
+"Why live connector checks leave this machine".
 -->
 
 ## Notes for review

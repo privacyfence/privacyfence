@@ -225,3 +225,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted |
 | [0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
 | [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |
+| [0120](0120-workflow-commands-come-from-the-devflow-toolkit-pinned-by-a-session-start-hook.md) | Claude Code workflow commands come from the devflow toolkit, pinned by a SessionStart hook | Accepted |

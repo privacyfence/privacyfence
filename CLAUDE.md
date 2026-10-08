@@ -15,12 +15,19 @@ with Claude Code.
 
 ## Commands and skills
 
-- `.claude/skills/steward/SKILL.md` — which work has to be dispatched to a GitHub Actions runner
-  instead of run locally, which pull requests to follow, and how to treat a red check.
+`/make-plan`, `/implement` and `/dod` come from the devflow toolkit (`andras-tkcs/claude-toolkit`,
+pinned by `toolkit.ref` in `.claude/toolkit.yaml` and installed by the second SessionStart hook in
+`.claude/settings.json`); the behaviour described here is unchanged. The project facts they use are
+in `.claude/toolkit.yaml`; [ADR 0120](docs/adr/0120-workflow-commands-come-from-the-devflow-toolkit-pinned-by-a-session-start-hook.md)
+says why.
+
+- `.claude/skills/steward/SKILL.md` — PrivacyFence-specific steward policy, on top of the toolkit's
+  `pr-steward` skill. The workflows a session dispatches instead of running locally are
+  `ci.dispatchable` in `.claude/toolkit.yaml`.
 - `/cut-release` (`.claude/commands/cut-release.md`) runs the `build.yml` pre-flight that
   [`docs/releasing.md`](docs/releasing.md#cutting-a-release) requires, then dispatches
   `release.yml`.
-- `/make-plan <prompt or issue>` (`.claude/commands/make-plan.md`, runs on Opus) researches the
+- `/make-plan <prompt or issue>` (runs on Opus) researches the
   change first. For a small scope (one session's worth, such as a single bug-fix issue) it writes
   no plan: it hands back a self-contained prompt to paste into a new session, and says whether
   that session should run on Sonnet (the default) or Opus. For a large scope it writes a
@@ -30,15 +37,15 @@ with Claude Code.
   the feature PR. Delete the `plan/` branch once the feature PR merges. Steps only the user can do
   (third-party console setup, secrets, real-device checks) go only into the manifest's
   `manual_before` and `manual_after`, never between phases, and get a step-by-step HTML artifact.
-- A plan with an `## Implementation manifest` can be run with `/implement <plan URL>`
-  (`.claude/commands/implement.md`). The orchestrator session (Sonnet) waits for the user to
+- A plan with an `## Implementation manifest` can be run with `/implement <plan URL>`.
+  The orchestrator session (Sonnet) waits for the user to
   confirm `manual_before`, builds the manifest's `feature/<name>` branch out of
   `feature/<name>--<phase id>` branches, one Sonnet child session each, merged with `--no-ff` and
   a `Plan-Phase:` trailer, has one Opus session review the whole branch against the plan, and
   opens a single PR to `main` at the end, with `manual_after` as unchecked items. Phase branches
   are never PR'd on their own.
-- `/dod` runs the §2.7 definition-of-done gate; `/qa-record` records a connector's live QA fixture
-  on the self-hosted runner.
+- `/dod` runs the §2.7 definition-of-done gate from `verify` in `.claude/toolkit.yaml`;
+  `/qa-record` records a connector's live QA fixture on the self-hosted runner.
 
 ## Parallel sessions & worktrees
 
