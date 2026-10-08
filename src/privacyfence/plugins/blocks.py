@@ -32,6 +32,15 @@ def clean_text(value: str) -> str:
     return _STRIP_RE.sub("", value)
 
 
+_LINE_BREAK_RE = re.compile(r"[\n\t\u2028\u2029]+")
+
+
+def clean_line(value: str) -> str:
+    """``clean_text``, then every run of line breaks and tabs replaced by one space: for text a card
+    shows on one line (a title, a header field)."""
+    return _LINE_BREAK_RE.sub(" ", clean_text(value))
+
+
 _clean = clean_text
 
 

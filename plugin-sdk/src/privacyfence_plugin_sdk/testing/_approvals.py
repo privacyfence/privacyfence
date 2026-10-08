@@ -90,8 +90,8 @@ def _tuple(params: dict, where: str) -> tuple[str, str, str, str]:
         raise _bad(f"{where}.kind does not match {_KIND_RE.pattern}")
     if not isinstance(subject_id, str) or not 1 <= len(subject_id) <= _SUBJECT_ID_MAX_CHARS:
         raise _bad(f"{where}.subject_id must be 1 to {_SUBJECT_ID_MAX_CHARS} characters")
-    if _HIDDEN_RE.search(subject_id):
-        raise _bad(f"{where}.subject_id must not contain control or bidirectional characters")
+    if _HIDDEN_RE.search(subject_id) or any(c in subject_id for c in "\n\t\u2028\u2029"):
+        raise _bad(f"{where}.subject_id must not contain line breaks, tabs, control or bidirectional characters")
     if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
         raise _bad(f"{where}.digest must be sha256: followed by 64 lowercase hex digits")
     return principal, kind, subject_id, digest
