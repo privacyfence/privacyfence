@@ -18,6 +18,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import logging
+import sys
 import threading
 from collections.abc import Callable, Coroutine, Iterator
 from datetime import datetime, timezone
@@ -30,8 +31,10 @@ from privacyfence.audit_log import AuditEntry, current_week, get_audit_logger
 from privacyfence.connector import Connector
 from privacyfence.plugins import manifest as manifest_mod
 from privacyfence.plugins import source_ops, storage, trust
+from privacyfence.plugins.approvals import ApprovalService, ApprovalStore, STORE_FILENAME as APPROVALS_FILENAME
 from privacyfence.plugins.confirm import ConfirmationService
 from privacyfence.plugins.constants import (
+    AUDIT_PLUGIN_APPROVAL,
     AUDIT_PLUGIN_CONFIRM,
     AUDIT_PLUGIN_LIFECYCLE,
     INLINE_RESULT_BYTES,
@@ -45,6 +48,7 @@ from privacyfence.plugins.constants import (
 from privacyfence.plugins.connector import PluginConnector
 from privacyfence.plugins.events import EventFanout
 from privacyfence.plugins.manifest import Manifest, ManifestError
+from privacyfence.plugins.outputs import OWNER as OUTPUTS_OWNER, PluginOutputsConnector, PluginTable
 from privacyfence.plugins.protocol import InitializeResult, RpcError, principal_context
 from privacyfence.plugins.spool import DownloadSpool
 from privacyfence.plugins.state import HASH_DRIFT_REASON, PluginStateStore, STATE_FILENAME
@@ -60,6 +64,7 @@ REASON_DIRECTORY_UNREADABLE = "plugins directory unreadable"
 CHANGED_SINCE_REVIEW = "The plugin changed since you reviewed it; review it again."
 _ACTION_FAILED = "The action failed; the log has the details."
 _MAX_CONFIRM_THREADS = 64
+_MAX_ROW_APPROVALS = 200
 
 
 class _DaemonThreadExecutor(concurrent.futures.Executor):
@@ -123,6 +128,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _approval_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 class PluginHost:
     def __init__(
         self,
@@ -155,12 +164,23 @@ class PluginHost:
         self._unattended: Callable[[], bool] = lambda: False
         self.loop: asyncio.AbstractEventLoop | None = None
         self.purge_timeout = TIMEOUT_SECONDS["storage.purge"]
+        self._executor = _DaemonThreadExecutor(_MAX_CONFIRM_THREADS)
         self._confirm = ConfirmationService(
             registry_provider=registry_provider,
             unattended_active=lambda: self._unattended(),
-            executor=_DaemonThreadExecutor(_MAX_CONFIRM_THREADS),
+            executor=self._executor,
             audit=self._audit_confirm,
         )
+        self._approval_store = ApprovalStore(paths.data_dir() / APPROVALS_FILENAME)
+        self._approvals = ApprovalService(
+            store=self._approval_store,
+            registry_provider=registry_provider,
+            unattended_active=lambda: self._unattended(),
+            executor=self._executor,
+            audit=self._audit_approval,
+        )
+        self._outputs_connector: PluginOutputsConnector | None = None
+        self._outputs_names: frozenset[str] = frozenset()
 
     # ── Listeners and the loop ────────────────────────────────────────
 
@@ -208,7 +228,44 @@ class PluginHost:
         except Exception:
             logger.warning("The tools-changed listener failed", exc_info=True)
 
+    def _outputs_table(self) -> PluginTable:
+        """Every enabled plugin with ``outputs: true``: display name, output root, output types."""
+        records = self._store.load()
+        table: PluginTable = {}
+        for name, plugin in self._plugins.items():
+            record = records.get(name)
+            manifest = plugin.manifest
+            if record is None or not record.enabled or manifest is None or not manifest.outputs:
+                continue
+            table[name] = (manifest.display_name, storage.output_dir(name, LOCAL_PRINCIPAL), manifest.output_types)
+        return table
+
+    def _sync_outputs(self) -> None:
+        """Bring the outputs connector in line with the enabled outputs plugins: present while any
+        exists, re-registered when the set changes, and the tools-changed listener told when it
+        appears or disappears."""
+        try:
+            names = frozenset(self._outputs_table())
+            connector = self._outputs_connector
+            if names and connector is None:
+                connector = self._outputs_connector = PluginOutputsConnector(self._outputs_table)
+                connector.register()
+                self._outputs_names = names
+                self._notify_tools()
+            elif names and names != self._outputs_names:
+                assert connector is not None  # nosec B101
+                connector.register()
+                self._outputs_names = names
+            elif not names and connector is not None:
+                connector.unregister()
+                self._outputs_connector = None
+                self._outputs_names = frozenset()
+                self._notify_tools()
+        except Exception:
+            logger.warning("Could not update the plugin outputs connector", exc_info=True)
+
     def _changed(self) -> None:
+        self._sync_outputs()
         try:
             self._rows_changed()
         except Exception:
@@ -241,6 +298,9 @@ class PluginHost:
     def _audit_confirm(self, plugin: str, kind: str, status: str) -> None:
         self._record(plugin, "confirm", f"{kind}; {status}", AUDIT_PLUGIN_CONFIRM)
 
+    def _audit_approval(self, plugin: str, kind: str, status: str) -> None:
+        self._record(plugin, "approval", f"{kind}; {status}", AUDIT_PLUGIN_APPROVAL)
+
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     def _blocked_reason(self) -> str | None:
@@ -260,6 +320,11 @@ class PluginHost:
         running = [p for p in self._plugins.values() if p.supervisor is not None]
         await asyncio.gather(*(self._stop(p, "shutdown") for p in running))
         await self._confirm.close()
+        await self._approvals.close()
+        if self._outputs_connector is not None:
+            self._outputs_connector.unregister()
+            self._outputs_connector = None
+            self._outputs_names = frozenset()
         if self._spool is not None:
             self._spool.clear()
 
@@ -303,7 +368,13 @@ class PluginHost:
         storage.remove_all(name)
         self._remove_rules(name, lambda _operations: True)
         self._store.forget(name)
+        self._forget_approvals(name)
         self._audit_lifecycle(name, "removed; data and rules deleted")
+
+    def _forget_approvals(self, name: str) -> None:
+        removed = self._approval_store.forget_plugin(name)
+        if removed:
+            self._audit_lifecycle(name, f"approvals deleted: {removed}")
 
     @staticmethod
     def _remove_rules(name: str, affected: Callable[[frozenset[str]], bool]) -> None:
@@ -380,6 +451,12 @@ class PluginHost:
         manifest = plugin.manifest
         assert manifest is not None  # nosec B101  # only plugins with a manifest are started
         shared, per_principal = storage.ensure_dirs(plugin.name, [LOCAL_PRINCIPAL])
+        output_dir: Path | None = None
+        if manifest.outputs:
+            output_dir = storage.output_dir(plugin.name, LOCAL_PRINCIPAL)
+            output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if sys.platform != "win32":
+                output_dir.chmod(0o700)
         return {
             "protocol_version": PROTOCOL_VERSION,
             "purpose": purpose,
@@ -387,13 +464,26 @@ class PluginHost:
             "daemon": {"name": "privacyfence", "version": self._daemon_version},
             "plugin": {"name": manifest.name, "manifest_version": manifest.version},
             "data_dir": str(shared),
-            "principals": [principal_context(LOCAL_PRINCIPAL, per_principal[LOCAL_PRINCIPAL.id])],
+            "principals": [principal_context(
+                LOCAL_PRINCIPAL, per_principal[LOCAL_PRINCIPAL.id],
+                output_dir=output_dir, output_types=manifest.output_types if output_dir is not None else (),
+            )],
             "limits": {
                 "max_line_bytes": MAX_LINE_BYTES,
                 "max_in_flight": MAX_IN_FLIGHT,
                 "inline_result_bytes": INLINE_RESULT_BYTES,
             },
         }
+
+    @staticmethod
+    def _request_context(name: str, manifest: Manifest, principal: Principal) -> dict:
+        """The ``PrincipalContext`` of a request made for ``principal``; the output folder only for
+        a plugin that declared ``outputs: true``."""
+        return principal_context(
+            principal, storage.principal_dir(name, principal),
+            output_dir=storage.output_dir(name, principal) if manifest.outputs else None,
+            output_types=manifest.output_types,
+        )
 
     def _get_spool(self) -> DownloadSpool:
         if self._spool is None:
@@ -444,6 +534,23 @@ class PluginHost:
         async def confirm_await(params: dict) -> Any:
             return await self._confirm.await_(plugin.name, params)
 
+        async def approval_request(params: dict) -> Any:
+            try:
+                return await self._approvals.request(
+                    plugin.name, manifest.display_name, manifest, params, introspecting=False,
+                )
+            except RpcError as exc:
+                if exc.code == "confirmation_refused":
+                    # Refused only after the service validated the params, so the kind is sound.
+                    self._audit_approval(plugin.name, params["kind"], "refused")
+                raise
+
+        async def approval_check(params: dict) -> Any:
+            return await self._approvals.check(plugin.name, params)
+
+        async def approval_await(params: dict) -> Any:
+            return await self._approvals.await_(plugin.name, params)
+
         async def tools_changed(params: dict) -> None:
             connector = plugin.connector
             if connector is None:
@@ -453,7 +560,14 @@ class PluginHost:
                 self._notify_tools()
             self._changed()
 
-        handlers = {"source.call": source_call, "confirm.request": confirm_request, "confirm.await": confirm_await}
+        handlers = {
+            "source.call": source_call,
+            "confirm.request": confirm_request,
+            "confirm.await": confirm_await,
+            "approval.request": approval_request,
+            "approval.check": approval_check,
+            "approval.await": approval_await,
+        }
         return handlers, {"tools.changed": tools_changed}
 
     async def _start_plugin(self, plugin: _Plugin) -> None:
@@ -488,7 +602,7 @@ class PluginHost:
                 manifest.display_name,
                 manifest,
                 lambda: supervisor.peer,
-                lambda: principal_context(LOCAL_PRINCIPAL, storage.principal_dir(plugin.name, LOCAL_PRINCIPAL)),
+                lambda: self._request_context(plugin.name, manifest, LOCAL_PRINCIPAL),
                 lambda summary: self._audit_lifecycle(plugin.name, summary),
                 scope_types=result.scope_types,
                 reviewed=record.reviewed,
@@ -617,6 +731,8 @@ class PluginHost:
                 "source_operations": sorted(manifest.source_operations),
                 "pages": manifest.pages,
                 "service_credentials": manifest.service_credentials,
+                "outputs": manifest.outputs,
+                "output_types": list(manifest.output_types),
                 "tools": [
                     {
                         "name": mcp_tool_name(plugin.name, d.name),
@@ -666,6 +782,29 @@ class PluginHost:
             plugin.state, plugin.reason = "disabled", "disabled by you"
             self._audit_lifecycle(plugin.name, "disabled")
 
+    def approval_embed_allowed(self, name: str, approval_id: str, path: str) -> bool:
+        """Whether the plugin's page at ``path`` may be framed on this approval's card."""
+        return self._approvals.embed_allowed(name, approval_id, path)
+
+    async def revoke_approval(self, name: str, approval_id: str) -> None:
+        with self._action(name) as plugin:
+            record = await asyncio.to_thread(
+                self._approval_store.revoke, name, approval_id, now=_approval_now(),
+            )
+            if record is None:
+                raise ValueError("No such approval.")
+            self._audit_approval(name, record.kind, "revoked")
+            supervisor = plugin.supervisor
+            peer = supervisor.peer if supervisor is not None else None
+            if peer is not None:
+                try:
+                    await peer.notify("approval.revoked", {
+                        "approval_id": record.approval_id, "kind": record.kind,
+                        "subject_id": record.subject_id, "digest": record.digest,
+                    })
+                except Exception:
+                    logger.debug("Could not tell plugin %s about a revoked approval", name, exc_info=True)
+
     async def purge(self, name: str) -> str:
         """Delete every file the plugin holds. A running plugin is asked first and given
         ``purge_timeout`` to say it let go of them; a hung one does not stop the deletion."""
@@ -679,6 +818,7 @@ class PluginHost:
                 except (RpcError, OSError):
                     acknowledged = False
             await asyncio.to_thread(storage.remove_all, plugin.name)
+            await asyncio.to_thread(self._forget_approvals, plugin.name)
             outcome = "ack" if acknowledged else "timeout"
             self._audit_lifecycle(plugin.name, f"data purged ({outcome})")
             if supervisor is not None:
@@ -689,11 +829,14 @@ class PluginHost:
     # ── Reading ───────────────────────────────────────────────────────
 
     def connectors(self) -> dict[str, Connector]:
-        return {
+        found: dict[str, Connector] = {
             name: plugin.connector
             for name, plugin in self._plugins.items()
             if plugin.state == "running" and plugin.connector is not None
         }
+        if self._outputs_connector is not None:
+            found[OUTPUTS_OWNER] = self._outputs_connector
+        return found
 
     def rows(self) -> list[dict]:
         records = self._store.load()
@@ -721,6 +864,14 @@ class PluginHost:
                 "tools_note": f"last tools change rejected: {rejection}" if rejection else "",
                 "review": plugin.review if plugin is not None else None,
                 "last_error": plugin.last_error if plugin is not None else None,
+                "outputs": manifest.outputs if manifest is not None else False,
+                "approvals": [
+                    {
+                        "approval_id": r.approval_id, "kind": r.kind, "subject_id": r.subject_id,
+                        "digest": r.digest, "decided_at": r.decided_at, "revoked_at": r.revoked_at,
+                    }
+                    for r in self._approval_store.for_plugin(name)[:_MAX_ROW_APPROVALS]
+                ],
             })
         return rows
 
@@ -731,7 +882,7 @@ class PluginHost:
         peer = supervisor.peer if supervisor is not None else None
         if peer is None or plugin is None or plugin.state != "running" or manifest is None or not manifest.pages:
             raise LookupError(f"Plugin {name} is not serving pages.")
-        context = principal_context(principal, storage.principal_dir(name, principal))
+        context = self._request_context(name, manifest, principal)
         return await peer.request(
             "web.request", {"principal": context, "method": "GET", "path": path, "query": query},
         )

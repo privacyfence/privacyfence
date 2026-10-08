@@ -145,6 +145,38 @@ SDK_PLUGIN = textwrap.dedent('''
             return Text(exc.code)
 
 
+    REVOKED = []
+
+
+    @plugin.on("approval.revoked")
+    async def revoked(ctx, params):
+        REVOKED.append(params)
+
+
+    @plugin.page("/revoked")
+    async def revoked_page(ctx, request):
+        return Text(json.dumps(REVOKED))
+
+
+    @plugin.page("/approval")
+    async def approval(ctx, request):
+        try:
+            ticket = await ctx.approvals.request("code", "main", "v1", "Run main", blocks("body"))
+        except SourceError as exc:
+            return Text(exc.code)
+        return Text(ticket.approval_id + " " + ticket.status)
+
+
+    @plugin.page("/approval-check")
+    async def approval_check(ctx, request):
+        return Text(await ctx.approvals.check("code", "main", "v1"))
+
+
+    @plugin.page("/outdir")
+    async def outdir(ctx, request):
+        return Text(json.dumps({{"dir": str(ctx.principal.output_dir)}}))
+
+
     @plugin.page("/await")
     async def await_confirm(ctx, request):
         try:
@@ -790,6 +822,8 @@ class TestInspectReturnsSummary:
             "source_operations": ["calendar.list_events"],
             "pages": True,
             "service_credentials": False,
+            "outputs": False,
+            "output_types": [],
             "tools": [
                 {"name": "sdk-demo_ping", "gate": "auto", "read_only": True, "destructive": False,
                  "description": "Say pong."},
@@ -908,6 +942,204 @@ class TestConfirmRefusedWhenUnattended:
         assert answered["body"] == "approved"
         assert env.audit.summaries("plugin_confirm")[0] == "publish; requested"
         await until(lambda: "publish; approved" in env.audit.summaries("plugin_confirm"))
+
+
+class TestApprovalRouted:
+    async def test_request_shows_a_card_and_approval_is_checked(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        assert (await env.page(host, "/approval-check"))["body"] == "unknown"
+        approval_id, status = (await env.page(host, "/approval"))["body"].split()
+
+        assert status == "pending"
+        card = env.registry.get(approval_id)
+        assert card is not None and card.kind == "confirm"
+        assert env.audit.summaries("plugin_approval") == ["code; requested"]
+        env.registry.answer(approval_id, "confirm")
+        await until(lambda: "code; approved" in env.audit.summaries("plugin_approval"))
+        assert (await env.page(host, "/approval-check"))["body"] == "approved"
+        assert env.row(host, SDK)["approvals"][0]["approval_id"] == approval_id
+
+    async def test_revoke_notifies_the_plugin_and_the_check_says_revoked(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        approval_id = (await env.page(host, "/approval"))["body"].split()[0]
+        env.registry.answer(approval_id, "confirm")
+        await until(lambda: "code; approved" in env.audit.summaries("plugin_approval"))
+
+        await host.revoke_approval(SDK, approval_id)
+
+        assert (await env.page(host, "/approval-check"))["body"] == "revoked"
+        for _ in range(250):
+            seen = json.loads((await env.page(host, "/revoked"))["body"])
+            if seen:
+                break
+            await asyncio.sleep(0.02)
+        assert seen[0]["approval_id"] == approval_id and seen[0]["kind"] == "code"
+        assert "code; revoked" in env.audit.summaries("plugin_approval")
+        row = env.row(host, SDK)["approvals"][0]
+        assert row["revoked_at"] is not None
+
+    async def test_revoking_an_unknown_id_is_a_value_error(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        with pytest.raises(ValueError, match="No such approval."):
+            await host.revoke_approval(SDK, "nope")
+
+        assert env.row(host, SDK)["last_error"] == "No such approval."
+
+    async def test_refused_while_unattended_is_audited(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        host.set_unattended_provider(lambda: True)
+        await host.start()
+        await env.enable(host, SDK)
+
+        assert (await env.page(host, "/approval"))["body"] == "confirmation_refused"
+        assert env.audit.summaries("plugin_approval") == ["code; refused"]
+
+
+class TestApprovalEmbedAllowed:
+    async def test_delegates_to_the_service(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        assert host.approval_embed_allowed(SDK, "missing", "/approval") is False
+
+
+class TestPurgeForgetsApprovals:
+    async def test_purge_deletes_approvals_and_audits_the_count(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        approval_id = (await env.page(host, "/approval"))["body"].split()[0]
+        env.registry.answer(approval_id, "confirm")
+        await until(lambda: "code; approved" in env.audit.summaries("plugin_approval"))
+
+        await host.purge(SDK)
+
+        assert (await env.page(host, "/approval-check"))["body"] == "unknown"
+        assert env.row(host, SDK)["approvals"] == []
+        assert "approvals deleted: 1" in env.audit.summaries("plugin_lifecycle")
+
+
+class TestUninstallForgetsApprovals:
+    async def test_removal_deletes_approvals(self, env):
+        plugin_dir = env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        approval_id = (await env.page(host, "/approval"))["body"].split()[0]
+        env.registry.answer(approval_id, "confirm")
+        await until(lambda: "code; approved" in env.audit.summaries("plugin_approval"))
+        await host.disable(SDK)
+        for child in plugin_dir.iterdir():
+            child.unlink()
+        plugin_dir.rmdir()
+
+        await host.rescan()
+
+        assert host._approval_store.for_plugin(SDK) == []
+        summaries = env.audit.summaries("plugin_lifecycle")
+        assert "approvals deleted: 1" in summaries
+        assert summaries[-1] == "removed; data and rules deleted"
+
+
+class TestOutputDir:
+    async def test_created_0700_and_passed_only_with_outputs(self, env):
+        env.add(SDK, sdk=True, outputs=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        expected = storage.output_dir(SDK, LOCAL_PRINCIPAL)
+        assert json.loads((await env.page(host, "/outdir"))["body"]) == {"dir": str(expected)}
+        assert expected.is_dir()
+        if sys.platform != "win32":
+            assert expected.stat().st_mode & 0o777 == 0o700
+
+    async def test_not_created_without_outputs(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        assert json.loads((await env.page(host, "/outdir"))["body"]) == {"dir": "None"}
+        assert not storage.output_dir(SDK, LOCAL_PRINCIPAL).exists()
+
+    async def test_inspect_summary_and_row_report_outputs(self, env):
+        env.add(SDK, sdk=True, outputs=True, output_types=["application/json"])
+        host = env.host()
+        await host.start()
+
+        summary = await host.inspect(SDK)
+
+        assert summary["outputs"] is True and summary["output_types"] == ["application/json"]
+        assert env.row(host, SDK)["outputs"] is True
+
+
+class TestOutputsConnector:
+    async def test_appears_when_enabled_and_disappears_when_disabled(self, env):
+        env.add(SDK, sdk=True, outputs=True)
+        host = env.host()
+        await host.start()
+        assert "plugin_outputs" not in host.connectors()
+        before = env.tools_changed
+
+        try:
+            await env.enable(host, SDK)
+            assert "plugin_outputs" in host.connectors()
+            after_enable = env.tools_changed
+            assert after_enable > before
+
+            await host.disable(SDK)
+            assert "plugin_outputs" not in host.connectors()
+            assert env.tools_changed > after_enable
+        finally:
+            await host.stop_all()
+
+    async def test_absent_for_a_plugin_without_outputs(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        assert "plugin_outputs" not in host.connectors()
+
+
+class TestRowsApprovals:
+    async def test_newest_first_with_the_documented_fields(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        approval_id = (await env.page(host, "/approval"))["body"].split()[0]
+        env.registry.answer(approval_id, "confirm")
+        await until(lambda: "code; approved" in env.audit.summaries("plugin_approval"))
+
+        (entry,) = env.row(host, SDK)["approvals"]
+
+        assert set(entry) == {"approval_id", "kind", "subject_id", "digest", "decided_at", "revoked_at"}
+        assert entry["kind"] == "code" and entry["subject_id"] == "main" and entry["revoked_at"] is None
+
+    async def test_empty_by_default(self, env):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+
+        assert env.row(host, "stub")["approvals"] == []
+        assert env.row(host, "stub")["outputs"] is False
 
 
 class TestPurge:

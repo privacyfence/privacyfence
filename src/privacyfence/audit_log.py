@@ -152,7 +152,8 @@ class AuditEntry:
                             # "webauthn_recovery_refused" |
                             # "sign_in_code_minted" |
                             # "step_up_requirement_enabled" | "step_up_requirement_disabled" |
-                            # "plugin_source" | "plugin_confirm" | "plugin_lifecycle"
+                            # "plugin_source" | "plugin_confirm" | "plugin_lifecycle" |
+                            # "plugin_approval" | "plugin_output"
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
                             #  web/routes_security.py's register_verify/delete_credential,
                             #  recorded for either mode's own passkey enrollment surface. Tamper-
@@ -326,11 +327,27 @@ class AuditEntry:
                             #  named; a request refused while a session is unattended is recorded
                             #  once as "<kind>; refused". Nothing the plugin put in the card body
                             #  is recorded.)
+                            # ("plugin_approval": plugins/approvals.py and plugins/host.py, the
+                            #  persistent approvals a plugin asks for through ``approval.request``.
+                            #  ``connector`` is "plugin:<name>", ``tool`` "approval", ``tool_name``
+                            #  "<name> approval", ``request_id`` empty. ``summary`` is
+                            #  "<kind>; requested" and then "<kind>; approved", "<kind>; denied" or
+                            #  "<kind>; expired", "<kind>; refused" when it was refused while a session
+                            #  is unattended, and "<kind>; revoked" when a human revokes it in
+                            #  Settings. <kind> is the approval kind the plugin named; the subject, the
+                            #  digest and the card body are never recorded.)
+                            # ("plugin_output": plugins/outputs.py, one extra entry per
+                            #  ``plugin_outputs_read`` after the gate allowed it, next to the gate's own
+                            #  entry. ``connector`` is "plugin:<name>", ``tool`` "plugin_outputs_read",
+                            #  ``summary`` "read <path>; offset=<n>; bytes=<n>". File contents are never
+                            #  recorded.)
                             # ("plugin_lifecycle": plugins/host.py and plugins/supervisor.py, a change
                             #  in a plugin's own standing that is not one call: ``connector`` is
                             #  "plugin:<name>" and ``summary`` says what happened -- "enabled",
                             #  "disabled", "disabled: <reason>" (crash limit or hash drift), "data
-                            #  purged (ack)" or "data purged (timeout)", "tools changed: +a,+b,-c" and
+                            #  purged (ack)" or "data purged (timeout)", "removed; data and rules
+                            #  deleted" (the plugin's folder is gone), "approvals deleted: <n>" (its
+                            #  stored approvals went with its data or its removal), "tools changed: +a,+b,-c" and
                             #  "tools change rejected: <detail>". Enabling is the step that lets a
                             #  plugin act, so it is recorded like the other posture changes above even
                             #  though no tool call was involved.)
