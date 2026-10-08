@@ -52,7 +52,7 @@ def build(cls: type, data: dict):
 
 def run_adapter(operation: str, client, params: dict, spool=None):
     adapter = SOURCE_ADAPTERS[operation]
-    return adapter.run(client, {**adapter.validate(params), "plugin": "sample"}, spool)
+    return adapter.run(client, {**adapter.validate(params), "plugin": "sample", "state": None}, spool)
 
 
 def test_there_is_one_sample_per_source_operation():
@@ -66,7 +66,9 @@ def test_there_is_one_sample_per_source_operation():
 class TestShapeMatchesTheAdapters:
     def test_calendar_list_events(self):
         data = sample("calendar.list_events")["data"]
-        client = SimpleNamespace(list_events=lambda *args: [build(CalendarEvent, item) for item in data])
+        client = SimpleNamespace(
+            list_events_page=lambda *args: ([build(CalendarEvent, item) for item in data], None)
+        )
 
         produced, cursor = run_adapter(
             "calendar.list_events", client, {"time_min": "2026-10-07T00:00:00Z", "time_max": "2026-10-08T00:00:00Z"},
@@ -76,7 +78,9 @@ class TestShapeMatchesTheAdapters:
 
     def test_jira_search(self):
         data = sample("jira.search")["data"]
-        client = SimpleNamespace(search_issues=lambda jql, limit: [build(JiraIssue, item) for item in data])
+        client = SimpleNamespace(
+            search_issues_page=lambda jql, size, token: ([build(JiraIssue, item) for item in data], None)
+        )
 
         produced, cursor = run_adapter("jira.search", client, {"jql": "project = EXAMPLE"})
 
@@ -84,7 +88,8 @@ class TestShapeMatchesTheAdapters:
 
     def test_confluence_get_page(self):
         data = sample("confluence.get_page")["data"]
-        client = SimpleNamespace(get_page=lambda page_id: build(ConfluencePage, data))
+        page = {k: v for k, v in data.items() if k not in ("body_offset", "body_total_chars")}
+        client = SimpleNamespace(get_page=lambda page_id: build(ConfluencePage, page))
 
         produced, cursor = run_adapter("confluence.get_page", client, {"page_id": "EXAMPLE-1"})
 
@@ -97,6 +102,7 @@ class TestShapeMatchesTheAdapters:
         produced, cursor = run_adapter("sheets.get_values", client, {"spreadsheet_id": "EXAMPLE-1", "range": "A:B"})
 
         assert produced == data and cursor is None
+        assert data["first_row"] == 0
         assert all(isinstance(row, list) for row in produced["values"])
 
     def test_drive_download(self, tmp_path):
@@ -104,8 +110,10 @@ class TestShapeMatchesTheAdapters:
         data = loaded["data"]
         content = base64.b64decode(data["content_base64"])
         client = SimpleNamespace(
-            get_file_metadata=lambda file_id: SimpleNamespace(size=len(content), modified_time=data["revision"]),
-            download_file_bytes=lambda file_id: {"data": content, "mime_type": data["mime_type"]},
+            get_file_metadata=lambda file_id: SimpleNamespace(
+                size=len(content), mime_type=data["mime_type"], modified_time=data["revision"]
+            ),
+            download_range=lambda file_id, offset, length: content[offset:offset + length],
         )
 
         produced, cursor = run_adapter(
