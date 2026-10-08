@@ -12,6 +12,8 @@ Known differences, which these tests deliberately do not compare (and do not hid
 - Daemon responses also carry ``Permissions-Policy`` and ``Cross-Origin-Opener-Policy``.
 - A call accepted by an "Always allow" rule reports ``approval.via == "rule"`` on the test host and
   ``"card"`` on the daemon, which does not tell the two apart in protocol 1.
+- Revoking an approval adds an ``echo-template; revoked`` row to the audit log on the daemon and none
+  on the test host, so the approval audit comparisons leave that row out.
 """
 from __future__ import annotations
 
@@ -24,11 +26,14 @@ from typing import Any
 import pytest
 
 from privacyfence import auto_accept
+from privacyfence.plugins import storage
 from tests.fixtures.plugins.echo.harness import (  # noqa: I001  (puts the SDK sources on sys.path)
     Stack,
     install_echo,
     load_echo_plugin,
+    calendar_event,
     mcp_session,
+    until,
     web_session,
 )
 from privacyfence_plugin_sdk.responses import ToolDefinitionError  # noqa: E402
@@ -94,6 +99,35 @@ class SdkSide:
         return json.loads(response.text), len(self.host.source.calls)
 
 
+    async def paging(self, first: list[dict], second: list[dict]) -> tuple[dict, int]:
+        self.host.source.when("calendar.list_events", **CALENDAR_WINDOW).returns_pages([first, second])
+        response = await self.host.get("/pages?op=calendar.list_events")
+        return json.loads(response.text), len(self.host.source.calls)
+
+    async def request_approval(self, text: str, note: str = "") -> dict:
+        outcome = await self.host.call_tool("approve", {"text": text, "note": note}, decide="approve")
+        assert outcome.error is None, outcome.error
+        return outcome.released
+
+    async def decide_approval(self, approval_id: str, decision: str) -> None:
+        await self.host.decide_approval(approval_id, decision)
+
+    async def revoke_approval(self, approval_id: str) -> None:
+        await self.host.revoke_approval(approval_id)
+
+    async def check_approval(self, text: str) -> str:
+        return json.loads((await self.host.get("/approval-check", query={"text": text})).text)["status"]
+
+    async def revoked_events(self) -> list[dict]:
+        return recorded(json.loads((await self.host.get("/events")).text), "approval.revoked")
+
+    def approval_audit(self) -> list[str]:
+        return [
+            e["summary"] for e in self.host.audit
+            if e["decision"] == "plugin_approval" and not e["summary"].endswith("; revoked")
+        ]
+
+
 class DaemonSide:
     """The echo plugin as a child process of the real daemon."""
 
@@ -142,6 +176,64 @@ class DaemonSide:
         page = await self.stack.page("/download", file_id="FILE-1")
         calls = len([e for e in self.stack.audit() if e["decision"] == "plugin_source"]) - before
         return json.loads(page["body"]), calls
+
+
+    async def paging(self, first: list[dict], second: list[dict]) -> tuple[dict, int]:
+        pages = {None: (first, "page-2"), "page-2": (second, None)}
+        self.stack.calendar.list_events.side_effect = (
+            lambda calendar_id, page_size, time_min, time_max, token=None: (
+                [calendar_event(e["title"], id=e["id"]) for e in pages[token][0]], pages[token][1]
+            )
+        )
+        before = len([e for e in self.stack.audit() if e["decision"] == "plugin_source"])
+        page = await self.stack.page("/pages", op="calendar.list_events")
+        calls = len([e for e in self.stack.audit() if e["decision"] == "plugin_source"]) - before
+        return json.loads(page["body"]), calls
+
+    async def request_approval(self, text: str, note: str = "") -> dict:
+        self.stack.popups.decision = "accept"
+        async with mcp_session(self.stack.server) as mcp:
+            result = await mcp.call("echo_approve", text=text, note=note)
+        assert result.is_error is False, result
+        return result.structured_content
+
+    async def decide_approval(self, approval_id: str, decision: str) -> None:
+        mark = len(self._approval_audit())
+        assert self.stack.registry.answer(approval_id, DECIDE_ANSWER[decision])
+        await until(lambda: len(self._approval_audit()) > mark)
+
+    async def revoke_approval(self, approval_id: str) -> None:
+        await self.stack.run(self.stack.host.revoke_approval("echo", approval_id))
+
+    async def check_approval(self, text: str) -> str:
+        return json.loads((await self.stack.page("/approval-check", text=text))["body"])["status"]
+
+    async def revoked_events(self) -> list[dict]:
+        await until(lambda: self._events() and any(e["event"] == "approval.revoked" for e in self._events()))
+        return recorded(self._events(), "approval.revoked")
+
+    def _events(self) -> list[dict]:
+        path = storage.install_dir("echo") / "events.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def _approval_audit(self) -> list[str]:
+        return [e["summary"] for e in self.stack.audit() if e["decision"] == "plugin_approval"]
+
+    def approval_audit(self) -> list[str]:
+        return [summary for summary in self._approval_audit() if not summary.endswith("; revoked")]
+
+
+CALENDAR_WINDOW = {"time_min": "2026-10-07T00:00:00Z", "time_max": "2026-10-08T00:00:00Z"}
+DECIDE_ANSWER = {"approve": "confirm", "deny": "cancel"}
+
+
+def recorded(events: list[dict], name: str) -> list[dict]:
+    """The comparable part of each ``name`` event an echo plugin logged."""
+    return [
+        {key: e["params"][key] for key in ("kind", "subject_id", "digest")} for e in events if e["event"] == name
+    ]
 
 
 @pytest.fixture
@@ -290,6 +382,70 @@ class TestSameDownload:
         result, calls = on_sdk
         assert result["size"] == len(data) and result["sha256"] == hashlib.sha256(data).hexdigest()
         assert result["revision"] == "r1" and calls == 2
+
+
+class TestSamePaging:
+    async def test_two_provider_pages_give_the_same_items_and_calls(self, sdk, daemon):
+        first = [{"id": f"a{n}", "title": f"A{n}"} for n in range(3)]
+        second = [{"id": f"b{n}", "title": f"B{n}"} for n in range(2)]
+
+        async def scenario(side):
+            return await side.paging(first, second)
+
+        on_sdk, on_daemon = await both(sdk, daemon, scenario)
+
+        assert_same(on_sdk, on_daemon)
+        result, calls = on_sdk
+        assert result == {"pages": 2, "items": 5, "ids": ["a0", "a1", "a2", "b0", "b1"]}
+        assert calls == 2
+
+
+class TestSameApprovals:
+    async def test_request_decide_and_check_statuses_match(self, sdk, daemon):
+        async def scenario(side):
+            seen = [await side.check_approval("v1")]
+            ticket = await side.request_approval("v1")
+            seen += [ticket["status"], await side.check_approval("v1")]
+            await side.decide_approval(ticket["approval_id"], "approve")
+            seen += [await side.check_approval("v1")]
+            again = await side.request_approval("v1", note="again")
+            seen += [again["status"], again["approval_id"] == ticket["approval_id"]]
+            changed = await side.request_approval("v2")
+            seen += [changed["status"], await side.check_approval("v2")]
+            await side.decide_approval(changed["approval_id"], "deny")
+            seen += [await side.check_approval("v2")]
+            return seen, side.approval_audit()
+
+        on_sdk, on_daemon = await both(sdk, daemon, scenario)
+
+        assert_same(on_sdk, on_daemon)
+        statuses, audit = on_sdk
+        assert statuses == ["unknown", "pending", "unknown", "approved", "approved", True, "pending", "unknown", "unknown"]
+        assert audit == [
+            "echo-template; requested", "echo-template; approved",
+            "echo-template; requested", "echo-template; denied",
+        ]
+
+    async def test_revoking_matches(self, sdk, daemon):
+        async def scenario(side):
+            ticket = await side.request_approval("v1")
+            await side.decide_approval(ticket["approval_id"], "approve")
+            await side.revoke_approval(ticket["approval_id"])
+            renewed = await side.request_approval("v1", note="after revoke")
+            return (
+                await side.check_approval("v1"), renewed["status"], renewed["approval_id"] != ticket["approval_id"],
+                await side.revoked_events(), side.approval_audit(),
+            )
+
+        on_sdk, on_daemon = await both(sdk, daemon, scenario)
+
+        assert_same(on_sdk, on_daemon)
+        check, status, is_new, events, audit = on_sdk
+        assert (check, status, is_new) == ("revoked", "pending", True)
+        assert [e["subject_id"] for e in events] == ["templates/a"]
+        assert audit == [
+            "echo-template; requested", "echo-template; approved", "echo-template; requested",
+        ]
 
 
 class TestSameFloor:

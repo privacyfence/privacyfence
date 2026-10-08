@@ -8,6 +8,7 @@ environment, so the SDK location arrives as an argument rather than ``PYTHONPATH
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import sys
@@ -124,6 +125,38 @@ async def source(ctx, args):
     )
 
 
+@plugin.tool("approve", gate="popup", title="Approve", description="Ask for approval of a template.",
+             params={"text": {"type": "string"}, "note": {"type": "string"}}, required=["text"],
+             effect="Asks for an approval that stays until it is revoked.")
+async def approve(ctx, args):
+    return Prepared(preview=[blocks.fields({"Template": args["text"]})], state=args["text"])
+
+
+@approve.execute
+async def approve_run(ctx, prepared, approval):
+    ticket = await ctx.approvals.request(
+        "echo-template", "templates/a", content=prepared.state, title="Approve template",
+        preview=[blocks.fields({"Template": prepared.state})], page="/approval",
+    )
+    return {"approval_id": ticket.approval_id, "status": ticket.status}
+
+
+@plugin.tool("publish", gate="popup", title="Publish", description="Publish a CSV report.",
+             params={"name": {"type": "string"}, "text": {"type": "string"}}, required=["name", "text"],
+             effect="Writes a file to the Echo output folder.")
+async def publish(ctx, args):
+    return Prepared(
+        preview=[blocks.fields({"Report": args["name"], "Characters": str(len(args["text"]))})],
+        state=(args["name"], args["text"]),
+    )
+
+
+@publish.execute
+async def publish_run(ctx, prepared, approval):
+    name, text = prepared.state
+    return {"path": ctx.outputs.publish(f"reports/{name}.csv", text)}
+
+
 @plugin.page("/")
 async def home(ctx, request):
     return Html(PAGE)
@@ -207,9 +240,49 @@ async def source_page(ctx, request):
     return Text(json.dumps({"bytes": result["bytes"], "cursor": result["next_cursor"]}))
 
 
+@plugin.page("/approval")
+async def approval_page(ctx, request):
+    return Html(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Approval</title></head><body>"
+        f"<p id=\"approval\">{html.escape(request.query.get('pf_approval', ''))}</p></body></html>"
+    )
+
+
+@plugin.page("/approval-check")
+async def approval_check(ctx, request):
+    status = await ctx.approvals.check("echo-template", "templates/a", request.query.get("text", ""))
+    return Text(json.dumps({"status": status}))
+
+
+_PAGED = {
+    "calendar.list_events": ({"time_min": "2026-10-07T00:00:00Z", "time_max": "2026-10-08T00:00:00Z"}, "id"),
+    "jira.search": ({"jql": "project = ECHO"}, "key"),
+}
+
+
+@plugin.page("/pages")
+async def paged(ctx, request):
+    """Every page of one paged source operation: how many pages came, and which items."""
+    operation = request.query["op"]
+    params, id_key = _PAGED[operation]
+    if "page_size" in request.query:
+        params = {**params, "page_size": int(request.query["page_size"])}
+    pages = 0
+    ids = []
+    async for page in ctx.source.pages(operation, **params):
+        pages += 1
+        ids.extend(item[id_key] for item in page.data)
+    return Text(json.dumps({"pages": pages, "items": len(ids), "ids": ids}))
+
+
 @plugin.on("connector.state_changed")
 async def state_changed(ctx, params):
     _log(ctx, "connector.state_changed", params)
+
+
+@plugin.on("approval.revoked")
+async def approval_revoked(ctx, params):
+    _log(ctx, "approval.revoked", params)
 
 
 @plugin.on("plugin.disabling")

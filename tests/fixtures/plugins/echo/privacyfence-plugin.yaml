@@ -8,3 +8,7 @@ max_gate_floor: auto
 pages: true
 source_operations:
   - calendar.list_events
+outputs: true
+output_types:
+  - text/csv
+  - application/json
