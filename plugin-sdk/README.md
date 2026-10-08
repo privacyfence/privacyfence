@@ -72,6 +72,20 @@ file = await ctx.source.download(file_id)   # chunked, restarts once if the file
 
 A source operation must be listed in the manifest's `source_operations`.
 
+### Paging
+
+```python
+async for page in ctx.source.pages("jira.search", jql="project = PF", page_size=50):
+    handle(page.data)                      # one SourceResult per page
+
+events = await ctx.source.collect("calendar.list_events", time_min="...", time_max="...")
+```
+
+`pages` calls the operation, then calls it again with the `next_cursor` of the previous page, until
+there is none. Size pages with `page_size`; do not send `max_results` or `cursor` yourself. `collect`
+concatenates the pages into one list and works only for `jira.search` and `calendar.list_events`; any
+other operation raises `ValueError`. `download` handles its own cursor.
+
 ## The manifest
 
 Next to the executable, a plugin ships `privacyfence-plugin.yaml`:
@@ -107,6 +121,50 @@ opaque origin, so requests for separate files carry no session and are refused. 
 self-contained page that keeps its state in the page itself (script or `#fragment`). Other pages of
 the plugin open only from Settings or a typed URL: links between plugin pages, and links from a
 plugin page back into PrivacyFence, do not carry the session and get a 404.
+
+## Approvals
+
+An approval is a human's yes to one specific thing (a template, a mapping, a piece of code) that stays
+valid until the thing changes or the human revokes it in Settings.
+
+```python
+ticket = await ctx.approvals.request(
+    "template", "templates/invoice", content=template_text, title="Approve the invoice template",
+    preview=[blocks.code(template_text)], page="/approval",
+)
+if ticket.status != "approved":
+    outcome = await ctx.approvals.await_(ticket.approval_id)   # waits for the human
+
+if await ctx.approvals.check("template", "templates/invoice", template_text) == "approved":
+    ...   # "approved", "revoked" or "unknown"
+```
+
+The SDK computes the digest (`sha256:` over the UTF-8 text or the raw bytes; `ctx.approvals.digest(content)`
+gives it to you), so changing the content makes the old approval stop matching. A `page` is shown in a
+sandboxed frame on the approval card and receives `pf_approval=<approval id>` in its query. Register the
+`approval.revoked` event with `@plugin.on("approval.revoked")` to react when a human revokes one.
+
+## Outputs
+
+A plugin whose manifest sets `outputs: true` (and optionally `output_types`) can publish files that the
+user's agent lists and reads through PrivacyFence.
+
+```python
+path = ctx.outputs.publish("reports/2026-q3.csv", csv_text)   # str or bytes; returns the relative path
+folder = ctx.outputs.dir
+```
+
+`publish` writes a hidden `.name.tmp` file, flushes it and renames it, so a reader never sees a partial
+file. It refuses an existing file (publish a new version under a new name; `FileExistsError`), a path with
+`..`, a leading `/` or a dot-prefixed segment, and an extension the manifest's `output_types` do not allow
+(`ValueError`). Without `outputs: true` both calls raise `RuntimeError`.
+
+## Child processes
+
+A plugin may start child processes. They run under the plugin's account with the plugin's environment, and
+they hold the same trust as the plugin. PrivacyFence does not supervise, restart or count them; stopping the
+plugin kills its process group on POSIX and its process on Windows. Confining them is the plugin's job, for
+example with no network, read-only inputs and one scratch folder.
 
 ## Building with PyInstaller
 

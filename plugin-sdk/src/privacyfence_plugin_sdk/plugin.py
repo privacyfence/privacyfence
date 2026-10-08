@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,7 @@ from typing import Any
 from . import blocks as _blocks
 from ._rpc import Peer, RpcError, open_stdio
 from .responses import (
+    ApprovalTicket,
     Bytes,
     ConfirmResult,
     DownloadedFile,
@@ -59,7 +60,19 @@ _GATES = ("auto", "review", "popup")
 
 _PARAM_TYPES = frozenset({"string", "integer", "number", "boolean"})
 _FORBIDDEN_PARAM_KEYS = frozenset({"enum", "oneOf", "anyOf", "allOf", "items", "properties", "$ref"})
-_EVENTS = ("connector.state_changed", "plugin.disabling", "shutdown", "principal.removed")
+_EVENTS = (
+    "connector.state_changed", "plugin.disabling", "shutdown", "principal.removed", "approval.revoked",
+)
+_PAGED_OPERATIONS = frozenset({"jira.search", "calendar.list_events"})
+_OUTPUT_EXTENSIONS = {
+    "application/json": (".json",),
+    "text/csv": (".csv",),
+    "text/html": (".html", ".htm"),
+    "text/plain": (".txt",),
+    "text/markdown": (".md",),
+}
+_OUTPUT_MAX_DEPTH = 8
+_NO_OUTPUT_FOLDER = "this plugin has no output folder"
 _CHUNK_ATTEMPTS = 2
 
 __all__ = [
@@ -77,6 +90,8 @@ class Principal:
     id: str
     display_name: str
     storage_dir: Path
+    output_dir: Path | None = None
+    output_types: tuple[str, ...] = ()
 
 
 @dataclass
@@ -145,6 +160,33 @@ class SourceClient:
             bytes=size if isinstance(size, int) else 0,
             next_cursor=cursor if isinstance(cursor, str) else None,
         )
+
+    async def pages(self, operation: str, **params: Any) -> AsyncIterator[SourceResult]:
+        """Yield each page of ``operation`` until the host gives no ``next_cursor``.
+
+        Pass ``page_size`` to size the pages. ``max_results`` and ``cursor`` are not accepted.
+        """
+        if "max_results" in params or "cursor" in params:
+            raise ValueError("pages() takes page_size, not max_results or cursor")
+        cursor: str | None = None
+        while True:
+            call_params = params if cursor is None else {**params, "cursor": cursor}
+            result = await self.call(operation, **call_params)
+            yield result
+            if result.next_cursor is None:
+                return
+            cursor = result.next_cursor
+
+    async def collect(self, operation: str, **params: Any) -> list:
+        """All items of a paged ``jira.search`` or ``calendar.list_events``, concatenated."""
+        if operation not in _PAGED_OPERATIONS:
+            raise ValueError(f"collect supports only {', '.join(sorted(_PAGED_OPERATIONS))}, not {operation}")
+        items: list = []
+        async for page in self.pages(operation, **params):
+            if not isinstance(page.data, list):
+                raise SourceError("internal_error", f"malformed {operation} page")
+            items.extend(page.data)
+        return items
 
     async def download(self, file_id: str, dest: Path | None = None) -> DownloadedFile:
         """Download a Drive file in chunks into the directory ``dest`` (default ``data_dir/downloads``).
@@ -245,6 +287,129 @@ class ConfirmClient:
         return ConfirmResult(status=result["status"], decided_at=decided if isinstance(decided, str) else None)
 
 
+class ApprovalsClient:
+    """``ctx.approvals``: asks a human to approve a thing that stays approved until it changes."""
+
+    def __init__(self, host: _Host, principal: Principal) -> None:
+        self._host = host
+        self._principal = principal
+
+    @staticmethod
+    def digest(content: bytes | str) -> str:
+        raw = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+        return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+    async def request(
+        self,
+        kind: str,
+        subject_id: str,
+        content: bytes | str,
+        title: str,
+        preview: list[dict],
+        page: str | None = None,
+        require_step_up: bool = True,
+    ) -> ApprovalTicket:
+        """Ask for approval of ``content``. A page shown on the card receives ``pf_approval`` in its query."""
+        if self._host.introspecting:
+            raise SourceError("introspection_only", "approvals are refused while PrivacyFence introspects")
+        try:
+            checked = _blocks.validate_blocks(preview)
+        except ValueError as exc:
+            raise SourceError("invalid_blocks", str(exc)) from None
+        params: dict[str, Any] = {
+            "principal": self._principal.id,
+            "kind": kind,
+            "subject_id": subject_id,
+            "digest": self.digest(content),
+            "title": title,
+            "preview": checked,
+            "require_step_up": require_step_up,
+        }
+        if page is not None:
+            params["page"] = page
+        result = await self._host.request("approval.request", params, _CONFIRM_REQUEST_TIMEOUT_SECONDS)
+        approval_id = result.get("approval_id") if isinstance(result, dict) else None
+        status = result.get("status") if isinstance(result, dict) else None
+        if not isinstance(approval_id, str) or not approval_id or not isinstance(status, str):
+            raise SourceError("internal_error", "malformed approval.request result")
+        return ApprovalTicket(approval_id=approval_id, status=status)
+
+    async def check(self, kind: str, subject_id: str, content: bytes | str) -> str:
+        """``approved``, ``revoked`` or ``unknown`` for exactly this ``content``."""
+        result = await self._host.request(
+            "approval.check",
+            {"principal": self._principal.id, "kind": kind, "subject_id": subject_id,
+             "digest": self.digest(content)},
+            _CONFIRM_REQUEST_TIMEOUT_SECONDS,
+        )
+        status = result.get("status") if isinstance(result, dict) else None
+        if not isinstance(status, str):
+            raise SourceError("internal_error", "malformed approval.check result")
+        return status
+
+    async def await_(self, approval_id: str, timeout_ms: int | None = None) -> ConfirmResult:
+        params: dict[str, Any] = {"approval_id": approval_id}
+        wait = _CONFIRM_AWAIT_MAX_MS
+        if timeout_ms is not None:
+            wait = max(0, min(int(timeout_ms), _CONFIRM_AWAIT_MAX_MS))
+            params["timeout_ms"] = wait
+        result = await self._host.request("approval.await", params, wait / 1000 + 10.0)
+        if not isinstance(result, dict) or not isinstance(result.get("status"), str):
+            raise SourceError("internal_error", "malformed approval.await result")
+        decided = result.get("decided_at")
+        return ConfirmResult(status=result["status"], decided_at=decided if isinstance(decided, str) else None)
+
+
+class OutputsClient:
+    """``ctx.outputs``: publishes files the principal's agent can list and read."""
+
+    def __init__(self, principal: Principal) -> None:
+        self._principal = principal
+
+    @property
+    def dir(self) -> Path:
+        if self._principal.output_dir is None:
+            raise RuntimeError(_NO_OUTPUT_FOLDER)
+        return self._principal.output_dir
+
+    def publish(self, relpath: str, data: bytes | str) -> str:
+        """Write ``data`` to ``relpath`` under the output folder, atomically; returns ``relpath``.
+
+        Refuses an existing file (a new version is a new name), ``..`` or a leading ``/``, a dot-prefixed
+        segment, and an extension the manifest's ``output_types`` do not allow.
+        """
+        root = self.dir
+        segments = relpath.split("/") if isinstance(relpath, str) else []
+        if (
+            not segments or "\\" in relpath or ":" in relpath or "\0" in relpath
+            or any(not seg or seg.startswith(".") for seg in segments)
+        ):
+            raise ValueError("an output path is relative, uses / and has no empty or dot-prefixed segment")
+        if len(segments) > _OUTPUT_MAX_DEPTH:
+            raise ValueError(f"an output path has at most {_OUTPUT_MAX_DEPTH} segments")
+        allowed = tuple(
+            ext for mime in self._principal.output_types for ext in _OUTPUT_EXTENSIONS.get(mime, ())
+        )
+        if os.path.splitext(segments[-1])[1].lower() not in allowed:
+            raise ValueError(f"the extension of {segments[-1]} is not one of: {', '.join(allowed) or 'none'}")
+        target = root.joinpath(*segments)
+        raw = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(f"{relpath} already exists; publish a new version under a new name")
+        temp = target.parent / f".{target.name}.tmp"
+        try:
+            with open(temp, "wb") as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, target)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
+        return relpath
+
+
 class Context:
     """What a handler gets: who is asking, where its data lives, and the calls back to PrivacyFence."""
 
@@ -254,6 +419,8 @@ class Context:
         self.data_dir = data_dir
         self.source = SourceClient(host, principal, data_dir)
         self.confirm = ConfirmClient(host, principal)
+        self.approvals = ApprovalsClient(host, principal)
+        self.outputs = OutputsClient(principal)
 
     @property
     def introspecting(self) -> bool:
@@ -486,6 +653,8 @@ class Plugin:
                 id=str(raw.get("id", "")),
                 display_name=str(raw.get("display_name", "")),
                 storage_dir=Path(str(raw.get("storage_dir", self._data_dir))),
+                output_dir=Path(raw["output_dir"]) if isinstance(raw.get("output_dir"), str) else None,
+                output_types=tuple(t for t in raw.get("output_types") or () if isinstance(t, str)),
             )
             self._principals[principal.id] = principal
             return principal

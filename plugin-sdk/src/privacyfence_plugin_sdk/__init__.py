@@ -8,6 +8,7 @@ from __future__ import annotations
 from . import blocks
 from .plugin import PROTOCOL_VERSION, Context, PageRequest, Plugin, Prepared, Principal, ToolHandle
 from .responses import (
+    ApprovalTicket,
     Bytes,
     ConfirmResult,
     DownloadedFile,
@@ -20,6 +21,7 @@ from .responses import (
 
 __all__ = [
     "PROTOCOL_VERSION",
+    "ApprovalTicket",
     "Bytes",
     "ConfirmResult",
     "Context",
