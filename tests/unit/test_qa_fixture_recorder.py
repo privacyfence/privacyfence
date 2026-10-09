@@ -834,6 +834,9 @@ class TestCheckConfluence:
         assert "does not carry" in get_page.note
 
 
+DUEDATE_FIELD = {"id": "duedate", "name": "Due date", "custom": False, "schema": {"type": "date"}}
+
+
 class TestCheckJira:
     def _client(self) -> JiraClient:
         client = JiraClient(config={"access_token": "t", "cloud_id": "c1", "site_url": "https://acme.atlassian.net"})
@@ -883,6 +886,7 @@ class TestCheckJira:
             "fields": {"summary": "PrivacyFence QA seed issue [QATEST]", "status": {"name": "To Do"}},
         }
         client._client.enhanced_jql.return_value = {"issues": [], "isLast": True}
+        client._client.get_all_fields.return_value = [DUEDATE_FIELD]
         monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
 
         results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
@@ -893,12 +897,36 @@ class TestCheckJira:
         args, kwargs = client._client.enhanced_jql.call_args
         assert args[0] == 'project = PFQA AND summary ~ "PrivacyFence QA seed issue [QATEST]"'
         assert kwargs["limit"] == 1
+        assert "duedate" in kwargs["fields"]
+
+    def _list_fields_row(self, monkeypatch, get_all_fields):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {"key": "PFQA-1", "fields": {"summary": "x"}}
+        client._client.enhanced_jql.return_value = {"issues": [], "isLast": True}
+        if isinstance(get_all_fields, Exception):
+            client._client.get_all_fields.side_effect = get_all_fields
+        else:
+            client._client.get_all_fields.return_value = get_all_fields
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+        return next(r for r in results if r.method == "list_fields")
+
+    def test_list_fields_ok_with_one_field(self, monkeypatch):
+        assert self._list_fields_row(monkeypatch, [DUEDATE_FIELD]).ok
+
+    def test_list_fields_not_ok_when_empty(self, monkeypatch):
+        assert not self._list_fields_row(monkeypatch, []).ok
+
+    def test_list_fields_not_ok_when_listing_raises(self, monkeypatch):
+        assert not self._list_fields_row(monkeypatch, RuntimeError("boom")).ok
 
     def test_search_issues_page_failure_reported(self, monkeypatch):
         client = self._client()
         client._client.projects.return_value = []
         client._client.issue.return_value = {"key": "PFQA-1", "fields": {"summary": "x"}}
         client._client.enhanced_jql.side_effect = RuntimeError("boom")
+        client._client.get_all_fields.return_value = [DUEDATE_FIELD]
         monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
 
         results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
