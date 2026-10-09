@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from privacyfence_plugin_sdk._rpc import RpcError
-from privacyfence_plugin_sdk import Bytes, Html, Plugin, Prepared, Text, blocks
+from privacyfence_plugin_sdk import Bytes, Html, PageEntry, Plugin, Prepared, Text, blocks
 from privacyfence_plugin_sdk.testing import PluginTestHost
 from privacyfence_plugin_sdk.testing import _host as host_module
 from privacyfence_plugin_sdk.testing import _pages
@@ -522,6 +522,42 @@ def build_output_plugin() -> Plugin:
                 "dir": str(ctx.outputs.dir)}
 
     return plugin
+
+
+class TestListPages:
+    @staticmethod
+    def plugin_with(entries=None):
+        plugin = Plugin(name="listing", version="1.0.0")
+
+        @plugin.page("/")
+        async def home(ctx, request):
+            return Html("home")
+
+        if entries is not None:
+            @plugin.page_index
+            async def index(ctx):
+                return entries
+
+        return plugin
+
+    async def test_it_returns_the_entries(self):
+        entries = [PageEntry("/", "Home"), PageEntry("/a", "A", version="v2")]
+        async with PluginTestHost(self.plugin_with(entries), pages=True) as host:
+            assert await host.list_pages() == [e.to_wire() for e in entries]
+
+    async def test_without_an_index_it_lists_the_root_page(self):
+        async with PluginTestHost(self.plugin_with(), pages=True) as host:
+            assert await host.list_pages() == [{"path": "/", "title": "listing"}]
+
+    async def test_an_invalid_entry_raises_assertion_error(self):
+        async with PluginTestHost(self.plugin_with([PageEntry("/x y", "X")]), pages=True) as host:
+            with pytest.raises(AssertionError, match=r"pages\[0\]\.path"):
+                await host.list_pages()
+
+    async def test_it_needs_the_plugin_to_have_pages(self):
+        async with PluginTestHost(self.plugin_with([PageEntry("/", "Home")])) as host:
+            with pytest.raises(LookupError):
+                await host.list_pages()
 
 
 class TestOutputs:

@@ -23,6 +23,7 @@ from ..plugin import (
     args_digest,
 )
 from ..responses import ToolDefinitionError
+from .. import _page_index
 from . import _pages
 from ._approvals import Approval, Approvals
 from ._confirm import Confirmation, Confirmations
@@ -49,7 +50,7 @@ _MAX_SCOPE_VALUE_CHARS = 200
 _MCP_TOOL_NAME_MAX = 64
 _MAX_SCOPE_TYPES = 20
 
-_TIMEOUTS = {"initialize": 10.0, "tool.prepare": 30.0, "tool.execute": 60.0}
+_TIMEOUTS = {"initialize": 10.0, "tool.prepare": 30.0, "tool.execute": 60.0, "pages.list": 10.0}
 _TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")
 _SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")
 _GATES = ("auto", "review", "popup")
@@ -624,6 +625,30 @@ class PluginTestHost:
         """
         peer = self._running_peer()
         return await _pages.serve(peer, self._principal(principal), method, path, query, enabled=self.pages)
+
+    async def list_pages(self, principal: str | None = None) -> list[dict]:
+        """The pages the plugin lists for the page browser, as the daemon would validate them.
+
+        A plugin without a page index lists its root page. An invalid list raises ``AssertionError``.
+        """
+        if not self.pages:
+            raise LookupError(f"plugin {self.plugin.name} does not serve pages")
+        peer = self._running_peer()
+        try:
+            result = await peer.request(
+                "pages.list", {"principal": self._principal(principal)}, timeout=_TIMEOUTS["pages.list"])
+        except RpcError as exc:
+            if exc.code == "method_not_found":
+                return [{"path": "/", "title": self.plugin.name}]
+            if exc.code == "invalid_params":
+                raise AssertionError(exc.detail) from None
+            raise
+        try:
+            if not isinstance(result, dict) or set(result) != {"pages"}:
+                raise ValueError("pages.list result must be an object holding only pages")
+            return _page_index.validate_page_entries(result["pages"])
+        except ValueError as exc:
+            raise AssertionError(str(exc)) from None
 
     # ------------------------------------------------------------------ confirmations
 

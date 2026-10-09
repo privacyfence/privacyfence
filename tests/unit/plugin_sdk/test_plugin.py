@@ -14,6 +14,7 @@ from privacyfence.plugins.protocol import InitializeResult, PrepareResult, args_
 from privacyfence_plugin_sdk import (
     Bytes,
     Html,
+    PageEntry,
     Plugin,
     Prepared,
     SourceError,
@@ -118,6 +119,17 @@ class TestLimits:
         assert sdk_blocks._MAX_CELL_CHARS == constants.MAX_CELL_CHARS
         assert sdk_blocks._BLOCK_KEY_RE.pattern == constants.BLOCK_KEY_RE.pattern
         assert sdk_plugin.PROTOCOL_VERSION == constants.PROTOCOL_VERSION
+
+    def test_page_index_limits_match_the_daemons(self):
+        from privacyfence_plugin_sdk import _page_index
+
+        for sdk_name, constant in [
+            ("_MAX_PAGE_INDEX_ENTRIES", "MAX_PAGE_INDEX_ENTRIES"), ("_MAX_PAGE_PATH_CHARS", "MAX_PAGE_PATH_CHARS"),
+            ("_MAX_TITLE_CHARS", "MAX_TITLE_CHARS"), ("_MAX_PAGE_VERSION_CHARS", "MAX_PAGE_VERSION_CHARS"),
+            ("_MAX_PAGE_DESCRIPTION_CHARS", "MAX_PAGE_DESCRIPTION_CHARS"),
+        ]:
+            assert getattr(_page_index, sdk_name) == getattr(constants, constant)
+        assert _page_index._PAGE_ENTRY_PATH_RE.pattern == constants.PAGE_ENTRY_PATH_RE.pattern
 
     def test_digest_matches_the_daemons(self):
         args = {"b": 1, "a": "é"}
@@ -444,6 +456,45 @@ class TestSourceErrors:
         data = await daemon.error("tool.execute", execute_params(principal, tool="write"))
         assert (data["code"], data["reason"]) == ("upstream_error", "rate_limited")
         await daemon.stop()
+
+
+class TestPageIndex:
+    @staticmethod
+    def indexed(entries):
+        plugin = Plugin(name="indexed", version="1.0.0")
+
+        @plugin.page_index
+        async def index(ctx):
+            return entries
+
+        return plugin
+
+    def test_a_second_index_is_refused(self):
+        plugin = self.indexed([])
+        with pytest.raises(ValueError, match="page_index is already registered"):
+            plugin.page_index(lambda ctx: None)
+
+    async def test_the_index_answers_with_wire_entries(self, make_daemon, principal):
+        entries = [PageEntry("/", "Home"), PageEntry("/a?x=1", "A", version="v1", description="Page A",
+                                                       updated_at="2026-10-07T10:00:00Z")]
+        daemon = await make_daemon(self.indexed(entries))
+        await daemon.initialize()
+        result = await daemon.result("pages.list", {"principal": principal})
+        assert result == {"pages": [e.to_wire() for e in entries]}
+        assert result["pages"][0] == {"path": "/", "title": "Home"}
+
+    async def test_without_an_index_the_method_is_unknown(self, daemon, principal):
+        await daemon.initialize()
+        assert (await daemon.error("pages.list", {"principal": principal}))["code"] == "method_not_found"
+
+    @pytest.mark.parametrize("entry", [
+        PageEntry("/", "a\tb"), PageEntry("/./x", "X"), PageEntry("/a#b", "X"),
+    ])
+    async def test_an_invalid_entry_is_invalid_params(self, make_daemon, principal, entry):
+        daemon = await make_daemon(self.indexed([PageEntry("/", "Home"), entry]))
+        await daemon.initialize()
+        error = await daemon.error("pages.list", {"principal": principal})
+        assert error["code"] == "invalid_params" and "pages[1]." in error["detail"]
 
 
 class TestPages:

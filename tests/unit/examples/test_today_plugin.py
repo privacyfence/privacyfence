@@ -421,6 +421,10 @@ class TestLayoutNote:
 
 
 class TestPage:
+    async def test_it_lists_its_page_for_the_page_browser(self):
+        async with make_host() as host:
+            assert await host.list_pages() == [{"path": "/", "title": "Today"}]
+
     async def test_it_is_served_with_the_sandbox_headers_and_is_self_contained(self):
         async with make_host() as host:
             page = await host.get("/")

@@ -56,6 +56,26 @@ class DownloadedFile:
 
 
 @dataclass(frozen=True)
+class PageEntry:
+    """One page a plugin lists for the page browser. ``path`` is relative to the plugin and starts with ``/``."""
+
+    path: str
+    title: str
+    version: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    description: str | None = None
+
+    def to_wire(self) -> dict:
+        out: dict[str, Any] = {"path": self.path, "title": self.title}
+        for key in ("version", "created_at", "updated_at", "description"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
+        return out
+
+
+@dataclass(frozen=True)
 class Html:
     """An HTML page. It must be self-contained: inline its CSS, scripts and images."""
 
