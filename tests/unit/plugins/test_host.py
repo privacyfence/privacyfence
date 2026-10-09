@@ -25,7 +25,8 @@ from privacyfence.audit_log import AuditEntry
 from privacyfence.calendar_client import CalendarEvent
 from privacyfence.plugins import host as host_mod
 from privacyfence.plugins import source_ops, storage
-from privacyfence.plugins import supervisor as supervisor_mod
+from privacyfence.plugins import rpc, supervisor as supervisor_mod
+from privacyfence.plugins.page_index import PAGE_INDEX_INVALID, PAGE_INDEX_NO_ANSWER
 from privacyfence.plugins.host import CHANGED_SINCE_REVIEW, PluginHost
 from privacyfence.plugins.manifest import MANIFEST_FILENAME, ManifestError
 from privacyfence.plugins.state import HASH_DRIFT_REASON
@@ -48,7 +49,7 @@ SDK_PLUGIN = textwrap.dedent('''
     import sys
 
     sys.path.insert(0, {sdk_src!r})
-    from privacyfence_plugin_sdk import Plugin, Prepared, SourceError, Text
+    from privacyfence_plugin_sdk import PageEntry, Plugin, Prepared, SourceError, Text
 
     MODE, NAME = sys.argv[1], sys.argv[2]
     HERE = os.path.dirname(os.path.abspath(__file__))
@@ -151,6 +152,11 @@ SDK_PLUGIN = textwrap.dedent('''
     @plugin.on("approval.revoked")
     async def revoked(ctx, params):
         REVOKED.append(params)
+
+
+    @plugin.page_index
+    async def page_index(ctx):
+        return [PageEntry(path="/info", title="Info", version="2"), PageEntry(path="/revoked", title="Revoked")]
 
 
     @plugin.page("/revoked")
@@ -1430,7 +1436,7 @@ class TestWebRequest:
         response = await env.page(host, "/info")
 
         assert response["status"] == 200
-        assert env.row(host, SDK)["page_url"] == f"/plugins/{SDK}/"
+        assert env.row(host, SDK)["page_url"] == f"/plugin-pages/{SDK}"
 
     async def test_page_links_list_only_running_plugins_with_pages(self, env):
         env.add(SDK, sdk=True)
@@ -1439,7 +1445,7 @@ class TestWebRequest:
         assert host.page_links() == []
 
         await env.enable(host, SDK)
-        assert host.page_links() == [(host._plugins[SDK].manifest.display_name, f"/plugins/{SDK}/")]
+        assert host.page_links() == [(host._plugins[SDK].manifest.display_name, f"/plugin-pages/{SDK}")]
 
         host._plugins[SDK].state = "starting"
         assert host.page_links() == []
@@ -1486,6 +1492,116 @@ class TestWebRequest:
 
         with pytest.raises(LookupError):
             await host.web_request("nothing", "/", {}, LOCAL_PRINCIPAL)
+
+
+class TestPageIndex:
+    async def test_entries_come_back(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        index = await host.list_pages(SDK, LOCAL_PRINCIPAL)
+
+        assert index.error == ""
+        assert [(e.path, e.title) for e in index.entries] == [("/info", "Info"), ("/revoked", "Revoked")]
+
+    async def test_no_index_gives_the_display_name_fallback(self, env):
+        env.add("stub", pages=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        index = await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+        assert index.error == ""
+        assert [(e.path, e.title) for e in index.entries] == [("/", "Stub")]
+
+    async def test_timeout_is_no_answer(self, env, monkeypatch):
+        monkeypatch.setitem(rpc.TIMEOUT_SECONDS, "pages.list", 0.05)
+        env.add("stub", mode="pages-slow", pages=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        index = await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+        assert index.error == PAGE_INDEX_NO_ANSWER
+        assert index.entries == ()
+
+    async def test_invalid_result_is_invalid_and_not_logged(self, env, caplog):
+        env.add("stub", mode="pages-invalid", pages=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        with caplog.at_level("WARNING", logger="privacyfence.plugins.page_index"):
+            index = await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+        assert index.error == PAGE_INDEX_INVALID
+        assert index.entries == ()
+        assert caplog.records
+        assert '"path"' not in caplog.text and "'path'" not in caplog.text
+
+    async def test_stopped_plugin_raises(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+
+        with pytest.raises(LookupError):
+            await host.list_pages(SDK, LOCAL_PRINCIPAL)
+
+    async def test_plugin_without_pages_raises(self, env):
+        env.add("stub", pages=False)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        with pytest.raises(LookupError):
+            await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+    async def test_list_all_pages_orders_and_skips_lookup_errors(self, env, monkeypatch):
+        for name, display in (("zed", "zed"), ("alpha", "Beta"), ("beta", "beta"), ("gone", "Aaa")):
+            env.add(name, pages=True, display_name=display)
+        host = env.host()
+        await host.start()
+        for name in ("zed", "alpha", "beta", "gone"):
+            await env.enable(host, name)
+        real = host.list_pages
+
+        async def flaky(name, principal):
+            if name == "gone":
+                raise LookupError(name)
+            return await real(name, principal)
+
+        monkeypatch.setattr(host, "list_pages", flaky)
+
+        indexes = await host.list_all_pages(LOCAL_PRINCIPAL)
+
+        assert [i.name for i in indexes] == ["alpha", "beta", "zed"]
+
+    async def test_list_pages_does_not_wait_for_a_host_action(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        held = asyncio.Event()
+        release = asyncio.Event()
+
+        async def hold() -> None:
+            async with host._lock:
+                held.set()
+                await release.wait()
+
+        holder = asyncio.create_task(hold())
+        await held.wait()
+        try:
+            index = await asyncio.wait_for(host.list_pages(SDK, LOCAL_PRINCIPAL), 2)
+        finally:
+            release.set()
+            await holder
+
+        assert index.error == ""
 
 
 class TestRowsChangedListener:
