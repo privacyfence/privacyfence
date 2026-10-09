@@ -2,7 +2,8 @@
 
 A plugin with ``outputs: true`` writes into a per-principal folder (``storage.output_dir``).
 PrivacyFence reads it through its own tools: ``plugin_outputs_list`` is auto and audited,
-``plugin_outputs_read`` is a review-gated read of one file, a page at a time.
+``plugin_outputs_read`` is a review-gated read of one file, a page at a time. The approval is keyed
+to the file's sha256, so a file rewritten after its card gets a new card.
 
 Only canonical paths are accepted: a path reaches the policy context, and a folder rule is a
 string-prefix match on it, so ``a/./b.csv``, ``a\\..\\b.csv`` or a path through a symlink must
@@ -355,6 +356,7 @@ class PluginOutputsConnector(Connector):
             details_text=result["text"],
             pii_scan_text=result["text"],
             args={"plugin": plugin, "path": result["path"], "offset": offset},
+            dedupe_extra=result["sha256"],
         )
         self._record(
             f"plugin:{plugin}", READ_TOOL, f"Read {display} output",
