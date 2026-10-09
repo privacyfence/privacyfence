@@ -48,7 +48,7 @@ Tracking issue: [privacyfence/privacyfence#846](https://github.com/privacyfence/
   0140 and 0141; p8 takes the next two free numbers whatever they are.
 
 Paths and line numbers below were taken at 2bd334d9 on `feature/plugin-framework-hardening` and the
-symbols re-checked at #873's head 690e3c8b; line numbers may be a few lines off.
+symbols re-checked at #873's head 690e3c8b; line numbers may be a few lines off. This branch merged 45e955ac.
 
 ### Plugin pages (ADR 0124)
 
