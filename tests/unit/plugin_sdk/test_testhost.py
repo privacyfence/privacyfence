@@ -248,6 +248,22 @@ class TestPluginTestHost:
         assert outcome.result == {"renamed": "new", "via": "card"} == outcome.released
         assert seen["executed"] == 2 and again.card_shown  # a second call is a new card, not a replay
 
+    async def test_write_result_over_the_cap_is_withheld(self):
+        plugin = Plugin(name="big", version="1.0.0")
+
+        @plugin.tool("bulk", description="Write a lot.", gate="popup", effect="Writes.")
+        async def bulk(ctx, args):
+            return Prepared(preview=[blocks.text("bulk")])
+
+        @bulk.execute
+        async def do_bulk(ctx, prepared, approval):
+            return {"text": "x" * 3000}
+
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("bulk")
+        assert outcome.result == {"text": "x" * 3000}
+        assert outcome.released == {"withheld": True, "message": host_module._WRITE_RESULT_WITHHELD}
+
     async def test_unknown_tool_and_missing_argument(self):
         plugin, _ = build_plugin()
         async with PluginTestHost(plugin) as host:
@@ -444,6 +460,7 @@ class TestPluginTestHost:
                      "MAX_SCOPE_VALUE_CHARS", "MCP_TOOL_NAME_MAX"):
             assert getattr(host_module, "_" + name) == getattr(constants, name), name
         assert host_module._MAX_SCOPE_TYPES == 20
+        assert host_module._WRITE_RESULT_MAX_BYTES == constants.WRITE_RESULT_MAX_BYTES
         for name in ("SOURCE_OPERATIONS", "DRIVE_CHUNK_BYTES", "MAX_SOURCE_RESULT_BYTES"):
             assert getattr(source_module, name) == getattr(constants, name), name
         assert cursors_module.CURSOR_MAX_CHARS == constants.CURSOR_MAX_CHARS

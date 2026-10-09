@@ -375,6 +375,18 @@ class ApprovalService:
             result["decided_at"] = _rfc3339(card.decided_at)
         return result
 
+    def owns(self, plugin: str, approval_id: str) -> bool:
+        """True when ``approval_id`` is a card opened for ``plugin``, or the id of one of its
+        stored approvals that is not revoked (``request`` hands that id out again)."""
+        with self._lock:
+            owned = self._owned.get(approval_id)
+        if owned is not None and owned.plugin == plugin:
+            return True
+        return any(
+            record.approval_id == approval_id and record.revoked_at is None
+            for record in self._store.for_plugin(plugin)
+        )
+
     def embed_allowed(self, plugin: str, approval_id: str, frame_path: str) -> bool:
         """True only while ``approval_id`` is this plugin's card, still waiting for a human, and
         its frame shows exactly ``frame_path``: the normalized page path, as the page route sees

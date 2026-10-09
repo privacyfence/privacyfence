@@ -1066,6 +1066,14 @@ class TestPendingCardsEndWithThePlugin:
         confirm_id = (await env.page(host, "/confirm"))["body"]
         return host, approval_id, confirm_id, plugin_dir
 
+    async def test_a_running_plugins_connector_owns_the_cards_it_requested(self, env):
+        host, approval_id, confirm_id, _ = await self._open_cards(env)
+        owns = host.connectors()[SDK]._owns_approval
+
+        assert owns(confirm_id) is True
+        assert owns(approval_id) is True
+        assert owns("0" * 32) is False
+
     async def test_disable_expires_pending_cards(self, env):
         host, approval_id, confirm_id, _ = await self._open_cards(env)
 

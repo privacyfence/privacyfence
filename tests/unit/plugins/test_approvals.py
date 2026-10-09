@@ -483,6 +483,19 @@ class TestAwait:
                 await harness.service.await_("other", {"approval_id": approval})
             assert exc.value.code == "invalid_params"
 
+    async def test_owns_only_its_own_plugins_cards(self, harness):
+        approval_id = (await harness.request())["approval_id"]
+        assert harness.service.owns(PLUGIN, approval_id) is True
+        assert harness.service.owns("other", approval_id) is False
+        assert harness.service.owns(PLUGIN, "nope") is False
+
+    async def test_owns_a_stored_approval_until_it_is_revoked(self, harness):
+        harness.store.add(_record("a1"))
+        assert harness.service.owns(PLUGIN, "a1") is True
+        assert harness.service.owns("other", "a1") is False
+        harness.store.revoke(PLUGIN, "a1", now="2026-10-09T00:00:00Z")
+        assert harness.service.owns(PLUGIN, "a1") is False
+
     @pytest.mark.parametrize("params", [{}, {"approval_id": ""}, {"approval_id": "x", "timeout_ms": -1}])
     async def test_bad_params(self, harness, params):
         with pytest.raises(RpcError) as exc:

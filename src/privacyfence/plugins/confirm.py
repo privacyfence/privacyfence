@@ -177,6 +177,12 @@ class ConfirmationService:
         if finalizers:
             await asyncio.wait(finalizers, timeout=timeout)
 
+    def owns(self, plugin: str, approval_id: str) -> bool:
+        """True when ``approval_id`` is a confirmation card this service opened for ``plugin``."""
+        with self._lock:
+            owned = self._owned.get(approval_id)
+        return owned is not None and owned.plugin == plugin
+
     def expire_plugin(self, plugin: str) -> int:
         """Expire every confirmation of ``plugin`` still waiting for a human; returns how many
         this call expired. The finalizer threads wake and audit the outcome."""
