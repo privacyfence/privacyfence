@@ -90,13 +90,13 @@ A failed request is answered with a JSON-RPC error whose `data` carries the stab
 | `parse_error` | -32700 | A line that is not JSON |
 | `invalid_request` | -32600 | A batch, a message that is not a request, too many in flight |
 | `method_not_found` | -32601 | An unknown request method |
-| `invalid_params` | -32602 | Parameters that fail validation |
+| `invalid_params` | -32602 | Parameters that fail validation (`data.reason` is `not_downloadable` for a Drive file of a Google type that cannot be downloaded) |
 | `internal_error` | -32603 | A handler failed, or the peer closed |
 | `operation_not_allowed` | -32001 | A source operation outside the manifest's list |
 | `connector_unavailable` | -32002 | The service is not connected (`data.reason`: `disabled`, `not_authenticated` or `unavailable`) |
 | `unknown_principal` | -32003 | A principal other than `local` |
 | `payload_too_large` | -32004 | A result over its limit, or one record larger than a page |
-| `upstream_error` | -32005 | The service answered with an error (`data.reason` is `revision_changed` for a Drive file that changed) |
+| `upstream_error` | -32005 | The service answered with an error (`data.reason` is `revision_changed` for a Drive file or Confluence page that changed, or `cursor_expired` when a Sheets copy is gone and the range must be read again from the start) |
 | `org_only_field` | -32006 | An organization-mode field in local mode |
 | `confirmation_refused` | -32007 | A confirmation or approval refused (`data.reason` is `unattended_session` or `too_many_pending`) |
 | `unknown_tool` | -32008 | A tool name the plugin does not have |
@@ -347,6 +347,8 @@ Result:
 {"operation": "calendar.list_events", "data": …, "bytes": 1234, "next_cursor": null}
 ```
 
+Sizes are UTF-8 bytes of the JSON.
+
 The checks run in this order, and the first failure is the error: the plugin is being inspected
 (`introspection_only`); the parameters parse (`invalid_params`, `org_only_field`); the principal is
 `local` (`unknown_principal`); the operation is one of the six and in the manifest's
@@ -471,8 +473,8 @@ nothing is left.
 |---|---|
 | `jira.search` | Issues from one provider page (the provider's own page token), cut to fit; the cursor continues inside a provider page or moves to the next |
 | `calendar.list_events` | The same, with the provider's page token |
-| `sheets.get_values` | A run of rows from `first_row`; the next cursor starts after the last row returned |
-| `confluence.get_page` | The page with `body` cut to a slice that fits; `body_offset` and `body_total_chars` say where the slice sits |
+| `sheets.get_values` | A run of rows from `first_row`; the next cursor starts after the last row returned. The whole range is read once; later pages come from a private copy held for 10 idle minutes |
+| `confluence.get_page` | The page with `body` cut to a slice that fits; `body_offset` and `body_total_chars` say where the slice sits. A page that changes between pages is `revision_changed` |
 | `drive.download` | A byte range of the file, up to `length` (8 MiB at most) |
 | `salesforce.report_run` | **Not paged.** It returns the whole report, or `payload_too_large`. Paging it is [the Salesforce paging issue](https://github.com/privacyfence/privacyfence/issues/854) |
 
@@ -485,7 +487,7 @@ shorter than asked, fails with `upstream_error` and `data.reason` `revision_chan
 the end of the file is `invalid_params`. A Google-native file (Docs and Slides exported as text,
 Sheets as CSV) cannot be ranged: it is exported whole to a private spool file, with no size cap of
 PrivacyFence's own, served in chunks of at most 8 MiB, and deleted after 10 idle minutes. An export
-Google refuses is `upstream_error`.
+Google refuses is `upstream_error`. Other Google-native types (Forms, Drawings, folders, shortcuts, …) are `invalid_params` with `data.reason` `not_downloadable`.
 
 ### Confirmations
 
