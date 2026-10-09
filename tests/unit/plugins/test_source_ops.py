@@ -25,7 +25,8 @@ from privacyfence.plugins.protocol import RpcError
 from privacyfence.plugins.source_ops import SOURCE_ADAPTERS, handle_source_call
 from privacyfence.plugins.spool import DownloadSpool
 from privacyfence.principal import current_principal
-from privacyfence.salesforce_client import ReportPagingError, SalesforceClient, SalesforceClientError
+from privacyfence.salesforce_client import SalesforceClientError
+from privacyfence.salesforce_client import ReportPagingError, SalesforceClient
 from tests.fixtures.salesforce_analytics import COLUMNS, KEY, REPORT_ID, TYPE, FakeAnalytics, make_rows, tabular_report
 
 SENTINEL = "SENTINEL-do-not-log-4f1c"
