@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -91,6 +92,27 @@ def _next_cursor(raw: Any) -> str | None:
 
 class ConfluenceClientError(Exception):
     """Raised for unrecoverable Confluence client problems (auth, config, API)."""
+
+
+# Page and attachment ids become part of a URL path, where ".." or "?" would
+# send the request somewhere else, so only Confluence Cloud's own id shapes
+# are accepted: page ids are numeric, attachment ids are "att" plus digits.
+_PAGE_ID_RE = re.compile(r"[0-9]+")
+_ATTACHMENT_ID_RE = re.compile(r"(att)?[0-9]+")
+
+
+def _validate_page_id(page_id: str) -> str:
+    value = str(page_id).strip()
+    if not _PAGE_ID_RE.fullmatch(value):
+        raise ConfluenceClientError(f"page_id must be a numeric Confluence page id, got {value!r}")
+    return value
+
+
+def _validate_attachment_id(attachment_id: str) -> str:
+    value = str(attachment_id).strip()
+    if not _ATTACHMENT_ID_RE.fullmatch(value):
+        raise ConfluenceClientError(f"attachment_id must be a Confluence attachment id, got {value!r}")
+    return value
 
 
 def resolve_attachment_destination(filename: str, destination_dir: str = "") -> str:
@@ -497,6 +519,7 @@ class ConfluenceClient:
     def get_page(self, page_id: str) -> ConfluencePage:
         if not page_id:
             raise ConfluenceClientError("get_page requires a page_id")
+        page_id = _validate_page_id(page_id)
         try:
             raw = self._request(
                 self._client.get, f"{_V2_PAGES_PATH}/{page_id}", params={"body-format": "storage"},
@@ -560,6 +583,7 @@ class ConfluenceClient:
     ) -> ConfluencePage:
         if not page_id or not title:
             raise ConfluenceClientError("update_page requires page_id and title")
+        page_id = _validate_page_id(page_id)
         try:
             current = self._request(self._client.get, f"{_V2_PAGES_PATH}/{page_id}")
             version = int((current.get("version") or {}).get("number", 1))
@@ -583,6 +607,7 @@ class ConfluenceClient:
     def list_attachments(self, page_id: str, max_results: int = 500) -> list[ConfluenceAttachment]:
         if not page_id:
             raise ConfluenceClientError("list_attachments requires a page_id")
+        page_id = _validate_page_id(page_id)
         max_results = max(1, min(max_results, 500))
         results = self._collect_pages(
             f"{_V2_PAGES_PATH}/{page_id}/attachments", max_results, 250,
@@ -619,6 +644,8 @@ class ConfluenceClient:
             raise ConfluenceClientError(
                 "fetch_attachment_bytes requires a non-empty page_id and attachment_id"
             )
+        page_id = _validate_page_id(page_id)
+        attachment_id = _validate_attachment_id(attachment_id)
         url = f"{self._api_url}/rest/api/content/{page_id}/child/attachment/{attachment_id}/download"
 
         def _get() -> requests.Response:
