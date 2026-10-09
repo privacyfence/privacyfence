@@ -5,6 +5,7 @@
 Accepted — 2026-10-07. Implemented: `src/privacyfence/plugins/rpc.py`,
 `src/privacyfence/plugins/supervisor.py`, `src/privacyfence/plugins/protocol.py`,
 `docs/plugin-protocol/protocol.schema.json`.
+Amended by [ADR 0132](0132-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md): a plugin that stops reading its input is a crash.
 
 ## Context
 
