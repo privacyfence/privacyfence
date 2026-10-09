@@ -94,3 +94,37 @@ def test_windows_accepts_a_plugin_installed_under_program_files():
         assert trust.admin_only_problem(plugin_dir, exe) is None
     finally:
         shutil.rmtree(plugins, ignore_errors=True)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS ACLs exist only on Windows")
+def test_windows_refuses_a_plugin_folder_this_user_owns():
+    # An owner holds WRITE_DAC whatever the DACL says, so a folder this user owns is refused
+    # even when its ACL grants this user nothing.
+    import win32api
+    import win32con
+    import win32security
+
+    if not _is_elevated():
+        pytest.skip("creating a folder under %ProgramFiles% needs an elevated process")
+    plugins = trust.plugins_dir().parent / f"PrivacyFence Plugin Test {uuid.uuid4().hex}"
+    try:
+        plugin_dir = plugins / "today"
+        (plugin_dir / "bin").mkdir(parents=True)
+        exe = plugin_dir / "bin" / "today-plugin.exe"
+        exe.write_bytes(b"not really a program")
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32con.TOKEN_QUERY,
+        )
+        user_sid = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+        descriptor = win32security.SECURITY_DESCRIPTOR()
+        descriptor.SetSecurityDescriptorOwner(user_sid, False)
+        win32security.SetFileSecurity(
+            str(plugin_dir), win32security.OWNER_SECURITY_INFORMATION, descriptor,
+        )
+
+        problem = trust.admin_only_problem(plugin_dir, exe)
+
+        assert problem is not None
+        assert "is owned by" in problem
+    finally:
+        shutil.rmtree(plugins, ignore_errors=True)

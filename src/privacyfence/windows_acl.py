@@ -465,6 +465,14 @@ def describe_sid(sid) -> str:  # noqa: ANN001 -- a pywin32 PySID, no type stub
     return f"{domain}\\{name}" if domain else name
 
 
+# Well-known SIDs of the owners a plugin's files may have. SIDs, not names, so a localized
+# group name cannot slip past.
+SYSTEM_SID = "S-1-5-18"
+ADMINISTRATORS_SID = "S-1-5-32-544"
+TRUSTED_INSTALLER_SID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+TRUSTED_OWNER_SIDS = frozenset({SYSTEM_SID, ADMINISTRATORS_SID, TRUSTED_INSTALLER_SID})
+
+
 def read_owner(path: Path) -> str | None:
     """``path``'s owning principal as ``DOMAIN\\Name``, or None where that
     cannot be read (not Windows, no such path, no permission). Feeds both
@@ -480,6 +488,21 @@ def read_owner(path: Path) -> str | None:
         logger.debug("Could not read the owner of %s: %s", path, exc)
         return None
     return None if sid is None else describe_sid(sid)
+
+
+def read_owner_sid(path: Path) -> str | None:
+    """The string SID of ``path``'s owner, or None when it cannot be read (or off Windows)."""
+    try:
+        import win32security
+
+        descriptor = win32security.GetFileSecurity(
+            str(path), win32security.OWNER_SECURITY_INFORMATION
+        )
+        sid = descriptor.GetSecurityDescriptorOwner()
+        return None if sid is None else str(win32security.ConvertSidToStringSid(sid))
+    except Exception as exc:
+        logger.debug("Could not read the owner SID of %s: %s", path, exc)
+        return None
 
 
 def read_dacl(path: Path) -> list[Ace] | None:
@@ -587,11 +610,15 @@ def lookup_account_sid(name: str):  # noqa: ANN201 -- a pywin32 PySID, no type s
 
 
 __all__ = [
+    "ADMINISTRATORS_SID",
     "Ace",
     "FILE_ALL_ACCESS",
     "FILE_GENERIC_READ_EXECUTE",
     "FILE_TRAVERSE_ONLY",
     "OWNER_RIGHTS_TRUSTEE",
+    "SYSTEM_SID",
+    "TRUSTED_INSTALLER_SID",
+    "TRUSTED_OWNER_SIDS",
     "TRUSTED_TRUSTEES",
     "authority_problems",
     "current_account_name",
@@ -607,6 +634,7 @@ __all__ = [
     "owner_problems",
     "read_dacl",
     "read_owner",
+    "read_owner_sid",
     "root_problems",
     "trustee_matches",
 ]

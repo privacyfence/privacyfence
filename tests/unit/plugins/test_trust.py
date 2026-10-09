@@ -21,6 +21,12 @@ MANIFEST = {
 _EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
 
 
+@pytest.fixture(autouse=True)
+def _administrators_own_every_path(monkeypatch):
+    """Windows tests judge the DACL; a path's owner is Administrators unless a test says otherwise."""
+    monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: windows_acl.ADMINISTRATORS_SID)
+
+
 def _no_problem(plugin_dir: Path, executable: Path) -> None:
     return None
 
@@ -214,6 +220,19 @@ class TestWindowsAncestors:
 
         assert trust.admin_only_problem(plugin_dir, exe) == (
             f"{bin_dir} is writable by NT AUTHORITY\\Authenticated Users"
+        )
+
+    def test_a_plugin_directory_a_user_owns_is_refused(self, monkeypatch, tmp_path):
+        plugin_dir, exe = self._layout(monkeypatch, tmp_path, lambda path, exe, real_dir: _ADMIN_ONLY_ACL)
+        real_dir = plugin_dir.resolve()
+        monkeypatch.setattr(
+            windows_acl, "read_owner_sid",
+            lambda path: "S-1-5-21-1-2-3-1001" if Path(path) == real_dir else windows_acl.ADMINISTRATORS_SID,
+        )
+        monkeypatch.setattr(windows_acl, "read_owner", lambda path: "MACHINE\\alice")
+
+        assert trust.admin_only_problem(plugin_dir, exe) == (
+            f"{real_dir} is owned by MACHINE\\alice, not by SYSTEM, Administrators or TrustedInstaller"
         )
 
     @pytest.mark.parametrize("mask", [0x1301BF, windows_acl.FILE_WRITE_DATA])
