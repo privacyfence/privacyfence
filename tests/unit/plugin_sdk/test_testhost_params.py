@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import pytest
 
+from privacyfence import drive_client
 from privacyfence.connectors import salesforce as daemon_salesforce
 from privacyfence.plugins import constants, source_ops
 from privacyfence.plugins.protocol import RpcError as DaemonRpcError
 from privacyfence.salesforce_client import REPORT_FILTER_OPERATORS
 from privacyfence_plugin_sdk._rpc import RpcError
-from privacyfence_plugin_sdk.testing import _params
+from privacyfence_plugin_sdk.testing import _params, _source
 
 _FILTER = {"column": "Amount", "operator": "equals", "value": "1"}
 _TIMES = {"time_min": "2025-01-01T00:00:00Z", "time_max": "2025-01-02T00:00:00Z"}
@@ -30,6 +31,20 @@ CASES: list[tuple[str, dict]] = [
     ("salesforce.report_run", {"report_id": "R1", "filters": [{**_FILTER, "value": []}]}),
     ("salesforce.report_run", {"report_id": "R1", "filters": [{**_FILTER, "value": ["a", 1]}]}),
     ("salesforce.report_run", {"report_id": "R1", "filters": [{**_FILTER, "column": "  "}]}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": ["A", "B"]}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": "x"}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": []}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": [""]}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": [5]}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": ["x" * 257]}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": ["c"] * 100}),
+    ("salesforce.report_run", {"report_id": "R1", "columns": ["c"] * 101}),
+    ("salesforce.report_run", {"report_id": "R1", "page_by": "Owner"}),
+    ("salesforce.report_run", {"report_id": "R1", "page_by": ""}),
+    ("salesforce.report_run", {"report_id": "R1", "page_by": 5}),
+    ("salesforce.report_run", {"report_id": "R1", "cursor": "abc"}),
+    ("salesforce.report_run", {"report_id": "R1", "page_by": "Owner", "cursor": "abc"}),
+    ("salesforce.report_run", {"report_id": "R1", "page_by": "Owner", "cursor": ""}),
     ("jira.search", {"jql": "project = X"}),
     ("jira.search", {"jql": "project = X", "page_size": 100, "cursor": "abc"}),
     ("jira.search", {}),
@@ -109,12 +124,13 @@ def test_every_operation_has_cases():
 
 
 def test_copied_limits_match():
-    for name in ("_MAX_ID_CHARS", "_MAX_RANGE_CHARS", "_MAX_TIME_CHARS", "_MAX_JQL_CHARS", "_VALUE_RENDER_OPTIONS"):
+    for name in ("_MAX_ID_CHARS", "_MAX_RANGE_CHARS", "_MAX_TIME_CHARS", "_MAX_JQL_CHARS", "_MAX_REPORT_COLUMNS", "_VALUE_RENDER_OPTIONS"):
         assert getattr(_params, name) == getattr(source_ops, name), name
     for name in ("CURSOR_MAX_CHARS", "JIRA_PAGE_SIZE_MAX", "CALENDAR_PAGE_SIZE_MAX", "DRIVE_CHUNK_BYTES"):
         assert getattr(_params, name) == getattr(constants, name), name
     assert _params.REPORT_FILTER_OPERATORS == REPORT_FILTER_OPERATORS
     assert _params._FILTERS_SHAPE_ERROR == daemon_salesforce._FILTERS_SHAPE_ERROR
+    assert _source._GOOGLE_DOC_EXPORTS == set(drive_client._GOOGLE_DOC_EXPORTS)
 
 
 def _serve(fixtures, operation, params):
