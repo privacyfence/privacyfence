@@ -720,6 +720,15 @@ class TestRegisterConfirm:
         assert approval.dedupe_key is None
         assert approval in registry.list_pending()
 
+    def test_frame_src_defaults_to_empty(self):
+        # Only a plugin approval card frames a page; every other card and dialog has none.
+        registry = make_registry()
+        assert registry.register_confirm().frame_src == ""
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert approval.frame_src == ""
+
     def test_two_confirms_never_coalesce(self):
         registry = make_registry()
         first = registry.register_confirm()
@@ -734,6 +743,22 @@ class TestRegisterConfirm:
         )
         # Would raise if this were charged against the same cap as cards.
         registry.register_confirm()
+
+    def test_does_not_notify_by_default(self):
+        registry = make_registry()
+        seen: list = []
+        registry.add_created_listener(seen.append)
+        registry.register_confirm()
+        assert seen == []
+
+    def test_notify_calls_the_created_listener(self):
+        registry = make_registry()
+        seen: list = []
+        registry.add_created_listener(seen.append)
+        approval = registry.register_confirm(sensitive=True, notify=True)
+        assert seen == [approval]
+        assert approval.kind == "confirm"
+        assert approval.sensitive is True
 
 
 class TestListPendingAndGet:

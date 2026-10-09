@@ -1,0 +1,21 @@
+{
+  "operation": "confluence.get_page",
+  "params": {},
+  "data": {
+    "id": "EXAMPLE-1",
+    "title": "Example page",
+    "space_key": "EXAMPLE",
+    "space_name": "Example space",
+    "version": 3,
+    "author": "EXAMPLE-USER-1",
+    "created": "2026-08-01T08:00:00.000Z",
+    "updated": "2026-09-01T09:00:00.000Z",
+    "body": "<p>An example paragraph.</p>",
+    "url": "https://example.com/wiki/spaces/EXAMPLE/pages/1",
+    "author_name": "Jane Example",
+    "mentions": {},
+    "body_offset": 0,
+    "body_total_chars": 28
+  },
+  "next_cursor": null
+}

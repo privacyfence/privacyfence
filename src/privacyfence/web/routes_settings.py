@@ -246,6 +246,9 @@ _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # -- unlike disable_connector below, this is not a no-op change of
     # nothing (ADR 0070).
     "enable_connector",
+    # Enabling lets a plugin act through the user's connectors, and purging deletes its data for
+    # good: both need a human and a fresh passkey assertion (ADR 0121).
+    "enable_plugin", "purge_plugin_data",
 })
 
 _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
@@ -260,6 +263,11 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # Changes what a draft *contains* (the user's own signature), never
     # whether or how it is gated -- every draft still raises its popup.
     "toggle_gmail_signature",
+    # Listing, introspecting and stopping a plugin lets nothing new act: the binary is already
+    # administrator-installed (ADR 0121), and introspection can neither read data nor change state.
+    "rescan_plugins", "inspect_plugin", "disable_plugin",
+    # Revoking an approval only takes trust away, like disable_plugin.
+    "revoke_plugin_approval",
 })
 
 # The org-only actions (ADR 0035 decision 3), classified the same
@@ -512,6 +520,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "    if (!window.confirm('Rotate the AI client token? Every AI client using the current token stops working until you give it the new one.')) { return; }"
         "    url = '/api/settings/mcp_token/rotate'; rest.confirmed = true;"
         "  }"
+        "  if (action === 'purge_plugin_data' && !window.confirm('Delete everything this plugin has stored? This cannot be undone.')) { return; }"
         "  if (action === 'quit_app') {"
         "    if (!window.confirm('Quit PrivacyFence? This stops the daemon, including every open approval and settings page.')) { return; }"
         "    rest.confirmed = true;"
@@ -810,6 +819,8 @@ def build_routes(
             notifications_enabled=general.get("notifications_enabled", notifications_enabled),
             notifications_detail=general.get("notifications_detail", notifications_detail),
             banner_html=_banner_html(),
+            # The plugin rows of this same snapshot, so the Plugins menu matches the cards below.
+            plugin_pages=tuple((p["display_name"], p["page_url"]) for p in state.get("plugins", []) if p.get("page_url")),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

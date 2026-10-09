@@ -875,6 +875,37 @@ class TestCheckJira:
         assert not get_issue.ok
         assert get_issue.raw is None
 
+    def test_search_issues_page_called_with_fallback_jql(self, monkeypatch):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {
+            "key": "PFQA-1",
+            "fields": {"summary": "PrivacyFence QA seed issue [QATEST]", "status": {"name": "To Do"}},
+        }
+        client._client.enhanced_jql.return_value = {"issues": [], "isLast": True}
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+
+        page = next(r for r in results if r.method == "search_issues_page")
+        assert page.ok
+        assert page.raw is None
+        args, kwargs = client._client.enhanced_jql.call_args
+        assert args[0] == 'project = PFQA AND summary ~ "PrivacyFence QA seed issue [QATEST]"'
+        assert kwargs["limit"] == 1
+
+    def test_search_issues_page_failure_reported(self, monkeypatch):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {"key": "PFQA-1", "fields": {"summary": "x"}}
+        client._client.enhanced_jql.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+
+        page = next(r for r in results if r.method == "search_issues_page")
+        assert not page.ok
+
 
 class TestCheckSalesforce:
     def _client(self, sf: MagicMock) -> SalesforceClient:
@@ -1199,6 +1230,61 @@ class TestCheckDrive:
         assert get_meta.raw is None
 
 
+class _RangeDriveClient:
+    def __init__(self, files, chunk=b"0123456789abcdef"):
+        self._files = files
+        self._chunk = chunk
+        self.range_calls = []
+
+    def get_file_metadata(self, file_id):
+        return SimpleNamespace(id=file_id, name="PrivacyFence QA Sandbox")
+
+    def list_files(self, query, max_results=20):
+        assert "'f1' in parents" in query
+        return self._files
+
+    def download_range(self, file_id, offset, length):
+        self.range_calls.append((file_id, offset, length))
+        return self._chunk[:length]
+
+
+def _drive_file(file_id, mime_type, size=100):
+    return SimpleNamespace(id=file_id, mime_type=mime_type, size=size)
+
+
+class TestCheckDriveRange:
+    def _run(self, monkeypatch, client):
+        monkeypatch.setattr(recorder, "_build_drive_client", lambda: client)
+        results = recorder.check_drive(record=False, manifest={"drive": {"folder_id": "f1"}})
+        return next(r for r in results if r.method == "download_range")
+
+    def test_reads_16_bytes_of_the_first_non_google_file(self, monkeypatch):
+        client = _RangeDriveClient([
+            _drive_file("sub", "application/vnd.google-apps.folder"),
+            _drive_file("doc", "application/vnd.google-apps.document"),
+            _drive_file("pdf", "application/pdf"),
+            _drive_file("png", "image/png"),
+        ])
+        result = self._run(monkeypatch, client)
+        assert result.ok
+        assert client.range_calls == [("pdf", 0, 16)]
+
+    def test_a_file_smaller_than_16_bytes_is_read_whole(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("tiny", "text/plain", size=5)], chunk=b"hello")
+        assert self._run(monkeypatch, client).ok
+
+    def test_a_short_read_fails(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("pdf", "application/pdf")], chunk=b"short")
+        assert not self._run(monkeypatch, client).ok
+
+    def test_no_non_google_file_fails_with_the_exact_message(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("doc", "application/vnd.google-apps.document")])
+        result = self._run(monkeypatch, client)
+        assert not result.ok
+        assert result.note == "QA Sandbox has no non-Google file for the Range check"
+        assert client.range_calls == []
+
+
 class TestCheckCalendar:
     def test_organizer_and_attendee_identity_redacted(self, monkeypatch):
         raw_event = {
@@ -1235,6 +1321,26 @@ class TestCheckCalendar:
         get_event = next(r for r in results if r.method == "get_event")
         assert not get_event.ok
         assert get_event.raw is None
+
+    def test_list_events_page_called(self, monkeypatch):
+        raw_event = {
+            "id": "e1", "summary": "PrivacyFence QA seed event [QATEST]",
+            "start": {"dateTime": "x"}, "end": {"dateTime": "y"},
+            "organizer": {"email": "real.user@company.com"},
+        }
+        client = CalendarClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = _offline_google_service("calendar", "v3", raw_event)
+        monkeypatch.setattr(recorder, "_build_calendar_client", lambda: client)
+        calls = []
+        real = client.list_events_page
+        client.list_events_page = lambda *a, **k: calls.append((a, k)) or real(*a, **k)
+
+        results = recorder.check_calendar(record=True, manifest={"calendar": {"seed_event_id": "e1"}})
+
+        page = next(r for r in results if r.method == "list_events_page")
+        assert page.ok
+        assert page.raw is None
+        assert calls == [(("primary", 1, "", ""), {})]
 
 
 class TestCheckContacts:

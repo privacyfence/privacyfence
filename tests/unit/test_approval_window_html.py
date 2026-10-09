@@ -810,6 +810,56 @@ class TestPreviewBlocks:
         assert body == ""
 
 
+class TestCodeAndDiffBlocks:
+    """A plugin's code and diff blocks (ADR 0122) are plain text: escaped, in
+    monospace, never interpreted. A diff only gains a class per line."""
+
+    def test_code_renders_as_pre_code(self):
+        body = build_preview_body_html(blocks=[{"type": "code", "text": "x = 1\ny = 2", "language": "python"}])
+        assert body == '<pre class="pf-code"><code>x = 1\ny = 2</code></pre>'
+
+    def test_code_is_escaped(self):
+        body = build_preview_body_html(blocks=[
+            {"type": "code", "text": "</code></pre><script>window.pwned=1</script><img src=x onerror=alert(1)>"},
+        ])
+        assert "<script" not in body
+        assert "<img" not in body
+        assert body.count("</pre>") == 1
+        assert "&lt;script&gt;window.pwned=1&lt;/script&gt;" in body
+
+    def test_code_language_selects_nothing(self):
+        body = build_preview_body_html(blocks=[{"type": "code", "text": "a", "language": '"><script>'}])
+        assert "<script>" not in body
+        assert "language" not in body
+
+    def test_diff_lines_get_their_classes(self):
+        text = "@@ -1,2 +1,2 @@\n context\n-old\n+new\n"
+        body = build_preview_body_html(blocks=[{"type": "diff", "text": text}])
+        assert body == (
+            '<pre class="pf-code pf-diff">'
+            '<span class="pf-diff-hunk">@@ -1,2 +1,2 @@</span>\n'
+            "<span> context</span>\n"
+            '<span class="pf-diff-del">-old</span>\n'
+            '<span class="pf-diff-add">+new</span>\n'
+            "<span></span></pre>"
+        )
+
+    def test_diff_is_escaped(self):
+        body = build_preview_body_html(blocks=[
+            {"type": "diff", "text": '+<script>window.pwned=1</script>\n-<img src=x onerror="alert(1)">'},
+        ])
+        assert "<script" not in body
+        assert "<img" not in body
+        assert '<span class="pf-diff-add">+&lt;script&gt;' in body
+        assert '<span class="pf-diff-del">-&lt;img src=x onerror=&quot;alert(1)&quot;&gt;</span>' in body
+
+    def test_styles_define_the_code_and_diff_classes(self):
+        from privacyfence.approval_window_html import _STYLES_CSS
+
+        for selector in (".pf-code", ".pf-diff-add", ".pf-diff-del", ".pf-diff-hunk"):
+            assert selector in _STYLES_CSS
+
+
 class TestMarkdownBlock:
     """The "markdown" block type -- text_extraction.py's DOCX/PPTX/XLSX
     output and html_to_text.py's html_to_markdown() output both render

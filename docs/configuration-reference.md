@@ -209,6 +209,12 @@ is required for settings changes, changing this needs one too. See ADR 0091.
 |---|---|---|---|---|
 | `agent_overrides.<client name>` | string | none | not set (commented out) | Label an MCP client whose handshake name PrivacyFence does not recognise as a known AI system. The value is an AI system id such as `claude-code` or `claude` (the ids the **Audit Log** shows); an unknown id is ignored with a warning. It relabels the recorded name only: the entry is still recorded as claimed (`client_info`), and the card still shows *Undetected*, as every local-mode card does. Local mode only; needs a restart. See [How PrivacyFence works](how-it-works.md#which-ai-system-is-asking). |
 
+### Plugins
+
+| Key | Type | Code default | Seeded | What it does |
+|---|---|---|---|---|
+| `plugins.enabled` | boolean | `true` | `true` | Lets the administrator-installed plugins run. Set it to `false` and no plugin starts; each shows in Settings that plugins are switched off. Plugins also need the packaged install's background service (the privilege-separated install); without it they do not run whatever this says. Any value other than `true` or `false`, or a `plugins:` that is not a mapping, is ignored with a warning in the daemon log and the default applies. Local mode only; needs a restart. |
+
 ## Organization config bundle (org_config.json)
 
 Build the bundle with `scripts/build_org_bundle.py` (Python standard library only; `--sign-key`

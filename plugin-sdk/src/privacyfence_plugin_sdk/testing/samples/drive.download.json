@@ -1,0 +1,15 @@
+{
+  "operation": "drive.download",
+  "params": {},
+  "data": {
+    "file_id": "EXAMPLE-1",
+    "mime_type": "application/octet-stream",
+    "revision": "2026-09-01T09:00:00.000Z",
+    "total_size_bytes": 23,
+    "offset": 0,
+    "length": 23,
+    "eof": true,
+    "content_base64": "RXhhbXBsZSB3b3JrYm9vayBieXRlcy4="
+  },
+  "next_cursor": null
+}

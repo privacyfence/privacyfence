@@ -284,6 +284,82 @@ On a separated install, a tool that reads or writes a local file you named goes 
 A non-packaged install is never separated. `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` exists for
 development against a source checkout and must never be set in a real deployment.
 
+## Plugins
+
+A [plugin](plugins.md) is a separate program an administrator installs and you enable. The design
+is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
+[ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
+and in [ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) to
+[ADR 0131](adr/0131-a-plugins-child-processes-run-under-its-account-unsupervised.md).
+
+**Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
+every connector credential, so whoever can replace it can read your data. The privacy boundary of
+[ADR 0058](adr/0058-nothing-runs-elevated-unless-only-an-administrator-can-rewrite-it.md) therefore
+applies. Plugins run only on a separated install. A plugin lives in an administrator-only plugins
+directory outside the app and the data directory ([Platform support](platform-support.md#plugins-directory)),
+and at every start PrivacyFence checks that the executable, the plugin's folder and every folder
+above it can be written by administrators only. For the folders above the plugin's own, Windows
+ignores inherit-only entries and the right to create subfolders, which a default drive root grants
+every signed-in user, because they cannot swap an existing folder; the executable and the plugin's
+own folder keep the strict rule, and POSIX applies one rule to all. Some older Debian installs make
+`/usr/local` and `/usr/local/lib` group-writable by `staff`, and plugins are refused there until
+those directories are administrator-only. The directory is not configurable.
+
+**Enabling is a sensitive action.** It needs a human session and, where step-up is on, a passkey.
+You review the plugin's tools and gates, the connector reads it may make and whether it serves
+pages. PrivacyFence records the hashes of the executable and the manifest and the tools you saw. A
+changed file, or a tool you did not review, disables the plugin until you enable it again. A tool on
+the `auto` gate, read or write, needs the manifest's `max_gate_floor: auto`, which the review card
+shows. The plugin starts with an allow-listed environment, never a copy of the daemon's.
+
+**What a plugin can do.** Through the protocol, only what is listed: add tools (gated like any
+connector tool, where a read releases the payload you saw on the card), read connected services
+through the source API, ask you for a confirmation, serve pages and keep files. The source API is
+**not gated**: a read through it opens no card. It is limited to the operations in the plugin's
+manifest, which you approve at enable, to the local principal and to six read operations, and every
+call is written to the audit log with the target and the size, never the content. A plugin holds no
+connector token.
+
+**Plugin pages** are served only to your signed-in human session, never to an AI client. They run in
+a sandbox: no `allow-same-origin`, so a page cannot read the session cookie or call PrivacyFence's
+APIs, and the content security policy allows scripts but no form posts and no framing. Only GET
+and HEAD are served.
+
+**Confirmations** are cards that no rule can accept, with step-up kept, and they are refused while
+any AI session is unattended.
+
+**Approvals and the card frame.** A plugin approval is a stored, revocable approval of a thing,
+bound to its content digest. Its card is never auto-accepted and keeps step-up by default.
+PrivacyFence's own fields (the plugin's display name and installed name, the kind, the subject and
+the full digest) are rendered outside any frame, above the plugin's preview. A plugin may also have
+its own page shown in a frame on the card. Framing is otherwise forbidden, and two headers are
+loosened for one response each: the card's response allows `frame-src 'self'`, and only when it has
+a page; a plugin page response allows `frame-ancestors 'self'` (and `X-Frame-Options: SAMEORIGIN`)
+only when its request names a pending approval of that plugin for exactly that page. The page stays
+in the same sandbox as any plugin page. PrivacyFence cannot check that the digest matches what the
+preview or the page shows: the approval is only as honest as the plugin, which is already trusted
+code.
+
+**Outputs are a read path.** A plugin with `outputs: true` writes files into a folder that only the
+service account can write, and PrivacyFence hands them to the AI through its own tools:
+`plugin_outputs_list` shows names, sizes and times without a card, and `plugin_outputs_read` shows a
+card with the text and a PII check, unless a folder rule you created allows it. Only regular files of
+the declared types, not symbolic links and not dot-prefixed, are published, and the path is checked
+to be canonical before a rule sees it. A plugin can therefore get its own data to the AI only through
+a card or a rule you wrote; the file names are visible without one.
+
+**Child processes.** A plugin may start child processes. They run under the service account with the
+plugin's environment and the plugin's trust, and PrivacyFence does not supervise, restart or confine
+them. Stopping the plugin kills its process group on Linux and macOS but only the plugin's process on
+Windows. Confining children is the plugin's job.
+
+**Residual risk.** PrivacyFence does not sandbox a plugin and gives it no account of its own. An
+enabled plugin, and anything it starts, can read what the service account can read, connector
+credential files included, and can use the source API silently within its approved operations. It
+can show a card one thing and bind its approval to the digest of another. The controls are the administrator
+who installs it and your decision to enable it. Review a plugin as you would review any program run
+by an administrator. Organization deployments do not run plugins.
+
 ## Audit log integrity
 
 Each gate decision, approval and security event is written to a weekly JSON Lines file

@@ -78,7 +78,7 @@ from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientErr
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
 from privacyfence.salesforce_client import ReportFilter, SalesforceClient, SalesforceClientError  # noqa: E402
 from privacyfence.gmail_client import GmailClient, GmailClientError  # noqa: E402
-from privacyfence.drive_client import DriveClient, DriveClientError  # noqa: E402
+from privacyfence.drive_client import _GOOGLE_DOC_EXPORTS, DriveClient, DriveClientError  # noqa: E402
 from privacyfence.calendar_client import CalendarClient, CalendarClientError  # noqa: E402
 from privacyfence.contacts_client import ContactsClient, ContactsClientError  # noqa: E402
 from privacyfence.tasks_client import TasksClient, TasksClientError  # noqa: E402
@@ -918,6 +918,15 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except JiraClientError as exc:
         results.append(CheckResult("jira", "get_issue", seed_issue_summary, False, str(exc)))
 
+    # search_issues_page -- the single-request page call the connector's paged
+    # search will use; exercised live, nothing recorded.
+    page_jql = f'project = {project_key} AND summary ~ "{seed_issue_summary}"'
+    try:
+        client.search_issues_page(page_jql, 1)
+        results.append(CheckResult("jira", "search_issues_page", project_key, True, "one page returned"))
+    except JiraClientError as exc:
+        results.append(CheckResult("jira", "search_issues_page", project_key, False, str(exc)))
+
     return results
 
 
@@ -1155,6 +1164,30 @@ def _build_drive_client() -> DriveClient:
     return DriveClient(client_config=client_config, token_file=token_path)
 
 
+def _check_drive_range(client: DriveClient, folder_id: str) -> CheckResult:
+    """Read the first 16 bytes of the first non-Google file in the sandbox folder with a Range request."""
+    target = "download_range"
+    try:
+        files = client.list_files(f"'{folder_id}' in parents and trashed = false", max_results=50)
+        candidate = next(
+            (
+                f
+                for f in files
+                if f.mime_type not in _GOOGLE_DOC_EXPORTS and f.mime_type != "application/vnd.google-apps.folder"
+            ),
+            None,
+        )
+        if candidate is None:
+            return CheckResult("drive", "download_range", target, False, "QA Sandbox has no non-Google file for the Range check")
+        chunk = client.download_range(candidate.id, 0, 16)
+    except DriveClientError as exc:
+        return CheckResult("drive", "download_range", target, False, str(exc))
+    expected = min(16, candidate.size)
+    ok = len(chunk) == expected
+    note = f"{len(chunk)} bytes read" if ok else f"expected {expected} bytes, got {len(chunk)}"
+    return CheckResult("drive", "download_range", target, ok, note)
+
+
 def check_drive(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # drive_get_file_metadata is auto-approved (no gate/preview -- see
     # connectors/drive.py), unlike every other connector's targeted read
@@ -1170,6 +1203,7 @@ def check_drive(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
 
     results: list[CheckResult] = []
     client = _build_drive_client()
+    resolved_folder_id = folder_id
 
     try:
         if folder_id:
@@ -1182,8 +1216,9 @@ def check_drive(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
             )
             if not matches:
                 raise DriveClientError(f"no folder found matching name {folder_name!r}")
+            resolved_folder_id = matches[0].id
             with RawCaptureExecute() as cap:
-                file = client.get_file_metadata(matches[0].id)
+                file = client.get_file_metadata(resolved_folder_id)
         tagged = file.name == folder_name
         complete = bool(file.id and file.name)
         ok = tagged and complete
@@ -1199,6 +1234,9 @@ def check_drive(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         )
     except DriveClientError as exc:
         results.append(CheckResult("drive", "get_file_metadata", folder_name, False, str(exc)))
+
+    if resolved_folder_id:
+        results.append(_check_drive_range(client, resolved_folder_id))
 
     return results
 
@@ -1246,6 +1284,14 @@ def check_calendar(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         results.append(CheckResult("calendar", "get_event", seed_event_title, ok, note, raw, "get_event.json"))
     except CalendarClientError as exc:
         results.append(CheckResult("calendar", "get_event", seed_event_title, False, str(exc)))
+
+    # list_events_page -- the single-request page call the connector's paged
+    # listing will use; exercised live, nothing recorded.
+    try:
+        client.list_events_page(calendar_id, 1, "", "")
+        results.append(CheckResult("calendar", "list_events_page", calendar_id, True, "one page returned"))
+    except CalendarClientError as exc:
+        results.append(CheckResult("calendar", "list_events_page", calendar_id, False, str(exc)))
 
     return results
 
