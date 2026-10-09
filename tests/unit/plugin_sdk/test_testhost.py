@@ -717,3 +717,53 @@ class TestCheckToolDefs:
         result = {**self.result(p, []), "tools": [tool]}
         with pytest.raises(ToolDefinitionError, match=f"tool.{field} must not contain line breaks"):
             host_module._check_tool_defs(p, result, "review")
+
+    @staticmethod
+    def file_tool(**overrides):
+        return {
+            "name": "put", "description": "d", "read_only": False, "destructive": False, "gate": "review",
+            "parameters": {"type": "object", "properties": {"f": {
+                "type": "string", "x-privacyfence-file": {"max_bytes": 10, "media_types": ["text/plain"]},
+            }}},
+            **overrides,
+        }
+
+    def test_a_file_tool_that_is_read_only_is_refused(self):
+        p, _ = build_plugin()
+        result = {**self.result(p, []), "tools": [self.file_tool(read_only=True)]}
+        with pytest.raises(ToolDefinitionError, match="tool put takes a file and cannot be read-only"):
+            host_module._check_tool_defs(p, result, "review")
+
+    def test_a_file_tool_on_the_auto_gate_is_refused(self):
+        p, _ = build_plugin()
+        result = {**self.result(p, []), "tools": [self.file_tool(gate="auto")]}
+        with pytest.raises(ToolDefinitionError, match="tool put takes a file and must use the review or popup gate"):
+            host_module._check_tool_defs(p, result, "auto")
+
+    def test_a_valid_file_tool_is_accepted(self):
+        p, _ = build_plugin()
+        result = {**self.result(p, []), "tools": [self.file_tool()]}
+        assert len(host_module._check_tool_defs(p, result, "review")) == 1
+
+    @pytest.mark.parametrize(("spec", "detail"), [
+        ({"type": "integer"}, "a file parameter must have type string"),
+        ({"type": "string", "x-privacyfence-file": {"max_bytes": 1}}, "takes max_bytes and media_types only"),
+        ({"type": "string", "x-privacyfence-file": {"max_bytes": 0, "media_types": ["text/plain"]}},
+         "max_bytes must be 1 to 8388608"),
+        ({"type": "string", "x-privacyfence-file": {"max_bytes": 1, "media_types": ["text/x"]}},
+         "media_types must be a non-empty list of distinct supported types"),
+    ])
+    def test_a_malformed_file_parameter_is_refused(self, spec, detail):
+        p, _ = build_plugin()
+        if "x-privacyfence-file" not in spec:
+            spec = {**spec, "x-privacyfence-file": {"max_bytes": 1, "media_types": ["text/plain"]}}
+        tool = self.file_tool(parameters={"type": "object", "properties": {"f": spec}})
+        with pytest.raises(ToolDefinitionError, match=detail):
+            host_module._check_tool_defs(p, {**self.result(p, []), "tools": [tool]}, "review")
+
+    def test_two_file_parameters_are_refused(self):
+        p, _ = build_plugin()
+        one = self.file_tool()["parameters"]["properties"]["f"]
+        tool = self.file_tool(parameters={"type": "object", "properties": {"f": one, "g": dict(one)}})
+        with pytest.raises(ToolDefinitionError, match="tool put may take at most 1 file parameter"):
+            host_module._check_tool_defs(p, {**self.result(p, []), "tools": [tool]}, "review")

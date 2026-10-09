@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import subprocess  # nosec B404  # runs this interpreter on a fixed argv
 import sys
@@ -11,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from privacyfence_plugin_sdk._rpc import RpcError
-from privacyfence_plugin_sdk import Bytes, Html, PageEntry, Plugin, Prepared, Text, blocks
+from privacyfence_plugin_sdk import Bytes, Html, PageEntry, Plugin, Prepared, Text, blocks, file_param
 from privacyfence_plugin_sdk.testing import PluginTestHost
 from privacyfence_plugin_sdk.testing import _host as host_module
 from privacyfence_plugin_sdk.testing import _pages
@@ -631,3 +633,162 @@ class TestOutputs:
             PluginTestHost(plugin, outputs=True, output_types=("image/png",))
         with pytest.raises(ValueError, match="non-empty"):
             PluginTestHost(plugin, outputs=True, output_types=())
+
+
+NEW_TABS_CSP = (
+    "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'self' data: 'unsafe-inline'; "
+    "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+)
+
+
+async def test_page_new_tabs_changes_the_csp_on_every_page_response():
+    plugin, _ = build_plugin()
+    async with PluginTestHost(plugin, pages=True, page_new_tabs=True) as host:
+        for method, path in (("GET", "/"), ("GET", "/missing"), ("GET", "/a//b"), ("HEAD", "/"), ("POST", "/")):
+            response = await host.request(method, path)
+            assert response.headers["content-security-policy"] == NEW_TABS_CSP, (method, path)
+        assert (await host.get("/")).headers["x-frame-options"] == "DENY"
+    async with PluginTestHost(plugin, pages=True, page_new_tabs=False) as host:
+        assert (await host.get("/")).headers["content-security-policy"] == CSP
+
+
+def test_page_new_tabs_needs_pages():
+    plugin, _ = build_plugin()
+    with pytest.raises(ValueError, match="page_new_tabs needs pages=True"):
+        PluginTestHost(plugin, page_new_tabs=True)
+
+
+HTML_PAGE = b"<!doctype html><title>x</title><p>hello</p>"
+
+
+def build_file_plugin() -> tuple[Plugin, dict]:
+    seen: dict = {"prepare": [], "execute": []}
+    plugin = Plugin(name="filer", version="1.0.0")
+
+    @plugin.tool(
+        "publish", description="Publish a page.", gate="review", title="Publish page",
+        params={
+            "html": file_param("The page.", max_bytes=100, media_types=["text/html"]),
+            "note": {"type": "string"},
+        },
+        required=["html"],
+    )
+    async def publish(ctx, args):
+        seen["prepare"].append((dict(args), ctx.files["html"] if "html" in ctx.files else None))
+        return Prepared(preview=[blocks.text("publish")])
+
+    @publish.execute
+    async def do_publish(ctx, prepared, approval):
+        seen["execute"].append((None, ctx.files["html"].content))
+        return {"ok": True}
+
+    @plugin.tool(
+        "attach", description="Attach.", gate="popup",
+        params={"blob": file_param(max_bytes=1000, media_types=["application/pdf", "image/png"])},
+    )
+    async def attach(ctx, args):
+        seen["prepare"].append((dict(args), ctx.files.get("blob")))
+        return Prepared(preview=[blocks.text("attach")])
+
+    @attach.execute
+    async def do_attach(ctx, prepared, approval):
+        seen["execute"].append(({}, ctx.files["blob"].content if "blob" in ctx.files else None))
+        return {"ok": True}
+
+    return plugin, seen
+
+
+class TestFileCalls:
+    async def test_prepare_gets_the_metadata_and_execute_the_bytes(self):
+        plugin, seen = build_file_plugin()
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("publish", {"note": "n"}, files={"html": ("page.html", HTML_PAGE)})
+        assert outcome.error is None and outcome.result == {"ok": True}
+        args, prepared_file = seen["prepare"][0]
+        assert args == {"note": "n"}
+        assert (prepared_file.name, prepared_file.size) == ("page.html", len(HTML_PAGE))
+        assert (prepared_file.media_type, prepared_file.sniffed_type) == ("text/html", "text/html")
+        assert prepared_file.sha256 == hashlib.sha256(HTML_PAGE).hexdigest()
+        with pytest.raises(RuntimeError, match="execute function only"):
+            _ = prepared_file.content
+        assert seen["execute"][0][1] == HTML_PAGE
+
+    async def test_plain_bytes_are_named_after_the_first_media_type(self):
+        plugin, seen = build_file_plugin()
+        async with PluginTestHost(plugin) as host:
+            await host.call_tool("publish", files={"html": HTML_PAGE})
+            await host.call_tool("attach", files={"blob": b"%PDF-1.4 x"})
+        assert seen["prepare"][0][1].name == "file.html"
+        assert seen["prepare"][1][1].name == "file.pdf"
+
+    async def test_the_card_starts_with_the_file_block(self):
+        plugin, _ = build_file_plugin()
+        seen_cards = []
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool(
+                "publish", files={"html": ("p.htm", HTML_PAGE)}, decide=lambda card: seen_cards.append(card) or True)
+        first = outcome.card.preview[0]
+        assert first["type"] == "fields"
+        assert first["items"] == [
+            {"label": "File", "value": "p.htm"},
+            {"label": "Source", "value": "Test host"},
+            {"label": "Size", "value": f"{len(HTML_PAGE):,} bytes"},
+            {"label": "Declared type", "value": "text/html"},
+            {"label": "Detected type", "value": "text/html"},
+            {"label": "SHA-256", "value": hashlib.sha256(HTML_PAGE).hexdigest()},
+        ]
+        assert outcome.card.preview[1] == blocks.text("publish")
+        assert seen_cards[0] is outcome.card
+
+    async def test_an_optional_file_may_be_left_out(self):
+        plugin, seen = build_file_plugin()
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("attach")
+        assert outcome.error is None
+        assert seen["prepare"][0] == ({}, None)
+        assert [e["decision"] for e in outcome.audit] == ["approved"]
+
+    async def test_an_approved_call_writes_a_plugin_file_row_without_the_content(self):
+        plugin, _ = build_file_plugin()
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("publish", files={"html": ("p.html", HTML_PAGE)})
+        rows = [e for e in outcome.audit if e["decision"] == "plugin_file"]
+        assert len(rows) == 1
+        digest = hashlib.sha256(HTML_PAGE).hexdigest()
+        assert rows[0]["summary"] == f"html: p.html; bytes={len(HTML_PAGE)}; sha256={digest}; type=text/html"
+        assert rows[0]["connector"] == "plugin:filer"
+        assert "hello" not in json.dumps(outcome.audit)
+
+    async def test_a_denied_card_writes_no_plugin_file_row(self):
+        plugin, seen = build_file_plugin()
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("publish", files={"html": HTML_PAGE}, decide="deny")
+        assert outcome.error["code"] == "denied"
+        assert [e["decision"] for e in outcome.audit] == ["denied"]
+        assert seen["execute"] == []
+
+    @pytest.mark.parametrize(("args", "files", "detail"), [
+        ({}, {"html": HTML_PAGE, "other": b"x"}, "other is not a file parameter of publish"),
+        ({"note": "n"}, {"html": HTML_PAGE, "note": b"x"}, "note is not a file parameter of publish"),
+        ({"html": "/tmp/x.html"}, {}, "pass html in files=, not in args"),
+        ({"html": "/tmp/x.html"}, {"html": HTML_PAGE}, "pass html in files=, not in args"),
+        ({}, {}, "missing html"),
+        ({}, {"html": b"<html>" + b"x" * 100}, "The file is 106 bytes, over the 100-byte limit of Publish page."),
+        ({}, {"html": b"\x89PNG\r\n\x1a\n"},
+         "The file's content is image/png, and Publish page accepts only text/html."),
+        ({}, {"html": b"plain text"},
+         "The file's content is text/plain, and Publish page accepts only text/html."),
+    ])
+    async def test_every_refusal_is_invalid_params_and_never_reaches_the_plugin(self, args, files, detail):
+        plugin, seen = build_file_plugin()
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("publish", args, files=files)
+        assert outcome.error == {"code": "invalid_params", "detail": detail}
+        assert seen["prepare"] == [] and outcome.audit == [] and outcome.card is None
+
+    async def test_a_default_title_names_the_tool_in_a_refusal(self):
+        plugin, _ = build_file_plugin()
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("attach", files={"blob": b"plain"})
+        assert outcome.error["detail"] == (
+            "The file's content is text/plain, and Attach accepts only application/pdf, image/png.")

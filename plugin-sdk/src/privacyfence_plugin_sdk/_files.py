@@ -9,6 +9,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,8 +54,7 @@ _OCTET_STREAM = "application/octet-stream"
 
 def declared_media_type(name: str) -> str:
     """The type the file's name claims, from a fixed map on the lowercased extension."""
-    dot = name.rfind(".")
-    return _EXTENSION_TYPES.get(name[dot:].lower(), _OCTET_STREAM) if dot >= 0 else _OCTET_STREAM
+    return _EXTENSION_TYPES.get(os.path.splitext(name)[1].lower(), _OCTET_STREAM)
 
 
 def sniff_media_type(data: bytes) -> str:
