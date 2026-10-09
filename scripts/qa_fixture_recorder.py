@@ -76,7 +76,12 @@ from privacyfence import daemon_main  # noqa: E402
 from privacyfence.app_credentials import telegram_app_credentials  # noqa: E402
 from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
-from privacyfence.salesforce_client import ReportFilter, SalesforceClient, SalesforceClientError  # noqa: E402
+from privacyfence.salesforce_client import (  # noqa: E402
+    ReportFilter,
+    ReportPagingError,
+    SalesforceClient,
+    SalesforceClientError,
+)
 from privacyfence.gmail_client import GmailClient, GmailClientError  # noqa: E402
 from privacyfence.drive_client import _GOOGLE_DOC_EXPORTS, DriveClient, DriveClientError  # noqa: E402
 from privacyfence.calendar_client import CalendarClient, CalendarClientError  # noqa: E402
@@ -187,6 +192,8 @@ _STRUCTURAL_ID_KEYS = frozenset({
     # Slack workspace/app identifiers -- app_id, bot_profile.team_id, the
     # top-level "team", block_id -- all real, all identify your workspace.
     "app_id", "team_id", "team", "block_id",
+    # Salesforce Analytics: a report cell's record id and the run's report id.
+    "recordid", "reportid",
 })
 
 # Same idea, but the value is a *list* of raw id strings rather than one
@@ -1011,11 +1018,105 @@ def _check_salesforce_run_report(client: SalesforceClient, report_id: str, label
     return result(True, "rows returned; columns, split ID filter and summary_only honoured")
 
 
+def _looks_like_salesforce_id(value: Any) -> bool:
+    """A 15- or 18-character alphanumeric string mixing letters and digits."""
+    return (
+        isinstance(value, str) and len(value) in (15, 18) and value.isascii() and value.isalnum()
+        and any(c.isdigit() for c in value) and any(c.isalpha() for c in value)
+    )
+
+
+def _check_salesforce_report_paging(
+    client: SalesforceClient, report_id: str, summary_report_id: str, page_by_label: str, label: str,
+    record: bool,
+) -> CheckResult:
+    """Live proof that a keyset page of a report honours sortBy, greaterThan,
+    the RowCount aggregate and flattening a summary report. Records the first
+    page's run, reduced to its [QATEST] rows. Never puts a cell value into a
+    note: ReportPagingError messages hold column names and counts only."""
+
+    def result(ok: bool, note: str, raw: Any = None) -> CheckResult:
+        return CheckResult("salesforce", "run_report_page", label, ok, note, raw, "run_report_page.json")
+
+    try:
+        describe = client._call(lambda sf: sf.restful(f"analytics/reports/{report_id}/describe"))
+        info = ((describe.get("reportExtendedMetadata") or {}).get("detailColumnInfo")) or {}
+        col = next(
+            (name for name, entry in info.items()
+             if isinstance(entry, dict) and entry.get("label") == page_by_label),
+            None,
+        )
+        if col is None:
+            return result(False, f"no column labelled {page_by_label} in the QA report "
+                                 "-- see connector-qa.md, Seed: Salesforce")
+        with RawCaptureCall(client) as cap:
+            first = client.run_report_page(report_id, col)
+        if len(first.keys) < 2:
+            return result(False, "fewer than 2 rows in the QA report")
+        if first.keys != sorted(first.keys):
+            return result(False, "sortBy not honoured -- keys are not in ascending order")
+        if first.row_count != len(first.keys):
+            return result(False, "RowCount aggregate does not match the rows returned")
+        rest = client.run_report_page(
+            report_id, col, after=first.keys[0], pages_done=1, remaining=first.row_count - 1,
+        )
+        if rest.keys != first.keys[1:]:
+            return result(False, "greaterThan on page_by not honoured")
+        if summary_report_id:
+            flat = client.run_report_page(summary_report_id, col)
+            if not flat.keys:
+                return result(False, "flattened summary report returned no rows")
+        raw = None
+        if record:
+            captured = cap.captured.result if hasattr(cap.captured, "result") else cap.captured
+            filtered = copy.deepcopy(captured)
+            group = filtered["factMap"]["T!T"]
+            group["rows"] = [
+                row for row in group.get("rows") or []
+                if any(QATEST_TAG in str(cell.get("label")) for cell in row.get("dataCells") or [])
+            ]
+            if not group["rows"]:
+                return result(False, f"no {QATEST_TAG} rows in the QA report run -- nothing safe to record")
+            # RowCount counted every Account in the report; the kept rows are fewer.
+            aggregate_names = (filtered.get("reportMetadata") or {}).get("aggregates") or []
+            if "RowCount" in aggregate_names and len(group.get("aggregates") or []) > aggregate_names.index("RowCount"):
+                group["aggregates"][aggregate_names.index("RowCount")] = {
+                    "label": str(len(group["rows"])), "value": len(group["rows"]),
+                }
+            id_map: dict[Any, str] = {}
+            for row in group["rows"]:
+                for cell in row.get("dataCells") or []:
+                    value = cell.get("value")
+                    # A User lookup (Account Owner): a real person's name and id.
+                    if isinstance(value, str) and value.startswith("005") and len(value) in (15, 18):
+                        cell["value"] = _REDACTED_ACCOUNT_ID
+                        cell["label"] = _REDACTED_NAME
+                    # A record id as a cell value or label (an Account Name lookup): the same
+                    # placeholder as that cell's recordId, which deidentify_structural_fields
+                    # assigns from the shared id_map.
+                    for field in ("value", "label"):
+                        if _looks_like_salesforce_id(cell.get(field)):
+                            if cell[field] not in id_map:
+                                id_map[cell[field]] = _fake_structural_value("recordid", len(id_map) + 1)
+                            cell[field] = id_map[cell[field]]
+            meta = filtered.get("reportMetadata")
+            if isinstance(meta, dict) and str(meta.get("folderId") or "").startswith("005"):
+                meta["folderId"] = _REDACTED_ACCOUNT_ID  # a private folder is named by its owner's User id
+            raw = deidentify_structural_fields(redact(filtered), id_map)
+    except (SalesforceClientError, ReportPagingError) as exc:
+        return result(False, str(exc))
+    except (AttributeError, KeyError, TypeError, IndexError):
+        return result(False, "unexpected report run response shape")
+    return result(True, "sortBy, greaterThan, RowCount and flattening honoured", raw)
+
+
 def check_salesforce(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("salesforce") or {}
     report_id = cfg.get("report_id", "")
     report_name = cfg.get("report_name", "PrivacyFence QA Report")
     object_type = cfg.get("object_type", "Account")
+    page_by_label = cfg.get("page_by_label", "PF QA Number")
+    summary_report_name = cfg.get("summary_report_name", "PrivacyFence QA Summary Report")
     seed_record_id = cfg.get("seed_record_id", "")
     # No separate seed artifact here -- connector-qa.md's "Seed: Salesforce" already
     # has you create sample records tagged [QATEST]; the recorder just
@@ -1049,9 +1150,21 @@ def check_salesforce(record: bool, manifest: dict[str, Any]) -> list[CheckResult
     except SalesforceClientError as exc:
         results.append(CheckResult("salesforce", "list_reports", report_id or report_name, False, str(exc)))
         match = None
+        reports = []
 
     if match is not None:
         results.append(_check_salesforce_run_report(client, match.id, report_id or report_name))
+        summary_match = next((r for r in reports if r.name == summary_report_name), None)
+        if summary_match is None:
+            results.append(CheckResult(
+                "salesforce", "run_report_page", report_id or report_name, False,
+                f"summary report {summary_report_name!r} not in list_reports() result "
+                "-- see connector-qa.md, Seed: Salesforce",
+            ))
+        else:
+            results.append(_check_salesforce_report_paging(
+                client, match.id, summary_match.id, page_by_label, report_id or report_name, record,
+            ))
 
     # get_record -- targeted at the seed record's id if the manifest has
     # it, otherwise resolved once via search() by its tagged Name.
@@ -1681,7 +1794,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
 EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "confluence": ("list_spaces.json", "get_page.json"),
     "jira": ("list_projects.json", "get_issue.json"),
-    "salesforce": ("list_reports.json", "get_record.json"),
+    "salesforce": ("list_reports.json", "run_report_page.json", "get_record.json"),
     "gmail": ("get_message.json", "list_send_as.json"),
     "drive": ("get_file_metadata.json",),
     "calendar": ("get_event.json",),

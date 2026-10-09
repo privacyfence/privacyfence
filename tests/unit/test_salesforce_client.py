@@ -26,8 +26,12 @@ import requests
 
 from privacyfence.oauth_loopback import OAuthLoopbackError
 from privacyfence.salesforce_client import (
+    DEFAULT_REPORT_MAX_PAGES,
     MAX_REPORT_FILTERS,
+    REPORT_PAGING_REASONS,
     ReportFilter,
+    ReportPage,
+    ReportPagingError,
     SalesforceClient,
     SalesforceClientError,
     SalesforceRecord,
@@ -38,9 +42,14 @@ from privacyfence.salesforce_client import (
     _validate_salesforce_id,
     authorize_interactive,
     build_authorize_url,
+    build_keyset_metadata,
     build_report_metadata,
     exchange_code,
+    _oauth_error_detail,
     load_token_file,
+    save_token_file,
+    report_page_info,
+    report_page_keys,
 )
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "salesforce"
@@ -739,6 +748,407 @@ class TestBuildReportMetadata:
         built = build_report_metadata(saved, ["A"], None)
         assert built["reportBooleanFilter"] == "1 OR 2"
         assert built["reportFilters"] == saved["reportFilters"]
+
+
+TABULAR_SAVED = {
+    "reportFormat": "TABULAR",
+    "detailColumns": ["Name", "Num__c", "City"],
+    "reportFilters": [
+        {"column": "X", "operator": "equals", "value": "1"},
+        {"column": "Y", "operator": "equals", "value": "2"},
+    ],
+    "reportBooleanFilter": "1 OR 2",
+    "aggregates": ["s!Amount"],
+    "sortBy": [{"sortColumn": "City", "sortOrder": "Desc"}],
+}
+SUMMARY_SAVED = {
+    "reportFormat": "SUMMARY",
+    "detailColumns": ["Name", "Num__c"],
+    "groupingsDown": [{"name": "Type", "dateGranularity": "None"}, {"name": "Owner", "dateGranularity": "Day"}],
+    "groupingsAcross": [{"name": "Type", "dateGranularity": None}, {"name": "Stage"}],
+    "aggregates": ["s!Amount", "RowCount"],
+    "chart": {"chartType": "Bar"},
+    "customSummaryFormula": {"F": {"label": "f"}},
+    "reportFilters": [],
+}
+SECRET = "SECRET-ROW-VALUE"
+
+
+class TestBuildKeysetMetadata:
+    def test_sort_and_filter_anded_onto_saved_logic(self):
+        built = build_keyset_metadata(TABULAR_SAVED, None, None, "Num__c", "PFQA-00003")
+        assert built["sortBy"] == [{"sortColumn": "Num__c", "sortOrder": "Asc"}]
+        assert built["reportFilters"][2:] == [{"column": "Num__c", "operator": "greaterThan", "value": "PFQA-00003"}]
+        expected = build_report_metadata(
+            TABULAR_SAVED, None, [ReportFilter("Num__c", "greaterThan", ["PFQA-00003"])],
+        )["reportBooleanFilter"]
+        assert built["reportBooleanFilter"] == expected == "(1 OR 2) AND 3"
+        assert built["aggregates"] == ["s!Amount", "RowCount"]
+
+    def test_saved_metadata_not_mutated(self):
+        import copy
+        for saved in (TABULAR_SAVED, SUMMARY_SAVED):
+            before = copy.deepcopy(saved)
+            build_keyset_metadata(saved, None, None, "Num__c", "a")
+            assert saved == before
+
+    def test_first_page_has_no_key_filter(self):
+        built = build_keyset_metadata(TABULAR_SAVED, None, None, "Num__c", None)
+        assert built["reportFilters"] == TABULAR_SAVED["reportFilters"]
+        assert built["reportBooleanFilter"] == "1 OR 2"
+
+    def test_caller_filters_and_after_filter_both_anded(self):
+        flt = ReportFilter("City", "equals", ["Oslo"])
+        built = build_keyset_metadata(TABULAR_SAVED, None, [flt], "Num__c", "a")
+        assert [f["column"] for f in built["reportFilters"]] == ["X", "Y", "City", "Num__c"]
+        assert built["reportBooleanFilter"] == "(1 OR 2) AND 3 AND 4"
+
+    def test_columns_narrow_the_run(self):
+        built = build_keyset_metadata(TABULAR_SAVED, ["City", "Num__c"], None, "Num__c", None)
+        assert built["detailColumns"] == ["City", "Num__c"]
+
+    def test_summary_report_is_flattened(self):
+        built = build_keyset_metadata(SUMMARY_SAVED, None, None, "Num__c", "a")
+        assert built["reportFormat"] == "TABULAR"
+        assert built["groupingsDown"] == [] and built["groupingsAcross"] == []
+        assert built["aggregates"] == ["RowCount"]
+        assert built["chart"] is None and built["customSummaryFormula"] is None
+        assert built["detailColumns"] == ["Type", "Owner", "Stage", "Name", "Num__c"]
+
+    def test_grouping_column_in_columns_is_not_repeated(self):
+        saved = {**SUMMARY_SAVED, "detailColumns": ["Type", "Name", "Num__c"]}
+        built = build_keyset_metadata(saved, None, None, "Num__c", None)
+        assert built["detailColumns"] == ["Owner", "Stage", "Type", "Name", "Num__c"]
+
+    def test_flattened_report_can_page_by_a_grouping_column(self):
+        built = build_keyset_metadata(SUMMARY_SAVED, None, None, "Type", None)
+        assert built["sortBy"][0]["sortColumn"] == "Type"
+
+    def test_report_without_format_or_groupings_is_flattened(self):
+        built = build_keyset_metadata({"detailColumns": ["K"]}, None, None, "K", None)
+        assert built["reportFormat"] == "TABULAR"
+        assert built["detailColumns"] == ["K"]
+        assert built["aggregates"] == ["RowCount"]
+
+    def test_tabular_report_keeps_aggregates_and_gets_row_count(self):
+        saved = {**TABULAR_SAVED, "aggregates": ["RowCount", "s!Amount"]}
+        assert build_keyset_metadata(saved, None, None, "Num__c", None)["aggregates"] == ["RowCount", "s!Amount"]
+        assert build_keyset_metadata(TABULAR_SAVED, None, None, "Num__c", None)["aggregates"] == ["s!Amount", "RowCount"]
+        no_aggs = {k: v for k, v in TABULAR_SAVED.items() if k != "aggregates"}
+        assert build_keyset_metadata(no_aggs, None, None, "Num__c", None)["aggregates"] == ["RowCount"]
+
+    def test_page_by_must_be_a_column(self):
+        with pytest.raises(ReportPagingError, match="'Nope' is not a column of this run: Name, Num__c, City") as exc:
+            build_keyset_metadata(TABULAR_SAVED, None, None, "Nope", None)
+        assert exc.value.reason == "bad_page_by"
+
+    def test_page_by_must_be_in_the_narrowed_columns(self):
+        with pytest.raises(ReportPagingError, match="not a column of this run: Name") as exc:
+            build_keyset_metadata(TABULAR_SAVED, ["Name"], None, "Num__c", None)
+        assert exc.value.reason == "bad_page_by"
+
+    def test_top_rows_refused(self):
+        with pytest.raises(ReportPagingError, match="row limit") as exc:
+            build_keyset_metadata({**TABULAR_SAVED, "topRows": {"rowLimit": 5}}, None, None, "Num__c", None)
+        assert exc.value.reason == "bad_page_by"
+
+    def test_joined_report_refused(self):
+        with pytest.raises(ReportPagingError, match="joined report") as exc:
+            build_keyset_metadata({**SUMMARY_SAVED, "reportFormat": "MULTI_BLOCK"}, None, None, "Num__c", None)
+        assert exc.value.reason == "bad_page_by"
+
+    @pytest.mark.parametrize("granularity", ["Week", "Month", "Quarter", "Year", "FiscalYear"])
+    def test_coarse_date_grouping_refused(self, granularity):
+        saved = {**SUMMARY_SAVED, "groupingsAcross": [{"name": "Close", "dateGranularity": granularity}]}
+        with pytest.raises(ReportPagingError, match="week, month, quarter or year") as exc:
+            build_keyset_metadata(saved, None, None, "Num__c", None)
+        assert exc.value.reason == "bad_page_by"
+
+    @pytest.mark.parametrize("granularity", ["Day", "None"])
+    def test_day_and_none_grouping_allowed(self, granularity):
+        saved = {**SUMMARY_SAVED, "groupingsDown": [{"name": "Close", "dateGranularity": granularity}],
+                 "groupingsAcross": []}
+        assert build_keyset_metadata(saved, None, None, "Num__c", None)["reportFormat"] == "TABULAR"
+
+    def test_coarse_date_grouping_allowed_on_a_tabular_report(self):
+        saved = {**TABULAR_SAVED, "groupingsDown": [{"name": "Close", "dateGranularity": "Month"}]}
+        assert build_keyset_metadata(saved, None, None, "Num__c", None)["reportFormat"] == "TABULAR"
+
+    def test_twenty_filters_fail_on_the_first_page(self):
+        flt = [ReportFilter("City", "equals", ["Oslo"])] * 18      # 2 saved + 18 caller = 20
+        with pytest.raises(SalesforceClientError, match="report would have 21 filters; Salesforce allows at most 20"):
+            build_keyset_metadata(TABULAR_SAVED, None, flt, "Num__c", None)
+        with pytest.raises(SalesforceClientError, match="21 filters"):
+            build_keyset_metadata(TABULAR_SAVED, None, flt, "Num__c", "a")
+
+    def test_nineteen_filters_fit(self):
+        flt = [ReportFilter("City", "equals", ["Oslo"])] * 17     # 2 saved + 17 caller + key = 20
+        assert len(build_keyset_metadata(TABULAR_SAVED, None, flt, "Num__c", None)["reportFilters"]) == 19
+        assert len(build_keyset_metadata(TABULAR_SAVED, None, flt, "Num__c", "a")["reportFilters"]) == 20
+
+    def test_invalid_page_by_column_name_rejected_on_the_first_page(self):
+        with pytest.raises(SalesforceClientError, match="Invalid report filter column"):
+            build_keyset_metadata(TABULAR_SAVED, None, None, "Num; DROP", None)
+
+    @pytest.mark.parametrize("page_by", ["Account Name", "Num; DROP", "", "Num-1", "Näme", "A\nB"])
+    def test_page_by_that_is_not_a_column_name_is_bad_page_by(self, page_by):
+        with pytest.raises(ReportPagingError) as exc:
+            build_keyset_metadata(TABULAR_SAVED, None, None, page_by, None)
+        assert exc.value.reason == "bad_page_by"
+        assert isinstance(exc.value, SalesforceClientError)
+        assert "page_by" in str(exc.value)
+
+    def test_bad_page_by_is_refused_on_later_pages_too(self):
+        with pytest.raises(ReportPagingError) as exc:
+            build_keyset_metadata(TABULAR_SAVED, None, None, "Account Name", "PFQA-00003")
+        assert exc.value.reason == "bad_page_by"
+        assert "PFQA-00003" not in str(exc.value)
+
+
+def _page_result(
+    keys, *, count=None, all_data=True, page_by="Num__c", aggregates=("RowCount",), fact_keys=("T!T",),
+):
+    columns = ["Name", page_by]
+    rows = [{"dataCells": [{"value": "n", "label": "n"}, {"value": k, "label": str(k)}]} for k in keys]
+    n = len(keys) if count is None else count
+    fact = {fk: {"rows": rows, "aggregates": [{"label": str(n), "value": n} for _ in aggregates]}
+            for fk in fact_keys}
+    return {
+        "allData": all_data,
+        "reportMetadata": {"detailColumns": columns, "aggregates": list(aggregates)},
+        "factMap": fact,
+    }
+
+
+class TestReportPageKeys:
+    def test_text_int_and_float_keys(self):
+        result = _page_result(["a-1", 7, 2.0, 2.5])
+        assert report_page_keys(result, "Num__c", None, None) == (["a-1", "7", "2", "2.5"], 4)
+
+    def test_returns_row_count_not_page_length(self):
+        result = _page_result(["a", "b"], count=5, all_data=False)
+        assert report_page_keys(result, "Num__c", None, 5) == (["a", "b"], 5)
+
+    @pytest.mark.parametrize("value", ["", "a,b", " padded ", {"x": 1}, True, None, [1]])
+    def test_unusable_key_is_bad_page_by(self, value):
+        with pytest.raises(ReportPagingError, match="has a value that cannot be paged by") as exc:
+            report_page_keys(_page_result(["ok", value]), "Num__c", None, None)
+        assert exc.value.reason == "bad_page_by"
+
+    def test_duplicate_key(self):
+        with pytest.raises(ReportPagingError, match="not unique") as exc:
+            report_page_keys(_page_result(["a", "b", "a"]), "Num__c", None, None)
+        assert exc.value.reason == "not_unique"
+
+    def test_after_in_keys_is_not_advancing(self):
+        with pytest.raises(ReportPagingError, match="did not advance") as exc:
+            report_page_keys(_page_result(["a", "b"], all_data=False, count=9), "Num__c", "b", 9)
+        assert exc.value.reason == "not_advancing"
+
+    def test_empty_page_with_more_is_not_advancing(self):
+        with pytest.raises(ReportPagingError, match="a page had no rows but Salesforce reported more") as exc:
+            report_page_keys(_page_result([], all_data=False, count=3), "Num__c", "a", 3)
+        assert exc.value.reason == "not_advancing"
+
+    def test_empty_last_page_is_fine(self):
+        assert report_page_keys(_page_result([]), "Num__c", "a", 0) == ([], 0)
+
+    def test_row_count_must_equal_remaining(self):
+        with pytest.raises(ReportPagingError, match="3 rows were left but the next page matched 2") as exc:
+            report_page_keys(_page_result(["a", "b"]), "Num__c", "0", 3)
+        assert exc.value.reason == "rows_lost"
+
+    def test_complete_page_must_return_every_row(self):
+        with pytest.raises(ReportPagingError, match="returned 2 of 5 rows") as exc:
+            report_page_keys(_page_result(["a", "b"], count=5), "Num__c", None, None)
+        assert exc.value.reason == "rows_lost"
+
+    def test_missing_row_count_aggregate(self):
+        with pytest.raises(ReportPagingError, match="not as one table|one table") as exc:
+            report_page_keys(_page_result(["a"], aggregates=("s!Amount",)), "Num__c", None, None)
+        assert exc.value.reason == "not_flat"
+
+    def test_non_int_row_count(self):
+        for bad in ("1", True, 1.5, None):
+            result = _page_result(["a"])
+            result["factMap"]["T!T"]["aggregates"][0]["value"] = bad
+            with pytest.raises(ReportPagingError) as exc:
+                report_page_keys(result, "Num__c", None, None)
+            assert exc.value.reason == "not_flat"
+
+    def test_other_fact_map_key_is_not_flat(self):
+        with pytest.raises(ReportPagingError) as exc:
+            report_page_keys(_page_result(["a"], fact_keys=("T!T", "0!T")), "Num__c", None, None)
+        assert exc.value.reason == "not_flat"
+        with pytest.raises(ReportPagingError) as exc:
+            report_page_keys(_page_result(["a"], fact_keys=("0!T",)), "Num__c", None, None)
+        assert exc.value.reason == "not_flat"
+
+    @pytest.mark.parametrize("mutate", [
+        lambda r: r.pop("factMap"),
+        lambda r: r["factMap"]["T!T"].pop("rows"),
+        lambda r: r["reportMetadata"].update(detailColumns=["Name"]),
+        lambda r: r["factMap"]["T!T"]["rows"][0].pop("dataCells"),
+        lambda r: r["factMap"]["T!T"].pop("aggregates"),
+    ])
+    def test_malformed_result_is_not_flat(self, mutate):
+        result = _page_result(["a"])
+        mutate(result)
+        with pytest.raises(ReportPagingError) as exc:
+            report_page_keys(result, "Num__c", None, None)
+        assert exc.value.reason == "not_flat"
+
+    def test_messages_never_contain_row_values(self):
+        cases = [
+            (_page_result([SECRET, ""]), None, None),
+            (_page_result([SECRET, "x,y"]), None, None),
+            (_page_result([SECRET, SECRET]), None, None),
+            (_page_result([SECRET], all_data=False, count=9), SECRET, 9),
+            (_page_result([SECRET], count=9), None, None),
+            (_page_result([SECRET], count=2), SECRET + "0", 8),
+            (_page_result([SECRET], fact_keys=("T!T", "0!T")), None, None),
+        ]
+        for result, after, remaining in cases:
+            with pytest.raises(ReportPagingError) as exc:
+                report_page_keys(result, "Num__c", after, remaining)
+            assert SECRET not in str(exc.value)
+
+    def test_build_messages_never_contain_row_values(self):
+        for call in (
+            lambda: build_keyset_metadata(TABULAR_SAVED, None, None, "Nope", SECRET),
+            lambda: build_keyset_metadata({**TABULAR_SAVED, "topRows": {}, "reportFormat": "MULTI_BLOCK"},
+                                          None, None, "Num__c", SECRET),
+            lambda: build_keyset_metadata({**TABULAR_SAVED, "topRows": {"rowLimit": 1}}, None, None, "Num__c", SECRET),
+        ):
+            with pytest.raises(ReportPagingError) as exc:
+                call()
+            assert SECRET not in str(exc.value)
+
+
+class TestReportPagingError:
+    def test_reason_attribute_and_subclass(self):
+        exc = ReportPagingError("rows_lost", "msg")
+        assert exc.reason == "rows_lost" and str(exc) == "msg"
+        assert isinstance(exc, SalesforceClientError)
+
+    def test_unknown_reason_rejected(self):
+        with pytest.raises(ValueError):
+            raise ReportPagingError("nope", "msg")
+
+    def test_reasons(self):
+        assert REPORT_PAGING_REASONS == {
+            "bad_page_by", "not_unique", "not_advancing", "page_limit", "not_flat", "rows_lost",
+        }
+
+
+class TestReportPageInfo:
+    def test_empty_page(self):
+        assert report_page_info(3, 10, 0, False) == {"number": 3, "first_row": 0, "last_row": 0, "more": False}
+
+    def test_rows(self):
+        assert report_page_info(2, 3, 2, True) == {"number": 2, "first_row": 4, "last_row": 5, "more": True}
+
+
+class TestRunReportPage:
+    SAVED = {"reportFormat": "TABULAR", "detailColumns": ["Name", "Num__c"], "reportFilters": []}
+
+    def _client(self, run_result, saved=None):
+        sf = MagicMock()
+        sf.restful.side_effect = [{"reportMetadata": saved or self.SAVED}, run_result]
+        return with_fake_sf(make_client(), sf), sf
+
+    def test_requires_report_id(self):
+        with pytest.raises(SalesforceClientError, match="requires a report_id"):
+            make_client().run_report_page("", "Num__c")
+
+    def test_defaults(self):
+        assert make_client().report_max_pages == DEFAULT_REPORT_MAX_PAGES == 50
+
+    def test_page_limit_makes_no_call(self):
+        sf = MagicMock()
+        client = with_fake_sf(make_client(), sf)
+        client.report_max_pages = 3
+        with pytest.raises(ReportPagingError, match="stopped after 3 pages") as exc:
+            client.run_report_page("r1", "Num__c", pages_done=3)
+        assert exc.value.reason == "page_limit"
+        sf.restful.assert_not_called()
+
+    def test_last_allowed_page_runs(self):
+        client, sf = self._client(_page_result(["a"]))
+        client.report_max_pages = 3
+        assert client.run_report_page("r1", "Num__c", pages_done=2).keys == ["a"]
+
+    def test_describe_then_keyset_post(self):
+        result = _page_result(["a", "b"], count=7, all_data=False)
+        client, sf = self._client(result)
+        flt = ReportFilter("Name", "equals", ["x"])
+
+        page = client.run_report_page("r1", "Num__c", ["Name", "Num__c"], [flt], after="0", pages_done=1, remaining=7)
+
+        assert page == ReportPage(result, ["a", "b"], False, 7)
+        built = build_keyset_metadata(self.SAVED, ["Name", "Num__c"], [flt], "Num__c", "0")
+        assert sf.restful.call_args_list == [
+            (("analytics/reports/r1/describe",), {}),
+            (
+                ("analytics/reports/r1",),
+                {"params": {"includeDetails": "true"}, "method": "POST", "json": {"reportMetadata": built}},
+            ),
+        ]
+
+    def test_all_data_true_when_absent_or_true(self):
+        result = _page_result(["a"])
+        del result["allData"]
+        client, _ = self._client(result)
+        assert client.run_report_page("r1", "Num__c").all_data is True
+
+    def test_non_dict_describe_is_treated_as_empty(self):
+        sf = MagicMock()
+        sf.restful.side_effect = [None, _page_result(["a"])]
+        client = with_fake_sf(make_client(), sf)
+        with pytest.raises(ReportPagingError, match="not a column of this run: $") as exc:
+            client.run_report_page("r1", "Num__c")
+        assert exc.value.reason == "bad_page_by"
+
+    def test_paging_error_from_keys_propagates_unchanged(self):
+        client, _ = self._client(_page_result(["a", "a"]))
+        with pytest.raises(ReportPagingError) as exc:
+            client.run_report_page("r1", "Num__c")
+        assert exc.value.reason == "not_unique"
+
+    def test_page_info_for_the_page(self):
+        client, _ = self._client(_page_result(["a", "b"], count=4, all_data=False))
+        page = client.run_report_page("r1", "Num__c", remaining=None)
+        assert report_page_info(2, 3, len(page.keys), not page.all_data) == {
+            "number": 2, "first_row": 4, "last_row": 5, "more": True,
+        }
+
+
+class TestClientPlumbing:
+    def test_get_sf_builds_once_and_caches(self):
+        client = make_client()
+        built = []
+        client._build_sf = lambda: built.append(1) or object()
+        assert client._get_sf() is client._get_sf()
+        assert built == [1]
+
+    def test_missing_simple_salesforce_package(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "simple_salesforce", None)
+        with pytest.raises(SalesforceClientError, match="'simple-salesforce' package is not installed"):
+            make_client()._build_sf()
+
+    def test_save_token_file_round_trips(self, tmp_path):
+        path = str(tmp_path / "token.json")
+        save_token_file(path, {"access_token": "t"})
+        assert load_token_file(path) == {"access_token": "t"}
+
+    @pytest.mark.parametrize("body", [ValueError("not json"), ["list"], {"no": "error"}])
+    def test_oauth_error_detail_ignores_unusable_bodies(self, body):
+        response = MagicMock()
+        if isinstance(body, Exception):
+            response.json.side_effect = body
+        else:
+            response.json.return_value = body
+        assert _oauth_error_detail(requests.HTTPError(response=response)) == ""
 
 
 # ---------------------------------------------------------------------------- #

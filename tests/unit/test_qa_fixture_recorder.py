@@ -1064,6 +1064,279 @@ class TestCheckSalesforce:
         assert not any(r.method == "run_report" for r in results)
 
 
+class TestReportPagingCheck:
+    """``_check_salesforce_report_paging`` against an in-memory report: describe, then POSTed runs."""
+
+    COL = "Account.PF_QA_Number__c"
+    ROWS = [("Acme [QATEST]", "PFQA-00001"), ("Real Co", "PFQA-00002"), ("Beta [QATEST]", "PFQA-00003")]
+
+    def _sf(self, rows=None, *, label="PF QA Number", sort=True, honour_after=True, count_delta=0,
+            report_format="TABULAR", ids=("rep",)):
+        rows = list(self.ROWS if rows is None else rows)
+        sf = MagicMock()
+        self.posted = []
+
+        def restful(path, params=None, method="GET", **kwargs):
+            if path.endswith("/describe"):
+                return {
+                    "reportMetadata": {
+                        "reportFormat": report_format, "detailColumns": ["ACCOUNT.NAME", self.COL],
+                        "groupingsDown": [], "groupingsAcross": [], "aggregates": [], "reportFilters": [],
+                    },
+                    "reportExtendedMetadata": {"detailColumnInfo": {
+                        "ACCOUNT.NAME": {"label": "Account Name"}, self.COL: {"label": label},
+                    }},
+                }
+            meta = kwargs["json"]["reportMetadata"]
+            self.posted.append(meta)
+            out = sorted(rows, key=lambda r: r[1]) if sort else list(rows)
+            for f in meta["reportFilters"]:
+                if f["operator"] == "greaterThan" and honour_after:
+                    out = [r for r in out if r[1] > f["value"]]
+            return {
+                "allData": True, "reportMetadata": meta,
+                "factMap": {"T!T": {
+                    "rows": [{"dataCells": [{"label": n, "value": n}, {"label": k, "value": k}]} for n, k in out],
+                    "aggregates": [{"label": str(len(out) + count_delta), "value": len(out) + count_delta}],
+                }},
+            }
+
+        sf.restful.side_effect = restful
+        return sf
+
+    def _check(self, sf, *, summary="sum", record=False, label="PF QA Number"):
+        client = SalesforceClient(config={"access_token": "t", "instance_url": "https://my.salesforce.com"})
+        client._get_sf = lambda: sf
+        return recorder._check_salesforce_report_paging(client, "rep", summary, label, "QA Report", record)
+
+    def test_report_paging_check_passes(self):
+        res = self._check(self._sf())
+        assert res.ok, res.note
+        assert res.note == "sortBy, greaterThan, RowCount and flattening honoured"
+        assert (res.connector, res.method, res.fixture_relpath) == ("salesforce", "run_report_page", "run_report_page.json")
+        assert res.raw is None
+        assert self.posted[0]["sortBy"] == [{"sortColumn": self.COL, "sortOrder": "Asc"}]
+
+    def test_report_paging_check_without_summary_report_id_skips_it(self):
+        sf = self._sf()
+        assert self._check(sf, summary="").ok
+        assert len(self.posted) == 2
+
+    def test_report_paging_check_missing_label_column(self):
+        res = self._check(self._sf(label="Other"))
+        assert not res.ok
+        assert res.note.startswith("no column labelled PF QA Number in the QA report")
+
+    def test_report_paging_check_fewer_than_two_rows(self):
+        res = self._check(self._sf(rows=self.ROWS[:1]))
+        assert not res.ok and res.note == "fewer than 2 rows in the QA report"
+
+    def test_report_paging_check_unsorted_keys(self):
+        res = self._check(self._sf(rows=list(reversed(self.ROWS)), sort=False))
+        assert not res.ok and "sortBy not honoured" in res.note
+
+    def test_report_paging_check_after_filter_ignored_is_refused_by_the_client(self):
+        res = self._check(self._sf(honour_after=False))
+        assert not res.ok
+        assert "did not advance" in res.note
+
+    def test_report_paging_check_after_filter_not_honoured(self):
+        sf = self._sf()
+        client = SalesforceClient(config={"access_token": "t", "instance_url": "https://my.salesforce.com"})
+        client._get_sf = lambda: sf
+        real = client.run_report_page
+
+        def run_report_page(report_id, page_by, *args, **kwargs):
+            page = real(report_id, page_by, *args, **kwargs)
+            if kwargs.get("after"):
+                page.keys = page.keys[:-1]
+            return page
+
+        client.run_report_page = run_report_page
+        res = recorder._check_salesforce_report_paging(client, "rep", "sum", "PF QA Number", "QA Report", False)
+        assert not res.ok and res.note == "greaterThan on page_by not honoured"
+
+    def test_report_paging_check_summary_report_without_rows(self):
+        sf = self._sf()
+        real = sf.restful.side_effect
+        state = {"runs": 0}
+
+        def restful(path, params=None, method="GET", **kwargs):
+            out = real(path, params=params, method=method, **kwargs)
+            if method == "POST":
+                state["runs"] += 1
+                if state["runs"] == 3:
+                    out["factMap"]["T!T"]["rows"] = []
+                    out["factMap"]["T!T"]["aggregates"] = [{"label": "0", "value": 0}]
+            return out
+
+        sf.restful.side_effect = restful
+        res = self._check(sf)
+        assert not res.ok and res.note == "flattened summary report returned no rows"
+
+    def test_report_paging_check_surfaces_paging_error(self):
+        res = self._check(self._sf(report_format="MULTI_BLOCK"))
+        assert not res.ok and "joined report" in res.note
+
+    def test_report_paging_check_row_count_mismatch(self):
+        res = self._check(self._sf(count_delta=1))
+        assert not res.ok
+        assert "lost rows" in res.note or "RowCount" in res.note
+
+    def test_report_paging_check_record_keeps_only_qatest_rows(self):
+        res = self._check(self._sf(), record=True)
+        assert res.ok, res.note
+        labels = [c["label"] for r in res.raw["factMap"]["T!T"]["rows"] for c in r["dataCells"]]
+        assert any("[QATEST]" in v for v in labels)
+        assert "Real Co" not in labels
+        assert len(res.raw["factMap"]["T!T"]["rows"]) == 2
+
+    def test_report_paging_check_record_redacts_user_lookup_cells(self):
+        sf = self._sf()
+        real = sf.restful.side_effect
+
+        def restful(path, params=None, method="GET", **kwargs):
+            out = real(path, params=params, method=method, **kwargs)
+            if method == "POST":
+                out["reportMetadata"]["folderId"] = "005ak00000iCxfiAAC"
+            for row in out.get("factMap", {}).get("T!T", {}).get("rows", []):
+                row["dataCells"].append({"label": "Real Person", "value": "005ak00000iCxfiAAC"})
+            return out
+
+        sf.restful.side_effect = restful
+        res = self._check(sf, record=True)
+        assert res.ok, res.note
+        text = json.dumps(res.raw)
+        assert "Real Person" not in text and "005ak" not in text
+
+    def test_report_paging_check_record_row_count_matches_kept_rows(self):
+        res = self._check(self._sf(), record=True)
+        assert res.ok, res.note
+        group = res.raw["factMap"]["T!T"]
+        assert len(group["rows"]) == 2
+        assert group["aggregates"] == [{"label": "2", "value": 2}]
+
+    def test_report_paging_check_record_row_count_leaves_other_aggregates(self):
+        sf = self._sf()
+        real = sf.restful.side_effect
+
+        def restful(path, params=None, method="GET", **kwargs):
+            out = real(path, params=params, method=method, **kwargs)
+            if method == "POST":
+                out["reportMetadata"]["aggregates"] = ["s!Amount", "RowCount"]
+                group = out["factMap"]["T!T"]
+                group["aggregates"] = [{"label": "9", "value": 9}, *group["aggregates"]]
+            return out
+
+        sf.restful.side_effect = restful
+        res = self._check(sf, record=True)
+        assert res.ok, res.note
+        assert res.raw["factMap"]["T!T"]["aggregates"] == [
+            {"label": "9", "value": 9}, {"label": "2", "value": 2},
+        ]
+
+    def test_report_paging_check_record_replaces_record_and_report_ids(self):
+        acme, beta = "001ak00003cU5KbAAK", "001ak00003cU5cLAAS"
+        report = "00Oak00000RkbHxEAJ"
+        sf = self._sf()
+        real = sf.restful.side_effect
+
+        def restful(path, params=None, method="GET", **kwargs):
+            out = real(path, params=params, method=method, **kwargs)
+            if method == "POST":
+                out["attributes"] = {"reportId": report, "type": "Report"}
+                out["reportMetadata"]["id"] = report
+                rows = out["factMap"]["T!T"]["rows"]
+                ids = {"PFQA-00001": acme, "PFQA-00002": "001ak00003cU5dMAAS", "PFQA-00003": beta}
+                for row in rows:
+                    rid = ids[row["dataCells"][1]["value"]]
+                    row["dataCells"][0]["recordId"] = rid
+                    row["dataCells"].append({"label": "Account", "recordId": rid, "value": rid})
+                    row["dataCells"].append({"label": rid, "value": rid[:15]})
+            return out
+
+        sf.restful.side_effect = restful
+        res = self._check(sf, record=True)
+        assert res.ok, res.note
+        text = json.dumps(res.raw)
+        for real_id in (acme, beta, report, acme[:15]):
+            assert real_id not in text
+        rows = res.raw["factMap"]["T!T"]["rows"]
+        assert len(rows) == 2
+        # The cell value, its label and its recordId share one placeholder per record.
+        for row in rows:
+            cell = row["dataCells"][-2]
+            assert cell["value"] == cell["recordId"] == row["dataCells"][0]["recordId"]
+            assert cell["value"].startswith("qa-placeholder-id-")
+        assert rows[0]["dataCells"][-2]["value"] != rows[1]["dataCells"][-2]["value"]
+        assert res.raw["attributes"]["reportId"] == res.raw["reportMetadata"]["id"]
+        assert res.raw["attributes"]["reportId"].startswith("qa-placeholder-id-")
+
+    def test_report_paging_check_record_keeps_non_id_cell_values(self):
+        res = self._check(self._sf(), record=True)
+        values = [c["value"] for r in res.raw["factMap"]["T!T"]["rows"] for c in r["dataCells"]]
+        assert "PFQA-00001" in values and "Acme [QATEST]" in values
+
+    @pytest.mark.parametrize("value, expected", [
+        ("001ak00003cU5KbAAK", True), ("001ak00003cU5Kb", True), ("PFQA-00001", False),
+        ("Budapest", False), ("Internationalis", False), ("1234567890123456", False), (None, False),
+        ("0é1ak00003cU5KbAAK", False),
+    ])
+    def test_looks_like_salesforce_id(self, value, expected):
+        assert recorder._looks_like_salesforce_id(value) is expected
+
+    def test_recorded_run_report_page_is_accepted_by_the_client(self):
+        path = Path(__file__).parent.parent / "fixtures" / "live" / "salesforce" / "run_report_page.json"
+        if not path.exists():
+            pytest.skip("run_report_page.json not recorded yet")
+        from privacyfence.salesforce_client import report_page_keys
+        recorded = json.loads(path.read_text())
+        meta = recorded["reportMetadata"]
+        col = meta["sortBy"][0]["sortColumn"]
+        row_count = recorded["factMap"]["T!T"]["aggregates"][0]["value"]
+        keys, count = report_page_keys(recorded, col, None, row_count)
+        assert count == row_count == len(keys) == 2
+
+    def test_report_paging_check_record_fails_without_qatest_rows(self):
+        rows = [("Real One", "PFQA-00001"), ("Real Two", "PFQA-00002")]
+        res = self._check(self._sf(rows=rows), record=True)
+        assert not res.ok and res.raw is None
+        assert "nothing safe to record" in res.note
+
+    @pytest.mark.parametrize("kwargs", [
+        {}, {"label": "Other"}, {"rows": ["x"]}, {"honour_after": False}, {"count_delta": 1},
+        {"report_format": "MULTI_BLOCK"},
+    ])
+    def test_report_paging_check_notes_hold_no_row_value(self, kwargs):
+        if "rows" in kwargs:
+            kwargs = {"rows": [("Secret Co", "PFQA-00001")]}
+        res = self._check(self._sf(**kwargs), record=True)
+        for value in ("Acme", "Real Co", "Beta", "Secret Co", "PFQA-0000"):
+            assert value not in res.note
+
+    def test_report_paging_check_runs_from_check_salesforce(self, monkeypatch):
+        sf = self._sf()
+        sf.query.return_value = {"records": [
+            {"Id": "rep", "Name": "PrivacyFence QA Report"},
+            {"Id": "sum", "Name": "PrivacyFence QA Summary Report"},
+        ]}
+        client = SalesforceClient(config={"access_token": "t", "instance_url": "https://my.salesforce.com"})
+        client._get_sf = lambda: sf
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+        results = recorder.check_salesforce(record=False, manifest={"salesforce": {"seed_record_id": "001a"}})
+        assert [r.method for r in results[:3]] == ["list_reports", "run_report", "run_report_page"]
+
+    def test_report_paging_check_fails_when_summary_report_not_listed(self, monkeypatch):
+        sf = self._sf()
+        sf.query.return_value = {"records": [{"Id": "rep", "Name": "PrivacyFence QA Report"}]}
+        client = SalesforceClient(config={"access_token": "t", "instance_url": "https://my.salesforce.com"})
+        client._get_sf = lambda: sf
+        monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: client)
+        results = recorder.check_salesforce(record=False, manifest={"salesforce": {"seed_record_id": "001a"}})
+        page = next(r for r in results if r.method == "run_report_page")
+        assert not page.ok and "Summary Report" in page.note
+
+
 class TestCheckGmail:
     def _service(self, raw_message: dict):
         return _offline_google_service("gmail", "v1", raw_message)

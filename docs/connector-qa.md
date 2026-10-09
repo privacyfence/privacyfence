@@ -230,6 +230,11 @@ if it reports `database is locked`.
 - [ ] Create two or three Account records named like `PrivacyFence QA — Acme Test Co [QATEST]` and
       `PrivacyFence QA — Globex Test Co [QATEST]`.
 - [ ] Create a **tabular** report on Accounts named exactly `PrivacyFence QA Report`, with the Account Name and at least one plain text column (for example Billing City).
+- [ ] Add an **Auto Number** field `PF QA Number` to Account (display format `PFQA-{00000}`, starting at 1)
+      and add it to `PrivacyFence QA Report`. The report-paging check pages by this column.
+- [ ] Create a **summary** report on Accounts named exactly `PrivacyFence QA Summary Report`, grouped by
+      Billing City, with Account Name and `PF QA Number`. The check flattens it. Override the names with
+      `salesforce.page_by_label` and `salesforce.summary_report_name`.
 - [ ] Set `salesforce.report_name` (default `PrivacyFence QA Report`), `salesforce.object_type`
       (default `Account`) and `salesforce.seed_record_name` (default
       `PrivacyFence QA — Acme Test Co [QATEST]`). Optionally set `salesforce.report_id` (blank to
@@ -297,7 +302,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 | `tasks` | **`task_list_id`**, **`seed_task_id`** | `get_task.json` | creates, updates and deletes one task in `task_list_id` |
 | `apps_script` | `seed_script_title`, `seed_script_id` | `get_content.json` | — |
 | `telegram` | `chat_id`, `history_limit` | `get_messages.json` | — |
-| `salesforce` | `report_name`, `report_id`, `object_type`, `seed_record_name`, `seed_record_id` | `list_reports.json`, `get_record.json` | — |
+| `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id` | `list_reports.json`, `run_report_page.json`, `get_record.json` | — |
 | `jira` | `project_key`, `seed_issue_summary`, `seed_issue_key` | `list_projects.json`, `get_issue.json` | creates, updates and deletes one issue in `project_key` |
 | `confluence` | `space_key`, `seed_page_title`, `seed_page_id` | `list_spaces.json`, `get_page.json` | creates and updates one page in `space_key`; never deletes it |
 
@@ -596,6 +601,7 @@ For each representative read, list, search, create, update, send or upload tool:
   `approved_object_types`; an unscoped search never does. `account_id` without `object_types` is
   rejected before any card appears.
 - **Report overrides.** `salesforce_run_report` with `columns`, `filters` or `summary_only` narrows that run only. The approved-report rule still reads it without a card, and `--check`'s `run_report` row covers the three live.
+- **Report paging.** `--check`'s `run_report_page` row covers `sortBy`, `greaterThan`, the `RowCount` aggregate and flattening a summary report live, on the QA report's `PF QA Number` column. It records only the `[QATEST]` rows of the first page.
 
 ### Jira checks
 

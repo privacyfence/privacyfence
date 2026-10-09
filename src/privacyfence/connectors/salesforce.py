@@ -12,7 +12,13 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
-from ..salesforce_client import ReportFilter, SalesforceClient, SalesforceClientError
+from ..plugins import cursors
+from ..salesforce_client import (
+    ReportFilter,
+    SalesforceClient,
+    SalesforceClientError,
+    report_page_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +169,37 @@ _FILTERS_SHAPE_ERROR = (
 )
 
 
+def _page_rows_text(info: dict) -> str:
+    """The card's "Rows" line for one page of a paged report read."""
+    number = info["number"]
+    if not info["first_row"]:
+        return f"Page {number}: no rows, last page"
+    span = f"rows {info['first_row']:,}\u2013{info['last_row']:,}"
+    tail = "more pages follow" if info["more"] else "last page"
+    return f"Page {number}: {span}, {tail}"
+
+
+def _decode_page_cursor(cursor: str, bound: dict) -> tuple[int, int, str | None, int | None]:
+    """``(runs done, rows so far, last key, rows still to come)`` from a
+    salesforce_run_report cursor, or a first page's ``(0, 0, None, None)``."""
+    if not cursor:
+        return 0, 0, None, None
+    try:
+        state = cursors.decode(cursor, "salesforce_run_report", bound)
+    except cursors.CursorError as exc:
+        raise ValueError(f"salesforce_run_report: {exc}") from exc
+    counts = [state.get(key) for key in ("n", "a", "r")]
+    last = state.get("l")
+    if (
+        set(state) != {"n", "a", "l", "r"}
+        or any(isinstance(c, bool) or not isinstance(c, int) or c < 0 for c in counts)
+        or counts[0] < 1
+        or not isinstance(last, str) or not last
+    ):
+        raise ValueError("salesforce_run_report: cursor is not valid")
+    return counts[0], counts[1], last, counts[2]
+
+
 def _parse_report_filters(raw: str) -> list[ReportFilter]:
     """Parse salesforce_run_report's ``filters`` argument (a JSON array in a
     string, since ToolParam has no list type) into ReportFilters."""
@@ -251,10 +288,12 @@ class SalesforceConnector(Connector):
                     "reportExtendedMetadata, groupingsDown/groupingsAcross and a factMap "
                     "holding each group's rows and aggregates. By default it runs the report as "
                     "saved; columns, filters and summary_only narrow this one run without "
-                    "changing the saved report. Salesforce returns at most 2,000 detail rows: "
-                    "allData false in the result means rows were cut off, so narrow the run "
-                    "with filters. Get report_id from salesforce_list_reports. Requires user "
-                    "approval."
+                    "changing the saved report. Salesforce returns at most 2,000 detail rows "
+                    "per run: allData false means rows were cut off. To read every row, pass "
+                    "page_by (a column with a unique value per row) and call again with "
+                    "cursor=next_cursor until next_cursor is null; each page is one report run "
+                    "and carries page {number, first_row, last_row, more}. Get report_id from "
+                    "salesforce_list_reports. Requires user approval."
                 ),
                 params=[
                     ToolParam("report_id", "str",
@@ -278,6 +317,16 @@ class SalesforceConnector(Connector):
                               description="True to return only groupings and aggregates (totals), with no "
                                           "detail rows: the smallest response. Default false returns detail "
                                           "rows too."),
+                    ToolParam("page_by", "str", required=False, default="",
+                              description="Report column API name whose values are unique per row (best an "
+                                          "auto-number column the report includes), e.g. "
+                                          "'Opportunity.Opp_Number__c'. Reads every row of the report, page by "
+                                          "page in order of this column; a grouped report is read as one flat "
+                                          "table. Leave empty for one run as saved."),
+                    ToolParam("cursor", "str", required=False, default="",
+                              description="Opaque cursor from a previous paged result's next_cursor. Pass it "
+                                          "with the same report_id, columns, filters and page_by. Leave empty "
+                                          "for the first page."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -399,6 +448,7 @@ class SalesforceConnector(Connector):
 
     async def _run_report(
         self, report_id: str, columns: str = "", filters: str = "", summary_only: bool = False,
+        page_by: str = "", cursor: str = "",
     ) -> Any:
         # Parse before fetching or gating: a malformed call shouldn't cost
         # the user an approval decision (same as _search).
@@ -406,10 +456,38 @@ class SalesforceConnector(Connector):
         column_list = [c.strip() for c in columns.split(",") if c.strip()]
         if summary_only and column_list:
             raise ValueError("salesforce_run_report: columns has no effect with summary_only")
-        result = await self._fetch(
-            self._sf.run_report, report_id, column_list or None, filter_list or None, summary_only,
-        )
-        result_dict = asdict(result) if hasattr(result, "__dataclass_fields__") else result
+        page_by = page_by.strip()
+        if cursor and not page_by:
+            raise ValueError("salesforce_run_report: cursor needs page_by")
+        if page_by and summary_only:
+            raise ValueError("salesforce_run_report: page_by has no effect with summary_only")
+        page_info: dict | None = None
+        if page_by:
+            bound = {
+                "report_id": report_id, "page_by": page_by, "columns": column_list,
+                "filters": [asdict(f) for f in filter_list],
+            }
+            number_done, rows_before, last_key, remaining = _decode_page_cursor(cursor, bound)
+            page = await self._fetch(
+                self._sf.run_report_page, report_id, page_by, column_list or None,
+                filter_list or None, last_key, number_done, remaining,
+            )
+            count = len(page.keys)
+            more = not page.all_data
+            number = number_done + 1
+            result = page.result
+            result_dict = dict(page.result)
+            page_info = report_page_info(number, rows_before, count, more)
+            result_dict["page"] = page_info
+            result_dict["next_cursor"] = cursors.encode(
+                "salesforce_run_report", bound,
+                {"n": number, "a": rows_before + count, "l": page.keys[-1], "r": page.row_count - count},
+            ) if more else None
+        else:
+            result = await self._fetch(
+                self._sf.run_report, report_id, column_list or None, filter_list or None, summary_only,
+            )
+            result_dict = asdict(result) if hasattr(result, "__dataclass_fields__") else result
         # Salesforce's report-run response nests the report's name under
         # reportMetadata.name, not at the top level -- report_dict.get("name")
         # is always None for a real API response.
@@ -434,6 +512,8 @@ class SalesforceConnector(Connector):
             preview["Filters"] = "; ".join(
                 f"{f.column} {f.operator} {_filter_value_summary(f.values)}" for f in filter_list
             )
+        if page_by:
+            preview["Paged by"] = page_by
         if summary_only:
             preview["Mode"] = "Totals only (no rows)"
         if summary_only:
@@ -448,8 +528,11 @@ class SalesforceConnector(Connector):
         details = _format_report_details(result_dict)
         # Salesforce cuts detail rows off at 2,000 and says so with allData
         # false; tell the reviewer here, and the AI client via the result
-        # itself (which carries allData).
-        if isinstance(result_dict, dict) and result_dict.get("allData") is False:
+        # itself (which carries allData). A paged read says where it stands
+        # instead: more pages follow, so allData false is not a cut-off there.
+        if page_info is not None:
+            new_info["Rows"] = _page_rows_text(page_info)
+        elif isinstance(result_dict, dict) and result_dict.get("allData") is False:
             details = (
                 "Salesforce returned only the first 2,000 detail rows; the report has more. "
                 "Narrow it with filters.\n\n" + details
@@ -481,6 +564,7 @@ class SalesforceConnector(Connector):
             args={
                 "report_id": report_id, "columns": columns, "filters": filters,
                 "summary_only": summary_only,
+                **({"page_by": page_by, "cursor": cursor} if page_by else {}),
             },
         )
 

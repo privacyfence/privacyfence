@@ -41,6 +41,10 @@ salesforce:
   report_name: "PrivacyFence QA Report"
   report_id: ""
   object_type: Account
+  # Report paging check (connector-qa.md, "Seed: Salesforce"): the label of the
+  # Auto Number column in the QA report, and the grouped report to flatten.
+  page_by_label: "PF QA Number"
+  summary_report_name: "PrivacyFence QA Summary Report"
   seed_record_name: "PrivacyFence QA — Acme Test Co [QATEST]"
   # Leave blank to resolve by search() on seed_record_name instead (one
   # extra API call per run).

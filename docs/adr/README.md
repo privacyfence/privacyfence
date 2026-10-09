@@ -233,8 +233,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0125](0125-the-org-mode-plugin-contract-is-reserved-in-protocol-1-and-rejected-in-local-mode.md) | The org-mode plugin contract is reserved in protocol 1 and rejected in local mode | Accepted |
 | [0126](0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md) | The plugin SDK lives in this repository and is published from the same tag | Accepted |
 | [0127](0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) | A plugin approval binds to its content digest and persists until revoked | Accepted |
-| [0128](0128-plugin-source-reads-never-truncate.md) | Plugin source reads never truncate | Accepted; amends 0123 |
+| [0128](0128-plugin-source-reads-never-truncate.md) | Plugin source reads never truncate | Accepted; amends 0123; amended by 0133 |
 | [0129](0129-drive-binary-downloads-for-plugins-are-http-range-reads-with-no-size-cap.md) | Drive binary downloads for plugins are HTTP Range reads with no size cap | Accepted; amends 0123 |
 | [0130](0130-plugin-outputs-are-a-folder-that-privacyfence-reads-through-its-own-tools.md) | Plugin outputs are a folder that PrivacyFence reads through its own tools | Accepted |
 | [0131](0131-a-plugins-child-processes-run-under-its-account-unsupervised.md) | A plugin's child processes run under its account, unsupervised, and the plugin confines them | Accepted; amends 0121 |
 | [0132](0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) | Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project | Accepted |
+| [0133](0133-salesforce-reports-page-by-a-unique-key-column.md) | Salesforce reports page by a unique key column | Accepted; amends 0128 |

@@ -26,6 +26,8 @@ from privacyfence.plugins.source_ops import SOURCE_ADAPTERS, handle_source_call
 from privacyfence.plugins.spool import DownloadSpool
 from privacyfence.principal import current_principal
 from privacyfence.salesforce_client import SalesforceClientError
+from privacyfence.salesforce_client import ReportPagingError, SalesforceClient
+from tests.fixtures.salesforce_analytics import COLUMNS, KEY, REPORT_ID, TYPE, FakeAnalytics, make_rows, tabular_report
 
 SENTINEL = "SENTINEL-do-not-log-4f1c"
 
@@ -285,6 +287,142 @@ class TestAdapterSalesforce:
         sf.run_report.side_effect = SalesforceClientError("nope")
         err = await _code(Env(tmp_path, salesforce=sf).call("salesforce.report_run", {"report_id": "00O1"}))
         assert err.code == "upstream_error"
+
+
+def _analytics(monkeypatch, rows=4500, **kw):
+    fake = FakeAnalytics(tabular_report(), COLUMNS, make_rows(rows), **kw)
+    client = SalesforceClient(config={"access_token": "tok", "instance_url": "https://my.salesforce.com"})
+    monkeypatch.setattr(client, "_get_sf", lambda: SimpleNamespace(restful=fake.restful))
+    return fake, client
+
+
+def _page_keys(data):
+    index = data["reportMetadata"]["detailColumns"].index(KEY)
+    return [row["dataCells"][index]["value"] for row in data["factMap"]["T!T"]["rows"]]
+
+
+REPORT = ("salesforce.report_run", {"report_id": REPORT_ID, "page_by": KEY})
+
+
+def _sf_cursor(state, **bound):
+    base = {"report_id": REPORT_ID, "page_by": KEY, "columns": [], "filters": []}
+    return cursors.encode("salesforce.report_run", {**base, **bound}, state)
+
+
+class TestAdapterSalesforcePaged:
+    async def test_4500_rows_arrive_once_in_key_order_over_three_calls(self, tmp_path, audit_dir, monkeypatch):
+        _, client = _analytics(monkeypatch)
+        keys, results = await _follow(Env(tmp_path, salesforce=client), *REPORT, _page_keys)
+        assert keys == [r[KEY] for r in make_rows(4500)]
+        assert [r["data"]["page"] for r in results] == [
+            {"number": 1, "first_row": 1, "last_row": 2000, "more": True},
+            {"number": 2, "first_row": 2001, "last_row": 4000, "more": True},
+            {"number": 3, "first_row": 4001, "last_row": 4500, "more": False},
+        ]
+        sizes = [r["bytes"] for r in results]
+        base = f"{REPORT_ID}; filters=0; page_by={KEY}"
+        assert [line["summary"] for line in audit_lines(audit_dir)] == [
+            f"{base}; bytes={sizes[0]}; more", f"{base}; page; bytes={sizes[1]}; more", f"{base}; page; bytes={sizes[2]}",
+        ]
+
+    async def test_columns_and_filters_narrow_the_run(self, tmp_path, audit_dir, monkeypatch):
+        fake, client = _analytics(monkeypatch, rows=10)
+        filters = [{"column": TYPE, "operator": "equals", "value": "Customer"}]
+        result = await Env(tmp_path, salesforce=client).call(
+            REPORT[0], {**REPORT[1], "columns": [KEY, TYPE], "filters": filters}
+        )
+        assert result["next_cursor"] is None and len(_page_keys(result["data"])) == 5
+        assert fake.calls[-1][1]["detailColumns"] == [KEY, TYPE]
+        assert audit_lines(audit_dir)[0]["summary"].startswith(f"{REPORT_ID}; filters=1; columns=2; page_by={KEY}; bytes=")
+
+    async def test_rows_over_the_budget_continue_after_the_last_served_key(self, tmp_path, audit_dir, monkeypatch):
+        fake, client = _analytics(monkeypatch, rows=60)
+        monkeypatch.setattr(source_ops, "SOURCE_PAGE_BUDGET_BYTES", 9000)
+        keys, results = await _follow(Env(tmp_path, salesforce=client), *REPORT, _page_keys)
+        assert keys == [r[KEY] for r in make_rows(60)]
+        assert len(results) > 1 and all(r["bytes"] <= 9000 for r in results)
+        runs = [m for path, m in fake.calls if m is not None]
+        afters = [
+            next((f["value"] for f in m["reportFilters"] if f["operator"] == "greaterThan"), None) for m in runs
+        ]
+        assert afters[0] is None
+        served = [_page_keys(r["data"]) for r in results]
+        assert afters[1:] == [page[-1] for page in served[:-1]]
+        assert [r["data"]["page"]["number"] for r in results] == list(range(1, len(results) + 1))
+        assert results[-1]["next_cursor"] is None
+
+    async def test_one_row_over_the_budget_is_payload_too_large(self, tmp_path, audit_dir, monkeypatch):
+        _, client = _analytics(monkeypatch, rows=3)
+        monkeypatch.setattr(source_ops, "SOURCE_PAGE_BUDGET_BYTES", 3000)
+        monkeypatch.setattr(source_ops, "_encoded_size", lambda value: 3001 if isinstance(value, list) else 10)
+        err = await _code(Env(tmp_path, salesforce=client).call(*REPORT))
+        assert err.code == "payload_too_large"
+
+    async def test_without_page_by_the_run_is_unpaged(self, tmp_path, audit_dir):
+        sf = MagicMock()
+        sf.run_report.return_value = {"allData": True}
+        await Env(tmp_path, salesforce=sf).call("salesforce.report_run", {"report_id": "00O1", "columns": ["A"]})
+        assert sf.run_report.call_args.kwargs == {"columns": ["A"], "filters": None}
+        sf.run_report_page.assert_not_called()
+
+
+class TestAdapterSalesforcePagedRefusals:
+    async def test_cursor_without_page_by(self, tmp_path, audit_dir):
+        err = await _code(Env(tmp_path, salesforce=MagicMock()).call(
+            "salesforce.report_run", {"report_id": "00O1", "cursor": _sf_cursor({"n": 1, "a": 1, "l": "x", "r": 1})}
+        ))
+        assert err.code == "invalid_params" and err.detail == "cursor needs page_by"
+
+    @pytest.mark.parametrize("changed", [
+        {"columns": [KEY]}, {"page_by": "ACCOUNT.NAME"}, {"filters": [{"column": TYPE, "operator": "equals", "value": "x"}]},
+    ])
+    async def test_a_cursor_of_a_different_call_is_refused(self, tmp_path, audit_dir, monkeypatch, changed):
+        _, client = _analytics(monkeypatch)
+        env = Env(tmp_path, salesforce=client)
+        first = await env.call(*REPORT)
+        err = await _code(env.call(REPORT[0], {**REPORT[1], **changed, "cursor": first["next_cursor"]}))
+        assert err.code == "invalid_params" and err.detail == "cursor belongs to a different call"
+
+    @pytest.mark.parametrize("state", [
+        {"n": 1, "a": 1, "l": "x"}, {"n": 0, "a": 1, "l": "x", "r": 1}, {"n": 1, "a": 1, "l": "", "r": 1},
+        {"n": 1, "a": 1, "l": 5, "r": 1}, {"n": 1, "a": 1, "l": "x", "r": -1}, {"n": 1, "a": 1, "l": "x", "r": 1, "z": 1},
+    ])
+    async def test_garbled_state_is_refused(self, tmp_path, audit_dir, state):
+        client = MagicMock()
+        err = await _code(Env(tmp_path, salesforce=client).call(REPORT[0], {**REPORT[1], "cursor": _sf_cursor(state)}))
+        assert err.code == "invalid_params" and err.detail == "cursor is not valid"
+        client.run_report_page.assert_not_called()
+
+    @pytest.mark.parametrize("reason", ["bad_page_by", "not_unique", "not_advancing", "page_limit", "not_flat", "rows_lost"])
+    async def test_paging_errors_are_invalid_params_with_a_reason(self, tmp_path, audit_dir, reason):
+        client = MagicMock()
+        client.run_report_page.side_effect = ReportPagingError(reason, "no good")
+        err = await _code(Env(tmp_path, salesforce=client).call(*REPORT))
+        assert err.code == "invalid_params" and err.detail == "no good" and err.extra == {"reason": reason}
+
+    async def test_other_client_errors_stay_upstream(self, tmp_path, audit_dir):
+        client = MagicMock()
+        client.run_report_page.side_effect = SalesforceClientError("nope")
+        err = await _code(Env(tmp_path, salesforce=client).call(*REPORT))
+        assert err.code == "upstream_error"
+
+    async def test_a_real_bad_column_is_reported(self, tmp_path, audit_dir, monkeypatch):
+        _, client = _analytics(monkeypatch, rows=3)
+        err = await _code(Env(tmp_path, salesforce=client).call(REPORT[0], {**REPORT[1], "page_by": "NOPE"}))
+        assert err.extra == {"reason": "bad_page_by"}
+
+    @pytest.mark.parametrize("page_by", ["Account Name", "Num; DROP"])
+    async def test_a_page_by_that_is_not_a_column_name_is_bad_page_by(self, tmp_path, audit_dir, monkeypatch, page_by):
+        _, client = _analytics(monkeypatch, rows=3)
+        err = await _code(Env(tmp_path, salesforce=client).call(REPORT[0], {**REPORT[1], "page_by": page_by}))
+        assert err.code == "invalid_params" and err.extra == {"reason": "bad_page_by"}
+
+    @pytest.mark.parametrize("columns", ["A", [], [1], [""], ["x" * 257], ["a"] * 101])
+    async def test_columns_are_validated(self, tmp_path, audit_dir, columns):
+        err = await _code(Env(tmp_path, salesforce=MagicMock()).call(
+            "salesforce.report_run", {"report_id": "00O1", "columns": columns}
+        ))
+        assert err.code == "invalid_params" and err.detail == "params.columns must be a list of column names"
 
 
 class TestAdapterJira:
