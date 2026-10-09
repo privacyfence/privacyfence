@@ -489,6 +489,8 @@ class TestPageIndex:
 
     @pytest.mark.parametrize("entry", [
         PageEntry("/", "a\tb"), PageEntry("/./x", "X"), PageEntry("/a#b", "X"),
+        PageEntry("/x", "X", updated_at="0001-01-01T00:00:00+14:00"),
+        PageEntry("/x", "X", created_at="9999-12-31T23:59:59-14:00"),
     ])
     async def test_an_invalid_entry_is_invalid_params(self, make_daemon, principal, entry):
         daemon = await make_daemon(self.indexed([PageEntry("/", "Home"), entry]))

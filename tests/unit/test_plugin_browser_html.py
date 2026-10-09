@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from privacyfence.plugin_browser_html import format_timestamp, render
-from privacyfence.plugins.page_index import PAGE_INDEX_NO_ANSWER, PageIndex
+from privacyfence.plugins.page_index import PAGE_INDEX_INVALID, PAGE_INDEX_NO_ANSWER, PageIndex, index_from_result
 from privacyfence.plugins.protocol import PageEntry
 
 pytestmark = pytest.mark.unit
@@ -49,6 +49,12 @@ class TestRender:
         assert "2026-10-09 10:00 UTC" in html
         assert '<div class="pf-plugin-pages-desc">About</div>' in html
 
+    @pytest.mark.parametrize("stamp", ["0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"])
+    def test_a_timestamp_that_overflows_in_utc_shows_the_invalid_page_list_message(self, stamp):
+        result = {"pages": [{"path": "/", "title": "x", "updated_at": stamp}]}
+        html = render([index_from_result("alpha", "Alpha", result)], single=False, nonce="n")
+        assert PAGE_INDEX_INVALID in html
+
     def test_no_script_and_the_style_carries_the_nonce(self):
         html = render([_index(PageEntry(path="/", title="Home"))], single=False, nonce="abc")
         assert "<script" not in html
@@ -85,3 +91,7 @@ class TestFormatTimestamp:
     def test_naive_value_is_taken_as_utc_and_garbage_is_returned_as_is(self):
         assert format_timestamp("2026-10-09T10:00:00") == "2026-10-09 10:00 UTC"
         assert format_timestamp("soon") == "soon"
+
+    @pytest.mark.parametrize("value", ["0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"])
+    def test_value_that_overflows_in_utc_is_returned_as_is(self, value):
+        assert format_timestamp(value) == value

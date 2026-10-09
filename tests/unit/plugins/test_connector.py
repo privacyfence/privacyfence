@@ -871,6 +871,17 @@ class TestErrors:
         peer.execute = {"result": value}
         assert await make_connector(peer).call("today_note", {"text": "y"}) == value
 
+    async def test_write_result_with_a_lone_surrogate_is_withheld_not_raised(self, gated_call_spy):
+        peer = FakePeer()
+        peer.execute = {"result": "\ud800" * WRITE_RESULT_MAX_BYTES}
+        result = await make_connector(peer).call("today_note", {"text": "y"})
+        assert result == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
+
+    async def test_write_result_with_a_small_lone_surrogate_is_returned(self, gated_call_spy):
+        peer = FakePeer()
+        peer.execute = {"result": "\ud800"}
+        assert await make_connector(peer).call("today_note", {"text": "y"}) == "\ud800"
+
     async def test_write_result_with_personal_data_is_withheld(self, gated_call_spy):
         peer = FakePeer()
         peer.execute = {"result": {"iban": "DE89370400440532013000"}}
