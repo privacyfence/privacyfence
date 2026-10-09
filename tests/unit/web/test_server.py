@@ -457,6 +457,9 @@ class _PageHost:
         self.calls.append((name, path))
         return {"status": 200, "headers": {"content-type": "text/html"}, "body": "<p>hi</p>"}
 
+    def page_links(self):
+        return [("Today", "/plugins/today/")]
+
 
 def _route_paths(app) -> set[str]:
     """Walk the middleware chain down to the Starlette app and list its route paths."""
@@ -507,6 +510,10 @@ class TestPluginPagesSandboxCsp:
         assert "sandbox" not in csp
         assert "default-src 'none'" in csp
         assert r.headers.get("cache-control") != "private, no-store"
+
+    def test_approvals_page_has_the_plugins_menu_from_the_host(self):
+        r = self._client().get("/approvals")
+        assert '<a class="pf-shell-nav-item" href="/plugins/today/" target="_blank" rel="noopener">Today</a>' in r.text
 
     def test_middleware_alone_branches_on_the_path(self):
         async def app(scope, receive, send):
