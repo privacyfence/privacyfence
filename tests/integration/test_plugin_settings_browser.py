@@ -141,6 +141,17 @@ class TestPhoneLayout:
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=".pf-page")
 
+        # Picking a plugin from the narrow Menu opens it in a new tab and closes the menus here.
+        menu = phone_page.locator("details.pf-shell-menu")
+        menu.evaluate("(el) => { el.open = true; }")
+        plugins = menu.locator("details.pf-shell-plugins")
+        plugins.evaluate("(el) => { el.open = true; }")
+        plugins.locator('a[href="/plugins/alpha/"]').evaluate(
+            "(el) => { el.addEventListener('click', (ev) => ev.preventDefault()); el.click(); }"
+        )
+        assert menu.evaluate("(el) => el.open") is False
+        assert plugins.evaluate("(el) => el.open") is False
+
     @pytest.mark.parametrize(("case", "width"), _phone_cases(["settings-plugins-approvals"]))
     def test_a_row_with_three_approvals(self, phone_page, plugin_server, case, width):  # noqa: F811
         server, host = plugin_server

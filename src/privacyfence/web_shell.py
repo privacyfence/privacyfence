@@ -517,7 +517,10 @@ _STREAM_JS = """
   function updatePluginsMenu(plugins) {
     var pages = (plugins || []).filter(function (p) { return p && p.page_url; });
     pages.sort(function (a, b) {
+      // The same order as the server's: case-insensitive, then exact, so names that differ only
+      // in case keep their places when the menu is rebuilt.
       var x = String(a.display_name).toLowerCase(), y = String(b.display_name).toLowerCase();
+      if (x === y) { x = String(a.display_name); y = String(b.display_name); }
       return x < y ? -1 : (x > y ? 1 : 0);
     });
     document.querySelectorAll('[data-pf-plugins]').forEach(function (menu) {
@@ -537,8 +540,11 @@ _STREAM_JS = """
     });
   }
   document.addEventListener('click', function (e) {
-    document.querySelectorAll('details.pf-shell-plugins[open]').forEach(function (menu) {
-      if (!menu.contains(e.target)) { menu.open = false; }
+    // A plugin link opens a new tab; close the menus it was picked from, the narrow-header menu
+    // included, so this tab is not left with them open.
+    var picked = e.target.closest && e.target.closest('.pf-shell-plugins-panel a');
+    document.querySelectorAll('details.pf-shell-plugins[open], details.pf-shell-menu[open]').forEach(function (menu) {
+      if (picked || (menu.classList.contains('pf-shell-plugins') && !menu.contains(e.target))) { menu.open = false; }
     });
   });
   document.addEventListener('keydown', function (e) {
