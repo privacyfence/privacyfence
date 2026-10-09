@@ -12,6 +12,7 @@ save_token_file monkeypatched at their call sites.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -20,14 +21,18 @@ import pytest
 from privacyfence import jira_client as jira_client_module
 from privacyfence.atlassian_oauth import AtlassianOAuthError
 from privacyfence.atlassian_users import AtlassianUser, AtlassianUserDirectory
+from privacyfence.atlassian_users import UNKNOWN_USER_LABEL, mask_emails
 from privacyfence.jira_client import (
+    SEARCH_FIELDS,
     JiraClient,
     JiraClientError,
     JiraComment,
+    JiraField,
     JiraIssue,
     JiraProject,
     JiraTransition,
     _text_to_adf,
+    simplify_field_value,
 )
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "jira"
@@ -463,6 +468,12 @@ class TestListProjects:
             client.list_projects()
 
 
+STORY_POINTS = {
+    "id": "customfield_10016", "name": "Story Points", "custom": True,
+    "schema": {"type": "number"}, "clauseNames": ["cf[10016]", "Story Points"],
+}
+
+
 class TestSearchIssues:
     def test_requires_jql(self):
         client = make_client()
@@ -492,8 +503,31 @@ class TestSearchIssues:
         issues = client.search_issues("project = ENG", max_results=5)
         assert [i.key for i in issues] == [f"ENG-{i}" for i in range(1, 6)]
         calls = client._client.enhanced_jql.call_args_list
-        assert calls[0].kwargs == {"nextPageToken": None, "limit": 5}
-        assert calls[1].kwargs == {"nextPageToken": "tok2", "limit": 2}
+        assert calls[0].kwargs == {"nextPageToken": None, "limit": 5, "fields": list(SEARCH_FIELDS)}
+        assert calls[1].kwargs == {"nextPageToken": "tok2", "limit": 2, "fields": list(SEARCH_FIELDS)}
+
+    def test_fields_resolve_once_and_every_page_passes_them(self):
+        client = make_client()
+        client._client.get_all_fields.return_value = [STORY_POINTS]
+        client._client.enhanced_jql.side_effect = [
+            {"issues": [{"key": "ENG-1", "fields": {"customfield_10016": 3}}],
+             "nextPageToken": "tok2", "isLast": False},
+            {"issues": [{"key": "ENG-2", "fields": {"customfield_10016": 5}}], "isLast": True},
+        ]
+        issues = client.search_issues("project = ENG", max_results=5, fields=["Story Points"])
+        assert [i.extra_fields for i in issues] == [{"Story Points": 3}, {"Story Points": 5}]
+        client._client.get_all_fields.assert_called_once()
+        expected = [*SEARCH_FIELDS, "customfield_10016"]
+        assert [c.kwargs["fields"] for c in client._client.enhanced_jql.call_args_list] == [expected, expected]
+
+    def test_unknown_field_raises_unwrapped(self):
+        client = make_client()
+        client._client.get_all_fields.return_value = [STORY_POINTS]
+        with pytest.raises(JiraClientError) as excinfo:
+            client.search_issues("project = ENG", fields=["Nope"])
+        assert "jira_list_fields" in str(excinfo.value)
+        assert "search_issues failed" not in str(excinfo.value)
+        client._client.enhanced_jql.assert_not_called()
 
 
 class TestSearchIssuesPage:
@@ -512,8 +546,40 @@ class TestSearchIssuesPage:
         assert [i.key for i in issues] == ["ENG-1"]
         assert token == "tok2"
         client._client.enhanced_jql.assert_called_once_with(
-            "project = ENG", nextPageToken="tok1", limit=7
+            "project = ENG", nextPageToken="tok1", limit=7, fields=list(SEARCH_FIELDS)
         )
+
+    def test_extra_fields_appended_without_repeating_search_fields(self):
+        client = make_client()
+        client._client.enhanced_jql.return_value = {
+            "issues": [{"key": "ENG-1", "fields": {"summary": "x", "customfield_10016": 8}}],
+            "isLast": True,
+        }
+        extra = [
+            JiraField("customfield_10016", "Story Points", True, "number"),
+            JiraField("summary", "Summary", False, "string"),
+        ]
+        issues, _ = client.search_issues_page("project = ENG", extra=extra)
+        _, kwargs = client._client.enhanced_jql.call_args
+        assert kwargs["fields"] == [*SEARCH_FIELDS, "customfield_10016"]
+        assert issues[0].extra_fields == {"Story Points": 8, "Summary": "x"}
+
+    def test_no_extra_leaves_extra_fields_none(self):
+        client = make_client()
+        client._client.enhanced_jql.return_value = {"issues": [{"key": "ENG-1", "fields": {}}], "isLast": True}
+        issues, _ = client.search_issues_page("project = ENG")
+        assert issues[0].extra_fields is None
+
+    def test_extra_values_without_mentions_never_look_up_users(self, monkeypatch):
+        calls = fake_bulk(monkeypatch, {})
+        client = make_client()
+        client._client.enhanced_jql.return_value = {
+            "issues": [{"key": "ENG-1", "fields": {"customfield_10016": 8}}], "isLast": True,
+        }
+        client.search_issues_page(
+            "project = ENG", extra=[JiraField("customfield_10016", "Story Points", True, "number")]
+        )
+        assert calls == []
 
     def test_is_last_gives_no_token(self):
         client = make_client()
@@ -541,6 +607,39 @@ class TestGetIssue:
         client._client.issue.return_value = {"key": "ENG-1", "fields": {"summary": "x", "description": "d"}}
         issue = client.get_issue("ENG-1")
         assert issue.description == "d"
+
+    def test_extra_fields_set_when_asked(self):
+        client = make_client()
+        client._client.get_all_fields.return_value = [STORY_POINTS]
+        client._client.issue.return_value = {"key": "ENG-1", "fields": {"customfield_10016": 5}}
+        issue = client.get_issue("ENG-1", ["Story Points"])
+        assert issue.extra_fields == {"Story Points": 5}
+
+    def test_extra_fields_none_by_default(self):
+        client = make_client()
+        client._client.issue.return_value = {"key": "ENG-1", "fields": {}}
+        assert client.get_issue("ENG-1").extra_fields is None
+        client._client.get_all_fields.assert_not_called()
+
+    def test_extra_fields_never_in_asdict(self):
+        client = make_client()
+        client._client.get_all_fields.return_value = [STORY_POINTS]
+        client._client.issue.return_value = {"key": "ENG-1", "fields": {"customfield_10016": 5}}
+        issue = client.get_issue("ENG-1", ["Story Points"])
+        assert "extra_fields" not in asdict(issue)
+
+    def test_rich_text_extra_field_resolves_mentions_once(self, monkeypatch):
+        calls = fake_bulk(monkeypatch, {JANE_ID: "Jane Doe"})
+        client = make_client()
+        client._client.get_all_fields.return_value = [
+            {"id": "customfield_10050", "name": "Notes", "custom": True, "schema": {"type": "string"}},
+        ]
+        client._client.issue.return_value = {
+            "key": "ENG-1", "fields": {"customfield_10050": adf_doc(mention_node(JANE_ID))},
+        }
+        issue = client.get_issue("ENG-1", ["Notes"])
+        assert calls == [[JANE_ID]]
+        assert issue.extra_fields == {"Notes": f"@[Jane Doe]({JANE_ID})"}
 
 
 class TestGetIssueMentions:
@@ -875,7 +974,7 @@ class TestResolveCustomField:
         client._client.get_all_fields.return_value = [
             {"id": "customfield_10016", "name": "Story Points", "schema": {"type": "number"}},
         ]
-        with pytest.raises(JiraClientError, match="no Jira field named"):
+        with pytest.raises(JiraClientError, match="no Jira field named 'Not A Real Field'; jira_list_fields"):
             client.resolve_custom_field("Not A Real Field", 1)
 
     def test_ambiguous_field_name_raises(self):
@@ -1001,3 +1100,188 @@ class TestLiveFixtureParsing:
         projects = [client._parse_project(p) for p in raw]
         assert projects, "recorded list_projects.json has no results"
         assert all(p.key and p.name for p in projects)
+
+
+# ---------------------------------------------------------------------------- #
+# Extra fields: value simplification, field lookup
+# ---------------------------------------------------------------------------- #
+
+class TestSimplifyFieldValue:
+    def test_scalars_unchanged(self):
+        for v in (None, "a", 3, 1.5, True):
+            assert simplify_field_value(v) == v
+
+    def test_list_item_by_item(self):
+        assert simplify_field_value([{"value": "A"}, 2, {"name": "B"}]) == ["A", 2, "B"]
+
+    def test_adf_with_mention(self):
+        # ACCOUNT_ID_RE needs at least 10 characters, so "a1" would not count as a mention id.
+        doc = adf_doc(mention_node(JANE_ID, "@Ann"))
+        assert simplify_field_value(doc, {JANE_ID: "Ann"}) == f"@[Ann]({JANE_ID})"
+
+    def test_person_is_display_name(self):
+        assert simplify_field_value({"accountId": "a1", "displayName": "Ann", "emailAddress": "a@b.c"}) == "Ann"
+
+    def test_person_email_display_name_masked(self):
+        value = {"accountId": "abcd1234", "displayName": "ann@example.com"}
+        assert simplify_field_value(value) == mask_emails("ann@example.com", "abcd1234")
+        assert "@" not in simplify_field_value(value)
+
+    def test_person_without_display_name(self):
+        assert simplify_field_value({"accountId": "a1"}) == UNKNOWN_USER_LABEL
+
+    def test_option(self):
+        assert simplify_field_value({"id": "1", "value": "High"}) == "High"
+
+    def test_cascading_select(self):
+        assert simplify_field_value({"value": "A", "child": {"value": "B"}}) == "A > B"
+
+    def test_option_holding_a_person(self):
+        value = {"value": {"accountId": "a1", "displayName": "Ann", "emailAddress": "x@y.z"}}
+        assert simplify_field_value(value) == "Ann"
+
+    def test_named_object(self):
+        assert simplify_field_value({"name": "Sprint 4", "id": 7}) == "Sprint 4"
+
+    def test_sla_keeps_cycles(self):
+        sla = {"id": "1", "name": "Time to resolution", "ongoingCycle": {"breached": False}, "_links": {"self": "u"}}
+        assert simplify_field_value(sla) == {
+            "id": "1", "name": "Time to resolution", "ongoingCycle": {"breached": False},
+        }
+
+    def test_issue_reference_is_its_key(self):
+        assert simplify_field_value({"key": "ENG-2", "fields": {"summary": "x"}}) == "ENG-2"
+
+    def test_generic_dict_drops_noise_at_any_depth(self):
+        value = {
+            "self": "u", "_links": {}, "avatarUrls": {}, "iconUrl": "i", "emailAddress": "e", "expand": "x",
+            "keep": 1, "inner": {"self": "u", "avatarUrls": {}, "iconUrl": "i", "emailAddress": "e", "ok": 2},
+        }
+        assert simplify_field_value(value) == {"keep": 1, "inner": {"ok": 2}}
+
+    def test_comment_container(self):
+        value = {
+            "comments": [{
+                "self": "u", "id": "1",
+                "author": {"accountId": "a1", "displayName": "Ann"},
+                "body": {"type": "doc", "version": 1, "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}]},
+            }],
+            "total": 1,
+        }
+        assert simplify_field_value(value) == {
+            "comments": [{"id": "1", "author": "Ann", "body": "hi"}], "total": 1,
+        }
+
+    def test_issue_link(self):
+        link = {"id": "1", "type": {"name": "Blocks"}, "outwardIssue": {"key": "ENG-2"}}
+        assert simplify_field_value(link) == {"id": "1", "type": "Blocks", "outwardIssue": "ENG-2"}
+
+    def test_other_types_become_strings(self):
+        assert simplify_field_value(("a", "b")) == str(("a", "b"))
+
+
+def fields_client(*raw_fields: dict) -> JiraClient:
+    client = make_client()
+    client._client.get_all_fields.return_value = list(raw_fields)
+    return client
+
+
+DUE_DATE = {"id": "duedate", "name": "Due date", "custom": False, "schema": {"type": "date"}, "clauseNames": ["due", "duedate"]}
+ASSIGNEES = {"id": "customfield_10040", "name": "Reviewers", "custom": True, "schema": {"type": "array", "items": "user"}}
+NO_SCHEMA = {"id": "customfield_10041", "name": "Legacy", "custom": True}
+
+
+class TestListFields:
+    def test_query_matches_name_or_id_ignoring_case(self):
+        client = fields_client(STORY_POINTS, DUE_DATE)
+        assert [f.id for f in client.list_fields("STORY")] == ["customfield_10016"]
+        assert [f.id for f in client.list_fields("DueDate")] == ["duedate"]
+        assert [f.id for f in client.list_fields(" Customfield_100 ")] == ["customfield_10016"]
+
+    def test_custom_only(self):
+        client = fields_client(STORY_POINTS, DUE_DATE)
+        assert [f.id for f in client.list_fields(custom_only=True)] == ["customfield_10016"]
+
+    def test_sorted_by_name(self):
+        client = fields_client(STORY_POINTS, DUE_DATE, ASSIGNEES)
+        assert [f.name for f in client.list_fields()] == ["Due date", "Reviewers", "Story Points"]
+
+    def test_max_results_clamped(self):
+        many = [{"id": f"customfield_{i}", "name": f"F{i:03d}", "custom": True} for i in range(250)]
+        client = fields_client(*many)
+        assert len(client.list_fields(max_results=0)) == 1
+        assert len(client.list_fields(max_results=1000)) == 200
+        assert len(client.list_fields()) == 50
+
+    def test_type_strings(self):
+        client = fields_client(STORY_POINTS, ASSIGNEES, NO_SCHEMA)
+        types = {f.name: f.type for f in client.list_fields()}
+        assert types == {"Story Points": "number", "Reviewers": "array of user", "Legacy": ""}
+
+    def test_jql_names_from_clause_names(self):
+        client = fields_client(STORY_POINTS, NO_SCHEMA)
+        by_name = {f.name: f for f in client.list_fields()}
+        assert by_name["Story Points"].jql_names == ["cf[10016]", "Story Points"]
+        assert by_name["Legacy"].jql_names == []
+
+    def test_field_list_fetched_once_across_calls(self):
+        client = fields_client(STORY_POINTS, DUE_DATE)
+        client.list_fields()
+        client.resolve_fields(["Story Points"])
+        client.list_fields("due")
+        client._client.get_all_fields.assert_called_once()
+
+
+class TestResolveFields:
+    def test_by_name_ignoring_case(self):
+        client = fields_client(STORY_POINTS)
+        assert [f.id for f in client.resolve_fields(["story POINTS"])] == ["customfield_10016"]
+
+    def test_by_exact_id(self):
+        client = fields_client(STORY_POINTS, DUE_DATE)
+        assert [f.id for f in client.resolve_fields(["duedate", "customfield_10016"])] == ["duedate", "customfield_10016"]
+
+    def test_by_jql_id_either_case(self):
+        client = fields_client(STORY_POINTS)
+        assert client.resolve_fields(["cf[10016]"])[0].name == "Story Points"
+        assert client.resolve_fields(["CF[10016]"])[0].name == "Story Points"
+
+    def test_unknown_cf_id(self):
+        client = fields_client(STORY_POINTS)
+        with pytest.raises(JiraClientError) as excinfo:
+            client.resolve_fields(["cf[999]"])
+        assert str(excinfo.value) == "no Jira field with id 'cf[999]'; jira_list_fields lists the field names"
+
+    def test_unknown_name(self):
+        client = fields_client(STORY_POINTS)
+        with pytest.raises(JiraClientError) as excinfo:
+            client.resolve_fields(["Nope"])
+        assert str(excinfo.value) == "no Jira field named 'Nope'; jira_list_fields lists the field names"
+
+    def test_empty_ref(self):
+        client = fields_client(STORY_POINTS)
+        with pytest.raises(JiraClientError, match="field names must not be empty"):
+            client.resolve_fields(["  "])
+
+    def test_duplicates_removed_order_kept(self):
+        client = fields_client(STORY_POINTS, DUE_DATE)
+        refs = ["duedate", "Story Points", "Due date", "cf[10016]", "customfield_10016"]
+        assert [f.id for f in client.resolve_fields(refs)] == ["duedate", "customfield_10016"]
+
+    def test_same_named_fields_by_name_are_ambiguous(self):
+        client = fields_client(
+            {"id": "customfield_1", "name": "Sprint", "custom": True},
+            {"id": "customfield_2", "name": "Sprint", "custom": True},
+        )
+        with pytest.raises(JiraClientError, match="customfield_1, customfield_2.*pass one of these ids instead"):
+            client.resolve_fields(["Sprint"])
+        assert [f.id for f in client.resolve_fields(["customfield_2"])] == ["customfield_2"]
+
+    def test_extra_field_keys(self):
+        sprint1 = JiraField("customfield_1", "Sprint", True, "")
+        sprint2 = JiraField("customfield_2", "Sprint", True, "")
+        points = JiraField("customfield_10016", "Story Points", True, "number")
+        assert JiraClient.extra_field_keys([sprint1, sprint2, points]) == [
+            "Sprint (customfield_1)", "Sprint (customfield_2)", "Story Points",
+        ]

@@ -225,19 +225,23 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted |
 | [0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
 | [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |
-| [0120](0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) | Plugins are out-of-process executables speaking newline-delimited JSON-RPC 2.0 over stdio | Accepted; amended by 0132 |
+| [0120](0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) | Plugins are out-of-process executables speaking newline-delimited JSON-RPC 2.0 over stdio | Accepted; amended by 0136 |
 | [0121](0121-a-plugin-is-trusted-code-installed-by-an-administrator-into-an-admin-only-directory.md) | A plugin is trusted code, installed by an administrator into an admin-only directory | Accepted; amended by 0131 |
-| [0122](0122-plugin-tools-are-gated-in-two-steps-and-a-read-releases-the-prepared-payload.md) | Plugin tools are gated in two steps, and a read releases the prepared payload | Accepted; amended by 0133 |
+| [0122](0122-plugin-tools-are-gated-in-two-steps-and-a-read-releases-the-prepared-payload.md) | Plugin tools are gated in two steps, and a read releases the prepared payload | Accepted; amended by 0137 |
 | [0123](0123-the-plugin-source-api-is-ungated-but-audited-without-content.md) | The plugin source API is ungated but audited without content | Accepted; amended by 0128, 0129 |
-| [0124](0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md) | Plugin pages are GET-only, owner-session-only, self-contained and sandboxed | Accepted; amended by 0135 |
+| [0124](0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md) | Plugin pages are GET-only, owner-session-only, self-contained and sandboxed | Accepted; amended by 0139 |
 | [0125](0125-the-org-mode-plugin-contract-is-reserved-in-protocol-1-and-rejected-in-local-mode.md) | The org-mode plugin contract is reserved in protocol 1 and rejected in local mode | Accepted |
 | [0126](0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md) | The plugin SDK lives in this repository and is published from the same tag | Accepted |
 | [0127](0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) | A plugin approval binds to its content digest and persists until revoked | Accepted |
-| [0128](0128-plugin-source-reads-never-truncate.md) | Plugin source reads never truncate | Accepted; amends 0123; amended by 0134 |
+| [0128](0128-plugin-source-reads-never-truncate.md) | Plugin source reads never truncate | Accepted; amends 0123; amended by 0133, 0138 |
 | [0129](0129-drive-binary-downloads-for-plugins-are-http-range-reads-with-no-size-cap.md) | Drive binary downloads for plugins are HTTP Range reads with no size cap | Accepted; amends 0123 |
 | [0130](0130-plugin-outputs-are-a-folder-that-privacyfence-reads-through-its-own-tools.md) | Plugin outputs are a folder that PrivacyFence reads through its own tools | Accepted |
 | [0131](0131-a-plugins-child-processes-run-under-its-account-unsupervised.md) | A plugin's child processes run under its account, unsupervised, and the plugin confines them | Accepted; amends 0121 |
-| [0132](0132-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md) | A plugin that stops reading its input for 10 seconds is treated as crashed | Accepted; amends 0120 |
-| [0133](0133-a-plugin-writes-result-is-capped-and-pii-scanned-before-it-reaches-the-ai.md) | A plugin write's result is capped at 2,048 bytes and PII-scanned before it reaches the AI | Accepted; amends 0122 |
-| [0134](0134-paged-source-reads-read-one-version-and-measure-utf8-bytes.md) | Paged plugin source reads read one version of the data and measure UTF-8 bytes | Accepted; amends 0128 |
-| [0135](0135-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md) | A plugin lists its pages, and PrivacyFence serves the page browser | Accepted; amends 0124 |
+| [0132](0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) | Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project | Accepted |
+| [0133](0133-salesforce-reports-page-by-a-unique-key-column.md) | Salesforce reports page by a unique key column | Accepted; amends 0128 |
+| [0134](0134-extra-jira-fields-go-through-a-reviewed-search.md) | Extra Jira fields are read through a separate reviewed search with no scope | Accepted |
+| [0135](0135-the-jira-field-list-is-auto-approved.md) | The Jira field list is auto-approved | Accepted |
+| [0136](0136-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md) | A plugin that stops reading its input for 10 seconds is treated as crashed | Accepted; amends 0120 |
+| [0137](0137-a-plugin-writes-result-is-capped-and-pii-scanned-before-it-reaches-the-ai.md) | A plugin write's result is capped at 2,048 bytes and PII-scanned before it reaches the AI | Accepted; amends 0122 |
+| [0138](0138-paged-source-reads-read-one-version-and-measure-utf8-bytes.md) | Paged plugin source reads read one version of the data and measure UTF-8 bytes | Accepted; amends 0128 |
+| [0139](0139-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md) | A plugin lists its pages, and PrivacyFence serves the page browser | Accepted; amends 0124 |

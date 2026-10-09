@@ -1,4 +1,4 @@
-# ADR 0135: A plugin lists its pages, and PrivacyFence serves the page browser
+# ADR 0139: A plugin lists its pages, and PrivacyFence serves the page browser
 
 ## Status
 

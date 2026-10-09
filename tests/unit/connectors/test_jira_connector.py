@@ -18,11 +18,12 @@ from privacyfence import atlassian_users as au
 from privacyfence.atlassian_users import AtlassianUser
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import jira as jira_module
-from privacyfence.connectors.jira import JiraConnector
+from privacyfence.connectors.jira import JiraConnector, _field_cell, _parse_field_refs
 from privacyfence.jira_client import (
     JiraClient,
     JiraClientError,
     JiraComment,
+    JiraField,
     JiraIssue,
     JiraProject,
     JiraTransition,
@@ -57,6 +58,11 @@ def make_real_client(config: dict | None = None) -> JiraClient:
     return client
 
 
+STORY_POINTS = JiraField(id="customfield_10016", name="Story Points", custom=True, type="number",
+                         jql_names=["cf[10016]", "Story Points"])
+SPRINT = JiraField(id="customfield_10020", name="Sprint", custom=True, type="array of sprint")
+
+
 def make_issue(**overrides):
     defaults = dict(
         key="ENG-42", summary="Fix login bug", status="In Progress", issue_type="Bug",
@@ -85,11 +91,26 @@ class TestDispatch:
         with pytest.raises(ValueError, match="Unknown Jira tool"):
             await connector.call("jira_does_not_exist", {})
 
+    @pytest.mark.parametrize("tool", ["jira_list_fields", "jira_search_issues_with_fields"])
+    async def test_new_field_tools_dispatch(self, tool, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.list_fields.return_value = []
+        client.resolve_fields.return_value = [STORY_POINTS]
+        client.search_issues.return_value = []
+        args = {"fields": '["Story Points"]', "jql": "project = ENG"} if "search" in tool else {}
+
+        await connector.call(tool, args)
+
+        assert client.list_fields.called or client.search_issues.called
+
 
 JIRA_SIBLINGS: dict[str, tuple[str, ...]] = {
     "jira_list_projects": ("jira_search_issues",),
     "jira_search_issues": ("jira_get_issue",),
     "jira_get_issue": ("jira_search_issues",),
+    "jira_search_issues_with_fields": ("jira_search_issues", "jira_list_fields"),
+    "jira_list_fields": ("jira_search_issues_with_fields",),
     "jira_create_issue": ("jira_list_projects",),
     "jira_update_issue": ("jira_transition_issue",),
     "jira_add_comment": ("jira_update_issue",),
@@ -150,6 +171,198 @@ class TestAutoTools:
         client.get_transitions.assert_called_once_with("ENG-42")
         entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
         assert '"decision": "auto_accepted"' in entries[-1]
+
+
+class TestParseFieldRefs:
+    TOOL = "jira_search_issues_with_fields"
+
+    def test_valid_names_are_returned(self):
+        assert _parse_field_refs('["Story Points", "cf[10016]"]', self.TOOL, required=True) == [
+            "Story Points", "cf[10016]"]
+
+    def test_bad_json(self):
+        with pytest.raises(ValueError) as exc:
+            _parse_field_refs("[oops", self.TOOL, required=True)
+        assert str(exc.value) == (
+            f'{self.TOOL}: fields must be a JSON array of field names, e.g. ["Story Points", "Sprint"].')
+
+    def test_non_list(self):
+        with pytest.raises(ValueError, match="must be a JSON array of field names"):
+            _parse_field_refs('{"a": 1}', self.TOOL, required=True)
+
+    def test_list_holding_a_non_string(self):
+        with pytest.raises(ValueError, match="must be a JSON array of field names"):
+            _parse_field_refs('["Story Points", 3]', self.TOOL, required=True)
+
+    @pytest.mark.parametrize("value", ["", "   ", "[]"])
+    def test_empty_when_required(self, value):
+        with pytest.raises(ValueError) as exc:
+            _parse_field_refs(value, self.TOOL, required=True)
+        assert str(exc.value) == (
+            f"{self.TOOL}: fields must name at least one field; use jira_search_issues for the standard fields.")
+
+    @pytest.mark.parametrize("value", ["", "  ", "[]"])
+    def test_empty_when_not_required_gives_empty_list(self, value):
+        assert _parse_field_refs(value, "jira_get_issue", required=False) == []
+
+    def test_twenty_names_pass(self):
+        names = [f"F{i}" for i in range(20)]
+        assert _parse_field_refs(json.dumps(names), self.TOOL, required=True) == names
+
+    def test_twenty_one_names_fail(self):
+        names = [f"F{i}" for i in range(21)]
+        with pytest.raises(ValueError) as exc:
+            _parse_field_refs(json.dumps(names), self.TOOL, required=True)
+        assert str(exc.value) == f"{self.TOOL}: fields can name at most 20 fields."
+
+
+class TestFieldCell:
+    def test_none_is_empty(self):
+        assert _field_cell(None) == ""
+
+    def test_str_is_itself(self):
+        assert _field_cell("Ann") == "Ann"
+
+    def test_list_is_joined(self):
+        assert _field_cell(["a", "b"]) == "a, b"
+
+    def test_nested_list_is_joined_recursively(self):
+        assert _field_cell(["a", ["b", "c"], None]) == "a, b, c, "
+
+    def test_bool_reads_true_or_false(self):
+        assert _field_cell(True) == "true"
+        assert _field_cell(False) == "false"
+
+    def test_dict_is_json(self):
+        assert _field_cell({"n": "é", "ok": True}) == '{"n": "é", "ok": true}'
+
+    def test_number_is_str(self):
+        assert _field_cell(5.5) == "5.5"
+
+
+class TestListFields:
+    async def test_result_is_the_asdict_list(self, tmp_path, gated_call_spy):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.list_fields.return_value = [STORY_POINTS]
+
+        result = await connector.call("jira_list_fields", {})
+
+        assert result == [{"id": "customfield_10016", "name": "Story Points", "custom": True,
+                           "type": "number", "jql_names": ["cf[10016]", "Story Points"]}]
+        assert gated_call_spy == []
+
+    async def test_arguments_are_passed_to_the_client(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.list_fields.return_value = []
+
+        await connector.call("jira_list_fields", {"query": "story", "custom_only": True, "max_results": 7})
+
+        client.list_fields.assert_called_once_with("story", True, 7)
+
+    async def test_audit_entry_never_holds_the_query(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.list_fields.return_value = [STORY_POINTS]
+
+        await connector.call("jira_list_fields", {"query": "secretquery"})
+
+        entry = json.loads((tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        assert entry["summary"] == "List fields"
+        assert entry["decision"] == "auto_accepted"
+        assert "secretquery" not in json.dumps(entry)
+
+
+class TestSearchIssuesWithFields:
+    FIELDS = '["Story Points", "Sprint"]'
+
+    def _setup(self, issues, wanted=None):
+        connector, client = make_connector()
+        client.resolve_fields.return_value = wanted or [STORY_POINTS, SPRINT]
+        client.search_issues.return_value = issues
+        return connector, client
+
+    @staticmethod
+    def _issue(key="ENG-1", summary="Fix it", **extra):
+        issue = make_issue(key=key, summary=summary)
+        issue.extra_fields = extra
+        return issue
+
+    @pytest.mark.parametrize("fields", ["", "[]", "nope", "[1]"])
+    async def test_bad_fields_never_reach_the_client(self, fields, gated_call_spy):
+        connector, client = self._setup([])
+
+        with pytest.raises(ValueError, match="jira_search_issues_with_fields: fields"):
+            await connector.call("jira_search_issues_with_fields", {"jql": "project = ENG", "fields": fields})
+
+        client.resolve_fields.assert_not_called()
+        client.search_issues.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_gate_receives_review_preview_and_new_info(self, gated_call_spy):
+        connector, client = self._setup([self._issue(**{"Story Points": 5, "Sprint": "S1"})])
+
+        await connector.call("jira_search_issues_with_fields", {"jql": "project = ENG", "fields": self.FIELDS})
+
+        (call,) = gated_call_spy
+        assert call["gate"] == "review"
+        assert call["tool"] == "jira_search_issues_with_fields"
+        assert call["preview"] == {"JQL": "project = ENG", "Fields": "Story Points, Sprint"}
+        assert call["new_info"] == {"Results": "1", "Field values": "Story Points, Sprint for each issue"}
+        assert call["table_only"] is True
+        assert call["args"] == {"jql": "project = ENG", "fields": self.FIELDS}
+        client.search_issues.assert_called_once_with("project = ENG", 20, ["Story Points", "Sprint"])
+
+    async def test_preview_table_headers_and_cells(self, gated_call_spy):
+        connector, _ = self._setup([
+            self._issue("ENG-1", "One", **{"Story Points": 5, "Sprint": ["S1", "S2"]}),
+            self._issue("ENG-2", "Two", **{"Story Points": None, "Sprint": "S3"}),
+        ])
+
+        await connector.call("jira_search_issues_with_fields", {"jql": "x", "fields": self.FIELDS})
+
+        (call,) = gated_call_spy
+        assert call["preview_tables"] == [{
+            "headers": ["Key", "Summary", "Story Points", "Sprint"],
+            "rows": [["ENG-1", "One", "5", "S1, S2"], ["ENG-2", "Two", "", "S3"]],
+        }]
+
+    async def test_pii_scan_text_holds_cell_values_not_summaries(self, gated_call_spy):
+        connector, _ = self._setup([self._issue("ENG-1", "SummaryText", **{"Story Points": 5, "Sprint": "S1"})])
+
+        await connector.call("jira_search_issues_with_fields", {"jql": "x", "fields": self.FIELDS})
+
+        (call,) = gated_call_spy
+        assert call["pii_scan_text"] == "5 S1"
+        assert "SummaryText" not in call["pii_scan_text"]
+
+    async def test_each_result_item_carries_fields(self, gated_call_spy):
+        connector, _ = self._setup([self._issue("ENG-1", "One", **{"Story Points": 5, "Sprint": "S1"})])
+
+        result = await connector.call("jira_search_issues_with_fields", {"jql": "x", "fields": self.FIELDS})
+
+        assert result[0]["key"] == "ENG-1"
+        assert result[0]["fields"] == {"Story Points": 5, "Sprint": "S1"}
+
+    async def test_zero_results_still_names_the_fields(self, gated_call_spy):
+        connector, _ = self._setup([])
+
+        result = await connector.call("jira_search_issues_with_fields", {"jql": "x", "fields": self.FIELDS})
+
+        (call,) = gated_call_spy
+        assert result == []
+        assert call["preview"]["Fields"] == "Story Points, Sprint"
+        assert call["preview_tables"] == []
+        assert call["details_text"] == "(no matches)"
+
+    async def test_max_results_is_capped_at_100(self, gated_call_spy):
+        connector, client = self._setup([])
+
+        await connector.call("jira_search_issues_with_fields",
+                             {"jql": "x", "fields": self.FIELDS, "max_results": 500})
+
+        assert client.search_issues.call_args.args[1] == 100
 
 
 class TestFindUsers:
@@ -293,6 +506,53 @@ class TestGetIssue:
                 "rows": [["bob@example.com", "2026-07-01", "Looking into it"]],
             },
         ]
+
+    async def test_fields_add_requested_fields_block_and_result_key(self, gated_call_spy):
+        connector, client = make_connector()
+        issue = make_issue()
+        issue.extra_fields = {"Story Points": 5}
+        client.get_issue.return_value = issue
+        client.get_issue_comments.return_value = [
+            JiraComment(id="c1", author="bob@example.com", body="Looking into it", created="2026-07-01"),
+        ]
+
+        result = await connector.call(
+            "jira_get_issue", {"issue_key": "ENG-42", "fields": '["Story Points"]'}
+        )
+
+        kwargs = gated_call_spy[0]
+        client.get_issue.assert_called_once_with("ENG-42", ["Story Points"])
+        assert result["fields"] == {"Story Points": 5}
+        assert kwargs["new_info"]["Requested fields"] == "Story Points"
+        assert "5" in kwargs["pii_scan_text"]
+        assert kwargs["args"] == {"issue_key": "ENG-42", "fields": '["Story Points"]'}
+        blocks = kwargs["preview_blocks"]
+        assert blocks[2] == {"type": "text", "text": "Users can't log in with SSO."}
+        assert blocks[3] == {
+            "type": "table", "caption": "Requested fields", "headers": ["Field", "Value"],
+            "rows": [["Story Points", "5"]],
+        }
+        assert blocks[4]["caption"] == "Comments (1)"
+
+    async def test_without_fields_keeps_args_result_and_client_call(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.get_issue_comments.return_value = []
+
+        result = await connector.call("jira_get_issue", {"issue_key": "ENG-42"})
+
+        client.get_issue.assert_called_once_with("ENG-42")
+        assert gated_call_spy[0]["args"] == {"issue_key": "ENG-42"}
+        assert "fields" not in result
+
+    async def test_invalid_fields_raises_before_any_client_call(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="jira_get_issue: fields must be a JSON array"):
+            await connector.call("jira_get_issue", {"issue_key": "ENG-42", "fields": "not json"})
+
+        client.get_issue.assert_not_called()
+        assert gated_call_spy == []
 
     async def test_no_comments_produces_no_table_block(self, gated_call_spy):
         connector, client = make_connector()
@@ -1369,10 +1629,18 @@ class TestEveryToolIsAudited:
         client.transition_issue.return_value = make_issue()
         client.find_users.return_value = [AtlassianUser(account_id="acc-jane-0001", display_name="Jane Doe")]
         client.refresh_user_cache.return_value = 1
+        client.list_fields.return_value = [STORY_POINTS]
+        client.resolve_fields.return_value = [STORY_POINTS]
+        with_fields = make_issue()
+        with_fields.extra_fields = {"Story Points": 3}
+        client.search_issues.return_value = [with_fields]
 
         await assert_all_tools_leave_an_audit_trail(
             connector, jira_module, monkeypatch, tmp_path,
-            arg_overrides={"jira_update_issue": {"summary": "Updated summary"}},
+            arg_overrides={
+                "jira_update_issue": {"summary": "Updated summary"},
+                "jira_search_issues_with_fields": {"fields": '["Story Points"]'},
+            },
         )
 
 

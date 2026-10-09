@@ -812,6 +812,60 @@ class TestSourcePaging:
         assert not [m for m in daemon.incoming if m["method"] == "source.call"]
 
 
+def report_page(keys, *, columns=("ACCOUNT.NAME", "Account.PF_QA_Number__c")):
+    return {
+        "reportMetadata": {"detailColumns": list(columns)},
+        "factMap": {"T!T": {"rows": [{"dataCells": [{"value": "n"}, {"value": k}]} for k in keys]}},
+    }
+
+
+class TestReportPages:
+    async def run(self, daemon, principal, pages, **kwargs):
+        await daemon.initialize()
+        daemon.source_handler = paged_handler(pages)
+        ctx = daemon.plugin._ctx(principal)
+        kwargs.setdefault("page_by", "Account.PF_QA_Number__c")
+        return ctx, [page.data async for page in ctx.source.report_pages("00O1", **kwargs)]
+
+    def sent(self, daemon):
+        return [m["params"] for m in daemon.incoming if m["method"] == "source.call"]
+
+    async def test_yields_both_pages_and_passes_the_cursor(self, daemon, principal):
+        pages = [report_page(["A1", "A2"]), report_page(["A3"])]
+        _, seen = await self.run(daemon, principal, pages, columns=["Account.PF_QA_Number__c"], filters=[{"column": "TYPE"}])
+        assert seen == pages
+        sent = self.sent(daemon)
+        assert [m["operation"] for m in sent] == ["salesforce.report_run"] * 2
+        base = {"report_id": "00O1", "page_by": "Account.PF_QA_Number__c",
+                "columns": ["Account.PF_QA_Number__c"], "filters": [{"column": "TYPE"}]}
+        assert [m["params"] for m in sent] == [base, {**base, "cursor": "p:1"}]
+
+    async def test_columns_and_filters_are_omitted_when_none(self, daemon, principal):
+        await self.run(daemon, principal, [report_page(["A1"])])
+        assert self.sent(daemon)[0]["params"] == {"report_id": "00O1", "page_by": "Account.PF_QA_Number__c"}
+
+    async def test_a_key_repeated_across_pages_is_refused(self, daemon, principal):
+        with pytest.raises(SourceError) as info:
+            await self.run(daemon, principal, [report_page(["A1", "A2"]), report_page(["A3", "A2"])])
+        assert info.value.code == "invalid_params" and info.value.reason == "not_unique"
+
+    async def test_a_key_repeated_within_a_page_is_refused(self, daemon, principal):
+        with pytest.raises(SourceError) as info:
+            await self.run(daemon, principal, [report_page(["A1", "A1"])])
+        assert info.value.reason == "not_unique"
+
+    @pytest.mark.parametrize("data", [
+        None, "text", {}, {"reportMetadata": {"detailColumns": ["X"]}, "factMap": {"T!T": {"rows": []}}},
+        {"reportMetadata": {"detailColumns": ["Account.PF_QA_Number__c"]}, "factMap": {}},
+        {"reportMetadata": {"detailColumns": ["Account.PF_QA_Number__c"]},
+         "factMap": {"T!T": {"rows": [{"dataCells": []}]}}},
+    ])
+    async def test_malformed_data_is_an_internal_error(self, daemon, principal, data):
+        with pytest.raises(SourceError) as info:
+            await self.run(daemon, principal, [data])
+        assert info.value.code == "internal_error"
+
+
 class TestApprovals:
     def test_digest_of_str_and_bytes(self):
         import hashlib

@@ -11,7 +11,7 @@ normal Allow once.
 Write tools (``gate="popup"``) are never scanned: this gate exists to catch
 personal data flowing from an external source into Claude's context, not
 content Claude itself generated for an outbound write. A plugin write tool's result is the
-exception: it is scanned before it reaches the AI (ADR 0133).
+exception: it is scanned before it reaches the AI (ADR 0137).
 
 This is a best-effort heuristic, not a compliance-grade PII classifier: it
 runs entirely locally (no network calls, no third-party NLP) over plaintext

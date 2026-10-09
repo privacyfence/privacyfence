@@ -31,11 +31,13 @@ from privacyfence.jira_client import JiraIssue
 from privacyfence.plugins.host import PluginHost
 from privacyfence.plugins.manifest import MANIFEST_FILENAME
 from privacyfence.principal import LOCAL_PRINCIPAL
+from privacyfence.salesforce_client import SalesforceClient
 from privacyfence.web import state_stream as state_stream_module
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.server import WebServer
 from privacyfence.web.session_auth import PROVENANCE_HUMAN
 from privacyfence.web_approval_ui import WebApprovalUI
+from tests.fixtures.salesforce_analytics import COLUMNS, FakeAnalytics, make_rows, tabular_report
 from tests.loop_watch import pending_io
 
 FIXTURES = Path(__file__).resolve().parents[1]
@@ -255,6 +257,10 @@ class Stack:
         events.side_effect = lambda *args, **kwargs: (events.return_value, None)
         self.drive = FakeDrive()
         self.jira = FakeJira()
+        # The real Salesforce client over a synthetic Analytics server; a test sets ``analytics``.
+        self.analytics = FakeAnalytics(tabular_report(), COLUMNS, make_rows(0))
+        self.salesforce = SalesforceClient({})
+        self.salesforce._get_sf = lambda: SimpleNamespace(restful=self.analytics.restful)  # type: ignore[method-assign]
         self.calendar_state: tuple[bool, str | None] = (True, None)
         self.problem: str | None = None
         self.tools_changed = 0
@@ -280,6 +286,7 @@ class Stack:
                 "calendar": SimpleNamespace(_calendar=self.calendar),
                 "drive": SimpleNamespace(_drive=self.drive),
                 "jira": SimpleNamespace(_jira=self.jira),
+                "salesforce": SimpleNamespace(_sf=self.salesforce),
             },
             "connector_state": lambda name: self.calendar_state,
             "registry_provider": lambda: self.registry,

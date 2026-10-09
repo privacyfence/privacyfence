@@ -137,8 +137,8 @@ its data, or a page with a cursor to continue, and the plugin follows the cursor
 Drive files are read in 8 MiB pieces with HTTP Range requests, with no limit on the file's size, so a
 large binary file starts arriving at once. Google Docs, Sheets and Slides cannot be ranged: they are
 exported whole, as text or CSV, and served from a private temporary file that is deleted after ten
-idle minutes. Salesforce report runs do not page yet and can still fail on a very large report
-([the Salesforce paging issue](https://github.com/privacyfence/privacyfence/issues/854)). The
+idle minutes. A Salesforce report past 2,000 rows is read with `page_by`, a column that is unique per row,
+through `ctx.source.report_pages`, one report run per page. The
 cursor rules are in [`plugin-protocol.md`](plugin-protocol.md#paging). A Sheets range is read once and later pages come from a private copy held for ten idle minutes; if
 the copy is gone the cursor is refused with `cursor_expired` and the plugin reads the range again. A
 Confluence page that changes between pages is refused with `revision_changed` instead of being joined
@@ -317,7 +317,8 @@ function that does the work with `@greet.execute`. What that function returns
 reaches the AI only when it is at most 2,048 bytes and the PII check finds nothing; otherwise
 the AI is told the action ran and its result was withheld. Reads from connected services go through
 `ctx.source.call(...)`, `ctx.source.pages(...)` (every page of an operation, following the cursor),
-`ctx.source.collect(...)` (the whole list for `jira.search` and `calendar.list_events`) and
+`ctx.source.collect(...)` (the whole list for `jira.search` and `calendar.list_events`),
+`ctx.source.report_pages(...)` (every page of a Salesforce report, read by a unique column) and
 `ctx.source.download(...)`, a confirmation through `ctx.confirm`, an approval through
 `ctx.approvals` (`request`, `check`, `await_`, `wait`), `ctx.confirm.wait()` (waits until the card is approved, denied or expired), a published file through `ctx.outputs.publish`, and a
 page is `@plugin.page("/")`. A page shown inside an approval card receives `pf_approval` in its

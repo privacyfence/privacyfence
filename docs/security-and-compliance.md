@@ -290,7 +290,7 @@ A [plugin](plugins.md) is a separate program an administrator installs and you e
 is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
 [ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
 and in [ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) to
-[ADR 0135](adr/0135-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md).
+[ADR 0139](adr/0139-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md).
 
 **Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
 every connector credential, so whoever can replace it can read your data. The privacy boundary of

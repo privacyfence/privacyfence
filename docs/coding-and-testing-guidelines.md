@@ -335,9 +335,10 @@ Its client's test module (`tests/unit/test_<name>_client.py`) also carries a
 
 ### 2.7 Definition of done for a PR touching this repo
 
-This section is the authoritative copy. The `/dod` command (`.claude/commands/dod.md`) runs its
-commands and checks the conditional rows against the branch's diff, and
-`.github/pull_request_template.md` repeats the checklist for the PR description.
+This section is the authoritative copy. The `/dod` command runs the gate commands in the `verify`
+section of `.claude/toolkit.yaml`, which must be kept in step with this section, and checks the
+conditional rows against the branch's diff, and `.github/pull_request_template.md` repeats the
+checklist for the PR description.
 
 **Every PR:**
 

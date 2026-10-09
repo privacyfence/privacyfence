@@ -6,7 +6,8 @@ Accepted — 2026-10-08. Implemented: `src/privacyfence/plugins/cursors.py`,
 `src/privacyfence/plugins/source_ops.py`, `src/privacyfence/jira_client.py`
 (`search_issues_page`), `src/privacyfence/calendar_client.py` (`list_events_page`).
 Amends [ADR 0123](0123-the-plugin-source-api-is-ungated-but-audited-without-content.md).
-Amended by [ADR 0134](0134-paged-source-reads-read-one-version-and-measure-utf8-bytes.md): one version per read, UTF-8 bytes.
+Amended by [ADR 0138](0138-paged-source-reads-read-one-version-and-measure-utf8-bytes.md): one version per read, UTF-8 bytes.
+Salesforce report paging: [ADR 0133](0133-salesforce-reports-page-by-a-unique-key-column.md).
 
 ## Context
 

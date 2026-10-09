@@ -73,6 +73,14 @@ Atlassian's own name.
 A Confluence-only site (no Jira product) cannot look names up: page authors show as raw account ids, mentions
 as "unknown user", and it cannot use mention markup.
 
+## Fields
+
+`jira_list_fields` lists the site's fields with their ids and JQL names, so the agent can use the
+names you see in Jira. `jira_search_issues` returns a fixed set of fields without asking. To read
+other fields, custom fields included, the agent uses `jira_search_issues_with_fields` or the
+`fields` parameter of `jira_get_issue`, and you review the values on the approval card first. No
+extra scope is needed.
+
 ## Build and distribute the bundle
 
 `scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every

@@ -283,6 +283,25 @@ async def paged(ctx, request):
     return Text(json.dumps({"pages": pages, "items": len(ids), "ids": ids}))
 
 
+@plugin.page("/report")
+async def report(ctx, request):
+    """Every row key of one Salesforce report read page by page, or the error that stopped it."""
+    page_by = request.query["page_by"]
+    pages = 0
+    keys: list = []
+    out: dict = {}
+    try:
+        async for page in ctx.source.pages(
+            "salesforce.report_run", report_id=request.query["report_id"], page_by=page_by
+        ):
+            pages += 1
+            index = page.data["reportMetadata"]["detailColumns"].index(page_by)
+            keys.extend(row["dataCells"][index]["value"] for row in page.data["factMap"]["T!T"]["rows"])
+    except SourceError as exc:
+        out = {"error": exc.code, "reason": exc.reason}
+    return Text(json.dumps({"pages": pages, "items": len(keys), "keys": keys, **out}))
+
+
 @plugin.on("connector.state_changed")
 async def state_changed(ctx, params):
     _log(ctx, "connector.state_changed", params)

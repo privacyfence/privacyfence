@@ -1,4 +1,4 @@
-# ADR 0133: A plugin write's result is capped at 2,048 bytes and PII-scanned before it reaches the AI
+# ADR 0137: A plugin write's result is capped at 2,048 bytes and PII-scanned before it reaches the AI
 
 ## Status
 

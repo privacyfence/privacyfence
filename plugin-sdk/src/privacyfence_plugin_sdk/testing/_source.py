@@ -299,6 +299,13 @@ class _Samples:
             )
         return json.loads((_SAMPLES_DIR / f"{name}.json").read_text(encoding="utf-8"))
 
+    def salesforce_report_pages(self) -> list[dict]:
+        """The two pages of a paged ``salesforce.report_run``: load both, and the first page's ``next_cursor`` fetches the second."""
+        return [
+            json.loads((_SAMPLES_DIR / f"{name}.json").read_text(encoding="utf-8"))
+            for name in ("salesforce.report_run.paged", "salesforce.report_run.paged.page2")
+        ]
+
     def drive_download(
         self, data: bytes, *, revision: str = "r1", file_id: str = "EXAMPLE-1",
         mime_type: str = "application/octet-stream",

@@ -1,4 +1,4 @@
-# ADR 0132: A plugin that stops reading its input for 10 seconds is treated as crashed
+# ADR 0136: A plugin that stops reading its input for 10 seconds is treated as crashed
 
 ## Status
 
