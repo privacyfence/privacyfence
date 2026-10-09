@@ -16,7 +16,7 @@ from .plugins.protocol import PageEntry
 _MISSING = "—"
 
 _CSS = """
-.pf-plugin-pages { margin: 0 0 28px; }
+.pf-plugin-pages { margin: 0 0 28px; container-type: inline-size; }
 .pf-plugin-pages h2 { margin: 0 0 8px; font-size: 18px; color: var(--ink); }
 .pf-plugin-pages table { width: 100%; border-collapse: collapse; }
 .pf-plugin-pages th, .pf-plugin-pages td {
@@ -27,7 +27,7 @@ _CSS = """
 .pf-plugin-pages td a { display: inline-block; min-height: 44px; line-height: 44px; }
 .pf-plugin-pages-desc { margin-top: 2px; font-size: 13px; color: var(--ink); opacity: 0.75; }
 .pf-plugin-pages-error, .pf-plugin-pages-empty { margin: 4px 0; color: var(--ink); }
-@media (max-width: 640px) {
+@container (max-width: 640px) {
   .pf-plugin-pages table, .pf-plugin-pages tbody { display: block; }
   .pf-plugin-pages thead { display: none; }
   .pf-plugin-pages tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--line); }
