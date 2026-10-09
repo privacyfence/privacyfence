@@ -53,6 +53,22 @@ async def _raw(limit: int = 2**16):
     return peer, rb, wb, closes
 
 
+class TestWireEncoding:
+    async def test_non_ascii_is_sent_as_raw_utf8(self):
+        peer, rb, wb, _ = await _raw()
+        await peer.notify("n", {"v": "é"})
+        line = await rb.readline()
+        assert "é".encode() in line and b"\\u00e9" not in line
+        await peer.close()
+
+    async def test_a_lone_surrogate_still_sends_escaped(self):
+        peer, rb, wb, _ = await _raw()
+        await peer.notify("n", {"v": "\ud800"})
+        line = await rb.readline()
+        assert b"\\ud800" in line and json.loads(line)["params"]["v"] == "\ud800"
+        await peer.close()
+
+
 class TestRoundTrip:
     async def test_request_both_directions(self, pair):
         async def echo(params):

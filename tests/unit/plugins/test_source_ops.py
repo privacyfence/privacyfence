@@ -11,7 +11,7 @@ import pytest
 
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.calendar_client import CalendarEvent
-from privacyfence.confluence_client import ConfluencePage
+from privacyfence.confluence_client import ConfluenceClient, ConfluencePage
 from privacyfence.jira_client import JiraClientError, JiraIssue
 from privacyfence.plugins import cursors, source_ops
 from privacyfence.plugins.constants import (
@@ -25,7 +25,7 @@ from privacyfence.plugins.protocol import RpcError
 from privacyfence.plugins.source_ops import SOURCE_ADAPTERS, handle_source_call
 from privacyfence.plugins.spool import DownloadSpool
 from privacyfence.principal import current_principal
-from privacyfence.salesforce_client import SalesforceClientError
+from privacyfence.salesforce_client import SalesforceClient, SalesforceClientError
 
 SENTINEL = "SENTINEL-do-not-log-4f1c"
 
@@ -202,6 +202,14 @@ class TestPayloadCap:
         err = await _code(Env(tmp_path, salesforce=sf).call("salesforce.report_run", {"report_id": "00O1"}))
         assert err.code == "payload_too_large"
 
+    async def test_non_ascii_counts_utf8_bytes(self, tmp_path, audit_dir, monkeypatch):
+        monkeypatch.setattr(source_ops, "MAX_SOURCE_RESULT_BYTES", 100)
+        drive = MagicMock()
+        drive.get_sheet_values.return_value = [["é" * 20]]
+        result = await Env(tmp_path, drive=drive).call("sheets.get_values", {"spreadsheet_id": "s", "range": "A1"})
+        assert result["bytes"] == len(json.dumps(result["data"], ensure_ascii=False).encode())
+        assert result["bytes"] <= 100
+
 
 class TestAuditNoContent:
     async def test_response_bytes_absent_from_audit(self, tmp_path, audit_dir):
@@ -366,6 +374,17 @@ class TestAdapterDrive:
         assert result["data"]["total_size_bytes"] == 10**9 and result["next_cursor"]
 
 
+    async def test_a_google_form_is_not_downloadable(self, tmp_path, audit_dir):
+        drive = MagicMock()
+        drive.get_file_metadata.return_value = SimpleNamespace(
+            size=0, mime_type="application/vnd.google-apps.form", modified_time="r1"
+        )
+        err = await _code(Env(tmp_path, drive=drive).call("drive.download", {"file_id": "f1"}))
+        assert err.code == "invalid_params" and err.extra["reason"] == "not_downloadable"
+        drive.download_range.assert_not_called()
+        drive.download_file_bytes.assert_not_called()
+
+
 class TestAdapterSheets:
     async def test_values_are_raw(self, tmp_path, audit_dir):
         drive = MagicMock()
@@ -445,7 +464,7 @@ class TestAdapterCalendar:
 
 
 def _size(value) -> int:
-    return len(json.dumps(value, default=str).encode())
+    return len(json.dumps(value, default=str, ensure_ascii=False).encode())
 
 
 class PagedJira:
@@ -540,11 +559,62 @@ class TestPaging:
         assert got == rows
         assert [r["data"]["first_row"] for r in results] == [0, 3, 6, 9]
         assert results[-1]["next_cursor"] is None
+        assert drive.get_sheet_values.call_count == 1
+
+    async def test_sheets_continuation_never_refetches(self, tmp_path, audit_dir, monkeypatch):
+        rows = [[f"r{n}", "x" * 100] for n in range(10)]
+        drive = MagicMock()
+        drive.get_sheet_values.return_value = rows
+        monkeypatch.setattr(source_ops, "SOURCE_PAGE_BUDGET_BYTES", _size(rows[:3]) + 10)
+        env = Env(tmp_path, drive=drive)
+        first = await env.call(*SHEETS)
+        drive.get_sheet_values.return_value = [["changed"]] * 10
+        got, results = [], [first]
+        got.extend(first["data"]["values"])
+        cursor = first["next_cursor"]
+        while cursor:
+            result = await env.call(SHEETS[0], {**SHEETS[1], "cursor": cursor})
+            results.append(result)
+            got.extend(result["data"]["values"])
+            cursor = result["next_cursor"]
+        assert got == rows
+        assert drive.get_sheet_values.call_count == 1
+
+    async def test_sheets_expired_snapshot_is_cursor_expired(self, tmp_path, audit_dir, monkeypatch):
+        rows = [[f"r{n}", "x" * 100] for n in range(10)]
+        drive = MagicMock()
+        drive.get_sheet_values.return_value = rows
+        monkeypatch.setattr(source_ops, "SOURCE_PAGE_BUDGET_BYTES", _size(rows[:3]) + 10)
+        env = Env(tmp_path, drive=drive)
+        first = await env.call(*SHEETS)
+        env.spool.clear()
+        err = await _code(env.call(SHEETS[0], {**SHEETS[1], "cursor": first["next_cursor"]}))
+        assert err.code == "upstream_error" and err.extra["reason"] == "cursor_expired"
+
+    async def test_sheets_single_page_writes_no_spool_file(self, tmp_path, audit_dir):
+        drive = MagicMock()
+        drive.get_sheet_values.return_value = [["a"], ["b"]]
+        result = await Env(tmp_path, drive=drive).call(*SHEETS)
+        assert result["next_cursor"] is None
+        assert [p for p in (tmp_path / "spool").rglob("*") if p.is_file()] == []
+
+    async def test_confluence_version_change_mid_read_is_revision_changed(self, tmp_path, audit_dir, monkeypatch):
+        body = "".join(chr(97 + n % 26) for n in range(1000))
+        confluence = MagicMock()
+        confluence.get_page.side_effect = [
+            ConfluencePage(id="9", title="T", space_key="PF", body=body, version=1),
+            ConfluencePage(id="9", title="T", space_key="PF", body=body, version=2),
+        ]
+        monkeypatch.setattr(source_ops, "SOURCE_PAGE_BUDGET_BYTES", 600)
+        env = Env(tmp_path, confluence=confluence)
+        first = await env.call(*CONFLUENCE)
+        err = await _code(env.call(CONFLUENCE[0], {**CONFLUENCE[1], "cursor": first["next_cursor"]}))
+        assert err.code == "upstream_error" and err.extra["reason"] == "revision_changed"
 
     async def test_confluence_splits_the_body(self, tmp_path, audit_dir, monkeypatch):
         body = "".join(chr(97 + n % 26) for n in range(1000))
         confluence = MagicMock()
-        confluence.get_page.return_value = ConfluencePage(id="9", title="T", space_key="PF", body=body)
+        confluence.get_page.return_value = ConfluencePage(id="9", title="T", space_key="PF", body=body, version=3)
         monkeypatch.setattr(source_ops, "SOURCE_PAGE_BUDGET_BYTES", 600)
         slices, results = await _follow(
             Env(tmp_path, confluence=confluence), *CONFLUENCE, lambda data: [data["body"]]
@@ -688,27 +758,55 @@ class TestCursorState:
         err = await _code(env.call(CALENDAR[0], {**CALENDAR[1], "cursor": _forged("calendar.list_events", bound, state)}))
         assert err.detail == "cursor is not valid"
 
-    @pytest.mark.parametrize("state", [{"k": 3}, {"k": -1}, {"k": True}, {"k": "0"}, {}, {"k": 0, "o": 0}])
+    @pytest.mark.parametrize("state", [
+        {"k": 3}, {"k": 0, "s": "0123456789abcdef", "x": 1}, {"k": -1, "s": "0123456789abcdef"},
+        {"k": True, "s": "0123456789abcdef"}, {"k": "0", "s": "0123456789abcdef"}, {"s": "0123456789abcdef"},
+        {"k": 0, "s": 5}, {"k": 0, "s": "../../etc/passwd"}, {"k": 0, "s": "0123456789ABCDEF"},
+        {"k": 0, "s": "0123456789abcde"}, {"k": 0, "s": "0123456789abcdef0"}, {},
+    ])
     async def test_sheets_state_is_checked(self, tmp_path, audit_dir, state):
         drive = MagicMock()
-        drive.get_sheet_values.return_value = [["a"], ["b"]]
         err = await _code(Env(tmp_path, drive=drive).call(
             SHEETS[0], {**SHEETS[1], "cursor": _forged("sheets.get_values", SHEETS_BOUND, state)}
         ))
-        assert err.detail == "cursor is not valid"
+        assert err.code == "invalid_params" and err.detail == "cursor is not valid"
+        drive.get_sheet_values.assert_not_called()
 
-    async def test_sheets_skip_to_the_row_count_is_an_empty_last_page(self, tmp_path, audit_dir):
+    async def test_sheets_unknown_snapshot_is_cursor_expired(self, tmp_path, audit_dir):
         drive = MagicMock()
-        drive.get_sheet_values.return_value = [["a"], ["b"]]
-        result = await Env(tmp_path, drive=drive).call(
-            SHEETS[0], {**SHEETS[1], "cursor": _forged("sheets.get_values", SHEETS_BOUND, {"k": 2})}
-        )
-        assert result["data"] == {"values": [], "first_row": 2} and result["next_cursor"] is None
+        err = await _code(Env(tmp_path, drive=drive).call(
+            SHEETS[0],
+            {**SHEETS[1], "cursor": _forged("sheets.get_values", SHEETS_BOUND, {"k": 0, "s": "0123456789abcdef"})},
+        ))
+        assert err.code == "upstream_error" and err.extra["reason"] == "cursor_expired"
+        drive.get_sheet_values.assert_not_called()
 
-    @pytest.mark.parametrize("state", [{"o": 6}, {"o": -1}, {"o": True}, {"o": "0"}, {}])
+    async def test_sheets_skip_past_the_row_count_is_not_valid(self, tmp_path, audit_dir, monkeypatch):
+        rows = [[f"r{n}", "x" * 100] for n in range(10)]
+        drive = MagicMock()
+        drive.get_sheet_values.return_value = rows
+        monkeypatch.setattr(source_ops, "SOURCE_PAGE_BUDGET_BYTES", _size(rows[:3]) + 10)
+        env = Env(tmp_path, drive=drive)
+        first = await env.call(*SHEETS)
+        snapshot = cursors.decode(first["next_cursor"], "sheets.get_values", SHEETS_BOUND)["s"]
+        err = await _code(env.call(
+            SHEETS[0], {**SHEETS[1], "cursor": _forged("sheets.get_values", SHEETS_BOUND, {"k": 11, "s": snapshot})}
+        ))
+        assert err.detail == "cursor is not valid"
+        result = await env.call(
+            SHEETS[0], {**SHEETS[1], "cursor": _forged("sheets.get_values", SHEETS_BOUND, {"k": 10, "s": snapshot})}
+        )
+        assert result["data"] == {"values": [], "first_row": 10} and result["next_cursor"] is None
+
+    @pytest.mark.parametrize("state", [
+        {"o": 6, "v": 1}, {"o": -1, "v": 1}, {"o": True, "v": 1}, {"o": "0", "v": 1}, {"o": 0, "v": -1},
+        {"o": 0, "v": True}, {"o": 0, "v": "1"}, {"o": 0}, {"v": 1}, {"o": 0, "v": 1, "x": 1}, {},
+    ])
     async def test_confluence_state_is_checked(self, tmp_path, audit_dir, state):
         confluence = MagicMock()
-        confluence.get_page.return_value = ConfluencePage(id="9", title="T", space_key="PF", body="abcde")
+        confluence.get_page.return_value = ConfluencePage(
+            id="9", title="T", space_key="PF", body="abcde", version=1
+        )
         err = await _code(Env(tmp_path, confluence=confluence).call(
             CONFLUENCE[0], {**CONFLUENCE[1], "cursor": _forged("confluence.get_page", {"page_id": "9"}, state)}
         ))
@@ -802,3 +900,23 @@ class TestAlias:
 
 def test_every_operation_has_an_adapter():
     assert set(SOURCE_ADAPTERS) == set(SOURCE_OPERATIONS)
+
+
+class TestPathIdsNeverReachTheService:
+    async def test_a_report_id_with_a_path_is_refused_before_any_request(self, tmp_path, audit_dir):
+        sf = SalesforceClient.__new__(SalesforceClient)
+        sf._call = MagicMock()
+        err = await _code(Env(tmp_path, salesforce=sf).call(
+            "salesforce.report_run", {"report_id": "../../query?q=SELECT Id FROM Contact"}
+        ))
+        assert err.code == "upstream_error" and err.detail == "the service returned an error"
+        sf._call.assert_not_called()
+
+    async def test_a_page_id_with_a_path_is_refused_before_any_request(self, tmp_path, audit_dir):
+        cf = ConfluenceClient.__new__(ConfluenceClient)
+        cf._request = MagicMock()
+        cf._client = MagicMock()
+        err = await _code(Env(tmp_path, confluence=cf).call("confluence.get_page", {"page_id": "../x"}))
+        assert err.code == "upstream_error" and err.detail == "the service returned an error"
+        cf._request.assert_not_called()
+        cf._client.get.assert_not_called()
