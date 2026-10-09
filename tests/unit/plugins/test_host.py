@@ -1101,6 +1101,7 @@ class TestPendingCardsEndWithThePlugin:
         assert env.registry.answer(approval_id, "confirm") is False
         assert host._approval_store.for_plugin(SDK) == []
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot delete the folder of a running plugin")
     async def test_removal_expires_pending_cards(self, env):
         host, approval_id, confirm_id, plugin_dir = await self._open_cards(env)
         TestUninstall._remove(plugin_dir)

@@ -125,6 +125,9 @@ def test_windows_refuses_a_plugin_folder_this_user_owns():
         problem = trust.admin_only_problem(plugin_dir, exe)
 
         assert problem is not None
-        assert "is owned by" in problem
+        # The ACL rule may name the owner's inherited entry first, so the owner rule is checked alone.
+        owner_problem = privilege_separation._windows_owner_problem(plugin_dir)
+        assert owner_problem is not None
+        assert "is owned by" in owner_problem
     finally:
         shutil.rmtree(plugins, ignore_errors=True)

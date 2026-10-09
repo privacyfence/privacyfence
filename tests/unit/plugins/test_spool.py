@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -346,6 +347,7 @@ class TestRowSnapshots:
         snapshot = spool.put_rows("p", [["\ud800"]])
         assert spool.rows_page("p", snapshot, 0, 1000)[0] == [["\ud800"]]
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no POSIX mode bits")
     def test_snapshot_files_are_private(self, spool, tmp_path):
         spool.put_rows("p", _rows(2))
         (path,) = _files(tmp_path / "spool")

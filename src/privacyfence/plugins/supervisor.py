@@ -162,7 +162,7 @@ def _rotate_log(path: Path, *, force: bool = False) -> None:
 def _open_log(path: Path) -> int:
     secure_mkdir(path.parent)
     _rotate_log(path)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
     if sys.platform != "win32":  # pragma: no branch -- Windows has no mode bits to assert
         os.fchmod(fd, 0o600)
     return fd
@@ -183,7 +183,7 @@ class _StderrLog:
     def append(self, data: bytes) -> None:
         with self._lock:
             while data:
-                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
                 try:
                     if sys.platform != "win32":  # pragma: no branch -- Windows has no mode bits to assert
                         os.fchmod(fd, 0o600)
