@@ -663,11 +663,21 @@ class TestPluginsSection:
         html = build_html(_make_state())
 
         for needle in (
-            "p.display_name", "p.version", "p.reason", "p.last_error", "p.page_url", "Open page",
+            "p.display_name", "p.version", "p.reason", "p.last_error", "p.page_url", "Pages",
             "Review and enable", "data-plugin-review", "'disable_plugin'", "Delete this plugin\\'s data",
             "data-plugin-purge", "'rescan_plugins'",
         ):
             assert needle in html, needle
+
+    def test_the_card_links_to_the_page_browser_in_this_tab(self):
+        html = build_html(_make_state())
+        link = (
+            "html += '<a class=\"pf-link\" href=\"' + esc(p.page_url) + '\" aria-label=\"Pages of ' +\n"
+            "        esc(p.display_name) + '\">Pages</a>';"
+        )
+        assert link in html
+        assert "Open page" not in html
+        assert "rel=\"noopener\" aria-label=\"Pages of" not in html
 
     def test_each_row_lists_its_approvals_with_a_revoke_action(self):
         html = build_html(_make_state())
