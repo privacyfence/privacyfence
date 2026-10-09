@@ -127,12 +127,12 @@ requirements and are listed under Risks.
 ### Files today (ADR 0007, ADR 0028, ADR 0102)
 
 - `src/privacyfence/local_files.py`: `require_local_files(paths, *, max_total_bytes,
-  download_mode)` (`:282`) resolves each path in this order: already read this call; an
-  `upload:<id>` reference (`UPLOAD_REF_PREFIX`, `:93`) peeked from `UploadStagingStore` for
+  download_mode)` (`:286`) resolves each path in this order: already read this call; an
+  `upload:<id>` reference (`UPLOAD_REF_PREFIX`, `:96`) peeked from `UploadStagingStore` for
   `current_principal()` with a hold of `UPLOAD_HOLD_SECONDS` (20 minutes); the shim's bridge upload
   map; a direct read when `can_access_user_files(download_mode)` (unseparated local install);
   `LocalFilesNeeded` for the shim handshake; otherwise `LocalFileAccessError(NO_BRIDGE_UPLOAD_MESSAGE)`.
-  `read_local_file` (`:419`) returns the bytes; `commit_uploads()` (`:263`) claims every slot the
+  `read_local_file` (`:387`) returns the bytes; `commit_uploads()` (`:266`) claims every slot the
   call read and must run after the gate, before the write (ADR 0102).
 - `build_upload_slot` (`:338`) mints a capability slot: `DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES =
   50_000_000`, 10-minute TTL, fill once, bound to the creating principal.
@@ -352,8 +352,9 @@ Rules, checked by `tools._check_parameters` (daemon) and `_validate_parameters` 
 6. A tool with a file parameter is not read-only: `tool <t> takes a file and cannot be read-only`.
 7. A tool with a file parameter is not on the `auto` gate: `tool <t> takes a file and must use the review or popup gate`.
 
-Rules 6 and 7 mean every file reaches a plugin only after a card (or a saved rule the owner made)
-accepted it, and no file content can come back to the AI through a read's payload.
+Rules 6 and 7 mean a file's bytes reach a plugin only in `tool.execute`, after a card (or a saved rule
+the owner made) accepted the call, and no file content can come back to the AI through a read's
+payload. Before that the plugin sees the metadata only.
 
 `tool_signature` does not change (parameters were never part of it; the per-call card still gates
 every file). A tool list that adds a file parameter after enable is accepted like any parameter
@@ -375,7 +376,9 @@ def file_params(defn: ToolDef) -> dict[str, FileParamSpec]
 name (empty for most tools). Both go in `__all__`.
 
 **On the wire.** `tool.prepare` and `tool.execute` params gain `files`, sent only when the tool has
-a file parameter and the call gave one: an object from parameter name to a `ToolFile`:
+a file parameter and the call gave one: an object from parameter name to a `ToolFile`.
+**`tool.prepare` carries the metadata only; the bytes (`content_base64`) are in `tool.execute` only**,
+after the gate has passed:
 
 | Field | Rule |
 |---|---|
@@ -384,18 +387,19 @@ a file parameter and the call gave one: an object from parameter name to a `Tool
 | `media_type` | the declared type: from the name's extension (below) |
 | `sniffed_type` | the detected type: from the bytes (below), always one of the parameter's `media_types` |
 | `sha256` | 64 lowercase hex digits of the bytes |
-| `content_base64` | the bytes, standard base64 with padding |
+| `content_base64` | `tool.execute` only, absent from `tool.prepare`: the bytes, standard base64 with padding |
 
 The file parameter itself is **removed from `args`** before `tool.prepare` and `tool.execute`, like
 `reason`, so the plugin never sees the path or the upload token, and `args_digest` covers the other
-arguments only. The bytes are bound by `sha256`: the daemon sends the same bytes to execute that it
-showed on the card, and the SDK refuses an execute whose files' SHA-256 differ from the prepared
+arguments only. The bytes are bound by `sha256`: the card showed the SHA-256 of the bytes the daemon sends
+to execute, and the SDK refuses an execute whose files' SHA-256 differ from the prepared
 ones with `digest_mismatch`.
 
 Schema (`docs/plugin-protocol/protocol.schema.json`): `x-protocol-version` `"1.3.0"`; `x-limits`
-gains `MAX_FILE_BYTES` (8388608), `MAX_FILE_PARAMS_PER_TOOL` (1) and `FILE_MEDIA_TYPES` (the list);
-`$defs` gains `FileParamSpec` (`max_bytes`, `media_types`, both required, no other properties) and
-`ToolFile` (the table, all required); the existing `$defs` for the `tool.prepare` and
+gains `MAX_FILE_BYTES` (8388608) and `MAX_FILE_PARAMS_PER_TOOL` (1) (integers only: the list of types
+is not an `x-limits` entry); `$defs` gains `FileParamSpec` (`max_bytes`, `media_types` whose items are an
+enum of `FILE_MEDIA_TYPES`, both required, no other properties) and `ToolFile` (the table; `content_base64`
+is the only optional member); `$defs.Manifest` gains `page_new_tabs` (boolean); the existing `$defs` for the `tool.prepare` and
 `tool.execute` params gain an optional `files` (`additionalProperties: {"$ref": "#/$defs/ToolFile"}`).
 Then `python3 scripts/gen_plugin_sdk_types.py` regenerates `plugin-sdk/src/privacyfence_plugin_sdk/types.py`.
 
@@ -419,9 +423,10 @@ class IncomingFile:
     media_type: str
     sniffed_type: str
     sha256: str
+    source: str                     # "Upload slot", or the path as the AI gave it (clean_line, 200 characters)
     data: bytes = field(repr=False)
 
-    def to_wire(self) -> dict      # the ToolFile object, content_base64 included
+    def to_wire(self, *, with_content: bool) -> dict   # the ToolFile object; content_base64 only when with_content
 
 def declared_media_type(name: str) -> str
 def sniff_media_type(data: bytes) -> str
@@ -439,8 +444,8 @@ def param_description(description: str, spec: FileParamSpec) -> str
 - **`sniff_media_type`**, first match wins:
   1. `\x89PNG\r\n\x1a\n` → `image/png`; `\xff\xd8\xff` → `image/jpeg`; `GIF87a` or `GIF89a` →
      `image/gif`; `RIFF` then any 4 bytes then `WEBP` → `image/webp`; `wOFF` → `font/woff`;
-     `wOF2` → `font/woff2`; `\x00\x01\x00\x00` or `true` → `font/ttf`; `OTTO` → `font/otf`;
-     `%PDF-` → `application/pdf`.
+     `wOF2` → `font/woff2`; `\x00\x01\x00\x00` → `font/ttf`; `%PDF-` → `application/pdf`. (OpenType
+     `OTTO` and TrueType `true` are not matched: they are plain ASCII and would misread text files.)
   2. Otherwise, if the bytes decode as UTF-8 (a leading BOM `\xef\xbb\xbf` dropped) and contain no
      NUL: let `head` be the first 1024 characters with leading whitespace stripped, lowercased. If
      `head` contains `<!doctype html` or `<html` → `text/html`. Else if `json.loads` of the whole
@@ -452,10 +457,12 @@ def param_description(description: str, spec: FileParamSpec) -> str
   that fullmatches `UPLOAD_ID_RE` becomes `"upload:" + value`; anything else is a local path and is
   returned as is.
 - **`resolve_file`**, called with `local_files.call_context` already entered by `routes_mcp`:
-  1. `ref = file_reference(value)`; an empty `ref` raises
+  1. A `value` that is not a `str` raises `LocalFileAccessError(f"{tool_title} needs a file path or
+     upload id in {spec.param}.")`. `ref = file_reference(value)`; an empty `ref` raises
      `LocalFileAccessError(f"{tool_title} needs a file in {spec.param}.")`.
   2. `local_files.require_local_files([ref], max_total_bytes=spec.max_bytes, download_mode="local")`
-     (plugins run in local mode only). It may raise `LocalFilesNeeded` (the shim fetches the file and
+     (plugins run in local mode only: `daemon_main.py` builds `PluginHost` only when `local_mode`, so a future
+     org-mode plugin host must revisit this argument). It may raise `LocalFilesNeeded` (the shim fetches the file and
      re-sends the call) or `LocalFileAccessError`; both propagate unchanged.
   3. `data = local_files.read_local_file(ref, download_mode="local")`.
   4. `len(data) > spec.max_bytes` → `LocalFileAccessError(f"The file is {len(data):,} bytes, over
@@ -466,8 +473,10 @@ def param_description(description: str, spec: FileParamSpec) -> str
      `LocalFileAccessError(f"The file's content is {sniffed}, and {tool_title} accepts only
      {', '.join(spec.media_types)}.")`.
   7. Return `IncomingFile(spec.param, name, len(data), declared_media_type(name), sniffed,
-     hashlib.sha256(data).hexdigest(), data)`.
+     hashlib.sha256(data).hexdigest(), "Upload slot" if ref.startswith("upload:") else
+     blocks.clean_line(value.strip())[:200], data)`.
 - **`card_block`**: `{"type": "fields", "items": [{"label": "File", "value": name}, {"label":
+  "Source", "value": source}, {"label":
   "Size", "value": f"{size:,} bytes"}, {"label": "Declared type", "value": media_type}, {"label":
   "Detected type", "value": sniffed_type}, {"label": "SHA-256", "value": sha256}]}`.
 - **`param_description`**: `description` (stripped), a space when it is non-empty, then
@@ -475,7 +484,7 @@ def param_description(description: str, spec: FileParamSpec) -> str
 
 **`local_files.resolved_name(path: str) -> str`**: for an `upload:<id>` reference, the basename of
 the slot's `declared_path` (new `UploadStagingStore.declared_path(token: bytes, principal_id: str)
--> str | None`, same lookup and principal check as `peek`, no expiry change; `""` when it returns
+-> str | None`, `peek`'s lookup, filled check and principal check, no expiry change; `""` when it returns
 `None` or the token does not decode); for a bridge path or a direct path, `os.path.basename` of the
 path with both `/` and `\` treated as separators. Added to `__all__`.
 
@@ -495,19 +504,26 @@ path with both `/` and `\` treated as separators. Added to `__all__`.
      changed (a local path edited between the first call and the re-issued one) therefore gets a
      fresh prepare and its own card, never the old approval.
   4. `_reuse_or_prepare(key, peer, tool, defn, plugin_args, incoming)`; `_prepare` adds
-     `"files": {p: f.to_wire() for p, f in incoming.items()}` to the `tool.prepare` params only when
+     `"files": {p: f.to_wire(with_content=False) for p, f in incoming.items()}` to the `tool.prepare` params only when
      `incoming` is non-empty, and stores `files={p: f.sha256 ...}` on the `PreparedCall`.
   5. `_gate(...)` is called with `args` (the AI's arguments, as today, so the ledger key is stable)
      and `file_blocks=[files.card_block(f) for f in incoming.values()]`, and passes
      `preview_blocks=to_card_blocks(file_blocks + prepared.preview + payload)`.
   6. After the gate returns and before `_execute`: `local_files.commit_uploads()` (ADR 0102), then
      one audit entry per file (below).
-  7. `_execute(defn, prepared, plugin_args, approval, incoming)` adds the same `files` object to
-     `tool.execute`, and `args_digest(plugin_args)`.
-- **Audit.** Modelled on `_auto_audit`: `AuditEntry(connector=f"plugin:{self._plugin}", tool=tool,
+  7. `_execute(defn, prepared, plugin_args, approval, incoming)` adds `"files": {p: f.to_wire(with_content=True)
+     ...}` to `tool.execute`, and `args_digest(plugin_args)`.
+- **Audit.** Modelled on `_auto_audit` (same try/except and `logger.warning`): `AuditEntry(timestamp=datetime.now(timezone.utc).isoformat(),
+  week=current_week(), latency_seconds=time.time() - prepared.created_at, claude_reason=current_reason(), connector=f"plugin:{self._plugin}", tool=tool,
   tool_name=title, decision="plugin_file", auto_accept_rule="", sender="", request_id="",
   summary=f"{p}: {name}; bytes={size}; sha256={sha256}; type={sniffed_type}")`. Written only after
   the gate passed and the slot was committed, so a denied call has none. Never the content.
+
+**The MCP dispatcher's 30-second cache.** `McpDispatcher.call` (`web/mcp_dispatch.py:77,219-235`) answers an
+identical completed call from its cache for 30 seconds, keyed on the arguments without `reason`, before the
+connector runs. So within 30 seconds a repeated call with the same `upload:` reference or path returns the
+first result and does not read the file again; the slot rules below are enforced by the connector and are
+tested on it directly, not through MCP.
 
 **What is held, and for how long.** The daemon keeps no file bytes across calls: `PreparedCall`
 holds only the SHA-256, and a re-issued call reads the file again (a slot is held for 20 minutes by
@@ -546,28 +562,30 @@ In `plugin-sdk/src/privacyfence_plugin_sdk/`:
       media_type: str
       sniffed_type: str
       sha256: str
-      content: bytes = field(repr=False)
+      data: bytes | None = field(default=None, repr=False)
+
+      @property
+      def content(self) -> bytes   # raises RuntimeError("the file's bytes are available in the execute function only") when data is None
 
   def file_param(description: str = "", *, max_bytes: int, media_types: Sequence[str]) -> dict
-  def parse_files(raw: Any, specs: Mapping[str, Mapping]) -> dict[str, IncomingFile]
+  def parse_files(raw: Any, specs: Mapping[str, Mapping], *, with_content: bool) -> dict[str, IncomingFile]
   ```
 
   `file_param` returns `{"type": "string", "description": description, FILE_PARAM_KEY:
   {"max_bytes": max_bytes, "media_types": list(media_types)}}` (no `description` key when it is
-  empty). `parse_files` turns the wire `files` into `IncomingFile`s and raises
+  empty). `parse_files` turns the wire `files` into `IncomingFile`s (with `with_content=True`, `content_base64` is required, decoded, its length must equal `size` and its SHA-256 must equal `sha256`; with `False` it is ignored and `data` stays `None`) and raises
   `RpcError("invalid_params", "files.<p>: <what>")` when a name is not a declared file parameter,
-  a field is missing or of the wrong type, base64 does not decode, the decoded length differs from
-  `size` or exceeds that parameter's `max_bytes`, `sniffed_type` is not in its `media_types`, or
-  the SHA-256 differs. `None` or a missing `files` gives `{}`.
+  a field is missing or of the wrong type, base64 does not decode, the size exceeds that parameter's
+  `max_bytes`, or `sniffed_type` is not in its `media_types`, and, with content, the length or SHA-256 differ. `None` or a missing `files` gives `{}`.
 - **`__init__.py`** exports `IncomingFile` and `file_param`.
 - **`plugin.py`**:
   - `_validate_parameters` and `_check_tool` apply rules 1 to 7 of section 5 with the same detail
     texts (as `ToolDefinitionError`).
   - `Context` gains `files: Mapping[str, IncomingFile]`, an empty `MappingProxyType` by default.
-  - `_prepare`: `files = parse_files(params.get("files"), <the tool's file specs>)`, set on the
+  - `_prepare`: `files = parse_files(params.get("files"), <the tool's file specs>, with_content=False)`, set on the
     context before the tool function runs; `_PreparedEntry` gains `files: dict[str, str]`
     (parameter → SHA-256).
-  - `_execute`: parses `files` the same way; when `{p: f.sha256}` differs from the entry's,
+  - `_execute`: parses `files` with `with_content=True`; when `{p: f.sha256}` differs from the entry's,
     `RpcError("digest_mismatch", "the files differ from the prepared call")`; otherwise the
     execute function's `ctx.files` holds them.
   - **Older daemons.** `_initialize` records the daemon's minor version
@@ -578,7 +596,8 @@ In `plugin-sdk/src/privacyfence_plugin_sdk/`:
   - `PROTOCOL_VERSION` is already `"1.3.0"` from p3.
 - **`README.md`**: a "File parameters" section with a short example (`params={"html":
   file_param("The page.", max_bytes=1_048_576, media_types=["text/html"])}` and
-  `ctx.files["html"].content` in the tool function), the rules (one per tool, not read-only, not
+  `ctx.files["html"].content` in the execute function; the tool function sees name, size, types and
+  SHA-256 only), the rules (one per tool, not read-only, not
   auto, the plugin never sees the path, `ctx.files` is empty for a call without a file), and that a
   daemon older than 1.3 is not offered such a tool.
 
@@ -596,14 +615,15 @@ In `plugin-sdk/src/privacyfence_plugin_sdk/`:
   `.gif`, `image/webp` → `.webp`, `font/woff` → `.woff`, `font/woff2` → `.woff2`, `font/ttf` →
   `.ttf`, `font/otf` → `.otf`, `application/octet-stream` → no extension).
   The host applies the daemon's rules and returns the daemon's messages in
-  `ToolOutcome.error = {"code": "invalid_params", "detail": <message>}` without calling the plugin:
+  `ToolOutcome.error = {"code": "invalid_params", "detail": <message>}` without calling the plugin, checked in
+  this order and with file parameters left out of `call_tool`'s existing `missing <r>` check:
   a key that is not a file parameter (`"<p> is not a file parameter of <tool>"`), a file parameter
   given in `args` instead of `files` (`"pass <p> in files=, not in args"`), a required file
   parameter without a file (`"missing <p>"`), over `max_bytes`, and a sniffed type not accepted
   (the two `resolve_file` sentences of section 6, with the tool's title). Otherwise it sends
-  `files` in `tool.prepare` and `tool.execute` as the daemon does, puts the `card_block` fields
-  block first on the card it shows `decide`, and records one `plugin_file` audit row with the
-  daemon's summary.
+  `files` as the daemon does (metadata in `tool.prepare`, bytes added in `tool.execute`), puts the `card_block` fields
+  block first on the card it shows `decide`, records one `plugin_file` audit row with the
+  daemon's summary, and shows `Source` as `Test host`.
 - `ToolOutcome` and `Card` keep their shapes; the card's blocks simply start with the file block.
 
 ### 9. Versions and what a plugin pins
@@ -645,10 +665,11 @@ mechanical to look up after the merge. pf-pages takes it in its own follow-up.
 - **A read-only path for the plugin.** The plugin would hold a path into a daemon-written file, and
   every plugin would need a cleanup rule for it. Inline bytes in the message fit the 16 MiB line at
   8 MiB per file and need no new storage.
-- **Bytes only in `tool.execute`.** The plugin could not check the file (is it HTML at all?) or
-  describe it on the card before the human decides. The plugin is trusted code (ADR 0121) and
-  `prepare` has no side effects (ADR 0122), so the bytes go to both; the card's daemon-made block is
-  what the human relies on.
+- **Bytes in `tool.prepare` too.** The plugin could then check the file before the card. Rejected:
+  ADR 0121 trusts a plugin with what its account can read, and on a privilege-separated install the
+  user's own files are not that, so sending the bytes before the card would disclose a file the
+  owner has not approved. The plugin gets the name, size, both types and the SHA-256 at prepare,
+  which is enough to describe the call, and the bytes at execute.
 - **File parameters on read-only or `auto` tools.** A read could return a local file's content to
   the AI through its payload, and an `auto` tool would hand a file to a plugin with no card. Both
   refused.
@@ -743,7 +764,7 @@ manual_before:
   - id: mb1-hardening-finished
     title: Finish feature/plugin-framework-hardening (all its phases merged), or merge its PR into main
     why: p0 merges that branch; every phase builds on its protocol 1.2.0, the page browser and its host and SDK changes. Without it p3's version bump and p6's test host edits conflict with the remaining hardening phases.
-    done_when: "`git fetch origin && git show origin/feature/plugin-framework-hardening:docs/plugin-framework-hardening-plan.md` fails with 'does not exist' (the hardening plan retired itself), or the hardening PR shows Merged."
+    done_when: "`git fetch origin && git show origin/feature/plugin-framework-hardening:docs/plugin-framework-hardening-plan.md` fails with 'does not exist' (the hardening plan retired itself), or the hardening PR shows Merged; and on that branch merged with main, `ls docs/adr | cut -c1-4 | sort | uniq -d` prints nothing (no two ADRs share a number: the hardening branch's ADR 0132 must have been renumbered past main's 0132 and 0133)."
 manual_after:
   - id: ma1-reference-dashboards
     title: Open the two reference dashboards as plugin pages in Chrome and follow a Jira link
@@ -782,7 +803,8 @@ phases:
          changed, keeping both sides; never edit code beyond conflict markers.
       3. Check: `git show HEAD:docs/plugin-framework-hardening-plan.md` must fail, and
          `grep -n 'PROTOCOL_VERSION = "1.2.0"' src/privacyfence/plugins/constants.py` must print a line, and
-         `grep -n "def list_pages" src/privacyfence/plugins/host.py` must print a line. If any check fails, stop with
+         `grep -n "def list_pages" src/privacyfence/plugins/host.py` must print a line, and
+         `ls docs/adr | cut -c1-4 | sort | uniq -d` must print nothing. If any check fails, stop with
          status=blocked: the hardening branch is not finished (manual_before mb1-hardening-finished).
       4. In docs/plugin-files-and-page-links-plan.md "Current state", replace "Paths and line numbers below are at
          2bd334d9 on `feature/plugin-framework-hardening`" with "Paths and line numbers below were taken at 2bd334d9
@@ -891,10 +913,11 @@ phases:
            (new_tabs empty); wait for #out; assert script is true, css == "rgb(0, 128, 0)", attr == "rgb(0, 0, 255)",
            json is true, img == 1, and violations has no entry whose directive starts with "script-src",
            "style-src", "img-src", "font-src" or "default-src".
-         - TestCspAllowsSelfContainedPages.test_a_blocked_font_host_is_reported: a page with
-           `@font-face{font-family:X;src:url(https://fonts.example.test/x.woff2)}` used by text and the same
-           violation collector; assert one violation whose directive starts with "font-src", which shows the
-           collector works.
+         - TestCspAllowsSelfContainedPages.test_a_blocked_font_host_is_reported: a page (served at "/font") with
+           `@font-face{font-family:X;src:url(https://fonts.example.test/x.woff2)}` used by text, a
+           `securitypolicyviolation` listener added first, and a script that awaits `document.fonts.load('16px X')
+           .catch(() => null)` before writing the collected violations to `<pre id="out">`; assert one violation whose
+           directive starts with "font-src", which shows the collector works.
          - TestNewTabs.test_same_tab_link_to_an_external_site_loads: /plugins/demo/same; click #go under
            page.expect_navigation(); page.locator("#jira") is visible.
          - TestNewTabs.test_blank_link_does_nothing_without_page_new_tabs: /plugins/demo/blank; click #go; wait 1 s;
@@ -943,9 +966,12 @@ phases:
       3. tools.py _check_parameters: rules 1 to 7 of Design section 5, in order, with the exact detail texts (rules
          6 and 7 need defn.read_only and defn.gate, which _check_parameters already receives through defn).
          tool_signature does not change.
-      4. protocol.schema.json: x-protocol-version "1.3.0"; x-limits gains MAX_FILE_BYTES, MAX_FILE_PARAMS_PER_TOOL
-         and FILE_MEDIA_TYPES; $defs FileParamSpec and ToolFile; the tool.prepare and tool.execute params $defs
-         gain optional "files". Then run `python3 scripts/gen_plugin_sdk_types.py` (never edit types.py by hand).
+      4. protocol.schema.json: x-protocol-version "1.3.0"; x-limits gains MAX_FILE_BYTES and MAX_FILE_PARAMS_PER_TOOL
+         (never FILE_MEDIA_TYPES: test_x_limits_match_the_constants compares each x-limits value with the
+         constant); $defs FileParamSpec (media_types items enum) and ToolFile (content_base64 optional);
+         $defs.Manifest gains "page_new_tabs": {"type": "boolean"} and tests/unit/plugins/test_protocol.py's literal
+         manifest key set (test_manifest_properties) gains "page_new_tabs"; the tool.prepare and tool.execute params
+         $defs gain optional "files". Then run `python3 scripts/gen_plugin_sdk_types.py` (never edit types.py by hand).
       5. Version strings: change "1.2.0" to "1.3.0" only where it is the protocol version: the initialize
          protocol_version assertions in tests/unit/plugins/test_constants.py, test_protocol.py, test_host.py and
          tests/unit/plugin_sdk/test_plugin.py; in docs/plugin-protocol.md the "This is protocol version" line and
@@ -979,6 +1005,7 @@ phases:
       - src/privacyfence/local_files.py
       - src/privacyfence/upload_staging.py
       - src/privacyfence/web/mcp_tools.py
+      - src/privacyfence/audit_log.py
       - src/privacyfence/plugins/host.py
       - src/privacyfence/settings_window_html.py
       - tests/unit/plugins/test_files.py
@@ -991,13 +1018,14 @@ phases:
     brief: |
       Read docs/plugin-files-and-page-links-plan.md Design section 6 first; it is the spec, including every message.
       Copy connectors/drive.py:1485-1530 and :1623 for how a connector reads an upload and commits it after the gate.
-      1. upload_staging.py: UploadStagingStore.declared_path(token, principal_id) -> str | None (peek's lookup and
-         principal check, filled or not, no expiry change).
+      1. upload_staging.py: UploadStagingStore.declared_path(token, principal_id) -> str | None (peek's lookup, filled
+         check and principal check, no expiry change). audit_log.py: add "plugin_file" to the comment that lists the
+         decision values (next to plugin_output).
       2. local_files.py: resolved_name(path) as specified; add to __all__.
       3. New plugins/files.py with everything in Design section 6's code block, exactly as specified.
       4. plugins/connector.py: PreparedCall.files; _tool_spec's file parameter description; call() steps 1 to 7;
          _reuse_or_prepare/_prepare/_gate/_execute gain the parameters they need; the plugin_file audit entry
-         (copy _auto_audit's try/except and logger.warning). Keep every existing invariant in the module docstring
+         with every AuditEntry field Design section 6 names (copy _auto_audit's try/except and logger.warning). Keep every existing invariant in the module docstring
          true and add one paragraph to it on file parameters (bytes go to prepare and execute, the card's file block
          is the daemon's, the slot is committed after the gate).
       5. web/mcp_tools.py: the CREATE_UPLOAD_SLOT_TOOL sentence exactly as in the Design.
@@ -1005,15 +1033,16 @@ phases:
          settings_window_html.py: the "Takes a file in …" line under that tool, as in the Design.
       7. Tests:
          - test_files.py: declared_media_type for every extension in the map and an unknown one, case-insensitive;
-           sniff_media_type for each magic, for HTML with a BOM and leading whitespace, for "<!DOCTYPE html>" in
-           capitals, for JSON, plain text, empty bytes, a NUL in text, invalid UTF-8; file_reference for
+           sniff_media_type for each magic (and the texts "true" and "OTTO" are text/plain), for HTML with a BOM and leading whitespace, for "<!DOCTYPE html>" in
+           capitals, for JSON, plain text, empty bytes, a NUL in text, invalid UTF-8; a non-string value; file_reference for
            "upload:abc", a 43-character id, "~/x.html" and "/tmp/x.html"; resolve_file for an upload slot (use
            local_files.call_context and the real UploadStagingStore as test_local_files.py does), for a direct path
            (tmp_path; force_bridge_for_tests stays False), over max_bytes, a refused sniffed type, an empty value,
-           and a slot whose filename is "C:\\x\\page.html" (name "page.html"); card_block; param_description.
-         - test_connector.py, with the file's existing fake peer: a popup tool with a file parameter sends "files" with
-           content_base64 in both tool.prepare and tool.execute, and "args" without the parameter; args_digest
-           excludes it; the card's first block is the file block; the slot is consumed after approval (a second call
+           and a slot whose filename is "C:\\x\\page.html" (name "page.html"); card_block (six labels; Source is "Upload slot" for a slot and the path as given for a path); param_description.
+         - test_connector.py, with the file's existing fake peer: a popup tool with a file parameter sends "files" in tool.prepare
+           without content_base64 and in tool.execute with it, and "args" without the parameter; args_digest
+           excludes it; the card's first block is the file block (read it as a label to value dict: File, Source, Size, Declared type,
+           Detected type, SHA-256); the slot is consumed after approval (a second call
            with the same upload: reference fails with the existing "expired or was already used" message); a denied
            call leaves the slot and writes no plugin_file audit row; an approved call writes exactly one with the
            summary format; a changed local file between two calls gets a new prepare (two tool.prepare requests);
@@ -1029,10 +1058,9 @@ phases:
       No CHANGELOG line; no plan item IDs in code, comments or test names.
     acceptance:
       - python3 -m pytest tests/unit/plugins/test_files.py tests/unit/plugins/test_connector.py tests/unit/test_local_files.py tests/unit/test_upload_staging.py tests/unit/web/test_mcp_tools.py tests/unit/plugins/test_host.py tests/unit/test_settings_window_html.py -q passes
-      - python3 -m pytest tests/unit/plugins/test_files.py -q --cov=privacyfence.plugins.files --cov-branch --cov-report=term-missing reports 100%
+      - python3 -m pytest tests/unit/plugins/test_files.py -q --cov=privacyfence.plugins.files --cov-branch --cov-fail-under=100 passes
       - grep -n "commit_uploads" src/privacyfence/plugins/connector.py prints one line
       - ruff check . exits 0
-      - python3 scripts/mypy_strict_modules.py exits 0
 
   - id: p5-sdk-files
     title: SDK file parameters - file_param, IncomingFile, ctx.files, digest check and the older-daemon filter
@@ -1060,12 +1088,14 @@ phases:
            parse_files: valid, unknown parameter, bad base64, size mismatch, over max_bytes, refused sniffed type,
            SHA-256 mismatch, None -> {}.
          - test_plugin.py: each of rules 1 to 7 raises ToolDefinitionError with the text; tool.prepare with files
-           gives the tool function ctx.files[p].content; tool.execute with the same files runs and the execute
-           function sees ctx.files; execute with a different SHA-256 answers digest_mismatch; a tool without a file
+           (no content_base64) gives the tool function ctx.files[p] with name, size and sha256, and its .content raises
+           RuntimeError; tool.execute with the same files plus content_base64 runs and the execute
+           function reads ctx.files[p].content; execute with a different SHA-256 answers digest_mismatch; a tool without a file
            parameter sees ctx.files == {}; initialize with protocol_version "1.2.0" leaves the file tool out of
            "tools" and logs the WARNING (caplog), "1.3.0" keeps it; tools_changed after a 1.2.0 initialize leaves it
-           out too; extend TestLimits so the SDK's new constants equal privacyfence.plugins.constants' (the test
-           already imports the daemon's constants for this).
+           out too; add a test next to TestLimits comparing the SDK's constants in privacyfence_plugin_sdk._files
+           (FILE_PARAM_KEY, MAX_FILE_BYTES, MAX_FILE_PARAMS_PER_TOOL, FILE_MEDIA_TYPES) with privacyfence.plugins.constants'
+           (the existing parametrize reads underscore names from plugin.py, so it does not fit).
       No CHANGELOG line; no plan item IDs in code, comments or test names.
     acceptance:
       - python3 -m pytest tests/unit/plugin_sdk -q passes
@@ -1079,7 +1109,6 @@ phases:
     touches:
       - plugin-sdk/src/privacyfence_plugin_sdk/testing/_host.py
       - plugin-sdk/src/privacyfence_plugin_sdk/testing/_pages.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/testing/_gate.py
       - plugin-sdk/README.md
       - tests/unit/plugin_sdk/test_testhost.py
       - tests/unit/plugin_sdk/test_testhost_surfaces.py
@@ -1089,14 +1118,14 @@ phases:
       1. testing/_pages.py: CSP_NEW_TABS (same string as the daemon's) used for every page response when the host
          has page_new_tabs. testing/_host.py: PluginTestHost(page_new_tabs=False) with the ValueError; the file
          parameter floors in _check_tool_defs; call_tool(..., files=None) exactly as Design section 8 says, using
-         _files.py's sniff and declared type and the daemon's messages; the card's file block first (in _gate.py if
-         that is where cards are built); the plugin_file audit row.
+         _files.py's sniff and declared type and the daemon's messages; the card's file block first: in _host.py's _validate_prepared (where cards are built), prepend one
+         {"type": "fields", "items": [...]} entry to Card.preview; the plugin_file audit row.
       2. README.md: in the test host section, call_tool's files= argument with a one-line example, and
          page_new_tabs=.
       3. Tests:
-         - test_testhost_surfaces.py: call_tool with files= reaches ctx.files in prepare and execute; plain bytes get
-           the name "file.html" for a text/html parameter; the card's first block is the file block with the five
-           labels; every refusal in Design section 8 returns invalid_params with its exact detail and does not call
+         - test_testhost_surfaces.py: call_tool with files= gives prepare the metadata only and execute the bytes; plain bytes get
+           the name "file.html" for a text/html parameter; the card's first block is the file block with the six
+           labels (File, Source, Size, Declared type, Detected type, SHA-256); every refusal in Design section 8 returns invalid_params with its exact detail and does not call
            the plugin; a denied card writes no plugin_file row; page_new_tabs=True gives CSP_NEW_TABS on a page and
            False gives the old CSP; page_new_tabs without pages raises ValueError.
          - test_testhost.py: _check_tool_defs refuses each of rules 6 and 7 for a plugin built without the SDK's own
@@ -1136,15 +1165,15 @@ phases:
       2. New tests/integration/test_plugin_files.py, on the harness's Stack and mcp_session (copy the setup of
          tests/integration/test_plugin_outputs.py): call privacyfence_create_upload_slot (filename "note.txt",
          size_bytes 5), PUT b"hello" to upload_url with httpx, call echo_file_put with file="upload:<upload_id>" and a
-         reason, approve the card (the harness's Popups/CardCapture); the result is {"name": "note.txt", "size": 5,
-         "sha256": sha256(b"hello")}; the captured card's first block lists File note.txt, Size 5 bytes, Declared
+         reason, approve the card (read it from stack.popups.write[-1][1]["preview_blocks"], where the daemon has turned the file block into field entries; compare label to value pairs); the result is {"name": "note.txt", "size": 5,
+         "sha256": sha256(b"hello")}; the captured card lists File note.txt, Source Upload slot, Size 5 bytes, Declared
          type text/plain, Detected type text/plain and the SHA-256; the audit log has one plugin_file row for
-         plugin:echo with that summary; the same call again fails with "expired or was already used"; a 70,000-byte
+         plugin:echo with that summary; a 70,000-byte
          slot fails with the over-the-limit message and no card; a PNG slot fails with the refused-type message; a
          direct local path (tmp_path file, unseparated test daemon) works and its card names the file's basename.
       3. tests/integration/test_sdk_testhost_conformance.py: one scenario running echo file_put with the same bytes on
          the test host (call_tool(files={"file": ("note.txt", b"hello")})) and on the daemon (upload slot as above),
-         comparing the result and the card's file block field by field.
+         comparing the result and the card's file block as label to value pairs, leaving out Source (the test host says "Test host").
       No CHANGELOG line; no plan item IDs in code, comments or test names.
     acceptance:
       - python3 -m pytest tests/integration/test_plugin_files.py tests/integration/test_sdk_testhost_conformance.py tests/integration/test_plugin_framework.py tests/integration/test_plugin_harness.py -v passes

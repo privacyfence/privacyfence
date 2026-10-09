@@ -127,7 +127,7 @@ git checkout feature/plugin-files-and-page-links</pre>
       <li><input type="checkbox" id="ma3-5"><label for="ma3-5">Create a small text file, for example <code>echo hello &gt; /tmp/note.txt</code>, and ask Claude Code: "Store /tmp/note.txt with the echo plugin's file_put tool."
         <span class="see">Claude Code should either pass the path directly or create an upload slot, upload the file with curl, and pass <code>upload:&lt;id&gt;</code>. Either is correct.</span></label></li>
       <li><input type="checkbox" id="ma3-6"><label for="ma3-6">Look at the approval card that appears.
-        <span class="see">Its first block lists File <code>note.txt</code>, Size <code>6 bytes</code>, Declared type <code>text/plain</code>, Detected type <code>text/plain</code> and a SHA-256. Approve it.</span></label></li>
+        <span class="see">Its first block lists File <code>note.txt</code>, Source (the path you gave, or "Upload slot"), Size <code>6 bytes</code>, Declared type <code>text/plain</code>, Detected type <code>text/plain</code> and a SHA-256. Approve it.</span></label></li>
       <li><input type="checkbox" id="ma3-7"><label for="ma3-7">Compare the SHA-256 in Claude Code's result with <code>shasum -a 256 /tmp/note.txt</code> (or <code>sha256sum</code>).
         <span class="see">They are the same.</span></label></li>
       <li><input type="checkbox" id="ma3-8"><label for="ma3-8">Open Settings → Audit log.
