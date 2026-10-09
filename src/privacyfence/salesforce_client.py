@@ -263,6 +263,13 @@ def build_keyset_metadata(
     a tabular run, which never shows more than the saved report does. ``saved``
     is not mutated.
     """
+    if not _REPORT_COLUMN_RE.match(page_by):
+        # page_by is the caller's input, not a cell value, so naming it is allowed.
+        raise ReportPagingError(
+            "bad_page_by",
+            f"Invalid report filter column: page_by {page_by!r} is not a report column name; "
+            "use the column's API name, such as Account.Opp_Number__c",
+        )
     if saved.get("topRows"):
         raise ReportPagingError(
             "bad_page_by",
