@@ -431,3 +431,21 @@ async def mcp_session(server: WebServer):
             async with ClientSession(read, write, message_handler=on_message) as session:
                 await session.initialize()
                 yield Mcp(session, notifications)
+
+
+async def upload_file(mcp: Mcp, data: bytes, filename: str = "note.txt") -> str:
+    """PUT ``data`` into a fresh upload slot and return the ``upload:<id>`` reference a file parameter takes."""
+    import httpx
+
+    slot = await mcp.call("privacyfence_create_upload_slot", filename=filename, size_bytes=len(data))
+    assert slot.is_error is False, slot
+    info = slot.structured_content
+    async with httpx.AsyncClient() as http:
+        response = await http.put(info["upload_url"], content=data)
+    assert response.status_code < 300, response.text
+    return f"upload:{info['upload_id']}"
+
+
+def card_pairs(blocks: list[dict]) -> list[tuple[str, str]]:
+    """The label to value pairs of a captured card's field entries, in order."""
+    return [(b["label"], b["value"]) for b in blocks if b.get("type") == "field"]

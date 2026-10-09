@@ -17,7 +17,9 @@ from pathlib import Path
 if len(sys.argv) > 1 and (Path(sys.argv[1]) / "privacyfence_plugin_sdk").is_dir():
     sys.path.insert(0, sys.argv[1])
 
-from privacyfence_plugin_sdk import Html, PageEntry, Plugin, Prepared, SourceError, Text, blocks  # noqa: E402
+from privacyfence_plugin_sdk import (  # noqa: E402
+    Html, PageEntry, Plugin, Prepared, SourceError, Text, blocks, file_param,
+)
 
 plugin = Plugin(name="echo", version="1.0.0")
 plugin.scope_type("dataset", "A dataset a call reads")
@@ -155,6 +157,20 @@ async def publish(ctx, args):
 async def publish_run(ctx, prepared, approval):
     name, text = prepared.state
     return {"path": ctx.outputs.publish(f"reports/{name}.csv", text)}
+
+
+@plugin.tool("file_put", gate="popup", title="File put", description="Store a file and return its size and SHA-256.",
+             params={"file": file_param("The file to store.", max_bytes=65536,
+                                        media_types=["text/plain", "application/json", "text/html"])},
+             required=["file"], effect="Stores a file in the Echo plugin.")
+async def file_put(ctx, args):
+    return Prepared(preview=[blocks.text("file put")])
+
+
+@file_put.execute
+async def file_put_run(ctx, prepared, approval):
+    f = ctx.files["file"]
+    return {"name": f.name, "size": f.size, "sha256": f.sha256}
 
 
 @plugin.page("/")
