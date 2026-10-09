@@ -382,7 +382,7 @@ class TestPluginTestHost:
         "jira.search": {"jql": "project = X"},
         "drive.download": {"file_id": "F1"},
         "sheets.get_values": {"spreadsheet_id": "S1", "range": "A1:B2"},
-        "confluence.get_page": {"page_id": "P1"},
+        "confluence.get_page": {"page_id": "page-1"},
         "calendar.list_events": {"time_min": "2025-01-01T00:00:00Z", "time_max": "2025-01-02T00:00:00Z"},
     }
 
