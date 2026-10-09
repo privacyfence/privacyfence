@@ -100,6 +100,11 @@ calendar:
   # titles/status in the (auto-approved) free/busy result.
   free_busy_full_event_details: true
 
+salesforce:
+  # Most report runs one paged salesforce_run_report read may use (each page
+  # is one report run and counts against the org's report-run limits).
+  report_max_pages: 50
+
 gmail:
   # Append your Gmail signature to drafts created through PrivacyFence (the
   # Gmail API, unlike Gmail's own compose window, adds none). This is the
