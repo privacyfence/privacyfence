@@ -60,6 +60,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   those connections until the process exited. It now gives open event streams two seconds to
   finish, then closes them.
 
+### Security
+
+- **Salesforce and Confluence.** A report id is checked to be a Salesforce id before a report runs, so a crafted id can no longer turn a report run into a different query; record ids in `salesforce_get_record` are checked the same way. Confluence page ids must be numeric, and attachment ids must look like Confluence attachment ids, for the same reason.
+
 ## [5.5.0] — 2026-10-01
 
 ### Added
