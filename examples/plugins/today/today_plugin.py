@@ -369,7 +369,7 @@ def build_plugin(crash_tool: bool = False) -> Plugin:
 
     async def _publish_when_confirmed(ctx, approval_id: str, snapshot: dict) -> None:
         try:
-            verdict = await ctx.confirm.await_(approval_id)
+            verdict = await ctx.confirm.wait(approval_id)
             day = _load_day(ctx)
             if verdict.status == "approved" and day is not None:
                 day["published"] = {"at": verdict.decided_at or datetime.now().astimezone().isoformat(), **snapshot}

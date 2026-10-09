@@ -73,7 +73,10 @@ CLOSE_WAIT_SECONDS = 1.0
 RESTART_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 CRASH_LIMIT = 5
 CRASH_WINDOW_SECONDS = 600.0
-PREPARED_CALL_LIFETIME_SECONDS = 900.0     # = approvals' pending TTL, so a deferred card can still release
+PENDING_CARD_SECONDS = 900.0               # = approvals.DEFAULT_PENDING_TTL_SECONDS
+DECISION_REPLAY_SECONDS = 300.0            # = approvals.DEFAULT_LEDGER_TTL_SECONDS
+# A deferred card can still release, and the daemon can still replay a decision, within this window.
+PREPARED_CALL_LIFETIME_SECONDS = PENDING_CARD_SECONDS + DECISION_REPLAY_SECONDS   # 1200.0
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
 LOG_PUMP_CHUNK_BYTES = 64 * 1024
