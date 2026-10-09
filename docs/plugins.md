@@ -29,7 +29,8 @@ output. A plugin can:
 - **Ask you to approve a thing once**, such as a script or a template, and have the approval stay
   until you revoke it ([Approvals](#approvals)).
 - **Publish files** you or your AI client can read through PrivacyFence ([Outputs](#outputs)).
-- **Serve read-only pages** at `/plugins/<name>/`, in a sandbox, to you only.
+- **Serve read-only pages** at `/plugins/<name>/`, in a sandbox, to you only. A plugin can list its
+  pages, and PrivacyFence's page browser (the Plugins menu, or `/plugin-pages`) opens each in a new tab.
 - **Keep its own files** in folders only the service account can read.
 
 Plugins run only on a packaged install, where PrivacyFence runs as its own service account. A `pip`
@@ -102,7 +103,7 @@ A plugin's folder must be a real folder inside the plugins directory, not a symb
    hashes and the tools you saw, and starts the plugin.
 
 A running plugin shows **Running**, and its tools appear to the AI client, which is told that the
-tool list changed. A plugin with pages shows an **Open page** link.
+tool list changed. A plugin with pages shows a **Pages** link.
 
 A plugin can later drop tools, but it cannot add a tool or change a tool's gate without another
 review: a rebuilt plugin whose tool list differs is disabled with "executable or manifest changed,
@@ -321,7 +322,25 @@ the AI is told the action ran and its result was withheld. Reads from connected 
 `ctx.approvals` (`request`, `check`, `await_`, `wait`), `ctx.confirm.wait()` (waits until the card is approved, denied or expired), a published file through `ctx.outputs.publish`, and a
 page is `@plugin.page("/")`. A page shown inside an approval card receives `pf_approval` in its
 query. Pages must be self-contained: inline the CSS, scripts and images, since
-a page's requests for separate files carry no session and are refused.
+a page's requests for separate files carry no session and are refused. Links between a plugin's
+pages do not carry your session either, so a multi-page plugin lists its pages with `page_index`
+instead of linking them. A single page can take a `?query`; page paths match exactly.
+
+### Page index
+
+`@plugin.page_index` registers `async def pages(ctx) -> list[PageEntry]`, which returns the pages
+PrivacyFence's page browser lists, each a `PageEntry(path, title)` with an optional `version`,
+`created_at`, `updated_at` and `description`:
+
+```python
+from privacyfence_plugin_sdk import PageEntry
+
+@plugin.page_index
+async def pages(ctx):
+    return [PageEntry("/", "Home")]
+```
+
+A plugin without a page index is listed with one page, `/`.
 
 The manifest names the plugin, its version (equal to the `Plugin`'s), `protocol: "1"`, its
 `command`, the source operations it uses, whether it serves pages, whether it publishes outputs
@@ -366,6 +385,7 @@ Where the test host differs from PrivacyFence:
   default is `"review"`, which refuses a tool on the `auto` gate.
 - `PluginTestHost(plugin, source_operations=(...), pages=True)` takes the manifest's `source_operations` and
   `pages`; it checks source-call parameters as PrivacyFence does.
+- `list_pages()` titles the fallback entry with the plugin's name; PrivacyFence uses its display name.
 - `pii=` takes a function that models the PII check, which overrides an "Always allow" rule.
 - It withholds a write result over 2,048 bytes but does not run PrivacyFence's PII detector on it.
 - It ignores a `tools.changed` the plugin sends.
