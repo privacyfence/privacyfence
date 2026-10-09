@@ -325,6 +325,31 @@ class TestWin32LookupsAreBestEffort:
     def test_read_owner_answers_none(self, tmp_path):
         assert windows_acl.read_owner(tmp_path) is None
 
+    def test_read_owner_sid_answers_none(self, tmp_path):
+        assert windows_acl.read_owner_sid(tmp_path) is None
+
+    @staticmethod
+    def _fake_win32security(monkeypatch, owner):
+        import sys
+        from types import SimpleNamespace
+
+        descriptor = SimpleNamespace(GetSecurityDescriptorOwner=lambda: owner)
+        monkeypatch.setitem(sys.modules, "win32security", SimpleNamespace(
+            OWNER_SECURITY_INFORMATION=1,
+            GetFileSecurity=lambda path, info: descriptor,
+            ConvertSidToStringSid=lambda sid: f"S-{sid}",
+        ))
+
+    def test_read_owner_sid_returns_the_string_sid(self, monkeypatch, tmp_path):
+        self._fake_win32security(monkeypatch, "1-5-18")
+
+        assert windows_acl.read_owner_sid(tmp_path) == "S-1-5-18"
+
+    def test_read_owner_sid_answers_none_for_a_descriptor_without_an_owner(self, monkeypatch, tmp_path):
+        self._fake_win32security(monkeypatch, None)
+
+        assert windows_acl.read_owner_sid(tmp_path) is None
+
 
 class TestOwnerRights:
     """``OWNER RIGHTS`` (S-1-3-4) is not a principal — it grants whoever owns

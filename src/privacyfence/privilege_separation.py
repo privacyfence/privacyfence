@@ -2128,6 +2128,24 @@ def _windows_admin_only_write_problem(
     return None
 
 
+def _windows_owner_problem(path: Path) -> str | None:
+    from . import windows_acl
+
+    sid = windows_acl.read_owner_sid(path)
+    if sid is None:
+        return f"could not read {path}'s owner"
+    if sid in windows_acl.TRUSTED_OWNER_SIDS:
+        return None
+    owner = windows_acl.read_owner(path) or sid
+    return f"{path} is owned by {owner}, not by SYSTEM, Administrators or TrustedInstaller"
+
+
+def _windows_plugin_path_problem(
+    path: Path, *, can_rewrite: Callable[[Any], bool] | None = None,
+) -> str | None:
+    return _windows_admin_only_write_problem(path, can_rewrite=can_rewrite) or _windows_owner_problem(path)
+
+
 def admin_only_write_problem(path: Path) -> str | None:
     """Whether anyone but an administrator can rewrite ``path``, a file or a
     directory: ``None`` when only administrators can, otherwise a
@@ -2143,7 +2161,7 @@ def admin_only_write_problem(path: Path) -> str | None:
     ``admin_only_ancestor_write_problem()`` for the directories above that.
     """
     if current_platform() == "win32":
-        return _windows_admin_only_write_problem(path)
+        return _windows_plugin_path_problem(path)
     return _posix_admin_only_write_problem(path)
 
 
@@ -2161,7 +2179,7 @@ def admin_only_ancestor_write_problem(path: Path) -> str | None:
     still refused.
     """
     if current_platform() == "win32":
-        return _windows_admin_only_write_problem(path, can_rewrite=_windows_ancestor_ace_can_rewrite)
+        return _windows_plugin_path_problem(path, can_rewrite=_windows_ancestor_ace_can_rewrite)
     return admin_only_write_problem(path)
 
 
@@ -2178,7 +2196,7 @@ def admin_only_plugin_dir_write_problem(path: Path) -> str | None:
     or not, is still refused. POSIX has no such entries, so there the rule is unchanged.
     """
     if current_platform() == "win32":
-        return _windows_admin_only_write_problem(path, can_rewrite=_windows_plugin_dir_ace_can_rewrite)
+        return _windows_plugin_path_problem(path, can_rewrite=_windows_plugin_dir_ace_can_rewrite)
     return admin_only_write_problem(path)
 
 
