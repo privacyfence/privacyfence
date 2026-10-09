@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-PROTOCOL_VERSION = "1.1.0"
+PROTOCOL_VERSION = "1.2.0"
 PROTOCOL_MAJOR = 1
 
 MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -29,6 +29,9 @@ DRIVE_CHUNK_BYTES = 8 * 1024 * 1024
 DRIVE_SPOOL_IDLE_SECONDS = 600
 MAX_PAGE_BODY_BYTES = 8 * 1024 * 1024
 MAX_PAGE_PATH_CHARS = 512
+MAX_PAGE_INDEX_ENTRIES = 500
+MAX_PAGE_VERSION_CHARS = 40
+MAX_PAGE_DESCRIPTION_CHARS = 200
 MAX_TOOLS = 64
 MAX_SCOPE_VALUES = 100
 MAX_SCOPE_VALUE_CHARS = 200
@@ -41,6 +44,7 @@ CALENDAR_PAGE_SIZE_MAX = 250
 SUBJECT_ID_MAX_CHARS = 200
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")      # always .fullmatch()
 APPROVAL_KIND_RE = re.compile(r"[a-z][a-z0-9_-]{0,40}")   # always .fullmatch()
+PAGE_ENTRY_PATH_RE = re.compile(r"/[\x21\x22\x24-\x5b\x5d-\x7e]*")   # always .fullmatch(); no space, # or backslash
 OUTPUT_TYPES: dict[str, tuple[str, ...]] = {
     "application/json": (".json",),
     "text/csv": (".csv",),
@@ -58,6 +62,7 @@ TIMEOUT_SECONDS: dict[str, float] = {
     "tool.prepare": 30.0,
     "tool.execute": 60.0,
     "web.request": 10.0,
+    "pages.list": 10.0,
     "storage.purge": 30.0,
     "source.call": 120.0,
     "confirm.request": 5.0,
