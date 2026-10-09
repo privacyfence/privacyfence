@@ -407,6 +407,44 @@ class TestPaging:
                 mode="local", audit=lambda *a: None)
         assert second["data"] == [{"key": "A-2"}] and second["next_cursor"] is None
 
+    async def test_report_pages_reads_both_sample_pages(self):
+        plugin = Plugin(name="reports", version="1.0.0")
+        seen: list = []
+
+        @plugin.tool("rows", description="Read rows.", read_only=True)
+        async def rows(ctx, args):
+            async for page in ctx.source.report_pages("00OEXAMPLE0000001", page_by="Account.PF_QA_Number__c"):
+                seen.extend(r["dataCells"][0]["value"] for r in page.data["factMap"]["T!T"]["rows"])
+            return Prepared(preview=[blocks.text("rows")], payload=[blocks.text("ok")])
+
+        async with PluginTestHost(plugin) as host:
+            for fixture in samples.salesforce_report_pages():
+                host.source.load(fixture)
+            outcome = await host.call_tool("rows", {})
+        assert outcome.error is None
+        assert seen == [f"PFQA-{i:05d}" for i in range(1, 6)]
+
+    async def test_a_report_cursor_for_another_page_by_is_refused(self):
+        plugin = Plugin(name="reports", version="1.0.0")
+        async with PluginTestHost(plugin) as host:
+            def page(keys):
+                return {"reportMetadata": {"detailColumns": ["K"]},
+                        "factMap": {"T!T": {"rows": [{"dataCells": [{"value": k}]} for k in keys]}}}
+            host.source.when("salesforce.report_run", report_id="00O1", page_by="K").returns_pages(
+                [page(["a"]), page(["b"])])
+            host.source.when("salesforce.report_run", report_id="00O1", page_by="OTHER").returns_pages(
+                [page(["c"]), page(["d"])])
+            first = host.source.handle(
+                {"principal": "local", "operation": "salesforce.report_run",
+                 "params": {"report_id": "00O1", "page_by": "K"}},
+                mode="local", audit=lambda *a: None)
+            with pytest.raises(Exception) as bad:
+                host.source.handle(
+                    {"principal": "local", "operation": "salesforce.report_run",
+                     "params": {"report_id": "00O1", "page_by": "OTHER", "cursor": first["next_cursor"]}},
+                    mode="local", audit=lambda *a: None)
+        assert bad.value.code == "invalid_params"
+
     def test_returns_pages_needs_pages_and_issues_its_own_cursors(self):
         fixtures = source_module.SourceFixtures()
         with pytest.raises(ValueError, match="non-empty"):
