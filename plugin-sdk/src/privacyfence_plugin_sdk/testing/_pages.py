@@ -5,11 +5,11 @@ import base64
 import binascii
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qsl
 
+from .._page_index import normalized_page_path
 from .._rpc import Peer, RpcError
 
-MAX_PAGE_PATH_CHARS = 512
 MAX_PAGE_BODY_BYTES = 8 * 1024 * 1024
 _WEB_REQUEST_TIMEOUT = 10.0
 
@@ -50,16 +50,7 @@ class PageResponse:
 
 def normalize_path(raw: str) -> str | None:
     """URL-decode ``raw`` once and apply the daemon's rules; ``None`` means the path is rejected."""
-    if len(raw) > 3 * MAX_PAGE_PATH_CHARS:
-        return None
-    path = unquote(raw)
-    if "\x00" in path or "\\" in path:
-        return None
-    if not path.startswith("/"):
-        path = "/" + path
-    if len(path) > MAX_PAGE_PATH_CHARS or "//" in path or ".." in path.split("/"):
-        return None
-    return path
+    return normalized_page_path(raw)
 
 
 def _content_type(value: Any) -> str:

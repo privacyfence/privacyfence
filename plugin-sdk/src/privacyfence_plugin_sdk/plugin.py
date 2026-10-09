@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import blocks as _blocks
+from ._page_index import validate_page_entries
 from ._rpc import Peer, RpcError, open_stdio
 from .responses import (
     ApprovalTicket,
@@ -23,6 +24,7 @@ from .responses import (
     ConfirmResult,
     DownloadedFile,
     Html,
+    PageEntry,
     SourceError,
     SourceResult,
     Text,
@@ -501,6 +503,7 @@ class _Registry:
     pages: dict[str, Callable[[Context, PageRequest], Awaitable[Any]]] = field(default_factory=dict)
     events: dict[str, list[Callable[[Context, dict], Awaitable[None]]]] = field(default_factory=dict)
     purge: Callable[[Context, str, str | None], Awaitable[None]] | None = None
+    page_index: Callable[[Context], Awaitable[list[PageEntry]]] | None = None
 
 
 def _page_key(path: str) -> str:
@@ -650,6 +653,15 @@ class Plugin:
             return fn
 
         return register
+
+    def page_index(
+        self, fn: Callable[[Context], Awaitable[list[PageEntry]]]
+    ) -> Callable[[Context], Awaitable[list[PageEntry]]]:
+        """Register ``async def fn(ctx) -> list[PageEntry]``: the pages the page browser lists."""
+        if self._reg.page_index is not None:
+            raise ValueError("page_index is already registered")
+        self._reg.page_index = fn
+        return fn
 
     def on(self, event: str) -> Callable[[Callable[[Context, dict], Awaitable[None]]], Callable]:
         if event not in _EVENTS:
@@ -867,6 +879,20 @@ class Plugin:
             return Text("Internal error", status=500).to_wire()
         return response.to_wire()
 
+    async def _pages_list(self, params: dict) -> dict:
+        self._require_initialized()
+        fn = self._reg.page_index
+        assert fn is not None  # the handler is registered only when an index exists
+        ctx = Context(self._host, self._principal(self._need(params, "principal", dict)), self._data_dir)
+        entries = await fn(ctx)
+        if not isinstance(entries, list) or not all(isinstance(e, PageEntry) for e in entries):
+            raise RpcError("invalid_params", "pages must be a list of PageEntry")
+        try:
+            pages = validate_page_entries([e.to_wire() for e in entries])
+        except ValueError as exc:
+            raise RpcError("invalid_params", str(exc)) from None
+        return {"pages": pages}
+
     async def _purge(self, params: dict) -> dict:
         self._require_initialized()
         scope = self._need(params, "scope", str)
@@ -907,6 +933,8 @@ class Plugin:
             "web.request": self._web_request,
             "storage.purge": self._purge,
         }
+        if self._reg.page_index is not None:
+            handlers["pages.list"] = self._pages_list
         notifications = {event: self._event_handler(event) for event in _EVENTS}
         peer = Peer(
             reader,
