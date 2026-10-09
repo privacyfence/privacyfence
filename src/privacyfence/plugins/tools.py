@@ -10,6 +10,10 @@ from typing import Any
 
 from privacyfence import auto_accept
 from privacyfence.plugins.constants import (
+    FILE_MEDIA_TYPES,
+    FILE_PARAM_KEY,
+    MAX_FILE_BYTES,
+    MAX_FILE_PARAMS_PER_TOOL,
     MAX_SCOPE_TYPE_DESCRIPTION_CHARS,
     MAX_TOOLS,
     MCP_TOOL_NAME_MAX,
@@ -61,6 +65,26 @@ def validate_scope_types(raw: Any) -> list[dict]:
     return out
 
 
+def _check_file_param(tool: str, pname: str, schema: dict) -> None:
+    where = f"parameter {pname} of {tool}"
+    if schema.get("type") != "string":
+        raise ToolDefError(f"{where}: a file parameter must have type string")
+    spec = schema[FILE_PARAM_KEY]
+    if not isinstance(spec, dict) or set(spec) != {"max_bytes", "media_types"}:
+        raise ToolDefError(f"{where}: {FILE_PARAM_KEY} takes max_bytes and media_types only")
+    max_bytes = spec["max_bytes"]
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 1 <= max_bytes <= MAX_FILE_BYTES:
+        raise ToolDefError(f"{where}: max_bytes must be 1 to {MAX_FILE_BYTES}")
+    types = spec["media_types"]
+    if (
+        not isinstance(types, list)
+        or not types
+        or not all(isinstance(t, str) and t in FILE_MEDIA_TYPES for t in types)
+        or len(set(types)) != len(types)
+    ):
+        raise ToolDefError(f"{where}: media_types must be a non-empty list of distinct supported types")
+
+
 def _check_parameters(defn: ToolDef) -> None:
     params = defn.parameters
     if params.get("type") != "object":
@@ -75,6 +99,17 @@ def _check_parameters(defn: ToolDef) -> None:
             raise ToolDefError(
                 f"parameter {pname} of {defn.name}: only string, integer, number and boolean are supported"
             )
+    file_count = 0
+    for pname, schema in props.items():
+        if FILE_PARAM_KEY in schema:
+            file_count += 1
+            _check_file_param(defn.name, pname, schema)
+    if file_count > MAX_FILE_PARAMS_PER_TOOL:
+        raise ToolDefError(f"tool {defn.name} may take at most {MAX_FILE_PARAMS_PER_TOOL} file parameter")
+    if file_count and defn.read_only:
+        raise ToolDefError(f"tool {defn.name} takes a file and cannot be read-only")
+    if file_count and defn.gate == "auto":
+        raise ToolDefError(f"tool {defn.name} takes a file and must use the review or popup gate")
     required = params.get("required", [])
     if not isinstance(required, list) or not all(isinstance(r, str) and r in props for r in required):
         raise ToolDefError(f"required of {defn.name} must list declared parameter names")

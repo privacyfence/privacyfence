@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-PROTOCOL_VERSION = "1.2.0"
+PROTOCOL_VERSION = "1.3.0"
 PROTOCOL_MAJOR = 1
 
 MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -31,6 +31,16 @@ MAX_PAGE_BODY_BYTES = 8 * 1024 * 1024
 MAX_PAGE_PATH_CHARS = 512
 MAX_PAGE_INDEX_ENTRIES = 500
 MAX_PAGE_VERSION_CHARS = 40
+FILE_PARAM_KEY = "x-privacyfence-file"
+MAX_FILE_BYTES = 8 * 1024 * 1024           # per file; base64 of it plus the envelope fits MAX_LINE_BYTES
+MAX_FILE_PARAMS_PER_TOOL = 1
+FILE_MEDIA_TYPES = (
+    "text/html", "text/plain", "application/json", "application/pdf",
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    "font/woff", "font/woff2", "font/ttf", "font/otf",
+    "application/octet-stream",
+)
+UPLOAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{43}")     # a 32-byte slot token, base64url without padding; always .fullmatch()
 MAX_PAGE_DESCRIPTION_CHARS = 200
 MAX_TOOLS = 64
 MAX_SCOPE_VALUES = 100

@@ -327,7 +327,7 @@ class TestStartEnabled:
         params = host._initialize_params(host._plugins["stub"], "run")
 
         shared, per_principal = storage.install_dir("stub"), storage.principal_dir("stub", LOCAL_PRINCIPAL)
-        assert params["protocol_version"] == "1.2.0" and params["purpose"] == "run" and params["mode"] == "local"
+        assert params["protocol_version"] == "1.3.0" and params["purpose"] == "run" and params["mode"] == "local"
         assert params["daemon"] == {"name": "privacyfence", "version": "9.9.9"}
         assert params["plugin"] == {"name": "stub", "manifest_version": "1.0.0"}
         assert params["data_dir"] == str(shared) and shared.is_dir()

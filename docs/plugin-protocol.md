@@ -1,7 +1,7 @@
 # Plugin protocol reference
 
 How PrivacyFence and a plugin talk to each other: the transport, the manifest, every message with
-its data shapes, the limits and the timeouts. This is protocol version `1.2.0`. For installing and
+its data shapes, the limits and the timeouts. This is protocol version `1.3.0`. For installing and
 running a plugin, see [`plugins.md`](plugins.md); for writing one, the
 [`privacyfence-plugin-sdk`](https://github.com/privacyfence/privacyfence/tree/main/plugin-sdk) does
 the protocol for you. The machine-readable description of every message is
@@ -185,7 +185,7 @@ principal is `local`.
 Parameters:
 
 ```json
-{"protocol_version": "1.2.0", "purpose": "run", "mode": "local",
+{"protocol_version": "1.3.0", "purpose": "run", "mode": "local",
  "daemon": {"name": "privacyfence", "version": "5.6.0"},
  "plugin": {"name": "today", "manifest_version": "1.2.0"},
  "data_dir": "/var/lib/privacyfence/plugin-data/today/shared",
@@ -203,7 +203,7 @@ declares them twice); neither is sent to any other plugin.
 Result:
 
 ```json
-{"protocol_version": "1.2.0",
+{"protocol_version": "1.3.0",
  "plugin": {"name": "today", "version": "1.2.0"},
  "scope_types": [{"name": "calendar", "description": "Calendar id a call reads"}],
  "tools": [ToolDef, …]}
@@ -716,6 +716,8 @@ mode does not start plugins.
 | Page path | 512 characters |
 | Page index entries | 500 (`MAX_PAGE_INDEX_ENTRIES`) |
 | Page index version, description | 40 and 200 characters (`MAX_PAGE_VERSION_CHARS`, `MAX_PAGE_DESCRIPTION_CHARS`) |
+| File parameter size | 8 MiB (`MAX_FILE_BYTES`) |
+| File parameters per tool | 1 (`MAX_FILE_PARAMS_PER_TOOL`) |
 | Pending confirmations, pending approvals | 64 each |
 | Send timeout (a message the plugin does not read) | 10 seconds |
 

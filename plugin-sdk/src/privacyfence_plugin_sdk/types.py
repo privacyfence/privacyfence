@@ -45,6 +45,57 @@ class ToolDef(_ToolDefRequired, total=False):
     title: str
 
 
+FileParamSpecMediaTypesItem = Literal[
+    "text/html",
+    "text/plain",
+    "application/json",
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "font/woff",
+    "font/woff2",
+    "font/ttf",
+    "font/otf",
+    "application/octet-stream",
+]
+
+
+class FileParamSpec(TypedDict):
+    max_bytes: int
+    media_types: list[FileParamSpecMediaTypesItem]
+
+
+ToolFileSniffedType = Literal[
+    "text/html",
+    "text/plain",
+    "application/json",
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "font/woff",
+    "font/woff2",
+    "font/ttf",
+    "font/otf",
+    "application/octet-stream",
+]
+
+
+class _ToolFileRequired(TypedDict):
+    name: str
+    size: int
+    media_type: str
+    sniffed_type: ToolFileSniffedType
+    sha256: str
+
+
+class ToolFile(_ToolFileRequired, total=False):
+    content_base64: str
+
+
 class _BlockHeadingRequired(TypedDict):
     type: Literal["heading"]
     text: str
@@ -214,6 +265,7 @@ class Manifest(_ManifestRequired, total=False):
     service_credentials: bool
     outputs: bool
     output_types: list[ManifestOutputTypesItem]
+    page_new_tabs: bool
 
 
 class InitializeParamsDaemon(TypedDict):
@@ -262,12 +314,16 @@ class ToolsChangedParams(TypedDict):
     tools: list[ToolDef]
 
 
-class ToolPrepareParams(TypedDict):
+class _ToolPrepareParamsRequired(TypedDict):
     call_id: str
     principal: PrincipalContext
     tool: str
     args: dict[str, Any]
     reason: str | None
+
+
+class ToolPrepareParams(_ToolPrepareParamsRequired, total=False):
+    files: dict[str, ToolFile]
 
 
 class _ToolPrepareResultRequired(TypedDict):
@@ -286,13 +342,17 @@ class ToolExecuteParamsApproval(TypedDict):
     decided_at: str
 
 
-class ToolExecuteParams(TypedDict):
+class _ToolExecuteParamsRequired(TypedDict):
     call_id: str
     principal: PrincipalContext
     tool: str
     args: dict[str, Any]
     args_digest: str
     approval: ToolExecuteParamsApproval
+
+
+class ToolExecuteParams(_ToolExecuteParamsRequired, total=False):
+    files: dict[str, ToolFile]
 
 
 class ToolExecuteResult(TypedDict, total=False):

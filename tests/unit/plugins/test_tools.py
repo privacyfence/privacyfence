@@ -139,6 +139,71 @@ class TestParameters:
         _refused([_tool(parameters={**_params(a={"type": "string"}), "required": ["b"]})], "required")
 
 
+def _file_tool(spec=None, *, schema=None, **over):
+    spec = {"max_bytes": 1024, "media_types": ["text/html"]} if spec is None else spec
+    prop = schema if schema is not None else {"type": "string", c.FILE_PARAM_KEY: spec}
+    return _tool(**{"parameters": _params(html=prop), "read_only": False, **over})
+
+
+class TestFileParameters:
+    def test_accepted_on_review_and_popup_tools(self):
+        assert len(_validate([_file_tool()])) == 1
+        assert len(_validate([_file_tool(gate="popup")])) == 1
+
+    def test_type_must_be_string(self):
+        _refused(
+            [_file_tool(schema={"type": "integer", c.FILE_PARAM_KEY: {"max_bytes": 1, "media_types": ["text/html"]}})],
+            "^parameter html of get_agenda: a file parameter must have type string$",
+        )
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            "x",
+            {"max_bytes": 1},
+            {"media_types": ["text/html"]},
+            {"max_bytes": 1, "media_types": ["text/html"], "extra": 1},
+        ],
+    )
+    def test_spec_keys_are_exact(self, spec):
+        _refused(
+            [_file_tool(spec)],
+            "^parameter html of get_agenda: x-privacyfence-file takes max_bytes and media_types only$",
+        )
+
+    @pytest.mark.parametrize("max_bytes", [0, -1, c.MAX_FILE_BYTES + 1, True, 1.5, "9"])
+    def test_max_bytes_range(self, max_bytes):
+        _refused(
+            [_file_tool({"max_bytes": max_bytes, "media_types": ["text/html"]})],
+            "^parameter html of get_agenda: max_bytes must be 1 to 8388608$",
+        )
+
+    @pytest.mark.parametrize(
+        "types",
+        [[], "text/html", ["text/html", "text/html"], ["text/css"], [1], ["text/html", None]],
+    )
+    def test_media_types_list(self, types):
+        _refused(
+            [_file_tool({"max_bytes": 1, "media_types": types})],
+            "^parameter html of get_agenda: media_types must be a non-empty list of distinct supported types$",
+        )
+
+    def test_at_most_one_file_parameter(self):
+        file_prop = {"type": "string", c.FILE_PARAM_KEY: {"max_bytes": 1, "media_types": ["text/html"]}}
+        defn = _tool(parameters=_params(a=file_prop, b=dict(file_prop)), read_only=False)
+        _refused([defn], "^tool get_agenda may take at most 1 file parameter$")
+
+    def test_not_read_only(self):
+        _refused([_file_tool(read_only=True)], "^tool get_agenda takes a file and cannot be read-only$")
+
+    def test_not_on_the_auto_gate(self):
+        _refused(
+            [_file_tool(gate="auto")],
+            "^tool get_agenda takes a file and must use the review or popup gate$",
+            floor="auto",
+        )
+
+
 class TestLimits:
     def test_not_a_list(self):
         _refused({}, "must be a list")
