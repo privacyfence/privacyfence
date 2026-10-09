@@ -1247,7 +1247,7 @@ class TestReportPagingCheck:
                 out["attributes"] = {"reportId": report, "type": "Report"}
                 out["reportMetadata"]["id"] = report
                 rows = out["factMap"]["T!T"]["rows"]
-                for row, rid in zip(rows, (acme, beta, "001ak00003cU5dMAAS")):
+                for row, rid in zip(rows, (acme, beta, "001ak00003cU5dMAAS"), strict=True):
                     row["dataCells"][0]["recordId"] = rid
                     row["dataCells"].append({"label": "Account", "recordId": rid, "value": rid})
                     row["dataCells"].append({"label": rid, "value": rid[:15]})
