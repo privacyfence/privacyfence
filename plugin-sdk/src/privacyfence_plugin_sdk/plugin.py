@@ -49,7 +49,7 @@ _MCP_TOOL_NAME_MAX = 64
 _MAX_SCOPE_TYPES = 20
 _MAX_SCOPE_TYPE_DESCRIPTION_CHARS = 500
 _MAX_PAGE_PATH_CHARS = 512
-_PREPARED_CALL_LIFETIME_SECONDS = 900.0
+_PREPARED_CALL_LIFETIME_SECONDS = 1200.0
 _CONFIRM_AWAIT_MAX_MS = 300_000
 _SOURCE_CALL_TIMEOUT_SECONDS = 120.0
 _CONFIRM_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -64,6 +64,9 @@ _RESERVED_PLUGIN_NAMES = frozenset({
     "apps", "sheets", "docs",
 })
 # --- end of _limits ---------------------------------------------------------------------------
+
+_MAX_PREPARED_CALLS = 256
+_WAIT_MAX_ROUNDS = 12
 
 _PARAM_TYPES = frozenset({"string", "integer", "number", "boolean"})
 _FORBIDDEN_PARAM_KEYS = frozenset({"enum", "oneOf", "anyOf", "allOf", "items", "properties", "$ref"})
@@ -297,6 +300,16 @@ class ConfirmClient:
         decided = result.get("decided_at")
         return ConfirmResult(status=result["status"], decided_at=decided if isinstance(decided, str) else None)
 
+    async def wait(self, approval_id: str) -> ConfirmResult:
+        """Wait until the card is approved, denied or expired."""
+        for _ in range(_WAIT_MAX_ROUNDS):
+            try:
+                return await self.await_(approval_id)
+            except SourceError as exc:
+                if exc.code != "timeout":
+                    raise
+        raise SourceError("timeout", "the confirmation was not decided within an hour")
+
 
 class ApprovalsClient:
     """``ctx.approvals``: asks a human to approve a thing that stays approved until it changes."""
@@ -369,6 +382,16 @@ class ApprovalsClient:
             raise SourceError("internal_error", "malformed approval.await result")
         decided = result.get("decided_at")
         return ConfirmResult(status=result["status"], decided_at=decided if isinstance(decided, str) else None)
+
+    async def wait(self, approval_id: str) -> ConfirmResult:
+        """Wait until the card is approved, denied or expired."""
+        for _ in range(_WAIT_MAX_ROUNDS):
+            try:
+                return await self.await_(approval_id)
+            except SourceError as exc:
+                if exc.code != "timeout":
+                    raise
+        raise SourceError("timeout", "the confirmation was not decided within an hour")
 
 
 class OutputsClient:
@@ -731,6 +754,9 @@ class Plugin:
     async def _prepare(self, params: dict) -> dict:
         self._require_initialized()
         self._sweep()
+        while len(self._prepared) >= _MAX_PREPARED_CALLS:
+            del self._prepared[next(iter(self._prepared))]
+            logger.warning("prepared-call store is full (%d); dropped the oldest prepared call", _MAX_PREPARED_CALLS)
         call_id = self._need(params, "call_id", str)
         handle = self._reg.tools.get(self._need(params, "tool", str))
         if handle is None:
@@ -803,7 +829,7 @@ class Plugin:
             raise RpcError("unknown_call", "no prepared call with this id")
         if given != entry.digest or args_digest(args) != entry.digest:
             raise RpcError("digest_mismatch", "the arguments differ from the prepared call")
-        if not handle.read_only:
+        if not handle.read_only or approval.get("via") == "auto":
             del self._prepared[call_id]
         ctx = self._ctx(self._need(params, "principal", dict))
         result: Any = None

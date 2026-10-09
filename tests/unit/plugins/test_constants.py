@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from privacyfence import auto_accept, settings_controller
+from privacyfence.approvals import DEFAULT_LEDGER_TTL_SECONDS, DEFAULT_PENDING_TTL_SECONDS
 from privacyfence.plugins import constants as c
 from privacyfence.web import mcp_tools
 
@@ -81,6 +82,13 @@ class TestNameHelpers:
 
     def test_scope_predicate(self):
         assert c.scope_predicate("today", "calendar") == "plugin:today:calendar"
+
+
+class TestLifetimes:
+    def test_prepared_lifetime_is_pending_plus_replay(self):
+        assert c.PENDING_CARD_SECONDS == DEFAULT_PENDING_TTL_SECONDS
+        assert c.DECISION_REPLAY_SECONDS == DEFAULT_LEDGER_TTL_SECONDS
+        assert c.PREPARED_CALL_LIFETIME_SECONDS == c.PENDING_CARD_SECONDS + c.DECISION_REPLAY_SECONDS == 1200.0
 
 
 class TestTables:

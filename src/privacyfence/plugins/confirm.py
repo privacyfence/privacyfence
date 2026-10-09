@@ -41,7 +41,7 @@ from privacyfence.plugins.constants import (
     CONFIRM_AWAIT_MAX_MS,
     MAX_PENDING_CONFIRMS,
     MAX_PENDING_CONFIRMS_PER_PLUGIN,
-    PREPARED_CALL_LIFETIME_SECONDS,
+    PENDING_CARD_SECONDS,
 )
 from privacyfence.plugins.protocol import ConfirmRequestParams, RpcError
 from privacyfence.principal import LOCAL_PRINCIPAL_ID
@@ -88,7 +88,7 @@ class ConfirmationService:
         self._finished: dict[str, float] = {}      # approval id -> monotonic time it finished
         self._active_total = 0
         self._active_by_plugin: dict[str, int] = {}
-        self.retain_finished_seconds = PREPARED_CALL_LIFETIME_SECONDS
+        self.retain_finished_seconds = PENDING_CARD_SECONDS
         self._finalizers: set[asyncio.Future] = set()
         self.poll_seconds = POLL_SECONDS
 
