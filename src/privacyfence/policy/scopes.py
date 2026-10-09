@@ -570,3 +570,175 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
     ),
 }
+
+
+# ── Plugin scopes (registered at runtime) ──────────────────────────────────────────────────────
+#
+# A plugin declares scope types ("calendar") and reports, with every gated call, which values of
+# each the call touched (``raw_data["scopes"]``). Its rules live under ``NEW_SCOPE_SELECTORS`` as
+# ``plugin:<plugin>:<scope type>`` predicates, added and removed with the plugin's tool list
+# (``auto_accept.register_dynamic_tools``). The selector's own ``scope_type`` is dotted
+# (``today.calendar``) so ``policy.describe.scope_type_label`` finds the noun the same way it does
+# for a connector's scope.
+
+PLUGIN_PREDICATE_PREFIX = "plugin:"
+PLUGIN_ANYTHING_SCOPE_TYPE = "anything"
+# The scope type of a plugin's output folder rules. Reserved: only
+# ``register_plugin_output_selector`` adds a predicate for it, never a plugin's own tool.
+PLUGIN_OUTPUT_SCOPE_TYPE = "output"
+
+# predicate -> how many registrations hold it. Two tools of one plugin share a scope type's
+# predicate, so the selector goes only when the last of them is unregistered.
+_PLUGIN_SELECTOR_REFS: dict[str, int] = {}
+
+
+def _plugin_scope_matches(scope_type: str) -> Callable[[Any, ReviewContext], bool]:
+    """Match when every value of ``scope_type`` the call returned is in the rule. A call that
+    returned none, an empty rule, or an empty value never matches."""
+
+    def matches(value: Any, ctx: ReviewContext) -> bool:
+        reported = ctx.raw_data.get("scopes") if isinstance(ctx.raw_data, dict) else None
+        returned = reported.get(scope_type) if isinstance(reported, dict) else None
+        allowed = {str(v) for v in _values_of(value) if v not in (None, "")}
+        # ``_values_of`` keeps a lone string whole; iterating it would compare its characters.
+        return bool(returned) and bool(allowed) and {str(v) for v in _values_of(returned)} <= allowed
+
+    return matches
+
+
+def _plugin_of_predicate(predicate: str, scope_type: str) -> str:
+    """The plugin a ``plugin:<plugin>:<scope type>`` predicate belongs to; ``ValueError`` if
+    ``predicate`` is not that shape for ``scope_type``."""
+    plugin, sep, rest = predicate[len(PLUGIN_PREDICATE_PREFIX):].partition(":")
+    if not predicate.startswith(PLUGIN_PREDICATE_PREFIX) or not plugin or not sep or rest != scope_type:
+        raise ValueError(f"{predicate!r} is not a plugin predicate for scope type {scope_type!r}")
+    return plugin
+
+
+def _plugin_selector(predicate: str, scope_type: str) -> ScopeSelector:
+    plugin = _plugin_of_predicate(predicate, scope_type)
+    if scope_type == PLUGIN_ANYTHING_SCOPE_TYPE:
+        # Unconditional: the rule's operation key is the only thing that limits it.
+        return ScopeSelector(
+            predicate=predicate, scope_type=f"{plugin}.{scope_type}", kind=ScopeKind.ATTRIBUTE,
+            resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
+        )
+    return ScopeSelector(
+        predicate=predicate, scope_type=f"{plugin}.{scope_type}", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_plugin_scope_matches(scope_type),
+    )
+
+
+def check_plugin_selector(predicate: str, scope_type: str) -> None:
+    """Raise ``ValueError`` if ``register_plugin_selector(predicate, scope_type)`` would fail,
+    without registering anything."""
+    # No built-in predicate has the ``plugin:`` shape, so passing this check also rules them out.
+    if scope_type == PLUGIN_OUTPUT_SCOPE_TYPE:
+        raise ValueError(f"scope type {scope_type!r} is reserved")
+    _plugin_of_predicate(predicate, scope_type)
+
+
+def _register(predicate: str, scope_type: str) -> None:
+    check_plugin_selector(predicate, scope_type)
+    if predicate not in _PLUGIN_SELECTOR_REFS:
+        NEW_SCOPE_SELECTORS[predicate] = _plugin_selector(predicate, scope_type)
+    _PLUGIN_SELECTOR_REFS[predicate] = _PLUGIN_SELECTOR_REFS.get(predicate, 0) + 1
+
+
+def register_plugin_selector(predicate: str, scope_type: str) -> None:
+    """Add the selector for a plugin's declared scope type (``plugin:<plugin>:<scope type>``).
+    Registering a predicate already held adds one more holder."""
+    if scope_type == PLUGIN_ANYTHING_SCOPE_TYPE:
+        raise ValueError(f"scope type {scope_type!r} is reserved")
+    _register(predicate, scope_type)
+
+
+def register_plugin_anything_selector(plugin: str) -> None:
+    """Add ``plugin:<plugin>:anything``, the unconditional predicate for a plugin tool that
+    declares no scope types. Its own predicate, never the shared ``always_allow``: rules that
+    share a predicate and value merge into one row in ``store.merge_rules``."""
+    _register(f"{PLUGIN_PREDICATE_PREFIX}{plugin}:{PLUGIN_ANYTHING_SCOPE_TYPE}", PLUGIN_ANYTHING_SCOPE_TYPE)
+
+
+def unregister_plugin_selector(predicate: str) -> None:
+    """Drop one holder of a plugin predicate, and the selector with the last one. A built-in
+    predicate, or one never registered, is left alone."""
+    held = _PLUGIN_SELECTOR_REFS.get(predicate)
+    if held is None:
+        return
+    if held > 1:
+        _PLUGIN_SELECTOR_REFS[predicate] = held - 1
+        return
+    del _PLUGIN_SELECTOR_REFS[predicate]
+    NEW_SCOPE_SELECTORS.pop(predicate, None)
+
+
+# ── Plugin output folders (registered at runtime) ──────────────────────────────────────────────
+#
+# ``plugin:<plugin>:output`` governs ``plugin_outputs_read`` for one plugin's published files. Its
+# value is a path prefix, not the set ``_plugin_scope_matches`` checks: a value ending in ``/`` is
+# a folder and covers every file below it, any other value is one exact file. Each is matched
+# against the canonical path the outputs connector put in ``raw_data``, so ``reports/`` never
+# matches ``reports2/x``.
+
+# Plugins whose output selector is registered.
+_PLUGIN_OUTPUT_SELECTORS: set[str] = set()
+
+
+def plugin_output_predicate(plugin: str) -> str:
+    return f"{PLUGIN_PREDICATE_PREFIX}{plugin}:{PLUGIN_OUTPUT_SCOPE_TYPE}"
+
+
+def _plugin_output_matches(name: str) -> Callable[[Any, ReviewContext], bool]:
+    def matches(value: Any, ctx: ReviewContext) -> bool:
+        raw = ctx.raw_data if isinstance(ctx.raw_data, dict) else {}
+        if raw.get("plugin") != name or not isinstance(raw.get("path"), str):
+            return False
+        path = raw["path"]
+        for v in _values_of(value):
+            if not isinstance(v, str) or not v:
+                continue
+            if v.endswith("/") and path.startswith(v):
+                return True
+            if path == v:
+                return True
+        return False
+
+    return matches
+
+
+def register_plugin_output_selector(name: str) -> None:
+    """Add ``plugin:<name>:output``. Registering a plugin already registered changes nothing."""
+    predicate = plugin_output_predicate(name)
+    _plugin_of_predicate(predicate, PLUGIN_OUTPUT_SCOPE_TYPE)
+    if name in _PLUGIN_OUTPUT_SELECTORS:
+        return
+    NEW_SCOPE_SELECTORS[predicate] = ScopeSelector(
+        predicate=predicate, scope_type=f"{name}.{PLUGIN_OUTPUT_SCOPE_TYPE}", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.ARGS, matches=_plugin_output_matches(name),
+    )
+    _PLUGIN_OUTPUT_SELECTORS.add(name)
+
+
+def unregister_plugin_output_selector(name: str) -> None:
+    """Remove the selector ``register_plugin_output_selector`` added; a plugin never registered is
+    a no-op."""
+    if name not in _PLUGIN_OUTPUT_SELECTORS:
+        return
+    _PLUGIN_OUTPUT_SELECTORS.discard(name)
+    NEW_SCOPE_SELECTORS.pop(plugin_output_predicate(name), None)
+
+
+def reset_plugin_output_selectors() -> None:
+    """Unregister every output selector. Registered with ``plugins._testing``."""
+    for name in list(_PLUGIN_OUTPUT_SELECTORS):
+        unregister_plugin_output_selector(name)
+
+
+def _register_test_reset() -> None:
+    from ..plugins import _testing
+
+    _testing.register_reset(reset_plugin_output_selectors)
+
+
+_register_test_reset()

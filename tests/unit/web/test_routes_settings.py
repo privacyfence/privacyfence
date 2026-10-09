@@ -12,6 +12,7 @@ doubles as the CSRF value every mutating request below sends.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import subprocess
 import time
@@ -856,6 +857,157 @@ class TestConnectorToggleDirectional:
         r = client.post("/api/settings/enable_connector", json={"connector": "gmail", "csrf": csrf})
         assert r.status_code == 403
         assert r.json()["error"] == "passkey_enrollment_required"
+
+
+class _PluginHostStub:
+    """Just enough PluginHost for the controller's plugin actions: each submitted coroutine is
+    closed, never run, and recorded by name."""
+
+    def __init__(self) -> None:
+        self.submitted: list[str] = []
+
+    def set_rows_changed_listener(self, fn) -> None:
+        pass
+
+    def on_connectors_changed(self, rows) -> None:
+        pass
+
+    def rows(self) -> list[dict]:
+        return [{"name": "demo", "display_name": "Demo", "state": "discovered", "review": None, "last_error": None}]
+
+    def submit(self, coro):
+        self.submitted.append(coro.cr_code.co_name)
+        coro.close()
+        future = concurrent.futures.Future()
+        future.set_result(None)
+        return future
+
+    async def rescan(self): ...
+    async def inspect(self, name): ...
+    async def enable(self, name, *, executable_sha256, manifest_sha256): ...
+    async def disable(self, name): ...
+    async def purge(self, name): ...
+    async def revoke_approval(self, name, approval_id): ...
+
+
+@pytest.fixture
+def plugin_host():
+    return _PluginHostStub()
+
+
+@pytest.fixture
+def plugin_controller(controller, plugin_host):
+    return sc.SettingsController(
+        controller._config_path, connectors=[], connector_host=SimpleNamespace(set_connectors=lambda conns: None),
+        plugin_host=plugin_host,
+    )
+
+
+_ENABLE_BODY = {"name": "demo", "executable_sha256": "aa", "manifest_sha256": "bb"}
+
+
+class TestPluginActionsDispatch:
+    def test_each_action_returns_the_snapshot_with_the_rows_and_calls_the_host(
+        self, plugin_controller, plugin_host, sessions,
+    ):
+        client = create_app(plugin_controller, sessions=sessions)
+        client = TestClient(client, base_url=ORIGIN)
+        csrf = _authed(client, sessions)
+
+        for action, body, called in [
+            ("rescan_plugins", {}, "rescan"),
+            ("inspect_plugin", {"name": "demo"}, "inspect"),
+            ("enable_plugin", _ENABLE_BODY, "enable"),
+            ("disable_plugin", {"name": "demo"}, "disable"),
+            ("purge_plugin_data", {"name": "demo"}, "purge"),
+            ("revoke_plugin_approval", {"name": "demo", "approval_id": "ap1"}, "revoke_approval"),
+        ]:
+            r = client.post(f"/api/settings/{action}", json={**body, "csrf": csrf})
+            assert r.status_code == 200, action
+            assert r.json()["plugins"][0]["name"] == "demo", action
+            assert plugin_host.submitted[-1] == called, action
+
+    def test_a_missing_argument_is_a_bad_request(self, plugin_controller, sessions):
+        client = TestClient(create_app(plugin_controller, sessions=sessions), base_url=ORIGIN)
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/enable_plugin", json={"name": "demo", "csrf": csrf})
+
+        assert r.status_code == 400
+
+
+class TestEnablePluginSensitivity:
+    def test_enable_and_purge_are_sensitive_the_rest_are_not(self):
+        assert {"enable_plugin", "purge_plugin_data"} <= _SENSITIVE_ACTIONS
+        assert {"rescan_plugins", "inspect_plugin", "disable_plugin", "revoke_plugin_approval"} <= _NON_SENSITIVE_ACTIONS
+        assert "revoke_plugin_approval" not in _SENSITIVE_ACTIONS
+
+    def test_requires_step_up_and_human_session(self, plugin_controller, plugin_host, sessions):
+        # Without a human session the action is refused before anything else...
+        guarded = TestClient(
+            create_app(plugin_controller, sessions=sessions, require_human_session=True), base_url=ORIGIN,
+        )
+        csrf = _authed(guarded, sessions)
+        refused = guarded.post("/api/settings/enable_plugin", json={**_ENABLE_BODY, "csrf": csrf})
+        assert refused.status_code == 403
+        assert refused.json()["error"] == "human_session_required"
+        assert plugin_host.submitted == []
+
+        # ...and with one, it still needs a passkey.
+        stepped = _step_up_client(
+            plugin_controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(stepped, sessions)
+        gated = stepped.post("/api/settings/enable_plugin", json={**_ENABLE_BODY, "csrf": csrf})
+        assert gated.status_code == 403
+        assert gated.json()["error"] == "passkey_enrollment_required"
+        assert plugin_host.submitted == []
+
+
+class TestPurgePluginSensitivity:
+    def test_requires_step_up_and_human_session(self, plugin_controller, plugin_host, sessions):
+        guarded = TestClient(
+            create_app(plugin_controller, sessions=sessions, require_human_session=True), base_url=ORIGIN,
+        )
+        csrf = _authed(guarded, sessions)
+        refused = guarded.post("/api/settings/purge_plugin_data", json={"name": "demo", "csrf": csrf})
+        assert refused.status_code == 403 and refused.json()["error"] == "human_session_required"
+
+        stepped = _step_up_client(
+            plugin_controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(stepped, sessions)
+        gated = stepped.post("/api/settings/purge_plugin_data", json={"name": "demo", "csrf": csrf})
+        assert gated.status_code == 403
+        assert plugin_host.submitted == []
+
+
+class TestDisablePluginIsNotSensitive:
+    def test_no_passkey_and_no_human_session_needed(self, plugin_controller, plugin_host, sessions):
+        stepped = _step_up_client(
+            plugin_controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(stepped, sessions)
+
+        for action in ("disable_plugin", "inspect_plugin"):
+            r = stepped.post(f"/api/settings/{action}", json={"name": "demo", "csrf": csrf})
+            assert r.status_code == 200, action
+        assert stepped.post("/api/settings/rescan_plugins", json={"csrf": csrf}).status_code == 200
+
+        unattested = TestClient(
+            create_app(plugin_controller, sessions=sessions, require_human_session=True), base_url=ORIGIN,
+        )
+        csrf = sessions.create(provenance=PROVENANCE_UNATTESTED)
+        unattested.cookies.set(SESSION_COOKIE, csrf)
+        r = unattested.post("/api/settings/disable_plugin", json={"name": "demo", "csrf": csrf})
+        assert r.status_code == 200
+
+
+class TestPurgeConfirmInTheBridge:
+    def test_the_shim_asks_before_purging(self):
+        shim = rs._settings_bridge_shim(csrf="c", repo_url="https://example.com", nonce="n")
+
+        assert "purge_plugin_data" in shim and "window.confirm(" in shim.split("purge_plugin_data", 1)[1].split("quit_app", 1)[0]
 
 
 class TestOrgConfigUpload:

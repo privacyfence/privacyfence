@@ -9,13 +9,16 @@ from __future__ import annotations
 import sys
 
 import pytest
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
 from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
-from privacyfence.web.csp import build_csp
+from privacyfence.plugins import pages as plugin_pages
+from privacyfence.web.csp import build_csp, set_frame_self, set_plugin_embed
 from privacyfence.web.server import (
     DEFAULT_PORT,
+    SHUTDOWN_GRACE_SECONDS,
     WebServer,
     _local_principal_resolver,
     _parse_host_header,
@@ -446,6 +449,192 @@ class TestSecurityHeadersMiddlewareReplacesNotExtends:
         assert "default-src 'none'" in csp_values[0]
 
 
+class _PageHost:
+    def __init__(self):
+        self.calls = []
+
+    async def web_request(self, name, path, query, principal):
+        self.calls.append((name, path))
+        return {"status": 200, "headers": {"content-type": "text/html"}, "body": "<p>hi</p>"}
+
+
+def _route_paths(app) -> set[str]:
+    """Walk the middleware chain down to the Starlette app and list its route paths."""
+    seen = 0
+    while not hasattr(app, "routes") and seen < 20:
+        app = getattr(app, "_app", None) or getattr(app, "app", None)
+        seen += 1
+    return {getattr(route, "path", "") for route in app.routes}
+
+
+class TestPluginPagesSandboxCsp:
+    """The plugin-page branch of the security-header middleware (ADR 0124): every response under
+    /plugins/ gets the sandbox CSP and private, no-store, and no other path changes."""
+
+    SANDBOX = (
+        "sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; "
+        "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+
+    def _client(self, host=None):
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions, plugin_host=host or _PageHost())
+        client = TestClient(app, base_url="http://localhost")
+        client.cookies.set(SESSION_COOKIE, sessions.create(provenance=PROVENANCE_HUMAN))
+        return client
+
+    def test_sandbox_csp_under_plugins(self):
+        r = self._client().get("/plugins/today/")
+        assert r.status_code == 200
+        assert r.headers.get_list("content-security-policy") == [self.SANDBOX]
+        assert r.headers.get_list("cache-control") == ["private, no-store"]
+        assert r.headers["x-frame-options"] == "DENY"
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "no-referrer"
+        # The headers the middleware sets on every path stay.
+        assert r.headers["cross-origin-opener-policy"] == "same-origin"
+        assert "camera=()" in r.headers["permissions-policy"]
+
+    def test_sandbox_csp_on_an_unrouted_plugins_path_too(self):
+        r = self._client().get("/plugins/")
+        assert r.status_code == 404
+        assert r.headers["content-security-policy"] == self.SANDBOX
+
+    @pytest.mark.parametrize("path", ["/approvals", "/plugins", "/pluginsx/today/", "/settings/plugins/x", "/"])
+    def test_other_paths_keep_the_app_csp(self, path):
+        r = self._client().get(path)
+        csp = r.headers["content-security-policy"]
+        assert "sandbox" not in csp
+        assert "default-src 'none'" in csp
+        assert r.headers.get("cache-control") != "private, no-store"
+
+    def test_middleware_alone_branches_on_the_path(self):
+        async def app(scope, receive, send):
+            response = JSONResponse({"ok": True}, headers={"Content-Security-Policy": "default-src *"})
+            await response(scope, receive, send)
+
+        client = TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
+        assert client.get("/plugins/x/").headers.get_list("content-security-policy") == [self.SANDBOX]
+        other = client.get("/x/plugins/").headers.get_list("content-security-policy")
+        assert len(other) == 1
+        assert "default-src 'none'" in other[0]
+
+    def test_local_app_mounts_the_plugin_routes(self):
+        app = build_app(WebApprovalUI(), plugin_host=_PageHost())
+        assert {"/plugins/{name}", "/plugins/{name}/{path:path}"} <= _route_paths(app)
+
+    def test_org_app_has_no_plugins_route(self, tmp_path, monkeypatch):
+        from privacyfence import org_identity as oi
+        from privacyfence.web.oauth_provider import OrgOAuthProvider
+        from privacyfence.web.org_session import OrgSessionStore
+        from privacyfence.web.server import OrgAuth
+
+        issuer = "https://pf.example.com"
+        idp = oi.IdpConfig(
+            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
+            authorization_endpoint="https://idp.example.com/authorize",
+            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
+        )
+        monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "c.json"))
+        monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "r.json"))
+        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer}/oauth/idp/callback")
+        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer)
+        host = _PageHost()
+
+        app = build_app(WebApprovalUI(), org=org, plugin_host=host, allowed_hosts=frozenset({"pf.example.com"}))
+
+        assert not any(path.startswith("/plugins") for path in _route_paths(app))
+        r = TestClient(app, base_url=issuer).get("/plugins/today/")
+        assert r.status_code == 404
+        assert host.calls == []
+
+
+def _flagging_app(*flags):
+    """An app behind the middleware that sets the given web/csp.py flags on its response, the way
+    a route would."""
+    async def app(scope, receive, send):
+        request = Request(scope)
+        for flag in flags:
+            flag(request)
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    return app
+
+
+def _csp_directives(csp: str) -> dict[str, str]:
+    return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
+
+
+class TestPluginEmbed:
+    """The embed flag swaps exactly the plugin page's framing headers, for that response only."""
+
+    @staticmethod
+    def _client(app):
+        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
+
+    def test_flag_gives_the_embedded_csp_and_sameorigin(self):
+        r = self._client(_flagging_app(set_plugin_embed)).get("/plugins/echo/approval")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP_EMBEDDED]
+        assert r.headers.get_list("x-frame-options") == ["SAMEORIGIN"]
+        assert r.headers["cache-control"] == "private, no-store"
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "no-referrer"
+        assert r.headers["cross-origin-opener-policy"] == "same-origin"
+
+    def test_no_flag_keeps_the_sandbox_and_deny(self):
+        r = self._client(_flagging_app()).get("/plugins/echo/approval")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
+
+    def test_flag_outside_plugins_changes_nothing(self):
+        r = self._client(_flagging_app(set_plugin_embed)).get("/approvals")
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
+        directives = _csp_directives(r.headers["content-security-policy"])
+        assert directives["frame-src"] == "data:"
+        assert directives["frame-ancestors"] == "'none'"
+
+    def test_flag_does_not_outlive_its_response(self):
+        calls = []
+
+        async def app(scope, receive, send):
+            if not calls:
+                set_plugin_embed(Request(scope))
+            calls.append(1)
+            await JSONResponse({"ok": True})(scope, receive, send)
+
+        client = self._client(app)
+        assert client.get("/plugins/echo/approval").headers["content-security-policy"] == plugin_pages.CSP_EMBEDDED
+        second = client.get("/plugins/echo/approval")
+        assert second.headers["content-security-policy"] == plugin_pages.CSP
+        assert second.headers["x-frame-options"] == "DENY"
+
+
+class TestCardFrameSelf:
+    """The frame-self flag adds 'self' to frame-src for that response, and nothing else."""
+
+    @staticmethod
+    def _client(app):
+        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
+
+    def test_flag_adds_self_to_frame_src_only(self):
+        framed = self._client(_flagging_app(set_frame_self)).get("/approvals/abc")
+        plain = self._client(_flagging_app()).get("/approvals/abc")
+        framed_directives = _csp_directives(framed.headers["content-security-policy"])
+        plain_directives = _csp_directives(plain.headers["content-security-policy"])
+        assert framed_directives.pop("frame-src") == "data: 'self'"
+        assert plain_directives.pop("frame-src") == "data:"
+        # The nonce differs per response; every other directive is the same.
+        framed_directives.pop("script-src"), framed_directives.pop("style-src-elem")
+        plain_directives.pop("script-src"), plain_directives.pop("style-src-elem")
+        assert framed_directives == plain_directives
+        assert framed.headers.get_list("x-frame-options") == ["DENY"]
+
+    def test_flag_on_a_plugin_path_changes_nothing(self):
+        r = self._client(_flagging_app(set_frame_self)).get("/plugins/echo/approval")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
+
+
 class TestBuildCsp:
     def test_same_nonce_appears_in_every_nonce_source(self):
         csp = build_csp("the-nonce")
@@ -508,6 +697,18 @@ class TestWebServerConstruction:
             mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok",
         )
         assert server.mcp_url == "http://localhost:1234/mcp"
+
+    def test_plugin_host_is_stored_on_the_server_and_the_app(self):
+        host = object()
+        server = WebServer(WebApprovalUI(), port=0, plugin_host=host)
+        assert server.plugin_host is host
+        app = build_app(WebApprovalUI(), plugin_host=host)
+        while not hasattr(app, "state"):
+            app = app._app  # unwrap the middleware layers to the Starlette app
+        assert app.state.plugin_host is host
+
+    def test_plugin_host_defaults_to_none(self):
+        assert WebServer(WebApprovalUI(), port=0).plugin_host is None
 
     def test_build_app_requires_a_token_or_a_verifier_for_an_mcp_dispatcher(self):
         from privacyfence.web.mcp_dispatch import McpDispatcher
@@ -929,6 +1130,41 @@ class TestMcpUrlFile:
             assert not (tmp_path / "mcp_url").exists()
         finally:
             server.stop()
+
+
+class TestStop:
+    def test_an_open_event_stream_does_not_keep_the_server_running(self, tmp_path, monkeypatch):
+        import socket
+        import time
+
+        from privacyfence import paths
+        from tests.fixtures.plugins.echo.harness import free_port, wait_until_connectable
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        port = free_port()
+        server = WebServer(WebApprovalUI(), host="localhost", port=port)
+        server.start()
+        wait_until_connectable("localhost", port)
+        session = server.sessions.create(provenance=PROVENANCE_HUMAN)
+        with socket.create_connection(("localhost", port)) as stream:
+            stream.sendall((
+                f"GET /api/state/stream HTTP/1.1\r\nHost: localhost:{port}\r\n"
+                f"Cookie: {SESSION_COOKIE}={session}\r\n\r\n"
+            ).encode())
+            assert stream.recv(64).startswith(b"HTTP/1.1 200")
+
+            started = time.monotonic()
+            server.stop()
+
+            assert server.stopped
+            assert time.monotonic() - started < SHUTDOWN_GRACE_SECONDS + 3
+            # The server closed the stream rather than leaving the client waiting on it.
+            stream.settimeout(5)
+            while stream.recv(4096):
+                pass
+
+    def test_a_server_never_started_counts_as_stopped(self):
+        assert WebServer(WebApprovalUI(), host="localhost", port=0).stopped
 
 
 # --------------------------------------------------------------------------- #

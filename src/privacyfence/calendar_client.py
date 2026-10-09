@@ -439,6 +439,37 @@ class CalendarClient:
         logger.info("list_event_colors returned %d color(s)", len(colors))
         return colors
 
+    def list_events_page(
+        self,
+        calendar_id: str,
+        page_size: int = 250,
+        time_min: str = "",
+        time_max: str = "",
+        page_token: str | None = None,
+        query: str = "",
+    ) -> tuple[list[CalendarEvent], str | None]:
+        """One provider request: a page of events and the next page token (None when last)."""
+        kwargs: dict[str, Any] = {
+            "calendarId": calendar_id,
+            "singleEvents": True,
+            "orderBy": "startTime",
+            "maxResults": page_size,
+        }
+        if time_min:
+            kwargs["timeMin"] = time_min
+        if time_max:
+            kwargs["timeMax"] = time_max
+        if query:
+            kwargs["q"] = query
+        if page_token:
+            kwargs["pageToken"] = page_token
+        try:
+            result = self._get_service().events().list(**kwargs).execute()
+        except HttpError as exc:
+            raise CalendarClientError(f"list_events_page({calendar_id}) failed: {exc}") from exc
+        events = [self._parse_event(raw, calendar_id) for raw in result.get("items", [])]
+        return events, result.get("nextPageToken") or None
+
     def list_events(
         self,
         calendar_id: str,
@@ -449,30 +480,18 @@ class CalendarClient:
     ) -> list[CalendarEvent]:
         """List events from a calendar."""
         max_results = max(1, min(int(max_results), 250))
-        kwargs: dict[str, Any] = {
-            "calendarId": calendar_id,
-            "singleEvents": True,
-            "orderBy": "startTime",
-        }
-        if time_min:
-            kwargs["timeMin"] = time_min
-        if time_max:
-            kwargs["timeMax"] = time_max
-        if query:
-            kwargs["q"] = query
-        service = self._get_service()
         events: list[CalendarEvent] = []
         page_token: str | None = None
         for _ in range(MAX_PAGES):
-            kwargs["maxResults"] = min(max_results - len(events), 250)
-            if page_token:
-                kwargs["pageToken"] = page_token
-            try:
-                result = service.events().list(**kwargs).execute()
-            except HttpError as exc:
-                raise CalendarClientError(f"list_events({calendar_id}) failed: {exc}") from exc
-            events.extend(self._parse_event(raw, calendar_id) for raw in result.get("items", []))
-            page_token = result.get("nextPageToken")
+            page, page_token = self.list_events_page(
+                calendar_id,
+                min(max_results - len(events), 250),
+                time_min,
+                time_max,
+                page_token,
+                query,
+            )
+            events.extend(page)
             if len(events) >= max_results or not page_token:
                 break
         events = events[:max_results]

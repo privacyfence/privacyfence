@@ -310,28 +310,42 @@ class JiraClient:
     # Issues
     # ------------------------------------------------------------------ #
 
+    def search_issues_page(
+        self, jql: str, page_size: int = 100, page_token: str | None = None
+    ) -> tuple[list[JiraIssue], str | None]:
+        """One provider request: a page of issues and the next page token (None when last)."""
+        if not jql:
+            raise JiraClientError("search_issues_page requires a non-empty JQL query")
+        try:
+            result = self._request(
+                self._client.enhanced_jql,
+                jql,
+                nextPageToken=page_token,
+                limit=page_size,
+            )
+        except Exception as exc:
+            raise JiraClientError(f"search_issues_page failed: {exc}") from exc
+        issues = [self._parse_issue(i) for i in result.get("issues") or []]
+        next_token = None if result.get("isLast", True) else result.get("nextPageToken")
+        return issues, next_token or None
+
     def search_issues(self, jql: str, max_results: int = 20) -> list[JiraIssue]:
         if not jql:
             raise JiraClientError("search_issues requires a non-empty JQL query")
         max_results = max(1, min(max_results, 500))
-        raw_issues: list[Any] = []
+        issues: list[JiraIssue] = []
         page_token: str | None = None
         try:
             for _ in range(MAX_PAGES):
-                remaining = max_results - len(raw_issues)
-                result = self._request(
-                    self._client.enhanced_jql,
-                    jql,
-                    nextPageToken=page_token,
-                    limit=min(remaining, 100),
+                page, page_token = self.search_issues_page(
+                    jql, min(max_results - len(issues), 100), page_token
                 )
-                raw_issues.extend(result.get("issues") or [])
-                page_token = result.get("nextPageToken")
-                if result.get("isLast", True) or not page_token or len(raw_issues) >= max_results:
+                issues.extend(page)
+                if not page_token or len(issues) >= max_results:
                     break
-        except Exception as exc:
+        except JiraClientError as exc:
             raise JiraClientError(f"search_issues failed: {exc}") from exc
-        issues = [self._parse_issue(i) for i in raw_issues[:max_results]]
+        issues = issues[:max_results]
         logger.info("search_issues jql=%r returned %d issue(s)", jql, len(issues))
         return issues
 

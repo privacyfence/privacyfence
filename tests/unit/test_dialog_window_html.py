@@ -23,6 +23,7 @@ from privacyfence.dialog_window_html import (
     PICKER_WIDTH,
     build_choice_html,
     build_confirmation_html,
+    build_plugin_approval_html,
 )
 
 
@@ -109,6 +110,48 @@ class TestBuildConfirmationHtml:
             title="T", message_lines=["m"], cancel_label="Cancel", confirm_label="Confirm",
         )
         assert "window.webkit.messageHandlers.pf.postMessage" in html
+
+
+class TestConfirmationBodyBlocks:
+    """``body_blocks``: a plugin confirmation's typed preview, rendered by the
+    card's own preview renderer between the message and the buttons."""
+
+    def _html(self, blocks):
+        return build_confirmation_html(
+            title="Today: Publish", message_lines=["m"], cancel_label="Deny", confirm_label="Approve",
+            body_blocks=blocks,
+        )
+
+    def test_blocks_render_between_message_and_buttons(self):
+        html = self._html([
+            {"type": "heading", "label": "Note"},
+            {"type": "field", "label": "To", "value": "team"},
+            {"type": "code", "text": "x = 1", "language": ""},
+            {"type": "diff", "text": "+added"},
+        ])
+        assert 'class="pf-dialog-blocks"' in html
+        assert html.index('class="pf-dialog-message"') < html.index('class="pf-dialog-blocks"')
+        assert html.index('class="pf-dialog-blocks"') < html.index('class="pf-btn-row"')
+        assert ">Note</div>" in html
+        assert '<span class="pf-preview-label">To:</span>' in html
+        assert '<pre class="pf-code"><code>x = 1</code></pre>' in html
+        assert '<span class="pf-diff-add">+added</span>' in html
+
+    def test_blocks_are_escaped(self):
+        html = self._html([
+            {"type": "text", "text": "<script>window.pwned=1</script>"},
+            {"type": "field", "label": "<b>L</b>", "value": "<img src=x onerror=alert(1)>"},
+            {"type": "table", "headers": ["<i>h</i>"], "rows": [["<u>c</u>"]]},
+        ])
+        assert "window.pwned=1</script>" not in html
+        assert "<img" not in html
+        for tag in ("<b>", "<i>", "<u>"):
+            assert tag not in html
+        assert "&lt;script&gt;window.pwned=1&lt;/script&gt;" in html
+
+    def test_no_blocks_renders_no_blocks_container(self):
+        assert 'class="pf-dialog-blocks"' not in self._html(None)
+        assert 'class="pf-dialog-blocks"' not in self._html([])
 
 
 class TestBuildChoiceHtml:
@@ -207,3 +250,82 @@ class TestResponsiveViewport:
     def test_choice_declares_a_device_width_viewport(self):
         html = build_choice_html(title="T", prompt="p", options=["a"])
         assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+
+
+class TestBuildPluginApprovalHtml:
+    FIELDS = [
+        ("Plugin", "Data Lake (datalake)"),
+        ("Kind", "processor-code"),
+        ("Subject", "pipeline/clean.py"),
+        ("Digest", "sha256:" + "a" * 64),
+    ]
+
+    def _html(self, **overrides) -> str:
+        kwargs = dict(
+            title="Data Lake: Approve the cleaner", fields=self.FIELDS,
+            body_blocks=[{"type": "text", "text": "Cleans rows"}],
+            frame_src="/plugins/datalake/approval?pf_approval=abc", frame_title="Page from Data Lake",
+        )
+        kwargs.update(overrides)
+        return build_plugin_approval_html(**kwargs)
+
+    def test_fields_render_with_the_full_digest_in_code_style(self):
+        html = self._html()
+        for label, value in self.FIELDS:
+            assert f'<th scope="row">{label}</th>' in html
+            assert value in html
+        assert f'<code class="pf-code">sha256:{"a" * 64}</code>' in html
+
+    def test_fields_are_escaped(self):
+        html = self._html(
+            title="<b>t</b>", fields=[("Plugin", "<img src=x onerror=alert(1)>"), ("Subject", '"><script>')],
+        )
+        assert "<img src=x" not in html
+        assert "&lt;img src=x onerror=alert(1)&gt;" in html
+        assert "&quot;&gt;&lt;script&gt;" in html
+        assert "<b>t</b>" not in html
+
+    def test_fields_and_blocks_come_before_the_frame(self):
+        html = self._html()
+        fields_at = html.index("pf-approval-fields")
+        blocks_at = html.index("Cleans rows")
+        frame_at = html.index("<iframe")
+        buttons_at = html.index('data-pf-action="confirm"')
+        assert fields_at < blocks_at < frame_at < buttons_at
+        # The fields are never inside the frame: the frame element is empty.
+        assert html[frame_at:].startswith("<iframe") and "></iframe>" in html[frame_at:frame_at + 400]
+        assert "pf-approval-fields" not in html[frame_at:]
+
+    def test_frame_attributes_are_exact(self):
+        html = self._html()
+        assert (
+            '<iframe class="pf-plugin-frame" sandbox="allow-scripts" '
+            'src="/plugins/datalake/approval?pf_approval=abc" referrerpolicy="no-referrer" '
+            'title="Page from Data Lake" loading="eager"></iframe>'
+        ) in html
+        assert "allow-same-origin" not in html
+        assert html.count("<iframe") == 1
+
+    def test_frame_src_and_title_are_escaped(self):
+        html = self._html(frame_src='/plugins/x/a"onload="alert(1)&b', frame_title='"><x>')
+        assert 'src="/plugins/x/a&quot;onload=&quot;alert(1)&amp;b"' in html
+        assert 'title="&quot;&gt;&lt;x&gt;"' in html
+
+    def test_no_frame_without_frame_src(self):
+        html = self._html(frame_src="")
+        assert "<iframe" not in html
+        assert "pf-plugin-frame" not in html.split("</style>")[1]
+
+    def test_deny_and_approve_buttons_with_approve_primary(self):
+        body = self._html().split("<body>")[1].split("<script")[0]
+        assert ">Deny<" in body and ">Approve<" in body
+        assert body.count("data-pf-primary") == 1
+        assert body.index("data-pf-primary") > body.index('data-pf-action="cancel"')
+
+    def test_no_blocks_renders_no_blocks_container(self):
+        assert 'class="pf-dialog-blocks"' not in self._html(body_blocks=[])
+
+    def test_style_and_script_share_a_nonce(self):
+        html = self._html()
+        nonce = extract_csp_nonce(html)
+        assert nonce and f'<style nonce="{nonce}">' in html and f'<script nonce="{nonce}">' in html

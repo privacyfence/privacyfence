@@ -114,6 +114,7 @@ from ..webauthn_stepup import StepUpChallengeStore
 from ..web_approval_ui import WebApprovalUI
 from . import approval_step_up, org_session, step_up_decide
 from .csp import nonce_for as _csp_nonce_for
+from .csp import set_frame_self as _set_csp_frame_self
 from .csp import set_nonce as _set_csp_nonce
 from .routes_security import PF_WEBAUTHN_JS
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
@@ -566,6 +567,10 @@ def _build_route_list(
         # <style>/<script> tags outright.
         nonce = approval_window_html.extract_csp_nonce(card.html) or _csp_nonce_for(request)
         _set_csp_nonce(request, nonce)
+        if card.frame_src:
+            # A plugin approval card frames the plugin's own page from this origin; only this
+            # card's response lets frame-src name 'self'.
+            _set_csp_frame_self(request)
         shim = bridge_shim(
             decide_url=f"/api/approvals/{card.id}/decide", csrf=csrf,
             stepup_options_url=f"/api/approvals/{card.id}/stepup/idp", nonce=nonce,

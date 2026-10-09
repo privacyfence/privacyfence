@@ -1,0 +1,1296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrivacyFence plugin protocol",
+  "description": "Messages exchanged between the PrivacyFence daemon and an out-of-process plugin, JSON-RPC 2.0, one object per line. Receivers ignore unknown fields, except Block and Manifest.",
+  "x-protocol-version": "1.1.0",
+  "x-limits": {
+    "MAX_LINE_BYTES": 16777216,
+    "MAX_IN_FLIGHT": 16,
+    "INLINE_RESULT_BYTES": 100000,
+    "MAX_PREVIEW_BYTES": 65536,
+    "MAX_PREVIEW_BLOCKS": 50,
+    "MAX_CELL_CHARS": 4096,
+    "MAX_TITLE_CHARS": 120,
+    "MAX_EFFECT_CHARS": 200,
+    "MAX_DESCRIPTION_CHARS": 1024,
+    "MAX_SOURCE_RESULT_BYTES": 12582912,
+    "DRIVE_CHUNK_BYTES": 8388608,
+    "MAX_PAGE_BODY_BYTES": 8388608,
+    "MAX_PAGE_PATH_CHARS": 512,
+    "MAX_TOOLS": 64,
+    "MAX_SCOPE_VALUES": 100,
+    "MAX_SCOPE_VALUE_CHARS": 200,
+    "MCP_TOOL_NAME_MAX": 64,
+    "CONFIRM_AWAIT_MAX_MS": 300000,
+    "SOURCE_PAGE_BUDGET_BYTES": 12517376,
+    "CURSOR_MAX_CHARS": 4096,
+    "JIRA_PAGE_SIZE_MAX": 100,
+    "CALENDAR_PAGE_SIZE_MAX": 250,
+    "SUBJECT_ID_MAX_CHARS": 200,
+    "OUTPUT_READ_PAGE_BYTES": 90000,
+    "OUTPUT_LIST_PAGE": 200,
+    "OUTPUT_MAX_DEPTH": 8,
+    "TIMEOUT_SECONDS": {
+      "initialize": 10.0,
+      "tool.prepare": 30.0,
+      "tool.execute": 60.0,
+      "web.request": 10.0,
+      "storage.purge": 30.0,
+      "source.call": 120.0,
+      "confirm.request": 5.0,
+      "approval.request": 5.0
+    }
+  },
+  "$defs": {
+    "PrincipalContext": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "storage_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Org mode only. Local mode rejects it with org_only_field."
+        },
+        "output_dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only for a plugin whose manifest sets outputs: true. The plugin's output directory for this principal."
+        },
+        "output_types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "application/json",
+              "text/csv",
+              "text/html",
+              "text/plain",
+              "text/markdown"
+            ]
+          },
+          "description": "Present only for a plugin whose manifest sets outputs: true. The media types the plugin may publish."
+        }
+      },
+      "required": [
+        "id",
+        "display_name",
+        "storage_dir"
+      ]
+    },
+    "ScopeType": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,30}$"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ToolDef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,40}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "gate": {
+          "enum": [
+            "auto",
+            "review",
+            "popup"
+          ]
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,30}$"
+          }
+        },
+        "effect": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "parameters",
+        "read_only",
+        "destructive",
+        "gate"
+      ]
+    },
+    "Block": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "heading"
+            },
+            "text": {
+              "type": "string"
+            },
+            "level": {
+              "enum": [
+                2,
+                3
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "fields"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 50
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "table"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key",
+                  "label"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 20
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "description": "Only keys declared in columns."
+              }
+            }
+          },
+          "required": [
+            "type",
+            "columns",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "code"
+            },
+            "text": {
+              "type": "string"
+            },
+            "language": {
+              "type": "string",
+              "pattern": "^[a-z0-9+#-]{1,20}$"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "diff"
+            },
+            "format": {
+              "const": "unified"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "format",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "enum": [
+            -32700,
+            -32603,
+            -32602,
+            -32601,
+            -32600,
+            -32014,
+            -32013,
+            -32012,
+            -32011,
+            -32010,
+            -32009,
+            -32008,
+            -32007,
+            -32006,
+            -32005,
+            -32004,
+            -32003,
+            -32002,
+            -32001
+          ]
+        },
+        "message": {
+          "enum": [
+            "parse_error",
+            "invalid_request",
+            "method_not_found",
+            "invalid_params",
+            "internal_error",
+            "operation_not_allowed",
+            "connector_unavailable",
+            "unknown_principal",
+            "payload_too_large",
+            "upstream_error",
+            "org_only_field",
+            "confirmation_refused",
+            "unknown_tool",
+            "invalid_blocks",
+            "version_mismatch",
+            "unknown_call",
+            "digest_mismatch",
+            "timeout",
+            "introspection_only"
+          ]
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "enum": [
+                "parse_error",
+                "invalid_request",
+                "method_not_found",
+                "invalid_params",
+                "internal_error",
+                "operation_not_allowed",
+                "connector_unavailable",
+                "unknown_principal",
+                "payload_too_large",
+                "upstream_error",
+                "org_only_field",
+                "confirmation_refused",
+                "unknown_tool",
+                "invalid_blocks",
+                "version_mismatch",
+                "unknown_call",
+                "digest_mismatch",
+                "timeout",
+                "introspection_only"
+              ]
+            },
+            "detail": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "detail",
+            "retryable"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ]
+    },
+    "Manifest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,30}$",
+          "not": {
+            "enum": [
+              "apps_script",
+              "calendar",
+              "confluence",
+              "contacts",
+              "drive",
+              "gmail",
+              "jira",
+              "mcp",
+              "plugin",
+              "plugins",
+              "privacyfence",
+              "salesforce",
+              "settings",
+              "slack",
+              "tasks",
+              "telegram"
+            ]
+          }
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$"
+        },
+        "protocol": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "source_operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "salesforce.report_run",
+              "jira.search",
+              "drive.download",
+              "sheets.get_values",
+              "confluence.get_page",
+              "calendar.list_events"
+            ]
+          }
+        },
+        "tools": {
+          "const": "dynamic"
+        },
+        "max_gate_floor": {
+          "enum": [
+            "review",
+            "auto"
+          ]
+        },
+        "pages": {
+          "type": "boolean"
+        },
+        "service_credentials": {
+          "type": "boolean"
+        },
+        "outputs": {
+          "type": "boolean"
+        },
+        "output_types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "application/json",
+              "text/csv",
+              "text/html",
+              "text/plain",
+              "text/markdown"
+            ]
+          },
+          "description": "Only allowed with outputs: true. Default: application/json and text/csv."
+        }
+      },
+      "required": [
+        "name",
+        "display_name",
+        "version",
+        "protocol",
+        "command",
+        "tools"
+      ],
+      "additionalProperties": false
+    },
+    "InitializeParams": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "enum": [
+            "run",
+            "introspect"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "local",
+            "org"
+          ]
+        },
+        "daemon": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version"
+          ]
+        },
+        "plugin": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "manifest_version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "manifest_version"
+          ]
+        },
+        "data_dir": {
+          "type": "string"
+        },
+        "principals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PrincipalContext"
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_line_bytes": {
+              "type": "integer"
+            },
+            "max_in_flight": {
+              "type": "integer"
+            },
+            "inline_result_bytes": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max_line_bytes",
+            "max_in_flight",
+            "inline_result_bytes"
+          ]
+        }
+      },
+      "required": [
+        "protocol_version",
+        "purpose",
+        "mode",
+        "daemon",
+        "plugin",
+        "data_dir",
+        "principals",
+        "limits"
+      ]
+    },
+    "InitializeResult": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "version"
+          ]
+        },
+        "scope_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScopeType"
+          },
+          "maxItems": 20
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolDef"
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "protocol_version",
+        "plugin",
+        "tools"
+      ]
+    },
+    "ToolsChangedParams": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolDef"
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "tools"
+      ]
+    },
+    "ToolPrepareParams": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "principal": {
+          "$ref": "#/$defs/PrincipalContext"
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "object"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "call_id",
+        "principal",
+        "tool",
+        "args",
+        "reason"
+      ]
+    },
+    "ToolPrepareResult": {
+      "type": "object",
+      "properties": {
+        "preview": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          },
+          "maxItems": 50
+        },
+        "payload": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          },
+          "description": "Required for read-only tools, forbidden for others."
+        },
+        "scopes": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,30}$"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 100
+          }
+        }
+      },
+      "required": [
+        "preview"
+      ]
+    },
+    "ToolExecuteParams": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "principal": {
+          "$ref": "#/$defs/PrincipalContext"
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "object"
+        },
+        "args_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "approval": {
+          "type": "object",
+          "properties": {
+            "approval_id": {
+              "type": "string"
+            },
+            "decision": {
+              "const": "approved"
+            },
+            "via": {
+              "enum": [
+                "card",
+                "rule",
+                "auto"
+              ]
+            },
+            "decided_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "approval_id",
+            "decision",
+            "via",
+            "decided_at"
+          ]
+        }
+      },
+      "required": [
+        "call_id",
+        "principal",
+        "tool",
+        "args",
+        "args_digest",
+        "approval"
+      ]
+    },
+    "ToolExecuteResult": {
+      "type": "object",
+      "properties": {
+        "result": {},
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "SourceCallParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "enum": [
+            "salesforce.report_run",
+            "jira.search",
+            "drive.download",
+            "sheets.get_values",
+            "confluence.get_page",
+            "calendar.list_events"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "description": "Operation parameters. Every paged operation also accepts cursor (the next_cursor of an earlier result of the same operation with the same other parameters, at most 4096 characters), and jira.search and calendar.list_events accept page_size."
+        },
+        "credential": {
+          "description": "Org mode only. Local mode rejects it with org_only_field."
+        }
+      },
+      "required": [
+        "principal",
+        "operation"
+      ]
+    },
+    "SourceCallResult": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "data": {},
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "data",
+        "bytes",
+        "next_cursor"
+      ]
+    },
+    "ConfirmRequestParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "preview": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          },
+          "maxItems": 50
+        },
+        "require_step_up": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "principal",
+        "kind",
+        "title",
+        "preview"
+      ]
+    },
+    "ConfirmRequestResult": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "expires_at"
+      ]
+    },
+    "ConfirmAwaitParams": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000
+        }
+      },
+      "required": [
+        "approval_id"
+      ]
+    },
+    "ConfirmAwaitResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "approved",
+            "denied",
+            "expired"
+          ]
+        },
+        "decided_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "ApprovalRequestParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,40}$"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "No control or bidirectional characters."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "preview": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          },
+          "maxItems": 50
+        },
+        "page": {
+          "type": "string",
+          "pattern": "^/",
+          "maxLength": 512,
+          "description": "Path of the plugin's own page to embed in the card. Needs pages: true in the manifest."
+        },
+        "require_step_up": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "principal",
+        "kind",
+        "subject_id",
+        "digest",
+        "title",
+        "preview"
+      ]
+    },
+    "ApprovalRequestResult": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "approved"
+          ]
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "status"
+      ]
+    },
+    "ApprovalCheckParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,40}$"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "No control or bidirectional characters."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "principal",
+        "kind",
+        "subject_id",
+        "digest"
+      ]
+    },
+    "ApprovalCheckResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "approved",
+            "revoked",
+            "unknown"
+          ]
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decided_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "ApprovalAwaitParams": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000
+        }
+      },
+      "required": [
+        "approval_id"
+      ]
+    },
+    "ApprovalAwaitResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "approved",
+            "denied",
+            "expired"
+          ]
+        },
+        "decided_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "ApprovalRevokedParams": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,40}$"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "No control or bidirectional characters."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "approval_id",
+        "kind",
+        "subject_id",
+        "digest"
+      ]
+    },
+    "WebRequestParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "$ref": "#/$defs/PrincipalContext"
+        },
+        "method": {
+          "const": "GET"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "principal",
+        "method",
+        "path",
+        "query"
+      ]
+    },
+    "WebRequestResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "integer"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "body": {
+          "type": "string"
+        },
+        "body_encoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ],
+          "default": "utf8"
+        }
+      },
+      "required": [
+        "status",
+        "body"
+      ]
+    },
+    "StoragePurgeParams": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "enum": [
+            "all",
+            "install",
+            "principal"
+          ]
+        },
+        "principal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ]
+    },
+    "StoragePurgeResult": {
+      "type": "object",
+      "properties": {
+        "purged": {
+          "const": true
+        }
+      },
+      "required": [
+        "purged"
+      ]
+    },
+    "ConnectorStateChangedParams": {
+      "type": "object",
+      "properties": {
+        "connector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "enum": [
+            "enabled",
+            "disabled",
+            "signed_in",
+            "signed_out"
+          ]
+        },
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "connector",
+        "state",
+        "principal"
+      ]
+    },
+    "PrincipalRemovedParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "principal"
+      ]
+    },
+    "PluginDisablingParams": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "enum": [
+            "user",
+            "crash_limit",
+            "hash_changed",
+            "admin"
+          ]
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    "ShutdownParams": {
+      "type": "object",
+      "properties": {
+        "grace_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "grace_ms"
+      ]
+    }
+  }
+}
