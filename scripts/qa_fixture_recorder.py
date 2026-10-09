@@ -1067,6 +1067,13 @@ def _check_salesforce_report_paging(
             ]
             if not group["rows"]:
                 return result(False, f"no {QATEST_TAG} rows in the QA report run -- nothing safe to record")
+            for row in group["rows"]:
+                for cell in row.get("dataCells") or []:
+                    value = cell.get("value")
+                    # A User lookup (Account Owner): a real person's name and id.
+                    if isinstance(value, str) and value.startswith("005") and len(value) in (15, 18):
+                        cell["value"] = _REDACTED_ACCOUNT_ID
+                        cell["label"] = _REDACTED_NAME
             raw = deidentify_structural_fields(redact(filtered))
     except (SalesforceClientError, ReportPagingError) as exc:
         return result(False, str(exc))

@@ -1191,6 +1191,22 @@ class TestReportPagingCheck:
         assert "Real Co" not in labels
         assert len(res.raw["factMap"]["T!T"]["rows"]) == 2
 
+    def test_report_paging_check_record_redacts_user_lookup_cells(self):
+        sf = self._sf()
+        real = sf.restful.side_effect
+
+        def restful(path, params=None, method="GET", **kwargs):
+            out = real(path, params=params, method=method, **kwargs)
+            for row in out.get("factMap", {}).get("T!T", {}).get("rows", []):
+                row["dataCells"].append({"label": "Real Person", "value": "005ak00000iCxfiAAC"})
+            return out
+
+        sf.restful.side_effect = restful
+        res = self._check(sf, record=True)
+        assert res.ok, res.note
+        text = json.dumps(res.raw)
+        assert "Real Person" not in text and "005ak" not in text
+
     def test_report_paging_check_record_fails_without_qatest_rows(self):
         rows = [("Real One", "PFQA-00001"), ("Real Two", "PFQA-00002")]
         res = self._check(self._sf(rows=rows), record=True)
