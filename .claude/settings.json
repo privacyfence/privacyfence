@@ -9,14 +9,6 @@
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -fsSL https://raw.githubusercontent.com/andras-tkcs/claude-toolkit/v0.1.0/install/session-start.sh | bash"
-          }
-        ]
       }
     ]
   },

@@ -16,10 +16,9 @@ with Claude Code.
 ## Commands and skills
 
 `/make-plan`, `/implement` and `/dod` come from the devflow toolkit (`andras-tkcs/claude-toolkit`,
-pinned by `toolkit.ref` in `.claude/toolkit.yaml` and installed by the second SessionStart hook in
-`.claude/settings.json`); the behaviour described here is unchanged. The project facts they use are
-in `.claude/toolkit.yaml`; [ADR 0120](docs/adr/0120-workflow-commands-come-from-the-devflow-toolkit-pinned-by-a-session-start-hook.md)
-says why.
+enabled as plugins in the Claude Project); the behaviour described here is unchanged. The project
+facts they use are in `.claude/toolkit.yaml`;
+[ADR 0120](docs/adr/0120-workflow-commands-come-from-the-devflow-toolkit-plugins.md) says why.
 
 - `.claude/skills/steward/SKILL.md` — PrivacyFence-specific steward policy, on top of the toolkit's
   `pr-steward` skill. The workflows a session dispatches instead of running locally are
