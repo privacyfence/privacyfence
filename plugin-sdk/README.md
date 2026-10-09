@@ -57,7 +57,7 @@ so the AI receives exactly what the human saw. A tool that changes things attach
 does the work with `@greet.execute`, which receives the `Prepared` back, including its `state`.
 
 The SDK checks the arguments' digest on execute and answers `digest_mismatch` or `unknown_call`
-itself. Prepared state is kept for 15 minutes.
+itself. Prepared state is kept for 20 minutes, at most 256 at a time; the oldest goes first.
 
 Block builders (`blocks.heading`, `fields`, `table`, `text`, `code`, `diff`) validate with the same
 rules PrivacyFence applies, and raise `ValueError` on a mistake. A tool definition PrivacyFence
@@ -133,8 +133,33 @@ Pages are served read-only at `/plugins/<name>/` under a sandbox content securit
 must be self-contained**: inline its CSS, scripts and images (as `data:` URIs). The page runs in an
 opaque origin, so requests for separate files carry no session and are refused. A page is a single
 self-contained page that keeps its state in the page itself (script or `#fragment`). Other pages of
-the plugin open only from Settings or a typed URL: links between plugin pages, and links from a
+the plugin open from the page browser, Settings or a typed URL: links between plugin pages, and links from a
 plugin page back into PrivacyFence, do not carry the session and get a 404.
+
+### Page index
+
+To have PrivacyFence's page browser list your pages, register a page index:
+
+```python
+from privacyfence_plugin_sdk import PageEntry
+
+@plugin.page_index
+async def pages(ctx): return [PageEntry("/", "Home")]
+```
+
+`PluginTestHost.list_pages()` returns the entries as the daemon receives them. `types.py` has a
+`PageEntry` TypedDict for the wire shape; `privacyfence_plugin_sdk.PageEntry` is the dataclass to
+return.
+
+## Confirmations
+
+A confirmation is a card no saved rule can accept. `ctx.confirm.wait(...)` waits until it is approved,
+denied or expired:
+
+```python
+approval_id = await ctx.confirm.request("publish", "Publish the report", [blocks.text("…")])
+outcome = await ctx.confirm.wait(approval_id)   # outcome.status: approved, denied or expired
+```
 
 ## Approvals
 
@@ -147,7 +172,7 @@ ticket = await ctx.approvals.request(
     preview=[blocks.code(template_text)], page="/approval",
 )
 if ticket.status != "approved":
-    outcome = await ctx.approvals.await_(ticket.approval_id)   # waits for the human
+    outcome = await ctx.approvals.wait(ticket.approval_id)   # waits for the human, however long the card is pending
 
 if await ctx.approvals.check("template", "templates/invoice", template_text) == "approved":
     ...   # "approved", "revoked" or "unknown"
@@ -208,7 +233,7 @@ blocks and limits against the rules the SDK knows, decides each call at the simu
 from privacyfence_plugin_sdk.testing import PluginTestHost, samples
 
 async def test_the_ai_gets_what_the_card_showed():
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
         host.source.load(samples.get("calendar.list_events"))
         outcome = await host.call_tool("list_events", {"reason": "plan the day"})
         assert outcome.card_shown
@@ -227,6 +252,10 @@ Where the test host differs from PrivacyFence:
 
 - `PluginTestHost(plugin, max_gate_floor="auto")` is how a test declares the manifest's floor; the
   default is `"review"`, which refuses a tool on the `auto` gate.
+- `PluginTestHost(plugin, source_operations=(...), pages=True)` takes the manifest's `source_operations` and
+  `pages`; it checks source-call parameters as PrivacyFence does.
+- `pii=` takes a function that models the PII check, which overrides an "Always allow" rule.
+- It withholds a write result over 2,048 bytes but does not run PrivacyFence's PII detector on it.
 - It ignores a `tools.changed` the plugin sends.
 - It refuses a reserved plugin name, as PrivacyFence does, which also keeps every tool's MCP name
   clear of PrivacyFence's built-in tools.

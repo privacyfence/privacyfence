@@ -1,8 +1,12 @@
 """Stand-in plugin for supervisor tests: stdlib only, speaks the line-framed JSON-RPC protocol.
 
 Usage: ``stub_plugin.py <mode>`` with a mode of ``ok``, ``crash-on-start``, ``crash-after-init``,
-``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env``, ``wrong-name`` or
-``spawn-child`` (starts a sleeping child process and writes ``CHILD:<pid>`` to stderr).
+``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env``, ``wrong-name``,
+``stop-reading`` (answers initialize, then never reads stdin again) or
+``spawn-child`` (starts a sleeping child process and writes ``CHILD:<pid>`` to stderr) or
+``spam-stderr`` (writes about 30 KB to stderr right after the initialize result, then ``SPAM_DONE``) or
+``pages-invalid`` (answers ``pages.list`` with an entry that has no title) or
+``pages-slow`` (never answers ``pages.list``).
 """
 from __future__ import annotations
 
@@ -66,8 +70,16 @@ def main() -> int:
                 print("SOURCE_CALL:" + reply.get("error", {}).get("data", {}).get("code", "?"),
                       file=sys.stderr, flush=True)
             send({"jsonrpc": "2.0", "id": message["id"], "result": initialize_result(message.get("params", {}))})
+            if MODE == "spam-stderr":
+                for _ in range(300):
+                    print("x" * 99, file=sys.stderr)
+                print("SPAM_DONE", file=sys.stderr, flush=True)
             if MODE == "crash-after-init":
                 return 3
+            if MODE == "stop-reading":
+                while time.monotonic() < deadline:
+                    time.sleep(0.1)
+                return 2
             if MODE == "junk-stdout":
                 for _ in range(3):
                     sys.stdout.write("this is not json-rpc\n")
@@ -75,6 +87,10 @@ def main() -> int:
         elif method == "shutdown":
             if MODE != "slow-shutdown":
                 return 0
+        elif method == "pages.list" and MODE == "pages-invalid":
+            send({"jsonrpc": "2.0", "id": message["id"], "result": {"pages": [{"path": "/"}]}})
+        elif method == "pages.list" and MODE == "pages-slow":
+            continue
         elif "id" in message and method is not None:
             send({
                 "jsonrpc": "2.0",

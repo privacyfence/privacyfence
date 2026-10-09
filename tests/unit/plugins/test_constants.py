@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from privacyfence import auto_accept, settings_controller
+from privacyfence.approvals import DEFAULT_LEDGER_TTL_SECONDS, DEFAULT_PENDING_TTL_SECONDS
 from privacyfence.plugins import constants as c
 from privacyfence.web import mcp_tools
 
@@ -83,6 +84,13 @@ class TestNameHelpers:
         assert c.scope_predicate("today", "calendar") == "plugin:today:calendar"
 
 
+class TestLifetimes:
+    def test_prepared_lifetime_is_pending_plus_replay(self):
+        assert c.PENDING_CARD_SECONDS == DEFAULT_PENDING_TTL_SECONDS
+        assert c.DECISION_REPLAY_SECONDS == DEFAULT_LEDGER_TTL_SECONDS
+        assert c.PREPARED_CALL_LIFETIME_SECONDS == c.PENDING_CARD_SECONDS + c.DECISION_REPLAY_SECONDS == 1200.0
+
+
 class TestTables:
     def test_error_codes_are_unique_integers(self):
         assert len(set(c.ERROR_CODES.values())) == len(c.ERROR_CODES)
@@ -131,6 +139,21 @@ class TestProtocolOneOneConstants:
         assert c.DEFAULT_OUTPUT_TYPES == ("application/json", "text/csv")
         assert set(c.DEFAULT_OUTPUT_TYPES) <= set(c.OUTPUT_TYPES)
 
+    def test_write_result_cap(self):
+        assert c.WRITE_RESULT_MAX_BYTES == 2048
+
+    def test_page_index_limits(self):
+        assert (c.MAX_PAGE_INDEX_ENTRIES, c.MAX_PAGE_VERSION_CHARS, c.MAX_PAGE_DESCRIPTION_CHARS) == (500, 40, 200)
+        assert c.TIMEOUT_SECONDS["pages.list"] == 10.0
+
+    @pytest.mark.parametrize("path", ["/", "/a/b?x=1", "/a%2Fb", "/\"$"])
+    def test_page_entry_path_accepts(self, path):
+        assert c.PAGE_ENTRY_PATH_RE.fullmatch(path)
+
+    @pytest.mark.parametrize("path", ["", "a", "/a b", "/a#b", "/a\\b", "/a\tb", "/a\nb", "/\u00e9"])
+    def test_page_entry_path_rejects(self, path):
+        assert not c.PAGE_ENTRY_PATH_RE.fullmatch(path)
+
     def test_page_budget_leaves_room_for_the_envelope(self):
         assert c.SOURCE_PAGE_BUDGET_BYTES == c.MAX_SOURCE_RESULT_BYTES - 64 * 1024
         assert c.OUTPUT_READ_PAGE_BYTES < c.INLINE_RESULT_BYTES
@@ -142,5 +165,15 @@ class TestProtocolOneOneConstants:
         assert (c.AUDIT_PLUGIN_APPROVAL, c.AUDIT_PLUGIN_OUTPUT) == ("plugin_approval", "plugin_output")
 
     def test_protocol_version(self):
-        assert c.PROTOCOL_VERSION == "1.1.0"
+        assert c.PROTOCOL_VERSION == "1.2.0"
         assert not hasattr(c, "DRIVE_MAX_FILE_BYTES")
+
+    def test_send_and_close_timeouts(self):
+        assert c.SEND_TIMEOUT_SECONDS > 0
+        assert c.SHUTDOWN_NOTIFY_TIMEOUT_SECONDS > 0
+        assert c.CLOSE_WAIT_SECONDS > 0
+        assert c.SHUTDOWN_NOTIFY_TIMEOUT_SECONDS < c.SEND_TIMEOUT_SECONDS
+
+    def test_log_pump_values(self):
+        assert c.LOG_PUMP_CHUNK_BYTES > 0
+        assert c.LOG_DRAIN_SECONDS > 0

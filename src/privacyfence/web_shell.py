@@ -526,12 +526,17 @@ _STREAM_JS = """
     document.querySelectorAll('[data-pf-plugins]').forEach(function (menu) {
       var panel = menu.querySelector('.pf-shell-plugins-panel');
       panel.textContent = '';
+      if (pages.length > 0) {
+        var all = document.createElement('a');
+        all.className = 'pf-shell-nav-item';
+        all.href = '/plugin-pages';
+        all.textContent = 'All plugin pages';
+        panel.appendChild(all);
+      }
       pages.forEach(function (p) {
         var a = document.createElement('a');
         a.className = 'pf-shell-nav-item';
         a.href = p.page_url;
-        a.target = '_blank';
-        a.rel = 'noopener';
         a.textContent = p.display_name;
         panel.appendChild(a);
       });
@@ -540,8 +545,8 @@ _STREAM_JS = """
     });
   }
   document.addEventListener('click', function (e) {
-    // A plugin link opens a new tab; close the menus it was picked from, the narrow-header menu
-    // included, so this tab is not left with them open.
+    // Close the menus when a plugin link is picked: the link navigates, and a page restored from
+    // the back/forward cache would otherwise show them open.
     var picked = e.target.closest && e.target.closest('.pf-shell-plugins-panel a');
     document.querySelectorAll('details.pf-shell-plugins[open], details.pf-shell-menu[open]').forEach(function (menu) {
       if (picked || (menu.classList.contains('pf-shell-plugins') && !menu.contains(e.target))) { menu.open = false; }
@@ -611,18 +616,18 @@ _ORG_SIGN_OUT_JS = """
 
 
 def _plugins_html(plugin_pages: tuple[tuple[str, str], ...]) -> str:
-    """The Plugins dropdown: one link per ``(display name, href)``, alphabetical, each opening the
-    plugin's page in a new tab like the plugin card's "Open page" link in Settings. Hidden while
-    there are none; the stream script (``_STREAM_JS``) fills it in and out as plugins come and go."""
-    links = "".join(
-        f'<a class="pf-shell-nav-item" href="{_html_escape(href)}" target="_blank" rel="noopener">'
-        f"{_html_escape(name)}</a>"
+    """The Plugins dropdown: "All plugin pages" first, then one link per ``(display name, href)``,
+    alphabetical, each in this tab like every other menu item. Hidden while there are none; the
+    stream script (``_STREAM_JS``) fills it in and out as plugins come and go."""
+    plugin_links = "".join(
+        f'<a class="pf-shell-nav-item" href="{_html_escape(href)}">{_html_escape(name)}</a>'
         for name, href in sorted(plugin_pages, key=lambda page: (page[0].casefold(), page[0]))
     )
+    all_link = '<a class="pf-shell-nav-item" href="/plugin-pages">All plugin pages</a>' if plugin_pages else ""
     hidden = "" if plugin_pages else " hidden"
     return (
         f'<details class="pf-shell-plugins" data-pf-plugins{hidden}><summary>Plugins</summary>'
-        f'<div class="pf-shell-plugins-panel">{links}</div></details>'
+        f'<div class="pf-shell-plugins-panel">{all_link}{plugin_links}</div></details>'
     )
 
 

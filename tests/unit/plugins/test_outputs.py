@@ -560,6 +560,7 @@ class TestTools:
         assert "secret" not in json.dumps(call["preview"])
         assert call["details_text"] == "secret,1\n" and call["pii_scan_text"] == "secret,1\n"
         assert call["args"] == {"plugin": "today", "path": "reports/q3.csv", "offset": 0}
+        assert call["dedupe_extra"] == hashlib.sha256(b"secret,1\n").hexdigest()
         assert call["filtered_data"] is result
         assert result["plugin"] == "today" and result["text"] == "secret,1\n"
 
@@ -632,20 +633,21 @@ class Popups:
         return self.decision, None
 
 
-class TestRuleAllowsFolder:
-    @pytest.fixture
-    def env(self, root, tmp_path, monkeypatch):
-        init_audit_logger(str(tmp_path / "audit"))
-        reg = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
-        approval_ui.init_approval_ui(WebApprovalUI(registry=reg))
-        settings = tmp_path / "settings.yaml"
-        settings.write_text(yaml.dump({}), encoding="utf-8")
-        auto_accept.init_config_path(str(settings))
-        conn = make_connector(root)
-        conn.register()
-        yield conn, Popups(monkeypatch), tmp_path / "audit"
-        conn.unregister()
+@pytest.fixture
+def env(root, tmp_path, monkeypatch):
+    init_audit_logger(str(tmp_path / "audit"))
+    reg = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+    approval_ui.init_approval_ui(WebApprovalUI(registry=reg))
+    settings = tmp_path / "settings.yaml"
+    settings.write_text(yaml.dump({}), encoding="utf-8")
+    auto_accept.init_config_path(str(settings))
+    conn = make_connector(root)
+    conn.register()
+    yield conn, Popups(monkeypatch), tmp_path / "audit"
+    conn.unregister()
 
+
+class TestRuleAllowsFolder:
     def allow(self, value):
         auto_accept.add_policy_v2_rules(policy_rules({
             "plugin_outputs.read": [{"predicate": "plugin:today:output", "value": value}],
@@ -756,3 +758,36 @@ class TestRegistration:
         make_connector(root).unregister()
 
         assert self.snapshot() == before
+
+
+class TestReadReplay:
+    async def test_a_repeat_read_of_an_unchanged_file_reuses_the_approval(self, root, env):
+        conn, popups, _ = env
+        put(root, "a.csv", "v1")
+
+        await conn.call("plugin_outputs_read", {"plugin": "today", "path": "a.csv"})
+        await conn.call("plugin_outputs_read", {"plugin": "today", "path": "a.csv"})
+
+        assert len(popups.read) == 1
+
+    async def test_a_file_rewritten_after_approval_gets_a_new_card(self, root, env):
+        conn, popups, _ = env
+        put(root, "a.csv", "v1")
+        await conn.call("plugin_outputs_read", {"plugin": "today", "path": "a.csv"})
+
+        put(root, "a.csv", "v2-longer")
+        result = await conn.call("plugin_outputs_read", {"plugin": "today", "path": "a.csv"})
+
+        assert len(popups.read) == 2
+        assert popups.read[1][0][2] == "v2-longer"
+        assert result["text"] == "v2-longer"
+
+    async def test_a_denied_rewritten_file_is_not_released_by_the_earlier_approval(self, root, env):
+        conn, popups, _ = env
+        put(root, "a.csv", "v1")
+        await conn.call("plugin_outputs_read", {"plugin": "today", "path": "a.csv"})
+
+        put(root, "a.csv", "v2-longer")
+        popups.decision = "deny"
+        with pytest.raises(gate.GateDeniedError):
+            await conn.call("plugin_outputs_read", {"plugin": "today", "path": "a.csv"})

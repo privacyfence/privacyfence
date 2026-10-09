@@ -41,7 +41,7 @@ from privacyfence.plugins.constants import (
     CONFIRM_AWAIT_MAX_MS,
     MAX_PENDING_CONFIRMS,
     MAX_PENDING_CONFIRMS_PER_PLUGIN,
-    PREPARED_CALL_LIFETIME_SECONDS,
+    PENDING_CARD_SECONDS,
 )
 from privacyfence.plugins.protocol import ConfirmRequestParams, RpcError
 from privacyfence.principal import LOCAL_PRINCIPAL_ID
@@ -88,7 +88,7 @@ class ConfirmationService:
         self._finished: dict[str, float] = {}      # approval id -> monotonic time it finished
         self._active_total = 0
         self._active_by_plugin: dict[str, int] = {}
-        self.retain_finished_seconds = PREPARED_CALL_LIFETIME_SECONDS
+        self.retain_finished_seconds = PENDING_CARD_SECONDS
         self._finalizers: set[asyncio.Future] = set()
         self.poll_seconds = POLL_SECONDS
 
@@ -176,6 +176,22 @@ class ConfirmationService:
         finalizers = list(self._finalizers)
         if finalizers:
             await asyncio.wait(finalizers, timeout=timeout)
+
+    def owns(self, plugin: str, approval_id: str) -> bool:
+        """True when ``approval_id`` is a confirmation card this service opened for ``plugin``."""
+        with self._lock:
+            owned = self._owned.get(approval_id)
+        return owned is not None and owned.plugin == plugin
+
+    def expire_plugin(self, plugin: str) -> int:
+        """Expire every confirmation of ``plugin`` still waiting for a human; returns how many
+        this call expired. The finalizer threads wake and audit the outcome."""
+        with self._lock:
+            waiting = [
+                (i, o.registry) for i, o in self._owned.items()
+                if o.plugin == plugin and i not in self._finished
+            ]
+        return sum(1 for i, registry in waiting if registry.finalize(i, "expired"))
 
     def _finalize_when_answered(self, approval_id: str) -> None:
         with self._lock:

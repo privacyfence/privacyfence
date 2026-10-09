@@ -1229,8 +1229,8 @@ _JS = r"""
     html += renderPluginApprovals(p);
     html += '<div class="pf-plugin-controls">';
     if (p.page_url) {
-      html += '<a class="pf-link" href="' + esc(p.page_url) + '" target="_blank" rel="noopener" aria-label="Open page for ' +
-        esc(p.display_name) + '">Open page</a>';
+      html += '<a class="pf-link" href="' + esc(p.page_url) + '" aria-label="Pages of ' +
+        esc(p.display_name) + '">Pages</a>';
     }
     var reviewing = ui.pluginReviewing === p.name;
     if (p.state !== 'rejected' && p.state !== 'missing') {

@@ -20,10 +20,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from privacyfence.plugins.constants import (
+    CLOSE_WAIT_SECONDS,
     ERROR_CODES,
     INVALID_LINES_LIMIT,
     MAX_IN_FLIGHT,
     MAX_LINE_BYTES,
+    SEND_TIMEOUT_SECONDS,
     TIMEOUT_SECONDS,
 )
 from privacyfence.plugins.protocol import RpcError
@@ -118,10 +120,10 @@ class RpcPeer:
             finally:
                 self._pending.pop(request_id, None)
 
-    async def notify(self, method: str, params: dict) -> None:
+    async def notify(self, method: str, params: dict, *, timeout: float | None = None) -> None:
         if self._closed:
             raise RpcError("internal_error", "peer closed")
-        await self._send({"jsonrpc": "2.0", "method": method, "params": params})
+        await self._send({"jsonrpc": "2.0", "method": method, "params": params}, timeout=timeout)
 
     async def close(self) -> None:
         self._shutdown("closed")
@@ -134,9 +136,21 @@ class RpcPeer:
             with contextlib.suppress(asyncio.CancelledError):
                 await handler_task
         with contextlib.suppress(Exception):
-            await self._writer.wait_closed()
+            try:
+                await asyncio.wait_for(self._writer.wait_closed(), CLOSE_WAIT_SECONDS)
+            except TimeoutError:
+                self._abort_transport()
 
-    def _shutdown(self, reason: str) -> None:
+    def _abort_transport(self) -> None:
+        """Drop the connection without flushing; falls back to ``close`` for a writer with no transport."""
+        with contextlib.suppress(Exception):
+            abort = getattr(getattr(self._writer, "transport", None), "abort", None)
+            if callable(abort):
+                abort()
+            else:
+                self._writer.close()
+
+    def _shutdown(self, reason: str, *, abort: bool = False) -> None:
         """Mark closed exactly once: fail waiting requests, stop handlers, close the stream."""
         if self._closed:
             return
@@ -146,28 +160,43 @@ class RpcPeer:
                 future.set_exception(RpcError("internal_error", "peer closed"))
         for task in self._tasks:
             task.cancel()
-        with contextlib.suppress(Exception):
-            self._writer.close()
+        if abort:
+            self._abort_transport()
+        else:
+            with contextlib.suppress(Exception):
+                self._writer.close()
         if self._on_close is not None:
             try:
                 self._on_close(reason)
             except Exception:
                 logger.warning("on_close callback failed", exc_info=True)
 
-    async def _send(self, message: dict) -> None:
+    async def _send(self, message: dict, *, timeout: float | None = None) -> None:
+        limit = SEND_TIMEOUT_SECONDS if timeout is None else timeout
         try:
-            line = json.dumps(message, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+            try:
+                line = json.dumps(message, separators=(",", ":"), allow_nan=False, ensure_ascii=False).encode() + b"\n"
+            except UnicodeEncodeError:
+                # A lone surrogate has no UTF-8 form; the escaped form is plain ASCII.
+                line = json.dumps(message, separators=(",", ":"), allow_nan=False).encode() + b"\n"
         except (TypeError, ValueError):
             raise RpcError("internal_error", "message is not JSON") from None
         if len(line) > MAX_LINE_BYTES:
             raise RpcError("payload_too_large", "message exceeds the line limit")
-        async with self._write_lock:
-            try:
-                self._writer.write(line)
-                await self._writer.drain()
-            except (ConnectionError, OSError) as exc:
-                self._shutdown("write_failed")
-                raise RpcError("internal_error", "peer closed") from exc
+        try:
+            async with asyncio.timeout(limit):  # covers waiting for the lock and the drain
+                async with self._write_lock:
+                    if self._closed:
+                        raise RpcError("internal_error", "peer closed")
+                    self._writer.write(line)
+                    await self._writer.drain()
+        except TimeoutError:
+            # A partial line may be in the transport, so the peer cannot be used again.
+            self._shutdown("write_timeout", abort=True)
+            raise RpcError("timeout", "plugin is not reading its input") from None
+        except (ConnectionError, OSError) as exc:
+            self._shutdown("write_failed")
+            raise RpcError("internal_error", "peer closed") from exc
 
     async def _send_quiet(self, message: dict) -> None:
         if self._closed:

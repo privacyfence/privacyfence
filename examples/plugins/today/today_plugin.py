@@ -21,7 +21,7 @@ import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
-from privacyfence_plugin_sdk import PROTOCOL_VERSION, Html, Plugin, Prepared, SourceError, blocks
+from privacyfence_plugin_sdk import PROTOCOL_VERSION, Html, PageEntry, Plugin, Prepared, SourceError, blocks
 
 NAME = "today"
 VERSION = "1.0.0"
@@ -369,7 +369,7 @@ def build_plugin(crash_tool: bool = False) -> Plugin:
 
     async def _publish_when_confirmed(ctx, approval_id: str, snapshot: dict) -> None:
         try:
-            verdict = await ctx.confirm.await_(approval_id)
+            verdict = await ctx.confirm.wait(approval_id)
             day = _load_day(ctx)
             if verdict.status == "approved" and day is not None:
                 day["published"] = {"at": verdict.decided_at or datetime.now().astimezone().isoformat(), **snapshot}
@@ -484,6 +484,10 @@ def build_plugin(crash_tool: bool = False) -> Plugin:
         return Html(
             _page_html(day, _load_notes(ctx), _total_fetches(ctx), manifest_text, _layout_note(status, revoked_at))
         )
+
+    @plugin.page_index
+    async def pages(ctx) -> list[PageEntry]:
+        return [PageEntry("/", "Today")]  # /approval is framed by the approval card, not browsed
 
     @plugin.page("/approval")
     async def approval_page(ctx, request):

@@ -66,6 +66,14 @@ from privacyfence.web import control_channel, mcp_auth
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+USER_SID = "S-1-5-21-1-2-3-1001"
+
+
+@pytest.fixture(autouse=True)
+def _administrators_own_every_path(monkeypatch):
+    """Windows tests judge the DACL; a path's owner is Administrators unless a test says otherwise."""
+    monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: windows_acl.ADMINISTRATORS_SID)
+
 # Every platform privilege separation supports, and the installer that provisions
 # it. Kept as its own table rather than derived from PLATFORM_LAYOUTS so a
 # platform added to the module without an installer fails here loudly --
@@ -3991,6 +3999,44 @@ class TestAdminOnlyWriteProblem:
 
         assert problem == f"could not read {tmp_path}'s ACL"
 
+    def test_windows_refuses_a_path_a_user_owns(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: [windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF)],
+        )
+        monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: USER_SID)
+        monkeypatch.setattr(windows_acl, "read_owner", lambda path: "MACHINE\\alice")
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem == (
+            f"{tmp_path} is owned by MACHINE\\alice, not by SYSTEM, Administrators or TrustedInstaller"
+        )
+
+    @pytest.mark.parametrize("sid", sorted(windows_acl.TRUSTED_OWNER_SIDS))
+    def test_windows_accepts_each_trusted_owner(self, monkeypatch, tmp_path, sid):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: [windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF)],
+        )
+        monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: sid)
+
+        assert privilege_separation.admin_only_write_problem(tmp_path) is None
+
+    def test_windows_refuses_an_owner_it_cannot_read(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: [windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF)],
+        )
+        monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: None)
+
+        problem = privilege_separation.admin_only_write_problem(tmp_path)
+
+        assert problem == f"could not read {tmp_path}'s owner"
+
 
 def _default_drive_root_acl() -> list:
     """What ``icacls C:\\`` shows on a standard Windows install: administrators and SYSTEM in
@@ -4028,6 +4074,23 @@ class TestAdminOnlyAncestorWriteProblem:
         problem = privilege_separation.admin_only_write_problem(tmp_path)
 
         assert problem == f"{tmp_path} is writable by NT AUTHORITY\\Authenticated Users"
+
+    def test_windows_refuses_an_ancestor_a_user_owns(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, _default_drive_root_acl())
+        monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: USER_SID)
+        monkeypatch.setattr(windows_acl, "read_owner", lambda path: "MACHINE\\alice")
+
+        problem = privilege_separation.admin_only_ancestor_write_problem(tmp_path)
+
+        assert problem == (
+            f"{tmp_path} is owned by MACHINE\\alice, not by SYSTEM, Administrators or TrustedInstaller"
+        )
+
+    def test_the_elevation_check_ignores_the_owner(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, [windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF)])
+        monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: USER_SID)
+
+        assert privilege_separation._elevation_script_problem(tmp_path / "x.ps1") is None
 
     def test_the_elevation_check_still_refuses_the_default_drive_root(self, monkeypatch, tmp_path):
         self._windows_acl(monkeypatch, _default_drive_root_acl())
@@ -4139,6 +4202,17 @@ class TestAdminOnlyPluginDirWriteProblem:
         self._windows_acl(monkeypatch, _program_files_subfolder_acl())
 
         assert privilege_separation.admin_only_plugin_dir_write_problem(tmp_path) is None
+
+    def test_windows_refuses_a_plugin_folder_a_user_owns(self, monkeypatch, tmp_path):
+        self._windows_acl(monkeypatch, _program_files_subfolder_acl())
+        monkeypatch.setattr(windows_acl, "read_owner_sid", lambda path: USER_SID)
+        monkeypatch.setattr(windows_acl, "read_owner", lambda path: "MACHINE\\alice")
+
+        problem = privilege_separation.admin_only_plugin_dir_write_problem(tmp_path)
+
+        assert problem == (
+            f"{tmp_path} is owned by MACHINE\\alice, not by SYSTEM, Administrators or TrustedInstaller"
+        )
 
     def test_the_strict_rule_still_refuses_the_creator_owner_entry(self, monkeypatch, tmp_path):
         self._windows_acl(monkeypatch, _program_files_subfolder_acl())

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import re
 
-PROTOCOL_VERSION = "1.1.0"
+PROTOCOL_VERSION = "1.2.0"
 PROTOCOL_MAJOR = 1
 
 MAX_LINE_BYTES = 16 * 1024 * 1024
 MAX_IN_FLIGHT = 16
 INVALID_LINES_LIMIT = 3
 INLINE_RESULT_BYTES = 100_000              # ADR 0092
+WRITE_RESULT_MAX_BYTES = 2048              # ADR 0137
 MAX_PREVIEW_BYTES = 64 * 1024
 MAX_PREVIEW_BLOCKS = 50
 MAX_CELL_CHARS = 4096
@@ -28,6 +29,9 @@ DRIVE_CHUNK_BYTES = 8 * 1024 * 1024
 DRIVE_SPOOL_IDLE_SECONDS = 600
 MAX_PAGE_BODY_BYTES = 8 * 1024 * 1024
 MAX_PAGE_PATH_CHARS = 512
+MAX_PAGE_INDEX_ENTRIES = 500
+MAX_PAGE_VERSION_CHARS = 40
+MAX_PAGE_DESCRIPTION_CHARS = 200
 MAX_TOOLS = 64
 MAX_SCOPE_VALUES = 100
 MAX_SCOPE_VALUE_CHARS = 200
@@ -40,6 +44,7 @@ CALENDAR_PAGE_SIZE_MAX = 250
 SUBJECT_ID_MAX_CHARS = 200
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")      # always .fullmatch()
 APPROVAL_KIND_RE = re.compile(r"[a-z][a-z0-9_-]{0,40}")   # always .fullmatch()
+PAGE_ENTRY_PATH_RE = re.compile(r"/[\x21\x22\x24-\x5b\x5d-\x7e]*")   # always .fullmatch(); no space, # or backslash
 OUTPUT_TYPES: dict[str, tuple[str, ...]] = {
     "application/json": (".json",),
     "text/csv": (".csv",),
@@ -57,6 +62,7 @@ TIMEOUT_SECONDS: dict[str, float] = {
     "tool.prepare": 30.0,
     "tool.execute": 60.0,
     "web.request": 10.0,
+    "pages.list": 10.0,
     "storage.purge": 30.0,
     "source.call": 120.0,
     "confirm.request": 5.0,
@@ -67,12 +73,20 @@ MAX_PENDING_CONFIRMS = 64                  # all plugins together; the host's fi
 MAX_PENDING_CONFIRMS_PER_PLUGIN = 8
 SHUTDOWN_GRACE_SECONDS = 5.0
 TERMINATE_GRACE_SECONDS = 2.0
+SEND_TIMEOUT_SECONDS = 10.0                # ADR 0136: a message the plugin does not read in time is a crash
+SHUTDOWN_NOTIFY_TIMEOUT_SECONDS = 1.0
+CLOSE_WAIT_SECONDS = 1.0
 RESTART_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 CRASH_LIMIT = 5
 CRASH_WINDOW_SECONDS = 600.0
-PREPARED_CALL_LIFETIME_SECONDS = 900.0     # = approvals' pending TTL, so a deferred card can still release
+PENDING_CARD_SECONDS = 900.0               # = approvals.DEFAULT_PENDING_TTL_SECONDS
+DECISION_REPLAY_SECONDS = 300.0            # = approvals.DEFAULT_LEDGER_TTL_SECONDS
+# A deferred card can still release, and the daemon can still replay a decision, within this window.
+PREPARED_CALL_LIFETIME_SECONDS = PENDING_CARD_SECONDS + DECISION_REPLAY_SECONDS   # 1200.0
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
+LOG_PUMP_CHUNK_BYTES = 64 * 1024
+LOG_DRAIN_SECONDS = 2.0
 
 PLUGIN_NAME_RE = re.compile(r"[a-z][a-z0-9-]{1,30}")     # always .fullmatch()
 TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")       # always .fullmatch()

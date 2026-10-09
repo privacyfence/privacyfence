@@ -290,7 +290,7 @@ A [plugin](plugins.md) is a separate program an administrator installs and you e
 is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
 [ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
 and in [ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) to
-[ADR 0131](adr/0131-a-plugins-child-processes-run-under-its-account-unsupervised.md).
+[ADR 0139](adr/0139-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md).
 
 **Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
 every connector credential, so whoever can replace it can read your data. The privacy boundary of
@@ -298,7 +298,8 @@ every connector credential, so whoever can replace it can read your data. The pr
 applies. Plugins run only on a separated install. A plugin lives in an administrator-only plugins
 directory outside the app and the data directory ([Platform support](platform-support.md#plugins-directory)),
 and at every start PrivacyFence checks that the executable, the plugin's folder and every folder
-above it can be written by administrators only. For the folders above the plugin's own, Windows
+above it can be written by administrators only. On Windows each must also be owned by SYSTEM,
+Administrators or TrustedInstaller. For the folders above the plugin's own, Windows
 ignores inherit-only entries and the right to create subfolders, which a default drive root grants
 every signed-in user, because they cannot swap an existing folder; the executable and the plugin's
 own folder keep the strict rule, and POSIX applies one rule to all. Some older Debian installs make
@@ -317,13 +318,15 @@ connector tool, where a read releases the payload you saw on the card), read con
 through the source API, ask you for a confirmation, serve pages and keep files. The source API is
 **not gated**: a read through it opens no card. It is limited to the operations in the plugin's
 manifest, which you approve at enable, to the local principal and to six read operations, and every
-call is written to the audit log with the target and the size, never the content. A plugin holds no
+call is written to the audit log with the target and the size, never the content. A Google Drive export or a Sheets range too large for one page is held in an owner-only temporary file for up to 10 idle minutes, so later pages come from one version of it. A write's result
+reaches the AI only when it is at most 2,048 bytes and the PII check finds nothing. A plugin holds no
 connector token.
 
 **Plugin pages** are served only to your signed-in human session, never to an AI client. They run in
 a sandbox: no `allow-same-origin`, so a page cannot read the session cookie or call PrivacyFence's
 APIs, and the content security policy allows scripts but no form posts and no framing. Only GET
-and HEAD are served.
+and HEAD are served. The page browser that lists them is a PrivacyFence page; plugin pages keep the
+sandbox, and a plugin's images and styles are inlined, never fetched.
 
 **Confirmations** are cards that no rule can accept, with step-up kept, and they are refused while
 any AI session is unattended.

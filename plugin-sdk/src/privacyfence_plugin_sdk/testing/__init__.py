@@ -27,7 +27,7 @@ A read tool::
         )
 
     async def test_the_ai_gets_what_the_card_showed():
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
             host.source.load(samples.get("calendar.list_events"))
             outcome = await host.call_tool("list_events", {"reason": "plan the day"})
             assert outcome.card_shown
@@ -37,7 +37,7 @@ Decide a card with ``decide="deny"`` or a function of the card, and let a person
 click skip the card with a scope rule. A rule matches only when every value the call returned is in
 the rule::
 
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
         host.source.load(samples.get("calendar.list_events"))
         host.rules.allow_scope("calendar", ["primary"])
         outcome = await host.call_tool("list_events")
@@ -57,9 +57,10 @@ that no fixture answers raises ``SourceFixtureMissing`` out of ``call_tool``::
     # after a call_tool: host.source.calls lists every source.call the plugin made
 
 Pages, confirmations, events, purge and shutdown go through the same host. A page comes back with
-the daemon's security headers; a path the daemon refuses never reaches the plugin::
+the daemon's security headers; a path the daemon refuses never reaches the plugin. Pages need
+``pages=True``, the manifest's ``pages: true``; without it every request is a 404::
 
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, pages=True) as host:
         page = await host.get("/")
         assert page.status == 200 and page.headers["x-frame-options"] == "DENY"
         assert (await host.request("POST", "/")).status == 405

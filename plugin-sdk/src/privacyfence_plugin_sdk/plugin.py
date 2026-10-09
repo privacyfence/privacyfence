@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import blocks as _blocks
+from ._page_index import validate_page_entries
 from ._rpc import Peer, RpcError, open_stdio
 from .responses import (
     ApprovalTicket,
@@ -23,6 +24,7 @@ from .responses import (
     ConfirmResult,
     DownloadedFile,
     Html,
+    PageEntry,
     SourceError,
     SourceResult,
     Text,
@@ -31,7 +33,7 @@ from .responses import (
 
 logger = logging.getLogger("privacyfence_plugin_sdk")
 
-PROTOCOL_VERSION = "1.1.0"
+PROTOCOL_VERSION = "1.2.0"
 _PROTOCOL_MAJOR = 1
 
 # --- _limits: copied from the protocol; a test compares each with the daemon's constants ---------
@@ -49,7 +51,7 @@ _MCP_TOOL_NAME_MAX = 64
 _MAX_SCOPE_TYPES = 20
 _MAX_SCOPE_TYPE_DESCRIPTION_CHARS = 500
 _MAX_PAGE_PATH_CHARS = 512
-_PREPARED_CALL_LIFETIME_SECONDS = 900.0
+_PREPARED_CALL_LIFETIME_SECONDS = 1200.0
 _CONFIRM_AWAIT_MAX_MS = 300_000
 _SOURCE_CALL_TIMEOUT_SECONDS = 120.0
 _CONFIRM_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -64,6 +66,9 @@ _RESERVED_PLUGIN_NAMES = frozenset({
     "apps", "sheets", "docs",
 })
 # --- end of _limits ---------------------------------------------------------------------------
+
+_MAX_PREPARED_CALLS = 256
+_WAIT_MAX_ROUNDS = 12
 
 _PARAM_TYPES = frozenset({"string", "integer", "number", "boolean"})
 _FORBIDDEN_PARAM_KEYS = frozenset({"enum", "oneOf", "anyOf", "allOf", "items", "properties", "$ref"})
@@ -324,6 +329,16 @@ class ConfirmClient:
         decided = result.get("decided_at")
         return ConfirmResult(status=result["status"], decided_at=decided if isinstance(decided, str) else None)
 
+    async def wait(self, approval_id: str) -> ConfirmResult:
+        """Wait until the card is approved, denied or expired."""
+        for _ in range(_WAIT_MAX_ROUNDS):
+            try:
+                return await self.await_(approval_id)
+            except SourceError as exc:
+                if exc.code != "timeout":
+                    raise
+        raise SourceError("timeout", "the confirmation was not decided within an hour")
+
 
 class ApprovalsClient:
     """``ctx.approvals``: asks a human to approve a thing that stays approved until it changes."""
@@ -396,6 +411,16 @@ class ApprovalsClient:
             raise SourceError("internal_error", "malformed approval.await result")
         decided = result.get("decided_at")
         return ConfirmResult(status=result["status"], decided_at=decided if isinstance(decided, str) else None)
+
+    async def wait(self, approval_id: str) -> ConfirmResult:
+        """Wait until the card is approved, denied or expired."""
+        for _ in range(_WAIT_MAX_ROUNDS):
+            try:
+                return await self.await_(approval_id)
+            except SourceError as exc:
+                if exc.code != "timeout":
+                    raise
+        raise SourceError("timeout", "the confirmation was not decided within an hour")
 
 
 class OutputsClient:
@@ -505,6 +530,7 @@ class _Registry:
     pages: dict[str, Callable[[Context, PageRequest], Awaitable[Any]]] = field(default_factory=dict)
     events: dict[str, list[Callable[[Context, dict], Awaitable[None]]]] = field(default_factory=dict)
     purge: Callable[[Context, str, str | None], Awaitable[None]] | None = None
+    page_index: Callable[[Context], Awaitable[list[PageEntry]]] | None = None
 
 
 def _page_key(path: str) -> str:
@@ -655,6 +681,15 @@ class Plugin:
 
         return register
 
+    def page_index(
+        self, fn: Callable[[Context], Awaitable[list[PageEntry]]]
+    ) -> Callable[[Context], Awaitable[list[PageEntry]]]:
+        """Register ``async def fn(ctx) -> list[PageEntry]``: the pages the page browser lists."""
+        if self._reg.page_index is not None:
+            raise ValueError("page_index is already registered")
+        self._reg.page_index = fn
+        return fn
+
     def on(self, event: str) -> Callable[[Callable[[Context, dict], Awaitable[None]]], Callable]:
         if event not in _EVENTS:
             raise ValueError(f"unknown event {event}; expected one of {', '.join(_EVENTS)}")
@@ -758,6 +793,9 @@ class Plugin:
     async def _prepare(self, params: dict) -> dict:
         self._require_initialized()
         self._sweep()
+        while len(self._prepared) >= _MAX_PREPARED_CALLS:
+            del self._prepared[next(iter(self._prepared))]
+            logger.warning("prepared-call store is full (%d); dropped the oldest prepared call", _MAX_PREPARED_CALLS)
         call_id = self._need(params, "call_id", str)
         handle = self._reg.tools.get(self._need(params, "tool", str))
         if handle is None:
@@ -830,7 +868,7 @@ class Plugin:
             raise RpcError("unknown_call", "no prepared call with this id")
         if given != entry.digest or args_digest(args) != entry.digest:
             raise RpcError("digest_mismatch", "the arguments differ from the prepared call")
-        if not handle.read_only:
+        if not handle.read_only or approval.get("via") == "auto":
             del self._prepared[call_id]
         ctx = self._ctx(self._need(params, "principal", dict))
         result: Any = None
@@ -867,6 +905,20 @@ class Plugin:
             logger.warning("page %s returned %s, not Html, Text or Bytes", request.path, type(response).__name__)
             return Text("Internal error", status=500).to_wire()
         return response.to_wire()
+
+    async def _pages_list(self, params: dict) -> dict:
+        self._require_initialized()
+        fn = self._reg.page_index
+        assert fn is not None  # the handler is registered only when an index exists
+        ctx = Context(self._host, self._principal(self._need(params, "principal", dict)), self._data_dir)
+        entries = await fn(ctx)
+        if not isinstance(entries, list) or not all(isinstance(e, PageEntry) for e in entries):
+            raise RpcError("invalid_params", "pages must be a list of PageEntry")
+        try:
+            pages = validate_page_entries([e.to_wire() for e in entries])
+        except ValueError as exc:
+            raise RpcError("invalid_params", str(exc)) from None
+        return {"pages": pages}
 
     async def _purge(self, params: dict) -> dict:
         self._require_initialized()
@@ -908,6 +960,8 @@ class Plugin:
             "web.request": self._web_request,
             "storage.purge": self._purge,
         }
+        if self._reg.page_index is not None:
+            handlers["pages.list"] = self._pages_list
         notifications = {event: self._event_handler(event) for event in _EVENTS}
         peer = Peer(
             reader,

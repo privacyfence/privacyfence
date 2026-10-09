@@ -13,6 +13,7 @@ from privacyfence.plugins.protocol import InitializeResult, PrepareResult, args_
 from privacyfence_plugin_sdk import (
     Bytes,
     Html,
+    PageEntry,
     Plugin,
     Prepared,
     SourceError,
@@ -118,6 +119,17 @@ class TestLimits:
         assert sdk_blocks._BLOCK_KEY_RE.pattern == constants.BLOCK_KEY_RE.pattern
         assert sdk_plugin.PROTOCOL_VERSION == constants.PROTOCOL_VERSION
 
+    def test_page_index_limits_match_the_daemons(self):
+        from privacyfence_plugin_sdk import _page_index
+
+        for sdk_name, constant in [
+            ("_MAX_PAGE_INDEX_ENTRIES", "MAX_PAGE_INDEX_ENTRIES"), ("_MAX_PAGE_PATH_CHARS", "MAX_PAGE_PATH_CHARS"),
+            ("_MAX_TITLE_CHARS", "MAX_TITLE_CHARS"), ("_MAX_PAGE_VERSION_CHARS", "MAX_PAGE_VERSION_CHARS"),
+            ("_MAX_PAGE_DESCRIPTION_CHARS", "MAX_PAGE_DESCRIPTION_CHARS"),
+        ]:
+            assert getattr(_page_index, sdk_name) == getattr(constants, constant)
+        assert _page_index._PAGE_ENTRY_PATH_RE.pattern == constants.PAGE_ENTRY_PATH_RE.pattern
+
     def test_digest_matches_the_daemons(self):
         args = {"b": 1, "a": "é"}
         assert sdk_plugin.args_digest(args) == args_digest(args)
@@ -127,7 +139,7 @@ class TestInitialize:
     async def test_result_shape_parses_with_the_daemons_validator(self, daemon):
         result = await daemon.initialize()
         parsed = InitializeResult.from_wire(result)
-        assert parsed.protocol_version == "1.1.0"
+        assert parsed.protocol_version == "1.2.0"
         assert (parsed.plugin_name, parsed.plugin_version) == ("demo", "1.2.0")
         assert {t.name for t in parsed.tools} == {"list_events", "rename"}
         assert result["plugin"] == {"name": "demo", "version": "1.2.0"}
@@ -313,6 +325,34 @@ class TestPrepareExecute:
         assert (await daemon.error("tool.execute", execute_params(principal)))["code"] == "unknown_call"
         assert daemon.plugin._prepared == {}
 
+    async def test_prepared_call_survives_until_the_replay_window_ends(self, daemon, principal):
+        await daemon.initialize()
+        now = [1000.0]
+        daemon.plugin._clock = lambda: now[0]
+        await daemon.result("tool.prepare", prepare_params(principal, "w1", "rename", {"name": "x"}))
+        now[0] += sdk_plugin._PREPARED_CALL_LIFETIME_SECONDS - 1
+        ok = await daemon.result("tool.execute", execute_params(principal, "w1", "rename", {"name": "x"}))
+        assert ok["result"]["renamed"] == "x"
+
+    async def test_store_evicts_the_oldest_beyond_the_cap(self, daemon, principal, monkeypatch):
+        await daemon.initialize()
+        monkeypatch.setattr(sdk_plugin, "_MAX_PREPARED_CALLS", 2)
+        for call_id in ("c1", "c2", "c3"):
+            await daemon.result("tool.prepare", prepare_params(principal, call_id, "rename", {"name": "x"}))
+        assert list(daemon.plugin._prepared) == ["c2", "c3"]
+        gone = await daemon.error("tool.execute", execute_params(principal, "c1", "rename", {"name": "x"}))
+        assert gone["code"] == "unknown_call"
+        ok = await daemon.result("tool.execute", execute_params(principal, "c3", "rename", {"name": "x"}))
+        assert ok["result"]["renamed"] == "x"
+
+    async def test_an_auto_read_is_dropped_after_execute(self, daemon, principal):
+        await daemon.initialize()
+        await daemon.result("tool.prepare", prepare_params(principal, "r1"))
+        params = execute_params(principal, "r1")
+        params["approval"] = {**APPROVAL, "via": "auto"}
+        await daemon.result("tool.execute", params)
+        assert "r1" not in daemon.plugin._prepared
+
     async def test_missing_scope_values_and_payload_rules(self, make_daemon, principal):
         plugin = Plugin(name="demo", version="1")
         plugin.scope_type("calendar", "d")
@@ -415,6 +455,47 @@ class TestSourceErrors:
         data = await daemon.error("tool.execute", execute_params(principal, tool="write"))
         assert (data["code"], data["reason"]) == ("upstream_error", "rate_limited")
         await daemon.stop()
+
+
+class TestPageIndex:
+    @staticmethod
+    def indexed(entries):
+        plugin = Plugin(name="indexed", version="1.0.0")
+
+        @plugin.page_index
+        async def index(ctx):
+            return entries
+
+        return plugin
+
+    def test_a_second_index_is_refused(self):
+        plugin = self.indexed([])
+        with pytest.raises(ValueError, match="page_index is already registered"):
+            plugin.page_index(lambda ctx: None)
+
+    async def test_the_index_answers_with_wire_entries(self, make_daemon, principal):
+        entries = [PageEntry("/", "Home"), PageEntry("/a?x=1", "A", version="v1", description="Page A",
+                                                       updated_at="2026-10-07T10:00:00Z")]
+        daemon = await make_daemon(self.indexed(entries))
+        await daemon.initialize()
+        result = await daemon.result("pages.list", {"principal": principal})
+        assert result == {"pages": [e.to_wire() for e in entries]}
+        assert result["pages"][0] == {"path": "/", "title": "Home"}
+
+    async def test_without_an_index_the_method_is_unknown(self, daemon, principal):
+        await daemon.initialize()
+        assert (await daemon.error("pages.list", {"principal": principal}))["code"] == "method_not_found"
+
+    @pytest.mark.parametrize("entry", [
+        PageEntry("/", "a\tb"), PageEntry("/./x", "X"), PageEntry("/a#b", "X"),
+        PageEntry("/x", "X", updated_at="0001-01-01T00:00:00+14:00"),
+        PageEntry("/x", "X", created_at="9999-12-31T23:59:59-14:00"),
+    ])
+    async def test_an_invalid_entry_is_invalid_params(self, make_daemon, principal, entry):
+        daemon = await make_daemon(self.indexed([PageEntry("/", "Home"), entry]))
+        await daemon.initialize()
+        error = await daemon.error("pages.list", {"principal": principal})
+        assert error["code"] == "invalid_params" and "pages[1]." in error["detail"]
 
 
 class TestPages:
@@ -562,6 +643,25 @@ class TestSourceAndConfirm:
         with pytest.raises(SourceError) as info:
             await ctx.confirm.request("export", "Export?", [{"type": "html"}])
         assert info.value.code == "invalid_blocks"
+
+    async def test_confirm_wait_retries_timeouts(self, daemon, principal):
+        await daemon.initialize()
+        answers = [{"error": {"code": -32013, "message": "timeout", "data": {"code": "timeout", "detail": "still pending", "retryable": True}}}, {"error": {"code": -32013, "message": "timeout", "data": {"code": "timeout", "detail": "still pending", "retryable": True}}}, {"result": {"status": "approved", "decided_at": "now"}}]
+        daemon.source_handler = lambda message: answers.pop(0)
+        ctx = daemon.plugin._ctx(principal)
+        outcome = await ctx.confirm.wait("a1")
+        assert outcome.status == "approved"
+        assert [m["method"] for m in daemon.incoming].count("confirm.await") == 3
+
+    async def test_confirm_wait_raises_other_errors(self, daemon, principal):
+        await daemon.initialize()
+        daemon.source_handler = lambda message: {"error": {"code": -32005, "message": "upstream_error", "data": {
+            "code": "upstream_error", "detail": "nope", "retryable": False}}}
+        ctx = daemon.plugin._ctx(principal)
+        with pytest.raises(SourceError) as info:
+            await ctx.confirm.wait("a1")
+        assert info.value.code == "upstream_error"
+        assert [m["method"] for m in daemon.incoming].count("confirm.await") == 1
 
     async def test_tools_changed(self, daemon):
         await daemon.initialize()
@@ -801,6 +901,25 @@ class TestApprovals:
         assert sent["approval.check"] == {
             "principal": "local", "kind": "template", "subject_id": "t/1", "digest": digest}
         assert sent["approval.await"] == {"approval_id": "a1", "timeout_ms": 300_000}
+
+    async def test_approvals_wait_retries_timeouts(self, daemon, principal):
+        await daemon.initialize()
+        answers = [{"error": {"code": -32013, "message": "timeout", "data": {"code": "timeout", "detail": "still pending", "retryable": True}}}, {"error": {"code": -32013, "message": "timeout", "data": {"code": "timeout", "detail": "still pending", "retryable": True}}}, {"result": {"status": "approved", "decided_at": "now"}}]
+        daemon.source_handler = lambda message: answers.pop(0)
+        ctx = daemon.plugin._ctx(principal)
+        outcome = await ctx.approvals.wait("a1")
+        assert outcome.status == "approved"
+        assert [m["method"] for m in daemon.incoming].count("approval.await") == 3
+
+    async def test_approvals_wait_raises_other_errors(self, daemon, principal):
+        await daemon.initialize()
+        daemon.source_handler = lambda message: {"error": {"code": -32005, "message": "upstream_error", "data": {
+            "code": "upstream_error", "detail": "nope", "retryable": False}}}
+        ctx = daemon.plugin._ctx(principal)
+        with pytest.raises(SourceError) as info:
+            await ctx.approvals.wait("a1")
+        assert info.value.code == "upstream_error"
+        assert [m["method"] for m in daemon.incoming].count("approval.await") == 1
 
     async def test_invalid_blocks(self, daemon, principal):
         await daemon.initialize()

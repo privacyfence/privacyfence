@@ -206,6 +206,12 @@ class TestConfirm:
             await harness.await_("0" * 32)
         assert info.value.code == "invalid_params"
 
+    async def test_owns_only_its_own_plugins_cards(self, harness):
+        approval_id = (await harness.request(plugin=PLUGIN))["approval_id"]
+        assert harness.service.owns(PLUGIN, approval_id) is True
+        assert harness.service.owns("other", approval_id) is False
+        assert harness.service.owns(PLUGIN, "nope") is False
+
     async def test_await_approval_meta_tool_sees_status(self, harness):
         approval_id = (await harness.request())["approval_id"]
         assert harness.registry.await_status(approval_id) == "pending"
@@ -310,6 +316,23 @@ class TestClose:
     async def test_with_nothing_pending_returns_at_once(self, harness):
         await harness.service.close()
         assert harness.audits == []
+
+
+class TestExpirePlugin:
+    async def test_expires_only_that_plugins_confirmations(self, harness):
+        mine = (await harness.request())["approval_id"]
+        other = (await harness.request("other"))["approval_id"]
+
+        assert harness.service.expire_plugin(PLUGIN) == 1
+
+        assert harness.registry.await_status(mine) == "expired"
+        assert harness.registry.await_status(other) == "pending"
+        assert harness.registry.answer(mine, "confirm") is False
+        for _ in range(500):
+            if (PLUGIN, "publish_note", "expired") in harness.audits:
+                break
+            await asyncio.sleep(0.01)
+        assert (PLUGIN, "publish_note", "expired") in harness.audits
 
 
 class _RefusingExecutor(Executor):

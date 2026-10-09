@@ -1,6 +1,8 @@
 """Unit tests for privacyfence.plugins.events."""
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from privacyfence.plugins.events import EVENT_STATE_CHANGED, EventFanout, transitions
@@ -14,11 +16,15 @@ def row(key: str, enabled: bool, authed: bool) -> dict:
 
 
 class FakePeer:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, stuck: asyncio.Event | None = None) -> None:
         self.sent: list[tuple[str, dict]] = []
         self.fail = fail
+        self.stuck = stuck
 
     async def notify(self, method: str, params: dict) -> None:
+        if self.stuck is not None:
+            await self.stuck.wait()
+            raise RpcError("timeout", "plugin is not reading its input")
         if self.fail:
             raise RpcError("internal_error", "peer closed")
         self.sent.append((method, params))
@@ -100,5 +106,52 @@ class TestSend:
 
         assert len(healthy.sent) == 1
 
+    async def test_a_stuck_plugin_does_not_hold_up_the_others(self):
+        release = asyncio.Event()
+        stuck, healthy = FakePeer(stuck=release), FakePeer()
+        fanout = EventFanout(lambda: [stuck, healthy])
+        sending = asyncio.create_task(fanout.send([{"connector": "gmail", "state": "enabled", "principal": "local"}]))
+
+        await asyncio.wait_for(_until(lambda: len(healthy.sent) == 1), 2)
+        assert not sending.done()
+
+        release.set()
+        await asyncio.wait_for(sending, 2)
+        assert stuck.sent == []
+
+    async def test_order_is_kept_per_plugin(self):
+        peer = FakePeer()
+        events = [
+            {"connector": "gmail", "state": "enabled", "principal": "local"},
+            {"connector": "gmail", "state": "signed_in", "principal": "local"},
+            {"connector": "drive", "state": "disabled", "principal": "local"},
+        ]
+
+        await EventFanout(lambda: [peer]).send(events)
+
+        assert [params for _, params in peer.sent] == events
+
+    async def test_a_peer_gets_nothing_after_its_first_failure(self):
+        peer = FakePeer(fail=True)
+        events = [{"connector": "gmail", "state": "enabled", "principal": "local"}] * 3
+        calls = 0
+        original = peer.notify
+
+        async def counting(method, params):
+            nonlocal calls
+            calls += 1
+            await original(method, params)
+
+        peer.notify = counting  # type: ignore[method-assign]
+
+        await EventFanout(lambda: [peer]).send(events)
+
+        assert calls == 1
+
     async def test_no_running_plugin_is_fine(self):
         await EventFanout(lambda: []).send([{"connector": "gmail", "state": "enabled", "principal": "local"}])
+
+
+async def _until(predicate):
+    while not predicate():
+        await asyncio.sleep(0.01)
