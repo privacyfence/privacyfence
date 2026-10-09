@@ -239,3 +239,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0131](0131-a-plugins-child-processes-run-under-its-account-unsupervised.md) | A plugin's child processes run under its account, unsupervised, and the plugin confines them | Accepted; amends 0121 |
 | [0132](0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) | Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project | Accepted |
 | [0133](0133-salesforce-reports-page-by-a-unique-key-column.md) | Salesforce reports page by a unique key column | Accepted; amends 0128 |
+| [0134](0134-extra-jira-fields-go-through-a-reviewed-search.md) | Extra Jira fields are read through a separate reviewed search with no scope | Accepted |
+| [0135](0135-the-jira-field-list-is-auto-approved.md) | The Jira field list is auto-approved | Accepted |

@@ -193,6 +193,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "contacts_add_label": Verb.LABEL,
     "contacts_remove_label": Verb.LABEL,
     "jira_get_issue": Verb.READ,
+    "jira_search_issues_with_fields": Verb.SEARCH,
     "jira_create_issue": Verb.CREATE,
     "jira_add_comment": Verb.COMMENT,
     "jira_update_issue": Verb.UPDATE,

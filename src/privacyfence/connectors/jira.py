@@ -253,6 +253,48 @@ def _parse_json_object(value: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+MAX_EXTRA_FIELDS = 20
+
+
+def _parse_field_refs(value: str, tool: str, *, required: bool) -> list[str]:
+    """The field names, ids or JQL ids of a ``fields`` tool argument (a JSON array of strings)."""
+    none_error = ValueError(
+        f"{tool}: fields must name at least one field; use jira_search_issues for the standard fields."
+    )
+    if not value or not value.strip():
+        if required:
+            raise none_error
+        return []
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        parsed = None
+    if not isinstance(parsed, list) or not all(isinstance(v, str) for v in parsed):
+        raise ValueError(
+            f'{tool}: fields must be a JSON array of field names, e.g. ["Story Points", "Sprint"].'
+        )
+    if not parsed:
+        if required:
+            raise none_error
+        return []
+    if len(parsed) > MAX_EXTRA_FIELDS:
+        raise ValueError(f"{tool}: fields can name at most {MAX_EXTRA_FIELDS} fields.")
+    return parsed
+
+
+def _field_cell(value: Any) -> str:
+    """A simplified field value as one table cell."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return ", ".join(_field_cell(v) for v in value)
+    if isinstance(value, (bool, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 class JiraConnector(Connector):
     def __init__(self, client: JiraClient) -> None:
         self._jira = client
@@ -305,19 +347,52 @@ class JiraConnector(Connector):
                 read_only=True,
             ),
             ToolSpec(
+                name="jira_search_issues_with_fields",
+                description=(
+                    "Search Jira issues using JQL and add extra fields to each one: custom fields such as Story "
+                    "Points or Sprint, or built-in ones such as due date or fix versions. Returns the list "
+                    "jira_search_issues returns, each issue with an added fields object mapping each requested "
+                    "field's Jira name to its value (people as display names, options and statuses as their names, "
+                    "rich text as plain text with mentions as @[Name](accountId), an empty field as null), at most "
+                    "max_results (default 20, capped at 100), in the order the JQL gives. Find field names with "
+                    "jira_list_fields. Use jira_search_issues instead when its standard fields are enough: it needs "
+                    "no approval. Requires user approval."
+                ),
+                params=[
+                    ToolParam("jql", "str",
+                              description="A JQL query, e.g. \"project = MYPROJ AND status = 'In Progress' "
+                                          "ORDER BY updated DESC\". Must not be empty."),
+                    ToolParam("fields", "str",
+                              description="JSON array of the fields to add, by the name shown in Jira "
+                                          "(case-insensitive), by id (customfield_10016, duedate) or by JQL id "
+                                          "(cf[10016]), e.g. [\"Story Points\", \"Sprint\"]. 1 to 20 fields; "
+                                          "jira_list_fields lists them."),
+                    ToolParam("max_results", "int", required=False, default=20,
+                              description="Maximum number of issues to return. Default 20, capped at 100."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
                 name="jira_get_issue",
                 description=(
                     "Fetch full details of a Jira issue by key (e.g. PROJ-123), "
                     "including description and comments. Returns the issue as {key, summary, "
                     "status, issue_type, priority, assignee, reporter, description, labels, "
                     "created, updated, url, comments: a list of {id, author, body, created, "
-                    "updated}}. Use jira_search_issues instead to find issues without "
-                    "reading them in full. Mentions appear as @[Name](accountId). Requires user approval."
+                    "updated}}; with fields, it also has a fields object mapping each requested field's Jira name "
+                    "to its value, as jira_search_issues_with_fields returns it. Use jira_search_issues instead to "
+                    "find issues without reading them in full. Mentions appear as @[Name](accountId). Requires user "
+                    "approval."
                 ),
                 params=[
                     ToolParam("issue_key", "str",
                               description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
                                           "(its key field)."),
+                    ToolParam("fields", "str", required=False, default="",
+                              description="Optional JSON array of extra fields to return, as in "
+                                          "jira_search_issues_with_fields, e.g. [\"Story Points\"]. "
+                                          "Empty returns only the standard fields."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -335,6 +410,27 @@ class JiraConnector(Connector):
                     ToolParam("issue_key", "str",
                               description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
                                           "(its key field)."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="jira_list_fields",
+                description=(
+                    "List the Jira site's fields, built-in and custom, with the id and JQL names behind each "
+                    "display name. Returns a list of {id, name, custom, type, jql_names}, sorted by name, at most "
+                    "max_results (default 50, capped at 200). Pass a name in the fields parameter of "
+                    "jira_search_issues_with_fields or jira_get_issue; in a JQL query for jira_search_issues use one "
+                    "of jql_names, e.g. cf[10016] > 3 or \"Story Points\" > 3. Auto-approved."
+                ),
+                params=[
+                    ToolParam("query", "str", required=False, default="",
+                              description="Part of a field name or id, case-insensitive, e.g. 'story' or "
+                                          "'customfield_100'. Empty lists every field."),
+                    ToolParam("custom_only", "bool", required=False, default=False,
+                              description="True to list only custom fields. Default false lists built-in fields too."),
+                    ToolParam("max_results", "int", required=False, default=50,
+                              description="Maximum number of fields to return. Default 50, capped at 200."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -476,10 +572,14 @@ class JiraConnector(Connector):
             return await self._list_projects(**args)
         if tool == "jira_search_issues":
             return await self._search_issues(**args)
+        if tool == "jira_search_issues_with_fields":
+            return await self._search_issues_with_fields(**args)
         if tool == "jira_get_issue":
             return await self._get_issue(**args)
         if tool == "jira_get_transitions":
             return await self._get_transitions(**args)
+        if tool == "jira_list_fields":
+            return await self._list_fields(**args)
         if tool == "jira_find_users":
             return await self._find_users(**args)
         if tool == "jira_refresh_user_cache":
@@ -522,6 +622,14 @@ class JiraConnector(Connector):
                          f"List transitions: {issue_key}", f"{len(transitions)} transition(s)", t0)
         return data
 
+    async def _list_fields(self, query: str = "", custom_only: bool = False, max_results: int = 50) -> Any:
+        t0 = time.time()
+        fields = await self._fetch(self._jira.list_fields, query, custom_only, max_results)
+        data = [asdict(f) for f in fields]
+        self._auto_audit("jira_list_fields", "List Jira Fields",
+                         "List fields", f"{len(fields)} field(s)", t0)
+        return data
+
     async def _find_users(self, query: str, max_results: int = 10) -> Any:
         t0 = time.time()
         users = await self._fetch(self._jira.find_users, query, max_results)
@@ -541,8 +649,43 @@ class JiraConnector(Connector):
     # Review gate (reads)
     # ------------------------------------------------------------------ #
 
-    async def _get_issue(self, issue_key: str) -> Any:
-        issue = await self._fetch(self._jira.get_issue, issue_key)
+    async def _search_issues_with_fields(self, jql: str, fields: str, max_results: int = 20) -> Any:
+        refs = _parse_field_refs(fields, "jira_search_issues_with_fields", required=True)
+        max_results = max(1, min(max_results, 100))
+        wanted = await self._fetch(self._jira.resolve_fields, refs)
+        names = JiraClient.extra_field_keys(wanted)
+        issues = await self._fetch(self._jira.search_issues, jql, max_results, refs)
+        result = [{**asdict(i), "fields": i.extra_fields or {}} for i in issues]
+        rows = [[i.key, i.summary, *(_field_cell((i.extra_fields or {}).get(n)) for n in names)]
+                for i in issues]
+        return await gated_call(
+            connector=self.name,
+            tool="jira_search_issues_with_fields",
+            tool_name="Search Jira Issues with Fields",
+            summary=f"Search: {jql[:80]}",
+            sender="Jira",
+            raw_data=issues,
+            filtered_data=result,
+            gate="review",
+            preview={"JQL": jql, "Fields": ", ".join(names)},
+            new_info={"Results": str(len(issues)), "Field values": f"{', '.join(names)} for each issue"},
+            details_text="\n".join(
+                f"{r[0]} — {r[1]}: " + "; ".join(f"{n}: {c}" for n, c in zip(names, r[2:], strict=True))
+                for r in rows
+            ) or "(no matches)",
+            pii_scan_text="\n".join(" ".join(r[2:]) for r in rows),
+            preview_tables=[{"headers": ["Key", "Summary", *names], "rows": rows}] if issues else [],
+            table_only=True,
+            my_email=self.my_email,
+            args={"jql": jql, "fields": fields},
+        )
+
+    async def _get_issue(self, issue_key: str, fields: str = "") -> Any:
+        refs = _parse_field_refs(fields, "jira_get_issue", required=False)
+        if refs:
+            issue = await self._fetch(self._jira.get_issue, issue_key, refs)
+        else:
+            issue = await self._fetch(self._jira.get_issue, issue_key)
         comments = await self._fetch(self._jira.get_issue_comments, issue_key)
         result = {**asdict(issue), "comments": [asdict(c) for c in comments]}
         # Project/Key/Summary/Status/Assignee are all known for free via
@@ -596,6 +739,19 @@ class JiraConnector(Connector):
         blocks.append({"type": "field", "label": "Reporter", "value": getattr(issue, "reporter", "") or ""})
         blocks.append({"type": "heading", "label": "Description"})
         blocks.append({"type": "text", "text": description_text or "(none)"})
+        args = {"issue_key": issue_key}
+        if refs:
+            extra = issue.extra_fields or {}
+            result["fields"] = extra
+            new_info["Requested fields"] = ", ".join(extra)
+            blocks.append({
+                "type": "table",
+                "caption": "Requested fields",
+                "headers": ["Field", "Value"],
+                "rows": [[n, _field_cell(v)] for n, v in extra.items()],
+            })
+            pii_scan_text += "\n" + "\n".join(_field_cell(v) for v in extra.values())
+            args = {"issue_key": issue_key, "fields": fields}
         if comments:
             blocks.append({
                 "type": "table",
@@ -625,7 +781,7 @@ class JiraConnector(Connector):
             pii_scan_text=pii_scan_text,
             preview_blocks=blocks,
             my_email=self.my_email,
-            args={"issue_key": issue_key},
+            args=args,
         )
 
     # ------------------------------------------------------------------ #

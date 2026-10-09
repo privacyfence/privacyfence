@@ -98,9 +98,9 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Slack](#slack) | 11 | 6 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
 | [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
-| [Jira](#jira) | 10 | 5 | 1 | 4 |
+| [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
-| **Total** | **118** | **46** | **21** | **51** |
+| **Total** | **120** | **47** | **22** | **51** |
 
 ## Gmail
 
@@ -249,10 +249,12 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 |---|---|---|---|
 | `jira_find_users` | read | `auto` | Find Atlassian users by name or email and return their account ids. |
 | `jira_get_transitions` | read | `auto` | List the status transitions available for a Jira issue right now (name and target status), given its current workflow state. |
+| `jira_list_fields` | read | `auto` | List the Jira site's fields, built-in and custom, with the id and JQL names behind each display name. |
 | `jira_list_projects` | read | `auto` | List Jira projects accessible to the user (key, name, type, lead). |
 | `jira_refresh_user_cache` | read | `auto` | Re-fetch the names of every Atlassian account id PrivacyFence has cached. |
 | `jira_search_issues` | read | `auto` | Search Jira issues using JQL. |
 | `jira_get_issue` | read | `review` | Fetch full details of a Jira issue by key (e.g. PROJ-123), including description and comments. |
+| `jira_search_issues_with_fields` | read | `review` | Search Jira issues using JQL and add extra fields to each one: custom fields such as Story Points or Sprint, or built-in ones such as due date or fix versions. |
 | `jira_add_comment` | write | `popup` | Add a comment to an existing Jira issue. |
 | `jira_create_issue` | write | `popup` | Create a new Jira issue. |
 | `jira_transition_issue` | write | `popup` | Move a Jira issue to a new status by transition name (e.g. "Done", "In Progress") — call jira_get_transitions first to see what's valid from the issue's current status. |
