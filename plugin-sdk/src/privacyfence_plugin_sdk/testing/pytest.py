@@ -8,7 +8,7 @@ and ask for it in a test. The fixture is a factory that builds a :class:`PluginT
 same arguments, to use as an async context manager::
 
     async def test_home_page(plugin_host):
-        async with plugin_host(plugin) as host:
+        async with plugin_host(plugin, pages=True) as host:
             response = await host.get("/")
             assert response.status == 200
 

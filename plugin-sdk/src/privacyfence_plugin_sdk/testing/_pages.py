@@ -114,7 +114,8 @@ def _response(status: int, body: bytes, *, extra: dict[str, str] | None = None) 
 
 
 async def serve(
-    peer: Peer, principal: dict, method: str, target: str, query: dict[str, str] | None = None
+    peer: Peer, principal: dict, method: str, target: str, query: dict[str, str] | None = None,
+    *, enabled: bool = True,
 ) -> PageResponse:
     """One page request, start to finish: method, path, ``web.request``, then the response filter."""
     method = method.upper()
@@ -124,6 +125,8 @@ async def serve(
     path = normalize_path(raw_path)
     if path is None:
         return _response(400, b"Bad path.")
+    if not enabled:
+        return _response(404, b"Not Found")
     try:
         result = await peer.request("web.request", {
             "principal": principal, "method": "GET", "path": path, "query": {**parsed, **(query or {})},

@@ -38,6 +38,8 @@ def make_host(crash_tool: bool = False) -> PluginTestHost:
         max_gate_floor="auto",
         outputs=True,
         output_types=("text/csv",),
+        source_operations=("calendar.list_events",),
+        pages=True,
     )
 
 
