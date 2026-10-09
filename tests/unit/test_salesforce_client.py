@@ -1033,7 +1033,7 @@ class TestReportPagingError:
 
     def test_unknown_reason_rejected(self):
         with pytest.raises(ValueError):
-            ReportPagingError("nope", "msg")
+            raise ReportPagingError("nope", "msg")
 
     def test_reasons(self):
         assert REPORT_PAGING_REASONS == {

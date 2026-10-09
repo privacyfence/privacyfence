@@ -244,4 +244,5 @@ class TestPagedSalesforceReportSamples:
 
         produced, cursor = run_adapter("salesforce.report_run", self.client(monkeypatch), second["params"], state=state)
 
-        assert produced["page"] == second["data"]["page"] and cursor == second["next_cursor"] is None
+        assert produced["page"] == second["data"]["page"]
+        assert cursor is None and second["next_cursor"] is None
