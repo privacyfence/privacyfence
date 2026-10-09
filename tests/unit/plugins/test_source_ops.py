@@ -411,6 +411,12 @@ class TestAdapterSalesforcePagedRefusals:
         err = await _code(Env(tmp_path, salesforce=client).call(REPORT[0], {**REPORT[1], "page_by": "NOPE"}))
         assert err.extra == {"reason": "bad_page_by"}
 
+    @pytest.mark.parametrize("page_by", ["Account Name", "Num; DROP"])
+    async def test_a_page_by_that_is_not_a_column_name_is_bad_page_by(self, tmp_path, audit_dir, monkeypatch, page_by):
+        _, client = _analytics(monkeypatch, rows=3)
+        err = await _code(Env(tmp_path, salesforce=client).call(REPORT[0], {**REPORT[1], "page_by": page_by}))
+        assert err.code == "invalid_params" and err.extra == {"reason": "bad_page_by"}
+
     @pytest.mark.parametrize("columns", ["A", [], [1], [""], ["x" * 257], ["a"] * 101])
     async def test_columns_are_validated(self, tmp_path, audit_dir, columns):
         err = await _code(Env(tmp_path, salesforce=MagicMock()).call(

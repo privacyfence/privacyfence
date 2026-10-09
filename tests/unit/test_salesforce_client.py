@@ -890,6 +890,20 @@ class TestBuildKeysetMetadata:
         with pytest.raises(SalesforceClientError, match="Invalid report filter column"):
             build_keyset_metadata(TABULAR_SAVED, None, None, "Num; DROP", None)
 
+    @pytest.mark.parametrize("page_by", ["Account Name", "Num; DROP", "", "Num-1", "Näme", "A\nB"])
+    def test_page_by_that_is_not_a_column_name_is_bad_page_by(self, page_by):
+        with pytest.raises(ReportPagingError) as exc:
+            build_keyset_metadata(TABULAR_SAVED, None, None, page_by, None)
+        assert exc.value.reason == "bad_page_by"
+        assert isinstance(exc.value, SalesforceClientError)
+        assert "page_by" in str(exc.value)
+
+    def test_bad_page_by_is_refused_on_later_pages_too(self):
+        with pytest.raises(ReportPagingError) as exc:
+            build_keyset_metadata(TABULAR_SAVED, None, None, "Account Name", "PFQA-00003")
+        assert exc.value.reason == "bad_page_by"
+        assert "PFQA-00003" not in str(exc.value)
+
 
 def _page_result(
     keys, *, count=None, all_data=True, page_by="Num__c", aggregates=("RowCount",), fact_keys=("T!T",),
