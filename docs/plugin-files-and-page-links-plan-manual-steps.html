@@ -49,18 +49,18 @@ a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline
   <h2>Before implementation</h2>
 
   <section class="item" id="mb1">
-    <h3>1. Finish the plugin framework hardening branch</h3>
-    <div class="meta"><span><code>mb1-hardening-finished</code></span><span>About 5 minutes to check (the hardening run itself is separate)</span></div>
+    <h3>1. Merge the plugin framework hardening pull request</h3>
+    <div class="meta"><span><code>mb1-hardening-finished</code></span><span>About 5 minutes to check</span></div>
     <ol class="steps">
-      <li><input type="checkbox" id="mb1-1"><label for="mb1-1">Make sure the hardening plan's <code>/implement</code> run has merged all its phases into <code>feature/plugin-framework-hardening</code>.
-        <span class="see">Its plan is <a href="https://github.com/privacyfence/privacyfence/blob/feature/plugin-framework-hardening/docs/plugin-framework-hardening-plan.md">docs/plugin-framework-hardening-plan.md</a>. Its last phase deletes that file, so this link shows "404" once it is finished.</span></label></li>
-      <li><input type="checkbox" id="mb1-2"><label for="mb1-2">Or, if you already merged its pull request, check that it shows <strong>Merged</strong> in the <a href="https://github.com/privacyfence/privacyfence/pulls?q=is%3Apr+head%3Afeature%2Fplugin-framework-hardening">pull request list</a>.</label></li>
+      <li><input type="checkbox" id="mb1-1"><label for="mb1-1">Open <a href="https://github.com/privacyfence/privacyfence/pull/873">pull request 873</a> (plugin framework hardening and the page browser).
+        <span class="see">Its branch is complete. Merge it when its checks are green and you are happy with the review.</span></label></li>
+      <li><input type="checkbox" id="mb1-2"><label for="mb1-2">If you would rather start before it merges, that works too: the first phase merges the branch, and this plan's pull request then carries #873's changes until #873 merges.</label></li>
       <li><input type="checkbox" id="mb1-3"><label for="mb1-3">In a terminal in your checkout, run:
         <pre>git fetch origin
 git show origin/feature/plugin-framework-hardening:docs/plugin-framework-hardening-plan.md</pre>
         <span class="see">You should see an error that the path does not exist.</span></label></li>
     </ol>
-    <p class="done"><strong>Done when:</strong> the command above fails with "does not exist", or the hardening pull request is merged. Then run <code>/implement</code> with the plan URL.</p>
+    <p class="done"><strong>Done when:</strong> pull request 873 shows Merged, or you have decided to start with it open (the command above already fails today). Then run <code>/implement</code> with the plan URL.</p>
   </section>
 
   <h2>After implementation</h2>

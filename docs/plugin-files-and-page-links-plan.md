@@ -34,24 +34,21 @@ Tracking issue: [privacyfence/privacyfence#846](https://github.com/privacyfence/
 ### The stack this builds on
 
 - `main` (203ce182) is at protocol **1.1.0** (`src/privacyfence/plugins/constants.py:13`).
-- The plugin page browser was first planned on `plan/plugin-page-browser`
-  (`docs/plugin-page-browser-plan.md`, branch `feature/plugin-page-browser`, which was never
-  created). That plan was folded into `plan/plugin-framework-hardening` and is being implemented on
-  **`feature/plugin-framework-hardening`** (tracking issue 846). At 2bd334d9 that branch has merged
-  phases p0 to p13 and p18, so it already has **protocol 1.2.0** (`pages.list`, `PageEntry`,
-  `WRITE_RESULT_MAX_BYTES`, `SEND_TIMEOUT_SECONDS`). Phases p14 to p17 (SDK page index, host page
-  index, the `/plugin-pages` browser, conformance) and p19 to p21 (docs and ADRs 0133 to 0135) are
-  still to run. Its PR is not open yet.
-- This plan therefore starts from the finished `feature/plugin-framework-hardening`
-  (`manual_before` `mb1-hardening-finished`), and its p0 merges that branch, or `main` if the
-  hardening PR has merged by then.
-- **ADR numbers collide.** `main` has ADR 0132 (devflow toolkit) and 0133 (Salesforce paging);
-  the hardening branch writes its own 0132 to 0135. Whatever numbers the hardening branch ends up
-  with, this plan's two ADRs take the next two free numbers when its last phase runs (expected
-  0138 and 0139).
+- The plugin page browser was first planned on `plan/plugin-page-browser`. That plan was folded into
+  `plan/plugin-framework-hardening` and built on **`feature/plugin-framework-hardening`**, now open as
+  [privacyfence/privacyfence#873](https://github.com/privacyfence/privacyfence/pull/873) (head 690e3c8b,
+  all phases and `origin/main` merged, final review approved, its plan document deleted). It has
+  **protocol 1.2.0** (`pages.list`, `PageEntry`, the `/plugin-pages` browser, `WRITE_RESULT_MAX_BYTES`,
+  `SEND_TIMEOUT_SECONDS`) and ADRs 0136 to 0139 (0139 is the page browser, amending ADR 0124). The PR
+  was still blocked on CI and review when this plan was last checked.
+- This plan therefore starts from PR 873 (`manual_before` `mb1-hardening-finished`). Its p0 merges
+  `origin/main` if #873 has merged, and otherwise the branch first; in that case this plan's PR
+  carries #873's diff until #873 merges.
+- **ADR numbers.** `docs/adr/` ends at 0139 once #873 is in, so this plan's two ADRs are expected to take
+  0140 and 0141; p8 takes the next two free numbers whatever they are.
 
-Paths and line numbers below are at 2bd334d9 on `feature/plugin-framework-hardening`; they may move
-by a few lines once its remaining phases land.
+Paths and line numbers below were taken at 2bd334d9 on `feature/plugin-framework-hardening` and the
+symbols re-checked at #873's head 690e3c8b; line numbers may be a few lines off.
 
 ### Plugin pages (ADR 0124)
 
@@ -461,7 +458,7 @@ def param_description(description: str, spec: FileParamSpec) -> str
      upload id in {spec.param}.")`. `ref = file_reference(value)`; an empty `ref` raises
      `LocalFileAccessError(f"{tool_title} needs a file in {spec.param}.")`.
   2. `local_files.require_local_files([ref], max_total_bytes=spec.max_bytes, download_mode="local")`
-     (plugins run in local mode only: `daemon_main.py` builds `PluginHost` only when `local_mode`, so a future
+     (plugins run in local mode only: `daemon_main._build_plugin_host` is the local-mode `PluginHost`, so a future
      org-mode plugin host must revisit this argument). It may raise `LocalFilesNeeded` (the shim fetches the file and
      re-sends the call) or `LocalFileAccessError`; both propagate unchanged.
   3. `data = local_files.read_local_file(ref, download_mode="local")`.
@@ -684,16 +681,16 @@ mechanical to look up after the merge. pf-pages takes it in its own follow-up.
 
 ## ADRs
 
-Numbers are the next two free in `docs/adr/` when the last phase runs (expected 0138 and 0139,
+Numbers are the next two free in `docs/adr/` when the last phase runs (expected 0140 and 0141,
 after the hardening branch's four).
 
-- **ADR 0138** (expected), `docs/adr/<n>-a-plugin-page-opens-links-in-new-tabs-only-when-its-manifest-says-so.md`:
+- **ADR 0140** (expected), `docs/adr/<n>-a-plugin-page-opens-links-in-new-tabs-only-when-its-manifest-says-so.md`:
   a plugin page is served with `allow-popups allow-popups-to-escape-sandbox` only when the
   plugin's manifest sets `page_new_tabs: true`, shown on the review dialog; the framed approval page
   never is; same-tab navigation is recorded as already working; the CSP is recorded as allowing
   everything a self-contained dashboard needs (inline script and style, `data:` images and fonts).
   Amends ADR 0124.
-- **ADR 0139** (expected), `docs/adr/<n+1>-plugin-tools-take-files-by-reference-and-privacyfence-passes-the-bytes.md`:
+- **ADR 0141** (expected), `docs/adr/<n+1>-plugin-tools-take-files-by-reference-and-privacyfence-passes-the-bytes.md`:
   protocol 1.3 file parameters; the AI passes a path or an upload slot reference, PrivacyFence reads
   the file through the local file bridge, shows a daemon-made block on the card, and sends the bytes
   with `tool.prepare` and `tool.execute`; only gated, non-read-only tools; one file of at most 8 MiB.
@@ -704,9 +701,9 @@ after the hardening branch's four).
 Step by step: [the manual steps page](https://claude.ai/artifact/BztwskChbss3zbZosuTnzL)
 (`docs/plugin-files-and-page-links-plan-manual-steps.html`).
 
-- **Before** (`mb1-hardening-finished`): `feature/plugin-framework-hardening` has all its phases
-  merged (its plan document is deleted on that branch), or it has merged into `main`. This plan
-  builds on its protocol 1.2.0 and page browser.
+- **Before** (`mb1-hardening-finished`): [#873](https://github.com/privacyfence/privacyfence/pull/873)
+  (plugin framework hardening and the page browser, protocol 1.2.0) is merged into `main`. Its branch is
+  complete, so if you start before it merges, p0 merges the branch and this plan's PR carries #873's diff.
 - **After** (`ma1-reference-dashboards`): open the owner's two reference dashboards through
   `scripts/plugin_page_preview.py --new-tabs` in Chrome: they render fully with no CSP violation in
   the console, and a Jira link opens a new tab with `window.opener === null`.
@@ -762,9 +759,9 @@ manual_steps_artifact: https://claude.ai/artifact/BztwskChbss3zbZosuTnzL
 manual_steps_source: docs/plugin-files-and-page-links-plan-manual-steps.html
 manual_before:
   - id: mb1-hardening-finished
-    title: Finish feature/plugin-framework-hardening (all its phases merged), or merge its PR into main
+    title: Merge PR 873 (plugin framework hardening) into main, or accept that this PR carries its diff
     why: p0 merges that branch; every phase builds on its protocol 1.2.0, the page browser and its host and SDK changes. Without it p3's version bump and p6's test host edits conflict with the remaining hardening phases.
-    done_when: "`git fetch origin && git show origin/feature/plugin-framework-hardening:docs/plugin-framework-hardening-plan.md` fails with 'does not exist' (the hardening plan retired itself), or the hardening PR shows Merged; and on that branch merged with main, `ls docs/adr | cut -c1-4 | sort | uniq -d` prints nothing (no two ADRs share a number: the hardening branch's ADR 0132 must have been renumbered past main's 0132 and 0133)."
+    done_when: "PR 873 shows Merged (preferred), or you have decided to start with it open. Either way `git fetch origin && git show origin/feature/plugin-framework-hardening:docs/plugin-framework-hardening-plan.md` fails with 'does not exist' (it already does at head 690e3c8b); and on that branch merged with main, `ls docs/adr | cut -c1-4 | sort | uniq -d` prints nothing (no two ADRs share a number; true at head 690e3c8b, where its ADRs are 0136 to 0139)."
 manual_after:
   - id: ma1-reference-dashboards
     title: Open the two reference dashboards as plugin pages in Chrome and follow a Jira link
@@ -806,9 +803,8 @@ phases:
          `grep -n "def list_pages" src/privacyfence/plugins/host.py` must print a line, and
          `ls docs/adr | cut -c1-4 | sort | uniq -d` must print nothing. If any check fails, stop with
          status=blocked: the hardening branch is not finished (manual_before mb1-hardening-finished).
-      4. In docs/plugin-files-and-page-links-plan.md "Current state", replace "Paths and line numbers below are at
-         2bd334d9 on `feature/plugin-framework-hardening`" with "Paths and line numbers below were taken at 2bd334d9
-         on `feature/plugin-framework-hardening`; this branch merged it at <short SHA of the merged head>". Change
+      4. In docs/plugin-files-and-page-links-plan.md "Current state", at the end of the sentence that begins "Paths and
+         line numbers below were taken at", append " This branch merged <short SHA of the merged head>." Change
          nothing else in the plan.
       5. Run `ruff check .` and `python3 -m pytest tests/unit -q`. A failure here is the merged branches' own: stop
          with status=blocked and report it; do not fix it in this phase.
@@ -1204,7 +1200,7 @@ phases:
          sections 1 and 2; Alternatives = "What was rejected / Links"; Consequences = the five risks of Design
          section 2, the per-plugin review, eval and downloads still blocked; Verification = test_plugin_pages_browser.py's
          new classes, test_routes_plugins.py, test_server.py, and the preview script for the manual checks; Related =
-         issue 846, ADR 0124, the page-browser ADR from the hardening branch, ADR 0127. Files ADR: Status and
+         issue 846, ADR 0124, ADR 0139 (the page browser), ADR 0127. Files ADR: Status and
          "Amends [ADR 0122](…)."; Context = Goal item 3; Decision = Design sections 5 to 8; Alternatives = "What was
          rejected / Files"; Consequences = one file per tool of at most 8 MiB, every file passes a card or a saved
          rule, no bytes held across calls, the plugin never sees a path or token, 1.2 plugins unchanged; Verification
