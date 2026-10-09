@@ -15,6 +15,7 @@ _MAX_ID_CHARS = 256
 _MAX_RANGE_CHARS = 512
 _MAX_TIME_CHARS = 64
 _MAX_JQL_CHARS = 8192
+_MAX_REPORT_COLUMNS = 100
 CURSOR_MAX_CHARS = 4096
 JIRA_PAGE_SIZE_MAX = 100
 CALENDAR_PAGE_SIZE_MAX = 250
@@ -107,6 +108,18 @@ def _parse_report_filters(raw: str) -> None:
 def _salesforce(params: dict) -> None:
     _str(params, "report_id", max_len=_MAX_ID_CHARS)
     _filters(params)
+    columns = params.get("columns")
+    if columns is not None:
+        if (
+            not isinstance(columns, list)
+            or not 1 <= len(columns) <= _MAX_REPORT_COLUMNS
+            or not all(isinstance(c, str) and 0 < len(c) <= _MAX_ID_CHARS for c in columns)
+        ):
+            raise _bad("params.columns must be a list of column names")
+    page_by = _str(params, "page_by", max_len=_MAX_ID_CHARS, required=False)
+    cursor = _str(params, "cursor", max_len=CURSOR_MAX_CHARS, required=False)
+    if cursor is not None and page_by is None:
+        raise _bad("cursor needs page_by")
 
 
 def _jira(params: dict) -> None:
