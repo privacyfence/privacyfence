@@ -24,6 +24,8 @@ from privacyfence.plugins import cursors
 from privacyfence.plugins.constants import DRIVE_CHUNK_BYTES, SOURCE_OPERATIONS
 from privacyfence.plugins.source_ops import SOURCE_ADAPTERS
 from privacyfence.plugins.spool import DownloadSpool
+from privacyfence.salesforce_client import SalesforceClient
+from tests.fixtures.salesforce_analytics import COLUMNS, KEY, REPORT_ID, FakeAnalytics, make_rows, tabular_report
 
 pytestmark = pytest.mark.unit
 
@@ -33,6 +35,7 @@ SAMPLES_DIR = (
 
 
 PAGED = ("jira.search", "calendar.list_events")
+SALESFORCE_PAGED_SAMPLES = ("salesforce.report_run.paged", "salesforce.report_run.paged.page2")
 
 
 def sample(operation: str, page: int = 1) -> dict:
@@ -62,7 +65,7 @@ def run_adapter(operation: str, client, params: dict, spool=None, state=None):
 
 def test_there_is_one_sample_per_source_operation():
     assert sorted(p.stem for p in SAMPLES_DIR.glob("*.json")) == sorted(
-        [*SOURCE_OPERATIONS, *(f"{op}.page2" for op in PAGED)]
+        [*SOURCE_OPERATIONS, *(f"{op}.page2" for op in PAGED), *SALESFORCE_PAGED_SAMPLES]
     )
     for operation in SOURCE_OPERATIONS:
         loaded = sample(operation)
@@ -207,3 +210,38 @@ class TestPageTwoSamples:
         assert {item.get("key") or item["id"] for item in produced}.isdisjoint(
             {item.get("key") or item["id"] for item in first["data"]}
         )
+
+
+class TestPagedSalesforceReportSamples:
+    """The paged ``salesforce.report_run`` samples carry the page info and cursor the daemon issues."""
+
+    @staticmethod
+    def client(monkeypatch):
+        fake = FakeAnalytics(tabular_report(), COLUMNS, make_rows(5), row_limit=3)
+        client = SalesforceClient(config={"access_token": "tok", "instance_url": "https://my.salesforce.com"})
+        monkeypatch.setattr(client, "_get_sf", lambda: SimpleNamespace(restful=fake.restful))
+        return client
+
+    @staticmethod
+    def pages():
+        return sample("salesforce.report_run.paged"), sample("salesforce.report_run.paged.page2")
+
+    def test_page_one_matches_the_daemon(self, monkeypatch):
+        first, _ = self.pages()
+        assert first["params"]["report_id"] == REPORT_ID and first["params"]["page_by"] == KEY
+
+        produced, cursor = run_adapter("salesforce.report_run", self.client(monkeypatch), first["params"])
+
+        assert produced["page"] == first["data"]["page"] and cursor == first["next_cursor"]
+
+    def test_page_two_matches_the_daemon_for_the_samples_own_cursor(self, monkeypatch):
+        first, second = self.pages()
+        assert second["params"] == {**first["params"], "cursor": first["next_cursor"]}
+
+        adapter = SOURCE_ADAPTERS["salesforce.report_run"]
+        params = {key: value for key, value in second["params"].items() if key != "cursor"}
+        state = cursors.decode(first["next_cursor"], "salesforce.report_run", adapter.bound(adapter.validate(params)))
+
+        produced, cursor = run_adapter("salesforce.report_run", self.client(monkeypatch), second["params"], state=state)
+
+        assert produced["page"] == second["data"]["page"] and cursor == second["next_cursor"] is None

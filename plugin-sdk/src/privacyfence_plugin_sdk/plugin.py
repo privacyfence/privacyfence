@@ -177,6 +177,33 @@ class SourceClient:
                 return
             cursor = result.next_cursor
 
+    async def report_pages(
+        self, report_id: str, *, page_by: str, columns: list[str] | None = None,
+        filters: list[dict] | None = None,
+    ) -> AsyncIterator[SourceResult]:
+        """Yield each page of a Salesforce report, read in order of the unique column ``page_by``, until the host gives no ``next_cursor``."""
+        params: dict[str, Any] = {"report_id": report_id, "page_by": page_by}
+        if columns is not None:
+            params["columns"] = columns
+        if filters is not None:
+            params["filters"] = filters
+        seen: set[str] = set()
+        async for page in self.pages("salesforce.report_run", **params):
+            try:
+                index = page.data["reportMetadata"]["detailColumns"].index(page_by)
+                rows = page.data["factMap"]["T!T"]["rows"]
+                keys = [json.dumps(row["dataCells"][index].get("value"), sort_keys=True) for row in rows]
+            except (KeyError, ValueError, TypeError, IndexError, AttributeError):
+                raise SourceError("internal_error", "malformed salesforce.report_run page") from None
+            for key in keys:
+                if key in seen:
+                    raise SourceError(
+                        "invalid_params", f"page_by {page_by!r} is not unique: a value repeats across pages",
+                        reason="not_unique",
+                    )
+                seen.add(key)
+            yield page
+
     async def collect(self, operation: str, **params: Any) -> list:
         """All items of a paged ``jira.search`` or ``calendar.list_events``, concatenated."""
         if operation not in _PAGED_OPERATIONS:
