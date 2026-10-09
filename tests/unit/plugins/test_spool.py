@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from types import SimpleNamespace
 
@@ -246,3 +247,121 @@ class TestIdleSweep:
         (root / "stray").write_bytes(b"x")
         DownloadSpool(root, clock=clock)
         assert _files(root) == []
+
+
+def _rows(n, width=50):
+    return [[f"r{i}", "x" * width] for i in range(n)]
+
+
+def _list_size(rows):
+    return len(json.dumps(rows).encode())
+
+
+class TestRowSnapshots:
+    def test_rows_come_back_across_two_pages(self, spool):
+        rows = _rows(10)
+        snapshot = spool.put_rows("p", rows)
+        budget = _list_size(rows[:6])
+        first, end, total = spool.rows_page("p", snapshot, 0, budget)
+        assert first == rows[:6] and end == 6 and total == 10
+        second, end, total = spool.rows_page("p", snapshot, end, budget)
+        assert second == rows[6:] and end == 10 and total == 10
+
+    def test_a_page_fills_the_budget_exactly(self, spool):
+        rows = _rows(5)
+        snapshot = spool.put_rows("p", rows)
+        got, end, _ = spool.rows_page("p", snapshot, 0, _list_size(rows[:3]))
+        assert len(got) == 3
+        got, end, _ = spool.rows_page("p", snapshot, 0, _list_size(rows[:3]) - 1)
+        assert len(got) == 2
+
+    def test_reading_at_the_row_count_is_an_empty_page(self, spool):
+        snapshot = spool.put_rows("p", _rows(3))
+        assert spool.rows_page("p", snapshot, 3, 1000) == ([], 3, 3)
+
+    def test_an_unknown_snapshot_is_a_key_error(self, spool):
+        with pytest.raises(KeyError):
+            spool.rows_page("p", "0123456789abcdef", 0, 1000)
+
+    def test_a_snapshot_belongs_to_its_plugin(self, spool):
+        snapshot = spool.put_rows("p", _rows(3))
+        with pytest.raises(KeyError):
+            spool.rows_page("other", snapshot, 0, 1000)
+
+    def test_the_fifth_snapshot_evicts_the_least_recently_used(self, spool, clock, tmp_path):
+        snapshots = []
+        for _ in range(4):
+            snapshots.append(spool.put_rows("p", _rows(2)))
+            clock.now += 1
+        spool.rows_page("p", snapshots[0], 0, 1000)  # the first is now the most recently used
+        clock.now += 1
+        spool.put_rows("p", _rows(2))
+        assert len(_files(tmp_path / "spool")) == 4
+        with pytest.raises(KeyError):
+            spool.rows_page("p", snapshots[1], 0, 1000)
+        assert spool.rows_page("p", snapshots[0], 0, 1000)[2] == 2
+
+    def test_another_plugins_snapshots_are_not_evicted(self, spool, clock):
+        mine = spool.put_rows("a", _rows(2))
+        for _ in range(6):
+            clock.now += 1
+            spool.put_rows("b", _rows(2))
+        assert spool.rows_page("a", mine, 0, 1000)[2] == 2
+
+    def test_a_snapshot_idle_past_the_limit_is_swept(self, spool, clock, tmp_path):
+        snapshot = spool.put_rows("p", _rows(2))
+        clock.now += DRIVE_SPOOL_IDLE_SECONDS + 1
+        spool.sweep()
+        assert _files(tmp_path / "spool") == []
+        with pytest.raises(KeyError):
+            spool.rows_page("p", snapshot, 0, 1000)
+
+    def test_clear_drops_the_snapshots(self, spool, tmp_path):
+        snapshot = spool.put_rows("p", _rows(2))
+        spool.clear()
+        assert _files(tmp_path / "spool") == []
+        with pytest.raises(KeyError):
+            spool.rows_page("p", snapshot, 0, 1000)
+
+    def test_a_vanished_file_is_a_key_error(self, spool, tmp_path):
+        snapshot = spool.put_rows("p", _rows(2))
+        for path in _files(tmp_path / "spool"):
+            path.unlink()
+        with pytest.raises(KeyError):
+            spool.rows_page("p", snapshot, 0, 1000)
+
+    def test_one_row_bigger_than_the_budget_is_payload_too_large(self, spool):
+        snapshot = spool.put_rows("p", _rows(3))
+        with pytest.raises(RpcError) as err:
+            spool.rows_page("p", snapshot, 0, 20)
+        assert err.value.code == "payload_too_large"
+
+    def test_a_row_with_a_next_line_character_is_one_row(self, spool):
+        rows = [["a b\u0085c", "d\u2028e"], ["z"]]
+        snapshot = spool.put_rows("p", rows)
+        got, end, total = spool.rows_page("p", snapshot, 0, 1000)
+        assert got == rows and end == 2 and total == 2
+
+    def test_a_lone_surrogate_is_held_escaped(self, spool):
+        snapshot = spool.put_rows("p", [["\ud800"]])
+        assert spool.rows_page("p", snapshot, 0, 1000)[0] == [["\ud800"]]
+
+    def test_snapshot_files_are_private(self, spool, tmp_path):
+        spool.put_rows("p", _rows(2))
+        (path,) = _files(tmp_path / "spool")
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+class TestNotDownloadable:
+    @pytest.mark.parametrize("mime_type", [
+        "application/vnd.google-apps.form",
+        "application/vnd.google-apps.folder",
+        "application/vnd.google-apps.shortcut",
+    ])
+    def test_a_non_exportable_google_type_is_refused(self, spool, mime_type):
+        drive = RangeDrive(b"abc", mime_type=mime_type)
+        drive.download_range = lambda *a: pytest.fail("download_range was called")
+        drive.download_file_bytes = lambda *a: pytest.fail("download_file_bytes was called")
+        with pytest.raises(RpcError) as err:
+            _read_at(spool, drive, 0)
+        assert err.value.code == "invalid_params" and err.value.extra["reason"] == "not_downloadable"

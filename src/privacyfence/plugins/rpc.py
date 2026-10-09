@@ -174,7 +174,11 @@ class RpcPeer:
     async def _send(self, message: dict, *, timeout: float | None = None) -> None:
         limit = SEND_TIMEOUT_SECONDS if timeout is None else timeout
         try:
-            line = json.dumps(message, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+            try:
+                line = json.dumps(message, separators=(",", ":"), allow_nan=False, ensure_ascii=False).encode() + b"\n"
+            except UnicodeEncodeError:
+                # A lone surrogate has no UTF-8 form; the escaped form is plain ASCII.
+                line = json.dumps(message, separators=(",", ":"), allow_nan=False).encode() + b"\n"
         except (TypeError, ValueError):
             raise RpcError("internal_error", "message is not JSON") from None
         if len(line) > MAX_LINE_BYTES:
