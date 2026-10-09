@@ -380,13 +380,19 @@ class JiraConnector(Connector):
                     "including description and comments. Returns the issue as {key, summary, "
                     "status, issue_type, priority, assignee, reporter, description, labels, "
                     "created, updated, url, comments: a list of {id, author, body, created, "
-                    "updated}}. Use jira_search_issues instead to find issues without "
-                    "reading them in full. Mentions appear as @[Name](accountId). Requires user approval."
+                    "updated}}; with fields, it also has a fields object mapping each requested field's Jira name "
+                    "to its value, as jira_search_issues_with_fields returns it. Use jira_search_issues instead to "
+                    "find issues without reading them in full. Mentions appear as @[Name](accountId). Requires user "
+                    "approval."
                 ),
                 params=[
                     ToolParam("issue_key", "str",
                               description="Key of the issue, e.g. PROJ-123, from jira_search_issues "
                                           "(its key field)."),
+                    ToolParam("fields", "str", required=False, default="",
+                              description="Optional JSON array of extra fields to return, as in "
+                                          "jira_search_issues_with_fields, e.g. [\"Story Points\"]. "
+                                          "Empty returns only the standard fields."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -674,8 +680,12 @@ class JiraConnector(Connector):
             args={"jql": jql, "fields": fields},
         )
 
-    async def _get_issue(self, issue_key: str) -> Any:
-        issue = await self._fetch(self._jira.get_issue, issue_key)
+    async def _get_issue(self, issue_key: str, fields: str = "") -> Any:
+        refs = _parse_field_refs(fields, "jira_get_issue", required=False)
+        if refs:
+            issue = await self._fetch(self._jira.get_issue, issue_key, refs)
+        else:
+            issue = await self._fetch(self._jira.get_issue, issue_key)
         comments = await self._fetch(self._jira.get_issue_comments, issue_key)
         result = {**asdict(issue), "comments": [asdict(c) for c in comments]}
         # Project/Key/Summary/Status/Assignee are all known for free via
@@ -729,6 +739,19 @@ class JiraConnector(Connector):
         blocks.append({"type": "field", "label": "Reporter", "value": getattr(issue, "reporter", "") or ""})
         blocks.append({"type": "heading", "label": "Description"})
         blocks.append({"type": "text", "text": description_text or "(none)"})
+        args = {"issue_key": issue_key}
+        if refs:
+            extra = issue.extra_fields or {}
+            result["fields"] = extra
+            new_info["Requested fields"] = ", ".join(extra)
+            blocks.append({
+                "type": "table",
+                "caption": "Requested fields",
+                "headers": ["Field", "Value"],
+                "rows": [[n, _field_cell(v)] for n, v in extra.items()],
+            })
+            pii_scan_text += "\n" + "\n".join(_field_cell(v) for v in extra.values())
+            args = {"issue_key": issue_key, "fields": fields}
         if comments:
             blocks.append({
                 "type": "table",
@@ -758,7 +781,7 @@ class JiraConnector(Connector):
             pii_scan_text=pii_scan_text,
             preview_blocks=blocks,
             my_email=self.my_email,
-            args={"issue_key": issue_key},
+            args=args,
         )
 
     # ------------------------------------------------------------------ #
