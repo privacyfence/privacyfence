@@ -257,6 +257,8 @@ def _wait_for_shutdown() -> None:
 # _run_update_check_timer (started as its own daemon thread by
 # run_app(), below) is now what fires it.
 UPDATE_CHECK_TIMER_INTERVAL_SECONDS = 6 * 60 * 60
+# Worst case of stop_all is about 21 s (lock wait, shutdown notices, grace, terminate, log drain, services).
+PLUGIN_STOP_ALL_TIMEOUT_SECONDS = 25.0
 
 
 def _run_update_check_timer(controller: Any) -> None:
@@ -2027,7 +2029,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
         if plugins_loop is not None:
             # Before the audit log closes: stopping a plugin writes lifecycle entries.
             try:
-                asyncio.run_coroutine_threadsafe(plugin_host.stop_all(), plugins_loop).result(timeout=10)
+                asyncio.run_coroutine_threadsafe(plugin_host.stop_all(), plugins_loop).result(
+                    timeout=PLUGIN_STOP_ALL_TIMEOUT_SECONDS
+                )
             except Exception as exc:
                 logger.warning("Stopping the plugins failed: %s", exc)
         audit_logger.close()

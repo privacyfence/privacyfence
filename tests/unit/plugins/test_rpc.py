@@ -529,6 +529,77 @@ class TestBrokenStreams:
         assert exc.value.code == "internal_error"
 
 
+class _StuckWriter:
+    """A writer whose drain never finishes, like a pipe to a process that stopped reading."""
+
+    def __init__(self, *, wait_closed_hangs: bool = False):
+        self.written: list[bytes] = []
+        self.aborted = 0
+        self._never = asyncio.Event()
+        self._wait_closed_hangs = wait_closed_hangs
+        self.transport = self
+
+    def write(self, data):
+        self.written.append(data)
+
+    async def drain(self):
+        await self._never.wait()
+
+    def abort(self):
+        self.aborted += 1
+
+    def close(self):
+        pass
+
+    async def wait_closed(self):
+        if self._wait_closed_hangs:
+            await self._never.wait()
+
+
+class TestSendTimeout:
+    async def _stuck_peer(self, monkeypatch, **kwargs):
+        monkeypatch.setattr(rpc, "SEND_TIMEOUT_SECONDS", 0.2)
+        (ra, _), _other = await _streams()
+        writer = _StuckWriter(**kwargs)
+        closes: list[str] = []
+        peer = RpcPeer(ra, writer, handlers={}, on_close=closes.append)  # type: ignore[arg-type]
+        return peer, writer, closes
+
+    async def test_a_send_that_does_not_drain_times_out(self, monkeypatch):
+        peer, writer, closes = await self._stuck_peer(monkeypatch)
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(RpcError) as exc:
+            await peer.notify("m", {})
+        assert exc.value.code == "timeout"
+        assert asyncio.get_running_loop().time() - started < 1
+        assert peer.closed
+        assert closes == ["write_timeout"]
+        assert writer.aborted == 1
+
+    async def test_a_send_queued_behind_a_stuck_one_fails_fast(self, monkeypatch):
+        peer, writer, _ = await self._stuck_peer(monkeypatch)
+        first = asyncio.create_task(peer.notify("first", {}))
+        await asyncio.wait_for(_until(lambda: len(writer.written) == 1), 1)
+        second = asyncio.create_task(peer.notify("second", {}))
+        results = await asyncio.wait_for(asyncio.gather(first, second, return_exceptions=True), 2)
+        assert all(isinstance(r, RpcError) for r in results)
+        assert results[1].code == "timeout" or "peer closed" in str(results[1])
+        assert len(writer.written) == 1
+
+    async def test_a_request_whose_send_times_out_leaves_nothing_pending(self, monkeypatch):
+        peer, _, _ = await self._stuck_peer(monkeypatch)
+        with pytest.raises(RpcError) as exc:
+            await peer.request("m", {})
+        assert exc.value.code == "timeout"
+        assert peer._pending == {}
+
+    async def test_close_does_not_wait_for_a_stuck_transport(self, monkeypatch):
+        monkeypatch.setattr(rpc, "CLOSE_WAIT_SECONDS", 0.1)
+        peer, writer, _ = await self._stuck_peer(monkeypatch, wait_closed_hangs=True)
+        await asyncio.wait_for(peer.close(), 1)
+        assert writer.aborted == 1
+
+
 class TestInFlight:
     async def test_incoming_cap_answers_invalid_request(self):
         peer, rb, wb, closes = await _raw()

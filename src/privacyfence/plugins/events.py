@@ -11,6 +11,7 @@ local mode.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -59,12 +60,16 @@ class EventFanout:
 
     async def send(self, events: list[dict[str, str]]) -> None:
         """Notify every running plugin of ``events``; a plugin that cannot be reached is skipped."""
-        for peer in list(self._peers()):
-            for params in events:
-                try:
-                    await peer.notify(EVENT_STATE_CHANGED, dict(params))
-                except Exception:
-                    logger.debug("Could not send %s to a plugin", EVENT_STATE_CHANGED, exc_info=True)
+        await asyncio.gather(*(self._send_to(peer, events) for peer in list(self._peers())))
+
+    @staticmethod
+    async def _send_to(peer: RpcPeer, events: list[dict[str, str]]) -> None:
+        for params in events:
+            try:
+                await peer.notify(EVENT_STATE_CHANGED, dict(params))
+            except Exception:
+                logger.debug("Could not send %s to a plugin", EVENT_STATE_CHANGED, exc_info=True)
+                return
 
 
 __all__ = ["EVENT_STATE_CHANGED", "EventFanout", "transitions"]
