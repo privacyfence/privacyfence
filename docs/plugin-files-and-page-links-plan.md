@@ -3,7 +3,7 @@
 ## Goal
 
 The pages plugin ([privacyfence/pf-pages](https://github.com/privacyfence/pf-pages), plan
-`docs/pf-pages-plan.md` on its `main`) publishes AI-built HTML dashboards and shows them as plugin
+`pf-pages-plan.md` in the `docs` directory on its `main`) publishes AI-built HTML dashboards and shows them as plugin
 pages. The owner's two reference pages are self-contained dashboards of 600 to 670 KB: inline
 `<script>` and `<style>`, JSON in `<script type="application/json">`, `data:` fonts and images, no
 network requests. Their Jira, Salesforce and report links use `target="_blank"`. Three framework
@@ -48,7 +48,7 @@ Tracking issue: [privacyfence/privacyfence#846](https://github.com/privacyfence/
   0140 and 0141; p8 takes the next two free numbers whatever they are.
 
 Paths and line numbers below were taken at 2bd334d9 on `feature/plugin-framework-hardening` and the
-symbols re-checked at #873's head 690e3c8b; line numbers may be a few lines off.
+symbols re-checked at #873's head 690e3c8b; line numbers may be a few lines off. This branch merged 45e955ac.
 
 ### Plugin pages (ADR 0124)
 
@@ -718,7 +718,7 @@ Step by step: [the manual steps page](https://claude.ai/artifact/BztwskChbss3zbZ
 ## Risks and open questions
 
 - **The hardening branch is not finished.** p0 stops with `status=blocked` when
-  `git show HEAD:docs/plugin-framework-hardening-plan.md` still succeeds after its merge, or when
+  `git ls-tree -r --name-only HEAD | grep -q plugin-framework-hardening-plan.md` succeeds after its merge, or when
   `grep -n 'PROTOCOL_VERSION = "1.2.0"' src/privacyfence/plugins/constants.py` prints nothing.
 - **Line numbers.** They are at 2bd334d9. A brief names symbols; when a symbol it names is missing,
   the worker stops with `status=blocked` instead of guessing.
@@ -761,7 +761,7 @@ manual_before:
   - id: mb1-hardening-finished
     title: Merge PR 873 (plugin framework hardening) into main, or accept that this PR carries its diff
     why: p0 merges that branch; every phase builds on its protocol 1.2.0, the page browser and its host and SDK changes. Without it p3's version bump and p6's test host edits conflict with the remaining hardening phases.
-    done_when: "PR 873 shows Merged (preferred), or you have decided to start with it open. Either way `git fetch origin && git show origin/feature/plugin-framework-hardening:docs/plugin-framework-hardening-plan.md` fails with 'does not exist' (it already does at head 690e3c8b); and on that branch merged with main, `ls docs/adr | cut -c1-4 | sort | uniq -d` prints nothing (no two ADRs share a number; true at head 690e3c8b, where its ADRs are 0136 to 0139)."
+    done_when: "PR 873 shows Merged (preferred), or you have decided to start with it open. Either way `git fetch origin && git ls-tree -r --name-only origin/feature/plugin-framework-hardening | grep plugin-framework-hardening-plan.md` prints nothing (it already does at head 690e3c8b); and on that branch merged with main, `ls docs/adr | cut -c1-4 | sort | uniq -d` prints nothing (no two ADRs share a number; true at head 690e3c8b, where its ADRs are 0136 to 0139)."
 manual_after:
   - id: ma1-reference-dashboards
     title: Open the two reference dashboards as plugin pages in Chrome and follow a Jira link
@@ -798,7 +798,7 @@ phases:
          run `git merge --no-ff origin/main`. Otherwise run `git merge --no-ff origin/feature/plugin-framework-hardening`
          and then `git merge --no-ff origin/main`. Resolve conflicts only in files the merged branches
          changed, keeping both sides; never edit code beyond conflict markers.
-      3. Check: `git show HEAD:docs/plugin-framework-hardening-plan.md` must fail, and
+      3. Check: `git ls-tree -r --name-only HEAD | grep -q plugin-framework-hardening-plan.md` must fail, and
          `grep -n 'PROTOCOL_VERSION = "1.2.0"' src/privacyfence/plugins/constants.py` must print a line, and
          `grep -n "def list_pages" src/privacyfence/plugins/host.py` must print a line, and
          `ls docs/adr | cut -c1-4 | sort | uniq -d` must print nothing. If any check fails, stop with
@@ -810,7 +810,7 @@ phases:
          with status=blocked and report it; do not fix it in this phase.
       No CHANGELOG line; no plan item IDs in code.
     acceptance:
-      - git show HEAD:docs/plugin-framework-hardening-plan.md exits non-zero
+      - git ls-tree -r --name-only HEAD | grep -q plugin-framework-hardening-plan.md exits non-zero
       - grep -n 'PROTOCOL_VERSION = "1.2.0"' src/privacyfence/plugins/constants.py prints one line
       - python3 -m pytest tests/unit -q passes
       - ruff check . exits 0

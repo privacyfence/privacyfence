@@ -57,7 +57,7 @@ a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline
       <li><input type="checkbox" id="mb1-2"><label for="mb1-2">If you would rather start before it merges, that works too: the first phase merges the branch, and this plan's pull request then carries #873's changes until #873 merges.</label></li>
       <li><input type="checkbox" id="mb1-3"><label for="mb1-3">In a terminal in your checkout, run:
         <pre>git fetch origin
-git show origin/feature/plugin-framework-hardening:docs/plugin-framework-hardening-plan.md</pre>
+git ls-tree -r --name-only origin/feature/plugin-framework-hardening | grep plugin-framework-hardening-plan.md</pre>
         <span class="see">You should see an error that the path does not exist.</span></label></li>
     </ol>
     <p class="done"><strong>Done when:</strong> pull request 873 shows Merged, or you have decided to start with it open (the command above already fails today). Then run <code>/implement</code> with the plan URL.</p>
