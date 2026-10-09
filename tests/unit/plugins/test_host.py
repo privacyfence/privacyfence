@@ -1579,3 +1579,153 @@ class TestDaemonThreadExecutor:
         started[0]()
 
         assert ran == [] and executor._active == 0
+
+
+@pytest.fixture
+def spawned(monkeypatch):
+    """Every child process any supervisor spawns during the test, introspection runs included."""
+    procs: list = []
+    original = supervisor_mod.Supervisor._spawn
+
+    async def spy(self, *args, **kwargs):
+        child = await original(self, *args, **kwargs)
+        procs.append(child.proc)
+        return child
+
+    monkeypatch.setattr(supervisor_mod.Supervisor, "_spawn", spy)
+    return procs
+
+
+def _alive(procs: list) -> list:
+    return [p for p in procs if p.returncode is None]
+
+
+class TestActionsRunOneAtATime:
+    async def test_rescan_during_purge_leaves_one_supervisor(self, env, spawned, monkeypatch):
+        monkeypatch.setattr(supervisor_mod, "SHUTDOWN_GRACE_SECONDS", 0.5)
+        monkeypatch.setattr(supervisor_mod, "TERMINATE_GRACE_SECONDS", 0.5)
+        env.add("stub", mode="slow-shutdown")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        purge = asyncio.create_task(host.purge("stub"))
+        await asyncio.sleep(0)
+        await host.rescan()
+        await purge
+
+        await until(lambda: len(_alive(spawned)) <= 1)
+        live = _alive(spawned)
+        supervisor = host._plugins["stub"].supervisor
+        assert supervisor is not None
+        assert live == [supervisor._child.proc]
+        assert env.row(host, "stub")["state"] == "running"
+
+    @pytest.mark.parametrize("disable_first", [True, False])
+    async def test_disable_racing_rescan_leaves_nothing_running(self, env, spawned, disable_first):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        first, second = (host.disable("stub"), host.rescan()) if disable_first else (host.rescan(), host.disable("stub"))
+        await asyncio.gather(first, second)
+
+        await until(lambda: not _alive(spawned))
+        row = env.row(host, "stub")
+        assert row["state"] == "disabled" and row["reason"] == "disabled by you"
+        assert host._store.load()["stub"].enabled is False
+        assert host._plugins["stub"].supervisor is None
+
+    async def test_actions_run_one_at_a_time(self, env, spawned):
+        env.add(SDK, sdk=True, mode="purge-hang")
+        host = env.host()
+        host.purge_timeout = 0.5
+        await host.start()
+        await env.enable(host, SDK)
+
+        purge = asyncio.create_task(host.purge(SDK))
+        await asyncio.sleep(0)
+        await host.disable(SDK)
+        await purge
+
+        summaries = env.audit.summaries("plugin_lifecycle")
+        assert summaries.index("data purged (timeout)") < len(summaries) - 1 - summaries[::-1].index("disabled")
+        await until(lambda: not _alive(spawned))
+        assert host._plugins[SDK].supervisor is None
+
+    async def test_start_plugin_refuses_a_second_supervisor(self, env, spawned, caplog):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        plugin = host._plugins["stub"]
+        supervisor = plugin.supervisor
+        count = len(spawned)
+
+        with caplog.at_level("WARNING", logger=host_mod.logger.name):
+            await host._start_plugin(plugin)
+
+        assert len(spawned) == count
+        assert plugin.supervisor is supervisor
+        assert any("already has a supervisor" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+    async def test_action_queued_before_stop_all_does_nothing(self, env, spawned, monkeypatch):
+        monkeypatch.setattr(host_mod, "STOP_ALL_LOCK_WAIT_SECONDS", 0.2)
+        env.add(SDK, sdk=True, mode="purge-hang")
+        env.add("stub")
+        host = env.host()
+        host.purge_timeout = 2
+        await host.start()
+        await env.enable(host, SDK)
+
+        purge = asyncio.create_task(host.purge(SDK))
+        await asyncio.sleep(0)
+        rescan = asyncio.create_task(host.rescan())
+        enable = asyncio.create_task(host.enable("stub", executable_sha256="x", manifest_sha256="y"))
+        await asyncio.sleep(0)
+        await host.stop_all()
+        results = await asyncio.gather(purge, rescan, enable, return_exceptions=True)
+
+        assert results[1] is None
+        assert isinstance(results[2], ValueError)
+        await until(lambda: not _alive(spawned))
+        assert env.row(host, "stub")["last_error"] == host_mod.REASON_STOPPING
+
+    async def test_stop_all_does_not_wait_for_a_long_action(self, env, spawned, monkeypatch):
+        monkeypatch.setattr(host_mod, "STOP_ALL_LOCK_WAIT_SECONDS", 0.2)
+        env.add(SDK, sdk=True, mode="purge-hang")
+        host = env.host()
+        host.purge_timeout = 2
+        await host.start()
+        await env.enable(host, SDK)
+
+        purge = asyncio.create_task(host.purge(SDK))
+        await asyncio.sleep(0)
+        started = time.monotonic()
+        await host.stop_all()
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 1.5
+        assert not _alive(spawned)
+        await asyncio.gather(purge, return_exceptions=True)
+        assert not _alive(spawned)
+
+    async def test_disable_completes_for_a_plugin_that_stopped_reading(self, env, spawned):
+        env.add("stub", mode="stop-reading")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        count = len(spawned)
+        peer = host._plugins["stub"].supervisor.peer
+        filler = asyncio.create_task(peer.notify("x", {"pad": "x" * 512_000}))
+        await asyncio.sleep(0.1)
+
+        await asyncio.wait_for(host.disable("stub"), 5)
+
+        await asyncio.gather(filler, return_exceptions=True)
+        await until(lambda: not _alive(spawned))
+        row = env.row(host, "stub")
+        assert row["state"] == "disabled" and row["reason"] == "disabled by you"
+        assert host._plugins["stub"].supervisor is None
+        assert len(spawned) == count

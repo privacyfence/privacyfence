@@ -20,7 +20,7 @@ import contextlib
 import logging
 import sys
 import threading
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,6 +63,8 @@ REASON_NO_SEPARATION = "plugins need PrivacyFence's background service"
 REASON_DIRECTORY_UNREADABLE = "plugins directory unreadable"
 CHANGED_SINCE_REVIEW = "The plugin changed since you reviewed it; review it again."
 _ACTION_FAILED = "The action failed; the log has the details."
+STOP_ALL_LOCK_WAIT_SECONDS = 1.0
+REASON_STOPPING = "PrivacyFence is stopping its plugins."
 _MAX_CONFIRM_THREADS = 64
 _MAX_ROW_APPROVALS = 200
 
@@ -101,6 +103,10 @@ class _DaemonThreadExecutor(concurrent.futures.Executor):
 
         threading.Thread(target=run, daemon=True, name="plugin-confirm").start()
         return future
+
+
+class _HostStopping(ValueError):
+    """An action that was queued before stop_all ran; it does nothing."""
 
 
 class _Plugin:
@@ -156,6 +162,9 @@ class PluginHost:
         self._daemon_version = daemon_version
         self._store = PluginStateStore(paths.data_dir() / STATE_FILENAME)
         self._plugins: dict[str, _Plugin] = {}
+        self._lock = asyncio.Lock()
+        self._stop_epoch = 0
+        self._held_epoch = 0
         self._spool: DownloadSpool | None = None
         self._directory_unreadable = False
         self._events = EventFanout(self._running_peers)
@@ -317,18 +326,37 @@ class PluginHost:
         await self.rescan()
 
     async def stop_all(self) -> None:
-        running = [p for p in self._plugins.values() if p.supervisor is not None]
-        await asyncio.gather(*(self._stop(p, "shutdown") for p in running))
-        await self._confirm.close()
-        await self._approvals.close()
-        if self._outputs_connector is not None:
-            self._outputs_connector.unregister()
-            self._outputs_connector = None
-            self._outputs_names = frozenset()
-        if self._spool is not None:
-            self._spool.clear()
+        self._stop_epoch += 1
+        acquired = False
+        try:
+            async with asyncio.timeout(STOP_ALL_LOCK_WAIT_SECONDS):
+                await self._lock.acquire()
+                acquired = True
+        except TimeoutError:
+            logger.warning("plugin actions are still running; stopping plugins without waiting for them")
+        try:
+            running = [p for p in self._plugins.values() if p.supervisor is not None]
+            await asyncio.gather(*(self._stop(p, "shutdown") for p in running))
+            await self._confirm.close()
+            await self._approvals.close()
+            if self._outputs_connector is not None:
+                self._outputs_connector.unregister()
+                self._outputs_connector = None
+                self._outputs_names = frozenset()
+            if self._spool is not None:
+                self._spool.clear()
+        finally:
+            if acquired:
+                self._lock.release()
 
     async def rescan(self) -> None:
+        try:
+            async with self._serialized():
+                await self._rescan()
+        except _HostStopping:
+            return
+
+    async def _rescan(self) -> None:
         try:
             found = await asyncio.to_thread(trust.discover, self._plugins_dir, trust_check=self._trust_check)
         except OSError as exc:
@@ -571,9 +599,14 @@ class PluginHost:
         return handlers, {"tools.changed": tools_changed}
 
     async def _start_plugin(self, plugin: _Plugin) -> None:
+        if plugin.supervisor is not None:
+            logger.warning("plugin %s already has a supervisor; not starting another", plugin.name)
+            return
+        if self._held_epoch != self._stop_epoch:
+            return
         discovered = plugin.discovered
         record = self._store.load().get(plugin.name)
-        if discovered is None or discovered.manifest is None or record is None:
+        if discovered is None or discovered.manifest is None or record is None or not record.enabled:
             return
         manifest = discovered.manifest
         try:
@@ -659,24 +692,38 @@ class PluginHost:
 
     # ── Actions ───────────────────────────────────────────────────────
 
-    @contextlib.contextmanager
-    def _action(self, name: str) -> Iterator[_Plugin]:
-        plugin = self._plugins.get(name)
-        if plugin is None:
-            raise LookupError(f"No plugin named {name}.")
-        try:
-            yield plugin
-        except Exception as exc:
-            if isinstance(exc, ValueError):
-                plugin.last_error = str(exc)
+    @contextlib.asynccontextmanager
+    async def _serialized(self) -> AsyncIterator[None]:
+        epoch = self._stop_epoch
+        async with self._lock:
+            if epoch != self._stop_epoch:  # queued before stop_all ran: do nothing afterwards
+                raise _HostStopping(REASON_STOPPING)
+            self._held_epoch = epoch
+            yield
+
+    @contextlib.asynccontextmanager
+    async def _action(self, name: str) -> AsyncIterator[_Plugin]:
+        epoch = self._stop_epoch
+        async with self._lock:
+            plugin = self._plugins.get(name)
+            if plugin is None:
+                raise LookupError(f"No plugin named {name}.")
+            try:
+                if epoch != self._stop_epoch:
+                    raise _HostStopping(REASON_STOPPING)
+                self._held_epoch = epoch
+                yield plugin
+            except Exception as exc:
+                if isinstance(exc, ValueError):
+                    plugin.last_error = str(exc)
+                else:
+                    logger.warning("Action on plugin %s failed", name, exc_info=True)
+                    plugin.last_error = _ACTION_FAILED
+                self._changed()
+                raise
             else:
-                logger.warning("Action on plugin %s failed", name, exc_info=True)
-                plugin.last_error = _ACTION_FAILED
-            self._changed()
-            raise
-        else:
-            plugin.last_error = None
-            self._changed()
+                plugin.last_error = None
+                self._changed()
 
     async def _fresh(self, plugin: _Plugin) -> trust.DiscoveredPlugin:
         """Re-read the plugin from disk, so a review is of what is there now."""
@@ -690,7 +737,7 @@ class PluginHost:
         return discovered
 
     async def inspect(self, name: str) -> dict:
-        with self._action(name) as plugin:
+        async with self._action(name) as plugin:
             blocked = self._blocked_reason()
             if blocked is not None:
                 raise ValueError(blocked)
@@ -747,7 +794,7 @@ class PluginHost:
             return plugin.review
 
     async def enable(self, name: str, *, executable_sha256: str, manifest_sha256: str) -> None:
-        with self._action(name) as plugin:
+        async with self._action(name) as plugin:
             blocked = self._blocked_reason()
             if blocked is not None:
                 raise ValueError(blocked)
@@ -776,7 +823,7 @@ class PluginHost:
             await self._start_plugin(plugin)
 
     async def disable(self, name: str) -> None:
-        with self._action(name) as plugin:
+        async with self._action(name) as plugin:
             await self._stop(plugin, "user")
             self._store.disable(plugin.name, "disabled by you")
             plugin.state, plugin.reason = "disabled", "disabled by you"
@@ -787,7 +834,7 @@ class PluginHost:
         return self._approvals.embed_allowed(name, approval_id, path)
 
     async def revoke_approval(self, name: str, approval_id: str) -> None:
-        with self._action(name) as plugin:
+        async with self._action(name) as plugin:
             record = await asyncio.to_thread(
                 self._approval_store.revoke, name, approval_id, now=_approval_now(),
             )
@@ -808,7 +855,7 @@ class PluginHost:
     async def purge(self, name: str) -> str:
         """Delete every file the plugin holds. A running plugin is asked first and given
         ``purge_timeout`` to say it let go of them; a hung one does not stop the deletion."""
-        with self._action(name) as plugin:
+        async with self._action(name) as plugin:
             supervisor = plugin.supervisor
             peer = supervisor.peer if supervisor is not None else None
             acknowledged = True
