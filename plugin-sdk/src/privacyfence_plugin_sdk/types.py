@@ -438,6 +438,26 @@ class WebRequestResult(_WebRequestResultRequired, total=False):
     body_encoding: Literal["utf8", "base64"]
 
 
+class PagesListParams(TypedDict):
+    principal: PrincipalContext
+
+
+class _PageEntryRequired(TypedDict):
+    path: str
+    title: str
+
+
+class PageEntry(_PageEntryRequired, total=False):
+    version: str
+    created_at: str
+    updated_at: str
+    description: str
+
+
+class PagesListResult(TypedDict):
+    pages: list[PageEntry]
+
+
 class _StoragePurgeParamsRequired(TypedDict):
     scope: Literal["all", "install", "principal"]
 
