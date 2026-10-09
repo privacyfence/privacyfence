@@ -225,7 +225,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted |
 | [0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
 | [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |
-| [0120](0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) | Plugins are out-of-process executables speaking newline-delimited JSON-RPC 2.0 over stdio | Accepted |
+| [0120](0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) | Plugins are out-of-process executables speaking newline-delimited JSON-RPC 2.0 over stdio | Accepted; amended by 0132 |
 | [0121](0121-a-plugin-is-trusted-code-installed-by-an-administrator-into-an-admin-only-directory.md) | A plugin is trusted code, installed by an administrator into an admin-only directory | Accepted; amended by 0131 |
 | [0122](0122-plugin-tools-are-gated-in-two-steps-and-a-read-releases-the-prepared-payload.md) | Plugin tools are gated in two steps, and a read releases the prepared payload | Accepted |
 | [0123](0123-the-plugin-source-api-is-ungated-but-audited-without-content.md) | The plugin source API is ungated but audited without content | Accepted; amended by 0128, 0129 |
@@ -237,3 +237,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0129](0129-drive-binary-downloads-for-plugins-are-http-range-reads-with-no-size-cap.md) | Drive binary downloads for plugins are HTTP Range reads with no size cap | Accepted; amends 0123 |
 | [0130](0130-plugin-outputs-are-a-folder-that-privacyfence-reads-through-its-own-tools.md) | Plugin outputs are a folder that PrivacyFence reads through its own tools | Accepted |
 | [0131](0131-a-plugins-child-processes-run-under-its-account-unsupervised.md) | A plugin's child processes run under its account, unsupervised, and the plugin confines them | Accepted; amends 0121 |
+| [0132](0132-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md) | A plugin that stops reading its input for 10 seconds is treated as crashed | Accepted; amends 0120 |

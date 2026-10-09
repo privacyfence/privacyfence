@@ -40,6 +40,8 @@ stdin and stdout.
 - **Bad lines.** Three consecutive lines that are not valid JSON-RPC (bad JSON, over the size cap,
   or not an object) close the connection, and that counts as a crash. A line over the size cap is
   discarded up to its newline and counts once, however many pieces it arrives in.
+- **Unread messages.** A plugin that does not read a message the daemon sends within 10 seconds
+  (`SEND_TIMEOUT_SECONDS`) is treated as crashed ([ADR 0132](adr/0132-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md)).
 - **Non-finite numbers.** `NaN`, `Infinity` and `-Infinity` are not JSON: neither side sends them,
   and a line that carries one is a parse error.
 - **Unknown fields** are ignored by both sides, so a minor version can add fields. The exceptions
@@ -278,6 +280,11 @@ its own card. `tool.execute` can therefore name a `call_id` prepared more than 1
 and a read's `call_id` more than once. A plugin that no longer holds the call answers
 `unknown_call`; for a read the daemon still returns the prepared payload.
 
+The SDK keeps a prepared call for 20 minutes, the card's pending lifetime plus the window in which
+an approval is replayed, and at most 256 at a time. If you raise `approvals.pending_ttl_seconds` or
+`approvals.ledger_ttl_seconds`, a write approved after that fails with "lost track of this call"
+rather than running.
+
 When `tool.prepare` fails, the plugin's own error detail never reaches the AI client. The connector
 turns the error into one fixed sentence, which the daemon logs: `connector_unavailable` gives "A
 service this plugin reads from is not connected.", `upstream_error` gives "A service this plugin
@@ -494,7 +501,9 @@ may be pending at once, and at most 8 per plugin; a request over either cap is r
 `confirm.await` takes `approval_id` (one of this plugin's own) and `timeout_ms` (0 to 300,000;
 default 300,000) and answers `{"status": "approved" | "denied" | "expired", "decided_at": "…"}`, or
 `timeout` when still pending. A confirmation carries no deny note. The same `approval_id` works with
-`privacyfence_await_approval`.
+`privacyfence_await_approval`. A card stays pending up to 15 minutes, longer than one await: call
+`confirm.await` again after `timeout` until it answers a final status. The SDK's
+`ctx.confirm.wait()` does.
 
 ### Approvals
 
@@ -526,7 +535,9 @@ that could not be read. `approval.await` takes `approval_id` and `timeout_ms` (0
 answers `{"status": "approved" | "denied" | "expired", "decided_at"?}`, or `timeout` while pending; for
 an id that was answered without a card it answers `approved`. When a human revokes an approval in
 Settings, a running plugin gets the notification `approval.revoked` with `approval_id`, `kind`,
-`subject_id` and `digest`, best effort. Purging or uninstalling a plugin deletes its approvals.
+`subject_id` and `digest`, best effort. Purging or uninstalling a plugin deletes its approvals. A card stays pending up to 15 minutes,
+longer than one await: call `approval.await` again after `timeout` until it answers a final status.
+The SDK's `ctx.approvals.wait()` does.
 
 **The embedding rule.** The card shows PrivacyFence's fields (plugin, kind, subject, digest) first,
 outside any frame. When `page` is given, the plugin's page loads in a sandboxed frame at
@@ -668,6 +679,7 @@ mode does not start plugins.
 | Page body | 8 MiB |
 | Page path | 512 characters |
 | Pending confirmations, pending approvals | 64 each |
+| Send timeout (a message the plugin does not read) | 10 seconds |
 
 | Request | Timeout (seconds) |
 |---|---|

@@ -290,7 +290,7 @@ A [plugin](plugins.md) is a separate program an administrator installs and you e
 is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
 [ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
 and in [ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) to
-[ADR 0131](adr/0131-a-plugins-child-processes-run-under-its-account-unsupervised.md).
+[ADR 0132](adr/0132-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md).
 
 **Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
 every connector credential, so whoever can replace it can read your data. The privacy boundary of
@@ -298,7 +298,8 @@ every connector credential, so whoever can replace it can read your data. The pr
 applies. Plugins run only on a separated install. A plugin lives in an administrator-only plugins
 directory outside the app and the data directory ([Platform support](platform-support.md#plugins-directory)),
 and at every start PrivacyFence checks that the executable, the plugin's folder and every folder
-above it can be written by administrators only. For the folders above the plugin's own, Windows
+above it can be written by administrators only. On Windows each must also be owned by SYSTEM,
+Administrators or TrustedInstaller. For the folders above the plugin's own, Windows
 ignores inherit-only entries and the right to create subfolders, which a default drive root grants
 every signed-in user, because they cannot swap an existing folder; the executable and the plugin's
 own folder keep the strict rule, and POSIX applies one rule to all. Some older Debian installs make

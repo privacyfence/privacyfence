@@ -69,7 +69,7 @@ On POSIX a folder is administrator-only when it is owned by root and has no grou
 permission. Some older Debian installs make `/usr/local` and `/usr/local/lib` group-writable by
 `staff` (mode 2775); plugins are refused there until you make those directories administrator-only
 (`sudo chmod g-w /usr/local /usr/local/lib`). On Windows, a folder is administrator-only when no
-account but administrators, SYSTEM and TrustedInstaller can write to it. The executable gets that
+account but administrators, SYSTEM and TrustedInstaller can write to it and one of them owns it. The executable gets that
 strict rule. The plugin's own folder, any folder inside it on the way to the executable, and every
 folder above it ignore inherit-only entries, which grant nothing on the folder that carries them
 (every folder under `%ProgramFiles%` has one for `CREATOR OWNER`); what such an entry grants a file
@@ -88,7 +88,8 @@ A plugin's folder must be a real folder inside the plugins directory, not a symb
 1. Get the plugin's folder: its executable (for example `today-plugin`, `today-plugin.exe` on
    Windows) and `privacyfence-plugin.yaml`. The folder is named after the plugin's `name`.
 2. As an administrator, copy the folder into the plugins directory. Make sure the copy is owned by
-   an administrator and not writable by anyone else.
+   an administrator and not writable by anyone else. On Windows, no account but administrators,
+   SYSTEM and TrustedInstaller can write to it and one of them owns it.
 3. Open **Settings → Plugins** and choose **Rescan**. The plugin shows as **Not enabled**, or as
    **Rejected** with the reason (see [Why a plugin does not start](#why-a-plugin-does-not-start)).
 4. Choose **Review and enable**. PrivacyFence starts the plugin once to read its tool list, with
@@ -190,6 +191,7 @@ tool result. Settings' review card shows "Publishes output files" with the file 
   records the path, offset and length. That entry is written after the gate returns, so a denied
   read leaves none.
 - **Delete and remove** delete the folder with the rest of the plugin's data.
+- **A changed file.** A read of a file that changed after you approved it shows a new card.
 
 ## Child processes
 
@@ -210,7 +212,7 @@ See [ADR 0131](adr/0131-a-plugins-child-processes-run-under-its-account-unsuperv
 
 Each plugin's standard error goes to `logs/plugins/<name>.log` in PrivacyFence's data directory (see
 [Platform support](platform-support.md#data-locations) for where that is on each OS), readable with
-`sudo` or from an elevated prompt. The file is limited to 5 MiB, with three older copies kept
+`sudo` or from an elevated prompt. The file is limited to 5 MiB while the plugin runs, with three older copies kept
 (`<name>.log.1` to `.3`). PrivacyFence's own record of a plugin's start, stop and crashes is in the
 daemon log, and its enabling, disabling, tool changes and reads are in the audit log (decisions
 `plugin_lifecycle`, `plugin_source`, `plugin_confirm`, `plugin_approval` and `plugin_output`).
@@ -232,6 +234,10 @@ daemon log, and its enabling, disabling, tool changes and reads are in the audit
   change), nothing is deleted and every known plugin shows "plugins directory unreadable" until a
   rescan succeeds.
 
+Any of the plugin's approval or confirmation cards still waiting for you expire when you disable it,
+delete its data or remove it, and when PrivacyFence disables it after repeated crashes. Actions on
+plugins run one at a time: an action you start while another runs waits for it.
+
 ## Turning plugins off
 
 `plugins.enabled: false` in `settings.yaml` stops every plugin from running; each shows "plugins are
@@ -245,7 +251,7 @@ Settings shows a plugin's state and, unless it is running, the reason.
 | State | Reason | What it means |
 |---|---|---|
 | Rejected | `manifest invalid: <detail>` | The manifest is missing, unreadable or breaks a rule; the detail names it. |
-| Rejected | `executable is writable by non-administrators` | The executable, the plugin's folder or a folder above it can be changed by someone other than an administrator. The details are in the daemon log. |
+| Rejected | `executable is writable by non-administrators` | The executable, the plugin's folder or a folder above it can be changed by someone other than an administrator. The details are in the daemon log. On Windows, it is also refused when a file or folder is owned by an account other than SYSTEM, Administrators or TrustedInstaller. |
 | Rejected | `plugin directory is a symbolic link` | The plugin's folder in the plugins directory is a symbolic link. Install the plugin as a real folder. |
 | Rejected | `executable is outside the plugins directory` | The executable resolves to a path outside the plugins directory, for example through a junction. Install the plugin as a real folder. |
 | Rejected or disabled | `protocol major mismatch` | The plugin speaks a different protocol major version than PrivacyFence (the manifest's `protocol` is not `"1"`, or the plugin reported another). |
@@ -259,6 +265,8 @@ Settings shows a plugin's state and, unless it is running, the reason.
 | Disabled | `could not start` | The process could not be started, or the checks before a start could not run; the daemon log has the error. |
 | Disabled | `plugin is no longer installed` | The plugin's folder was gone when it was about to restart after a crash. |
 | Missing | `plugins directory unreadable` | The plugins directory could not be listed. Nothing is deleted; **Rescan** once it is back. |
+
+A plugin that stops reading what PrivacyFence sends it for 10 seconds is restarted like a crash.
 
 A **Restarting** plugin crashed and is waiting to start again, after 1, 2, 4, 8, 16 and then 30
 seconds. Each restart checks the files again as a first start does, so a plugin that changed while
@@ -305,7 +313,7 @@ function that does the work with `@greet.execute`. Reads from connected services
 `ctx.source.call(...)`, `ctx.source.pages(...)` (every page of an operation, following the cursor),
 `ctx.source.collect(...)` (the whole list for `jira.search` and `calendar.list_events`) and
 `ctx.source.download(...)`, a confirmation through `ctx.confirm`, an approval through
-`ctx.approvals` (`request`, `check`, `await_`), a published file through `ctx.outputs.publish`, and a
+`ctx.approvals` (`request`, `check`, `await_`, `wait`), `ctx.confirm.wait()` (waits until the card is approved, denied or expired), a published file through `ctx.outputs.publish`, and a
 page is `@plugin.page("/")`. A page shown inside an approval card receives `pf_approval` in its
 query. Pages must be self-contained: inline the CSS, scripts and images, since
 a page's requests for separate files carry no session and are refused.
@@ -334,7 +342,7 @@ shutdown.
 from privacyfence_plugin_sdk.testing import PluginTestHost, samples
 
 async def test_the_ai_gets_what_the_card_showed():
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
         host.source.load(samples.get("calendar.list_events"))
         outcome = await host.call_tool("list_events", {"reason": "plan the day"})
         assert outcome.card_shown
@@ -351,6 +359,10 @@ Where the test host differs from PrivacyFence:
 
 - `PluginTestHost(plugin, max_gate_floor="auto")` is how a test declares the manifest's floor; the
   default is `"review"`, which refuses a tool on the `auto` gate.
+- `PluginTestHost(plugin, source_operations=(...), pages=True)` takes the manifest's `source_operations` and
+  `pages`; it checks source-call parameters as PrivacyFence does.
+- `pii=` takes a function that models the PII check, which overrides an "Always allow" rule.
+- It withholds a write result over 2,048 bytes but does not run PrivacyFence's PII detector on it.
 - It ignores a `tools.changed` the plugin sends.
 - It refuses a reserved plugin name, as PrivacyFence does, which also keeps every tool's MCP name
   clear of PrivacyFence's built-in tools.
