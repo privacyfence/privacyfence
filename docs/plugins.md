@@ -128,8 +128,8 @@ its data, or a page with a cursor to continue, and the plugin follows the cursor
 Drive files are read in 8 MiB pieces with HTTP Range requests, with no limit on the file's size, so a
 large binary file starts arriving at once. Google Docs, Sheets and Slides cannot be ranged: they are
 exported whole, as text or CSV, and served from a private temporary file that is deleted after ten
-idle minutes. Salesforce report runs do not page yet and can still fail on a very large report
-([the Salesforce paging issue](https://github.com/privacyfence/privacyfence/issues/854)). The
+idle minutes. A Salesforce report past 2,000 rows is read with `page_by`, a column that is unique per row,
+through `ctx.source.report_pages`, one report run per page. The
 cursor rules are in [`plugin-protocol.md`](plugin-protocol.md#paging). A result that is too large for
 the AI goes out as an [output file](#outputs), not through a tool result.
 
@@ -295,7 +295,8 @@ Each tool call runs in two steps: `prepare` returns the preview (and, for a read
 approve it on the card, and only then does `execute` run. A tool that is not read-only attaches the
 function that does the work with `@greet.execute`. Reads from connected services go through
 `ctx.source.call(...)`, `ctx.source.pages(...)` (every page of an operation, following the cursor),
-`ctx.source.collect(...)` (the whole list for `jira.search` and `calendar.list_events`) and
+`ctx.source.collect(...)` (the whole list for `jira.search` and `calendar.list_events`),
+`ctx.source.report_pages(...)` (every page of a Salesforce report, read by a unique column) and
 `ctx.source.download(...)`, a confirmation through `ctx.confirm`, an approval through
 `ctx.approvals` (`request`, `check`, `await_`), a published file through `ctx.outputs.publish`, and a
 page is `@plugin.page("/")`. A page shown inside an approval card receives `pf_approval` in its
