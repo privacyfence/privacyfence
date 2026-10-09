@@ -44,7 +44,12 @@ from privacyfence.plugins.constants import (
 from privacyfence.plugins.protocol import RpcError, SourceCallParams
 from privacyfence.plugins.spool import DownloadSpool
 from privacyfence.principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, principal_scope
-from privacyfence.salesforce_client import REPORT_FILTER_OPERATORS, SalesforceClientError
+from privacyfence.salesforce_client import (
+    REPORT_FILTER_OPERATORS,
+    ReportPagingError,
+    SalesforceClientError,
+    report_page_info,
+)
 
 if TYPE_CHECKING:
     from privacyfence.connector import Connector
@@ -70,6 +75,7 @@ _MAX_ID_CHARS = 256
 _MAX_RANGE_CHARS = 512
 _MAX_TIME_CHARS = 64
 _MAX_JQL_CHARS = 8192
+_MAX_REPORT_COLUMNS = 100
 
 
 @dataclass(frozen=True)
@@ -226,12 +232,71 @@ def _validate_salesforce(params: dict) -> dict:
         except (ValueError, TypeError) as exc:
             raise _bad(str(exc)) from None
     out["filters"] = filters or []
+    columns = params.get("columns")
+    if columns is not None:
+        if (
+            not isinstance(columns, list)
+            or not 1 <= len(columns) <= _MAX_REPORT_COLUMNS
+            or not all(isinstance(c, str) and 0 < len(c) <= _MAX_ID_CHARS for c in columns)
+        ):
+            raise _bad("params.columns must be a list of column names")
+    out["columns"] = columns or []
+    out["page_by"] = _str(params, "page_by", max_len=_MAX_ID_CHARS, required=False)
+    out["cursor"] = _cursor_param(params)
+    if out["cursor"] is not None and out["page_by"] is None:
+        raise _bad("cursor needs page_by")
     return out
+
+
+def _bound_salesforce(p: dict) -> dict:
+    return {"report_id": p["report_id"], "page_by": p["page_by"], "columns": p["columns"], "filters": p["filters"]}
+
+
+def _targets_salesforce(p: dict) -> str:
+    text = f"{p['report_id']}; filters={len(p['filters'])}"
+    if p["columns"]:
+        text += f"; columns={len(p['columns'])}"
+    if p["page_by"]:
+        text += f"; page_by={p['page_by']}"
+    return text
 
 
 def _run_salesforce(client: Any, params: dict, spool: DownloadSpool) -> tuple[Any, str | None]:
     filters = _parse_report_filters(json.dumps(params["filters"])) if params["filters"] else None
-    return client.run_report(params["report_id"], filters=filters), None
+    columns = params["columns"] or None
+    page_by = params["page_by"]
+    if page_by is None:
+        if columns is None:
+            return client.run_report(params["report_id"], filters=filters), None
+        return client.run_report(params["report_id"], columns=columns, filters=filters), None
+    state = params["state"]
+    if state is None:
+        n, done, last, left = 0, 0, None, None
+    else:
+        _state_keys(state, {"n", "a", "l", "r"})
+        n, done, left = _state_count(state, "n"), _state_count(state, "a"), _state_count(state, "r")
+        last = state["l"]
+        if n < 1 or not isinstance(last, str) or not last:
+            raise _bad_cursor()
+    try:
+        page = client.run_report_page(params["report_id"], page_by, columns, filters, last, n, left)
+    except ReportPagingError as exc:
+        raise RpcError("invalid_params", str(exc), extra={"reason": exc.reason}) from None
+    fact_map = page.result["factMap"]
+    rows = fact_map["T!T"]["rows"]
+    shell = {
+        **page.result,
+        "factMap": {**fact_map, "T!T": {**fact_map["T!T"], "rows": []}},
+        "page": report_page_info(n + 1, done, len(rows), True),
+    }
+    fitted = _fit_prefix(rows, SOURCE_PAGE_BUDGET_BYTES - _encoded_size(shell))
+    more = fitted < len(rows) or not page.all_data
+    shell["factMap"]["T!T"]["rows"] = rows[:fitted]
+    shell["page"] = report_page_info(n + 1, done, fitted, more)
+    if not more:
+        return shell, None
+    state = {"n": n + 1, "a": done + fitted, "l": page.keys[fitted - 1], "r": page.row_count - fitted}
+    return shell, cursors.encode("salesforce.report_run", _bound_salesforce(params), state)
 
 
 # --- jira.search -------------------------------------------------------------------------------
@@ -420,9 +485,9 @@ SOURCE_ADAPTERS: dict[str, SourceAdapter] = {
         "salesforce",
         "_sf",
         _run_salesforce,
-        lambda p: f"{p['report_id']}; filters={len(p['filters'])}",
+        _targets_salesforce,
         _validate_salesforce,
-        lambda p: {},
+        _bound_salesforce,
     ),
     "jira.search": SourceAdapter(
         "jira",
