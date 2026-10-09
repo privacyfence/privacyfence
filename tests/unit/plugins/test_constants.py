@@ -6,6 +6,8 @@ cover every built-in connector and the patterns must refuse anything that could 
 """
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from privacyfence import auto_accept, settings_controller
@@ -165,8 +167,19 @@ class TestProtocolOneOneConstants:
         assert (c.AUDIT_PLUGIN_APPROVAL, c.AUDIT_PLUGIN_OUTPUT) == ("plugin_approval", "plugin_output")
 
     def test_protocol_version(self):
-        assert c.PROTOCOL_VERSION == "1.2.0"
+        assert c.PROTOCOL_VERSION == "1.3.0"
         assert not hasattr(c, "DRIVE_MAX_FILE_BYTES")
+
+    def test_file_constants(self):
+        assert c.FILE_PARAM_KEY == "x-privacyfence-file"
+        assert (c.MAX_FILE_BYTES, c.MAX_FILE_PARAMS_PER_TOOL) == (8 * 1024 * 1024, 1)
+        assert len(set(c.FILE_MEDIA_TYPES)) == len(c.FILE_MEDIA_TYPES) == 13
+        assert "application/octet-stream" in c.FILE_MEDIA_TYPES
+        assert c.UPLOAD_ID_RE.fullmatch("A" * 43) and not c.UPLOAD_ID_RE.fullmatch("A" * 42)
+        assert not c.UPLOAD_ID_RE.fullmatch("A" * 42 + "=")
+
+    def test_a_maximum_file_fits_one_line(self):
+        assert len(base64.b64encode(bytes(c.MAX_FILE_BYTES))) + 65536 < c.MAX_LINE_BYTES
 
     def test_send_and_close_timeouts(self):
         assert c.SEND_TIMEOUT_SECONDS > 0
