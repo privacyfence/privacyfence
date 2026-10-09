@@ -3,7 +3,7 @@
   "attributes": {
     "describeUrl": "https://example.com/qa-placeholder",
     "instancesUrl": "https://example.com/qa-placeholder",
-    "reportId": "00Oak00000RkbHxEAJ",
+    "reportId": "qa-placeholder-id-3",
     "reportName": "PrivacyFence QA Report",
     "type": "Report"
   },
@@ -11,8 +11,8 @@
     "T!T": {
       "aggregates": [
         {
-          "label": "3",
-          "value": 3
+          "label": "2",
+          "value": 2
         }
       ],
       "rows": [
@@ -24,7 +24,7 @@
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5KbAAK",
+              "recordId": "qa-placeholder-id-1",
               "value": null
             },
             {
@@ -33,8 +33,8 @@
             },
             {
               "label": "PrivacyFence QA \u2014 Acme Test Co [QATEST]",
-              "recordId": "001ak00003cU5KbAAK",
-              "value": "001ak00003cU5KbAAK"
+              "recordId": "qa-placeholder-id-1",
+              "value": "qa-placeholder-id-1"
             },
             {
               "label": "Florida",
@@ -42,12 +42,12 @@
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5KbAAK",
+              "recordId": "qa-placeholder-id-1",
               "value": null
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5KbAAK",
+              "recordId": "qa-placeholder-id-1",
               "value": null
             },
             {
@@ -56,17 +56,17 @@
             },
             {
               "label": "St Louise",
-              "recordId": "001ak00003cU5KbAAK",
+              "recordId": "qa-placeholder-id-1",
               "value": "St Louise"
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5KbAAK",
+              "recordId": "qa-placeholder-id-1",
               "value": null
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5KbAAK",
+              "recordId": "qa-placeholder-id-1",
               "value": null
             },
             {
@@ -84,7 +84,7 @@
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5cLAAS",
+              "recordId": "qa-placeholder-id-2",
               "value": null
             },
             {
@@ -93,8 +93,8 @@
             },
             {
               "label": "PrivacyFence QA \u2014 Globex Test Co [QATEST]",
-              "recordId": "001ak00003cU5cLAAS",
-              "value": "001ak00003cU5cLAAS"
+              "recordId": "qa-placeholder-id-2",
+              "value": "qa-placeholder-id-2"
             },
             {
               "label": "-",
@@ -102,12 +102,12 @@
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5cLAAS",
+              "recordId": "qa-placeholder-id-2",
               "value": null
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5cLAAS",
+              "recordId": "qa-placeholder-id-2",
               "value": null
             },
             {
@@ -116,17 +116,17 @@
             },
             {
               "label": "Budapest",
-              "recordId": "001ak00003cU5cLAAS",
+              "recordId": "qa-placeholder-id-2",
               "value": "Budapest"
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5cLAAS",
+              "recordId": "qa-placeholder-id-2",
               "value": null
             },
             {
               "label": "-",
-              "recordId": "001ak00003cU5cLAAS",
+              "recordId": "qa-placeholder-id-2",
               "value": null
             },
             {
@@ -403,7 +403,7 @@
     "hasDetailRows": true,
     "hasRecordCount": true,
     "historicalSnapshotDates": [],
-    "id": "qa-placeholder-id-1",
+    "id": "qa-placeholder-id-3",
     "name": "PrivacyFence QA Report",
     "presentationOptions": {
       "hasStackedSummaries": true

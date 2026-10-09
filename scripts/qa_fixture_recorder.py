@@ -192,6 +192,8 @@ _STRUCTURAL_ID_KEYS = frozenset({
     # Slack workspace/app identifiers -- app_id, bot_profile.team_id, the
     # top-level "team", block_id -- all real, all identify your workspace.
     "app_id", "team_id", "team", "block_id",
+    # Salesforce Analytics: a report cell's record id and the run's report id.
+    "recordid", "reportid",
 })
 
 # Same idea, but the value is a *list* of raw id strings rather than one
@@ -1016,6 +1018,14 @@ def _check_salesforce_run_report(client: SalesforceClient, report_id: str, label
     return result(True, "rows returned; columns, split ID filter and summary_only honoured")
 
 
+def _looks_like_salesforce_id(value: Any) -> bool:
+    """A 15- or 18-character alphanumeric string mixing letters and digits."""
+    return (
+        isinstance(value, str) and len(value) in (15, 18) and value.isascii() and value.isalnum()
+        and any(c.isdigit() for c in value) and any(c.isalpha() for c in value)
+    )
+
+
 def _check_salesforce_report_paging(
     client: SalesforceClient, report_id: str, summary_report_id: str, page_by_label: str, label: str,
     record: bool,
@@ -1067,6 +1077,13 @@ def _check_salesforce_report_paging(
             ]
             if not group["rows"]:
                 return result(False, f"no {QATEST_TAG} rows in the QA report run -- nothing safe to record")
+            # RowCount counted every Account in the report; the kept rows are fewer.
+            aggregate_names = (filtered.get("reportMetadata") or {}).get("aggregates") or []
+            if "RowCount" in aggregate_names and len(group.get("aggregates") or []) > aggregate_names.index("RowCount"):
+                group["aggregates"][aggregate_names.index("RowCount")] = {
+                    "label": str(len(group["rows"])), "value": len(group["rows"]),
+                }
+            id_map: dict[Any, str] = {}
             for row in group["rows"]:
                 for cell in row.get("dataCells") or []:
                     value = cell.get("value")
@@ -1074,10 +1091,18 @@ def _check_salesforce_report_paging(
                     if isinstance(value, str) and value.startswith("005") and len(value) in (15, 18):
                         cell["value"] = _REDACTED_ACCOUNT_ID
                         cell["label"] = _REDACTED_NAME
+                    # A record id as a cell value or label (an Account Name lookup): the same
+                    # placeholder as that cell's recordId, which deidentify_structural_fields
+                    # assigns from the shared id_map.
+                    for field in ("value", "label"):
+                        if _looks_like_salesforce_id(cell.get(field)):
+                            if cell[field] not in id_map:
+                                id_map[cell[field]] = _fake_structural_value("recordid", len(id_map) + 1)
+                            cell[field] = id_map[cell[field]]
             meta = filtered.get("reportMetadata")
             if isinstance(meta, dict) and str(meta.get("folderId") or "").startswith("005"):
                 meta["folderId"] = _REDACTED_ACCOUNT_ID  # a private folder is named by its owner's User id
-            raw = deidentify_structural_fields(redact(filtered))
+            raw = deidentify_structural_fields(redact(filtered), id_map)
     except (SalesforceClientError, ReportPagingError) as exc:
         return result(False, str(exc))
     except (AttributeError, KeyError, TypeError, IndexError):
