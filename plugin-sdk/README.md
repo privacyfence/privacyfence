@@ -86,6 +86,20 @@ there is none. Size pages with `page_size`; do not send `max_results` or `cursor
 concatenates the pages into one list and works only for `jira.search` and `calendar.list_events`; any
 other operation raises `ValueError`. `download` handles its own cursor.
 
+To read every row of a Salesforce report, use `report_pages`:
+
+```python
+async for page in ctx.source.report_pages(
+    "00O...", page_by="Account.PF_QA_Number__c", columns=[...], filters=[...]
+):
+    rows = page.data["factMap"]["T!T"]["rows"]
+```
+
+Each page is one report run, and Salesforce counts it against the org's report-run limits.
+`page_by` must be unique per row (an auto-number column is best): pages are read in order of that
+column, and a value that repeats across pages raises `SourceError` with `reason == "not_unique"`.
+`columns` and `filters` are optional and narrow the run as for `salesforce.report_run`.
+
 ## The manifest
 
 Next to the executable, a plugin ships `privacyfence-plugin.yaml`:

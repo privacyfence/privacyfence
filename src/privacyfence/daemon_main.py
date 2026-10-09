@@ -149,7 +149,7 @@ from .contacts_client import ContactsClient, ContactsClientError
 from .drive_client import DriveClient, DriveClientError
 from .gmail_client import GmailClient, GmailClientError
 from .jira_client import JiraClient, JiraClientError
-from .salesforce_client import SalesforceClient, SalesforceClientError
+from .salesforce_client import DEFAULT_REPORT_MAX_PAGES, SalesforceClient, SalesforceClientError
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .salesforce_client import load_token_file as load_salesforce_token
 from .slack_client import SlackClient, SlackClientError
@@ -1256,6 +1256,20 @@ def _classify_connector_failure(exc: BaseException) -> str:
     return public_message(exc)
 
 
+def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
+    """``salesforce.report_max_pages`` from settings.yaml: the most report runs one
+    paged read may use. Missing means the default; anything but a whole number of
+    at least 1 (a bool is not one) warns and falls back to the default."""
+    value = (config.get("salesforce") or {}).get("report_max_pages", DEFAULT_REPORT_MAX_PAGES)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        logger.warning(
+            "salesforce.report_max_pages must be a whole number of at least 1; using %d",
+            DEFAULT_REPORT_MAX_PAGES,
+        )
+        return DEFAULT_REPORT_MAX_PAGES
+    return value
+
+
 def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tuple[list, dict[str, str]]:
     """Builds every enabled, currently-authenticated connector for the
     *current principal*: every credential/cache path below resolves through ``_resolve_path()``/
@@ -1457,6 +1471,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             merged = {**sf_org, **token}
             client = SalesforceClient(config=merged, token_file=_resolve_path(TOKEN_FILES["salesforce"]))
             client.check_connection()
+            client.report_max_pages = _salesforce_report_max_pages(config)
             logger.info("Salesforce connector ready for %s", merged.get("instance_url"))
             connectors.append(SalesforceConnector(client))
         except (SalesforceClientError, FileNotFoundError) as exc:

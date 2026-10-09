@@ -348,7 +348,7 @@ writes one audit entry that holds the targets and the byte count, never the data
 
 | Operation | Parameters | `data` |
 |---|---|---|
-| `salesforce.report_run` | `report_id` (required); `filters`: a list of `{column, operator, value}` | Salesforce's raw report JSON, `allData` included |
+| `salesforce.report_run` | `report_id` (required); `filters`: a list of `{column, operator, value}`; `columns`: 1 to 100 column names to narrow the run; `page_by`: a report column whose values are unique per row, to read every row; `cursor` (needs `page_by`) | Salesforce's raw report JSON, `allData` included; with `page_by` it gains `page`: `{number, first_row, last_row, more}` |
 | `jira.search` | `jql` (required); `page_size` 1 to 100, default 100; `max_results` 1 to 500 (an alias, used when `page_size` is absent and clamped to 100); `cursor` | The matching issues, as a list of objects |
 | `drive.download` | `file_id` (required); `length` 1 to 8,388,608 (default the maximum); `offset` (at least 0) or `cursor`, not both | `{file_id, mime_type, revision, total_size_bytes, offset, length, eof, content_base64}` |
 | `sheets.get_values` | `spreadsheet_id` and `range` (required); `value_render_option`: `FORMATTED_VALUE` (default), `UNFORMATTED_VALUE` or `FORMULA`; `cursor` | `{"values": [[…], …], "first_row": n}`, Google's raw values array for rows `first_row` onward |
@@ -442,14 +442,14 @@ A Confluence page:
 
 ### Paging
 
-Every source operation but `salesforce.report_run` either returns all of its data or a page with a
+Every source operation either returns all of its data or a page with a
 `next_cursor`. A size limit is a page size, not a failure, and `next_cursor` is `null` exactly when
 nothing is left.
 
 - **The cursor is opaque** (at most 4,096 characters). It is bound to the operation and to the
   parameters it was issued for: `jql` and `page_size` for Jira; `calendar_id`, `time_min`, `time_max`
   and `page_size` for Calendar; `spreadsheet_id`, `range` and `value_render_option` for Sheets;
-  `page_id` for Confluence; `file_id` for Drive. Pass it back with the same other parameters. A
+  `page_id` for Confluence; `file_id` for Drive; `report_id`, `page_by`, `columns` and `filters` for Salesforce. Pass it back with the same other parameters. A
   cursor that is malformed, was issued for another operation or other parameters, or whose position
   does not fit is `invalid_params`. A cursor is neither secret nor signed: binding it protects a
   plugin from carrying it to the wrong query, nothing more.
@@ -463,7 +463,7 @@ nothing is left.
 | `sheets.get_values` | A run of rows from `first_row`; the next cursor starts after the last row returned |
 | `confluence.get_page` | The page with `body` cut to a slice that fits; `body_offset` and `body_total_chars` say where the slice sits |
 | `drive.download` | A byte range of the file, up to `length` (8 MiB at most) |
-| `salesforce.report_run` | **Not paged.** It returns the whole report, or `payload_too_large`. Paging it is [the Salesforce paging issue](https://github.com/privacyfence/privacyfence/issues/854) |
+| `salesforce.report_run` | One report run sorted by `page_by`, starting after the previous page's last value, cut to fit; grouped reports are read as one table. A column that is not unique, does not advance or is not a column of the run is `invalid_params` with `reason` `bad_page_by`, `not_unique`, `not_advancing` or `not_flat`; a read that would lose rows (RowCount check) is `invalid_params` with `reason` `rows_lost`; more than `salesforce.report_max_pages` runs is `invalid_params` with `reason` `page_limit`. Without `page_by` it is one run as saved, not paged |
 
 The audit entry's targets gain `; page` when a cursor was given, and the summary gains `; more` when
 `next_cursor` is set.

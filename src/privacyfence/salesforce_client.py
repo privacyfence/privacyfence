@@ -38,6 +38,25 @@ class SalesforceClientError(Exception):
     """Raised for unrecoverable Salesforce client problems (config, API)."""
 
 
+DEFAULT_REPORT_MAX_PAGES = 50
+REPORT_PAGING_REASONS = frozenset({
+    "bad_page_by", "not_unique", "not_advancing", "page_limit", "not_flat", "rows_lost",
+})
+
+
+class ReportPagingError(SalesforceClientError):
+    """A paged report read that cannot continue. ``reason`` is one of REPORT_PAGING_REASONS.
+
+    The message never contains a cell value, only column API names and counts.
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        if reason not in REPORT_PAGING_REASONS:
+            raise ValueError(f"unknown report paging reason: {reason!r}")
+        super().__init__(message)
+        self.reason = reason
+
+
 @dataclass
 class SalesforceReport:
     id: str
@@ -59,6 +78,14 @@ class ReportFilter:
     column: str          # report column API name, e.g. "Opportunity.Opp_Id__c" or "ACCOUNT.NAME"
     operator: str        # one of REPORT_FILTER_OPERATORS
     values: list[str]    # one or more values; several values = match any (or: none, for negative operators)
+
+
+@dataclass
+class ReportPage:
+    result: dict         # the run's report result, as Salesforce returned it
+    keys: list[str]      # the page_by key text of each detail row, in row order
+    all_data: bool       # Salesforce's allData for this run
+    row_count: int       # the run's RowCount aggregate: every row matching this run, not only those returned
 
 
 # ------------------------------------------------------------------ #
@@ -209,6 +236,185 @@ def build_report_metadata(
         metadata["reportBooleanFilter"] = " AND ".join([base, *groups] if base else groups)
 
     return metadata
+
+
+# ------------------------------------------------------------------ #
+# Keyset paging — Salesforce returns at most 2,000 detail rows per run. A
+# paged read runs the saved report once per page, sorted by a unique column
+# (page_by) and filtered to values after the previous page's last one. A paged
+# read finishes or fails; it never returns a silently cut result. No error
+# message here contains a cell value: MCP errors reach the AI client before any
+# approval card, so a value in a message would bypass the gate.
+# ------------------------------------------------------------------ #
+
+_PAGE_ROWS_KEY = "T!T"
+_NOT_FLAT_MESSAGE = "Salesforce did not return the report as one table, so it cannot be paged"
+_UNFLATTENABLE_GRANULARITIES = frozenset({None, "None", "Day"})
+
+
+def build_keyset_metadata(
+    saved: dict, columns: list[str] | None, filters: list[ReportFilter] | None,
+    page_by: str, after: str | None,
+) -> dict:
+    """The reportMetadata to POST for one keyset page of a saved report.
+
+    Sorted ascending by ``page_by`` and, when ``after`` is given, narrowed to
+    rows whose ``page_by`` is greater than it. A grouped report is flattened to
+    a tabular run, which never shows more than the saved report does. ``saved``
+    is not mutated.
+    """
+    if not _REPORT_COLUMN_RE.match(page_by):
+        # page_by is the caller's input, not a cell value, so naming it is allowed.
+        raise ReportPagingError(
+            "bad_page_by",
+            f"Invalid report filter column: page_by {page_by!r} is not a report column name; "
+            "use the column's API name, such as Account.Opp_Number__c",
+        )
+    if saved.get("topRows"):
+        raise ReportPagingError(
+            "bad_page_by",
+            "page_by cannot page a report that has a row limit; remove the row limit from the saved report",
+        )
+    if saved.get("reportFormat") == "MULTI_BLOCK":
+        raise ReportPagingError("bad_page_by", "page_by cannot page a joined report")
+
+    flatten = saved.get("reportFormat") != "TABULAR"
+    grouping_columns: list[str] = []
+    if flatten:
+        for grouping in [*(saved.get("groupingsDown") or []), *(saved.get("groupingsAcross") or [])]:
+            if grouping.get("dateGranularity") not in _UNFLATTENABLE_GRANULARITIES:
+                raise ReportPagingError(
+                    "bad_page_by",
+                    "page_by cannot page a report grouped by week, month, quarter or year: "
+                    "reading it as one table would show exact dates the saved report does not",
+                )
+            if grouping["name"] not in grouping_columns:
+                grouping_columns.append(grouping["name"])
+
+    extra_filters = list(filters or [])
+    if after is None:
+        # Reserve the key filter's slot so a read that would exceed the filter
+        # limit on page 2 fails on page 1, before any approval card.
+        build_report_metadata(saved, columns, [*extra_filters, ReportFilter(page_by, "greaterThan", ["0"])])
+    else:
+        extra_filters.append(ReportFilter(page_by, "greaterThan", [after]))
+    metadata = build_report_metadata(saved, columns, extra_filters)
+
+    if flatten:
+        cols = metadata.get("detailColumns") or []
+        metadata["reportFormat"] = "TABULAR"
+        metadata["groupingsDown"] = []
+        metadata["groupingsAcross"] = []
+        metadata["aggregates"] = ["RowCount"]
+        metadata["chart"] = None
+        metadata["customSummaryFormula"] = None
+        metadata["detailColumns"] = [g for g in grouping_columns if g not in cols] + cols
+
+    final_columns = metadata.get("detailColumns") or []
+    if page_by not in final_columns:
+        raise ReportPagingError(
+            "bad_page_by",
+            f"page_by {page_by!r} is not a column of this run: {', '.join(final_columns)}",
+        )
+    metadata["sortBy"] = [{"sortColumn": page_by, "sortOrder": "Asc"}]
+    aggregates = list(metadata.get("aggregates") or [])
+    if "RowCount" not in aggregates:
+        aggregates.append("RowCount")
+    metadata["aggregates"] = aggregates
+    return metadata
+
+
+def _key_text(value: Any) -> str | None:
+    """A cell value as page key text, or None if it cannot be used to page."""
+    if isinstance(value, str):
+        if value and "," not in value and value == value.strip():
+            return value
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
+    return None
+
+
+def report_page_keys(
+    result: dict, page_by: str, after: str | None, remaining: int | None,
+) -> tuple[list[str], int]:
+    """The ``page_by`` key text of each row of one page, and the run's RowCount.
+
+    Raises ReportPagingError when the page cannot be trusted to continue a
+    complete read: the keys are unusable, repeat, do not advance, or rows were
+    lost between pages.
+    """
+    not_flat = ReportPagingError("not_flat", _NOT_FLAT_MESSAGE)
+    try:
+        fact_map = result["factMap"]
+        if set(fact_map) != {_PAGE_ROWS_KEY}:
+            raise not_flat
+        table = fact_map[_PAGE_ROWS_KEY]
+        rows = table["rows"]
+        meta = result["reportMetadata"]
+        index = meta["detailColumns"].index(page_by)
+        cells = [row["dataCells"][index].get("value") for row in rows]
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        raise not_flat from None
+
+    keys: list[str] = []
+    for cell in cells:
+        key = _key_text(cell)
+        if key is None:
+            raise ReportPagingError(
+                "bad_page_by",
+                f"page_by {page_by!r} has a value that cannot be paged by "
+                "(empty, containing a comma, or not text or a number); choose an auto-number column",
+            )
+        keys.append(key)
+    if len(set(keys)) != len(keys):
+        raise ReportPagingError(
+            "not_unique", f"page_by {page_by!r} is not unique: a value repeats within one page",
+        )
+    if after is not None and after in keys:
+        raise ReportPagingError(
+            "not_advancing",
+            f"page_by {page_by!r} did not advance: Salesforce returned the previous page's last value "
+            "again, so the column cannot be paged with greaterThan; choose an auto-number column",
+        )
+    all_data = result.get("allData") is not False
+    if not keys and not all_data:
+        raise ReportPagingError(
+            "not_advancing",
+            f"page_by {page_by!r} did not advance: a page had no rows but Salesforce reported more",
+        )
+    try:
+        row_count = table["aggregates"][(meta.get("aggregates") or []).index("RowCount")]["value"]
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        raise not_flat from None
+    if isinstance(row_count, bool) or not isinstance(row_count, int):
+        raise not_flat
+    if remaining is not None and row_count != remaining:
+        raise ReportPagingError(
+            "rows_lost",
+            f"page_by {page_by!r} lost rows between pages: {remaining} rows were left but the next "
+            f"page matched {row_count}; the column has repeated or blank values, compares "
+            "case-insensitively, or the report changed during the read",
+        )
+    if all_data and len(keys) != row_count:
+        raise ReportPagingError(
+            "rows_lost", f"page_by {page_by!r} lost rows: the last page returned {len(keys)} of {row_count} rows",
+        )
+    return keys, row_count
+
+
+def report_page_info(number: int, rows_before: int, count: int, more: bool) -> dict:
+    """The ``page`` block attached to a paged report result."""
+    return {
+        "number": number,
+        "first_row": rows_before + 1 if count else 0,
+        "last_row": rows_before + count if count else 0,
+        "more": more,
+    }
 
 
 def build_authorize_url(
@@ -362,6 +568,7 @@ class SalesforceClient:
         self._config = dict(config)
         self._token_file = token_file
         self._sf = None  # lazily initialized
+        self.report_max_pages = DEFAULT_REPORT_MAX_PAGES
 
     def _build_sf(self):
         try:
@@ -584,3 +791,39 @@ class SalesforceClient:
         result = self._call(_run)
         logger.info("run_report %s completed (%s)", report_id, "summary" if summary_only else "details")
         return result
+
+    def run_report_page(
+        self, report_id: str, page_by: str, columns: list[str] | None = None,
+        filters: list[ReportFilter] | None = None, after: str | None = None, pages_done: int = 0,
+        remaining: int | None = None,
+    ) -> ReportPage:
+        """Run one keyset page of a saved report, in order of the unique column ``page_by``.
+
+        ``after`` is the last ``page_by`` value of the previous page,
+        ``pages_done`` the runs made so far and ``remaining`` the rows that were
+        left after the previous page. Raises ReportPagingError if the read
+        cannot continue; the saved report never changes.
+        """
+        if not report_id:
+            raise SalesforceClientError("run_report_page requires a report_id")
+        if pages_done >= self.report_max_pages:
+            raise ReportPagingError(
+                "page_limit",
+                f"stopped after {self.report_max_pages} pages without reaching the end of the report; "
+                "narrow it with filters or raise salesforce.report_max_pages",
+            )
+        path = f"analytics/reports/{report_id}"
+
+        def _run(sf):
+            describe = sf.restful(f"{path}/describe")
+            saved = (describe.get("reportMetadata") if isinstance(describe, dict) else None) or {}
+            metadata = build_keyset_metadata(saved, columns, filters, page_by, after)
+            result = sf.restful(
+                path, params={"includeDetails": "true"}, method="POST", json={"reportMetadata": metadata},
+            )
+            keys, row_count = report_page_keys(result, page_by, after, remaining)
+            return ReportPage(result, keys, result.get("allData") is not False, row_count)
+
+        page = self._call(_run)
+        logger.info("run_report_page %s completed (%d rows)", report_id, len(page.keys))
+        return page

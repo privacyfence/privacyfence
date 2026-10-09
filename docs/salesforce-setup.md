@@ -88,6 +88,25 @@ described in [connecting-a-service.md](connecting-a-service.md).
 After that, PrivacyFence refreshes the access token by itself: when Salesforce reports an expired
 session, it refreshes once and retries the call.
 
+## Reading large reports
+
+Salesforce returns at most 2,000 detail rows for one run of a report. To read more, pass `page_by`
+to `salesforce_run_report` (or the plugin operation `salesforce.report_run`). PrivacyFence then
+runs the saved report once per page, sorted by that column and starting after the last value of the
+previous page, and returns a `next_cursor` until the report is done. The saved report is not
+changed.
+
+- `page_by` must be a column with a different value in every row and no blanks. An Auto Number field
+  added to the report is best. Record-ID columns are not guaranteed to work, because Salesforce
+  compares text case-insensitively. A read that would lose rows fails with no rows instead of
+  returning a partial result.
+- A grouped report is read as one table, with the grouping columns first. A report grouped by
+  week, month, quarter or year, and a joined report, cannot be paged.
+- Each page is one report run and counts against the org's hourly report-run limits.
+  `salesforce.report_max_pages` in `settings.yaml` (default 50, which is 100,000 rows) caps the runs
+  one read may use; a read that needs more fails.
+- Totals and other aggregates on a later page cover only the rows from that page on.
+
 ## Troubleshooting
 
 **`redirect_uri_mismatch`** — the Callback URL on the app must include

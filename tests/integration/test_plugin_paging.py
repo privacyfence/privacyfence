@@ -11,6 +11,7 @@ import json
 import pytest
 
 from tests.fixtures.plugins.echo.harness import FakeDrive, Stack, calendar_event, install_echo
+from tests.fixtures.salesforce_analytics import COLUMNS, KEY, REPORT_ID, TYPE, FakeAnalytics, make_rows, tabular_report
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(30)]
 
@@ -20,7 +21,7 @@ MIB = 1024 * 1024
 @pytest.fixture
 async def stack(tmp_path, monkeypatch):
     stack = Stack(tmp_path, monkeypatch, serve=True)
-    install_echo(stack.plugins, source_operations=["calendar.list_events", "jira.search", "drive.download"])
+    install_echo(stack.plugins, source_operations=["calendar.list_events", "jira.search", "drive.download", "salesforce.report_run"])
     await stack.start()
     await stack.enable()
     try:
@@ -74,6 +75,30 @@ class TestJira:
         result = await collected(stack, "jira.search", page_size="100")
 
         assert result["pages"] == 1 and result["items"] == 5
+
+
+class TestSalesforce:
+    async def report(self, stack, page_by: str) -> dict:
+        page = await stack.page("/report", report_id=REPORT_ID, page_by=page_by)
+        assert page["status"] == 200, page
+        return json.loads(page["body"])
+
+    async def test_every_row_of_a_4500_row_report_arrives_once(self, stack):
+        rows = make_rows(4500)
+        stack.analytics = FakeAnalytics(tabular_report(), COLUMNS, rows)
+
+        result = await self.report(stack, KEY)
+
+        assert result["pages"] == 3 and result["items"] == 4500
+        assert result["keys"] == [r[KEY] for r in rows]
+
+    async def test_a_non_unique_column_fails_with_no_rows(self, stack):
+        stack.analytics = FakeAnalytics(tabular_report(), COLUMNS, make_rows(10))
+
+        result = await self.report(stack, TYPE)
+
+        assert result["error"] == "invalid_params" and result["reason"] == "not_unique"
+        assert result["keys"] == [] and result["items"] == 0
 
 
 class TestDriveBinary:

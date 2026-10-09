@@ -981,6 +981,26 @@ class TestBuildConnectorsSalesforce:
 
         assert connectors == []
 
+    def _built_client(self, monkeypatch, config):
+        monkeypatch.setattr(daemon_main, "load_salesforce_token", lambda path: {"access_token": "t"})
+        monkeypatch.setattr(daemon_main, "SalesforceClient", fake_client_class(result="ok"))
+        connectors, _failures = daemon_main.build_connectors(config, self._org_config())
+        return connectors[0]._sf
+
+    def test_report_max_pages_defaults_to_50(self, monkeypatch):
+        assert self._built_client(monkeypatch, {}).report_max_pages == 50
+
+    def test_report_max_pages_from_config(self, monkeypatch):
+        client = self._built_client(monkeypatch, {"salesforce": {"report_max_pages": 7}})
+        assert client.report_max_pages == 7
+
+    @pytest.mark.parametrize("bad", [0, -1, "x", True])
+    def test_bad_report_max_pages_falls_back_with_a_warning(self, monkeypatch, caplog, bad):
+        with caplog.at_level(logging.WARNING, logger=daemon_main.logger.name):
+            client = self._built_client(monkeypatch, {"salesforce": {"report_max_pages": bad}})
+        assert client.report_max_pages == 50
+        assert "salesforce.report_max_pages must be a whole number of at least 1; using 50" in caplog.text
+
 
 # ---------------------------------------------------------------------------- #
 # build_connectors: Jira / Confluence share one Atlassian OAuth grant
