@@ -99,7 +99,17 @@ def _local(tmp_path, monkeypatch):
 
 def daemon_resolve(tmp_path, name: str, data: bytes):
     path = tmp_path / name
-    path.write_bytes(data)
+    try:
+        path.write_bytes(data)
+    except OSError:
+        # The file system refuses this name (control characters on Windows): store the bytes under a
+        # plain name and let the daemon report the awkward one, which is the part under test.
+        path = tmp_path / "stored"
+        path.write_bytes(data)
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(local_files, "resolved_name", lambda _ref: name)
+            with local_files.call_context(bridge_available=False, uploads={}):
+                return files.resolve_file(SPEC, str(path), tool_title=TITLE)
     with local_files.call_context(bridge_available=False, uploads={}):
         return files.resolve_file(SPEC, str(path), tool_title=TITLE)
 
