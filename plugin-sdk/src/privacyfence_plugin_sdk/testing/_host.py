@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import copy
+import hashlib
 import json
 import re
 import shutil
@@ -11,15 +13,17 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from .. import blocks as _blocks
+from .._files import FILE_PARAM_KEY, MAX_FILE_PARAMS_PER_TOOL, declared_media_type, file_specs, sniff_media_type
 from .._rpc import Peer, RpcError
 from ..plugin import (
     _MAX_SCOPE_TYPE_DESCRIPTION_CHARS,
     _RESERVED_PLUGIN_NAMES,
     PROTOCOL_VERSION,
     Plugin,
+    _check_file_param,
     args_digest,
 )
 from ..responses import ToolDefinitionError
@@ -56,6 +60,17 @@ _SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")
 _GATES = ("auto", "review", "popup")
 _PARAM_TYPES = frozenset({"string", "integer", "number", "boolean"})
 _FORBIDDEN_PARAM_KEYS = frozenset({"enum", "oneOf", "anyOf", "allOf", "items", "properties", "$ref"})
+
+# The extension a file given as plain bytes gets, from the parameter's first media type.
+_FILE_EXTENSIONS = {
+    "text/html": ".html", "text/plain": ".txt", "application/json": ".json", "application/pdf": ".pdf",
+    "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp",
+    "font/woff": ".woff", "font/woff2": ".woff2", "font/ttf": ".ttf", "font/otf": ".otf",
+    "application/octet-stream": "",
+}
+_MAX_FILE_NAME_CHARS = 120
+_UNNAMED_FILE = "(unnamed file)"
+_FILE_SOURCE = "Test host"
 
 _PREPARE_SENTENCES = {
     "connector_unavailable": "A service this plugin reads from is not connected.",
@@ -149,11 +164,16 @@ def _check_tool(plugin: str, tool: Any, declared: set[str], seen: set[str], max_
     if not isinstance(description, str) or not 1 <= len(description) <= _MAX_DESCRIPTION_CHARS:
         raise ToolDefinitionError(f"the description of {name} must be 1 to {_MAX_DESCRIPTION_CHARS} characters")
     _check_parameters(name, tool.get("parameters"))
+    takes_file = bool(file_specs(tool["parameters"].get("properties", {})))
     read_only, destructive, gate = tool.get("read_only"), tool.get("destructive"), tool.get("gate")
     if not isinstance(read_only, bool) or not isinstance(destructive, bool):
         raise ToolDefinitionError(f"read_only and destructive of {name} must be booleans")
     if gate not in _GATES:
         raise ToolDefinitionError(f"gate of {name} must be one of {', '.join(_GATES)}")
+    if takes_file and read_only:
+        raise ToolDefinitionError(f"tool {name} takes a file and cannot be read-only")
+    if takes_file and gate == "auto":
+        raise ToolDefinitionError(f"tool {name} takes a file and must use the review or popup gate")
     if read_only and destructive:
         raise ToolDefinitionError(f"tool {name} cannot be both read-only and destructive")
     if destructive and gate != "popup":
@@ -191,6 +211,10 @@ def _check_parameters(tool: str, parameters: Any) -> None:
             raise ToolDefinitionError(
                 f"parameter {pname} of {tool}: only string, integer, number and boolean are supported"
             )
+        if FILE_PARAM_KEY in spec:
+            _check_file_param(tool, pname, spec)
+    if len(file_specs(properties)) > MAX_FILE_PARAMS_PER_TOOL:
+        raise ToolDefinitionError(f"tool {tool} may take at most {MAX_FILE_PARAMS_PER_TOOL} file parameter")
     required = parameters.get("required", [])
     if not isinstance(required, list) or any(r not in properties for r in required):
         raise ToolDefinitionError(f"required of {tool} must name declared parameters")
@@ -215,6 +239,9 @@ class PluginTestHost:
     are available. Without it every ``host.get`` / ``host.request`` answers 404 and never reaches
     the plugin.
 
+    ``page_new_tabs=True`` is the manifest's ``page_new_tabs: true`` (it needs ``pages=True``): page
+    responses carry the content security policy that lets a page open links in new tabs.
+
     ``pii`` stands in for the daemon's PII detector: a function of the text a review card shows
     that returns True when it finds personal data. A flagged call always shows its card, whatever
     "Always allow" rules exist, and the card has ``pii_flagged`` set. ``None`` flags nothing, and
@@ -236,6 +263,7 @@ class PluginTestHost:
         output_types: tuple[str, ...] | list[str] | None = None,
         source_operations: Iterable[str] = (),
         pages: bool = False,
+        page_new_tabs: bool = False,
         pii: Callable[[str], bool] | None = None,
     ) -> None:
         if mode not in ("local", "org"):
@@ -244,12 +272,15 @@ class PluginTestHost:
             raise ValueError("max_gate_floor must be 'review' or 'auto'")
         if output_types is not None and not outputs:
             raise ValueError("output_types needs outputs=True")
+        if page_new_tabs and not pages:
+            raise ValueError("page_new_tabs needs pages=True")
         allowed = frozenset(source_operations)
         for operation in sorted(allowed, key=str):
             if operation not in SOURCE_OPERATIONS:
                 raise ValueError(f"unknown source operation {operation!r}")
         self.source_operations = allowed
         self.pages = bool(pages)
+        self.page_new_tabs = bool(page_new_tabs)
         self._pii = pii
         self.outputs = bool(outputs)
         self._output_types = check_types(DEFAULT_OUTPUT_TYPES if output_types is None else output_types) if outputs else ()
@@ -431,13 +462,19 @@ class PluginTestHost:
         return tool.get("title") or tool["name"].replace("_", " ").capitalize()
 
     async def call_tool(
-        self, name: str, args: dict | None = None, decide: Decision = "approve", principal: str | None = None
+        self, name: str, args: dict | None = None, decide: Decision = "approve", principal: str | None = None,
+        files: Mapping[str, bytes | tuple[str, bytes]] | None = None,
     ) -> ToolOutcome:
         """Call one of the plugin's tools the way PrivacyFence would: prepare, gate, execute.
 
         ``name`` is the plugin's own tool name. ``decide`` answers a card that is shown:
         ``"approve"``, ``"deny"`` or a function of the :class:`Card`. A ``reason`` argument is
         passed on as the call's reason, as the MCP layer does.
+
+        ``files`` maps a file parameter to its bytes, or to ``(name, bytes)``; plain bytes are named
+        ``file`` plus the extension of the parameter's first media type. The host applies the daemon's
+        rules (size, detected type) and shows ``decide`` the file block first on the card. The plugin
+        is told the file's metadata at prepare and gets the bytes at execute only.
 
         Raises :class:`SourceFixtureMissing` when the plugin made a ``source.call`` that no fixture
         answers.
@@ -451,15 +488,30 @@ class PluginTestHost:
             return ToolOutcome(gate="", error={"code": "unknown_tool", "detail": f"the plugin has no tool {name!r}"})
         args = dict(args or {})
         reason = args.pop("reason", None)
-        required = tool["parameters"].get("required", [])
-        missing = [r for r in required if r not in args]
-        if missing:
-            return ToolOutcome(tool["gate"], error={"code": "invalid_params", "detail": f"missing {missing[0]}"})
+        specs = file_specs(tool["parameters"].get("properties", {}))
+        given = dict(files or {})
+        refusal = self._file_refusal(name, specs, args, given)
+        if refusal is None:
+            required = tool["parameters"].get("required", [])
+            missing = [r for r in required if r not in args and r not in specs]
+            if missing:
+                refusal = f"missing {missing[0]}"
+        if refusal is None:
+            refusal = next((f"missing {r}" for r in tool["parameters"].get("required", [])
+                            if r in specs and r not in given), None)
+        incoming: dict[str, dict] = {}
+        if refusal is None:
+            for param, value in given.items():
+                incoming[param], refusal = self._describe_file(tool, specs[param], param, value)
+                if refusal is not None:
+                    break
+        if refusal is not None:
+            return ToolOutcome(tool["gate"], error={"code": "invalid_params", "detail": refusal})
 
         mark = len(self.audit)
         self.source.take_missing()
         try:
-            outcome = await self._run_call(peer, tool, ctx, args, reason, decide)
+            outcome = await self._run_call(peer, tool, ctx, args, reason, decide, incoming)
         finally:
             missing_fixture = self.source.take_missing()
         outcome.audit = [dict(e) for e in self.audit[mark:]]
@@ -467,20 +519,75 @@ class PluginTestHost:
             raise missing_fixture
         return outcome
 
+    @staticmethod
+    def _file_refusal(name: str, specs: dict, args: dict, given: dict) -> str | None:
+        for param in given:
+            if param not in specs:
+                return f"{param} is not a file parameter of {name}"
+        for param in specs:
+            if param in args:
+                return f"pass {param} in files=, not in args"
+        return None
+
+    def _describe_file(self, tool: dict, spec: Mapping, param: str, value: Any) -> tuple[dict, str | None]:
+        """The daemon's ``resolve_file`` over bytes: ``(file, None)``, or ``({}, refusal)``."""
+        if isinstance(value, tuple):
+            name, data = value
+        else:
+            name, data = "file" + _FILE_EXTENSIONS[spec["media_types"][0]], value
+        if not isinstance(name, str) or not isinstance(data, (bytes, bytearray)):
+            raise TypeError("files= takes bytes or a (name, bytes) pair for each file parameter")
+        data = bytes(data)
+        title = self._title(tool)
+        if len(data) > spec["max_bytes"]:
+            return {}, f"The file is {len(data):,} bytes, over the {spec['max_bytes']:,}-byte limit of {title}."
+        name = _blocks.clean_line(name)[:_MAX_FILE_NAME_CHARS] or _UNNAMED_FILE
+        sniffed = sniff_media_type(data)
+        if sniffed not in spec["media_types"]:
+            return {}, f"The file's content is {sniffed}, and {title} accepts only {', '.join(spec['media_types'])}."
+        return {
+            "param": param, "name": name, "size": len(data), "media_type": declared_media_type(name),
+            "sniffed_type": sniffed, "sha256": hashlib.sha256(data).hexdigest(), "data": data,
+        }, None
+
+    @staticmethod
+    def _file_wire(file: dict, *, with_content: bool) -> dict:
+        wire = {k: file[k] for k in ("name", "size", "media_type", "sniffed_type", "sha256")}
+        if with_content:
+            wire["content_base64"] = base64.b64encode(file["data"]).decode("ascii")
+        return wire
+
+    @staticmethod
+    def _file_block(file: dict) -> dict:
+        return {"type": "fields", "items": [
+            {"label": "File", "value": file["name"]},
+            {"label": "Source", "value": _FILE_SOURCE},
+            {"label": "Size", "value": f"{file['size']:,} bytes"},
+            {"label": "Declared type", "value": file["media_type"]},
+            {"label": "Detected type", "value": file["sniffed_type"]},
+            {"label": "SHA-256", "value": file["sha256"]},
+        ]}
+
     async def _run_call(
-        self, peer: Peer, tool: dict, ctx: dict, args: dict, reason: str | None, decide: Decision
+        self, peer: Peer, tool: dict, ctx: dict, args: dict, reason: str | None, decide: Decision,
+        incoming: dict[str, dict],
     ) -> ToolOutcome:
         outcome = ToolOutcome(gate=tool["gate"])
         call_id = uuid.uuid4().hex
         read_only = tool["read_only"]
+        prepare_params: dict[str, Any] = {
+            "call_id": call_id, "principal": ctx, "tool": tool["name"], "args": args, "reason": reason,
+        }
+        if incoming:
+            prepare_params["files"] = {p: self._file_wire(f, with_content=False) for p, f in incoming.items()}
         try:
-            prepared = await peer.request("tool.prepare", {
-                "call_id": call_id, "principal": ctx, "tool": tool["name"], "args": args, "reason": reason,
-            }, timeout=_TIMEOUTS["tool.prepare"])
+            prepared = await peer.request("tool.prepare", prepare_params, timeout=_TIMEOUTS["tool.prepare"])
         except RpcError as exc:
             outcome.error = {"code": exc.code, "detail": _PREPARE_SENTENCES.get(exc.code, _PREPARE_FALLBACK)}
             return outcome
         card = self._validate_prepared(tool, prepared)
+        if card is not None and incoming:
+            card.preview = [self._file_block(f) for f in incoming.values()] + card.preview
         if card is None:
             outcome.error = {"code": "invalid_preview", "detail": _INVALID_PREVIEW}
             return outcome
@@ -531,11 +638,20 @@ class PluginTestHost:
 
         approval = {"approval_id": f"{via}-{call_id}", "decision": "approved", "via": via, "decided_at": _now()}
         outcome.approval = approval
+        execute_params: dict[str, Any] = {
+            "call_id": call_id, "principal": ctx, "tool": tool["name"], "args": args,
+            "args_digest": args_digest(args), "approval": approval,
+        }
+        if incoming:
+            execute_params["files"] = {p: self._file_wire(f, with_content=True) for p, f in incoming.items()}
+            for f in incoming.values():
+                self.audit.append({
+                    "connector": f"plugin:{self.plugin.name}", "tool": mcp_name, "tool_name": title,
+                    "decision": "plugin_file", "auto_accept_rule": "",
+                    "summary": f"{f['param']}: {f['name']}; bytes={f['size']}; sha256={f['sha256']}; type={f['sniffed_type']}",
+                })
         try:
-            executed = await peer.request("tool.execute", {
-                "call_id": call_id, "principal": ctx, "tool": tool["name"], "args": args,
-                "args_digest": args_digest(args), "approval": approval,
-            }, timeout=_TIMEOUTS["tool.execute"])
+            executed = await peer.request("tool.execute", execute_params, timeout=_TIMEOUTS["tool.execute"])
         except RpcError as exc:
             if read_only:
                 # What the human approved is the prepared payload, whatever execute says.
@@ -624,7 +740,10 @@ class PluginTestHost:
         other method gets 405 and a path the daemon rejects gets 400, and neither reaches the plugin.
         """
         peer = self._running_peer()
-        return await _pages.serve(peer, self._principal(principal), method, path, query, enabled=self.pages)
+        return await _pages.serve(
+            peer, self._principal(principal), method, path, query, enabled=self.pages,
+            new_tabs=self.page_new_tabs,
+        )
 
     async def list_pages(self, principal: str | None = None) -> list[dict]:
         """The pages the plugin lists for the page browser, as the daemon would validate them.

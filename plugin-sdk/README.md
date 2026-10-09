@@ -272,6 +272,11 @@ async def test_the_ai_gets_what_the_card_showed():
         assert outcome.released == {"blocks": outcome.card.payload}
 ```
 
+A tool with a file parameter is called with `files=`: `await host.call_tool("publish", files={"html": b"<h1>Hi</h1>"})`.
+Plain bytes are named `file` plus the extension of the parameter's first media type; pass
+`(name, bytes)` to choose the name. The tool function sees the file's metadata and the execute function
+gets the bytes, as with PrivacyFence, whose size and detected-type refusals the host repeats.
+
 With pytest, add `pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]` to `conftest.py` and
 use the `plugin_host` fixture: `async with plugin_host(plugin) as host`. The host also drives pages,
 confirmations, events, purge and shutdown. The module docstring of `privacyfence_plugin_sdk.testing`
@@ -286,6 +291,8 @@ Where the test host differs from PrivacyFence:
   default is `"review"`, which refuses a tool on the `auto` gate.
 - `PluginTestHost(plugin, source_operations=(...), pages=True)` takes the manifest's `source_operations` and
   `pages`; it checks source-call parameters as PrivacyFence does.
+- `PluginTestHost(plugin, pages=True, page_new_tabs=True)` takes the manifest's `page_new_tabs`; page
+  responses then carry the policy that lets a page open links in new tabs.
 - `pii=` takes a function that models the PII check, which overrides an "Always allow" rule.
 - It withholds a write result over 2,048 bytes but does not run PrivacyFence's PII detector on it.
 - It ignores a `tools.changed` the plugin sends.

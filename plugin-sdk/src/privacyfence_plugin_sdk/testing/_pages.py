@@ -17,6 +17,12 @@ CSP = (
     "sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; "
     "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
 )
+# CSP plus popups that escape the sandbox, for a plugin whose manifest sets page_new_tabs. A copy of the daemon's;
+# a test compares the two.
+CSP_NEW_TABS = (
+    "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'self' data: 'unsafe-inline'; "
+    "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+)
 # Header names are lower case, as an ASGI server hands them on.
 SECURITY_HEADERS = {
     "content-security-policy": CSP,
@@ -99,30 +105,36 @@ def split_target(target: str) -> tuple[str, dict[str, str]]:
     return path, {k: v for k, v in parse_qsl(query, keep_blank_values=True)}
 
 
-def _response(status: int, body: bytes, *, extra: dict[str, str] | None = None) -> PageResponse:
-    headers = {**SECURITY_HEADERS, "content-type": _PLAIN, **(extra or {})}
+def _security_headers(new_tabs: bool) -> dict[str, str]:
+    return {**SECURITY_HEADERS, "content-security-policy": CSP_NEW_TABS} if new_tabs else dict(SECURITY_HEADERS)
+
+
+def _response(
+    status: int, body: bytes, *, extra: dict[str, str] | None = None, new_tabs: bool = False
+) -> PageResponse:
+    headers = {**_security_headers(new_tabs), "content-type": _PLAIN, **(extra or {})}
     return PageResponse(status, headers, body)
 
 
 async def serve(
     peer: Peer, principal: dict, method: str, target: str, query: dict[str, str] | None = None,
-    *, enabled: bool = True,
+    *, enabled: bool = True, new_tabs: bool = False,
 ) -> PageResponse:
     """One page request, start to finish: method, path, ``web.request``, then the response filter."""
     method = method.upper()
     if method not in ("GET", "HEAD"):
-        return _response(405, b"Method not allowed.", extra={"allow": "GET, HEAD"})
+        return _response(405, b"Method not allowed.", extra={"allow": "GET, HEAD"}, new_tabs=new_tabs)
     raw_path, parsed = split_target(target)
     path = normalize_path(raw_path)
     if path is None:
-        return _response(400, b"Bad path.")
+        return _response(400, b"Bad path.", new_tabs=new_tabs)
     if not enabled:
-        return _response(404, b"Not Found")
+        return _response(404, b"Not Found", new_tabs=new_tabs)
     try:
         result = await peer.request("web.request", {
             "principal": principal, "method": "GET", "path": path, "query": {**parsed, **(query or {})},
         }, timeout=_WEB_REQUEST_TIMEOUT)
     except RpcError:
-        return _response(502, _NO_ANSWER)
+        return _response(502, _NO_ANSWER, new_tabs=new_tabs)
     status, headers, body = filter_response(result)
-    return PageResponse(status, {**SECURITY_HEADERS, **headers}, b"" if method == "HEAD" else body)
+    return PageResponse(status, {**_security_headers(new_tabs), **headers}, b"" if method == "HEAD" else body)
