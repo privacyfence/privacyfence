@@ -1,4 +1,5 @@
-"""Copied from privacyfence.plugins.source_ops; tests/unit/plugin_sdk/test_testhost_params.py compares them.
+"""Copied from
+privacyfence.plugins.source_ops; tests/unit/plugin_sdk/test_testhost_params.py compares them.
 
 The daemon refuses a malformed ``source.call`` before it touches a connector. ``validate`` raises
 the same ``invalid_params`` error with the same detail, checking in the same order.
