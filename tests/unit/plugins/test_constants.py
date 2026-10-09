@@ -150,3 +150,7 @@ class TestProtocolOneOneConstants:
         assert c.SHUTDOWN_NOTIFY_TIMEOUT_SECONDS > 0
         assert c.CLOSE_WAIT_SECONDS > 0
         assert c.SHUTDOWN_NOTIFY_TIMEOUT_SECONDS < c.SEND_TIMEOUT_SECONDS
+
+    def test_log_pump_values(self):
+        assert c.LOG_PUMP_CHUNK_BYTES > 0
+        assert c.LOG_DRAIN_SECONDS > 0

@@ -76,6 +76,8 @@ CRASH_WINDOW_SECONDS = 600.0
 PREPARED_CALL_LIFETIME_SECONDS = 900.0     # = approvals' pending TTL, so a deferred card can still release
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
+LOG_PUMP_CHUNK_BYTES = 64 * 1024
+LOG_DRAIN_SECONDS = 2.0
 
 PLUGIN_NAME_RE = re.compile(r"[a-z][a-z0-9-]{1,30}")     # always .fullmatch()
 TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")       # always .fullmatch()

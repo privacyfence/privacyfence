@@ -3,7 +3,8 @@
 Usage: ``stub_plugin.py <mode>`` with a mode of ``ok``, ``crash-on-start``, ``crash-after-init``,
 ``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env``, ``wrong-name``,
 ``stop-reading`` (answers initialize, then never reads stdin again) or
-``spawn-child`` (starts a sleeping child process and writes ``CHILD:<pid>`` to stderr).
+``spawn-child`` (starts a sleeping child process and writes ``CHILD:<pid>`` to stderr) or
+``spam-stderr`` (writes about 30 KB to stderr right after the initialize result, then ``SPAM_DONE``).
 """
 from __future__ import annotations
 
@@ -67,6 +68,10 @@ def main() -> int:
                 print("SOURCE_CALL:" + reply.get("error", {}).get("data", {}).get("code", "?"),
                       file=sys.stderr, flush=True)
             send({"jsonrpc": "2.0", "id": message["id"], "result": initialize_result(message.get("params", {}))})
+            if MODE == "spam-stderr":
+                for _ in range(300):
+                    print("x" * 99, file=sys.stderr)
+                print("SPAM_DONE", file=sys.stderr, flush=True)
             if MODE == "crash-after-init":
                 return 3
             if MODE == "stop-reading":

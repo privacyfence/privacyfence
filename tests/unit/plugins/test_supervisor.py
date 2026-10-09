@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -426,6 +427,13 @@ class TestShutdown:
         assert h.states[-1] == ("disabled", "executable or manifest changed, enable again")
         assert h.sleeps == []
 
+    async def test_stop_does_not_wait_for_a_grandchilds_pipe(self, make):
+        h = make("spawn-child")  # its sleeping child inherits stderr
+        await h.sup.start()
+        started = time.monotonic()
+        await asyncio.wait_for(h.sup.stop(), 5)
+        assert time.monotonic() - started < 1.0
+
     async def test_daemon_shutdown_sends_no_disabling_notice(self, make):
         h = make("ok")
         await h.sup.start()
@@ -584,6 +592,50 @@ class TestLog:
         await h.sup.stop()
         assert h.log.startswith("keep\n")
         assert not h.log_path.with_name("stub.log.1").exists()
+
+    def test_stderr_log_rotates_while_writing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sv, "LOG_MAX_BYTES", 10)
+        log = sv._StderrLog(tmp_path / "x.log")
+        log.append(b"a" * 25)
+        sizes = [(tmp_path / name).stat().st_size for name in ("x.log", "x.log.1", "x.log.2")]
+        assert sizes == [5, 10, 10]
+
+    def test_stderr_log_appends_from_two_threads(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sv, "LOG_MAX_BYTES", 10_000)
+        log = sv._StderrLog(tmp_path / "x.log")
+
+        def work() -> None:
+            for _ in range(100):
+                log.append(b"y" * 50)
+
+        threads = [threading.Thread(target=work) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        sizes = [p.stat().st_size for p in tmp_path.glob("x.log*")]
+        assert sum(sizes) == 10_000
+        assert max(sizes) <= 10_000
+
+    async def test_running_log_stays_under_the_cap(self, make, monkeypatch):
+        monkeypatch.setattr(sv, "LOG_MAX_BYTES", 4096)
+        h = make("spam-stderr")
+        await h.sup.start()
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if h.log_path.exists() and "SPAM_DONE" in h.log:
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("the plugin's stderr never reached the log")
+            assert h.sup.state == "running"
+            assert h.log_path.stat().st_size <= 4096
+            for index in (1, 2, 3):
+                assert h.log_path.with_name(f"stub.log.{index}").stat().st_size <= 4096
+            assert not h.log_path.with_name("stub.log.4").exists()
+        finally:
+            await h.sup.stop()
 
 
 class TestIntrospect:

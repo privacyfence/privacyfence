@@ -1,7 +1,7 @@
 """Runs one plugin as a child process: spawn, handshake, restart with backoff, stop.
 
-The child gets a minimal environment (``child_env``), its stderr goes to a private rotating log, and
-its stdout carries protocol messages only. A crash is an unexpected exit, or a peer that closes
+The child gets a minimal environment (``child_env``), its stderr goes through the daemon into a private log capped at
+5 MiB while it runs, and its stdout carries protocol messages only. A crash is an unexpected exit, or a peer that closes
 while the process is still there; five crashes inside ten minutes disable the plugin. A failed
 handshake check (protocol major, identity, tool definitions) is not a crash: it will fail the same
 way every time, so the plugin is disabled with the reason and not restarted. Neither is a refusal
@@ -16,6 +16,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -26,7 +27,9 @@ from privacyfence.plugins.constants import (
     CRASH_LIMIT,
     CRASH_WINDOW_SECONDS,
     LOG_BACKUP_COUNT,
+    LOG_DRAIN_SECONDS,
     LOG_MAX_BYTES,
+    LOG_PUMP_CHUNK_BYTES,
     MAX_LINE_BYTES,
     PROTOCOL_MAJOR,
     RESTART_BACKOFF_SECONDS,
@@ -110,6 +113,7 @@ class _Child:
             notification_handlers=notification_handlers,
             on_close=self.mark_gone,
         )
+        self.stderr_pump: asyncio.Task | None = None
         self.exit_watch = asyncio.create_task(self._watch_exit())
 
     def mark_gone(self, reason: str) -> None:
@@ -118,17 +122,35 @@ class _Child:
             self.gone.set()
 
     async def _watch_exit(self) -> None:
-        await self.proc.wait()
+        await _wait_exit(self.proc)
         self.mark_gone("exit")
 
 
-def _rotate_log(path: Path) -> None:
-    """Shift ``path`` to ``.1`` (and ``.1`` to ``.2`` …) once it is over the size limit."""
-    try:
-        if path.stat().st_size <= LOG_MAX_BYTES:
+_EXIT_POLL_SECONDS = 0.05
+
+
+async def _wait_exit(proc: asyncio.subprocess.Process, timeout: float | None = None) -> bool:
+    """True once ``proc`` has exited (its returncode is set), False when ``timeout`` ran out.
+
+    Polls the returncode instead of awaiting the process's ``wait()``, which on Python 3.11 also
+    waits for every pipe to close, and a grandchild can hold the stderr pipe open."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while proc.returncode is None:
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(_EXIT_POLL_SECONDS)
+    return True
+
+
+def _rotate_log(path: Path, *, force: bool = False) -> None:
+    """Shift ``path`` to ``.1`` (and ``.1`` to ``.2`` …) once it is over the size limit, or at once
+    when ``force`` is set."""
+    if not force:
+        try:
+            if path.stat().st_size <= LOG_MAX_BYTES:
+                return
+        except FileNotFoundError:
             return
-    except FileNotFoundError:
-        return
     path.with_name(f"{path.name}.{LOG_BACKUP_COUNT}").unlink(missing_ok=True)
     for index in range(LOG_BACKUP_COUNT - 1, 0, -1):
         older = path.with_name(f"{path.name}.{index}")
@@ -144,6 +166,53 @@ def _open_log(path: Path) -> int:
     if sys.platform != "win32":  # pragma: no branch -- Windows has no mode bits to assert
         os.fchmod(fd, 0o600)
     return fd
+
+
+class _StderrLog:
+    """The plugin's log file, written chunk by chunk so it never grows past ``LOG_MAX_BYTES``.
+
+    Two pumps of one supervisor can overlap after a restart (the old child's is still draining
+    when the new one starts), so ``append`` runs under a lock. The file is opened per chunk: no
+    descriptor is shared with children and no open handle blocks a rename on Windows. A line may
+    be split across files."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+
+    def append(self, data: bytes) -> None:
+        with self._lock:
+            while data:
+                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                try:
+                    if sys.platform != "win32":  # pragma: no branch -- Windows has no mode bits to assert
+                        os.fchmod(fd, 0o600)
+                    size = os.fstat(fd).st_size
+                    if size < LOG_MAX_BYTES:
+                        room = data[: LOG_MAX_BYTES - size]
+                        data = data[len(room):]
+                        view = memoryview(room)
+                        while view:
+                            view = view[os.write(fd, view):]
+                        continue
+                finally:
+                    os.close(fd)
+                _rotate_log(self.path, force=True)
+
+
+async def _pump_stderr(stream: asyncio.StreamReader, log: _StderrLog, name: str) -> None:
+    """Copy the plugin's stderr into ``log`` until EOF. Never cancelled: it ends when the last
+    holder of the pipe closes it. A write error is logged once and the rest is discarded, so a
+    full disk never blocks the child."""
+    failed = False
+    while chunk := await stream.read(LOG_PUMP_CHUNK_BYTES):
+        if failed:
+            continue
+        try:
+            await asyncio.to_thread(log.append, chunk)
+        except OSError as exc:
+            failed = True
+            logger.warning("plugin %s: could not write its log: %s", name, exc)
 
 
 def _signal_child(proc: asyncio.subprocess.Process, *, kill: bool) -> None:
@@ -192,6 +261,8 @@ class Supervisor:
         self._first_done = asyncio.Event()
         self._stopping = False
         self._crashes: list[float] = []
+        self._stderr_log = _StderrLog(spec.log_path)
+        self._pumps: set[asyncio.Task] = set()
 
     @property
     def peer(self) -> RpcPeer | None:
@@ -271,21 +342,23 @@ class Supervisor:
             )
         else:
             flags["start_new_session"] = True
-        log_fd = _open_log(spec.log_path)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *spec.argv,
-                cwd=spec.cwd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=log_fd,
-                env=child_env(),
-                limit=MAX_LINE_BYTES,
-                **flags,
-            )
-        finally:
-            os.close(log_fd)
+        os.close(_open_log(spec.log_path))  # the folder, the rotation at start, mode 0600
+        proc = await asyncio.create_subprocess_exec(
+            *spec.argv,
+            cwd=spec.cwd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=child_env(),
+            limit=MAX_LINE_BYTES,
+            **flags,
+        )
+        assert proc.stderr is not None  # nosec B101  # PIPE was requested
+        pump = asyncio.create_task(_pump_stderr(proc.stderr, self._stderr_log, spec.name))
+        self._pumps.add(pump)
+        pump.add_done_callback(self._pumps.discard)
         child = _Child(proc, handlers, notification_handlers)
+        child.stderr_pump = pump
         await child.peer.start()
         self._child = child
         logger.info("plugin %s: spawned pid %s", spec.name, proc.pid)
@@ -392,9 +465,10 @@ class Supervisor:
                 os.killpg(child.proc.pid, signal.SIGKILL)
         elif child.proc.returncode is None:  # pragma: no cover -- Windows only
             _signal_child(child.proc, kill=True)
-        if child.proc.returncode is None:
-            await child.proc.wait()
+        await _wait_exit(child.proc)
         await child.exit_watch
+        if child.stderr_pump is not None:
+            await asyncio.wait({child.stderr_pump}, timeout=LOG_DRAIN_SECONDS)
         await child.peer.close()
 
     async def _stop_child(self, child: _Child, reason: str) -> None:
@@ -417,8 +491,4 @@ class Supervisor:
 
     @staticmethod
     async def _exited(child: _Child, timeout: float) -> bool:
-        try:
-            await asyncio.wait_for(child.proc.wait(), timeout)
-        except TimeoutError:
-            return False
-        return True
+        return await _wait_exit(child.proc, timeout)
