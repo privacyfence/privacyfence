@@ -1,0 +1,67 @@
+{
+  "operation": "salesforce.report_run",
+  "params": {},
+  "data": {
+    "attributes": {
+      "reportName": "Example open deals",
+      "type": "tabular"
+    },
+    "reportMetadata": {
+      "id": "EXAMPLE-1",
+      "name": "Example open deals",
+      "reportFormat": "TABULAR",
+      "detailColumns": [
+        "OPPORTUNITY_NAME",
+        "AMOUNT",
+        "STAGE_NAME"
+      ]
+    },
+    "factMap": {
+      "T!T": {
+        "rows": [
+          {
+            "dataCells": [
+              {
+                "label": "Example Corp renewal",
+                "value": "EXAMPLE-OPP-1"
+              },
+              {
+                "label": "USD 12,000.00",
+                "value": 12000
+              },
+              {
+                "label": "Negotiation",
+                "value": "Negotiation"
+              }
+            ]
+          },
+          {
+            "dataCells": [
+              {
+                "label": "Sample Ltd upgrade",
+                "value": "EXAMPLE-OPP-2"
+              },
+              {
+                "label": "USD 4,500.00",
+                "value": 4500
+              },
+              {
+                "label": "Proposal",
+                "value": "Proposal"
+              }
+            ]
+          }
+        ],
+        "aggregates": [
+          {
+            "label": "2",
+            "value": 2
+          }
+        ]
+      }
+    },
+    "allData": true,
+    "hasDetailRows": true
+  },
+  "next_cursor": null
+}

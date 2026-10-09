@@ -875,6 +875,37 @@ class TestCheckJira:
         assert not get_issue.ok
         assert get_issue.raw is None
 
+    def test_search_issues_page_called_with_fallback_jql(self, monkeypatch):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {
+            "key": "PFQA-1",
+            "fields": {"summary": "PrivacyFence QA seed issue [QATEST]", "status": {"name": "To Do"}},
+        }
+        client._client.enhanced_jql.return_value = {"issues": [], "isLast": True}
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+
+        page = next(r for r in results if r.method == "search_issues_page")
+        assert page.ok
+        assert page.raw is None
+        args, kwargs = client._client.enhanced_jql.call_args
+        assert args[0] == 'project = PFQA AND summary ~ "PrivacyFence QA seed issue [QATEST]"'
+        assert kwargs["limit"] == 1
+
+    def test_search_issues_page_failure_reported(self, monkeypatch):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {"key": "PFQA-1", "fields": {"summary": "x"}}
+        client._client.enhanced_jql.side_effect = RuntimeError("boom")
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+
+        page = next(r for r in results if r.method == "search_issues_page")
+        assert not page.ok
+
 
 class TestCheckSalesforce:
     def _client(self, sf: MagicMock) -> SalesforceClient:
@@ -884,16 +915,16 @@ class TestCheckSalesforce:
 
     def test_owner_relationship_redacted(self, monkeypatch):
         sf = MagicMock()
-        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+        sf.query.return_value = {"records": [{"Id": "00O5e000004AbCdEAK", "Name": "PrivacyFence QA Report"}]}
         sf.Account.get.return_value = {
-            "attributes": {"type": "Account"}, "Id": "001a",
+            "attributes": {"type": "Account"}, "Id": "001xx000003DGb2AAG",
             "Name": "PrivacyFence QA — Acme Test Co [QATEST]",
             "Owner": {"Id": "005xx", "Name": "Real Owner", "Email": "real@company.com"},
         }
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
 
         results = recorder.check_salesforce(
-            record=True, manifest={"salesforce": {"seed_record_id": "001a"}},
+            record=True, manifest={"salesforce": {"seed_record_id": "001xx000003DGb2AAG"}},
         )
 
         get_record = next(r for r in results if r.method == "get_record")
@@ -903,12 +934,12 @@ class TestCheckSalesforce:
     def test_untagged_record_is_refused(self, monkeypatch):
         sf = MagicMock()
         sf.Account.get.return_value = {
-            "attributes": {"type": "Account"}, "Id": "001x", "Name": "Some real unrelated account",
+            "attributes": {"type": "Account"}, "Id": "001xx000003DGb3AAG", "Name": "Some real unrelated account",
         }
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
 
         results = recorder.check_salesforce(
-            record=True, manifest={"salesforce": {"seed_record_id": "001x"}},
+            record=True, manifest={"salesforce": {"seed_record_id": "001xx000003DGb3AAG"}},
         )
 
         get_record = next(r for r in results if r.method == "get_record")
@@ -926,7 +957,7 @@ class TestCheckSalesforce:
 
     def _report_sf(self, describe=None, narrowed=None, summary=None, full=None):
         sf = MagicMock()
-        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+        sf.query.return_value = {"records": [{"Id": "00O5e000004AbCdEAK", "Name": "PrivacyFence QA Report"}]}
         full = full or self._report_result(["NAME", "CITY"], [["Acme", "Zurich"], ["Beta", "Bern"]])
         describe = describe or {"reportMetadata": {
             "detailColumns": ["NAME", "CITY"],
@@ -950,7 +981,7 @@ class TestCheckSalesforce:
 
     def _run_report_result(self, monkeypatch, sf):
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
-        results = recorder.check_salesforce(record=True, manifest={"salesforce": {"seed_record_id": "001a"}})
+        results = recorder.check_salesforce(record=True, manifest={"salesforce": {"seed_record_id": "001xx000003DGb2AAG"}})
         return next(r for r in results if r.method == "run_report")
 
     def test_run_report_check_passes_on_honoured_overrides(self, monkeypatch):
@@ -974,7 +1005,7 @@ class TestCheckSalesforce:
 
     def test_run_report_check_degrades_on_mock_responses(self, monkeypatch):
         sf = MagicMock()
-        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+        sf.query.return_value = {"records": [{"Id": "00O5e000004AbCdEAK", "Name": "PrivacyFence QA Report"}]}
 
         res = self._run_report_result(monkeypatch, sf)
 
@@ -1029,7 +1060,7 @@ class TestCheckSalesforce:
         sf = MagicMock()
         sf.query.return_value = {"records": []}
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
-        results = recorder.check_salesforce(record=False, manifest={"salesforce": {"seed_record_id": "001a"}})
+        results = recorder.check_salesforce(record=False, manifest={"salesforce": {"seed_record_id": "001xx000003DGb2AAG"}})
         assert not any(r.method == "run_report" for r in results)
 
 
@@ -1199,6 +1230,61 @@ class TestCheckDrive:
         assert get_meta.raw is None
 
 
+class _RangeDriveClient:
+    def __init__(self, files, chunk=b"0123456789abcdef"):
+        self._files = files
+        self._chunk = chunk
+        self.range_calls = []
+
+    def get_file_metadata(self, file_id):
+        return SimpleNamespace(id=file_id, name="PrivacyFence QA Sandbox")
+
+    def list_files(self, query, max_results=20):
+        assert "'f1' in parents" in query
+        return self._files
+
+    def download_range(self, file_id, offset, length):
+        self.range_calls.append((file_id, offset, length))
+        return self._chunk[:length]
+
+
+def _drive_file(file_id, mime_type, size=100):
+    return SimpleNamespace(id=file_id, mime_type=mime_type, size=size)
+
+
+class TestCheckDriveRange:
+    def _run(self, monkeypatch, client):
+        monkeypatch.setattr(recorder, "_build_drive_client", lambda: client)
+        results = recorder.check_drive(record=False, manifest={"drive": {"folder_id": "f1"}})
+        return next(r for r in results if r.method == "download_range")
+
+    def test_reads_16_bytes_of_the_first_non_google_file(self, monkeypatch):
+        client = _RangeDriveClient([
+            _drive_file("sub", "application/vnd.google-apps.folder"),
+            _drive_file("doc", "application/vnd.google-apps.document"),
+            _drive_file("pdf", "application/pdf"),
+            _drive_file("png", "image/png"),
+        ])
+        result = self._run(monkeypatch, client)
+        assert result.ok
+        assert client.range_calls == [("pdf", 0, 16)]
+
+    def test_a_file_smaller_than_16_bytes_is_read_whole(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("tiny", "text/plain", size=5)], chunk=b"hello")
+        assert self._run(monkeypatch, client).ok
+
+    def test_a_short_read_fails(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("pdf", "application/pdf")], chunk=b"short")
+        assert not self._run(monkeypatch, client).ok
+
+    def test_no_non_google_file_fails_with_the_exact_message(self, monkeypatch):
+        client = _RangeDriveClient([_drive_file("doc", "application/vnd.google-apps.document")])
+        result = self._run(monkeypatch, client)
+        assert not result.ok
+        assert result.note == "QA Sandbox has no non-Google file for the Range check"
+        assert client.range_calls == []
+
+
 class TestCheckCalendar:
     def test_organizer_and_attendee_identity_redacted(self, monkeypatch):
         raw_event = {
@@ -1235,6 +1321,26 @@ class TestCheckCalendar:
         get_event = next(r for r in results if r.method == "get_event")
         assert not get_event.ok
         assert get_event.raw is None
+
+    def test_list_events_page_called(self, monkeypatch):
+        raw_event = {
+            "id": "e1", "summary": "PrivacyFence QA seed event [QATEST]",
+            "start": {"dateTime": "x"}, "end": {"dateTime": "y"},
+            "organizer": {"email": "real.user@company.com"},
+        }
+        client = CalendarClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = _offline_google_service("calendar", "v3", raw_event)
+        monkeypatch.setattr(recorder, "_build_calendar_client", lambda: client)
+        calls = []
+        real = client.list_events_page
+        client.list_events_page = lambda *a, **k: calls.append((a, k)) or real(*a, **k)
+
+        results = recorder.check_calendar(record=True, manifest={"calendar": {"seed_event_id": "e1"}})
+
+        page = next(r for r in results if r.method == "list_events_page")
+        assert page.ok
+        assert page.raw is None
+        assert calls == [(("primary", 1, "", ""), {})]
 
 
 class TestCheckContacts:

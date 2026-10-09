@@ -163,3 +163,48 @@ class TestOperationVerbs:
 
     def test_return_type_is_a_frozenset(self):
         assert isinstance(operation_verbs("jira.create_issue"), frozenset)
+
+
+class TestRegisterDynamic:
+    def test_adds_a_row_shaped_like_a_static_one(self):
+        from privacyfence.policy import registry
+
+        registry.register_dynamic("today_get_day", "plugin.today.get_day", Verb.READ, "review")
+        try:
+            assert TOOL_REGISTRY["today_get_day"] == registry.ToolRegistryEntry(
+                tool="today_get_day", gate="review", operation="plugin.today.get_day",
+                verb=Verb.READ, scope_subject=ScopeSubject.ITEM,
+            )
+            assert TOOL_TO_VERB["today_get_day"] is Verb.READ
+            assert operation_verbs("plugin.today.get_day") == frozenset({Verb.READ})
+        finally:
+            registry.unregister_dynamic("today_get_day")
+        assert "today_get_day" not in TOOL_REGISTRY
+        assert "today_get_day" not in TOOL_TO_VERB
+
+    def test_a_tool_with_no_operation_carries_no_verb(self):
+        from privacyfence.policy import registry
+
+        registry.register_dynamic("today_list_days", None, Verb.READ, "auto")
+        try:
+            entry = TOOL_REGISTRY["today_list_days"]
+            assert (entry.operation, entry.verb, entry.scope_subject) == (None, None, None)
+            assert "today_list_days" not in TOOL_TO_VERB
+        finally:
+            registry.unregister_dynamic("today_list_days")
+
+    def test_refuses_an_existing_tool_or_unknown_gate(self):
+        from privacyfence.policy import registry
+
+        with pytest.raises(ValueError):
+            registry.register_dynamic("gmail_get_message", "plugin.x.y", Verb.READ, "review")
+        with pytest.raises(ValueError):
+            registry.register_dynamic("today_get_day", "plugin.today.get_day", Verb.READ, "never")
+        assert "today_get_day" not in TOOL_REGISTRY
+
+    def test_unregistering_a_static_tool_is_a_no_op(self):
+        from privacyfence.policy import registry
+
+        before = dict(TOOL_REGISTRY)
+        registry.unregister_dynamic("gmail_get_message")
+        assert TOOL_REGISTRY == before

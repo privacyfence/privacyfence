@@ -18,7 +18,7 @@ with Claude Code.
 `/make-plan`, `/implement` and `/dod` come from the devflow toolkit (`andras-tkcs/claude-toolkit`,
 enabled as plugins in the Claude Project); the behaviour described here is unchanged. The project
 facts they use are in `.claude/toolkit.yaml`;
-[ADR 0120](docs/adr/0120-workflow-commands-come-from-the-devflow-toolkit-plugins.md) says why.
+[ADR 0132](docs/adr/0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) says why.
 
 - `.claude/skills/steward/SKILL.md` — PrivacyFence-specific steward policy, on top of the toolkit's
   `pr-steward` skill. The workflows a session dispatches instead of running locally are

@@ -1,0 +1,53 @@
+"""The daemon's cursor envelope, copied so the test host issues cursors a plugin cannot tell apart.
+
+The daemon's own tests compare this copy with ``privacyfence.plugins.cursors``. A cursor is the
+base64url text of ``{"v", "op", "d", "s"}``: the envelope version, the operation, a digest of the
+parameters the cursor was issued for, and the operation's state.
+"""
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+
+CURSOR_MAX_CHARS = 4096
+_VERSION = 1
+_INVALID = "cursor is not valid"
+_FOREIGN = "cursor belongs to a different call"
+
+
+class CursorError(ValueError):
+    """The cursor is malformed or was issued for another call."""
+
+
+def params_digest(operation: str, bound: dict) -> str:
+    raw = json.dumps({"op": operation, "p": bound}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def encode(operation: str, bound: dict, state: dict) -> str:
+    envelope = {"v": _VERSION, "op": operation, "d": params_digest(operation, bound), "s": state}
+    raw = json.dumps(envelope, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def decode(cursor: str, operation: str, bound: dict) -> dict:
+    if not isinstance(cursor, str) or not cursor or len(cursor) > CURSOR_MAX_CHARS:
+        raise CursorError(_INVALID)
+    try:
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        envelope = json.loads(raw.decode())
+    except (binascii.Error, ValueError):
+        raise CursorError(_INVALID) from None
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("v") != _VERSION
+        or not isinstance(envelope.get("op"), str)
+        or not isinstance(envelope.get("d"), str)
+        or not isinstance(envelope.get("s"), dict)
+    ):
+        raise CursorError(_INVALID)
+    if envelope["op"] != operation or envelope["d"] != params_digest(operation, bound):
+        raise CursorError(_FOREIGN)
+    return envelope["s"]

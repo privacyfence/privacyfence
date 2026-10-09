@@ -378,3 +378,8 @@ file_bridge:
 # after changing it.
 # agent_overrides:
 #   my-internal-wrapper: claude-code
+
+# Plugins: administrator-installed helper programs that add tools. false stops every plugin
+# from running. Local mode only; needs a restart.
+plugins:
+  enabled: true

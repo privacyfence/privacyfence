@@ -586,6 +586,9 @@ class TestListPagesInSpace:
             client.list_pages_in_space("ENG")
 
 
+BAD_PAGE_IDS = ["../spaces", "../../../rest/api/content?cql=type=page", "1?body-format=view", "1/../2", "abc"]
+
+
 class TestGetPage:
     def test_requires_page_id(self):
         client = make_client()
@@ -601,6 +604,25 @@ class TestGetPage:
         assert page.body == "content"
         assert client._client.get.call_args.args[0] == "api/v2/pages/1"
         assert client._client.get.call_args.kwargs["params"]["body-format"] == "storage"
+
+    def test_realistic_numeric_page_id_still_works(self):
+        client = make_client()
+        client._client.get.return_value = {"id": "98765432", "title": "Page"}
+        client.get_page("98765432")
+        assert client._client.get.call_args.args[0] == "api/v2/pages/98765432"
+
+    def test_int_page_id_is_accepted_as_its_digits(self):
+        client = make_client()
+        client._client.get.return_value = {"id": "98765432", "title": "Page"}
+        client.get_page(98765432)  # type: ignore[arg-type]
+        assert client._client.get.call_args.args[0] == "api/v2/pages/98765432"
+
+    @pytest.mark.parametrize("page_id", BAD_PAGE_IDS)
+    def test_non_numeric_page_id_is_refused_before_any_request(self, page_id):
+        client = make_client()
+        with pytest.raises(ConfluenceClientError, match="page_id must be a numeric Confluence page id"):
+            client.get_page(page_id)
+        assert client._client.mock_calls == []
 
     def test_no_bulk_call_without_author_or_mentions(self, monkeypatch):
         calls = patch_bulk(monkeypatch)
@@ -1006,6 +1028,13 @@ class TestUpdatePage:
         with pytest.raises(ConfluenceClientError, match="update_page"):
             client.update_page("1", "Title", "body")
 
+    @pytest.mark.parametrize("page_id", BAD_PAGE_IDS)
+    def test_non_numeric_page_id_is_refused_before_any_request(self, page_id):
+        client = make_client()
+        with pytest.raises(ConfluenceClientError, match="page_id must be a numeric Confluence page id"):
+            client.update_page(page_id, "Title", "body")
+        assert client._client.mock_calls == []
+
 
 # ---------------------------------------------------------------------------- #
 # list_attachments / _parse_attachment
@@ -1016,6 +1045,13 @@ class TestListAttachments:
         client = make_client()
         with pytest.raises(ConfluenceClientError, match="requires a page_id"):
             client.list_attachments("")
+
+    @pytest.mark.parametrize("page_id", BAD_PAGE_IDS)
+    def test_non_numeric_page_id_is_refused_before_any_request(self, page_id):
+        client = make_client()
+        with pytest.raises(ConfluenceClientError, match="page_id must be a numeric Confluence page id"):
+            client.list_attachments(page_id)
+        assert client._client.mock_calls == []
 
     def test_maps_results(self):
         client = make_client()
@@ -1141,6 +1177,29 @@ class TestFetchAttachmentBytes:
 
         with pytest.raises(ConfluenceClientError, match="fetch_attachment_bytes"):
             client.fetch_attachment_bytes("1", "att1")
+
+    @pytest.mark.parametrize("page_id", BAD_PAGE_IDS)
+    def test_non_numeric_page_id_is_refused_before_any_request(self, page_id):
+        client = make_client()
+        client._session = MagicMock()
+        with pytest.raises(ConfluenceClientError, match="page_id must be a numeric Confluence page id"):
+            client.fetch_attachment_bytes(page_id, "att1")
+        assert client._session.mock_calls == []
+
+    @pytest.mark.parametrize("attachment_id", ["../../../../api/v2/pages/1", "att1?x=1", "att1/download", "xyz"])
+    def test_malformed_attachment_id_is_refused_before_any_request(self, attachment_id):
+        client = make_client()
+        client._session = MagicMock()
+        with pytest.raises(ConfluenceClientError, match="attachment_id must be a Confluence attachment id"):
+            client.fetch_attachment_bytes("1", attachment_id)
+        assert client._session.mock_calls == []
+
+    def test_numeric_attachment_id_without_prefix_is_accepted(self):
+        client = make_client()
+        client._session = MagicMock()
+        client._session.get.return_value = MagicMock(content=b"x")
+        client.fetch_attachment_bytes("1", "123456")
+        assert client._session.get.call_args.args[0].endswith("/content/1/child/attachment/123456/download")
 
 
 class TestSaveAttachmentBytes:

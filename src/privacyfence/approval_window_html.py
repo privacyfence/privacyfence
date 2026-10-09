@@ -338,6 +338,36 @@ def _heading_block_html(label: str) -> str:
     return f'<div class="pf-preview-label" style="margin-bottom:6px">{_html_escape(label)}</div>'
 
 
+def _code_block_html(text: str) -> str:
+    """A plugin's code block (ADR 0122): the text escaped and shown verbatim, never highlighted or
+    interpreted. Its language travels in the block but picks nothing here; a renderer that colours
+    by language would be a parser of untrusted input."""
+    return f'<pre class="pf-code"><code>{_html_escape(text)}</code></pre>'
+
+
+def _diff_line_class(line: str) -> str:
+    if line.startswith("@@"):
+        return "pf-diff-hunk"
+    if line.startswith("+"):
+        return "pf-diff-add"
+    if line.startswith("-"):
+        return "pf-diff-del"
+    return ""
+
+
+def _diff_block_html(text: str) -> str:
+    """A plugin's unified diff (ADR 0122): one escaped ``<span>`` per line, classed by its first
+    characters so an added, removed or hunk-header line reads at a glance. Only the class is
+    derived from the text; the text itself stays text."""
+    lines = []
+    for line in text.split("\n"):
+        cls = _diff_line_class(line)
+        attr = f' class="{cls}"' if cls else ""
+        lines.append(f"<span{attr}>{_html_escape(line)}</span>")
+    body = "\n".join(lines)
+    return f'<pre class="pf-code pf-diff">{body}</pre>'
+
+
 def _render_block(block: dict, highlight: Callable[[str], list[tuple[int, int]]] | None = None) -> str:
     kind = block.get("type")
     if kind == "text":
@@ -351,6 +381,10 @@ def _render_block(block: dict, highlight: Callable[[str], list[tuple[int, int]]]
         return _table_html(block, highlight)
     if kind == "markdown":
         return _markdown_block_html(block.get("text", ""))
+    if kind == "code":
+        return _code_block_html(str(block.get("text", "")))
+    if kind == "diff":
+        return _diff_block_html(str(block.get("text", "")))
     return ""
 
 
@@ -404,7 +438,9 @@ def build_preview_body_html(
     ``_markdown_block_html``; this is how text_extraction.py's DOCX/PPTX/
     XLSX output and html_to_text.py's html_to_markdown() output get a rich
     preview instead of a flat text dump), or a table dict (same shape as
-    one entry of ``tables``, see ``_table_html``). This is what makes
+    one entry of ``tables``, see ``_table_html``), or a plugin's ``{"type":
+    "code", "text": ...}`` / ``{"type": "diff", "text": ...}`` (escaped
+    monospace text, see ``_code_block_html``/``_diff_block_html``). This is what makes
     *interleaving* possible -- text, then a table, then more text -- which
     a flat details_text-then-tables split can't express: e.g.
     jira_get_issue's Reporter field, then its Description paragraph, then

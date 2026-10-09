@@ -1,4 +1,4 @@
-# ADR 0120: Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project
+# ADR 0132: Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project
 
 ## Status
 
