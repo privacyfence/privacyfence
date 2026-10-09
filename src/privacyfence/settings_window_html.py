@@ -1288,6 +1288,7 @@ _JS = r"""
     html += '<div class="pf-plugin-facts">Reads from your connectors: ' +
       (r.source_operations.length ? esc(r.source_operations.join(', ')) : 'nothing') + '.</div>';
     html += '<div class="pf-plugin-facts">Serves its own pages: ' + (r.pages ? 'yes' : 'no') + '.</div>';
+    if (r.page_new_tabs) html += '<div class="pf-plugin-facts"><strong>Its pages can open links in new tabs.</strong> A tab opened that way is outside PrivacyFence\'s sandbox.</div>';
     if (r.outputs) {
       var kinds = (r.output_types || []).map(function (t) { return PLUGIN_OUTPUT_LABELS[t] || t; });
       html += '<div class="pf-plugin-facts">Publishes output files' + (kinds.length ? ': ' + esc(kinds.join(', ')) : '') + '.</div>';

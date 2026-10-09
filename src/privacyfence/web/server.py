@@ -118,7 +118,7 @@ from .control_channel import (
     send_mcp_token,
     send_recovery_code,
 )
-from .csp import build_csp, frame_self_for, plugin_embed_for
+from .csp import build_csp, frame_self_for, plugin_embed_for, plugin_new_tabs_for
 from .csp import new_nonce as _new_csp_nonce
 from . import mcp_auth
 from .mcp_auth import PerUserTokenVerifier, load_or_create_mcp_token
@@ -499,6 +499,8 @@ class _SecurityHeadersMiddleware:
                     if plugin_embed_for(scope):
                         headers["content-security-policy"] = plugin_pages.CSP_EMBEDDED
                         headers["x-frame-options"] = "SAMEORIGIN"
+                    elif plugin_new_tabs_for(scope):
+                        headers["content-security-policy"] = plugin_pages.CSP_NEW_TABS
                     else:
                         headers["content-security-policy"] = plugin_pages.CSP
                     headers["cache-control"] = plugin_pages.CACHE_CONTROL

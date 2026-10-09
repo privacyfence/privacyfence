@@ -313,6 +313,59 @@ class TestApprovalEmbed:
         _assert_embedded_headers(_client(host).get("/plugins/today/approval?pf_approval=a1"))
 
 
+class NewTabsHost(ApprovalHost):
+    """A host that answers ``page_new_tabs`` for the plugins in ``new_tabs``."""
+
+    def __init__(self, new_tabs=(), **kwargs):
+        super().__init__(**kwargs)
+        self.new_tabs = set(new_tabs)
+        self.new_tabs_calls: list[str] = []
+
+    def page_new_tabs(self, name):
+        self.new_tabs_calls.append(name)
+        return name in self.new_tabs
+
+
+class TestNewTabs:
+    """A plugin whose manifest sets ``page_new_tabs`` gets ``CSP_NEW_TABS``; the framed approval
+    page never does."""
+
+    def test_a_plugin_with_the_key_gets_the_new_tabs_csp(self):
+        host = NewTabsHost({"demo"}, running=("demo",))
+        r = _client(host).get("/plugins/demo/")
+        assert r.status_code == 200
+        assert r.headers.get_list("content-security-policy") == [pages.CSP_NEW_TABS]
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
+        assert host.new_tabs_calls == ["demo"]
+
+    def test_a_plugin_without_the_key_keeps_the_sandbox(self):
+        host = NewTabsHost(running=("demo",))
+        r = _client(host).get("/plugins/demo/")
+        _assert_sandbox_headers(r)
+        assert host.new_tabs_calls == ["demo"]
+
+    def test_a_host_without_the_method_keeps_the_sandbox(self):
+        _assert_sandbox_headers(_client(FakeHost(running=("demo",))).get("/plugins/demo/"))
+
+    def test_the_embed_wins(self):
+        host = NewTabsHost({"demo"}, cards={("demo", "a1"): "/approval"}, running=("demo",))
+        _assert_embedded_headers(_client(host).get("/plugins/demo/approval?pf_approval=a1"))
+
+    def test_a_non_owner_is_refused_before_the_check(self):
+        host = NewTabsHost({"demo"}, running=("demo",))
+        r = _client(host, provenance=None).get("/plugins/demo/")
+        assert r.status_code == 404
+        _assert_sandbox_headers(r)
+        assert host.new_tabs_calls == []
+
+    def test_the_root_redirect_never_sets_it(self):
+        host = NewTabsHost({"demo"}, running=("demo",))
+        r = _client(host).get("/plugins/demo")
+        assert r.status_code == 307
+        assert r.headers.get_list("content-security-policy") == [pages.CSP]
+        assert host.new_tabs_calls == []
+
+
 class TestNotMountedWithoutHost:
     def test_no_plugin_host_no_route(self):
         sessions = LocalSessionStore()

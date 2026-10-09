@@ -827,6 +827,7 @@ class TestInspectReturnsSummary:
             "max_gate_floor": "auto",
             "source_operations": ["calendar.list_events"],
             "pages": True,
+            "page_new_tabs": False,
             "service_credentials": False,
             "outputs": False,
             "output_types": [],
@@ -1486,6 +1487,37 @@ class TestWebRequest:
 
         with pytest.raises(LookupError):
             await host.web_request("stub", "/", {}, LOCAL_PRINCIPAL)
+
+    async def test_page_new_tabs_only_for_a_running_pages_plugin_that_sets_it(self, env):
+        env.add("tabs", pages=True, page_new_tabs=True)
+        env.add("plain", pages=True)
+        host = env.host()
+        await host.start()
+        assert host.page_new_tabs("tabs") is False
+
+        await env.enable(host, "tabs")
+        await env.enable(host, "plain")
+        assert host.page_new_tabs("tabs") is True
+        assert host.page_new_tabs("plain") is False
+        assert host.page_new_tabs("nothing") is False
+
+        host._plugins["tabs"].state = "starting"
+        assert host.page_new_tabs("tabs") is False
+
+    async def test_page_new_tabs_is_false_without_pages(self, env):
+        env.add("stub", pages=False)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        assert host.page_new_tabs("stub") is False
+
+    async def test_review_carries_page_new_tabs(self, env):
+        env.add("tabs", pages=True, page_new_tabs=True)
+        host = env.host()
+        await host.start()
+
+        assert (await host.inspect("tabs"))["page_new_tabs"] is True
 
     async def test_unknown_plugin(self, env):
         host = env.host()

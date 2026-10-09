@@ -696,6 +696,13 @@ class TestPluginsSection:
                        "'text/csv': 'CSV'", "'text/html': 'HTML'", "'text/plain': 'text'", "'text/markdown': 'Markdown'"):
             assert needle in html, needle
 
+    def test_the_enable_dialog_says_when_pages_can_open_new_tabs(self):
+        html = build_html(_make_state())
+
+        assert "if (r.page_new_tabs)" in html
+        assert "Its pages can open links in new tabs." in html
+        assert html.index("Serves its own pages") < html.index("if (r.page_new_tabs)")
+
     def test_the_enable_dialog_lists_every_tool_with_its_gate_and_the_floor(self):
         html = build_html(_make_state())
 
