@@ -1197,6 +1197,8 @@ class TestReportPagingCheck:
 
         def restful(path, params=None, method="GET", **kwargs):
             out = real(path, params=params, method=method, **kwargs)
+            if method == "POST":
+                out["reportMetadata"]["folderId"] = "005ak00000iCxfiAAC"
             for row in out.get("factMap", {}).get("T!T", {}).get("rows", []):
                 row["dataCells"].append({"label": "Real Person", "value": "005ak00000iCxfiAAC"})
             return out

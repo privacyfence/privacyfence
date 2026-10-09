@@ -1074,6 +1074,9 @@ def _check_salesforce_report_paging(
                     if isinstance(value, str) and value.startswith("005") and len(value) in (15, 18):
                         cell["value"] = _REDACTED_ACCOUNT_ID
                         cell["label"] = _REDACTED_NAME
+            meta = filtered.get("reportMetadata")
+            if isinstance(meta, dict) and str(meta.get("folderId") or "").startswith("005"):
+                meta["folderId"] = _REDACTED_ACCOUNT_ID  # a private folder is named by its owner's User id
             raw = deidentify_structural_fields(redact(filtered))
     except (SalesforceClientError, ReportPagingError) as exc:
         return result(False, str(exc))
