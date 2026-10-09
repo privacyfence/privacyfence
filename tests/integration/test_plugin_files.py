@@ -49,6 +49,8 @@ class TestUpload:
             ("File", "note.txt"), ("Source", "Upload slot"), ("Size", "5 bytes"),
             ("Declared type", "text/plain"), ("Detected type", "text/plain"), ("SHA-256", sha),
         ]
+        headings = [b["label"] for b in stack.popups.write[-1][1]["preview_blocks"] if b["type"] == "heading"]
+        assert headings == ["Read and checked by PrivacyFence from the file's bytes", "From the plugin"]
         [row] = [e for e in stack.audit() if e["decision"] == "plugin_file"]
         assert row["connector"] == "plugin:echo"
         assert row["summary"] == f"file: note.txt; bytes=5; sha256={sha}; type=text/plain"

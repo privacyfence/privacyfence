@@ -25,6 +25,7 @@ from ._files import (
     IncomingFile,
     file_specs,
     parse_files,
+    refuse_reserved_labels,
 )
 from ._page_index import validate_page_entries
 from ._rpc import Peer, RpcError, open_stdio
@@ -885,6 +886,9 @@ class Plugin:
             payload = None
             if prepared.payload is not None:
                 payload = _blocks.validate_blocks(prepared.payload, max_bytes=None)
+            if files:
+                refuse_reserved_labels(preview)
+                refuse_reserved_labels(payload or [])
         except ValueError as exc:
             raise RpcError("invalid_blocks", str(exc)) from None
         if handle.read_only and payload is None:

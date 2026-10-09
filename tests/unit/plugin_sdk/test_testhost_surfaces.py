@@ -727,7 +727,9 @@ class TestFileCalls:
         async with PluginTestHost(plugin) as host:
             outcome = await host.call_tool(
                 "publish", files={"html": ("p.htm", HTML_PAGE)}, decide=lambda card: seen_cards.append(card) or True)
-        first = outcome.card.preview[0]
+        assert outcome.card.preview[0] == {
+            "type": "heading", "text": "Read and checked by PrivacyFence from the file's bytes"}
+        first = outcome.card.preview[1]
         assert first["type"] == "fields"
         assert first["items"] == [
             {"label": "File", "value": "p.htm"},
@@ -737,7 +739,8 @@ class TestFileCalls:
             {"label": "Detected type", "value": "text/html"},
             {"label": "SHA-256", "value": hashlib.sha256(HTML_PAGE).hexdigest()},
         ]
-        assert outcome.card.preview[1] == blocks.text("publish")
+        assert outcome.card.preview[2] == {"type": "heading", "text": "From the plugin"}
+        assert outcome.card.preview[3] == blocks.text("publish")
         assert seen_cards[0] is outcome.card
 
     async def test_an_optional_file_may_be_left_out(self):

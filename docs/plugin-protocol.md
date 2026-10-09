@@ -383,6 +383,10 @@ answers `unknown_call`, and one whose arguments differ from the prepared ones an
 `digest_mismatch`. `via` is `auto` for an `auto` tool and `card` for a gated one, including a call
 a saved rule accepted.
 
+On a call with a file, a `fields` block of the preview or payload with a label equal to File, Source,
+Size, Declared type, Detected type or SHA-256 (case-insensitive, trimmed) is refused as `invalid_blocks`,
+because the card shows those rows itself under its own heading above the plugin's preview.
+
 The card showed the SHA-256 of the bytes the daemon sends here. The bytes are bound by it: a plugin
 answers `digest_mismatch` to an execute whose files' SHA-256 differ from the prepared ones (the
 SDK does), and a file whose bytes changed between two calls gets a fresh prepare and its own card,

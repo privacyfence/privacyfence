@@ -290,7 +290,7 @@ class PluginConnector(Connector):
         else:
             await self._gate(
                 key, tool, defn, title, summary, prepared, args,
-                [files.card_block(f) for f in incoming.values()],
+                [files.checked_heading(), *(files.card_block(f) for f in incoming.values())] if incoming else [],
             )
             approval = {
                 "approval_id": "card-" + prepared.call_id, "decision": "approved",
@@ -338,6 +338,15 @@ class PluginConnector(Connector):
         finally:
             self._preparing.pop(key, None)
 
+    @staticmethod
+    def _file_checked(validate: Callable[..., list[dict]]) -> Callable[..., list[dict]]:
+        """``validate`` that also refuses the labels of the daemon's file block."""
+        def checked(blocks: Any, **kwargs: Any) -> list[dict]:
+            out = validate(blocks, **kwargs)
+            files.refuse_reserved_labels(out)
+            return out
+        return checked
+
     async def _prepare(
         self, peer: RpcPeer, tool: str, defn: ToolDef, args: dict,
         incoming: dict[str, files.IncomingFile],
@@ -358,7 +367,8 @@ class PluginConnector(Connector):
         except RpcError as exc:
             raise RuntimeError(_PREPARE_ERRORS.get(exc.code, PREPARE_FAILED)) from None
         try:
-            result = PrepareResult.from_wire(raw, validate_blocks=validate_blocks)
+            result = PrepareResult.from_wire(
+                raw, validate_blocks=self._file_checked(validate_blocks) if incoming else validate_blocks)
         except RpcError as exc:
             logger.warning("Plugin %s returned an invalid prepare result: %s", self._plugin, exc.detail)
             if exc.code == "payload_too_large":
@@ -385,6 +395,8 @@ class PluginConnector(Connector):
         file_blocks: list[dict],
     ) -> None:
         payload = prepared.payload or []
+        # What the plugin wrote starts under its own heading, so it cannot read as the daemon's rows.
+        plugin_blocks = ([files.plugin_heading()] if file_blocks else []) + prepared.preview + payload
         registry = approval_ui.get_approval_ui().deferred_registry
         try:
             await gated_call(
@@ -394,7 +406,7 @@ class PluginConnector(Connector):
                 filtered_data={"blocks": payload} if defn.read_only else None,
                 gate=defn.gate,
                 preview={"Plugin": self.display_name, "Tool": title},
-                preview_blocks=to_card_blocks(file_blocks + prepared.preview + payload),
+                preview_blocks=to_card_blocks(file_blocks + plugin_blocks),
                 pii_scan_text=flatten_text(payload) if defn.read_only else None,
                 args=args,
                 dedupe_extra=prepared.call_id,

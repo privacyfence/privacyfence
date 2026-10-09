@@ -25,11 +25,11 @@ from typing import Any, ClassVar, Self
 
 from privacyfence.plugins.blocks import clean_line
 from privacyfence.plugins.constants import (
-    FILE_PARAM_KEY,
     APPROVAL_KIND_RE,
     CONFIRM_AWAIT_MAX_MS,
     DIGEST_RE,
     ERROR_CODES,
+    FILE_PARAM_KEY,
     GATES,
     INLINE_RESULT_BYTES,
     MAX_DESCRIPTION_CHARS,

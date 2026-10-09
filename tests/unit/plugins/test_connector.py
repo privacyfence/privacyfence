@@ -1114,7 +1114,9 @@ class TestFileParameter:
         assert execute["args_digest"] == args_digest({"title": "Home"})
         assert ref not in json.dumps(peer.calls("tool.prepare") + peer.calls("tool.execute"))
 
-    async def test_the_first_card_block_is_the_file_block(self, audit_dir, registry, popups, gated_call_spy):
+    async def test_the_daemons_file_block_and_the_plugins_preview_sit_under_their_own_headings(
+        self, audit_dir, registry, popups, gated_call_spy,
+    ):
         peer, conn = self.make()
         ref = self.slot()
 
@@ -1123,14 +1125,40 @@ class TestFileParameter:
 
         [call] = gated_call_spy
         blocks = call["preview_blocks"]
-        file_fields = {b["label"]: b["value"] for b in blocks[:6]}
+        assert blocks[0] == {"type": "heading", "label": "Read and checked by PrivacyFence from the file's bytes"}
+        file_fields = {b["label"]: b["value"] for b in blocks[1:7]}
         assert file_fields == {
             "File": "page.html", "Source": "Upload slot", "Size": f"{len(PAGE):,} bytes",
             "Declared type": "text/html", "Detected type": "text/html",
             "SHA-256": hashlib.sha256(PAGE).hexdigest(),
         }
-        assert blocks[6] == {"type": "field", "label": "Target", "value": "the site"}
+        assert blocks[7] == {"type": "heading", "label": "From the plugin"}
+        assert blocks[8] == {"type": "field", "label": "Target", "value": "the site"}
         assert call["args"] == {"html": ref}
+
+    async def test_a_plugin_row_labelled_like_the_daemons_is_refused(
+        self, audit_dir, registry, popups, gated_call_spy,
+    ):
+        peer, conn = self.make()
+        peer.prepare["publish"] = {
+            "preview": [{"type": "fields", "items": [{"label": " sha-256 ", "value": "0" * 64}]}], "scopes": {}}
+        ref = self.slot()
+
+        with self.context(), pytest.raises(RuntimeError, match="invalid preview"):
+            await conn.call("today_publish", {"html": ref})
+
+        assert gated_call_spy == []
+
+    async def test_a_tool_without_a_file_may_use_any_label(self, audit_dir, registry, popups, gated_call_spy):
+        peer = FakePeer()
+        peer.prepare["note"] = {"preview": [{"type": "fields", "items": [{"label": "File", "value": "x"}]}],
+                                "scopes": {}}
+        conn = make_connector(peer, defs=[PUBLISH, NOTE])
+
+        await conn.call("today_note", {"text": "x"})
+
+        [call] = gated_call_spy
+        assert call["preview_blocks"] == [{"type": "field", "label": "File", "value": "x"}]
 
     async def test_the_slot_is_consumed_after_approval(self, audit_dir, registry, popups):
         peer, conn = self.make()
