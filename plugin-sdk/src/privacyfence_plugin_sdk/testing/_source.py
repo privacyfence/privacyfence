@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .._rpc import ERROR_CODES, RpcError
-from . import _cursors
+from . import _cursors, _params
 
 # Copied from the protocol, like the limits in plugin.py. The daemon's own tests compare them.
 SOURCE_OPERATIONS: tuple[str, ...] = (
@@ -189,6 +189,10 @@ class SourceFixtures:
         self.calls.append(SourceCall(operation, copy.deepcopy(call_params), principal))
 
         rule = self._best_rule(operation, call_params)
+        if rule is not None and rule.error is not None and rule.error.code == "connector_unavailable":
+            raise rule.error  # the daemon checks the connector before the parameters
+        _params.validate(operation, call_params)
+        rule = self._best_rule(operation, call_params)
         if rule is not None and rule.error is not None:
             raise rule.error
         if rule is not None and rule.bound is not None and call_params.get("cursor") is not None:
@@ -227,15 +231,9 @@ class SourceFixtures:
         file = self._drive_files[file_id]
         content = base64.b64decode(file["content_base64"])
         offset, cursor = params.get("offset"), params.get("cursor")
-        length = params.get("length", DRIVE_CHUNK_BYTES)
-        if isinstance(length, bool) or not isinstance(length, int) or not 1 <= length <= DRIVE_CHUNK_BYTES:
-            raise RpcError("invalid_params", f"params.length must be between 1 and {DRIVE_CHUNK_BYTES}")
-        if offset is not None and (isinstance(offset, bool) or not isinstance(offset, int) or offset < 0):
-            raise RpcError("invalid_params", "params.offset must be at least 0")
-        if cursor is not None and not isinstance(cursor, str):
-            raise RpcError("invalid_params", "params.cursor must be a string")
-        if offset is not None and cursor is not None:
-            raise RpcError("invalid_params", "offset and cursor cannot both be given")
+        length = params.get("length")
+        if length is None:
+            length = DRIVE_CHUNK_BYTES
         revision = file["revision"]
         mime_type = file["mime_type"]
         if mime_type.startswith("application/vnd.google-apps.") and mime_type not in _GOOGLE_DOC_EXPORTS:
