@@ -138,7 +138,10 @@ large binary file starts arriving at once. Google Docs, Sheets and Slides cannot
 exported whole, as text or CSV, and served from a private temporary file that is deleted after ten
 idle minutes. Salesforce report runs do not page yet and can still fail on a very large report
 ([the Salesforce paging issue](https://github.com/privacyfence/privacyfence/issues/854)). The
-cursor rules are in [`plugin-protocol.md`](plugin-protocol.md#paging). A result that is too large for
+cursor rules are in [`plugin-protocol.md`](plugin-protocol.md#paging). A Sheets range is read once and later pages come from a private copy held for ten idle minutes; if
+the copy is gone the cursor is refused with `cursor_expired` and the plugin reads the range again. A
+Confluence page that changes between pages is refused with `revision_changed` instead of being joined
+from two versions. A result that is too large for
 the AI goes out as an [output file](#outputs), not through a tool result.
 
 ## Approvals

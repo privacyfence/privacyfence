@@ -290,7 +290,7 @@ A [plugin](plugins.md) is a separate program an administrator installs and you e
 is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
 [ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
 and in [ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) to
-[ADR 0133](adr/0133-a-plugin-writes-result-is-capped-and-pii-scanned-before-it-reaches-the-ai.md).
+[ADR 0134](adr/0134-paged-source-reads-read-one-version-and-measure-utf8-bytes.md).
 
 **Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
 every connector credential, so whoever can replace it can read your data. The privacy boundary of
@@ -318,7 +318,7 @@ connector tool, where a read releases the payload you saw on the card), read con
 through the source API, ask you for a confirmation, serve pages and keep files. The source API is
 **not gated**: a read through it opens no card. It is limited to the operations in the plugin's
 manifest, which you approve at enable, to the local principal and to six read operations, and every
-call is written to the audit log with the target and the size, never the content. A write's result
+call is written to the audit log with the target and the size, never the content. A Google Drive export or a Sheets range too large for one page is held in an owner-only temporary file for up to 10 idle minutes, so later pages come from one version of it. A write's result
 reaches the AI only when it is at most 2,048 bytes and the PII check finds nothing. A plugin holds no
 connector token.
 
