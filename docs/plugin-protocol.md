@@ -311,8 +311,12 @@ Result: `{"result": <any>, "approval_id": "<optional>"}`.
 
 - For a **read-only** tool the daemon ignores `result` and an error, and returns the prepared
   payload as `{"blocks": payload}`. A plugin cannot release anything the card did not show.
-- For any other tool `result` is returned to the AI client, at most 100,000 bytes serialized. When
-  `approval_id` is present it is added to the result, so the client can call
+- For any other tool `result` (with `approval_id` merged in) reaches the AI only when its JSON is
+  at most 2,048 bytes (`WRITE_RESULT_MAX_BYTES`) and PrivacyFence's PII check finds nothing.
+  Otherwise the AI gets `{"withheld": true, "message": "The action ran, but its result was withheld because it was larger than 2,048 bytes or may contain personal data."}`,
+  plus `approval_id` when that id is one PrivacyFence issued to this plugin (a confirmation or
+  approval card, or a stored approval); any other `approval_id` is dropped. Put larger results in
+  an output file. When `approval_id` is present it is added to the result, so the client can call
   `privacyfence_await_approval` with it. A write that was approved runs once and is never retried.
 
 ### Blocks
@@ -665,6 +669,7 @@ mode does not start plugins.
 | Requests in flight, each direction | 16 |
 | Consecutive invalid lines before disconnect | 3 |
 | Tool result and payload, serialized | 100,000 bytes |
+| Write tool result reaching the AI, serialized | 2,048 bytes |
 | Preview | 64 KiB, 50 blocks |
 | Table cell | 4,096 characters |
 | Tools per plugin | 64 |

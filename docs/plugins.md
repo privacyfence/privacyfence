@@ -309,7 +309,9 @@ if __name__ == "__main__":
 
 Each tool call runs in two steps: `prepare` returns the preview (and, for a read, the payload), you
 approve it on the card, and only then does `execute` run. A tool that is not read-only attaches the
-function that does the work with `@greet.execute`. Reads from connected services go through
+function that does the work with `@greet.execute`. What that function returns
+reaches the AI only when it is at most 2,048 bytes and the PII check finds nothing; otherwise
+the AI is told the action ran and its result was withheld. Reads from connected services go through
 `ctx.source.call(...)`, `ctx.source.pages(...)` (every page of an operation, following the cursor),
 `ctx.source.collect(...)` (the whole list for `jira.search` and `calendar.list_events`) and
 `ctx.source.download(...)`, a confirmation through `ctx.confirm`, an approval through
