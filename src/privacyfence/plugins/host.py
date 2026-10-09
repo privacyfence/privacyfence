@@ -646,6 +646,10 @@ class PluginHost:
                 lambda summary: self._audit_lifecycle(plugin.name, summary),
                 scope_types=result.scope_types,
                 reviewed=record.reviewed,
+                owns_approval=lambda approval_id: (
+                    self._confirm.owns(plugin.name, approval_id)
+                    or self._approvals.owns(plugin.name, approval_id)
+                ),
             )
             connector.set_tools(result.tools)
             plugin.connector = connector

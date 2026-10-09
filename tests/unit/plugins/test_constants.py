@@ -139,6 +139,9 @@ class TestProtocolOneOneConstants:
         assert c.DEFAULT_OUTPUT_TYPES == ("application/json", "text/csv")
         assert set(c.DEFAULT_OUTPUT_TYPES) <= set(c.OUTPUT_TYPES)
 
+    def test_write_result_cap(self):
+        assert c.WRITE_RESULT_MAX_BYTES == 2048
+
     def test_page_budget_leaves_room_for_the_envelope(self):
         assert c.SOURCE_PAGE_BUDGET_BYTES == c.MAX_SOURCE_RESULT_BYTES - 64 * 1024
         assert c.OUTPUT_READ_PAGE_BYTES < c.INLINE_RESULT_BYTES

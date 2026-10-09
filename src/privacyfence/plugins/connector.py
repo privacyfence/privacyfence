@@ -38,10 +38,11 @@ from privacyfence.approvals import ApprovalPending, canonical_key
 from privacyfence.audit_log import AuditEntry, current_week, get_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.gate import GateDeniedError, current_reason, gated_call
+from privacyfence.pii_detector import detect_pii_categories
 from privacyfence.plugins.blocks import fields_dict, flatten_text, to_card_blocks, validate_blocks
 from privacyfence.plugins.constants import (
-    INLINE_RESULT_BYTES,
     PREPARED_CALL_LIFETIME_SECONDS,
+    WRITE_RESULT_MAX_BYTES,
     mcp_tool_name,
     operation_key,
     scope_predicate,
@@ -71,6 +72,10 @@ PREPARE_FAILED = "The plugin could not prepare this call."
 INVALID_PREVIEW = "The plugin returned an invalid preview."
 LOST_CALL = "The plugin lost track of this call; ask again."
 EXECUTE_FAILED = "The plugin could not complete this call."
+WRITE_RESULT_WITHHELD = (
+    "The action ran, but its result was withheld because it was larger than 2,048 bytes "
+    "or may contain personal data."
+)
 
 
 @dataclass
@@ -109,9 +114,12 @@ class PluginConnector(Connector):
         *,
         scope_types: list[dict] | None = None,
         reviewed: frozenset[tuple] | None = None,
+        owns_approval: Callable[[str], bool] | None = None,
     ) -> None:
         """``scope_types`` is what the plugin declared at ``initialize``; ``reviewed`` is the
-        signature set recorded at enable, which every later ``tools.changed`` must stay within."""
+        signature set recorded at enable, which every later ``tools.changed`` must stay within.
+        ``owns_approval`` says whether an approval id is one PrivacyFence issued to this plugin;
+        ``None`` means it owns none."""
         self._plugin = plugin
         self.display_name = display_name
         self._manifest = manifest
@@ -120,6 +128,7 @@ class PluginConnector(Connector):
         self._on_audit_lifecycle = on_audit_lifecycle
         self._scope_types = list(scope_types or [])
         self._reviewed = reviewed
+        self._owns_approval = owns_approval
         self._defs: dict[str, ToolDef] = {}         # MCP name -> definition
         self._prepared: dict[str, PreparedCall] = {}
         self._preparing: dict[str, asyncio.Future[PreparedCall]] = {}
@@ -393,13 +402,35 @@ class PluginConnector(Connector):
             result = ExecuteResult.from_wire(raw)
         except RpcError:
             raise RuntimeError(EXECUTE_FAILED) from None
-        if _wire_size(result.result) > INLINE_RESULT_BYTES:
-            raise RuntimeError(_PREPARE_ERRORS["payload_too_large"])
-        if result.approval_id is None:
-            return result.result
-        if isinstance(result.result, dict):
-            return {**result.result, "approval_id": result.approval_id}
-        return {"result": result.result, "approval_id": result.approval_id}
+        value: Any = result.result
+        if result.approval_id is not None:
+            if isinstance(result.result, dict):
+                value = {**result.result, "approval_id": result.approval_id}
+            else:
+                value = {"result": result.result, "approval_id": result.approval_id}
+        return await self._screen_write_result(defn, value, result.approval_id)
+
+    async def _screen_write_result(self, defn: ToolDef, value: Any, approval_id: str | None) -> Any:
+        """A write result is an acknowledgement: over the cap, or carrying personal data, it is
+        withheld. It is returned, not raised, because an error would invite a retry of a write
+        that already ran. Only the size and the categories are logged, never the content."""
+        if _wire_size(value) > WRITE_RESULT_MAX_BYTES:
+            logger.info("Plugin %s: result of %s withheld: over %d bytes",
+                        self._plugin, defn.name, WRITE_RESULT_MAX_BYTES)
+            return await self._withheld(approval_id)
+        categories = await asyncio.to_thread(detect_pii_categories, json.dumps(value, ensure_ascii=False))
+        if categories:
+            logger.info("Plugin %s: result of %s withheld: possible personal data (%s)",
+                        self._plugin, defn.name, ", ".join(categories))
+            return await self._withheld(approval_id)
+        return value
+
+    async def _withheld(self, approval_id: str | None) -> dict:
+        out: dict[str, Any] = {"withheld": True, "message": WRITE_RESULT_WITHHELD}
+        if approval_id is not None and self._owns_approval is not None:
+            if await asyncio.to_thread(self._owns_approval, approval_id):
+                out["approval_id"] = approval_id
+        return out
 
     def _auto_audit(self, tool: str, tool_name: str, summary: str, created_at: float) -> None:
         try:

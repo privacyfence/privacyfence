@@ -35,6 +35,11 @@ _MAX_LINE_BYTES = 16 * 1024 * 1024
 _MAX_IN_FLIGHT = 16
 _INVALID_LINES_LIMIT = 3
 _INLINE_RESULT_BYTES = 100_000
+_WRITE_RESULT_MAX_BYTES = 2048
+_WRITE_RESULT_WITHHELD = (
+    "The action ran, but its result was withheld because it was larger than 2,048 bytes "
+    "or may contain personal data."
+)
 _MAX_TITLE_CHARS = 120
 _MAX_EFFECT_CHARS = 200
 _MAX_DESCRIPTION_CHARS = 1024
@@ -213,6 +218,10 @@ class PluginTestHost:
     that returns True when it finds personal data. A flagged call always shows its card, whatever
     "Always allow" rules exist, and the card has ``pii_flagged`` set. ``None`` flags nothing, and
     ``auto`` and ``popup`` gates are never scanned.
+
+    A write tool's result over 2,048 bytes is withheld from ``outcome.released``, as the daemon
+    does; ``outcome.result`` stays what the plugin returned. Only that cap is mirrored: the
+    daemon also withholds a result its PII detector flags, which this host cannot run.
     """
 
     def __init__(
@@ -543,6 +552,10 @@ class PluginTestHost:
             approval_id = executed.get("approval_id") if isinstance(executed, dict) else None
             if approval_id is not None and isinstance(result, dict):
                 released = {**result, "approval_id": approval_id}
+            if len(json.dumps(released, separators=(",", ":"), ensure_ascii=False).encode()) > _WRITE_RESULT_MAX_BYTES:
+                released = {"withheld": True, "message": _WRITE_RESULT_WITHHELD}
+                if approval_id in self._confirmations._cards or approval_id in self._approvals._cards:
+                    released["approval_id"] = approval_id
             outcome.released = released
         return outcome
 

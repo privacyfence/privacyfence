@@ -206,6 +206,12 @@ class TestConfirm:
             await harness.await_("0" * 32)
         assert info.value.code == "invalid_params"
 
+    async def test_owns_only_its_own_plugins_cards(self, harness):
+        approval_id = (await harness.request(plugin=PLUGIN))["approval_id"]
+        assert harness.service.owns(PLUGIN, approval_id) is True
+        assert harness.service.owns("other", approval_id) is False
+        assert harness.service.owns(PLUGIN, "nope") is False
+
     async def test_await_approval_meta_tool_sees_status(self, harness):
         approval_id = (await harness.request())["approval_id"]
         assert harness.registry.await_status(approval_id) == "pending"

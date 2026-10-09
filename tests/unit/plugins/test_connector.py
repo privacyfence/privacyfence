@@ -32,10 +32,11 @@ from privacyfence.plugins.connector import (
     LOST_CALL,
     PREPARE_FAILED,
     REASON_PARAM_DESCRIPTION,
+    WRITE_RESULT_WITHHELD,
     PluginConnector,
     default_title,
 )
-from privacyfence.plugins.constants import INLINE_RESULT_BYTES
+from privacyfence.plugins.constants import INLINE_RESULT_BYTES, WRITE_RESULT_MAX_BYTES
 from privacyfence.plugins.protocol import RpcError, args_digest
 from privacyfence.plugins.tools import tool_signature, validate_tool_defs
 from privacyfence.web_approval_ui import WebApprovalUI
@@ -128,7 +129,9 @@ class FakePeer:
         return [c.args[1] for c in self.request.call_args_list if c.args[0] == method]
 
 
-def make_connector(peer, *, defs=None, events=None, reviewed=None, peer_provider=None) -> PluginConnector:
+def make_connector(
+    peer, *, defs=None, events=None, reviewed=None, peer_provider=None, owns_approval=None,
+) -> PluginConnector:
     conn = PluginConnector(
         "today", "Today", MANIFEST,
         peer_provider or (lambda: peer),
@@ -136,6 +139,7 @@ def make_connector(peer, *, defs=None, events=None, reviewed=None, peer_provider
         (events if events is not None else []).append,
         scope_types=SCOPE_TYPES,
         reviewed=reviewed,
+        owns_approval=owns_approval,
     )
     conn.set_tools(validate_tool_defs("today", TOOLDEFS if defs is None else defs, SCOPE_TYPES, MANIFEST))
     return conn
@@ -853,11 +857,64 @@ class TestErrors:
         with pytest.raises(RuntimeError, match=f"^{EXECUTE_FAILED}$"):
             await make_connector(peer).call("today_note", {"text": "y"})
 
-    async def test_write_result_over_the_inline_limit(self, gated_call_spy):
+    async def test_write_result_over_the_cap_is_withheld(self, gated_call_spy):
         peer = FakePeer()
-        peer.execute = {"result": "x" * INLINE_RESULT_BYTES}
-        with pytest.raises(RuntimeError, match="^The plugin's result is too large to return.$"):
-            await make_connector(peer).call("today_note", {"text": "y"})
+        peer.execute = {"result": "x" * (WRITE_RESULT_MAX_BYTES + 1)}
+        result = await make_connector(peer).call("today_note", {"text": "y"})
+        assert result == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
+        assert len(peer.calls("tool.execute")) == 1
+
+    async def test_write_result_at_the_cap_is_returned(self, gated_call_spy):
+        peer = FakePeer()
+        value = "x" * (WRITE_RESULT_MAX_BYTES - 2)
+        assert plugin_connector._wire_size(value) == WRITE_RESULT_MAX_BYTES
+        peer.execute = {"result": value}
+        assert await make_connector(peer).call("today_note", {"text": "y"}) == value
+
+    async def test_write_result_with_personal_data_is_withheld(self, gated_call_spy):
+        peer = FakePeer()
+        peer.execute = {"result": {"iban": "DE89370400440532013000"}}
+        result = await make_connector(peer).call("today_note", {"text": "y"})
+        assert result == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
+
+    async def test_auto_write_result_is_screened_too(self, gated_call_spy):
+        stamp = {
+            "name": "stamp", "description": "Stamp the day.",
+            "parameters": {"type": "object", "properties": {}},
+            "read_only": False, "destructive": False, "gate": "auto", "scopes": [],
+        }
+        peer = FakePeer()
+        peer.prepare["stamp"] = {"preview": [], "payload": None, "scopes": {}}
+        peer.execute = {"result": {"iban": "DE89370400440532013000"}}
+        conn = make_connector(peer, defs=[stamp])
+        assert await conn.call("today_stamp", {}) == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
+
+    async def test_pii_detection_off_returns_the_result(self, gated_call_spy, monkeypatch):
+        monkeypatch.setattr(plugin_connector, "detect_pii_categories", lambda text: [])
+        peer = FakePeer()
+        peer.execute = {"result": {"iban": "DE89370400440532013000"}}
+        assert await make_connector(peer).call("today_note", {"text": "y"}) == {"iban": "DE89370400440532013000"}
+
+    async def test_an_oversized_approval_id_is_withheld(self, gated_call_spy):
+        peer = FakePeer()
+        peer.execute = {"result": {}, "approval_id": "a" * 3000}
+        result = await make_connector(peer).call("today_note", {"text": "y"})
+        assert result == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
+        assert "approval_id" not in result
+
+    async def test_a_withheld_result_keeps_an_approval_id_the_plugin_owns(self, gated_call_spy):
+        peer = FakePeer()
+        peer.execute = {"result": "x" * 3000, "approval_id": "abc"}
+        conn = make_connector(peer, owns_approval=lambda approval_id: approval_id == "abc")
+        assert await conn.call("today_note", {"text": "y"}) == {
+            "withheld": True, "message": WRITE_RESULT_WITHHELD, "approval_id": "abc",
+        }
+
+    async def test_a_withheld_result_drops_an_approval_id_the_plugin_does_not_own(self, gated_call_spy):
+        peer = FakePeer()
+        peer.execute = {"result": "x" * 3000, "approval_id": "abc"}
+        conn = make_connector(peer, owns_approval=lambda approval_id: False)
+        assert await conn.call("today_note", {"text": "y"}) == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
 
     async def test_plugin_stopped_before_execute(self, gated_call_spy):
         peer = FakePeer()
