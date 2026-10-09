@@ -214,6 +214,7 @@ class _Pending:
     title: str
     frame_src: str
     registry: PendingApprovalRegistry
+    epoch: int
 
     @property
     def plugin(self) -> str:
@@ -244,6 +245,7 @@ class ApprovalService:
         self._audit_fn = audit
         self._lock = threading.Lock()
         self._owned: dict[str, _Pending] = {}
+        self._epochs: dict[str, int] = {}          # plugin -> times its cards were expired
         self._pending: dict[_Key, str] = {}       # the tuple of a card still waiting -> its id
         self._finished: dict[str, float] = {}      # approval id -> monotonic time it finished
         self._active_total = 0
@@ -311,7 +313,9 @@ class ApprovalService:
                 frame_title=clean_line(f"Page from {display_name}"),
             ))
             with self._lock:
-                self._owned[card.id] = _Pending(key, clean_line(parsed.title), card.frame_src, registry)
+                self._owned[card.id] = _Pending(
+                    key, clean_line(parsed.title), card.frame_src, registry, self._epochs.get(plugin, 0),
+                )
                 self._pending[key] = card.id
         except BaseException:
             if registry is not None and card is not None:
@@ -396,6 +400,17 @@ class ApprovalService:
         if finalizers:
             await asyncio.wait(finalizers, timeout=timeout)
 
+    def expire_plugin(self, plugin: str) -> int:
+        """Expire every approval of ``plugin`` still waiting for a human; returns how many this
+        call expired. A card answered "confirm" after this is not stored either (see ``_decide``)."""
+        with self._lock:
+            self._epochs[plugin] = self._epochs.get(plugin, 0) + 1
+            waiting = [
+                (i, o.registry) for i, o in self._owned.items()
+                if o.plugin == plugin and i not in self._finished
+            ]
+        return sum(1 for i, registry in waiting if registry.finalize(i, "expired"))
+
     def _finalize_when_answered(self, approval_id: str) -> None:
         with self._lock:
             owned = self._owned[approval_id]
@@ -415,6 +430,12 @@ class ApprovalService:
         if not answered:
             registry.finalize(approval_id, "expired")
         elif card.result == CONFIRM_RESULTS[0] and not card.is_finalized():  # "confirm"
+            with self._lock:
+                current = self._epochs.get(owned.plugin, 0) == owned.epoch
+            if not current:
+                registry.finalize(approval_id, "expired")
+                self._audit(owned.plugin, owned.kind, "expired")
+                return
             plugin, principal, kind, subject_id, digest = owned.key
             record = ApprovalRecord(
                 approval_id=approval_id, plugin=plugin, principal=principal, kind=kind,

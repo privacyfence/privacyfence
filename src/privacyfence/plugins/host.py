@@ -378,6 +378,7 @@ class PluginHost:
     async def _gone(self, name: str) -> None:
         """A plugin whose directory is no longer there. With a state record it is uninstalled;
         without one there is nothing of it to delete."""
+        self._expire_cards(name)
         plugin = self._plugins.get(name)
         if plugin is not None and plugin.supervisor is not None:
             await self._stop(plugin, "shutdown")
@@ -398,6 +399,12 @@ class PluginHost:
         self._store.forget(name)
         self._forget_approvals(name)
         self._audit_lifecycle(name, "removed; data and rules deleted")
+
+    def _expire_cards(self, name: str) -> None:
+        """End the plugin's pending approval and confirmation cards. Synchronous and lock-free:
+        it runs from ``_on_state`` and ``_gone`` while an action may hold the host lock."""
+        self._confirm.expire_plugin(name)
+        self._approvals.expire_plugin(name)
 
     def _forget_approvals(self, name: str) -> None:
         removed = self._approval_store.forget_plugin(name)
@@ -667,6 +674,7 @@ class PluginHost:
         if state == "disabled" and not plugin.intentional_stop:
             if plugin.reviewed_violation:
                 reason = HASH_DRIFT_REASON
+            self._expire_cards(plugin.name)
             self._store.disable(plugin.name, reason or "")
             plugin.supervisor = None
             self._mark_disabled(plugin, reason or "")
@@ -825,6 +833,7 @@ class PluginHost:
     async def disable(self, name: str) -> None:
         async with self._action(name) as plugin:
             await self._stop(plugin, "user")
+            self._expire_cards(plugin.name)
             self._store.disable(plugin.name, "disabled by you")
             plugin.state, plugin.reason = "disabled", "disabled by you"
             self._audit_lifecycle(plugin.name, "disabled")
@@ -865,6 +874,7 @@ class PluginHost:
                 except (RpcError, OSError):
                     acknowledged = False
             await asyncio.to_thread(storage.remove_all, plugin.name)
+            self._expire_cards(plugin.name)
             await asyncio.to_thread(self._forget_approvals, plugin.name)
             outcome = "ack" if acknowledged else "timeout"
             self._audit_lifecycle(plugin.name, f"data purged ({outcome})")

@@ -177,6 +177,16 @@ class ConfirmationService:
         if finalizers:
             await asyncio.wait(finalizers, timeout=timeout)
 
+    def expire_plugin(self, plugin: str) -> int:
+        """Expire every confirmation of ``plugin`` still waiting for a human; returns how many
+        this call expired. The finalizer threads wake and audit the outcome."""
+        with self._lock:
+            waiting = [
+                (i, o.registry) for i, o in self._owned.items()
+                if o.plugin == plugin and i not in self._finished
+            ]
+        return sum(1 for i, registry in waiting if registry.finalize(i, "expired"))
+
     def _finalize_when_answered(self, approval_id: str) -> None:
         with self._lock:
             owned = self._owned[approval_id]
