@@ -135,12 +135,11 @@ class RpcPeer:
         for handler_task in list(self._tasks):
             with contextlib.suppress(asyncio.CancelledError):
                 await handler_task
-        try:
-            await asyncio.wait_for(self._writer.wait_closed(), CLOSE_WAIT_SECONDS)
-        except TimeoutError:
-            self._abort_transport()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            try:
+                await asyncio.wait_for(self._writer.wait_closed(), CLOSE_WAIT_SECONDS)
+            except TimeoutError:
+                self._abort_transport()
 
     def _abort_transport(self) -> None:
         """Drop the connection without flushing; falls back to ``close`` for a writer with no transport."""
