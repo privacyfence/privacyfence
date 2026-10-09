@@ -283,6 +283,21 @@ def commit_uploads() -> None:
             )
 
 
+def resolved_name(path: str) -> str:
+    """The file's name for a path ``require_local_files`` accepted: the basename of an upload
+    slot's declared filename, or of the path itself (``/`` and ``\\`` both separate), ``""`` when
+    the slot is unknown to this principal."""
+    if path.startswith(UPLOAD_REF_PREFIX):
+        token = _decode_token(path[len(UPLOAD_REF_PREFIX):])
+        if token is None:
+            return ""
+        declared = get_upload_staging_store().declared_path(token, current_principal().id)
+        if declared is None:
+            return ""
+        path = declared
+    return path.strip().replace("\\", "/").rsplit("/", 1)[-1]
+
+
 def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode: str) -> None:
     """Called by a connector at the very top of its tool method, before any
     preview/PII-scan/gate work, so a missing or unreadable file is
@@ -558,4 +573,5 @@ __all__ = [
     "local_file_size",
     "read_local_file",
     "require_local_files",
+    "resolved_name",
 ]

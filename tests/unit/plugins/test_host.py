@@ -28,6 +28,7 @@ from privacyfence.plugins import source_ops, storage
 from privacyfence.plugins import rpc, supervisor as supervisor_mod
 from privacyfence.plugins.page_index import PAGE_INDEX_INVALID, PAGE_INDEX_NO_ANSWER
 from privacyfence.plugins.host import CHANGED_SINCE_REVIEW, PluginHost
+from privacyfence.plugins.protocol import ToolDef
 from privacyfence.plugins.manifest import MANIFEST_FILENAME, ManifestError
 from privacyfence.plugins.state import HASH_DRIFT_REASON
 from privacyfence.principal import LOCAL_PRINCIPAL
@@ -877,6 +878,33 @@ class TestInspectReturnsSummary:
 
         with pytest.raises(LookupError):
             await host.inspect("nothing")
+
+
+class TestReviewToolEntry:
+    @staticmethod
+    def _defn(parameters):
+        return ToolDef(
+            name="publish", description="Publish a page.", parameters=parameters,
+            read_only=False, destructive=False, gate="popup",
+        )
+
+    def test_a_tool_with_a_file_parameter_names_it(self):
+        defn = self._defn({"type": "object", "properties": {
+            "title": {"type": "string"},
+            "html": {"type": "string", "x-privacyfence-file": {
+                "max_bytes": 1048576, "media_types": ["text/html", "text/plain"]}},
+        }})
+
+        assert host_mod._review_tool("sdk-demo", defn) == {
+            "name": "sdk-demo_publish", "gate": "popup", "read_only": False, "destructive": False,
+            "description": "Publish a page.",
+            "file": {"param": "html", "max_bytes": 1048576, "media_types": ["text/html", "text/plain"]},
+        }
+
+    def test_a_tool_without_one_has_no_file_entry(self):
+        entry = host_mod._review_tool("sdk-demo", self._defn({"type": "object", "properties": {}}))
+
+        assert "file" not in entry
 
 
 class TestSourceCallRouted:

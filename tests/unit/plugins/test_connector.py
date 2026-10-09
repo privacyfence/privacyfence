@@ -8,6 +8,7 @@ The plugin is a fake ``RpcPeer`` whose ``request`` is an ``AsyncMock``. The gate
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,7 @@ from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import ToolParam
 from privacyfence.gate import GateDeniedError, reason_scope
+from privacyfence.local_files import LocalFileAccessError
 from privacyfence.plugins import connector as plugin_connector
 from privacyfence.plugins.blocks import to_card_blocks
 from privacyfence.plugins.connector import (
@@ -1037,6 +1039,217 @@ class TestToolsChanged:
         conn = make_connector(FakePeer(), events=events)
         assert conn.handle_tools_changed({"tools": TOOLDEFS}) is True
         assert events == ["tools changed: none added or removed"]
+
+
+PUBLISH = {
+    "name": "publish", "description": "Publish a page.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "html": {
+                "type": "string", "description": "The page.",
+                "x-privacyfence-file": {"max_bytes": 1000, "media_types": ["text/html"]},
+            },
+        },
+        "required": ["html"],
+    },
+    "read_only": False, "destructive": False, "gate": "popup", "scopes": [],
+}
+PAGE = b"<!doctype html><p>hello</p>"
+PUBLISH_PREVIEW = [{"type": "fields", "items": [{"label": "Target", "value": "the site"}]}]
+
+
+class TestFileParameter:
+    @pytest.fixture(autouse=True)
+    def _data_dir(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    @staticmethod
+    def make(**kwargs):
+        peer = FakePeer()
+        peer.prepare["publish"] = {"preview": PUBLISH_PREVIEW, "scopes": {}}
+        return peer, make_connector(peer, defs=[PUBLISH, NOTE], **kwargs)
+
+    @staticmethod
+    def slot(data=PAGE, filename="page.html") -> str:
+        from privacyfence import local_files
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, filename, max_bytes=100_000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [data])
+        return "upload:" + local_files._encode_token(token)
+
+    @staticmethod
+    def context():
+        from privacyfence import local_files
+        return local_files.call_context(bridge_available=False, uploads={})
+
+    def test_the_file_parameter_is_described_to_the_ai(self):
+        _, conn = self.make()
+        [spec] = [s for s in conn.tool_specs() if s.name == "today_publish"]
+        html = next(p for p in spec.params if p.name == "html")
+        assert html.annotation == "str" and html.required
+        assert html.description.startswith("The page. A file, not its content:")
+        assert "accepted types: text/html" in html.description
+
+    async def test_prepare_gets_the_metadata_and_execute_the_bytes(self, audit_dir, registry, popups):
+        import base64
+        peer, conn = self.make()
+        ref = self.slot()
+
+        with self.context():
+            await conn.call("today_publish", {"title": "Home", "html": ref})
+
+        [prepare] = peer.calls("tool.prepare")
+        [execute] = peer.calls("tool.execute")
+        sha = hashlib.sha256(PAGE).hexdigest()
+        meta = {"name": "page.html", "size": len(PAGE), "media_type": "text/html",
+                "sniffed_type": "text/html", "sha256": sha}
+        assert prepare["files"] == {"html": meta}
+        assert execute["files"] == {"html": {**meta, "content_base64": base64.b64encode(PAGE).decode()}}
+        assert prepare["args"] == execute["args"] == {"title": "Home"}
+        assert execute["args_digest"] == args_digest({"title": "Home"})
+        assert ref not in json.dumps(peer.calls("tool.prepare") + peer.calls("tool.execute"))
+
+    async def test_the_first_card_block_is_the_file_block(self, audit_dir, registry, popups, gated_call_spy):
+        peer, conn = self.make()
+        ref = self.slot()
+
+        with self.context():
+            await conn.call("today_publish", {"html": ref})
+
+        [call] = gated_call_spy
+        blocks = call["preview_blocks"]
+        file_fields = {b["label"]: b["value"] for b in blocks[:6]}
+        assert file_fields == {
+            "File": "page.html", "Source": "Upload slot", "Size": f"{len(PAGE):,} bytes",
+            "Declared type": "text/html", "Detected type": "text/html",
+            "SHA-256": hashlib.sha256(PAGE).hexdigest(),
+        }
+        assert blocks[6] == {"type": "field", "label": "Target", "value": "the site"}
+        assert call["args"] == {"html": ref}
+
+    async def test_the_slot_is_consumed_after_approval(self, audit_dir, registry, popups):
+        peer, conn = self.make()
+        ref = self.slot()
+
+        with self.context():
+            await conn.call("today_publish", {"html": ref})
+        with self.context(), pytest.raises(LocalFileAccessError, match="expired or was already used"):
+            await conn.call("today_publish", {"html": ref})
+
+        assert len(peer.calls("tool.execute")) == 1
+
+    async def test_a_denied_call_leaves_the_slot_and_writes_no_file_audit_row(self, monkeypatch, audit_dir, registry):
+        Popups(monkeypatch, decision="deny")
+        peer, conn = self.make()
+        ref = self.slot()
+
+        with self.context(), pytest.raises(GateDeniedError):
+            await conn.call("today_publish", {"html": ref})
+
+        assert peer.calls("tool.execute") == []
+        assert [e for e in read_audit(audit_dir) if e["decision"] == "plugin_file"] == []
+        Popups(monkeypatch, decision="accept")
+        with self.context():
+            await conn.call("today_publish", {"html": ref})
+        assert len(peer.calls("tool.execute")) == 1
+
+    async def test_an_approved_call_writes_one_file_audit_row(self, audit_dir, registry, popups):
+        peer, conn = self.make()
+
+        with reason_scope("publishing the home page"), self.context():
+            await conn.call("today_publish", {"html": self.slot()})
+
+        [row] = [e for e in read_audit(audit_dir) if e["decision"] == "plugin_file"]
+        assert row["connector"] == "plugin:today" and row["tool"] == "today_publish"
+        assert row["tool_name"] == "Publish"
+        assert row["summary"] == (
+            f"html: page.html; bytes={len(PAGE)}; sha256={hashlib.sha256(PAGE).hexdigest()}; type=text/html"
+        )
+        assert row["claude_reason"] == "publishing the home page"
+        assert row["auto_accept_rule"] == "" and row["sender"] == ""
+        assert PAGE.decode() not in json.dumps(row)
+
+    async def test_a_failed_file_audit_write_does_not_fail_the_call(self, monkeypatch, caplog, registry, popups):
+        def broken_logger():
+            raise OSError("disk full")
+
+        monkeypatch.setattr(plugin_connector, "get_audit_logger", broken_logger)
+        peer, conn = self.make()
+
+        with self.context():
+            await conn.call("today_publish", {"html": self.slot()})
+
+        assert len(peer.calls("tool.execute")) == 1
+        assert "Audit log write failed" in caplog.text
+
+    async def test_a_changed_local_file_gets_a_new_prepare(self, audit_dir, registry, deferred_registry, tmp_path, monkeypatch):
+        from privacyfence import local_files
+        monkeypatch.setattr(local_files.privilege_separation, "is_enabled", lambda: False)
+        deferred_registry(hold_window=0.01, pending_ttl=5.0, ledger_ttl=5.0)
+        peer, conn = self.make()
+        page = tmp_path / "page.html"
+        page.write_bytes(b"<html>one</html>")
+
+        with self.context(), pytest.raises(ApprovalPending):
+            await conn.call("today_publish", {"html": str(page)})
+        with self.context(), pytest.raises(ApprovalPending):
+            await conn.call("today_publish", {"html": str(page)})
+        assert len(peer.calls("tool.prepare")) == 1
+
+        page.write_bytes(b"<html>two</html>")
+        with self.context(), pytest.raises(ApprovalPending):
+            await conn.call("today_publish", {"html": str(page)})
+
+        assert len(peer.calls("tool.prepare")) == 2
+        assert [p["files"]["html"]["sha256"] for p in peer.calls("tool.prepare")] == [
+            hashlib.sha256(b"<html>one</html>").hexdigest(), hashlib.sha256(b"<html>two</html>").hexdigest(),
+        ]
+
+    async def test_a_missing_required_file_is_refused(self, audit_dir, registry, popups):
+        peer, conn = self.make()
+        for args in ({}, {"html": ""}):
+            with pytest.raises(LocalFileAccessError, match=r"Publish needs a file in html\."):
+                await conn.call("today_publish", args)
+        assert peer.calls("tool.prepare") == []
+
+    async def test_an_optional_file_may_be_left_out(self, audit_dir, registry, popups):
+        optional = json.loads(json.dumps(PUBLISH))
+        optional["parameters"]["required"] = []
+        peer = FakePeer()
+        peer.prepare["publish"] = {"preview": PUBLISH_PREVIEW, "scopes": {}}
+        conn = make_connector(peer, defs=[optional])
+
+        await conn.call("today_publish", {"title": "Home"})
+
+        [prepare] = peer.calls("tool.prepare")
+        [execute] = peer.calls("tool.execute")
+        assert "files" not in prepare and "files" not in execute
+        assert [e for e in read_audit(audit_dir) if e["decision"] == "plugin_file"] == []
+
+    async def test_a_tool_without_a_file_parameter_sends_no_files_key(self, audit_dir, registry, popups):
+        peer, conn = self.make()
+
+        await conn.call("today_note", {"text": "buy milk"})
+
+        assert "files" not in peer.calls("tool.prepare")[0]
+        assert "files" not in peer.calls("tool.execute")[0]
+
+    async def test_local_files_needed_propagates_out_of_call(self, audit_dir, registry, popups):
+        from privacyfence import local_files
+        peer, conn = self.make()
+        local_files.force_bridge_for_tests(True)
+
+        with local_files.call_context(bridge_available=True, uploads={}):
+            with pytest.raises(local_files.LocalFilesNeeded) as caught:
+                await conn.call("today_publish", {"html": "~/page.html"})
+
+        assert caught.value.paths == ["~/page.html"]
+        assert peer.calls("tool.prepare") == []
 
 
 async def test_every_tool_leaves_an_audit_trail(monkeypatch, tmp_path):

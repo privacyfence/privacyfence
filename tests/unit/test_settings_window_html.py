@@ -712,6 +712,14 @@ class TestPluginsSection:
         ):
             assert needle in html, needle
 
+    def test_the_enable_dialog_says_which_tools_take_a_file(self):
+        html = build_html(_make_state())
+
+        assert "(t.file ?" in html
+        assert "Takes a file in ' + esc(t.file.param)" in html
+        assert "t.file.media_types.map(function (m) { return esc(m); }).join(', ')" in html
+        assert "esc(Number(t.file.max_bytes).toLocaleString('en-US')) + ' bytes.</div>'" in html
+
     def test_the_enable_dialog_tells_the_user_to_start_a_new_conversation(self):
         html = build_html(_make_state())
 

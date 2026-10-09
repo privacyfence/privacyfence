@@ -1281,7 +1281,10 @@ _JS = r"""
         '<span class="badge ' + (t.gate === 'auto' ? 'badge-warning' : 'badge-info') + '">' + esc(PLUGIN_GATE_LABELS[t.gate] || t.gate) + '</span>' +
         '<span class="badge badge-dashed">' + (t.read_only ? 'Read-only' : 'Writes') + '</span>' +
         (t.destructive ? '<span class="badge badge-danger">Destructive</span>' : '') + '</div>' +
-        (t.description ? '<div class="pf-plugin-meta">' + esc(t.description) + '</div>' : '') + '</li>';
+        (t.description ? '<div class="pf-plugin-meta">' + esc(t.description) + '</div>' : '') +
+        (t.file ? '<div class="pf-plugin-meta">Takes a file in ' + esc(t.file.param) + ': ' +
+          t.file.media_types.map(function (m) { return esc(m); }).join(', ') + ', up to ' + esc(Number(t.file.max_bytes).toLocaleString('en-US')) + ' bytes.</div>' : '') +
+        '</li>';
     });
     if (r.tools.length === 0) html += '<li class="pf-plugin-meta">This plugin declares no tools.</li>';
     html += '</ul>';

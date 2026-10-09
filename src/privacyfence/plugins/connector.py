@@ -19,6 +19,13 @@ hold:
 - **A write runs once.** An approved write's prepared call is dropped before ``tool.execute`` is
   sent, and execute is never retried. A second identical call prepares afresh and gets its own
   card.
+
+A tool may take a file parameter (protocol 1.3). The AI names the file; the daemon reads it,
+describes it from its bytes and puts the file block first on the card, so what the human approves
+is the daemon's own account of the file, never the plugin's. The file is taken out of ``args``:
+``tool.prepare`` gets its metadata only, ``tool.execute`` gets the bytes too, and the prepared call
+is keyed on the bytes' SHA-256, so a changed file gets a fresh prepare and its own card. An upload
+slot is committed after the gate passes and before ``tool.execute``, so it backs one approved call.
 """
 from __future__ import annotations
 
@@ -28,17 +35,18 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from privacyfence import approval_ui, auto_accept
+from privacyfence import approval_ui, auto_accept, local_files
 from privacyfence.approval_window_html import NARROW, WIDE
 from privacyfence.approvals import ApprovalPending, canonical_key
 from privacyfence.audit_log import AuditEntry, current_week, get_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.gate import GateDeniedError, current_reason, gated_call
 from privacyfence.pii_detector import detect_pii_categories
+from privacyfence.plugins import files
 from privacyfence.plugins.blocks import fields_dict, flatten_text, to_card_blocks, validate_blocks
 from privacyfence.plugins.constants import (
     PREPARED_CALL_LIFETIME_SECONDS,
@@ -47,7 +55,14 @@ from privacyfence.plugins.constants import (
     operation_key,
     scope_predicate,
 )
-from privacyfence.plugins.protocol import ExecuteResult, PrepareResult, RpcError, ToolDef, args_digest
+from privacyfence.plugins.protocol import (
+    ExecuteResult,
+    PrepareResult,
+    RpcError,
+    ToolDef,
+    args_digest,
+    file_params,
+)
 from privacyfence.plugins.rpc import RpcPeer
 from privacyfence.plugins.tools import ToolDefError, validate_tool_defs
 from privacyfence.policy.registry import Verb
@@ -87,6 +102,7 @@ class PreparedCall:
     scopes: dict[str, list[str]]
     created_at: float
     keep_until: float
+    files: dict[str, str] = field(default_factory=dict)   # file parameter -> SHA-256 of its bytes
 
 
 def default_title(tool: str) -> str:
@@ -210,13 +226,17 @@ class PluginConnector(Connector):
     def _tool_spec(mcp_name: str, defn: ToolDef) -> ToolSpec:
         props = defn.parameters.get("properties", {})
         required = set(defn.parameters.get("required", []))
+        specs = file_params(defn)
         params = [
             ToolParam(
                 name=pname,
                 annotation=_ANNOTATIONS[schema["type"]],
                 required=pname in required,
                 default=None,
-                description=str(schema.get("description", "")),
+                description=(
+                    files.param_description(str(schema.get("description", "")), specs[pname])
+                    if pname in specs else str(schema.get("description", ""))
+                ),
             )
             for pname, schema in props.items()
         ]
@@ -244,9 +264,21 @@ class PluginConnector(Connector):
             raise ValueError(f"Unknown tool: {tool}")
         peer = self._running_peer()
         args = dict(args)
-        key = canonical_key(self._plugin, tool, args)
-        prepared = await self._reuse_or_prepare(key, peer, tool, defn, args)
         title = self._title(defn)
+        specs = file_params(defn)
+        required = set(defn.parameters.get("required", []))
+        incoming: dict[str, files.IncomingFile] = {}
+        for pname, spec in specs.items():
+            value = args.get(pname) or ""
+            if value:
+                incoming[pname] = files.resolve_file(spec, value, tool_title=title)
+            elif pname in required:
+                raise local_files.LocalFileAccessError(f"{title} needs a file in {pname}.")
+        plugin_args = {k: v for k, v in args.items() if k not in specs}
+        key = canonical_key(self._plugin, tool, args)
+        if incoming:
+            key += "|files:" + ",".join(f"{p}={f.sha256}" for p, f in sorted(incoming.items()))
+        prepared = await self._reuse_or_prepare(key, peer, tool, defn, plugin_args, incoming)
         summary = _summary(prepared.preview, title)
 
         if defn.gate == "auto":
@@ -256,15 +288,22 @@ class PluginConnector(Connector):
                 "via": "auto", "decided_at": _now_rfc3339(),
             }
         else:
-            await self._gate(key, tool, defn, title, summary, prepared, args)
+            await self._gate(
+                key, tool, defn, title, summary, prepared, args,
+                [files.card_block(f) for f in incoming.values()],
+            )
             approval = {
                 "approval_id": "card-" + prepared.call_id, "decision": "approved",
                 "via": "card", "decided_at": _now_rfc3339(),
             }
-        return await self._execute(defn, prepared, args, approval)
+            if incoming:
+                local_files.commit_uploads()
+                self._file_audit(tool, title, incoming, prepared.created_at)
+        return await self._execute(defn, prepared, plugin_args, approval, incoming)
 
     async def _reuse_or_prepare(
         self, key: str, peer: RpcPeer, tool: str, defn: ToolDef, args: dict,
+        incoming: dict[str, files.IncomingFile],
     ) -> PreparedCall:
         existing = self._prepared.get(key)
         if existing is not None:
@@ -279,7 +318,7 @@ class PluginConnector(Connector):
         future: asyncio.Future[PreparedCall] = asyncio.get_running_loop().create_future()
         self._preparing[key] = future
         try:
-            prepared = await self._prepare(peer, tool, defn, args)
+            prepared = await self._prepare(peer, tool, defn, args, incoming)
         except asyncio.CancelledError:
             future.cancel()
             raise
@@ -299,17 +338,23 @@ class PluginConnector(Connector):
         finally:
             self._preparing.pop(key, None)
 
-    async def _prepare(self, peer: RpcPeer, tool: str, defn: ToolDef, args: dict) -> PreparedCall:
+    async def _prepare(
+        self, peer: RpcPeer, tool: str, defn: ToolDef, args: dict,
+        incoming: dict[str, files.IncomingFile],
+    ) -> PreparedCall:
         call_id = uuid.uuid4().hex
         created_at = time.time()
+        params: dict[str, Any] = {
+            "call_id": call_id,
+            "principal": self._principal_context(),
+            "tool": defn.name,
+            "args": args,
+            "reason": current_reason() or None,
+        }
+        if incoming:
+            params["files"] = {p: f.to_wire(with_content=False) for p, f in incoming.items()}
         try:
-            raw = await peer.request("tool.prepare", {
-                "call_id": call_id,
-                "principal": self._principal_context(),
-                "tool": defn.name,
-                "args": args,
-                "reason": current_reason() or None,
-            })
+            raw = await peer.request("tool.prepare", params)
         except RpcError as exc:
             raise RuntimeError(_PREPARE_ERRORS.get(exc.code, PREPARE_FAILED)) from None
         try:
@@ -332,10 +377,12 @@ class PluginConnector(Connector):
         return PreparedCall(
             tool=tool, call_id=call_id, preview=result.preview, payload=result.payload, scopes=scopes,
             created_at=created_at, keep_until=created_at + PREPARED_CALL_LIFETIME_SECONDS,
+            files={p: f.sha256 for p, f in incoming.items()},
         )
 
     async def _gate(
         self, key: str, tool: str, defn: ToolDef, title: str, summary: str, prepared: PreparedCall, args: dict,
+        file_blocks: list[dict],
     ) -> None:
         payload = prepared.payload or []
         registry = approval_ui.get_approval_ui().deferred_registry
@@ -347,7 +394,7 @@ class PluginConnector(Connector):
                 filtered_data={"blocks": payload} if defn.read_only else None,
                 gate=defn.gate,
                 preview={"Plugin": self.display_name, "Tool": title},
-                preview_blocks=to_card_blocks(prepared.preview + payload),
+                preview_blocks=to_card_blocks(file_blocks + prepared.preview + payload),
                 pii_scan_text=flatten_text(payload) if defn.read_only else None,
                 args=args,
                 dedupe_extra=prepared.call_id,
@@ -378,17 +425,23 @@ class PluginConnector(Connector):
         if self._prepared.get(key) is prepared:
             del self._prepared[key]
 
-    async def _execute(self, defn: ToolDef, prepared: PreparedCall, args: dict, approval: dict) -> Any:
+    async def _execute(
+        self, defn: ToolDef, prepared: PreparedCall, args: dict, approval: dict,
+        incoming: dict[str, files.IncomingFile],
+    ) -> Any:
         try:
             peer = self._running_peer()
-            raw = await peer.request("tool.execute", {
+            params: dict[str, Any] = {
                 "call_id": prepared.call_id,
                 "principal": self._principal_context(),
                 "tool": defn.name,
                 "args": args,
                 "args_digest": args_digest(args),
                 "approval": approval,
-            })
+            }
+            if incoming:
+                params["files"] = {p: f.to_wire(with_content=True) for p, f in incoming.items()}
+            raw = await peer.request("tool.execute", params)
         except (RpcError, RuntimeError) as exc:
             if defn.read_only:
                 logger.warning("Plugin %s: tool.execute for %s failed: %s", self._plugin, defn.name, exc)
@@ -440,6 +493,30 @@ class PluginConnector(Connector):
             if await asyncio.to_thread(self._owns_approval, approval_id):
                 out["approval_id"] = approval_id
         return out
+
+    def _file_audit(
+        self, tool: str, tool_name: str, incoming: dict[str, files.IncomingFile], created_at: float,
+    ) -> None:
+        """One entry per file the approved call passed on: its name, size, digest and detected
+        type, never the content."""
+        for f in incoming.values():
+            try:
+                get_audit_logger().record(AuditEntry(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    week=current_week(),
+                    request_id="",
+                    connector=f"plugin:{self._plugin}",
+                    tool=tool,
+                    tool_name=tool_name,
+                    summary=f"{f.param}: {f.name}; bytes={f.size}; sha256={f.sha256}; type={f.sniffed_type}",
+                    sender="",
+                    decision="plugin_file",
+                    auto_accept_rule="",
+                    latency_seconds=time.time() - created_at,
+                    claude_reason=current_reason(),
+                ))
+            except Exception as exc:
+                logger.warning("Audit log write failed: %s", exc)
 
     def _auto_audit(self, tool: str, tool_name: str, summary: str, created_at: float) -> None:
         try:
