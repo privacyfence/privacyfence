@@ -316,7 +316,9 @@ class TestPluginTestHost:
         fixtures = source_module.SourceFixtures()
         data = {"v": "\u00e9" * 20}
         fixtures.load({"operation": "calendar.list_events", "data": data})
-        result = fixtures._serve({"principal": "local", "operation": "calendar.list_events", "params": {}}, "local")
+        result = fixtures._serve({"principal": "local", "operation": "calendar.list_events",
+                                  "params": {"time_min": "2025-01-01T00:00:00Z", "time_max": "2025-01-02T00:00:00Z"}},
+                                 "local")
         assert result["bytes"] == len(json.dumps(data, ensure_ascii=False).encode())
         assert result["bytes"] < 100 < len(json.dumps(data).encode())
 
@@ -375,6 +377,15 @@ class TestPluginTestHost:
                                  "params": {"file_id": "BIG-1", "length": 1}}, "local")
         assert reply["data"]["total_size_bytes"] == constants.DRIVE_CHUNK_BYTES * 8 + 1 and reply["next_cursor"]
 
+    _REQUIRED_PARAMS = {
+        "salesforce.report_run": {"report_id": "R1"},
+        "jira.search": {"jql": "project = X"},
+        "drive.download": {"file_id": "F1"},
+        "sheets.get_values": {"spreadsheet_id": "S1", "range": "A1:B2"},
+        "confluence.get_page": {"page_id": "P1"},
+        "calendar.list_events": {"time_min": "2025-01-01T00:00:00Z", "time_max": "2025-01-02T00:00:00Z"},
+    }
+
     @pytest.mark.parametrize("operation", constants.SOURCE_OPERATIONS)
     def test_every_operation_has_a_sample(self, operation):
         fixture = samples.get(operation)
@@ -382,7 +393,8 @@ class TestPluginTestHost:
         assert samples.get(operation) is not fixture
         fixtures = source_module.SourceFixtures()
         fixtures.load(fixture)
-        reply = fixtures._serve({"principal": "local", "operation": operation, "params": fixture["params"]}, "local")
+        reply = fixtures._serve({"principal": "local", "operation": operation,
+                                  "params": {**self._REQUIRED_PARAMS[operation], **fixture["params"]}}, "local")
         assert reply["data"] == fixture["data"] and reply["bytes"] == len(json.dumps(fixture["data"]))
 
     def test_sample_data_shapes(self):
