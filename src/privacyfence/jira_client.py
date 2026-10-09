@@ -23,6 +23,7 @@ names through the ``AtlassianUserDirectory`` shared with the Confluence client
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -52,6 +53,13 @@ from .atlassian_users import (
 logger = logging.getLogger(__name__)
 
 MAX_PAGES = 10
+# The fields _parse_issue reads for a search result; description is left out on purpose.
+SEARCH_FIELDS = ("summary", "status", "issuetype", "priority", "assignee", "reporter", "labels", "created", "updated")
+# Keys a simplified field value never carries: links back into the API, avatars, and email addresses.
+_DROPPED_VALUE_KEYS = frozenset({"self", "_links", "avatarUrls", "iconUrl", "emailAddress", "expand"})
+# A Jira Service Management SLA field: it has a name, but its data is in the cycles, so it is not collapsed to the name.
+_SLA_KEYS = frozenset({"ongoingCycle", "completedCycles"})
+_CF_JQL_RE = re.compile(r"cf\[(\d+)\]", re.IGNORECASE)
 
 
 class JiraClientError(Exception):
@@ -91,6 +99,36 @@ def _text_to_adf(text: str, names: Mapping[str, str] | None = None) -> dict[str,
     }
 
 
+def simplify_field_value(value: Any, names: Mapping[str, str] | None = None) -> Any:
+    """Reduce a raw Jira field value to what an agent needs: names instead of objects, no
+    API links, avatars or email addresses. ``names`` resolves ADF mentions."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [simplify_field_value(v, names) for v in value]
+    if isinstance(value, dict):
+        if value.get("type") == "doc":
+            return JiraClient._extract_adf_text(value, names)
+        if "accountId" in value:
+            return mask_emails(value.get("displayName") or "", value["accountId"]) or UNKNOWN_USER_LABEL
+        if "value" in value:
+            head = simplify_field_value(value["value"], names)
+            child = value.get("child")
+            if isinstance(child, dict) and "value" in child:
+                return f"{head} > {simplify_field_value(child['value'], names)}"
+            return head
+        if "name" in value and not _SLA_KEYS & value.keys():
+            return simplify_field_value(value["name"], names)
+        if "key" in value:
+            return value["key"]
+        return {
+            k: simplify_field_value(v, names)
+            for k, v in value.items()
+            if k not in _DROPPED_VALUE_KEYS
+        }
+    return str(value)
+
+
 @dataclass
 class JiraProject:
     key: str
@@ -121,6 +159,9 @@ class JiraIssue:
     # description as the approval preview shows it, mentions as @Name and every other
     # character as written. None when the description has no ADF form.
     display_description = None
+    # Not a dataclass field either: the requested extra fields, {key: simplified value}, set only by a
+    # search or get_issue that asked for them (keys from JiraClient.extra_field_keys). None otherwise.
+    extra_fields = None
 
     def short_summary(self) -> str:
         snippet = self.summary[:60] + "…" if len(self.summary) > 60 else self.summary
@@ -142,6 +183,15 @@ class JiraTransition:
     id: str
     name: str
     to_status: str
+
+
+@dataclass
+class JiraField:
+    id: str            # "customfield_10016", "duedate"
+    name: str          # "Story Points", "Due date"
+    custom: bool
+    type: str          # schema type: "number", "option", "array of user"; "" when Jira gives none
+    jql_names: list[str] = field(default_factory=list)   # Jira's clauseNames, e.g. ["cf[10016]", "Story Points"]
 
 
 class JiraClient:
@@ -311,7 +361,11 @@ class JiraClient:
     # ------------------------------------------------------------------ #
 
     def search_issues_page(
-        self, jql: str, page_size: int = 100, page_token: str | None = None
+        self,
+        jql: str,
+        page_size: int = 100,
+        page_token: str | None = None,
+        extra: list[JiraField] | None = None,
     ) -> tuple[list[JiraIssue], str | None]:
         """One provider request: a page of issues and the next page token (None when last)."""
         if not jql:
@@ -322,23 +376,32 @@ class JiraClient:
                 jql,
                 nextPageToken=page_token,
                 limit=page_size,
+                fields=[*SEARCH_FIELDS, *(f.id for f in extra or [] if f.id not in SEARCH_FIELDS)],
             )
         except Exception as exc:
             raise JiraClientError(f"search_issues_page failed: {exc}") from exc
-        issues = [self._parse_issue(i) for i in result.get("issues") or []]
+        issues = []
+        for raw in result.get("issues") or []:
+            issue = self._parse_issue(raw)
+            if extra is not None:
+                issue.extra_fields = self._extra_fields(raw.get("fields") or {}, extra)
+            issues.append(issue)
         next_token = None if result.get("isLast", True) else result.get("nextPageToken")
         return issues, next_token or None
 
-    def search_issues(self, jql: str, max_results: int = 20) -> list[JiraIssue]:
+    def search_issues(
+        self, jql: str, max_results: int = 20, fields: list[str] | None = None
+    ) -> list[JiraIssue]:
         if not jql:
             raise JiraClientError("search_issues requires a non-empty JQL query")
         max_results = max(1, min(max_results, 500))
+        extra = self.resolve_fields(fields) if fields else None
         issues: list[JiraIssue] = []
         page_token: str | None = None
         try:
             for _ in range(MAX_PAGES):
                 page, page_token = self.search_issues_page(
-                    jql, min(max_results - len(issues), 100), page_token
+                    jql, min(max_results - len(issues), 100), page_token, extra
                 )
                 issues.extend(page)
                 if not page_token or len(issues) >= max_results:
@@ -349,9 +412,10 @@ class JiraClient:
         logger.info("search_issues jql=%r returned %d issue(s)", jql, len(issues))
         return issues
 
-    def get_issue(self, issue_key: str) -> JiraIssue:
+    def get_issue(self, issue_key: str, fields: list[str] | None = None) -> JiraIssue:
         if not issue_key:
             raise JiraClientError("get_issue requires an issue key")
+        extra = self.resolve_fields(fields) if fields else None
         try:
             raw = self._request(self._client.issue, issue_key)
         except Exception as exc:
@@ -360,6 +424,8 @@ class JiraClient:
         ids = self._collect_adf_mention_ids(description) if isinstance(description, dict) else []
         names = self.resolve_user_names(ids) if ids else None
         issue = self._parse_issue(raw, include_description=True, names=names)
+        if extra is not None:
+            issue.extra_fields = self._extra_fields(raw.get("fields") or {}, extra)
         logger.info("get_issue %s: %s", issue_key, issue.short_summary())
         return issue
 
@@ -480,16 +546,21 @@ class JiraClient:
             return "user_list"
         return "other"
 
-    def _get_field_descriptor(self, field_name: str) -> dict[str, Any]:
+    def _all_fields(self) -> list[dict[str, Any]]:
         if self._field_cache is None:
             try:
                 raw = self._request(self._client.get_all_fields)
             except Exception as exc:
                 raise JiraClientError(f"failed to list Jira fields: {exc}") from exc
             self._field_cache = raw or []
-        matches = [f for f in self._field_cache if (f.get("name") or "").lower() == field_name.lower()]
+        return self._field_cache
+
+    def _get_field_descriptor(self, field_name: str) -> dict[str, Any]:
+        matches = [f for f in self._all_fields() if (f.get("name") or "").lower() == field_name.lower()]
         if not matches:
-            raise JiraClientError(f"no Jira field named {field_name!r}")
+            raise JiraClientError(
+                f"no Jira field named {field_name!r}; jira_list_fields lists the field names"
+            )
         if len(matches) > 1:
             ids = ", ".join(m.get("id", "") for m in matches)
             raise JiraClientError(
@@ -497,6 +568,99 @@ class JiraClient:
                 "or ask your Jira admin to disambiguate them"
             )
         return matches[0]
+
+    @staticmethod
+    def _to_jira_field(raw: dict[str, Any]) -> JiraField:
+        schema = raw.get("schema") or {}
+        field_type = schema.get("type", "")
+        if field_type == "array" and schema.get("items"):
+            field_type = f"array of {schema['items']}"
+        return JiraField(
+            id=raw.get("id", ""),
+            name=raw.get("name", ""),
+            custom=bool(raw.get("custom")),
+            type=field_type,
+            jql_names=list(raw.get("clauseNames") or []),
+        )
+
+    def list_fields(
+        self, query: str = "", custom_only: bool = False, max_results: int = 50
+    ) -> list[JiraField]:
+        max_results = max(1, min(max_results, 200))
+        needle = query.strip().lower()
+        fields = [
+            self._to_jira_field(raw)
+            for raw in self._all_fields()
+            if needle in (raw.get("name") or "").lower() or needle in (raw.get("id") or "").lower()
+        ]
+        if custom_only:
+            fields = [f for f in fields if f.custom]
+        fields.sort(key=lambda f: (f.name.lower(), f.id))
+        fields = fields[:max_results]
+        logger.info("list_fields returned %d field(s)", len(fields))
+        return fields
+
+    def resolve_fields(self, refs: list[str]) -> list[JiraField]:
+        """Turn field names, ids and ``cf[N]`` JQL ids into fields, in the order given."""
+        resolved: list[JiraField] = []
+        for ref in refs:
+            ref = ref.strip()
+            if not ref:
+                raise JiraClientError("field names must not be empty")
+            all_fields = self._all_fields()
+            cf = _CF_JQL_RE.fullmatch(ref)
+            if cf:
+                wanted_id = f"customfield_{cf.group(1)}"
+                match = next((f for f in all_fields if f.get("id") == wanted_id), None)
+                if match is None:
+                    raise JiraClientError(
+                        f"no Jira field with id {ref!r}; jira_list_fields lists the field names"
+                    )
+            else:
+                match = next((f for f in all_fields if f.get("id") == ref), None)
+            if match is None:
+                by_name = [f for f in all_fields if (f.get("name") or "").lower() == ref.lower()]
+                if not by_name:
+                    raise JiraClientError(
+                        f"no Jira field named {ref!r}; jira_list_fields lists the field names"
+                    )
+                if len(by_name) > 1:
+                    ids = ", ".join(m.get("id", "") for m in by_name)
+                    raise JiraClientError(
+                        f"multiple Jira fields are named {ref!r} ({ids}); pass one of these ids instead"
+                    )
+                match = by_name[0]
+            jira_field = self._to_jira_field(match)
+            if all(jira_field.id != r.id for r in resolved):
+                resolved.append(jira_field)
+        return resolved
+
+    @staticmethod
+    def extra_field_keys(wanted: list[JiraField]) -> list[str]:
+        """The key each requested field has in ``extra_fields``: its name, or ``name (id)`` when
+        two requested fields share a name."""
+        counts: dict[str, int] = {}
+        for f in wanted:
+            counts[f.name] = counts.get(f.name, 0) + 1
+        return [f"{f.name} ({f.id})" if counts[f.name] > 1 else f.name for f in wanted]
+
+    def _extra_fields(self, raw_fields: Mapping[str, Any], wanted: list[JiraField]) -> dict[str, Any]:
+        ids: list[str] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, list):
+                for v in value:
+                    collect(v)
+            elif isinstance(value, dict) and value.get("type") == "doc":
+                ids.extend(i for i in self._collect_adf_mention_ids(value) if i not in ids)
+
+        for f in wanted:
+            collect(raw_fields.get(f.id))
+        names = self.resolve_user_names(ids) if ids else None
+        return {
+            k: simplify_field_value(raw_fields.get(f.id), names)
+            for k, f in zip(self.extra_field_keys(wanted), wanted, strict=True)
+        }
 
     def get_transitions(self, issue_key: str) -> list[JiraTransition]:
         if not issue_key:

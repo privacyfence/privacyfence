@@ -922,10 +922,18 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # search will use; exercised live, nothing recorded.
     page_jql = f'project = {project_key} AND summary ~ "{seed_issue_summary}"'
     try:
-        client.search_issues_page(page_jql, 1)
+        client.search_issues_page(page_jql, 1, extra=client.resolve_fields(["duedate"]))
         results.append(CheckResult("jira", "search_issues_page", project_key, True, "one page returned"))
     except JiraClientError as exc:
         results.append(CheckResult("jira", "search_issues_page", project_key, False, str(exc)))
+
+    # list_fields -- the site's field list behind jira_list_fields; nothing recorded.
+    try:
+        fields = client.list_fields(max_results=5)
+        results.append(CheckResult("jira", "list_fields", project_key, bool(fields),
+                                   f"{len(fields)} field(s)" if fields else "no fields returned"))
+    except JiraClientError as exc:
+        results.append(CheckResult("jira", "list_fields", project_key, False, str(exc)))
 
     return results
 
