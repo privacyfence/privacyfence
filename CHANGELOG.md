@@ -50,32 +50,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Plugin reads no longer truncate.** Every read from a connected service returns all of its data or a page with a cursor to continue, and a size limit is a page size instead of a failure. Jira searches and Calendar listings page through the provider's own tokens, Sheets and Confluence results split, and Drive reads binary files in pieces with HTTP Range requests and no limit on the file's size. Salesforce report runs do not page yet. The plugin SDK iterates pages with `ctx.source.pages` and `ctx.source.collect`.
 - **Plugin output files.** A plugin can publish result files into an output folder, and your AI client reads them through two new tools: `plugin_outputs_list` runs without asking and `plugin_outputs_read` shows a card with the text and a PII check. "Always allow" can cover one folder of one plugin. Large results reach the AI this way instead of through a tool result.
 - **Plugin child processes.** The plugin documentation now states that a plugin's child processes run under the service account, are not supervised and are the plugin's to confine.
-
-### Changed
-
-- A **Plugins** menu in the top navigation, between Approvals and Settings, lists every running plugin that has a page, one per line in alphabetical order. A click opens the plugin's page in a new tab, like **Open page** on the plugin's card. The menu is hidden while no plugin has a page.
-- Settings → Plugins: the enable dialog says that a newly enabled plugin's tools may only appear in a new conversation, or after the AI client restarts.
-- Plugins: `apps`, `sheets` and `docs` are reserved plugin names, and the plugin protocol refuses `NaN` and `Infinity`, which are not JSON.
-- Plugin SDK:
-  - it measures sizes as PrivacyFence does;
-  - it refuses non-finite table cells and reserved plugin names, and checks scope type descriptions;
-  - it enforces the line limit when sending;
-  - a source error raised from a tool reaches PrivacyFence as that error;
-  - `PluginTestHost.introspect()` runs the review start.
-- Plugins: a plugin whose display name, tool title or tool effect contains a line break or a tab is refused, and so is an approval subject that does.
+- **Plugin rules shared by PrivacyFence and the SDK.** `apps`, `sheets` and `docs` are reserved plugin names. A plugin's display name, a tool's title and effect, and an approval subject must fit on one line (no line breaks or tabs), and card titles are shown on one line. The plugin protocol refuses `NaN` and `Infinity`, which are not JSON. The plugin SDK and its test host apply the same checks as PrivacyFence (sizes, table cells, reserved names, scope type descriptions, the line limit), pass a source error raised from a tool through as that error, and `PluginTestHost.introspect()` starts a plugin the way a review does. Reading a published output file never follows a file swapped after the path check, and a Drive Range read stops as soon as the server sends more than it asked for.
+- **Restart hint.** The enable dialog in Settings → Plugins says that a newly enabled plugin's tools may only appear in a new conversation, or after the AI client restarts.
+- **Plugins menu.** A Plugins menu in the top navigation, between Approvals and Settings, lists every running plugin that has a page, one per line in alphabetical order. A click opens the plugin's page in a new tab, like **Open page** on the plugin's card. The menu is hidden while no plugin has a page.
 
 ### Fixed
 
 - With an approvals tab or MCP client still connected, stopping the web server left it serving
   those connections until the process exited. It now gives open event streams two seconds to
   finish, then closes them.
-- Plugins: a line break or tab in a confirmation or approval title no longer splits an approval card's header.
-- Plugins: a confirmation or approval card whose set-up failed no longer keeps one of the plugin's pending-card slots.
-- Drive: a Range read stops as soon as the server sends more than the requested bytes.
-
-### Security
-
-- Plugin outputs: a published file swapped for a symbolic link or another file after it was checked is not read.
 
 ## [5.5.0] — 2026-10-01
 

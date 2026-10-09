@@ -182,7 +182,12 @@ def read_output(
     except OSError:
         raise ValueError(NO_SUCH_FILE) from None
     try:
-        with os.fdopen(fd, "rb") as handle:
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+    try:
+        with handle:
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(checked, opened):
                 raise ValueError(NO_SUCH_FILE)

@@ -25,11 +25,8 @@ class PrincipalContext(_PrincipalContextRequired, total=False):
     output_types: list[PrincipalContextOutputTypesItem]
 
 
-class _ScopeTypeRequired(TypedDict):
+class ScopeType(TypedDict):
     name: str
-
-
-class ScopeType(_ScopeTypeRequired, total=False):
     description: str
 
 

@@ -9,12 +9,14 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from privacyfence.plugins import constants as c
 from privacyfence.plugins import protocol as p
+from privacyfence.plugins.blocks import clean_line
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 
 pytestmark = pytest.mark.unit
@@ -729,6 +731,32 @@ class TestSchema:
         assert defs["ApprovalCheckParams"]["properties"]["digest"]["pattern"] == f"^{c.DIGEST_RE.pattern}$"
         assert defs["PrincipalContext"]["properties"]["output_types"]["items"]["enum"] == list(c.OUTPUT_TYPES)
         assert defs["Manifest"]["properties"]["output_types"]["items"]["enum"] == list(c.OUTPUT_TYPES)
+
+    def test_reserved_plugin_names_match_the_constants(self, schema):
+        assert set(schema["$defs"]["Manifest"]["properties"]["name"]["not"]["enum"]) == c.RESERVED_PLUGIN_NAMES
+
+    def test_scope_type_description_is_required_and_bounded(self, schema):
+        scope_type = schema["$defs"]["ScopeType"]
+        assert "description" in scope_type["required"]
+        description = scope_type["properties"]["description"]
+        assert (description["minLength"], description["maxLength"]) == (1, c.MAX_SCOPE_TYPE_DESCRIPTION_CHARS)
+
+    def test_one_line_pattern_refuses_what_clean_line_changes(self, schema):
+        defs = schema["$defs"]
+        fields = [
+            defs["Manifest"]["properties"]["display_name"],
+            defs["ToolDef"]["properties"]["title"],
+            defs["ToolDef"]["properties"]["effect"],
+            defs["ApprovalRequestParams"]["properties"]["subject_id"],
+            defs["ApprovalCheckParams"]["properties"]["subject_id"],
+            defs["ApprovalRevokedParams"]["properties"]["subject_id"],
+        ]
+        patterns = {field["pattern"] for field in fields}
+        assert len(patterns) == 1
+        one_line = re.compile(patterns.pop())
+        for point in range(0x3000):
+            text = f"a{chr(point)}b"
+            assert bool(one_line.fullmatch(text)) == (clean_line(text) == text), hex(point)
 
     def test_drive_has_no_size_cap_in_the_limits(self, schema):
         assert "DRIVE_MAX_FILE_BYTES" not in schema["x-limits"]

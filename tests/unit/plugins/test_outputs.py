@@ -481,6 +481,17 @@ class TestRead:
         with pytest.raises(ValueError, match=NO_SUCH_FILE):
             read_output(root, TYPES, "a.csv")
 
+    def test_the_descriptor_is_closed_when_wrapping_it_fails(self, root, monkeypatch):
+        put(root, "a.csv")
+        closed = []
+        real_close = os.close
+        monkeypatch.setattr(outputs_module.os, "fdopen", lambda *a, **k: (_ for _ in ()).throw(MemoryError()))
+        monkeypatch.setattr(outputs_module.os, "close", lambda fd: (closed.append(fd), real_close(fd)))
+
+        with pytest.raises(MemoryError):
+            read_output(root, TYPES, "a.csv")
+        assert len(closed) == 1
+
 
 class TestTools:
     def test_specs(self, root):

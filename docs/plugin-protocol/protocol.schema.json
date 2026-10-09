@@ -96,11 +96,14 @@
           "pattern": "^[a-z][a-z0-9_]{0,30}$"
         },
         "description": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
         }
       },
       "required": [
-        "name"
+        "name",
+        "description"
       ]
     },
     "ToolDef": {
@@ -141,12 +144,16 @@
         "effect": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 200
+          "maxLength": 200,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$",
+          "description": "One line: no line breaks, tabs, control or bidirectional characters."
         },
         "title": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 120
+          "maxLength": 120,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$",
+          "description": "One line: no line breaks, tabs, control or bidirectional characters."
         }
       },
       "required": [
@@ -430,10 +437,12 @@
           "pattern": "^[a-z][a-z0-9-]{1,30}$",
           "not": {
             "enum": [
+              "apps",
               "apps_script",
               "calendar",
               "confluence",
               "contacts",
+              "docs",
               "drive",
               "gmail",
               "jira",
@@ -443,6 +452,7 @@
               "privacyfence",
               "salesforce",
               "settings",
+              "sheets",
               "slack",
               "tasks",
               "telegram"
@@ -452,7 +462,9 @@
         "display_name": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 60
+          "maxLength": 60,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$",
+          "description": "One line: no line breaks, tabs, control or bidirectional characters."
         },
         "version": {
           "type": "string",
@@ -967,7 +979,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200,
-          "description": "No control or bidirectional characters."
+          "description": "One line: no line breaks, tabs, control or bidirectional characters.",
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$"
         },
         "digest": {
           "type": "string",
@@ -1042,7 +1055,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200,
-          "description": "No control or bidirectional characters."
+          "description": "One line: no line breaks, tabs, control or bidirectional characters.",
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$"
         },
         "digest": {
           "type": "string",
@@ -1128,7 +1142,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200,
-          "description": "No control or bidirectional characters."
+          "description": "One line: no line breaks, tabs, control or bidirectional characters.",
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$"
         },
         "digest": {
           "type": "string",

@@ -318,8 +318,9 @@ class AuditEntry:
                             #  the call failed. ``request_id`` and ``sender`` are empty. The data the
                             #  plugin read is never put in an entry or a log line, only the target
                             #  names and the byte count.)
-                            # ("plugin_confirm": plugins/host.py, for the cards plugins/confirm.py raises,
-                            #  the human-confirmation cards a plugin asks for through ``confirm.request``. Two entries per card, one
+                            # ("plugin_confirm": plugins/host.py, for the cards plugins/confirm.py
+                            #  raises, the human-confirmation cards a plugin asks for through
+                            #  ``confirm.request``. Two entries per card, one
                             #  when it is raised and one when it is answered, sharing ``connector``
                             #  "plugin:<name>"; ``request_id`` is empty. ``summary`` is
                             #  "<kind>; requested" and then "<kind>; approved", "<kind>; denied" or
@@ -342,7 +343,8 @@ class AuditEntry:
                             #  ``summary`` "read <path>; offset=<n>; bytes=<n>". File contents are never
                             #  recorded.)
                             # ("plugin_lifecycle": plugins/host.py, including the state changes
-                            #  plugins/supervisor.py reports, a change in a plugin's own standing that is not one call: ``connector`` is
+                            #  plugins/supervisor.py reports, a change in a plugin's own standing that
+                            #  is not one call: ``connector`` is
                             #  "plugin:<name>" and ``summary`` says what happened -- "enabled",
                             #  "disabled", "disabled: <reason>" (crash limit or hash drift), "data
                             #  purged (ack)" or "data purged (timeout)", "removed; data and rules
