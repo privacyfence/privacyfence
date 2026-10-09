@@ -31,6 +31,10 @@ output. A plugin can:
 - **Publish files** you or your AI client can read through PrivacyFence ([Outputs](#outputs)).
 - **Serve read-only pages** at `/plugins/<name>/`, in a sandbox, to you only. A plugin can list its
   pages, and PrivacyFence's page browser (the Plugins menu, or `/plugin-pages`) opens each in a new tab.
+  A link inside a plugin page opens in the same tab, or in a new tab if the plugin's manifest sets
+  `page_new_tabs` (see [Links from a plugin page](#links-from-a-plugin-page)).
+- **Take a file** from your AI client in a tool call, without the AI writing the file's bytes
+  ([File parameters](#file-parameters)).
 - **Keep its own files** in folders only the service account can read.
 
 Plugins run only on a packaged install, where PrivacyFence runs as its own service account. A `pip`
@@ -96,8 +100,9 @@ A plugin's folder must be a real folder inside the plugins directory, not a symb
 4. Choose **Review and enable**. PrivacyFence starts the plugin once to read its tool list, with
    reads and confirmations switched off, then shows a card listing every tool with its gate
    (**Runs without asking**, **Review** or **Popup**), whether it reads or writes and whether it is
-   destructive, the connector reads it may make, whether it serves pages, and whether any tool runs
-   without asking. Check each one.
+   destructive, the connector reads it may make, whether it serves pages, whether those pages can
+   open links in new tabs, whether a tool takes a file, and whether any tool runs without asking.
+   Check each one.
 5. Choose **Enable**. Enabling needs a human session and, where your install requires it, your
    passkey. PrivacyFence checks again that the files are the ones you reviewed, records their
    hashes and the tools you saw, and starts the plugin.
@@ -125,6 +130,9 @@ one tool. A destructive tool never offers "Always allow". When you enable a plug
 deletes the rules saved for any tool whose gate, read or write, destructive flag or scopes differ from
 your previous review, or that is gone, and every rule for a destructive tool. A plugin's
 confirmation cards cannot be auto-accepted. See [Approvals and policy](approvals-and-policy.md#plugin-tools).
+
+A tool that takes a file says so in its description: you ask your AI client to use a file, and it
+passes a reference, not the file's content. See [Handing a file to a plugin](#handing-a-file-to-a-plugin).
 
 Your AI client learns about a newly enabled plugin's tools from PrivacyFence's tool-list change
 notice, but some clients show them only in a new conversation, or after you quit and restart the
@@ -327,6 +335,84 @@ a page's requests for separate files carry no session and are refused. Links bet
 pages do not carry your session either, so a multi-page plugin lists its pages with `page_index`
 instead of linking them. A single page can take a `?query`; page paths match exactly.
 
+#### Links from a plugin page
+
+A link without a target opens in the page's own tab and works as in any browser. A link to
+another site loads there. A link into PrivacyFence, or to another page of the plugin, carries no
+session and gets the owner-only 404.
+
+A `target="_blank"` link or `window.open` does nothing, unless the manifest sets `page_new_tabs: true`
+(it needs `pages: true`). Then the plugin's pages open links in a normal new tab. That tab is outside
+the sandbox, has no `window.opener`, and carries no PrivacyFence session. The enable dialog says "Its
+pages can open links in new tabs." for such a plugin, and a plugin that adds the key later must be
+enabled again. The page an approval card shows never opens new tabs. Plugin pages cannot download
+files (`<a download>`) or use `eval`; the exact content security policy and what it allows are in
+[`plugin-protocol.md`](plugin-protocol.md#pages). To try a page, or the built-in check page, in your own browser
+without a plugin, run `python3 scripts/plugin_page_preview.py --check-page --new-tabs` from a checkout.
+
+### File parameters
+
+A tool can take a file instead of a string the AI has to write out. Declare the parameter with
+`file_param`:
+
+```python
+from privacyfence_plugin_sdk import file_param
+
+@plugin.tool("publish", description="Publish a page.", gate="review",
+             params={"html": file_param("The page.", max_bytes=1_048_576, media_types=["text/html"])},
+             required=["html"])
+async def publish(ctx, args) -> Prepared:
+    page = ctx.files["html"]        # name, size, media_type, sniffed_type, sha256
+    return Prepared(preview=[blocks.fields({"Page": page.name})])
+
+
+@publish.execute
+async def do_publish(ctx, prepared, approval):
+    data = ctx.files["html"].content    # the bytes, in the execute function only
+    ...
+```
+
+The rules:
+
+- One file parameter per tool, at most 8 MiB, each accepted type one of `text/html`, `text/plain`,
+  `application/json`, `application/pdf`, `image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+  `font/woff`, `font/woff2`, `font/ttf`, `font/otf` and `application/octet-stream`.
+- The tool is not read-only and not on the `auto` gate, so every file goes through a card or a rule
+  you saved.
+- The tool function gets the file's name, size, declared and detected type and SHA-256. The bytes
+  arrive in the execute function only, after the call was approved. The plugin never sees a path or
+  an upload token, and PrivacyFence keeps no file between calls.
+- `ctx.files` is empty for a call without a file. `file_param` is the SDK's; any other language
+  follows [Tool definitions](plugin-protocol.md#file-parameters) and
+  [`tool.prepare`](plugin-protocol.md#toolprepare).
+- A PrivacyFence older than plugin protocol 1.3 cannot send files; the SDK leaves such a tool out
+  of the tool list it offers. See [Protocol and SDK versions](#protocol-and-sdk-versions).
+
+The file's content is checked against the accepted types by its bytes, not its name. The approval
+card starts with a block showing the file's name, where it came from, its size, declared and detected
+type and SHA-256.
+
+#### Handing a file to a plugin
+
+Your AI client passes the file as the parameter's value: a local path (absolute, or starting with
+`~/`), which PrivacyFence reads the way it reads a file for any other tool ([How it
+works](how-it-works.md#files)). A client without the `.mcpb` extension calls `privacyfence_create_upload_slot`, sends the file to the `upload_url` it
+returns with an HTTP `PUT`, and passes `upload:<upload_id>` as the parameter. An upload slot is used
+once, by the session that created it, and expires. PrivacyFence names the choice in the parameter's
+description, so the client does not need to be told.
+
+### Protocol and SDK versions
+
+| Feature | PrivacyFence | `privacyfence-plugin-sdk` |
+|---|---|---|
+| Same-tab links | any | any |
+| `page_new_tabs` | protocol 1.3.0 | any for the plugin; 1.3.0 for `PluginTestHost(page_new_tabs=True)` |
+| File parameters | protocol 1.3.0 | 1.3.0 (`file_param`, `ctx.files`, `call_tool(files=…)`) |
+
+The SDK is built from this repository and is not published to PyPI before a release carries
+1.3.0, so a plugin that needs it pins a commit: the first commit on `main` where
+`plugin-sdk/src/privacyfence_plugin_sdk/plugin.py` has `PROTOCOL_VERSION = "1.3.0"`.
+
 ### Page index
 
 `@plugin.page_index` registers `async def pages(ctx) -> list[PageEntry]`, which returns the pages
@@ -344,7 +430,8 @@ async def pages(ctx):
 A plugin without a page index is listed with one page, `/`.
 
 The manifest names the plugin, its version (equal to the `Plugin`'s), `protocol: "1"`, its
-`command`, the source operations it uses, whether it serves pages, whether it publishes outputs
+`command`, the source operations it uses, whether it serves pages and whether those can open links in new tabs
+(`pages`, `page_new_tabs`), whether it publishes outputs
 (`outputs`, `output_types`) and its `max_gate_floor`. A tool on
 the `auto` gate, read or write, needs `max_gate_floor: auto`, which you see when enabling.
 
@@ -386,6 +473,9 @@ Where the test host differs from PrivacyFence:
   default is `"review"`, which refuses a tool on the `auto` gate.
 - `PluginTestHost(plugin, source_operations=(...), pages=True)` takes the manifest's `source_operations` and
   `pages`; it checks source-call parameters as PrivacyFence does.
+- `PluginTestHost(plugin, pages=True, page_new_tabs=True)` serves pages with the policy of a plugin that
+  sets `page_new_tabs`. `call_tool(name, files={...})` hands a file to a tool, applies PrivacyFence's
+  size and detected-type checks, and shows the card's source as `Test host`.
 - `list_pages()` titles the fallback entry with the plugin's name; PrivacyFence uses its display name.
 - `pii=` takes a function that models the PII check, which overrides an "Always allow" rule.
 - It withholds a write result over 2,048 bytes but does not run PrivacyFence's PII detector on it.

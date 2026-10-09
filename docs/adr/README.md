@@ -227,9 +227,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |
 | [0120](0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) | Plugins are out-of-process executables speaking newline-delimited JSON-RPC 2.0 over stdio | Accepted; amended by 0136 |
 | [0121](0121-a-plugin-is-trusted-code-installed-by-an-administrator-into-an-admin-only-directory.md) | A plugin is trusted code, installed by an administrator into an admin-only directory | Accepted; amended by 0131 |
-| [0122](0122-plugin-tools-are-gated-in-two-steps-and-a-read-releases-the-prepared-payload.md) | Plugin tools are gated in two steps, and a read releases the prepared payload | Accepted; amended by 0137 |
+| [0122](0122-plugin-tools-are-gated-in-two-steps-and-a-read-releases-the-prepared-payload.md) | Plugin tools are gated in two steps, and a read releases the prepared payload | Accepted; amended by 0137, 0141 |
 | [0123](0123-the-plugin-source-api-is-ungated-but-audited-without-content.md) | The plugin source API is ungated but audited without content | Accepted; amended by 0128, 0129 |
-| [0124](0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md) | Plugin pages are GET-only, owner-session-only, self-contained and sandboxed | Accepted; amended by 0139 |
+| [0124](0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md) | Plugin pages are GET-only, owner-session-only, self-contained and sandboxed | Accepted; amended by 0139, 0140 |
 | [0125](0125-the-org-mode-plugin-contract-is-reserved-in-protocol-1-and-rejected-in-local-mode.md) | The org-mode plugin contract is reserved in protocol 1 and rejected in local mode | Accepted |
 | [0126](0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md) | The plugin SDK lives in this repository and is published from the same tag | Accepted |
 | [0127](0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) | A plugin approval binds to its content digest and persists until revoked | Accepted |
@@ -245,3 +245,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0137](0137-a-plugin-writes-result-is-capped-and-pii-scanned-before-it-reaches-the-ai.md) | A plugin write's result is capped at 2,048 bytes and PII-scanned before it reaches the AI | Accepted; amends 0122 |
 | [0138](0138-paged-source-reads-read-one-version-and-measure-utf8-bytes.md) | Paged plugin source reads read one version of the data and measure UTF-8 bytes | Accepted; amends 0128 |
 | [0139](0139-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md) | A plugin lists its pages, and PrivacyFence serves the page browser | Accepted; amends 0124 |
+| [0140](0140-a-plugin-page-opens-links-in-new-tabs-only-when-its-manifest-says-so.md) | A plugin page opens links in new tabs only when its manifest says so | Accepted; amends 0124 |
+| [0141](0141-plugin-tools-take-files-by-reference-and-privacyfence-passes-the-bytes.md) | Plugin tools take files by reference, and PrivacyFence passes the bytes | Accepted; amends 0122 |

@@ -81,6 +81,12 @@ The `tool.execute` message itself is unchanged, so a plugin written for 1.0 or 1
 working. `x-limits` also states `SEND_TIMEOUT_SECONDS` (10): a plugin that does not read a
 message within that time is treated as crashed.
 
+Version `1.3` adds, without changing any `1.2` message: the manifest key `page_new_tabs`, file
+parameters in tool definitions, and the `files` member of `tool.prepare` and `tool.execute`. A
+`1.0` to `1.2` plugin never declares a file parameter, so it is never sent `files`, and its pages
+keep the plain `Content-Security-Policy` of [Pages](#pages). `x-limits` also states
+`MAX_FILE_BYTES` and `MAX_FILE_PARAMS_PER_TOOL`.
+
 ## Errors
 
 A failed request is answered with a JSON-RPC error whose `data` carries the stable name:
@@ -131,6 +137,7 @@ source_operations:               # optional, default []
 tools: dynamic                   # required; the only value
 max_gate_floor: auto             # optional: "review" (default) or "auto"
 pages: true                      # optional, default false
+page_new_tabs: true              # optional, default false, only with pages: true: pages can open links in new tabs
 service_credentials: false       # optional, default false; true is an error in local mode
 outputs: true                    # optional, default false: the plugin publishes files (see Outputs)
 output_types: [text/csv]         # optional, only with outputs: true; default [application/json, text/csv]
@@ -147,6 +154,10 @@ output_types: [text/csv]         # optional, only with outputs: true; default [a
 - `source_operations` may list only the six operations under [Source calls](#source-calls).
 - `max_gate_floor: auto` lets the plugin declare tools on the `auto` gate (see
   [Tool definitions](#tool-definitions)). The owner sees the floor when enabling the plugin.
+- `page_new_tabs: true` serves the plugin's pages with `allow-popups allow-popups-to-escape-sandbox`,
+  so a `target="_blank"` link opens a normal new tab (see [Pages](#pages)). It is an error without
+  `pages: true`. Like every manifest key it is part of the manifest hash, so a plugin that adds it must be
+  enabled again, and Settings shows it when the owner reviews the plugin.
 - `outputs: true` gives the plugin an output folder ([Outputs](#outputs)). `output_types` lists the
   media types it may publish, each one of `application/json` (`.json`), `text/csv` (`.csv`),
   `text/html` (`.html`, `.htm`), `text/plain` (`.txt`) and `text/markdown` (`.md`); another value is
@@ -243,7 +254,7 @@ The whole list is refused on the first violation, at start and in `tools.changed
 - `parameters.properties` holds scalars only: each property's `type` is `string`, `integer`,
   `number` or `boolean`. Arrays, objects, `enum`, `oneOf` and nested schemas are refused, and so is
   a property named `reason`. Put fixed choices in the description, and take structured input as a
-  JSON string. `required` lists property names.
+  JSON string. `required` lists property names. The one exception is a file parameter, below.
 - A tool on the `auto` gate, a read as much as a write, needs the manifest's `max_gate_floor: auto`.
 - Gated tools (`review`, `popup`) get a required `reason` parameter added for the AI client, which
   the plugin never receives in `args`.
@@ -255,6 +266,41 @@ The whole list is refused on the first violation, at start and in `tools.changed
 
 A scope type's `description` is 1 to 500 characters, and the scope type name `output` is reserved.
 
+#### File parameters
+
+A tool can take a file without the AI writing its bytes. A **file parameter** is a property whose
+schema carries `x-privacyfence-file`:
+
+```json
+"html": {"type": "string", "description": "The page.",
+         "x-privacyfence-file": {"max_bytes": 1048576, "media_types": ["text/html"]}}
+```
+
+The daemon refuses the tool list on the first rule that fails, in this order (`<p>` is the
+parameter, `<t>` the tool):
+
+1. `type` is `"string"`: `parameter <p> of <t>: a file parameter must have type string`.
+2. The value of `x-privacyfence-file` is an object with exactly the keys `max_bytes` and
+   `media_types`: `parameter <p> of <t>: x-privacyfence-file takes max_bytes and media_types only`.
+3. `max_bytes` is an integer (not a boolean) from 1 to 8,388,608 (`MAX_FILE_BYTES`):
+   `parameter <p> of <t>: max_bytes must be 1 to 8388608`.
+4. `media_types` is a non-empty list of distinct strings, each one of `text/html`, `text/plain`,
+   `application/json`, `application/pdf`, `image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+   `font/woff`, `font/woff2`, `font/ttf`, `font/otf` and `application/octet-stream`:
+   `parameter <p> of <t>: media_types must be a non-empty list of distinct supported types`.
+5. At most one file parameter per tool (`MAX_FILE_PARAMS_PER_TOOL`):
+   `tool <t> may take at most 1 file parameter`.
+6. A tool with a file parameter is not read-only: `tool <t> takes a file and cannot be read-only`.
+7. A tool with a file parameter is not on the `auto` gate:
+   `tool <t> takes a file and must use the review or popup gate`.
+
+Rules 6 and 7 mean a file's bytes reach a plugin only in `tool.execute`, after a card (or a saved
+rule the owner made) accepted the call, and no file content comes back to the AI through a read's
+payload. Before that the plugin sees the file's metadata only. The AI client passes a file
+parameter as a local path or as `upload:<upload_id>` from `privacyfence_create_upload_slot`; the
+daemon adds that instruction and the limits to the parameter's description. A file parameter is not
+part of the reviewed tool signature, and the per-call card gates every file.
+
 The daemon exposes the tools to AI clients under the MCP name `<plugin>_<tool>`.
 
 ### `tools.changed`
@@ -265,8 +311,27 @@ audited (see [Audit entries](#audit-entries)).
 
 ### `tool.prepare`
 
-Parameters: `call_id`, `principal`, `tool` (the plugin's own tool name), `args` (without `reason`)
-and `reason` (the AI client's sentence, or `null`).
+Parameters: `call_id`, `principal`, `tool` (the plugin's own tool name), `args` (without `reason`
+and without the file parameter), `reason` (the AI client's sentence, or `null`) and, when the tool
+has a file parameter and the call gave a file, `files`: an object from the parameter's name to a
+`ToolFile` carrying the metadata only. A `ToolFile` is:
+
+| Field | Rule |
+|---|---|
+| `name` | 1 to 120 characters, one line; the file's name, never a path |
+| `size` | The byte count, at most the parameter's `max_bytes` |
+| `media_type` | The declared type, from the name's extension (`.html` and `.htm`, `.txt`, `.csv` and `.md`, `.json`, `.pdf`, `.png`, `.jpg` and `.jpeg`, `.gif`, `.webp`, `.woff`, `.woff2`, `.ttf` and `.otf` have one; any other name is `application/octet-stream`) |
+| `sniffed_type` | The detected type, from the bytes; always one of the parameter's `media_types` |
+| `sha256` | 64 lowercase hex digits of the bytes |
+| `content_base64` | `tool.execute` only, absent from `tool.prepare`: the bytes, standard base64 with padding |
+
+The daemon takes the file parameter out of `args`, as it does `reason`, so the plugin never sees
+the path or the upload token, and `args_digest` covers the other arguments only. The type is
+detected from the bytes: PNG, JPEG, GIF, WebP, WOFF, WOFF2, TrueType and PDF by their signature;
+otherwise UTF-8 text without a NUL byte is `text/html` when it contains `<!doctype html` or
+`<html` near its start, `application/json` when it parses as JSON and `text/plain` otherwise (an
+empty file is `text/plain`); anything else is `application/octet-stream`. A file over `max_bytes`,
+or whose detected type the parameter does not accept, fails the call before `tool.prepare`.
 
 Result:
 
@@ -304,7 +369,9 @@ plugin could not prepare this call." The test host returns the same sentence in
 
 ### `tool.execute`
 
-Parameters: `call_id`, `principal`, `tool`, `args`, `args_digest` and `approval`:
+Parameters: `call_id`, `principal`, `tool`, `args` (without the file parameter), `args_digest`,
+`approval` and, for a call with a file, `files`, the same `ToolFile` objects with `content_base64`
+added:
 
 ```json
 {"approval_id": "card-…", "decision": "approved", "via": "card", "decided_at": "2026-10-07T10:00:00Z"}
@@ -315,6 +382,11 @@ separators=(",", ":"), ensure_ascii=False)` encoded as UTF-8. A plugin that does
 answers `unknown_call`, and one whose arguments differ from the prepared ones answers
 `digest_mismatch`. `via` is `auto` for an `auto` tool and `card` for a gated one, including a call
 a saved rule accepted.
+
+The card showed the SHA-256 of the bytes the daemon sends here. The bytes are bound by it: a plugin
+answers `digest_mismatch` to an execute whose files' SHA-256 differ from the prepared ones (the
+SDK does), and a file whose bytes changed between two calls gets a fresh prepare and its own card,
+never the earlier approval. The daemon keeps no file bytes between calls, only the SHA-256.
 
 Result: `{"result": <any>, "approval_id": "<optional>"}`.
 
@@ -610,26 +682,75 @@ succeeded) is asked; any other page request gets 404.
   MiB (more becomes 502). Every other header the plugin sends, `set-cookie`, `cache-control` and
   any CSP included, is dropped. No answer within 10 seconds, or an error, becomes a 502 with the body
   "The plugin did not answer."
-- Every response under `/plugins/` carries these headers (the embedding rule in
-  [Approvals](#approvals) is the one exception, for `Content-Security-Policy`'s `frame-ancestors`
-  and `X-Frame-Options`):
+- Every response under `/plugins/` carries these headers, with one of three
+  `Content-Security-Policy` values (the framing rule in [Approvals](#approvals) is the one exception,
+  for `frame-ancestors` and `X-Frame-Options`):
 
   ```
-  Content-Security-Policy: sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
+  Content-Security-Policy: <one of the three below>
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Cache-Control: private, no-store
   X-Frame-Options: DENY
-  Permissions-Policy: …
+  Permissions-Policy: accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-create=(self), publickey-credentials-get=(self), screen-wake-lock=(), usb=(), xr-spatial-tracking=()
   Cross-Origin-Opener-Policy: same-origin
+  ```
+
+  The plain policy, for every page of a plugin whose manifest does not set `page_new_tabs`:
+
+  ```
+  sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
+  ```
+
+  For a plugin whose manifest sets `page_new_tabs: true` and that is running, the sandbox also
+  allows popups that escape it:
+
+  ```
+  sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'self' data: 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
+  ```
+
+  The page an approval card frames, requested with that card's `pf_approval` id, gets the plain
+  policy with only `frame-ancestors 'self'` changed, plus `X-Frame-Options: SAMEORIGIN`. It never
+  gets popups, whatever the manifest says:
+
+  ```
+  sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'
   ```
 
   The page runs in an opaque origin without `allow-same-origin`: it cannot read the session cookie
   or call PrivacyFence's APIs, and its requests for separate files carry no cookie and are refused.
   A page must inline its CSS, scripts and images (as `data:` URIs). A plugin page is a single
-  self-contained page that keeps its state in the page itself (script or `#fragment`). Other pages
-  of the same plugin open from the page browser ([`pages.list`](#pageslist)), Settings or a typed URL: a link from a plugin page to another
-  page, or back into PrivacyFence, does not carry the session and gets the owner-only 404.
+  self-contained page that keeps its state in the page itself (script or `#fragment`).
+
+**What the policy allows.** `script-src`, `style-src`, `style-src-attr`, `img-src`, `font-src`,
+`connect-src` and `frame-src` all fall back to `default-src`, so a self-contained dashboard works:
+
+| Need of a page | Allowed by | Result |
+|---|---|---|
+| Inline `<script>` | `'unsafe-inline'` | allowed |
+| `<script type="application/json">` | not executed, so no directive applies | allowed |
+| Inline `<style>` and `style="…"` | `'unsafe-inline'` | allowed |
+| `data:` images | `data:` | allowed |
+| `data:` fonts (`@font-face` with `src: url(data:…)`) | `data:` | allowed |
+| `eval`, `new Function` | no `'unsafe-eval'` | blocked |
+| `blob:` URLs, external hosts | not listed | blocked |
+| File downloads (`<a download>`) | the sandbox has no `allow-downloads` | blocked |
+
+**Links.** A link without a target navigates the page's own tab, and that works in every
+configuration: a sandboxed top-level page may navigate itself. A same-tab link to an external site
+is an ordinary cross-site navigation. A link back into PrivacyFence, or to another page of the same
+plugin, carries no session cookie (the page's origin is opaque, so the navigation is cross-site,
+and the session cookie is `SameSite=Strict`) and gets the owner-only 404; other pages of the plugin
+open from the page browser ([`pages.list`](#pageslist)), Settings or a typed URL. A
+`target="_blank"` link or `window.open` opens a new tab only for a plugin with `page_new_tabs: true`;
+otherwise the sandbox refuses it and nothing happens. The new tab is an unsandboxed top-level page
+that is not connected to the plugin page: `Cross-Origin-Opener-Policy: same-origin` and the opaque
+origin put it in its own browsing-context group, so its `window.opener` is `null` and it cannot
+navigate the plugin tab, and `Referrer-Policy: no-referrer` keeps the page's URL out of its
+`document.referrer`. It carries no PrivacyFence session either, so a link to a PrivacyFence URL
+gets the same 404. The browser's popup blocker still applies to a `window.open` without a user
+gesture. A plugin page can already send what it shows to any host by navigating its own tab, so the
+sandbox is not a data-loss boundary for the content of a page.
 
 ### `pages.list`
 
@@ -746,6 +867,7 @@ Plugin activity is written to the audit log with `connector` set to `plugin:<nam
 | `plugin_source` | Every `source.call`, success or error | The targets and `bytes=<n>`, or `error=<code>`; never the data |
 | `plugin_confirm` | A confirmation is requested, answered or refused | `<kind>; requested`, `<kind>; approved`, `<kind>; denied`, `<kind>; expired` or `<kind>; refused`; `request_id` is empty |
 | `plugin_approval` | An approval is requested, answered, refused or revoked | `<kind>; requested`, `<kind>; approved`, `<kind>; denied`, `<kind>; expired`, `<kind>; refused` or `<kind>; revoked`; never the subject or the digest |
+| `plugin_file` | A file reaches a plugin, one entry per file | `<param>: <name>; bytes=<n>; sha256=<hex>; type=<detected type>`, written after the card (or a saved rule) accepted the call and the upload slot was used up, so a denied call has none; never the content |
 | `plugin_output` | A plugin output file is read | `read <path>; offset=<n>; bytes=<n>`, written after the gate returns |
 | `plugin_lifecycle` | A plugin is enabled, disabled, removed or purged, or its tool list changes | For example `enabled`, `disabled: <reason>`, `tools changed: +a,-b`, `tools change rejected: <detail>`, `data purged (ack)`, `approvals deleted: <n>`, `removed; data and rules deleted` |
 
