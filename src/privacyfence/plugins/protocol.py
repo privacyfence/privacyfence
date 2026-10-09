@@ -19,7 +19,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
@@ -667,6 +667,10 @@ def _timestamp(obj: dict, key: str, where: str) -> str | None:
         raise _bad(f"{where}.{key} must be an RFC 3339 timestamp with a time zone") from None
     if parsed.tzinfo is None:
         raise _bad(f"{where}.{key} must be an RFC 3339 timestamp with a time zone")
+    try:
+        parsed.astimezone(timezone.utc)
+    except OverflowError:
+        raise _bad(f"{where}.{key} must be an RFC 3339 timestamp with a time zone") from None
     return value
 
 

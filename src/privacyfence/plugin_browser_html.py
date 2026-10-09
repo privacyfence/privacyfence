@@ -48,7 +48,10 @@ def format_timestamp(value: str | None) -> str:
         return value
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    try:
+        return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except (ValueError, OverflowError):
+        return value
 
 
 def _cell(value: str | None) -> str:

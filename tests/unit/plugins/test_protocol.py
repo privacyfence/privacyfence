@@ -661,6 +661,11 @@ class TestPagesListResult:
     def test_bad_timestamp(self, field, stamp):
         self._bad(field, stamp)
 
+    @pytest.mark.parametrize("stamp", ["0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"])
+    @pytest.mark.parametrize("field", ["created_at", "updated_at"])
+    def test_timestamp_that_overflows_in_utc_is_refused(self, field, stamp):
+        self._bad(field, stamp)
+
     @pytest.mark.parametrize("description", ["", "d" * (c.MAX_PAGE_DESCRIPTION_CHARS + 1), "a\nb"])
     def test_bad_description(self, description):
         self._bad("description", description)

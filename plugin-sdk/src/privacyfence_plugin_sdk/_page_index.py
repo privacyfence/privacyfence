@@ -6,7 +6,7 @@ limits equal.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import unquote
 
@@ -68,6 +68,10 @@ def _timestamp(entry: dict, key: str, where: str) -> None:
         raise ValueError(f"{where}.{key} must be an RFC 3339 timestamp with a time zone") from None
     if parsed.tzinfo is None:
         raise ValueError(f"{where}.{key} must be an RFC 3339 timestamp with a time zone")
+    try:
+        parsed.astimezone(timezone.utc)
+    except OverflowError:
+        raise ValueError(f"{where}.{key} must be an RFC 3339 timestamp with a time zone") from None
 
 
 def _validate_entry(entry: Any, where: str) -> dict:

@@ -99,7 +99,11 @@ def _now_rfc3339() -> str:
 
 
 def _wire_size(value: Any) -> int:
-    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+    try:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+    except UnicodeEncodeError:
+        # A lone surrogate has no UTF-8 form; the escaped form is plain ASCII and only larger.
+        return len(json.dumps(value, separators=(",", ":")).encode())
 
 
 class PluginConnector(Connector):
