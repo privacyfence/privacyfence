@@ -927,6 +927,20 @@ class TestErrors:
         conn = make_connector(peer, owns_approval=lambda approval_id: False)
         assert await conn.call("today_note", {"text": "y"}) == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
 
+    async def test_an_owned_approval_id_the_detector_reads_as_an_iban_is_returned(self, gated_call_spy):
+        issued = "ee45cccd1eda4bdbb43f29457a3845c7"
+        peer = FakePeer()
+        peer.execute = {"result": {"note": "saved"}, "approval_id": issued}
+        conn = make_connector(peer, owns_approval=lambda approval_id: approval_id == issued)
+        assert await conn.call("today_note", {"text": "y"}) == {"note": "saved", "approval_id": issued}
+
+    async def test_an_approval_id_the_plugin_does_not_own_is_still_screened(self, gated_call_spy):
+        issued = "ee45cccd1eda4bdbb43f29457a3845c7"
+        peer = FakePeer()
+        peer.execute = {"result": {"note": "saved"}, "approval_id": issued}
+        conn = make_connector(peer, owns_approval=lambda approval_id: False)
+        assert await conn.call("today_note", {"text": "y"}) == {"withheld": True, "message": WRITE_RESULT_WITHHELD}
+
     async def test_plugin_stopped_before_execute(self, gated_call_spy):
         peer = FakePeer()
         conn = make_connector(peer)

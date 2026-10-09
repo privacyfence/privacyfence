@@ -422,7 +422,12 @@ class PluginConnector(Connector):
             logger.info("Plugin %s: result of %s withheld: over %d bytes",
                         self._plugin, defn.name, WRITE_RESULT_MAX_BYTES)
             return await self._withheld(approval_id)
-        categories = await asyncio.to_thread(detect_pii_categories, json.dumps(value, ensure_ascii=False))
+        text = json.dumps(value, ensure_ascii=False)
+        if approval_id is not None and self._owns_approval is not None:
+            # An id PrivacyFence issued is random hex, which the detector sometimes reads as an IBAN.
+            if await asyncio.to_thread(self._owns_approval, approval_id):
+                text = text.replace(approval_id, "")
+        categories = await asyncio.to_thread(detect_pii_categories, text)
         if categories:
             logger.info("Plugin %s: result of %s withheld: possible personal data (%s)",
                         self._plugin, defn.name, ", ".join(categories))
