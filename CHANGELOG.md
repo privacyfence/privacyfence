@@ -51,12 +51,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Salesforce reports past 2,000 rows.** `salesforce_run_report` and the plugin source operation `salesforce.report_run` take `page_by`, a column with a unique value per row, and read the whole report page by page with a cursor, each page one report run; a grouped report is read as one table. A column that is not unique or cannot be paged fails with no rows, and `salesforce.report_max_pages` (default 50) caps the runs one read may use. The plugin SDK adds `ctx.source.report_pages`.
 - **Plugin output files.** A plugin can publish result files into an output folder, and your AI client reads them through two new tools: `plugin_outputs_list` runs without asking and `plugin_outputs_read` shows a card with the text and a PII check. "Always allow" can cover one folder of one plugin. Large results reach the AI this way instead of through a tool result.
 - **Plugin child processes.** The plugin documentation now states that a plugin's child processes run under the service account, are not supervised and are the plugin's to confine.
+- **Plugin rules shared by PrivacyFence and the SDK.** `apps`, `sheets` and `docs` are reserved plugin names. A plugin's display name, a tool's title and effect, and an approval subject must fit on one line (no line breaks or tabs), and card titles are shown on one line. The plugin protocol refuses `NaN` and `Infinity`, which are not JSON. The plugin SDK and its test host apply the same checks as PrivacyFence (sizes, table cells, reserved names, scope type descriptions, the line limit), pass a source error raised from a tool through as that error, and `PluginTestHost.introspect()` starts a plugin the way a review does. Reading a published output file never follows a file swapped after the path check, and a Drive Range read stops as soon as the server sends more than it asked for.
+- **Restart hint.** The enable dialog in Settings → Plugins says that a newly enabled plugin's tools may only appear in a new conversation, or after the AI client restarts.
+- **Plugins menu.** A Plugins menu in the top navigation, between Approvals and Settings, lists every running plugin that has a page, one per line in alphabetical order. A click opens the plugin's page in a new tab, like **Open page** on the plugin's card. The menu is hidden while no plugin has a page.
 
 ### Fixed
 
 - With an approvals tab or MCP client still connected, stopping the web server left it serving
   those connections until the process exited. It now gives open event streams two seconds to
   finish, then closes them.
+
+### Security
+
+- **Salesforce and Confluence.** A report id is checked to be a Salesforce id before a report runs, so a crafted id can no longer turn a report run into a different query; record ids in `salesforce_get_record` are checked the same way. Confluence page ids must be numeric, and attachment ids must look like Confluence attachment ids, for the same reason.
 
 ## [5.5.0] — 2026-10-01
 

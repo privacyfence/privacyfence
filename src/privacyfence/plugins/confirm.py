@@ -36,7 +36,7 @@ from typing import Any
 
 from privacyfence.approvals import CONFIRM_RESULTS, PendingApprovalRegistry
 from privacyfence.dialog_window_html import build_confirmation_html
-from privacyfence.plugins.blocks import clean_text, to_card_blocks, validate_blocks
+from privacyfence.plugins.blocks import clean_line, to_card_blocks, validate_blocks
 from privacyfence.plugins.constants import (
     CONFIRM_AWAIT_MAX_MS,
     MAX_PENDING_CONFIRMS,
@@ -106,25 +106,29 @@ class ConfirmationService:
             )
         # Cleaned as one string, with the same stripping every block string gets, so neither the
         # display name nor the title can reorder the text a human reads on the card.
-        title = clean_text(f"{display_name}: {parsed.title}")
-        if not clean_text(parsed.title).strip():
+        title = clean_line(f"{display_name}: {parsed.title}")
+        if not clean_line(parsed.title).strip():
             raise RpcError("invalid_params", "confirm.request.title is empty after cleaning")
         self._reserve(plugin)
+        registry = None
+        card = None
         try:
             registry = self._registry_provider()
             card = registry.register_confirm(sensitive=parsed.require_step_up, notify=True)
+            registry.set_html(card.id, build_confirmation_html(
+                title=title,
+                message_lines=[],
+                cancel_label="Deny",
+                confirm_label="Approve",
+                body_blocks=to_card_blocks(parsed.preview),
+            ))
+            with self._lock:
+                self._owned[card.id] = _Owned(plugin, parsed.kind, registry)
         except BaseException:
+            if registry is not None and card is not None:
+                registry.finalize(card.id, "deny")
             self._release(plugin)
             raise
-        registry.set_html(card.id, build_confirmation_html(
-            title=title,
-            message_lines=[],
-            cancel_label="Deny",
-            confirm_label="Approve",
-            body_blocks=to_card_blocks(parsed.preview),
-        ))
-        with self._lock:
-            self._owned[card.id] = _Owned(plugin, parsed.kind, registry)
         self._audit(plugin, parsed.kind, "requested")
         try:
             loop = asyncio.get_running_loop()

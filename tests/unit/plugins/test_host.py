@@ -1381,6 +1381,18 @@ class TestWebRequest:
         assert response["status"] == 200
         assert env.row(host, SDK)["page_url"] == f"/plugins/{SDK}/"
 
+    async def test_page_links_list_only_running_plugins_with_pages(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        assert host.page_links() == []
+
+        await env.enable(host, SDK)
+        assert host.page_links() == [(host._plugins[SDK].manifest.display_name, f"/plugins/{SDK}/")]
+
+        host._plugins[SDK].state = "starting"
+        assert host.page_links() == []
+
     async def test_missing_page(self, env):
         env.add(SDK, sdk=True)
         host = env.host()

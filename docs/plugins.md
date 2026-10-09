@@ -75,7 +75,10 @@ folder above it ignore inherit-only entries, which grant nothing on the folder t
 (every folder under `%ProgramFiles%` has one for `CREATOR OWNER`); what such an entry grants a file
 or subfolder is checked there. The folders above the plugin's own also ignore the right to create
 subfolders, which a default drive root gives every signed-in user, because it does not let anyone
-swap an existing folder.
+swap an existing folder. Only the executable and the folders on its path are checked. Other files in
+the plugin's folder, such as libraries the executable loads, are not; a default install under
+`%ProgramFiles%` gives them the folder's administrator-only permissions. Checking every file is
+tracked in [issue 860](https://github.com/privacyfence/privacyfence/issues/860).
 
 A plugin's folder must be a real folder inside the plugins directory, not a symbolic link, and its
 `command` must name a file inside it.
@@ -120,6 +123,10 @@ one tool. A destructive tool never offers "Always allow". When you enable a plug
 deletes the rules saved for any tool whose gate, read or write, destructive flag or scopes differ from
 your previous review, or that is gone, and every rule for a destructive tool. A plugin's
 confirmation cards cannot be auto-accepted. See [Approvals and policy](approvals-and-policy.md#plugin-tools).
+
+Your AI client learns about a newly enabled plugin's tools from PrivacyFence's tool-list change
+notice, but some clients show them only in a new conversation, or after you quit and restart the
+client. The enable dialog says so too.
 
 ## Large reads and downloads
 
@@ -244,6 +251,7 @@ Settings shows a plugin's state and, unless it is running, the reason.
 | Rejected or disabled | `protocol major mismatch` | The plugin speaks a different protocol major version than PrivacyFence (the manifest's `protocol` is not `"1"`, or the plugin reported another). |
 | Disabled | `executable or manifest changed, enable again` | A file differs from what you reviewed, or the plugin reported a tool you did not review. Review it again. |
 | Disabled | `crashed 5 times in 10 minutes` | The plugin exited five times within ten minutes. The log shows why. |
+| Restarting | `crashed 1 time`, `crashed <n> times` | The plugin exited and starts again after a pause (see below). The log shows why. |
 | Disabled | `disabled by you` | You disabled it. |
 | Disabled | `manifest invalid: name or version differs from the plugin's own` | The plugin's name or version differs from the manifest's. |
 | Disabled | `plugins need PrivacyFence's background service` | The install is not separated (`pip` or source). |
@@ -335,14 +343,18 @@ async def test_the_ai_gets_what_the_card_showed():
 ```
 
 With pytest, `pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]` provides a `plugin_host`
-fixture. Where the test host differs from PrivacyFence:
+fixture.
+
+`await PluginTestHost(plugin).introspect()` starts the plugin the way Settings does when you review
+it, and returns its tool list.
+
+Where the test host differs from PrivacyFence:
 
 - `PluginTestHost(plugin, max_gate_floor="auto")` is how a test declares the manifest's floor; the
   default is `"review"`, which refuses a tool on the `auto` gate.
-- It has no `host.introspect()` (what Settings does when you review a plugin), and it ignores a
-  `tools.changed` the plugin sends.
-- It does not check a tool's MCP name against PrivacyFence's built-in tools; PrivacyFence refuses a
-  tool whose name collides with one.
+- It ignores a `tools.changed` the plugin sends.
+- It refuses a reserved plugin name, as PrivacyFence does, which also keeps every tool's MCP name
+  clear of PrivacyFence's built-in tools.
 - A `source.call` that no fixture answers raises `SourceFixtureMissing`.
 - A call a saved rule accepted reports `approval.via` as `rule`; PrivacyFence reports `card`.
 - An audit decision PrivacyFence records as `rejected` is `denied` in the test host.

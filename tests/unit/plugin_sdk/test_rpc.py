@@ -14,8 +14,8 @@ from .conftest import _PipeWriter
 LIMITS = {"max_line_bytes": 1024, "max_in_flight": 2, "invalid_lines_limit": 3}
 
 
-async def make_peer(handlers=None, notifications=None, on_close=None, **limits):
-    to_peer, from_peer = asyncio.StreamReader(), asyncio.StreamReader()
+async def make_peer(handlers=None, notifications=None, on_close=None, limit=2**16, **limits):
+    to_peer, from_peer = asyncio.StreamReader(limit=limit), asyncio.StreamReader()
     peer = Peer(to_peer, _PipeWriter(from_peer), handlers=handlers or {}, notification_handlers=notifications,
                 on_close=on_close, **{**LIMITS, **limits})
     await peer.start()
@@ -132,6 +132,47 @@ class TestInvalidLines:
         to_peer.feed_eof()
         await asyncio.wait_for(peer.wait_closed(), 5)
         assert peer.close_reason == "eof"
+
+
+class TestWire:
+    async def test_oversize_result_becomes_an_error_and_the_peer_stays_open(self):
+        async def big(params):
+            return "x" * 2000
+
+        peer, to_peer, from_peer = await make_peer({"big": big}, limit=1024)
+        await send(to_peer, {"jsonrpc": "2.0", "id": 1, "method": "big", "params": {}})
+        reply = await next_message(from_peer)
+        assert reply["id"] == 1 and reply["error"]["data"]["code"] == "payload_too_large"
+        assert not peer.closed
+        await peer.close()
+
+    async def test_one_oversize_line_counts_once(self):
+        async def ok(params):
+            return "fine"
+
+        peer, to_peer, from_peer = await make_peer({"ok": ok}, limit=1024, invalid_lines_limit=2)
+        to_peer.feed_data(b"x" * 5000 + b"\n")
+        await send(to_peer, {"jsonrpc": "2.0", "id": 1, "method": "ok", "params": {}})
+        assert (await next_message(from_peer))["result"] == "fine"
+        assert not peer.closed
+        await peer.close()
+
+    async def test_nan_on_the_wire_is_a_parse_error(self):
+        peer, to_peer, from_peer = await make_peer(limit=1024)
+        await send(to_peer, b'{"jsonrpc":"2.0","id":1,"method":"x","params":{"v":NaN}}')
+        reply = await next_message(from_peer)
+        assert reply["error"]["data"]["code"] == "parse_error"
+        await peer.close()
+
+    async def test_nan_in_a_result_becomes_internal_error(self):
+        async def nan(params):
+            return {"v": float("nan")}
+
+        peer, to_peer, from_peer = await make_peer({"nan": nan}, limit=1024)
+        await send(to_peer, {"jsonrpc": "2.0", "id": 1, "method": "nan", "params": {}})
+        error = (await next_message(from_peer))["error"]["data"]
+        assert (error["code"], error["detail"]) == ("internal_error", "message is not JSON")
+        await peer.close()
 
 
 class TestRequests:

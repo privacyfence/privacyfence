@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 
 import pytest
@@ -319,6 +320,42 @@ class TestList:
 
 
 class TestRead:
+    def _swap_after_check(self, monkeypatch, replace):
+        real = outputs_module._canonical_file
+
+        def wrapper(root, types, path):
+            result = real(root, types, path)
+            replace(result[0])
+            return result
+
+        monkeypatch.setattr(outputs_module, "_canonical_file", wrapper)
+
+    def test_a_file_swapped_after_the_check_is_refused(self, root, monkeypatch):
+        put(root, "a.csv", "original")
+
+        def replace(target):
+            other = target.parent / "other.tmp"
+            other.write_bytes(b"different bytes")
+            os.replace(other, target)
+
+        self._swap_after_check(monkeypatch, replace)
+        with pytest.raises(ValueError, match=NO_SUCH_FILE):
+            read_output(root, TYPES, "a.csv")
+
+    @symlinks
+    def test_a_symlink_swapped_in_after_the_check_is_refused(self, root, tmp_path, monkeypatch):
+        put(root, "a.csv", "original")
+        outside = put(tmp_path, "outside.csv", "secret")
+
+        def replace(target):
+            link = target.parent / "link.tmp"
+            link.symlink_to(outside)
+            os.replace(link, target)
+
+        self._swap_after_check(monkeypatch, replace)
+        with pytest.raises(ValueError, match=NO_SUCH_FILE):
+            read_output(root, TYPES, "a.csv")
+
     def test_small_file_in_one_page(self, root):
         put(root, "a.csv", "a,b\n1,2\n")
 
@@ -439,10 +476,21 @@ class TestRead:
 
     def test_a_file_that_vanishes_is_no_such_file(self, root, monkeypatch):
         put(root, "a.csv")
-        monkeypatch.setattr("builtins.open", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+        monkeypatch.setattr("os.open", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
 
         with pytest.raises(ValueError, match=NO_SUCH_FILE):
             read_output(root, TYPES, "a.csv")
+
+    def test_the_descriptor_is_closed_when_wrapping_it_fails(self, root, monkeypatch):
+        put(root, "a.csv")
+        closed = []
+        real_close = os.close
+        monkeypatch.setattr(outputs_module.os, "fdopen", lambda *a, **k: (_ for _ in ()).throw(MemoryError()))
+        monkeypatch.setattr(outputs_module.os, "close", lambda fd: (closed.append(fd), real_close(fd)))
+
+        with pytest.raises(MemoryError):
+            read_output(root, TYPES, "a.csv")
+        assert len(closed) == 1
 
 
 class TestTools:

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
-from privacyfence.plugins.blocks import clean_text
+from privacyfence.plugins.blocks import clean_line
 from privacyfence.plugins.constants import (
     APPROVAL_KIND_RE,
     CONFIRM_AWAIT_MAX_MS,
@@ -229,6 +229,11 @@ class ToolDef:
         for scope in scopes:
             if not SCOPE_TYPE_RE.fullmatch(scope):
                 raise _bad("tool.scopes has a name that does not match the scope type pattern")
+        effect = _opt_str(data, "effect", "tool", max_len=MAX_EFFECT_CHARS)
+        title = _opt_str(data, "title", "tool", max_len=MAX_TITLE_CHARS)
+        for key, text in (("title", title), ("effect", effect)):
+            if text is not None and clean_line(text) != text:
+                raise _bad(f"tool.{key} must not contain line breaks, tabs, control or bidirectional characters")
         return cls(
             name=name,
             description=_str(
@@ -239,8 +244,8 @@ class ToolDef:
             destructive=_bool(_req(data, "destructive", "tool"), "tool.destructive"),
             gate=gate,
             scopes=tuple(scopes),
-            effect=_opt_str(data, "effect", "tool", max_len=MAX_EFFECT_CHARS),
-            title=_opt_str(data, "title", "tool", max_len=MAX_TITLE_CHARS),
+            effect=effect,
+            title=title,
         )
 
     def to_wire(self) -> dict:
@@ -471,8 +476,8 @@ def _approval_tuple(data: dict, where: str) -> tuple[str, str, str, str]:
     subject_id = _str(
         _req(data, "subject_id", where), f"{where}.subject_id", min_len=1, max_len=SUBJECT_ID_MAX_CHARS
     )
-    if clean_text(subject_id) != subject_id:
-        raise _bad(f"{where}.subject_id must not contain control or bidirectional characters")
+    if clean_line(subject_id) != subject_id:
+        raise _bad(f"{where}.subject_id must not contain line breaks, tabs, control or bidirectional characters")
     digest = _str(_req(data, "digest", where), f"{where}.digest")
     if not DIGEST_RE.fullmatch(digest):
         raise _bad(f"{where}.digest must be sha256: followed by 64 lowercase hex digits")

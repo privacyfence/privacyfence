@@ -7,6 +7,7 @@ import json
 import pytest
 
 from privacyfence.plugins import constants, cursors
+from privacyfence_plugin_sdk._rpc import RpcError
 from privacyfence_plugin_sdk import Plugin, Prepared, ToolDefinitionError, blocks
 from privacyfence_plugin_sdk.testing import PluginTestHost, SourceFixtureMissing, samples
 from privacyfence_plugin_sdk.testing import _host as host_module
@@ -165,7 +166,10 @@ class TestPluginTestHost:
             host.source.fail("calendar.list_events", "upstream_error", reason="rate_limited", time_min="2026-10-07T00:00:00Z")
             failed = await host.call_tool("agenda")
         assert specific.released["blocks"][0]["text"] == "Specific"
-        assert failed.error["code"] == "internal_error"  # the plugin let the SourceError escape
+        # The plugin let the SourceError escape: its code is passed through, and the host shows the
+        # fixed sentence for it.
+        assert failed.error["code"] == "upstream_error"
+        assert failed.error["detail"] == "A service this plugin reads from returned an error."
 
     async def test_source_refuses_org_fields_and_unknown_principals(self):
         plugin, _ = build_plugin()
@@ -349,6 +353,60 @@ class TestPluginTestHost:
         PluginTestHost(plugin, mode="org", principals=[{"id": "alice", "display_name": "Alice Example"}])
 
 
+class TestIntrospect:
+    async def test_it_returns_the_tools_a_later_run_reports(self):
+        plugin, _ = build_plugin()
+        host = PluginTestHost(plugin)
+        introspected = await host.introspect()
+        async with host:
+            assert introspected == host.tools
+
+    async def test_the_sdk_records_the_purpose(self):
+        plugin, _ = build_plugin()
+        host = PluginTestHost(plugin)
+        await host.introspect()
+        assert plugin._host.introspecting is True
+
+    async def test_it_ends_with_shutdown_like_a_review(self):
+        plugin, _ = build_plugin()
+        seen = []
+
+        @plugin.on("shutdown")
+        async def on_shutdown(ctx, params):
+            seen.append(params)
+
+        await PluginTestHost(plugin).introspect()
+        assert seen == [{"grace_ms": 0}]
+
+    async def test_only_source_and_confirm_calls_are_answered_and_refused(self, monkeypatch):
+        wired = {}
+        real_peer = host_module.Peer
+
+        def spy(*args, **kwargs):
+            wired.update(kwargs["handlers"])
+            return real_peer(*args, **kwargs)
+
+        monkeypatch.setattr(host_module, "Peer", spy)
+        plugin, _ = build_plugin()
+        await PluginTestHost(plugin).introspect()
+        assert wired == {
+            "source.call": host_module._refuse_while_introspecting,
+            "confirm.request": host_module._refuse_while_introspecting,
+        }
+
+    async def test_source_and_confirm_calls_are_refused(self):
+        with pytest.raises(RpcError) as raised:
+            await host_module._refuse_while_introspecting({})
+        assert raised.value.code == "introspection_only"
+        assert raised.value.detail == "not available while introspecting"
+
+    async def test_it_cannot_run_inside_the_host(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin) as host:
+            with pytest.raises(RuntimeError, match=r"introspect\(\) runs before the host starts"):
+                await host.introspect()
+
+
 class TestPaging:
     @staticmethod
     def paging_plugin() -> tuple[Plugin, dict]:
@@ -490,3 +548,37 @@ class TestPaging:
             with pytest.raises(cursors_module.CursorError) as ours:
                 cursors_module.decode(bad, operation, bound)
             assert str(ours.value) == str(theirs.value)
+
+
+class TestCheckToolDefs:
+    @staticmethod
+    def result(p, scope_types):
+        return {"plugin": {"name": p.name, "version": p.version}, "scope_types": scope_types, "tools": []}
+
+    def test_scope_type_output_is_reserved(self):
+        p, _ = build_plugin()
+        with pytest.raises(ToolDefinitionError, match="scope type output is reserved"):
+            host_module._check_tool_defs(p, self.result(p, [{"name": "output", "description": "x"}]), "review")
+
+    def test_scope_type_description_is_1_to_500_characters(self):
+        p, _ = build_plugin()
+        for description in ("", "x" * 501, None):
+            with pytest.raises(ToolDefinitionError, match="needs a description of 1 to 500 characters"):
+                host_module._check_tool_defs(p, self.result(p, [{"name": "cal", "description": description}]), "review")
+
+    def test_a_reserved_plugin_name_is_refused(self):
+        p, _ = build_plugin()
+        p.name = "apps"
+        with pytest.raises(ToolDefinitionError, match="name 'apps' is reserved"):
+            host_module._check_tool_defs(p, self.result(p, []), "review")
+
+    @pytest.mark.parametrize("field", ["title", "effect"])
+    def test_a_title_or_effect_with_a_line_break_is_refused(self, field):
+        p, _ = build_plugin()
+        tool = {
+            "name": "tt", "description": "d", "parameters": {"type": "object", "properties": {}},
+            "read_only": True, "destructive": False, "gate": "review", field: "A\nB",
+        }
+        result = {**self.result(p, []), "tools": [tool]}
+        with pytest.raises(ToolDefinitionError, match=f"tool.{field} must not contain line breaks"):
+            host_module._check_tool_defs(p, result, "review")

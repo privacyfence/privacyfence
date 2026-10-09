@@ -821,6 +821,7 @@ def create_app(
     step_up_origin: str = "",
     any_connector_authenticated: Callable[[], bool] | None = None,
     require_human_session: bool = False,
+    plugin_pages: Callable[[], list[tuple[str, str]]] | None = None,
 ) -> Starlette:
     """Build the Starlette app serving local mode's approval surface.
     ``sessions`` (see session_auth.py's own module docstring) is the
@@ -875,6 +876,9 @@ def create_app(
     ``None`` (the default, and every caller that has no settings controller
     to ask) keeps the steady-state copy -- never tell somebody who is
     already set up that they aren't.
+
+    ``plugin_pages`` lists ``(display name, href)`` of each plugin page for the top navigation's
+    Plugins menu, per request; ``None`` (no plugin host) leaves the menu out.
     """
 
     def _resolve_principal(request: Request) -> Principal | None:
@@ -923,6 +927,7 @@ def create_app(
             notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
             banner_html=_banner_html(principal),
             dismissible_notice_html=_off_notice_html(), dismissible_notice_key="pf_step_up_off_dismissed",
+            plugin_pages=tuple(plugin_pages()) if plugin_pages is not None else None,
         )
 
     def _unauthenticated_page(request: Request, next_path: str) -> Response:

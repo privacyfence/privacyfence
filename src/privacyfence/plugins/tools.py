@@ -10,6 +10,7 @@ from typing import Any
 
 from privacyfence import auto_accept
 from privacyfence.plugins.constants import (
+    MAX_SCOPE_TYPE_DESCRIPTION_CHARS,
     MAX_TOOLS,
     MCP_TOOL_NAME_MAX,
     SCOPE_TYPE_RE,
@@ -20,7 +21,6 @@ from privacyfence.plugins.protocol import RpcError, ToolDef
 from privacyfence.web import mcp_tools
 
 MAX_SCOPE_TYPES = 20
-MAX_SCOPE_TYPE_DESCRIPTION_CHARS = 500
 SCALAR_TYPES = frozenset({"string", "integer", "number", "boolean"})
 
 

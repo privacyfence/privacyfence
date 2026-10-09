@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from privacyfence import settings_controller
+from privacyfence import auto_accept, settings_controller
 from privacyfence.plugins import constants as c
+from privacyfence.web import mcp_tools
 
 pytestmark = pytest.mark.unit
 
@@ -20,6 +21,20 @@ class TestReservedNames:
 
     def test_reserved_names_include_the_product_words(self):
         assert {"privacyfence", "plugin", "plugins", "settings", "mcp"} <= c.RESERVED_PLUGIN_NAMES
+
+
+class TestBuiltInToolNames:
+    def test_every_built_in_tool_name_starts_with_a_reserved_name(self):
+        """A plugin's MCP names are ``<plugin>_<tool>`` and plugin names hold no ``_``, so a plugin tool
+        can only equal a built-in tool name when the plugin name equals the built-in name's first
+        segment. Every such segment being reserved therefore rules out the collision (more strictly
+        than needed), and the SDK needs no copy of the built-in tool list."""
+        names = auto_accept.STATIC_TOOL_NAMES | mcp_tools.META_TOOL_NAMES
+        assert names
+        assert {n for n in names if n.split("_")[0] not in c.RESERVED_PLUGIN_NAMES} == set()
+
+    def test_the_google_service_words_are_reserved(self):
+        assert {"apps", "sheets", "docs"} <= c.RESERVED_PLUGIN_NAMES
 
 
 class TestPatterns:

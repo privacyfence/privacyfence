@@ -40,6 +40,8 @@ stdin and stdout.
 - **Bad lines.** Three consecutive lines that are not valid JSON-RPC (bad JSON, over the size cap,
   or not an object) close the connection, and that counts as a crash. A line over the size cap is
   discarded up to its newline and counts once, however many pieces it arrives in.
+- **Non-finite numbers.** `NaN`, `Infinity` and `-Infinity` are not JSON: neither side sends them,
+  and a line that carries one is a parse error.
 - **Unknown fields** are ignored by both sides, so a minor version can add fields. The exceptions
   are the organization-mode fields (see [Organization-mode fields](#organization-mode-fields)).
 - **Environment.** The plugin runs with an allow-listed environment: `PATH`, `SYSTEMROOT`,
@@ -65,8 +67,9 @@ Settings shows "protocol major mismatch". The effective version is the lower min
 Version `1.1` adds, without changing any `1.0` message: the approval methods and the
 `approval.revoked` notification, cursor paging for every source operation, Drive Range reads, the
 manifest keys `outputs` and `output_types`, and `PrincipalContext.output_dir` and `output_types`. A
-`1.0` plugin keeps working. The daemon sends `approval.revoked`, `output_dir` and `output_types` only
-to a plugin whose manifest asks for the feature (`outputs: true` for the last two).
+`1.0` plugin keeps working. The daemon sends `approval.revoked` only to the running plugin that
+requested the revoked approval, and `output_dir` and `output_types` only to a plugin with
+`outputs: true`.
 
 ## Errors
 
@@ -109,7 +112,7 @@ Next to its executable a plugin ships `privacyfence-plugin.yaml`, loaded with `y
 
 ```yaml
 name: today                      # 2-31 characters, [a-z][a-z0-9-], equals the directory name
-display_name: Today              # 1-60 characters, no control or bidirectional characters
+display_name: Today              # 1-60 characters, no control or bidirectional characters, no line breaks or tabs
 version: 1.2.0                   # MAJOR.MINOR.PATCH, optionally with -prerelease
 protocol: "1"                    # the major version, as a string
 command: ["today-plugin"]        # a non-empty list of strings
@@ -125,7 +128,9 @@ output_types: [text/csv]         # optional, only with outputs: true; default [a
 
 - `name` must not be reserved: `privacyfence`, `plugin`, `plugins`, `settings`, `mcp`, and the names
   of the connectors (`gmail`, `drive`, `contacts`, `calendar`, `tasks`, `apps_script`, `slack`,
-  `jira`, `confluence`, `salesforce`, `telegram`).
+  `jira`, `confluence`, `salesforce`, `telegram`), plus `apps`, `sheets` and `docs`, which built-in
+  tools or services start with.
+- `display_name` must not contain line breaks or tabs.
 - `command[0]` is resolved inside the plugin's directory and must stay inside it; a symlink that
   points out is refused, and so is a command that resolves to the directory itself. On Windows,
   `.exe` is appended when it has no suffix and nothing by that exact name exists.
@@ -237,6 +242,8 @@ The whole list is refused on the first violation, at start and in `tools.changed
   rejected: …". A tool list at start that is outside the reviewed set disables the plugin with
   "executable or manifest changed, enable again".
 
+A scope type's `description` is 1 to 500 characters, and the scope type name `output` is reserved.
+
 The daemon exposes the tools to AI clients under the MCP name `<plugin>_<tool>`.
 
 ### `tools.changed`
@@ -270,6 +277,14 @@ a decided read, for one more replay window, so a repeat call gets the same paylo
 its own card. `tool.execute` can therefore name a `call_id` prepared more than 15 minutes earlier,
 and a read's `call_id` more than once. A plugin that no longer holds the call answers
 `unknown_call`; for a read the daemon still returns the prepared payload.
+
+When `tool.prepare` fails, the plugin's own error detail never reaches the AI client. The connector
+turns the error into one fixed sentence, which the daemon logs: `connector_unavailable` gives "A
+service this plugin reads from is not connected.", `upstream_error` gives "A service this plugin
+reads from returned an error.", `payload_too_large` gives "The plugin's result is too large to
+return.", `timeout` gives "The plugin did not answer in time.", and any other error gives "The
+plugin could not prepare this call." The test host returns the same sentence in
+`outcome.error["detail"]`.
 
 ### `tool.execute`
 
@@ -340,6 +355,91 @@ writes one audit entry that holds the targets and the byte count, never the data
 | `confluence.get_page` | `page_id` (required); `cursor` | The page as an object; `body` is Confluence storage-format XHTML, a slice of it when paged, with `body_offset` and `body_total_chars` always present |
 | `calendar.list_events` | `calendar_id` (default `primary`); `time_min` and `time_max` (RFC 3339, required); `page_size` 1 to 250, default 250; `max_results` (an alias, as for Jira); `cursor` | The events, as a list of objects |
 
+#### Record shapes
+
+`data` for `jira.search`, `calendar.list_events` and `confluence.get_page` holds these objects. Type is the
+field's type as JSON.
+
+A Jira issue:
+
+| Field | Type | Notes |
+|---|---|---|
+| `key` | string | |
+| `summary` | string | |
+| `status` | string | |
+| `issue_type` | string | |
+| `priority` | string | |
+| `assignee` | string | |
+| `reporter` | string | |
+| `description` | string | |
+| `labels` | list of strings | |
+| `created` | string | |
+| `updated` | string | |
+| `url` | string | |
+
+A Calendar event:
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | |
+| `calendar_id` | string | |
+| `title` | string | |
+| `description` | string | |
+| `start_time` | string | ISO 8601 |
+| `end_time` | string | ISO 8601 |
+| `all_day` | boolean | |
+| `organizer_email` | string | |
+| `attendees` | list of objects | See the attendee table. |
+| `location` | string | |
+| `hangout_link` | string | |
+| `conference_link` | string | |
+| `status` | string | "confirmed", "tentative" or "cancelled" |
+| `html_link` | string | |
+| `attachments` | list of objects | See the attachment table. |
+| `visibility` | string | "default", "public", "private" or "confidential" |
+| `color_id` | string | "1" to "11", or "" for the calendar's default color |
+| `recurrence` | list of strings | Raw RRULE, EXDATE, RDATE and EXRULE lines; non-empty only on a series' own master event, empty otherwise (including on individual expanded instances, which carry `recurring_event_id` instead) |
+| `recurring_event_id` | string | Non-empty if and only if this is one expanded instance of a recurring series: the id of that series' master event (a distinct id from this instance's own) |
+| `original_start_time` | string | This instance's originally-scheduled start (ISO 8601 or date), before any per-instance reschedule; non-empty only on a recurring instance |
+
+A Calendar attendee:
+
+| Field | Type | Notes |
+|---|---|---|
+| `email` | string | |
+| `display_name` | string | |
+| `response_status` | string | "accepted", "declined", "tentative" or "needsAction" |
+| `organizer` | boolean | |
+
+A Calendar attachment:
+
+| Field | Type | Notes |
+|---|---|---|
+| `file_id` | string | A Drive file id |
+| `title` | string | |
+| `mime_type` | string | |
+| `file_url` | string | |
+| `icon_link` | string | |
+
+A Confluence page:
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | |
+| `title` | string | |
+| `space_key` | string | |
+| `space_name` | string | |
+| `version` | integer | |
+| `author` | string | |
+| `created` | string | |
+| `updated` | string | |
+| `body` | string | |
+| `url` | string | |
+| `author_name` | string | |
+| `mentions` | object of strings | |
+| `body_offset` | integer | Where `body` starts in the whole body |
+| `body_total_chars` | integer | The length of the whole body |
+
 ### Paging
 
 Every source operation either returns all of its data or a page with a
@@ -400,7 +500,7 @@ default 300,000) and answers `{"status": "approved" | "denied" | "expired", "dec
 
 `approval.request` asks a human to approve a thing and keeps the answer until a human revokes it.
 Parameters: `principal` (`local`), `kind` (`[a-z][a-z0-9_-]{0,40}`), `subject_id` (1 to 200
-characters, no control or bidirectional characters), `digest` (`sha256:` and 64 lowercase hex digits
+characters, no control or bidirectional characters, no line breaks or tabs), `digest` (`sha256:` and 64 lowercase hex digits
 of the content), `title` (at most 120 characters), `preview` (blocks), optional `page` (a path of the
 plugin's own page, needs `pages: true`) and `require_step_up` (default `true`). An approval binds to
 `(plugin, principal, kind, subject_id, digest)`.

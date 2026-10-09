@@ -47,6 +47,7 @@ _MAX_SCOPE_VALUES = 100
 _MAX_SCOPE_VALUE_CHARS = 200
 _MCP_TOOL_NAME_MAX = 64
 _MAX_SCOPE_TYPES = 20
+_MAX_SCOPE_TYPE_DESCRIPTION_CHARS = 500
 _MAX_PAGE_PATH_CHARS = 512
 _PREPARED_CALL_LIFETIME_SECONDS = 900.0
 _CONFIRM_AWAIT_MAX_MS = 300_000
@@ -56,6 +57,12 @@ _PLUGIN_NAME_RE = re.compile(r"[a-z][a-z0-9-]{1,30}")
 _TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")
 _SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")
 _GATES = ("auto", "review", "popup")
+_RESERVED_PLUGIN_NAMES = frozenset({
+    "privacyfence", "plugin", "plugins", "settings", "mcp",
+    "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
+    "slack", "jira", "confluence", "salesforce", "telegram",
+    "apps", "sheets", "docs",
+})
 # --- end of _limits ---------------------------------------------------------------------------
 
 _PARAM_TYPES = frozenset({"string", "integer", "number", "boolean"})
@@ -110,6 +117,10 @@ class PageRequest:
     method: str
     path: str
     query: dict[str, str]
+
+
+def _source_rpc_error(exc: SourceError) -> RpcError:
+    return RpcError(exc.code, exc.detail, extra={"reason": exc.reason} if exc.reason else None)
 
 
 def _call_error(exc: RpcError) -> SourceError:
@@ -527,6 +538,8 @@ class Plugin:
     def __init__(self, name: str, version: str) -> None:
         if not _PLUGIN_NAME_RE.fullmatch(name):
             raise ValueError("plugin name must match [a-z][a-z0-9-]{1,30}")
+        if name in _RESERVED_PLUGIN_NAMES:
+            raise ValueError(f"plugin name {name!r} is reserved")
         if not isinstance(version, str) or not version:
             raise ValueError("plugin version must be a non-empty string")
         self.name = name
@@ -545,7 +558,13 @@ class Plugin:
     def scope_type(self, name: str, description: str) -> None:
         if not _SCOPE_TYPE_RE.fullmatch(name):
             raise ValueError("scope type name must match [a-z][a-z0-9_]{0,30}")
-        if not isinstance(description, str) or name in self._reg.scope_types:
+        if name == "output":
+            raise ValueError("scope type output is reserved")
+        if not isinstance(description, str) or not 1 <= len(description) <= _MAX_SCOPE_TYPE_DESCRIPTION_CHARS:
+            raise ValueError(
+                f"scope type {name} needs a description of 1 to {_MAX_SCOPE_TYPE_DESCRIPTION_CHARS} characters"
+            )
+        if name in self._reg.scope_types:
             raise ValueError(f"scope type {name} is invalid or already declared")
         if len(self._reg.scope_types) >= _MAX_SCOPE_TYPES:
             raise ValueError(f"at most {_MAX_SCOPE_TYPES} scope types are allowed")
@@ -601,6 +620,11 @@ class Plugin:
             raise ToolDefinitionError(f"the title of {name} must be at most {_MAX_TITLE_CHARS} characters")
         if effect is not None and (not isinstance(effect, str) or len(effect) > _MAX_EFFECT_CHARS):
             raise ToolDefinitionError(f"the effect of {name} must be at most {_MAX_EFFECT_CHARS} characters")
+        for field_name, text in (("title", title), ("effect", effect)):
+            if text is not None and _blocks.clean_line(text) != text:
+                raise ToolDefinitionError(
+                    f"tool.{field_name} must not contain line breaks, tabs, control or bidirectional characters"
+                )
         if len(self._reg.tools) >= _MAX_TOOLS:
             raise ToolDefinitionError(f"at most {_MAX_TOOLS} tools are allowed")
         definition: dict[str, Any] = {
@@ -740,7 +764,10 @@ class Plugin:
             raise RpcError("unknown_tool", "the plugin has no such tool")
         args = self._need(params, "args", dict)
         ctx = self._ctx(self._need(params, "principal", dict))
-        prepared = await handle(ctx, args)
+        try:
+            prepared = await handle(ctx, args)
+        except SourceError as exc:
+            raise _source_rpc_error(exc) from None
         if not isinstance(prepared, Prepared):
             raise RpcError("internal_error", "a tool function must return Prepared")
         try:
@@ -754,7 +781,11 @@ class Plugin:
             raise RpcError("invalid_params", "a read-only tool must return a payload")
         if not handle.read_only and payload is not None:
             raise RpcError("invalid_params", "only a read-only tool may return a payload")
-        if payload is not None and len(json.dumps({"blocks": payload}, ensure_ascii=False).encode()) > _INLINE_RESULT_BYTES:
+        if (
+            payload is not None
+            and len(json.dumps({"blocks": payload}, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode())
+            > _INLINE_RESULT_BYTES
+        ):
             raise RpcError("payload_too_large", "the payload is larger than the inline result limit")
         scopes = self._check_scopes(handle, prepared.scopes)
         self._prepared[call_id] = _PreparedEntry(
@@ -804,9 +835,12 @@ class Plugin:
         ctx = self._ctx(self._need(params, "principal", dict))
         result: Any = None
         if handle._execute is not None:
-            result = await handle._execute(ctx, entry.prepared, approval)
+            try:
+                result = await handle._execute(ctx, entry.prepared, approval)
+            except SourceError as exc:
+                raise _source_rpc_error(exc) from None
         try:
-            size = len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            size = len(json.dumps(result, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8"))
         except (TypeError, ValueError):
             raise RpcError("internal_error", "the execute result is not JSON") from None
         if size > _INLINE_RESULT_BYTES:

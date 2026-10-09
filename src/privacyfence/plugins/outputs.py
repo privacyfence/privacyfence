@@ -119,8 +119,9 @@ def list_outputs(
     return page, (page[-1].path if more and page else None)
 
 
-def _canonical_file(root: Path, output_types: tuple[str, ...], path: Any) -> tuple[Path, str]:
-    """The resolved file and its MIME type for a canonical ``path``, else ``ValueError``."""
+def _canonical_file(root: Path, output_types: tuple[str, ...], path: Any) -> tuple[Path, str, os.stat_result]:
+    """The resolved file, its MIME type and its ``lstat`` result for a canonical ``path``, else
+    ``ValueError``."""
     if not isinstance(path, str) or not path or "\\" in path or ":" in path or "\0" in path:
         raise ValueError(NO_SUCH_FILE)
     segments = path.split("/")
@@ -132,9 +133,11 @@ def _canonical_file(root: Path, output_types: tuple[str, ...], path: Any) -> tup
     try:
         base = root.resolve(strict=True)
         current = root
+        checked = None
         for index, segment in enumerate(segments):
             current = current / segment
-            mode = os.lstat(current).st_mode
+            checked = os.lstat(current)
+            mode = checked.st_mode
             last = index == len(segments) - 1
             if not (stat.S_ISREG(mode) if last else stat.S_ISDIR(mode)):
                 raise ValueError(NO_SUCH_FILE)
@@ -144,7 +147,7 @@ def _canonical_file(root: Path, output_types: tuple[str, ...], path: Any) -> tup
         raise ValueError(NO_SUCH_FILE) from None
     if canonical != path:
         raise ValueError(NO_SUCH_FILE)
-    return resolved, mime
+    return resolved, mime, checked
 
 
 def _complete_end(chunk: bytes) -> int:
@@ -167,14 +170,27 @@ def read_output(
 ) -> dict:
     """One page of a published file: bytes ``[offset, offset + max_bytes)``, cut back to a UTF-8
     character boundary unless it ends the file. ``sha256`` is that of the whole file."""
-    file, mime = _canonical_file(root, output_types, path)
+    file, mime, checked = _canonical_file(root, output_types, path)
     if offset < 0:
         raise ValueError("Offset must not be negative.")
     digest = hashlib.sha256()
     window = bytearray()
     size = 0
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     try:
-        with open(file, "rb") as handle:
+        fd = os.open(file, flags)
+    except OSError:
+        raise ValueError(NO_SUCH_FILE) from None
+    try:
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+    try:
+        with handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(checked, opened):
+                raise ValueError(NO_SUCH_FILE)
             while block := handle.read(_HASH_CHUNK):
                 digest.update(block)
                 lo = max(offset - size, 0)

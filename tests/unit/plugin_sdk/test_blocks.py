@@ -1,6 +1,8 @@
 """Block builders and validation."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from privacyfence_plugin_sdk import blocks
@@ -84,3 +86,26 @@ def test_table_key_must_be_an_identifier(key):
 
 def test_table_identifier_key_works():
     assert blocks.table([("A.b_c-9", "L")], [])["columns"][0]["key"] == "A.b_c-9"
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_table_refuses_a_non_finite_cell(value):
+    with pytest.raises(ValueError, match="must be a finite number"):
+        blocks.table([("a", "A")], [{"a": value}])
+
+
+def test_preview_size_is_measured_with_compact_separators():
+    def compact_size(pad):
+        return len(json.dumps([blocks.text("x" * pad)], separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+    pad = blocks._MAX_PREVIEW_BYTES - (compact_size(0))
+    assert compact_size(pad) == blocks._MAX_PREVIEW_BYTES
+    assert len(blocks.validate_blocks([blocks.text("x" * pad)])) == 1
+    with pytest.raises(ValueError, match="limit"):
+        blocks.validate_blocks([blocks.text("x" * (pad + 1))])
+
+
+def test_clean_line_turns_line_breaks_and_tabs_into_one_space():
+    assert blocks.clean_line("a\n\tb") == "a b"
+    assert blocks.clean_line("a b c") == "a b c"
+    assert blocks.clean_line("a‮b\x00c") == "abc"

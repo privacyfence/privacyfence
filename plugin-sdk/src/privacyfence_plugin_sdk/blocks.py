@@ -7,6 +7,7 @@ wrong type or field, so a mistake shows up in the plugin's own tests instead of 
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -21,6 +22,7 @@ _BLOCK_KEY_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 _STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩‎‏؜]")
 _LANGUAGE = re.compile(r"[a-z0-9+#-]{1,20}")
+_LINE_BREAK = re.compile(r"[\n\t\u2028\u2029]+")
 
 __all__ = [
     "code", "diff", "fields", "heading", "table", "text", "validate_blocks",
@@ -29,6 +31,12 @@ __all__ = [
 
 def _clean(value: str) -> str:
     return _STRIP.sub("", value)
+
+
+def clean_line(value: str) -> str:
+    """``value`` cleaned, then every run of line breaks and tabs replaced by one space: for text a card
+    shows on one line (a title, a header field)."""
+    return _LINE_BREAK.sub(" ", _clean(value))
 
 
 def _only(block: dict, allowed: set[str], where: str) -> None:
@@ -123,6 +131,8 @@ def _validate_table(block: dict, where: str) -> dict:
                     cell = cell[: _MAX_CELL_CHARS - 1] + "…"
             elif cell is not None and not isinstance(cell, (int, float, bool)):
                 raise ValueError(f"{where}: a cell must be a string, number, boolean or null")
+            elif isinstance(cell, float) and not math.isfinite(cell):
+                raise ValueError(f"{where}: must be a finite number")
             cleaned_row[key] = cell
         cleaned_rows.append(cleaned_row)
     return {"type": "table", "columns": cleaned_columns, "rows": cleaned_rows}
@@ -143,7 +153,7 @@ def validate_blocks(
         raise ValueError(f"at most {max_blocks} blocks are allowed")
     out = [_validate_one(block, index) for index, block in enumerate(blocks)]
     if max_bytes is not None:
-        size = len(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+        size = len(json.dumps(out, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8"))
         if size > max_bytes:
             raise ValueError(f"blocks serialize to {size} bytes; the limit is {max_bytes}")
     return out

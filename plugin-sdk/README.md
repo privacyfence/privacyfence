@@ -220,14 +220,16 @@ use the `plugin_host` fixture: `async with plugin_host(plugin) as host`. The hos
 confirmations, events, purge and shutdown. The module docstring of `privacyfence_plugin_sdk.testing`
 lists them all.
 
+`await PluginTestHost(plugin).introspect()` starts the plugin the way Settings does when you review
+it, and returns its tool list.
+
 Where the test host differs from PrivacyFence:
 
 - `PluginTestHost(plugin, max_gate_floor="auto")` is how a test declares the manifest's floor; the
   default is `"review"`, which refuses a tool on the `auto` gate.
-- It has no `host.introspect()` (what Settings does when you review a plugin), and it ignores a
-  `tools.changed` the plugin sends.
-- It does not check a tool's MCP name against PrivacyFence's built-in tools; PrivacyFence refuses a
-  tool whose name collides with one.
+- It ignores a `tools.changed` the plugin sends.
+- It refuses a reserved plugin name, as PrivacyFence does, which also keeps every tool's MCP name
+  clear of PrivacyFence's built-in tools.
 - A `source.call` that no fixture answers raises `SourceFixtureMissing`.
 - A call a saved rule accepted reports `approval.via` as `rule`; PrivacyFence reports `card`.
 - An audit decision PrivacyFence records as `rejected` is `denied` in the test host.

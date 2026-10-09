@@ -53,6 +53,8 @@ from privacyfence.salesforce_client import (
 )
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "salesforce"
+REPORT_ID = "00O5e000004AbCdEAK"
+ACCOUNT_ID = "001xx000003DGb2AAG"
 
 
 def make_client(config: dict | None = None, token_file: str | None = None) -> SalesforceClient:
@@ -511,19 +513,41 @@ class TestGetRecord:
     def test_fetches_record_and_strips_attributes_key(self):
         sf = MagicMock()
         sf.Account.get.return_value = {
-            "attributes": {"type": "Account", "url": "/x"}, "Id": "001", "Name": "Acme",
+            "attributes": {"type": "Account", "url": "/x"}, "Id": ACCOUNT_ID, "Name": "Acme",
         }
         client = with_fake_sf(make_client(), sf)
 
-        record = client.get_record("Account", "001")
+        record = client.get_record("Account", ACCOUNT_ID)
 
-        assert record == SalesforceRecord(object_type="Account", id="001", fields={"Id": "001", "Name": "Acme"})
+        assert record == SalesforceRecord(
+            object_type="Account", id=ACCOUNT_ID, fields={"Id": ACCOUNT_ID, "Name": "Acme"},
+        )
+        sf.Account.get.assert_called_once_with(ACCOUNT_ID)
+
+    @pytest.mark.parametrize("record_id", ["../../query?q=SELECT+Name+FROM+Contact", "001?x=1", "001"])
+    def test_non_id_record_id_is_refused_before_any_request(self, record_id):
+        sf = MagicMock()
+        client = with_fake_sf(make_client(), sf)
+
+        with pytest.raises(SalesforceClientError, match="record_id must be a 15- or 18-character"):
+            client.get_record("Account", record_id)
+
+        assert sf.mock_calls == []
+
+    def test_non_identifier_object_type_is_refused_before_any_request(self):
+        sf = MagicMock()
+        client = with_fake_sf(make_client(), sf)
+
+        with pytest.raises(SalesforceClientError, match="Invalid Salesforce object type name"):
+            client.get_record("../query", ACCOUNT_ID)
+
+        assert sf.mock_calls == []
 
     def test_unknown_object_type_raises_client_error(self):
         sf = MagicMock(spec=[])  # no attributes at all -> AttributeError on getattr
         client = with_fake_sf(make_client(), sf)
         with pytest.raises(SalesforceClientError, match="Unknown Salesforce object type"):
-            client.get_record("NotAThing", "001")
+            client.get_record("NotAThing", ACCOUNT_ID)
 
 
 class TestRunReport:
@@ -537,19 +561,47 @@ class TestRunReport:
         sf.restful.return_value = {"factMap": {}}
         client = with_fake_sf(make_client(), sf)
 
-        result = client.run_report("report-1")
+        result = client.run_report(REPORT_ID)
 
         assert result == {"factMap": {}}
-        sf.restful.assert_called_once_with("analytics/reports/report-1", params={"includeDetails": "true"})
+        sf.restful.assert_called_once_with(f"analytics/reports/{REPORT_ID}", params={"includeDetails": "true"})
+
+    def test_15_character_report_id_still_runs(self):
+        sf = MagicMock()
+        sf.restful.return_value = {"factMap": {}}
+        client = with_fake_sf(make_client(), sf)
+
+        client.run_report(REPORT_ID[:15])
+
+        sf.restful.assert_called_once_with(
+            f"analytics/reports/{REPORT_ID[:15]}", params={"includeDetails": "true"},
+        )
+
+    @pytest.mark.parametrize("report_id", [
+        "../../query?q=SELECT Name,Email FROM Contact",
+        f"{REPORT_ID}?includeDetails=false",
+        f"{REPORT_ID}/../../query",
+        "report-1",
+    ])
+    @pytest.mark.parametrize("narrowed", [False, True])
+    def test_non_id_report_id_is_refused_before_any_request(self, report_id, narrowed):
+        sf = MagicMock()
+        client = with_fake_sf(make_client(), sf)
+        kwargs = {"filters": [ReportFilter("A", "equals", ["x"])]} if narrowed else {}
+
+        with pytest.raises(SalesforceClientError, match="report_id must be a 15- or 18-character"):
+            client.run_report(report_id, **kwargs)
+
+        assert sf.mock_calls == []
 
     def test_summary_only_sends_include_details_false(self):
         sf = MagicMock()
         sf.restful.return_value = {"factMap": {}}
         client = with_fake_sf(make_client(), sf)
 
-        client.run_report("report-1", summary_only=True)
+        client.run_report(REPORT_ID, summary_only=True)
 
-        sf.restful.assert_called_once_with("analytics/reports/report-1", params={"includeDetails": "false"})
+        sf.restful.assert_called_once_with(f"analytics/reports/{REPORT_ID}", params={"includeDetails": "false"})
 
     def test_overrides_describe_then_post(self):
         saved = {"detailColumns": ["A", "B"], "reportFilters": []}
@@ -558,14 +610,14 @@ class TestRunReport:
         client = with_fake_sf(make_client(), sf)
         flt = ReportFilter("A", "equals", ["x"])
 
-        result = client.run_report("report-1", columns=["B"], filters=[flt])
+        result = client.run_report(REPORT_ID, columns=["B"], filters=[flt])
 
         assert result == {"factMap": {}}
         built = build_report_metadata(saved, ["B"], [flt])
         assert sf.restful.call_args_list == [
-            (("analytics/reports/report-1/describe",), {}),
+            ((f"analytics/reports/{REPORT_ID}/describe",), {}),
             (
-                ("analytics/reports/report-1",),
+                (f"analytics/reports/{REPORT_ID}",),
                 {"params": {"includeDetails": "true"}, "method": "POST", "json": {"reportMetadata": built}},
             ),
         ]
@@ -575,7 +627,7 @@ class TestRunReport:
         sf.restful.side_effect = [None, {"factMap": {}}]
         client = with_fake_sf(make_client(), sf)
 
-        client.run_report("report-1", filters=[ReportFilter("A", "equals", ["x"])])
+        client.run_report(REPORT_ID, filters=[ReportFilter("A", "equals", ["x"])])
 
         posted = sf.restful.call_args_list[1].kwargs["json"]["reportMetadata"]
         assert posted == {
@@ -589,9 +641,9 @@ class TestRunReport:
         client = with_fake_sf(make_client(), sf)
 
         with pytest.raises(SalesforceClientError, match="not one of this report's columns: A"):
-            client.run_report("report-1", columns=["Z"])
+            client.run_report(REPORT_ID, columns=["Z"])
 
-        sf.restful.assert_called_once_with("analytics/reports/report-1/describe")
+        sf.restful.assert_called_once_with(f"analytics/reports/{REPORT_ID}/describe")
 
 
 def _ids(n: int) -> list[str]:
@@ -1277,7 +1329,8 @@ class TestLiveFixtureParsing:
         getattr(sf, object_type).get.return_value = raw
         client = with_fake_sf(make_client(), sf)
 
-        record = client.get_record(object_type, raw["Id"])
+        # The recorder redacts the fixture's own Id, which is no longer a valid Salesforce id.
+        record = client.get_record(object_type, ACCOUNT_ID)
 
         assert record.id and record.fields.get("Name")
 

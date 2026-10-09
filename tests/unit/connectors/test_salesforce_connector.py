@@ -905,14 +905,14 @@ class TestFieldCompleteness:
         sf = MagicMock()
         sf.Account.get.return_value = {
             "attributes": {"type": "Account", "url": "/x"},
-            "Id": "001xx0001",
+            "Id": "001xx000003DGb2AAG",
             "Name": "PrivacyFence QA — Acme Test Co [QATEST]",
         }
         client = make_real_client(sf)
         connector = SalesforceConnector(client)
         connector.my_email = "me@example.com"
 
-        await connector.call("salesforce_get_record", {"object_type": "Account", "record_id": "001xx0001"})
+        await connector.call("salesforce_get_record", {"object_type": "Account", "record_id": "001xx000003DGb2AAG"})
 
         assert_no_placeholder_fields(gated_call_spy[0]["preview"])
 

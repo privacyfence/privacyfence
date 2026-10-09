@@ -96,6 +96,8 @@ class TestLimits:
         ("_PREPARED_CALL_LIFETIME_SECONDS", "PREPARED_CALL_LIFETIME_SECONDS"),
         ("_CONFIRM_AWAIT_MAX_MS", "CONFIRM_AWAIT_MAX_MS"),
         ("_GATES", "GATES"),
+        ("_RESERVED_PLUGIN_NAMES", "RESERVED_PLUGIN_NAMES"),
+        ("_MAX_SCOPE_TYPE_DESCRIPTION_CHARS", "MAX_SCOPE_TYPE_DESCRIPTION_CHARS"),
     ])
     def test_matches_the_daemons_constants(self, sdk_name, constant):
         assert getattr(sdk_plugin, sdk_name) == getattr(constants, constant)
@@ -174,6 +176,8 @@ class TestToolDefinitionErrors:
         ({"required": ["ghost"]}, "undeclared parameter"),
         ({"title": "t" * 121}, "title"),
         ({"effect": "e" * 201}, "effect"),
+        ({"title": "A\nB"}, "tool.title must not contain line breaks, tabs, control or bidirectional characters"),
+        ({"effect": "A\tB"}, "tool.effect must not contain line breaks, tabs, control or bidirectional characters"),
         ({"name": "a" * 42}, "must match"),
     ])
     def test_floor_violations_raise_at_registration(self, kwargs, fragment):
@@ -183,6 +187,19 @@ class TestToolDefinitionErrors:
         name = args.pop("name")
         with pytest.raises(ToolDefinitionError, match=fragment):
             plugin.tool(name, **args)
+
+    def test_reserved_plugin_name(self):
+        with pytest.raises(ValueError, match="is reserved"):
+            Plugin("apps", "1.0.0")
+
+    def test_scope_type_rules(self):
+        plugin = self.make()
+        with pytest.raises(ValueError, match="scope type output is reserved"):
+            plugin.scope_type("output", "x")
+        for description in ("", "x" * 501):
+            with pytest.raises(ValueError, match="needs a description of 1 to 500 characters"):
+                plugin.scope_type("cal", description)
+        plugin.scope_type("cal", "x" * 500)
 
     def test_mcp_name_length(self):
         plugin = Plugin(name="p" * 30, version="1")
@@ -324,8 +341,19 @@ class TestPrepareExecute:
         async def run_big(ctx, prepared, approval):
             return "x" * 200_000
 
+        @plugin.tool("nanresult", description="d", gate="popup")
+        async def nanresult(ctx, args):
+            return Prepared(preview=[])
+
+        @nanresult.execute
+        async def run_nan(ctx, prepared, approval):
+            return {"v": float("nan")}
+
         daemon = await make_daemon(plugin)
         await daemon.initialize()
+        await daemon.result("tool.prepare", prepare_params(principal, "n1", "nanresult"))
+        data = await daemon.error("tool.execute", execute_params(principal, "n1", "nanresult"))
+        assert (data["code"], data["detail"]) == ("internal_error", "the execute result is not JSON")
         for tool, code in [("scoped", "invalid_params"), ("nopayload", "invalid_params"),
                            ("hugepayload", "payload_too_large"), ("badblocks", "invalid_blocks")]:
             assert (await daemon.error("tool.prepare", prepare_params(principal, tool=tool)))["code"] == code
@@ -346,6 +374,46 @@ class TestPrepareExecute:
         data = await daemon.error("tool.prepare", prepare_params(principal, tool="crashy"))
         assert data["code"] == "internal_error"
         assert "abc123" not in json.dumps(data)
+        await daemon.stop()
+
+
+class TestSourceErrors:
+    async def test_a_source_error_from_a_handler_keeps_its_code_and_reason(self, make_daemon, principal):
+        plugin = Plugin(name="demo", version="1")
+
+        @plugin.tool("unplugged", description="d", read_only=True)
+        async def unplugged(ctx, args):
+            raise SourceError("connector_unavailable", "the connector is not connected", "not_connected")
+
+        @plugin.tool("strange", description="d", read_only=True)
+        async def strange(ctx, args):
+            raise SourceError("made_up_code", "x")
+
+        daemon = await make_daemon(plugin)
+        await daemon.initialize()
+        data = await daemon.error("tool.prepare", prepare_params(principal, tool="unplugged"))
+        assert (data["code"], data["detail"], data["reason"]) == (
+            "connector_unavailable", "the connector is not connected", "not_connected")
+        data = await daemon.error("tool.prepare", prepare_params(principal, tool="strange"))
+        assert data["code"] == "internal_error"
+        await daemon.stop()
+
+    async def test_a_source_error_from_an_execute_handler_keeps_its_code(self, make_daemon, principal):
+        plugin = Plugin(name="demo", version="1")
+
+        @plugin.tool("write", description="d", gate="popup")
+        async def write(ctx, args):
+            return Prepared(preview=[blocks.text("w")])
+
+        @write.execute
+        async def do_write(ctx, prepared, approval):
+            raise SourceError("upstream_error", "boom", "rate_limited")
+
+        daemon = await make_daemon(plugin)
+        await daemon.initialize()
+        await daemon.result("tool.prepare", prepare_params(principal, tool="write"))
+        data = await daemon.error("tool.execute", execute_params(principal, tool="write"))
+        assert (data["code"], data["reason"]) == ("upstream_error", "rate_limited")
         await daemon.stop()
 
 

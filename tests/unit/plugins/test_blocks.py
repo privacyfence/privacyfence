@@ -5,6 +5,7 @@ import pytest
 
 from privacyfence.plugins.blocks import (
     BlockError,
+    clean_line,
     fields_dict,
     flatten_text,
     to_card_blocks,
@@ -168,6 +169,19 @@ class TestSanitize:
         out = validate_blocks([{"type": "table", "columns": [{"key": "a", "label": "<i>"}],
                                 "rows": [{"a": "<b>"}]}])
         assert to_card_blocks(out) == [{"type": "table", "headers": ["<i>"], "rows": [["<b>"]]}]
+
+
+class TestCleanLine:
+    def test_line_breaks_and_tabs_become_one_space(self):
+        assert clean_line("a\n\tb") == "a b"
+        assert clean_line("a\u2028\u2029b") == "a b"
+
+    def test_ordinary_spaces_are_kept(self):
+        assert clean_line("a b") == "a b"
+        assert clean_line("a  b") == "a  b"
+
+    def test_bidi_controls_are_stripped(self):
+        assert clean_line("pay\u202egnp.exe") == "paygnp.exe"
 
 
 class TestCaps:

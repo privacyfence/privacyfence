@@ -683,6 +683,9 @@ class SalesforceClient:
         """Fetch a single record by object type and id."""
         if not object_type or not record_id:
             raise SalesforceClientError("get_record requires object_type and record_id")
+        # Both end up in the REST path (sobjects/{type}/{id}), where ".." or "?" would redirect the call.
+        object_type = _validate_object_type_name(object_type)
+        record_id = _validate_salesforce_id(record_id, "record_id")
 
         def _run(sf):
             try:
@@ -765,6 +768,8 @@ class SalesforceClient:
         """
         if not report_id:
             raise SalesforceClientError("run_report requires a report_id")
+        # The id becomes part of the REST path, where ".." or "?" would turn the run into another call.
+        report_id = _validate_salesforce_id(report_id, "report_id")
         params = {"includeDetails": "false" if summary_only else "true"}
         path = f"analytics/reports/{report_id}"
 

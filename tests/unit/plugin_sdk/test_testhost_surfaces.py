@@ -465,7 +465,8 @@ class TestApprovals:
             service = host._approvals
             for change, code in (
                 ({"kind": "Bad Kind"}, "invalid_params"), ({"subject_id": ""}, "invalid_params"),
-                ({"subject_id": "a‮b"}, "invalid_params"), ({"subject_id": "x" * 201}, "invalid_params"),
+                ({"subject_id": "a‮b"}, "invalid_params"), ({"subject_id": "a\nb"}, "invalid_params"),
+                ({"subject_id": "x" * 201}, "invalid_params"),
                 ({"digest": "sha256:ABC"}, "invalid_params"), ({"title": ""}, "invalid_params"),
                 ({"title": "t" * 121}, "invalid_params"), ({"require_step_up": "yes"}, "invalid_params"),
                 ({"preview": [{"type": "nope"}]}, "invalid_blocks"), ({"principal": "bob"}, "unknown_principal"),

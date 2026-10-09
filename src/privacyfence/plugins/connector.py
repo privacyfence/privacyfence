@@ -59,12 +59,13 @@ REASON_PARAM_DESCRIPTION = "One sentence: why are you calling this tool right no
 
 _ANNOTATIONS = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
 
-# A failed tool.prepare, as the AI client sees it. Fixed sentences only: the plugin's own error
-# detail could carry connector content.
+# A failed tool.prepare, as the daemon logs it (the AI client gets the generic tool-failure
+# message). Fixed sentences only: the plugin's own error detail could carry connector content.
 _PREPARE_ERRORS = {
     "connector_unavailable": "A service this plugin reads from is not connected.",
     "payload_too_large": "The plugin's result is too large to return.",
     "timeout": "The plugin did not answer in time.",
+    "upstream_error": "A service this plugin reads from returned an error.",
 }
 PREPARE_FAILED = "The plugin could not prepare this call."
 INVALID_PREVIEW = "The plugin returned an invalid preview."

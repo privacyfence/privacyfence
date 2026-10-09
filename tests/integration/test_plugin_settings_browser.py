@@ -131,10 +131,26 @@ class TestPhoneLayout:
 
         assert phone_page.locator(".pf-plugin-row").count() == 2
         assert phone_page.get_by_text("Beta Reports").first.is_visible()
-        assert phone_page.locator('a[href="/plugins/alpha/"]').inner_text() == "Open page"
+        assert phone_page.locator('.pf-plugin-row a[href="/plugins/alpha/"]').inner_text() == "Open page"
+        # The same page is in the top navigation's Plugins menu (inline and in the narrow Menu),
+        # and Beta Reports, which has no page, is not.
+        assert phone_page.locator('[data-pf-plugins] a[href="/plugins/alpha/"]').count() == 2
+        assert phone_page.locator("[data-pf-plugins] a").count() == 2
+        assert not phone_page.locator("[data-pf-plugins]").first.get_attribute("hidden")
         assert phone_page.get_by_text("The plugin changed since you reviewed it").is_visible()
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=".pf-page")
+
+        # Picking a plugin from the narrow Menu opens it in a new tab and closes the menus here.
+        menu = phone_page.locator("details.pf-shell-menu")
+        menu.evaluate("(el) => { el.open = true; }")
+        plugins = menu.locator("details.pf-shell-plugins")
+        plugins.evaluate("(el) => { el.open = true; }")
+        plugins.locator('a[href="/plugins/alpha/"]').evaluate(
+            "(el) => { el.addEventListener('click', (ev) => ev.preventDefault()); el.click(); }"
+        )
+        assert menu.evaluate("(el) => el.open") is False
+        assert plugins.evaluate("(el) => el.open") is False
 
     @pytest.mark.parametrize(("case", "width"), _phone_cases(["settings-plugins-approvals"]))
     def test_a_row_with_three_approvals(self, phone_page, plugin_server, case, width):  # noqa: F811
@@ -167,6 +183,7 @@ class TestPhoneLayout:
             "beta_wipe_cache", "Popup", "Destructive", "Read-only", "Writes",
             "calendar.list_events, gmail.search_messages", "Serves its own pages: yes",
             "Some tools run without asking", "Publishes output files: JSON, CSV",
+            "start a new conversation in your AI client",
         ):
             assert expected in text, expected
         _phone_screenshot(phone_page, f"{case}-{width}")

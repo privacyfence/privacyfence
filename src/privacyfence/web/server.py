@@ -1090,6 +1090,7 @@ def build_app(
             controller.any_connector_authenticated if controller is not None else None
         ),
         require_human_session=require_human_session,
+        plugin_pages=(lambda: plugin_host.page_links()) if plugin_host is not None else None,
     )
     app.state.plugin_host = plugin_host
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
