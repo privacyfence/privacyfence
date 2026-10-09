@@ -4,7 +4,9 @@ Usage: ``stub_plugin.py <mode>`` with a mode of ``ok``, ``crash-on-start``, ``cr
 ``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env``, ``wrong-name``,
 ``stop-reading`` (answers initialize, then never reads stdin again) or
 ``spawn-child`` (starts a sleeping child process and writes ``CHILD:<pid>`` to stderr) or
-``spam-stderr`` (writes about 30 KB to stderr right after the initialize result, then ``SPAM_DONE``).
+``spam-stderr`` (writes about 30 KB to stderr right after the initialize result, then ``SPAM_DONE``) or
+``pages-invalid`` (answers ``pages.list`` with an entry that has no title) or
+``pages-slow`` (never answers ``pages.list``).
 """
 from __future__ import annotations
 
@@ -85,6 +87,10 @@ def main() -> int:
         elif method == "shutdown":
             if MODE != "slow-shutdown":
                 return 0
+        elif method == "pages.list" and MODE == "pages-invalid":
+            send({"jsonrpc": "2.0", "id": message["id"], "result": {"pages": [{"path": "/"}]}})
+        elif method == "pages.list" and MODE == "pages-slow":
+            continue
         elif "id" in message and method is not None:
             send({
                 "jsonrpc": "2.0",

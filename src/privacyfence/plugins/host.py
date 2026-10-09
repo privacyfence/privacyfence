@@ -49,6 +49,7 @@ from privacyfence.plugins.connector import PluginConnector
 from privacyfence.plugins.events import EventFanout
 from privacyfence.plugins.manifest import Manifest, ManifestError
 from privacyfence.plugins.outputs import OWNER as OUTPUTS_OWNER, PluginOutputsConnector, PluginTable
+from privacyfence.plugins.page_index import PageIndex, index_from_result
 from privacyfence.plugins.protocol import InitializeResult, RpcError, principal_context
 from privacyfence.plugins.spool import DownloadSpool
 from privacyfence.plugins.state import HASH_DRIFT_REASON, PluginStateStore, STATE_FILENAME
@@ -903,7 +904,7 @@ class PluginHost:
         """``(display name, page URL)`` of every running plugin that has pages, for the top
         navigation's Plugins menu. The URL is the one the plugin's card in Settings links to."""
         return [
-            (plugin.manifest.display_name, f"/plugins/{name}/")
+            (plugin.manifest.display_name, f"/plugin-pages/{name}")
             for name, plugin in list(self._plugins.items())
             if plugin.state == "running" and plugin.manifest is not None and plugin.manifest.pages
         ]
@@ -930,7 +931,7 @@ class PluginHost:
                 "reason": "" if state == "running" else (reason or ""),
                 "enabled": bool(record is not None and record.enabled),
                 "pages": pages,
-                "page_url": f"/plugins/{name}/" if pages and state == "running" else "",
+                "page_url": f"/plugin-pages/{name}" if pages and state == "running" else "",
                 "tools_note": f"last tools change rejected: {rejection}" if rejection else "",
                 "review": plugin.review if plugin is not None else None,
                 "last_error": plugin.last_error if plugin is not None else None,
@@ -956,6 +957,35 @@ class PluginHost:
         return await peer.request(
             "web.request", {"principal": context, "method": "GET", "path": path, "query": query},
         )
+
+    async def list_pages(self, name: str, principal: Principal) -> PageIndex:
+        plugin = self._plugins.get(name)
+        manifest = plugin.manifest if plugin is not None else None
+        supervisor = plugin.supervisor if plugin is not None else None
+        peer = supervisor.peer if supervisor is not None else None
+        if peer is None or plugin is None or plugin.state != "running" or manifest is None or not manifest.pages:
+            raise LookupError(f"Plugin {name} is not serving pages.")
+        context = self._request_context(name, manifest, principal)
+        try:
+            result = await peer.request("pages.list", {"principal": context})
+        except RpcError as exc:
+            return index_from_result(name, manifest.display_name, error=exc)
+        return index_from_result(name, manifest.display_name, result)
+
+    async def list_all_pages(self, principal: Principal) -> list[PageIndex]:
+        names = [
+            name for name, plugin in list(self._plugins.items())
+            if plugin.state == "running" and plugin.manifest is not None and plugin.manifest.pages
+        ]
+
+        async def one(name: str) -> PageIndex | None:
+            try:
+                return await self.list_pages(name, principal)
+            except LookupError:
+                return None
+
+        found = [index for index in await asyncio.gather(*(one(n) for n in names)) if index is not None]
+        return sorted(found, key=lambda i: (i.display_name.casefold(), i.display_name, i.name))
 
 
 __all__ = ["CHANGED_SINCE_REVIEW", "PluginHost"]
