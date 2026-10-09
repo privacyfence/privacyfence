@@ -838,6 +838,15 @@ class PluginHost:
             found[OUTPUTS_OWNER] = self._outputs_connector
         return found
 
+    def page_links(self) -> list[tuple[str, str]]:
+        """``(display name, page URL)`` of every running plugin that has pages, for the top
+        navigation's Plugins menu. The URL is the one the plugin's card in Settings links to."""
+        return [
+            (plugin.manifest.display_name, f"/plugins/{name}/")
+            for name, plugin in list(self._plugins.items())
+            if plugin.state == "running" and plugin.manifest is not None and plugin.manifest.pages
+        ]
+
     def rows(self) -> list[dict]:
         records = self._store.load()
         names = set(self._plugins) | (set(records) if self._directory_unreadable else set())

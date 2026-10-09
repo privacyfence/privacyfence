@@ -819,6 +819,8 @@ def build_routes(
             notifications_enabled=general.get("notifications_enabled", notifications_enabled),
             notifications_detail=general.get("notifications_detail", notifications_detail),
             banner_html=_banner_html(),
+            # The plugin rows of this same snapshot, so the Plugins menu matches the cards below.
+            plugin_pages=tuple((p["display_name"], p["page_url"]) for p in state.get("plugins", []) if p.get("page_url")),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

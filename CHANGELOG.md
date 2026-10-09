@@ -53,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A **Plugins** menu in the top navigation, between Approvals and Settings, lists every running plugin that has a page, one per line in alphabetical order. A click opens the plugin's page in a new tab, like **Open page** on the plugin's card. The menu is hidden while no plugin has a page.
 - Settings → Plugins: the enable dialog says that a newly enabled plugin's tools may only appear in a new conversation, or after the AI client restarts.
 - Plugins: `apps`, `sheets` and `docs` are reserved plugin names, and the plugin protocol refuses `NaN` and `Infinity`, which are not JSON.
 - Plugin SDK:
