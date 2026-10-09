@@ -507,6 +507,53 @@ class TestGetIssue:
             },
         ]
 
+    async def test_fields_add_requested_fields_block_and_result_key(self, gated_call_spy):
+        connector, client = make_connector()
+        issue = make_issue()
+        issue.extra_fields = {"Story Points": 5}
+        client.get_issue.return_value = issue
+        client.get_issue_comments.return_value = [
+            JiraComment(id="c1", author="bob@example.com", body="Looking into it", created="2026-07-01"),
+        ]
+
+        result = await connector.call(
+            "jira_get_issue", {"issue_key": "ENG-42", "fields": '["Story Points"]'}
+        )
+
+        kwargs = gated_call_spy[0]
+        client.get_issue.assert_called_once_with("ENG-42", ["Story Points"])
+        assert result["fields"] == {"Story Points": 5}
+        assert kwargs["new_info"]["Requested fields"] == "Story Points"
+        assert "5" in kwargs["pii_scan_text"]
+        assert kwargs["args"] == {"issue_key": "ENG-42", "fields": '["Story Points"]'}
+        blocks = kwargs["preview_blocks"]
+        assert blocks[2] == {"type": "text", "text": "Users can't log in with SSO."}
+        assert blocks[3] == {
+            "type": "table", "caption": "Requested fields", "headers": ["Field", "Value"],
+            "rows": [["Story Points", "5"]],
+        }
+        assert blocks[4]["caption"] == "Comments (1)"
+
+    async def test_without_fields_keeps_args_result_and_client_call(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue()
+        client.get_issue_comments.return_value = []
+
+        result = await connector.call("jira_get_issue", {"issue_key": "ENG-42"})
+
+        client.get_issue.assert_called_once_with("ENG-42")
+        assert gated_call_spy[0]["args"] == {"issue_key": "ENG-42"}
+        assert "fields" not in result
+
+    async def test_invalid_fields_raises_before_any_client_call(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="jira_get_issue: fields must be a JSON array"):
+            await connector.call("jira_get_issue", {"issue_key": "ENG-42", "fields": "not json"})
+
+        client.get_issue.assert_not_called()
+        assert gated_call_spy == []
+
     async def test_no_comments_produces_no_table_block(self, gated_call_spy):
         connector, client = make_connector()
         client.get_issue.return_value = make_issue()
