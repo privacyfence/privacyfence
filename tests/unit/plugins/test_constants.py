@@ -144,3 +144,9 @@ class TestProtocolOneOneConstants:
     def test_protocol_version(self):
         assert c.PROTOCOL_VERSION == "1.1.0"
         assert not hasattr(c, "DRIVE_MAX_FILE_BYTES")
+
+    def test_send_and_close_timeouts(self):
+        assert c.SEND_TIMEOUT_SECONDS > 0
+        assert c.SHUTDOWN_NOTIFY_TIMEOUT_SECONDS > 0
+        assert c.CLOSE_WAIT_SECONDS > 0
+        assert c.SHUTDOWN_NOTIFY_TIMEOUT_SECONDS < c.SEND_TIMEOUT_SECONDS

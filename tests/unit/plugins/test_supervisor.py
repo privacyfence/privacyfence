@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import stat
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from privacyfence.plugins import rpc
 from privacyfence.plugins import supervisor as sv
 from privacyfence.plugins.protocol import InitializeResult, RpcError
 from privacyfence.plugins.supervisor import LaunchSpec, StartError, Supervisor, child_env
@@ -429,6 +431,45 @@ class TestShutdown:
         await h.sup.start()
         await h.sup.stop(reason="shutdown")
         assert h.states[-1] == ("disabled", None)
+
+
+class TestStuckReader:
+    async def test_disable_kills_a_plugin_that_stopped_reading(self, make, monkeypatch):
+        monkeypatch.setattr(sv, "SHUTDOWN_NOTIFY_TIMEOUT_SECONDS", 0.2)
+        h = make("stop-reading")
+        await h.sup.start()
+        proc = h.sup._child.proc
+        filler = asyncio.create_task(h.sup.peer.notify("x", {"pad": "x" * 512_000}))
+        await asyncio.sleep(0.2)
+        started = time.monotonic()
+        await asyncio.wait_for(h.sup.stop(reason="user"), 5)
+        elapsed = time.monotonic() - started
+        assert proc.returncode is not None
+        assert h.states[-1] == ("disabled", "disabled by you")
+        assert "backoff" not in h.names
+        assert h.sleeps == []
+        assert elapsed < sv.TERMINATE_GRACE_SECONDS + 1
+        await asyncio.gather(filler, return_exceptions=True)
+
+    async def test_a_send_timeout_while_running_is_a_crash(self, make, monkeypatch, caplog):
+        monkeypatch.setattr(rpc, "SEND_TIMEOUT_SECONDS", 0.3)
+        h = make("stop-reading")
+
+        async def stop_at_first(count: int) -> None:
+            await h.sup.stop()
+
+        h.on_sleep = stop_at_first
+        await h.sup.start()
+        proc = h.sup._child.proc
+        with caplog.at_level(logging.INFO, logger=sv.logger.name):
+            with pytest.raises(RpcError) as exc:
+                await h.sup.peer.notify("x", {"pad": "x" * 512_000})
+            assert exc.value.code == "timeout"
+            await asyncio.wait_for(h.sup.join(), 5)
+        assert ("backoff", "crashed 1 time") in h.states
+        assert h.sleeps == [1.0]
+        assert "crashed (write_timeout)" in caplog.text
+        assert proc.returncode is not None
 
 
 def _alive(pid: int) -> bool:

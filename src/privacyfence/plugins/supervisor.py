@@ -31,6 +31,7 @@ from privacyfence.plugins.constants import (
     PROTOCOL_MAJOR,
     RESTART_BACKOFF_SECONDS,
     SHUTDOWN_GRACE_SECONDS,
+    SHUTDOWN_NOTIFY_TIMEOUT_SECONDS,
     TERMINATE_GRACE_SECONDS,
 )
 from privacyfence.plugins.protocol import InitializeResult, RpcError
@@ -398,12 +399,17 @@ class Supervisor:
 
     async def _stop_child(self, child: _Child, reason: str) -> None:
         peer = child.peer
+        delivered = False
         if child.proc.returncode is None and not peer.closed:
             with contextlib.suppress(RpcError):
                 if reason != "shutdown":
-                    await peer.notify("plugin.disabling", {"reason": reason})
-                await peer.notify("shutdown", {"grace_ms": int(SHUTDOWN_GRACE_SECONDS * 1000)})
-        if not await self._exited(child, SHUTDOWN_GRACE_SECONDS):
+                    await peer.notify("plugin.disabling", {"reason": reason}, timeout=SHUTDOWN_NOTIFY_TIMEOUT_SECONDS)
+                await peer.notify(
+                    "shutdown", {"grace_ms": int(SHUTDOWN_GRACE_SECONDS * 1000)}, timeout=SHUTDOWN_NOTIFY_TIMEOUT_SECONDS
+                )
+                delivered = True
+        # Not `peer.closed`: a plugin that exits cleanly on "shutdown" closes the peer too.
+        if not delivered or not await self._exited(child, SHUTDOWN_GRACE_SECONDS):
             _signal_child(child.proc, kill=False)
             if not await self._exited(child, TERMINATE_GRACE_SECONDS):
                 _signal_child(child.proc, kill=True)

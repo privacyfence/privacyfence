@@ -1,7 +1,8 @@
 """Stand-in plugin for supervisor tests: stdlib only, speaks the line-framed JSON-RPC protocol.
 
 Usage: ``stub_plugin.py <mode>`` with a mode of ``ok``, ``crash-on-start``, ``crash-after-init``,
-``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env``, ``wrong-name`` or
+``bad-version``, ``junk-stdout``, ``slow-shutdown``, ``echo-env``, ``wrong-name``,
+``stop-reading`` (answers initialize, then never reads stdin again) or
 ``spawn-child`` (starts a sleeping child process and writes ``CHILD:<pid>`` to stderr).
 """
 from __future__ import annotations
@@ -68,6 +69,10 @@ def main() -> int:
             send({"jsonrpc": "2.0", "id": message["id"], "result": initialize_result(message.get("params", {}))})
             if MODE == "crash-after-init":
                 return 3
+            if MODE == "stop-reading":
+                while time.monotonic() < deadline:
+                    time.sleep(0.1)
+                return 2
             if MODE == "junk-stdout":
                 for _ in range(3):
                     sys.stdout.write("this is not json-rpc\n")
