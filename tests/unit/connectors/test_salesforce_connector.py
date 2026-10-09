@@ -16,6 +16,7 @@ connectors/salesforce.py:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,14 +24,25 @@ import pytest
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import salesforce as salesforce_module
 from privacyfence.connectors.salesforce import SalesforceConnector
+from privacyfence.plugins import cursors
 from privacyfence.salesforce_client import (
     ReportFilter,
+    ReportPage,
+    ReportPagingError,
     SalesforceClient,
     SalesforceClientError,
     SalesforceRecord,
     SalesforceReport,
 )
 
+from ...fixtures.salesforce_analytics import (
+    COLUMNS,
+    KEY,
+    REPORT_ID,
+    FakeAnalytics,
+    make_rows,
+    tabular_report,
+)
 from ...helpers import (
     assert_all_tools_leave_an_audit_trail,
     assert_no_placeholder_fields,
@@ -562,6 +574,228 @@ class TestRunReport:
             "Structure too complex to preview here; open in Salesforce to view."
         )
         assert gated_call_spy[0]["preview_tables"] == []
+
+
+class TestRunReportPaged:
+    @staticmethod
+    def _paged_connector(monkeypatch, rows=4500):
+        fake = FakeAnalytics(tabular_report(), COLUMNS, make_rows(rows))
+        client = SalesforceClient(config={"access_token": "tok", "instance_url": "https://my.salesforce.com"})
+        monkeypatch.setattr(client, "_get_sf", lambda: SimpleNamespace(restful=fake.restful))
+        connector = SalesforceConnector(client)
+        connector.my_email = "me@example.com"
+        return connector
+
+    @staticmethod
+    def _keys(result):
+        rows = result["factMap"]["T!T"]["rows"]
+        index = result["reportMetadata"]["detailColumns"].index(KEY)
+        return [row["dataCells"][index]["value"] for row in rows]
+
+    async def _read_all(self, connector):
+        results, cursor = [], ""
+        while True:
+            result = await connector.call(
+                "salesforce_run_report", {"report_id": REPORT_ID, "page_by": KEY, "cursor": cursor},
+            )
+            results.append(result)
+            cursor = result["next_cursor"]
+            if cursor is None:
+                return results
+
+    async def test_three_pages_return_every_row_once_in_key_order(self, monkeypatch, gated_call_spy):
+        connector = self._paged_connector(monkeypatch)
+
+        results = await self._read_all(connector)
+
+        assert [self._keys(r) for r in results] == [
+            [r[KEY] for r in make_rows(4500)[:2000]],
+            [r[KEY] for r in make_rows(4500)[2000:4000]],
+            [r[KEY] for r in make_rows(4500)[4000:]],
+        ]
+        assert [r["page"] for r in results] == [
+            {"number": 1, "first_row": 1, "last_row": 2000, "more": True},
+            {"number": 2, "first_row": 2001, "last_row": 4000, "more": True},
+            {"number": 3, "first_row": 4001, "last_row": 4500, "more": False},
+        ]
+        assert results[0]["next_cursor"] and results[1]["next_cursor"]
+        assert results[2]["next_cursor"] is None
+
+    async def test_card_rows_text_and_no_cut_off_text(self, monkeypatch, gated_call_spy):
+        connector = self._paged_connector(monkeypatch)
+
+        await self._read_all(connector)
+
+        assert [c["new_info"]["Rows"] for c in gated_call_spy] == [
+            "Page 1: rows 1\u20132,000, more pages follow",
+            "Page 2: rows 2,001\u20134,000, more pages follow",
+            "Page 3: rows 4,001\u20134,500, last page",
+        ]
+        for call in gated_call_spy:
+            assert call["preview"]["Paged by"] == KEY
+            assert "Cut off" not in call["details_text"]
+            assert "Cut off" not in json.dumps(call["new_info"])
+            assert call["summary"] == "Run report: " + call["preview"]["Report"]
+        assert gated_call_spy[0]["raw_data"]["allData"] is False
+        assert "page" not in gated_call_spy[0]["raw_data"]
+
+    async def test_preview_keeps_paged_by_after_filters(self, monkeypatch, gated_call_spy):
+        connector = self._paged_connector(monkeypatch)
+        filters = json.dumps([{"column": "TYPE", "operator": "equals", "value": "Customer"}])
+
+        await connector.call(
+            "salesforce_run_report", {"report_id": REPORT_ID, "page_by": f" {KEY} ", "filters": filters},
+        )
+
+        keys = list(gated_call_spy[0]["preview"])
+        assert keys.index("Paged by") == keys.index("Filters") + 1
+
+    async def test_no_rows_card_text(self, monkeypatch, gated_call_spy):
+        connector = self._paged_connector(monkeypatch, rows=0)
+
+        result = await connector.call("salesforce_run_report", {"report_id": REPORT_ID, "page_by": KEY})
+
+        assert gated_call_spy[0]["new_info"]["Rows"] == "Page 1: no rows, last page"
+        assert result["page"] == {"number": 1, "first_row": 0, "last_row": 0, "more": False}
+        assert result["next_cursor"] is None
+
+    async def test_args_include_page_by_and_cursor_on_paged_calls_only(self, monkeypatch, gated_call_spy):
+        connector = self._paged_connector(monkeypatch)
+
+        first = await connector.call("salesforce_run_report", {"report_id": REPORT_ID, "page_by": KEY})
+        await connector.call(
+            "salesforce_run_report",
+            {"report_id": REPORT_ID, "page_by": KEY, "cursor": first["next_cursor"]},
+        )
+        plain, plain_client = make_connector()
+        plain_client.run_report.return_value = {"reportMetadata": {"name": "R"}}
+        await plain.call("salesforce_run_report", {"report_id": REPORT_ID})
+
+        assert gated_call_spy[0]["args"] == {
+            "report_id": REPORT_ID, "columns": "", "filters": "", "summary_only": False,
+            "page_by": KEY, "cursor": "",
+        }
+        assert gated_call_spy[1]["args"]["cursor"] == first["next_cursor"]
+        assert set(gated_call_spy[2]["args"]) == {"report_id", "columns", "filters", "summary_only"}
+
+    async def test_unpaged_run_of_a_big_report_still_says_cut_off(self, monkeypatch, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report.return_value = {"reportMetadata": {"name": "R"}, "allData": False}
+
+        await connector.call("salesforce_run_report", {"report_id": "00O1"})
+
+        assert gated_call_spy[0]["new_info"]["Rows"] == "Cut off at Salesforce's 2,000-row limit"
+
+    async def test_page_by_is_passed_to_the_client_with_cursor_state(self, gated_call_spy):
+        connector, client = make_connector()
+        bound = {"report_id": "00O1", "page_by": "A.B", "columns": ["X"], "filters": []}
+        cursor = cursors.encode(
+            "salesforce_run_report", bound, {"n": 2, "a": 4000, "l": "K-4000", "r": 500},
+        )
+        client.run_report_page.return_value = ReportPage(
+            result={"reportMetadata": {"name": "R"}}, keys=["K-4001"], all_data=True, row_count=500,
+        )
+
+        await connector.call(
+            "salesforce_run_report",
+            {"report_id": "00O1", "columns": "X", "page_by": "A.B", "cursor": cursor},
+        )
+
+        client.run_report_page.assert_called_once_with("00O1", "A.B", ["X"], None, "K-4000", 2, 500)
+        assert gated_call_spy[0]["new_info"]["Rows"] == "Page 3: rows 4,001\u20134,001, last page"
+
+    @pytest.mark.parametrize("args, message", [
+        ({"cursor": "abc"}, "cursor needs page_by"),
+        ({"page_by": "A.B", "summary_only": True}, "page_by has no effect with summary_only"),
+        ({"page_by": "A.B", "cursor": "not-a-cursor"}, "salesforce_run_report: "),
+    ])
+    async def test_bad_calls_rejected_before_fetch_or_gate(self, gated_call_spy, args, message):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match=message):
+            await connector.call("salesforce_run_report", {"report_id": "00O1", **args})
+
+        client.run_report.assert_not_called()
+        client.run_report_page.assert_not_called()
+        assert gated_call_spy == []
+
+    @pytest.mark.parametrize("other", [
+        {"filters": json.dumps([{"column": "A", "operator": "equals", "value": "x"}])},
+        {"columns": "Y"},
+        {"page_by": "A.C"},
+        {"report_id": "00O2"},
+    ])
+    async def test_cursor_reused_with_other_arguments_rejected(self, gated_call_spy, other):
+        connector, client = make_connector()
+        bound = {"report_id": "00O1", "page_by": "A.B", "columns": ["X"], "filters": []}
+        cursor = cursors.encode("salesforce_run_report", bound, {"n": 1, "a": 1, "l": "K-1", "r": 5})
+        args = {"report_id": "00O1", "columns": "X", "page_by": "A.B", "cursor": cursor, **other}
+
+        with pytest.raises(ValueError, match="salesforce_run_report: "):
+            await connector.call("salesforce_run_report", args)
+
+        client.run_report_page.assert_not_called()
+        assert gated_call_spy == []
+
+    @pytest.mark.parametrize("state", [
+        {"n": 1, "a": 1, "l": "K-1"},
+        {"n": 1, "a": 1, "l": "K-1", "r": 5, "x": 1},
+        {"n": 0, "a": 1, "l": "K-1", "r": 5},
+        {"n": True, "a": 1, "l": "K-1", "r": 5},
+        {"n": 1, "a": -1, "l": "K-1", "r": 5},
+        {"n": 1, "a": 1, "l": "", "r": 5},
+        {"n": 1, "a": 1, "l": 5, "r": 5},
+        {"n": 1, "a": 1, "l": "K-1", "r": "5"},
+    ])
+    async def test_invalid_cursor_state_rejected(self, gated_call_spy, state):
+        connector, client = make_connector()
+        bound = {"report_id": "00O1", "page_by": "A.B", "columns": [], "filters": []}
+        cursor = cursors.encode("salesforce_run_report", bound, state)
+
+        with pytest.raises(ValueError, match="cursor is not valid"):
+            await connector.call(
+                "salesforce_run_report", {"report_id": "00O1", "page_by": "A.B", "cursor": cursor},
+            )
+
+        client.run_report_page.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_paging_error_becomes_runtime_error_with_no_card(self, gated_call_spy):
+        connector, client = make_connector()
+        client.run_report_page.side_effect = ReportPagingError("not_unique", "page_by 'A.B' is not unique")
+
+        with pytest.raises(RuntimeError, match="page_by 'A.B' is not unique"):
+            await connector.call("salesforce_run_report", {"report_id": "00O1", "page_by": "A.B"})
+
+        assert gated_call_spy == []
+
+
+class TestHelperEdges:
+    def test_group_label_skips_unresolvable_keys_and_adds_across_labels(self):
+        result = {
+            "groupingsDown": {"groupings": [{"key": "0", "label": "Open"}]},
+            "groupingsAcross": {"groupings": [{"key": "1", "label": "EMEA"}]},
+        }
+        label = salesforce_module._report_group_label
+        assert label(result, "9!T") == "9!T"
+        assert label(result, "0!T") == "Open"
+        assert label(result, "0!1") == "Open / EMEA"
+        assert label(result, "T!9") == "T!9"
+
+    def test_client_property_returns_the_client(self):
+        connector, client = make_connector()
+        assert connector.client is client
+
+    def test_audit_write_failure_is_logged_not_raised(self, monkeypatch, caplog):
+        connector, _client = make_connector()
+
+        def boom():
+            raise OSError("disk full")
+
+        monkeypatch.setattr(salesforce_module, "get_audit_logger", boom)
+        connector._auto_audit("salesforce_list_reports", "List", "s", "Salesforce", 0.0)
+
+        assert "Audit log write failed" in caplog.text
 
 
 class TestSearch:
