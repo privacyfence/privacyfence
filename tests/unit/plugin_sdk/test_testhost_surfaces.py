@@ -92,7 +92,7 @@ async def start_ask(host: PluginTestHost) -> asyncio.Task:
 
 async def test_page_headers_match_daemon():
     plugin, _ = build_plugin()
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, pages=True) as host:
         for path, status in (("/", 200), ("/missing", 404), ("/data.json", 200), ("/odd", 502), ("/a//b", 400)):
             response = await host.get(path)
             assert response.status == status, path
@@ -125,7 +125,7 @@ async def test_post_returns_405():
 
 async def test_head_is_served():
     plugin, seen = build_plugin()
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, pages=True) as host:
         head = await host.request("HEAD", "/?a=1&a=2&b=")
         get = await host.get("/")
         assert head.status == 200 and head.body == b""
@@ -185,7 +185,7 @@ async def test_page_slower_than_the_timeout_is_502(monkeypatch):
         await asyncio.sleep(2)
         return Html("late")
 
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, pages=True) as host:
         response = await host.get("/")
     assert response.status == 502
     assert response.body == b"The plugin did not answer."
@@ -283,7 +283,7 @@ async def test_purge_calls_handler():
 
 async def test_shutdown_stops_the_plugin():
     plugin, seen = build_plugin()
-    async with PluginTestHost(plugin) as host:
+    async with PluginTestHost(plugin, pages=True) as host:
         await host.shutdown()
         await host.shutdown()
         assert seen["events"] == [("shutdown", {"grace_ms": 0})]
@@ -333,7 +333,7 @@ def test_pytest_fixture_builds_a_host(tmp_path):
 
         def test_page(plugin_host):
             async def go():
-                async with plugin_host(plugin) as host:
+                async with plugin_host(plugin, pages=True) as host:
                     return (await host.get("/")).text
             assert asyncio.run(go()) == "hi"
     """))
@@ -388,7 +388,7 @@ def build_approval_plugin(with_page: bool = True) -> tuple[Plugin, dict]:
 class TestApprovals:
     async def test_request_opens_a_card_and_approving_it_stores_the_approval(self):
         plugin, seen = build_approval_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, pages=True) as host:
             first = (await host.call_tool("approve", {"text": "v1", "page": "/approval"})).result
             assert first["before"] == "unknown" and first["status"] == "pending"
             [card] = host.approvals
@@ -461,7 +461,7 @@ class TestApprovals:
         plugin, _ = build_approval_plugin()
         good = {"principal": "local", "kind": "template", "subject_id": "a", "digest": _digest("x"),
                 "title": "T", "preview": [blocks.text("p")]}
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, pages=True) as host:
             service = host._approvals
             for change, code in (
                 ({"kind": "Bad Kind"}, "invalid_params"), ({"subject_id": ""}, "invalid_params"),

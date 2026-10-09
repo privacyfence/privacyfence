@@ -8,7 +8,7 @@ import pytest
 
 from privacyfence.plugins import constants, cursors
 from privacyfence_plugin_sdk._rpc import RpcError
-from privacyfence_plugin_sdk import Plugin, Prepared, ToolDefinitionError, blocks
+from privacyfence_plugin_sdk import Html, Plugin, Prepared, ToolDefinitionError, blocks
 from privacyfence_plugin_sdk.testing import PluginTestHost, SourceFixtureMissing, samples
 from privacyfence_plugin_sdk.testing import _host as host_module
 from privacyfence_plugin_sdk.testing import _source as source_module
@@ -147,7 +147,7 @@ class TestPluginTestHost:
 
     async def test_source_fixture_missing_raises(self):
         plugin, _ = build_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
             with pytest.raises(SourceFixtureMissing, match="calendar.list_events"):
                 await host.call_tool("agenda")
             assert [c.operation for c in host.source.calls] == ["calendar.list_events"]
@@ -159,7 +159,7 @@ class TestPluginTestHost:
 
     async def test_source_when_fail_and_specificity(self):
         plugin, _ = build_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
             host.source.when("calendar.list_events").returns([{"title": "Any"}])
             host.source.when("calendar.list_events", time_min="2026-10-07T00:00:00Z").returns([{"title": "Specific"}])
             specific = await host.call_tool("agenda")
@@ -239,7 +239,7 @@ class TestPluginTestHost:
         plugin, seen = build_plugin()
         chunk = constants.DRIVE_CHUNK_BYTES
         data = bytes(range(256)) * (chunk // 256) + b"tail" * 1000 + bytes(7)
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("drive.download",)) as host:
             host.source.load(samples.drive_download(data, revision="r1"))
             outcome = await host.call_tool("fetch", {"file_id": "EXAMPLE-1"})
             assert outcome.error is None
@@ -247,6 +247,78 @@ class TestPluginTestHost:
         assert seen["downloaded"] == data and seen["revision"] == "r1"
         assert len(calls) == 2 and "cursor" not in calls[0]
         assert cursors.decode(calls[1]["cursor"], "drive.download", {"file_id": "EXAMPLE-1"}) == {"r": "r1", "o": chunk}
+
+    async def test_an_operation_outside_source_operations_is_refused(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin, source_operations=("jira.search",)) as host:
+            host.source.load(samples.get("calendar.list_events"))
+            with pytest.raises(RpcError) as refused:
+                host.source._serve({"principal": "local", "operation": "calendar.list_events", "params": {}}, "local")
+            outcome = await host.call_tool("agenda")
+        assert (refused.value.code, refused.value.detail) == (
+            "operation_not_allowed", "the plugin may not use this operation")
+        assert outcome.error["code"] == "operation_not_allowed" and outcome.released is None
+
+    def test_an_unknown_source_operation_is_a_value_error(self):
+        plugin, _ = build_plugin()
+        with pytest.raises(ValueError, match="unknown source operation 'gmail.list'"):
+            PluginTestHost(plugin, source_operations=("gmail.list",))
+
+    async def test_pages_off_is_a_404_that_never_reaches_the_plugin(self):
+        plugin = Plugin(name="paged", version="1.0.0")
+        ran = []
+
+        @plugin.page("/")
+        async def home(ctx, request):
+            ran.append(request)
+            return Html("hi")
+
+        async with PluginTestHost(plugin) as host:
+            response = await host.get("/")
+            bad = await host.get("/a/../b")
+        assert (response.status, response.body) == (404, b"Not Found")
+        assert response.headers["x-frame-options"] == "DENY" and "content-security-policy" in response.headers
+        assert bad.status == 400 and ran == []
+
+    async def test_an_approval_page_needs_pages(self):
+        plugin = Plugin(name="approver", version="1.0.0")
+
+        @plugin.page("/approval")
+        async def approval_page(ctx, request):
+            return Html("approve")
+
+        async with PluginTestHost(plugin) as host:
+            with pytest.raises(RpcError, match="pages: true") as refused:
+                await host._approvals.request({
+                    "principal": "local", "kind": "template", "subject_id": "a", "digest": "sha256:" + "0" * 64,
+                    "title": "T", "preview": [blocks.text("p")], "page": "/approval"})
+            assert refused.value.code == "invalid_params"
+
+    async def test_a_google_form_is_not_downloadable(self):
+        form = "application/vnd.google-apps.form"
+        fixtures = source_module.SourceFixtures()
+        fixtures.load(samples.drive_download(b"x", mime_type=form))
+        fixtures.load(samples.drive_download(b"doc", file_id="DOC-1", mime_type="application/vnd.google-apps.document"))
+
+        def serve(file_id):
+            return fixtures._serve({"principal": "local", "operation": "drive.download",
+                                    "params": {"file_id": file_id}}, "local")
+
+        with pytest.raises(RpcError) as refused:
+            serve("EXAMPLE-1")
+        assert (refused.value.code, refused.value.detail) == (
+            "invalid_params", f"files of type {form} cannot be downloaded")
+        assert refused.value.extra == {"reason": "not_downloadable"}
+        assert serve("DOC-1")["data"]["eof"] is True
+
+    async def test_non_ascii_counts_utf8_bytes(self, monkeypatch):
+        monkeypatch.setattr(source_module, "MAX_SOURCE_RESULT_BYTES", 100)
+        fixtures = source_module.SourceFixtures()
+        data = {"v": "\u00e9" * 20}
+        fixtures.load({"operation": "calendar.list_events", "data": data})
+        result = fixtures._serve({"principal": "local", "operation": "calendar.list_events", "params": {}}, "local")
+        assert result["bytes"] == len(json.dumps(data, ensure_ascii=False).encode())
+        assert result["bytes"] < 100 < len(json.dumps(data).encode())
 
     def test_drive_download_sample_matches_the_daemons_chunk_shape(self):
         fixtures = source_module.SourceFixtures()
@@ -432,7 +504,7 @@ class TestPaging:
 
     async def test_returns_pages_serves_each_page_for_the_cursor_before_it(self):
         plugin, seen = self.paging_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("jira.search",)) as host:
             host.source.when("jira.search", jql="project = A").returns_pages(
                 [[{"key": "A-1"}], [{"key": "A-2"}], [{"key": "A-3"}]])
             outcome = await host.call_tool("count", {"jql": "project = A"})
@@ -446,7 +518,7 @@ class TestPaging:
 
     async def test_a_cursor_for_another_query_or_none_of_ours_is_refused(self):
         plugin, _ = self.paging_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("jira.search",)) as host:
             host.source.when("jira.search", jql="project = A").returns_pages([[{"key": "A-1"}], [{"key": "A-2"}]])
             host.source.when("jira.search", jql="project = B").returns_pages([[{"key": "B-1"}], [{"key": "B-2"}]])
             first = host.source.handle(
@@ -477,7 +549,7 @@ class TestPaging:
 
     async def test_the_sample_pages_fetch_each_other(self):
         plugin, seen = self.paging_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("calendar.list_events", "jira.search")) as host:
             host.source.load(samples.get("calendar.list_events"))
             host.source.load(samples.get("calendar.list_events", page=2))
             await host.call_tool("collect")

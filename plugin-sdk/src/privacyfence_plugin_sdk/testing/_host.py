@@ -11,7 +11,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .. import blocks as _blocks
 from .._rpc import Peer, RpcError
@@ -28,7 +28,7 @@ from ._approvals import Approval, Approvals
 from ._confirm import Confirmation, Confirmations
 from ._gate import Card, Decision, Rules, ToolOutcome, resolve_decision
 from ._outputs import DEFAULT_OUTPUT_TYPES, OutputFile, check_types, list_outputs
-from ._source import SourceFixtures
+from ._source import SOURCE_OPERATIONS, SourceFixtures
 
 # Copied from the protocol, like the limits in plugin.py. The daemon's own tests compare them.
 _MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -200,6 +200,14 @@ class PluginTestHost:
     (``host.output_dir``) that ``ctx.outputs`` writes to, and ``output_types`` (the manifest's
     ``output_types``, ``application/json`` and ``text/csv`` by default) decides which extensions it
     may use and which files ``host.list_outputs`` shows.
+
+    ``source_operations`` is the manifest's ``source_operations``: the ``source.call`` operations the
+    plugin may use, none by default. Any other operation is refused with ``operation_not_allowed``,
+    and a name that is not a source operation raises ``ValueError``.
+
+    ``pages=True`` is the manifest's ``pages: true``: the plugin serves pages, and approval pages
+    are available. Without it every ``host.get`` / ``host.request`` answers 404 and never reaches
+    the plugin.
     """
 
     def __init__(
@@ -211,6 +219,8 @@ class PluginTestHost:
         max_gate_floor: str = "review",
         outputs: bool = False,
         output_types: tuple[str, ...] | list[str] | None = None,
+        source_operations: Iterable[str] = (),
+        pages: bool = False,
     ) -> None:
         if mode not in ("local", "org"):
             raise ValueError("mode must be 'local' or 'org'")
@@ -218,6 +228,12 @@ class PluginTestHost:
             raise ValueError("max_gate_floor must be 'review' or 'auto'")
         if output_types is not None and not outputs:
             raise ValueError("output_types needs outputs=True")
+        allowed = frozenset(source_operations)
+        for operation in sorted(allowed, key=str):
+            if operation not in SOURCE_OPERATIONS:
+                raise ValueError(f"unknown source operation {operation!r}")
+        self.source_operations = allowed
+        self.pages = bool(pages)
         self.outputs = bool(outputs)
         self._output_types = check_types(DEFAULT_OUTPUT_TYPES if output_types is None else output_types) if outputs else ()
         raw = principals if principals is not None else [dict(_DEFAULT_PRINCIPAL)]
@@ -231,14 +247,14 @@ class PluginTestHost:
         self._principal_specs = [dict(p) for p in raw]
         self._tools: list[dict] = []
         self._scope_types: list[str] = []
-        self.source = SourceFixtures()
+        self.source = SourceFixtures(self.source_operations)
         self.rules = Rules(lambda: set(self._scope_types))
         self.audit: list[dict] = []
         self._confirmations = Confirmations(
             plugin.name, lambda: set(self._principals), lambda entry: self.audit.append(entry)
         )
         self._approvals = Approvals(
-            plugin.name, lambda: set(self._principals), lambda: bool(plugin._reg.pages),
+            plugin.name, lambda: set(self._principals), lambda: self.pages,
             lambda entry: self.audit.append(entry),
         )
         self._stopped = False
@@ -569,7 +585,7 @@ class PluginTestHost:
         other method gets 405 and a path the daemon rejects gets 400, and neither reaches the plugin.
         """
         peer = self._running_peer()
-        return await _pages.serve(peer, self._principal(principal), method, path, query)
+        return await _pages.serve(peer, self._principal(principal), method, path, query, enabled=self.pages)
 
     # ------------------------------------------------------------------ confirmations
 

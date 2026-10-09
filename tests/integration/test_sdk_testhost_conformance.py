@@ -238,7 +238,10 @@ def recorded(events: list[dict], name: str) -> list[dict]:
 
 @pytest.fixture
 async def sdk():
-    async with PluginTestHost(load_echo_plugin().plugin, max_gate_floor="auto") as host:
+    async with PluginTestHost(
+        load_echo_plugin().plugin, max_gate_floor="auto",
+        source_operations=("calendar.list_events", "drive.download"), pages=True,
+    ) as host:
         yield SdkSide(host)
 
 

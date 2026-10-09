@@ -6,7 +6,7 @@ import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .._rpc import ERROR_CODES, RpcError
 from . import _cursors
@@ -16,6 +16,12 @@ SOURCE_OPERATIONS: tuple[str, ...] = (
     "salesforce.report_run", "jira.search", "drive.download",
     "sheets.get_values", "confluence.get_page", "calendar.list_events",
 )
+# The Google types the daemon exports to text; every other google-apps type cannot be downloaded.
+_GOOGLE_DOC_EXPORTS = frozenset({
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+})
 DRIVE_CHUNK_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_RESULT_BYTES = 12 * 1024 * 1024
 
@@ -108,7 +114,8 @@ def _check_operation(operation: Any) -> str:
 class SourceFixtures:
     """``host.source``. A call answers from the most specific fixture whose params it carries."""
 
-    def __init__(self) -> None:
+    def __init__(self, allowed: Iterable[str] = SOURCE_OPERATIONS) -> None:
+        self._allowed = frozenset(allowed)
         self.calls: list[SourceCall] = []
         self._rules: list[_Rule] = []
         self._drive_files: dict[str, dict] = {}
@@ -174,8 +181,8 @@ class SourceFixtures:
         if mode == "local" and principal != "local":
             raise RpcError("unknown_principal", "unknown principal")
         operation = params.get("operation")
-        if operation not in SOURCE_OPERATIONS:
-            raise RpcError("operation_not_allowed", "the operation is not allowed")
+        if operation not in SOURCE_OPERATIONS or operation not in self._allowed:
+            raise RpcError("operation_not_allowed", "the plugin may not use this operation")
         call_params = params.get("params")
         if not isinstance(call_params, dict):
             raise RpcError("invalid_params", "params must be an object")
@@ -230,6 +237,12 @@ class SourceFixtures:
         if offset is not None and cursor is not None:
             raise RpcError("invalid_params", "offset and cursor cannot both be given")
         revision = file["revision"]
+        mime_type = file["mime_type"]
+        if mime_type.startswith("application/vnd.google-apps.") and mime_type not in _GOOGLE_DOC_EXPORTS:
+            raise RpcError(
+                "invalid_params", f"files of type {mime_type} cannot be downloaded",
+                extra={"reason": "not_downloadable"},
+            )
         bound = {"file_id": file_id}
         if cursor is not None:
             try:
