@@ -4,20 +4,20 @@
 
 A PrivacyFence plugin, `pages`, that lets the AI client (Claude) publish simple HTML pages for its
 owner. Through gated tools Claude can store and read one shared stylesheet, store image assets,
-publish a page, update it (each update is a new version), read it and delete it. The plugin's own
-page, `/plugins/pages/`, is a page browser: it lists every page with its name, version, created and
-updated date, and opens each page in a new tab, with the stylesheet and the images inlined.
+publish a page, update it (each update is a new version), read it and delete it.
 
-It is built only on `privacyfence-plugin-sdk` from the plugin framework on PrivacyFence's
-`feature/plugin-framework-polish` branch (PR privacyfence/privacyfence#868), and it lives in its own
-repository, `privacyfence/pf-pages`.
+The pages are browsed in **PrivacyFence's own page browser**, not in a page of the plugin. The
+framework plan `plan/plugin-page-browser` in `privacyfence/privacyfence` adds that browser: protocol
+1.2's `pages.list`, the SDK's `@plugin.page_index`, and `/plugin-pages`, reached from the top
+navigation's Plugins menu. The plugin lists every published page there with its name, version,
+created and updated date, and each entry opens that single page in a new tab.
 
-Opening a page in a new tab needs one change to the framework, which is not part of this plan: plugin
-pages get `allow-popups allow-popups-to-escape-sandbox`, and a cookieless cross-site navigation to
-`/plugins/<name>/…` gets a same-origin "bounce" document that reloads it with the session cookie.
-That change is a separate single-session prompt against `privacyfence/privacyfence`, branched from
-and merged into `feature/plugin-framework-polish`. This plugin works without it except for the
-links, which then get the owner-only 404, and the final smoke test (`manual_after`) needs it.
+When a page is shown, the plugin inlines into it the one shared stylesheet and the images it
+references, as a `<style>` block and `data:` URIs. Every page gets the same stylesheet, and an image
+is never a separate request. The plugin-page sandbox (ADR 0124) stays exactly as strict as it is.
+
+The plugin is built only on `privacyfence-plugin-sdk` and lives in its own repository,
+`privacyfence/pf-pages`.
 
 ## Current state
 
@@ -46,8 +46,17 @@ links, which then get the owner-only 404, and the final smoke test (`manual_afte
     its handling of `_home()`, `--self-test` and `on_purge`, and its "preview says why the call
     will not do anything, execute returns the reason" pattern are what this plan copies.
     `scripts/build_example_plugin.py` is the PyInstaller build to copy.
-- The SDK is not on PyPI yet. It is installed from git:
-  `privacyfence-plugin-sdk @ git+https://github.com/privacyfence/privacyfence@567254695aad54efa586c3950eb6d05d43a2f744#subdirectory=plugin-sdk`.
+- The SDK is not on PyPI yet. It is installed from git, pinned to **the SDK pin**: the commit of
+  `privacyfence/privacyfence` where the framework plan's PR (`feature/plugin-page-browser`, which
+  adds `PageEntry` and `@plugin.page_index`) has merged. The planning session writes the real SHA
+  into this file at handover (`mb1-ready`), replacing every occurrence of the placeholder, also in
+  the documentation links below. A worker whose `pyproject.toml` dependency does not match
+  `privacyfence@[0-9a-f]{40}#subdirectory=plugin-sdk` stops with `status=blocked`. The dependency is
+  `privacyfence-plugin-sdk @ git+https://github.com/privacyfence/privacyfence@SDK_SHA_TO_FILL#subdirectory=plugin-sdk`.
+- At that SHA the SDK also has `PageEntry(path, title, version=None, created_at=None,
+  updated_at=None, description=None)` and `@plugin.page_index` (`async def index(ctx) ->
+  list[PageEntry]`), and `PluginTestHost.list_pages()` returns the entries as dicts after the
+  daemon's checks. `PROTOCOL_VERSION` is `"1.2.0"`.
 
 ## Design
 
@@ -61,7 +70,7 @@ links, which then get the owner-only 404, and the final smoke test (`manual_afte
 | Python distribution / import package | `pf-pages` / `pf_pages` |
 | Executable (`command`) | `pages-plugin` (`pages-plugin.exe` on Windows) |
 | First version | `0.1.0`, in `src/pf_pages/__init__.py` as `__version__`, equal to the manifest's `version` |
-| Page browser | `/plugins/pages/` |
+| Page browser | PrivacyFence's `/plugin-pages/pages` (top navigation → Plugins → Pages), fed by the plugin's `@plugin.page_index` |
 | One page | `/plugins/pages/view?p=<name>` (current version) or `…&v=<n>` |
 | License | Apache-2.0, the SDK's |
 
@@ -115,7 +124,7 @@ NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")                                
 ASSET_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,57}\.(png|jpg|jpeg|gif|svg|webp)")  # fullmatch; at most 63 chars
 WINDOWS_RESERVED = frozenset({"con", "prn", "aux", "nul",
                               *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))})
-TITLE_FORBIDDEN_RE = re.compile(r"[\x00-\x1f\x7f؜‎‏‪-‮⁦-⁩]")
+TITLE_FORBIDDEN_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 ASSET_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
                "svg": "image/svg+xml", "webp": "image/webp"}
 MAX_TITLE_CHARS = 120
@@ -129,7 +138,9 @@ MAX_ASSETS = 200
 - A page name in `WINDOWS_RESERVED` is `bad_name`, and so is an asset name whose part before the
   extension is in it (`con.png`). This holds on every OS, so a store copies between machines.
 - A title is valid when it has 1 to `MAX_TITLE_CHARS` characters, at least one of them not a space,
-  and no match of `TITLE_FORBIDDEN_RE` (control and bidirectional characters).
+  and no match of `TITLE_FORBIDDEN_RE` (C0 and C1 controls, line and paragraph separators, and
+  bidirectional controls). That is exactly what the SDK's `blocks.clean_line` strips, so a stored
+  title always passes the page index's `clean_line(title) == title` rule.
 - `check_html` and `check_css` normalize line endings before checking the size: `\r\n` and a lone
   `\r` become `\n`. They return the normalized text, encoded, and that is what is stored. Reads
   return text exactly as stored, except that the SDK's blocks strip control characters other than
@@ -137,6 +148,54 @@ MAX_ASSETS = 200
 
 An asset's bytes must match its extension: PNG starts `\x89PNG\r\n\x1a\n`, JPEG `\xff\xd8\xff`, GIF
 `GIF87a` or `GIF89a`, WebP `RIFF` + 4 bytes + `WEBP`, and SVG decodes as UTF-8 and contains `<svg`.
+
+### Images, securely
+
+The plugin-page sandbox stays as strict as it is (ADR 0124). A sandboxed page's own requests carry
+no cookie, so an image can never be a separate URL. The design keeps every image inside the one page
+response:
+
+1. **In through a gated write only.** An image enters the store only through `pages_asset_put`, a
+   popup card that shows its name, type, size and SHA-256. The plugin reads nothing from the user's
+   disk or the network.
+2. **Checked on the way in.**
+   - The name must match `ASSET_NAME_RE`, so it can never be a path.
+   - The bytes must match the extension (the magic numbers above), with a 1 MiB cap.
+   - An SVG must also pass `check_svg` (below), because SVG is the one image format that can carry
+     script and links.
+3. **Out only inlined.** When `/view` is served, `inline` replaces each `assets/<name>` reference
+   with a `data:<mime>;base64,…` URI of the stored bytes. The MIME type comes from the extension,
+   never from the content or from the AI.
+   - The browser makes no extra request.
+   - The page's CSP (`default-src 'self' data:`) allows exactly those `data:` images.
+   - There is no URL from which an image could be fetched on its own.
+4. **Rendered in the sandbox.** Even an image that slipped through runs inside the page's opaque
+   origin, with no cookie, no same-origin access and no popups.
+
+`check_svg(text: str) -> None` lives in `src/pf_pages/svg.py`, which imports nothing from the
+package. It raises `UnsafeSvg(ValueError)` with attribute `what`, and `Store.decode_asset` turns that
+into `StoreError("unsafe_svg")`. It is an **allowlist on namespaces
+plus a denylist on what can run, load or link**. It raises `unsafe_svg` (with `{what}` filled in)
+(through `UnsafeSvg`) on the first rule that fails, in this order:
+
+| # | Rule | `{what}` |
+|---|---|---|
+| 1 | Case-insensitive pre-checks on the text: `<!DOCTYPE`, `<!ENTITY` or `<?xml-stylesheet` appears | `a DOCTYPE, ENTITY or xml-stylesheet declaration` |
+| 2 | `xml.etree.ElementTree.fromstring(text)` raises `ET.ParseError` or `ValueError`, or the root tag is not `{http://www.w3.org/2000/svg}svg` | `XML that is not a single SVG document` |
+| 3 | An element's tag (from `root.iter()`) is not in the SVG namespace `{http://www.w3.org/2000/svg}` | `an element outside the SVG namespace` |
+| 4 | An element's local name is in `{"script", "foreignObject", "iframe", "embed", "object", "audio", "video", "set", "animate", "animateMotion", "animateTransform", "handler", "listener"}` | `a <name> element` |
+| 5 | An attribute has a namespace other than none, `http://www.w3.org/1999/xlink` or `http://www.w3.org/XML/1998/namespace` | `an attribute outside the SVG namespace` |
+| 6 | An attribute's local name starts with `on` (case-insensitive) | `an event handler attribute (<name>)` |
+| 7 | An attribute with local name `href` whose value, stripped, does not start with `#` | `a link to <value cut to 40 characters>` |
+| 8 | Any attribute value, or any `<style>` element's text, contains a backslash, or contains `@import` (case-insensitive) | `a CSS escape or @import` |
+| 9 | Any attribute value, or any `<style>` element's text, has a `url(` (case-insensitive) whose argument, stripped of spaces and quotes, does not start with `#` | `an external url()` |
+
+Rule 7 also refuses an `<image>` with an embedded `data:` raster, which many exported SVGs contain.
+That is deliberate: the README "Limits" section says to store the raster as its own asset and
+reference it from the HTML instead.
+
+`check_svg` is defence in depth, not the boundary. A page's own HTML can already run script in the
+sandbox. The boundary is the ADR 0124 sandbox together with the inlining above.
 
 `StoreError(ValueError)` carries one of these messages exactly (`{…}` filled in):
 
@@ -158,6 +217,7 @@ An asset's bytes must match its extension: PNG starts `\x89PNG\r\n\x1a\n`, JPEG 
 | `utf8_not_svg` | `Only .svg assets can be sent as utf8 text; send other images as base64.` |
 | `asset_too_large` | `The asset is larger than 1 MiB (1,048,576 bytes).` |
 | `asset_mismatch` | `The content is not a {mime_type} image.` |
+| `unsafe_svg` | `The SVG contains {what}, which pages may not use. Remove it and send the image again.` |
 | `no_asset` | `There is no asset named '{name}'.` |
 | `too_many_assets` | `There are already 200 assets. Delete one first.` |
 | `bad_offset` | `offset must be between 0 and {length}.` |
@@ -198,7 +258,8 @@ class Store:
     def publish(self, name: str, title: str, html: str) -> PageInfo
     def update(self, name: str, html: str, title: str | None, expected_current: int) -> PageInfo
     def delete(self, name: str, expected_current: int) -> int          # versions deleted
-    def pages_referencing(self, asset_name: str) -> list[str]         # names whose current HTML contains "assets/<asset_name>";
+    def pages_referencing(self, asset_name: str) -> list[str]         # names whose current HTML references the asset
+                                                                      # (store.ASSET_REF_RE, the regex inline also uses);
                                                                       # plus "stylesheet" last when site.css contains it
     # stylesheet
     def read_css(self) -> tuple[StylesheetInfo, str] | None
@@ -284,8 +345,8 @@ Descriptions and `effect` lines, verbatim:
   name>)." Effect: "Replaces the stylesheet of every published page."
 - `css_read`: "Return the stored stylesheet, about 40,000 characters per call. When the result shows
   a next offset, call again with that offset." `offset`: "Character offset to start at; default 0."
-- `publish`: "Publish a new HTML page as version 1. The page appears in the owner's page browser at
-  /plugins/pages/ and opens at /plugins/pages/view?p=<name>. Reference an image as
+- `publish`: "Publish a new HTML page as version 1. The page appears in the owner's page browser in
+  PrivacyFence (Plugins → Pages) and opens at /plugins/pages/view?p=<name>. Reference an image as
   src=\"assets/<asset name>\" (store it first with pages_asset_put); the stylesheet and images are
   inlined when the page is shown. A page runs sandboxed: scripts work, but it cannot load anything
   from the network. To change an existing page use pages_update." `name`: "Lowercase letters,
@@ -387,9 +448,21 @@ Descriptions and `effect` lines, verbatim:
 
 ### Pages (`src/pf_pages/render.py`, pure; `src/pf_pages/views.py`, `register_pages(plugin, store_for)`)
 
-`views.py` registers two pages.
+`views.py` registers the page index and one page route. The plugin serves no `/` page and no
+browser of its own.
 
-**`@plugin.page("/")`**: the page browser, `Html(browser_html(...))`.
+**`@plugin.page_index`**: one `PageEntry` per page, in `store.list_pages()` order (most recently
+updated first):
+
+```python
+PageEntry(path=f"/view?p={info.name}", title=info.title, version=str(info.current),
+          created_at=info.created_at, updated_at=info.updated_at,
+          description=f"{len(info.versions)} version" + ("" if len(info.versions) == 1 else "s"))
+```
+
+The plugin returns at most 500 entries (`MAX_PAGES` is 500, so every page fits). A page's name is
+`[a-z0-9-]`, so `path` needs no encoding. PrivacyFence's browser opens each entry at
+`/plugins/pages/view?p=<name>` in a new tab.
 
 **`@plugin.page("/view")`**: query `p` (the page's name) and optional `v` (its version). The answers:
 
@@ -418,30 +491,13 @@ Descriptions and `effect` lines, verbatim:
    - Check the total size again after inserting it.
 
 ```python
+# in store.py (so pages_referencing and inline agree); render.py imports it from there
 ASSET_REF_RE = re.compile(
     r"""(?P<lead>["'(]\s*)assets/(?P<name>[a-z0-9][a-z0-9_-]{0,57}\.(?:png|jpg|jpeg|gif|svg|webp))(?=\s*["')])"""
 )
+# in render.py
 class RenderTooLarge(Exception): ...
 ```
-
-`browser_html(pages: list[PageInfo], stylesheet: StylesheetInfo | None, assets: list[AssetInfo]) ->
-str` is a self-contained document (inline `<style>`, no script, every value escaped with
-`html.escape`). It has `<title>Pages</title>`, `<h1>Pages</h1>` and these parts, in order:
-
-- `<table id="pages">` with the header row Name, Version, Created, Updated. One row per page in
-  `list_pages()` order. The Name cell is `<a href="/plugins/pages/view?p=<name>" target="_blank"
-  rel="noopener">{title}</a> <code>{name}</code>`. Version is the newest version number, and dates
-  are shown as `YYYY-MM-DD HH:MM UTC`. With no pages it is `<p id="no-pages">No pages yet. Ask Claude
-  to publish one with pages_publish.</p>` instead.
-- `<h2>Stylesheet</h2>` with `<p id="stylesheet">site.css, {size:,} bytes, updated {date}</p>`, or
-  `No stylesheet is stored.`
-- `<h2>Assets</h2>` with `<table id="assets">` (Name, Type, Size, Updated), or `<p id="no-assets">No
-  assets are stored.</p>`.
-- `<p class="hint">Each page opens in a new tab.</p>`
-
-The browser's own styles are light, with a `@media (prefers-color-scheme: dark)` block. They use
-`system-ui`, a table with 1px borders, and a 16px page margin. The browser page is not styled with
-`site.css`.
 
 `message_html(title: str, text: str) -> str` is a minimal self-contained document with `<h1>` and
 `<p>`.
@@ -457,19 +513,19 @@ src/pf_pages/store.py
 src/pf_pages/fit.py
 src/pf_pages/tools_pages.py         register_page_tools(plugin, store_for)
 src/pf_pages/tools_assets.py        register_asset_tools(plugin, store_for)
-src/pf_pages/render.py              inline, browser_html, message_html, format_date (no SDK import)
-src/pf_pages/views.py               register_pages(plugin, store_for)
+src/pf_pages/render.py              inline, message_html (no SDK import)
+src/pf_pages/views.py               register_pages(plugin, store_for): page_index and /view
 src/pf_pages/plugin.py              build_plugin(now=utc_now) -> Plugin; plugin = build_plugin()
 scripts/pages_plugin_entry.py       PyInstaller entry: from pf_pages.__main__ import main; main()
 scripts/build.py                    python scripts/build.py --out dist  ->  dist/pages/{pages-plugin[.exe], privacyfence-plugin.yaml}
 tests/conftest.py                   pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]
-tests/test_scaffold.py, test_store.py, test_fit.py, test_tools_pages.py, test_tools_assets.py, test_render.py, test_pages.py
+tests/test_scaffold.py, test_store.py, test_svg.py, test_fit.py, test_tools_pages.py, test_tools_assets.py, test_render.py, test_pages.py
 .github/workflows/ci.yml
 README.md, CHANGELOG.md, LICENSE, CLAUDE.md, .gitignore, .claude/toolkit.yaml
 ```
 
 `pyproject.toml`: `requires-python = ">=3.11"`; dependency
-`privacyfence-plugin-sdk @ git+https://github.com/privacyfence/privacyfence@567254695aad54efa586c3950eb6d05d43a2f744#subdirectory=plugin-sdk`;
+`privacyfence-plugin-sdk @ git+https://github.com/privacyfence/privacyfence@SDK_SHA_TO_FILL#subdirectory=plugin-sdk`;
 extra `dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "pyinstaller>=6.0", "pyyaml>=6"]`;
 `[tool.pytest.ini_options] asyncio_mode = "auto"`, `testpaths = ["tests"]`; `[tool.ruff] line-length
 = 120`, `target-version = "py311"`, `[tool.ruff.lint] select = ["E", "F", "W", "I", "B", "UP"]`.
@@ -490,6 +546,9 @@ extra `dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "pyinstaller>=6.
 - **A version number the AI chooses.** Versions are 1, 2, 3, … assigned by the store. An update
   binds to the version it was prepared against (`expected_current`), so two overlapping updates
   cannot silently overwrite each other.
+- **A page browser served by the plugin.** Links from a sandboxed plugin page carry no session
+  cookie (ADR 0124), and making them work would loosen the sandbox for every plugin. PrivacyFence
+  serves the browser instead, from the plugin's page index.
 - **One page route per page (`/p/<name>`).** The SDK matches page paths exactly, so the page comes
   from the query (`/view?p=<name>`).
 
@@ -504,12 +563,18 @@ None in this repository: it keeps no ADR directory. The decisions above are reco
 Step by step, with links: [the manual steps page](https://claude.ai/artifact/S3iKvi1HvwAdMEDmwsq2xz)
 (`docs/pf-pages-plan-manual-steps.html`).
 
-- **Before** (`mb1-repo-ready`): create `privacyfence/pf-pages` with a README so `main` exists,
-  and give the Claude GitHub app access to it. Then have a session push this plan branch there.
-- **After** (`ma1-smoke-test`): on a packaged PrivacyFence built from `feature/plugin-framework-polish`
-  with the framework change merged, install the built `pages` plugin, enable it, and run the
-  README's smoke test: store CSS, an image, publish, update, open from the browser in a new tab,
-  read, delete.
+- **Before** (`mb1-ready`):
+  - The framework plan's PR (`feature/plugin-page-browser`) has merged into its base.
+  - `privacyfence/pf-pages` exists with a README, so `main` exists, and the Claude GitHub app has
+    access to it.
+  - The planning session has written the merge SHA in place of the SDK pin placeholder and pushed
+    this plan branch there.
+- **After** (`ma1-smoke-test`): on a packaged PrivacyFence built from the branch that holds the
+  framework change, install the built `pages` plugin, enable it, and run the README's smoke test:
+  - store CSS, a PNG and an SVG;
+  - publish and update a page;
+  - open it from the Plugins menu's page browser in a new tab;
+  - read it, then delete it.
 
 ## Risks and open questions
 
@@ -526,10 +591,15 @@ Step by step, with links: [the manual steps page](https://claude.ai/artifact/S3i
 - **Base64 through the AI.** Every asset byte passes through the AI's output as base64 (about 1.37
   characters per byte), so large images are slow and token-expensive. The 1 MiB cap keeps the worst
   case bounded. The README says to prefer SVG and small, compressed images.
-- **Links without the framework change.** Until the framework change is in the install, the browser's
-  links do nothing (the sandbox blocks popups), or get the owner-only 404 once popups are allowed
-  but the bounce is not there. No test in this repo can show the bounce, because the SDK's test host
-  does not model cookies. `ma1-smoke-test` is where it is checked.
+- **The framework must land first.** `@plugin.page_index` and `PageEntry` exist only from the
+  framework plan's merge commit on, which is why the pin is filled at handover. On an install
+  without that change there is no page browser: the Plugins menu and the Settings link go to
+  `/plugins/pages/`, which this plugin does not serve (404). The README says which PrivacyFence the
+  plugin needs.
+- **SVG checks are partly a denylist.** `check_svg` only allows the SVG namespace, and rejects
+  every way an SVG can run script, load something or link out that the plan knows of. The sandbox
+  stays the boundary: an SVG shown through `<img>` never runs script, and one framed by a page runs
+  in the page's opaque origin. A page's own HTML can run script there anyway.
 - **`text/html` inlining is string-level.** `inline` rewrites only `"assets/…"`, `'assets/…'` and
   `(assets/…)` references. A page that builds an asset URL in script does not get it inlined. That
   is documented, not handled.
@@ -543,14 +613,14 @@ max_parallel: 2
 manual_steps_artifact: https://claude.ai/artifact/S3iKvi1HvwAdMEDmwsq2xz
 manual_steps_source: docs/pf-pages-plan-manual-steps.html
 manual_before:
-  - id: mb1-repo-ready
-    title: Create privacyfence/pf-pages, give Claude access to it, and push this plan branch there
-    why: Every phase runs in a session cloned from privacyfence/pf-pages and starts from plan/pf-pages; without the repo and the app's access no session can start.
-    done_when: https://github.com/privacyfence/pf-pages/tree/plan/pf-pages shows docs/pf-pages-plan.md and .claude/toolkit.yaml.
+  - id: mb1-ready
+    title: Framework page-browser PR merged; privacyfence/pf-pages created with Claude's access; plan pushed there with the SDK pin filled
+    why: Every phase runs in a session cloned from privacyfence/pf-pages; p1 installs the SDK at the pinned commit, and p4 needs @plugin.page_index, which exists only after the framework PR merges.
+    done_when: "The orchestrator checks: `git show FETCH_HEAD:docs/pf-pages-plan.md | grep -cE 'privacyfence@[0-9a-f]{40}#subdirectory=plugin-sdk'` prints 2 or more, and the same grep for the placeholder word (SDK_SHA_ followed by TO_FILL) prints 0."
 manual_after:
   - id: ma1-smoke-test
     title: Run the README smoke test on a packaged PrivacyFence install
-    why: Only a real install shows the review card, the sandboxed pages and the new-tab links with the framework's bounce; the test host models none of the cookies or browser behaviour.
+    why: Only a real install shows the review cards, PrivacyFence's page browser and the sandboxed page with its inlined stylesheet and images opening in a new tab; the test host models no browser.
 verify_after_merge:
   - python -m ruff check .
   - python -m ruff format --check .
@@ -608,71 +678,108 @@ phases:
          "- The pages plugin skeleton: manifest, self-test and CI.".
          LICENSE: the Apache License 2.0 text. .gitignore: Python defaults plus build/, dist/, *.spec.
          CLAUDE.md: five lines — what the repo is; that the plugin framework docs are
-         https://github.com/privacyfence/privacyfence/blob/feature/plugin-framework-polish/docs/plugins.md
-         and https://github.com/privacyfence/privacyfence/blob/feature/plugin-framework-polish/docs/plugin-protocol.md;
+         https://github.com/privacyfence/privacyfence/blob/SDK_SHA_TO_FILL/docs/plugins.md
+         and https://github.com/privacyfence/privacyfence/blob/SDK_SHA_TO_FILL/docs/plugin-protocol.md;
          that /devflow:dod is the definition of done; and the branch naming <type>/<kebab-case>.
       9. Run pip install -e ".[dev]", ruff format ., ruff check ., pytest -q.
-      Stop with status=blocked if pip cannot install the SDK from the git URL (quote the error), or if
-      `from privacyfence_plugin_sdk import PROTOCOL_VERSION, Plugin` fails.
+      Stop with status=blocked if the dependency you wrote in pyproject.toml does not match
+      `grep -E 'privacyfence@[0-9a-f]{40}#subdirectory=plugin-sdk' pyproject.toml` (the pin was never
+      filled in at handover), if pip
+      cannot install the SDK from the git URL (quote the error), or if
+      `from privacyfence_plugin_sdk import PROTOCOL_VERSION, Plugin, PageEntry` fails.
     acceptance:
       - python -m pytest -q tests/test_scaffold.py passes
       - python -m pf_pages --self-test prints a line starting "pages ok protocol 1."
       - python -m ruff check . and python -m ruff format --check . exit 0
       - python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))" exits 0
 
-  - id: p2-store
-    title: Storage, validation and versions; card-fitting helpers
+  - id: p2a-svg-fit
+    title: SVG checks and card-fitting helpers
     depends_on: [p1-scaffold]
+    complexity: S
+    touches:
+      - src/pf_pages/svg.py
+      - src/pf_pages/fit.py
+      - tests/test_svg.py
+      - tests/test_fit.py
+    brief: |
+      Read docs/pf-pages-plan.md "Images, securely" (the check_svg table) and "Fitting text into a
+      card". Neither module imports anything from the package or the SDK.
+      1. src/pf_pages/svg.py: SVG_NS = "http://www.w3.org/2000/svg", XLINK_NS, XML_NS, the forbidden
+         element set, UnsafeSvg(ValueError) with attribute `what`, and check_svg(text) applying the nine
+         rules in the table's order, with exactly the {what} strings.
+      2. src/pf_pages/fit.py: PAYLOAD_BUDGET, PREVIEW_BUDGET, READ_CHUNK_CHARS, PREVIEW_CHARS,
+         json_size(), fit() as specified.
+      3. tests/test_svg.py: a plain `<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"
+         fill="url(#g)"/></svg>` passes, and so does one with `xlink:href="#a"`; then one failing case per
+         rule, each asserting `what`: `<!DOCTYPE svg>`, `<!ENTITY`, `<?xml-stylesheet href="x"?>`;
+         malformed "<svg><g></svg>", a namespace-less `<svg>`, a root `<html>`; an XHTML-namespaced
+         `<h:img xmlns:h="http://www.w3.org/1999/xhtml" src="https://x"/>` child; `<script>`,
+         `<foreignObject>`, `<set>`; an attribute in a made-up namespace; `onload=` and `ONCLICK=`;
+         `<a href="https://x">`, `<use href="https://x#y">`, `<image href="data:image/png;base64,AA">`;
+         `style="fill:\75rl(x)"` and `<style>@import "x";</style>`; `fill="URL(https://x)"`,
+         `filter="url('https://x')"`, `<style>rect{fill:url(https://x)}</style>`.
+      4. tests/test_fit.py: json_size counts both encodings (1,000 "😀" is larger with ensure_ascii); fit
+         never exceeds the budget for ASCII, '"'-heavy and emoji text; fit returns len(text) when it all
+         fits; fit returns start when one character does not fit.
+    acceptance:
+      - python -m pytest -q tests/test_svg.py tests/test_fit.py passes
+      - python -m ruff check . and python -m ruff format --check . exit 0
+
+  - id: p2b-store
+    title: Storage, validation and versions
+    depends_on: [p2a-svg-fit]
     complexity: M
     touches:
       - src/pf_pages/store.py
-      - src/pf_pages/fit.py
       - tests/test_store.py
-      - tests/test_fit.py
     brief: |
-      Read docs/pf-pages-plan.md "Storage", "Limits and validation", "Store API" and "Fitting text into
-      a card". This phase imports nothing from the SDK.
+      Read docs/pf-pages-plan.md "Storage", "Limits and validation", "Images, securely" and "Store
+      API". This phase imports nothing from the SDK.
       1. src/pf_pages/store.py: the constants of the code block in "Limits and validation" (copy the
-         regexes from that code block, not from any table), StoreError(ValueError) with attribute `code`
-         and the exact messages of the table, the four dataclasses, utc_now(), _atomic_write(), and Store
-         with exactly the methods and signatures of "Store API", storing files as "Storage" lays out.
-         publish raises page_exists / too_many_pages; update raises no_page, and page_changed when
-         page.current != expected_current; delete raises no_page and page_changed the same way;
-         read_html raises no_page and no_version; put_asset raises too_many_assets only for a new
-         name; delete_asset raises no_asset; check_offset raises bad_offset. Line endings are
-         normalized in check_html and check_css as specified. Symlinks: as "Store API" says.
-      2. src/pf_pages/fit.py: PAYLOAD_BUDGET, PREVIEW_BUDGET, READ_CHUNK_CHARS, PREVIEW_CHARS,
-         json_size(), fit() as specified.
-      3. tests/test_store.py, with tmp_path and a fake clock that advances one second per call:
-         - publish → version 1, created_at == updated_at; update twice → current 3, three versions,
-           each vN.html readable via read_html(name, N); update with a stale expected_current →
-           page_changed; list_pages order (updated_at descending); delete returns the version count and
-           removes the folder;
+         regexes from that code block, not from any table) and ASSET_REF_RE from "Pages",
+         StoreError(ValueError) with attribute `code` and the exact messages of the table, the four
+         dataclasses, utc_now() and a module function `timestamp(dt) -> str` that formats with
+         `dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")` (every stored timestamp goes
+         through it), _atomic_write(), and Store with exactly the methods and signatures of "Store
+         API", storing files as "Storage" lays out. publish raises page_exists / too_many_pages; update
+         raises no_page, and page_changed when page.current != expected_current; delete raises no_page
+         and page_changed the same way; read_html raises no_page and no_version; put_asset raises
+         too_many_assets only for a new name; delete_asset raises no_asset; check_offset raises
+         bad_offset; decode_asset calls svg.check_svg for every .svg and turns UnsafeSvg into
+         StoreError("unsafe_svg", message with {what}); pages_referencing uses ASSET_REF_RE. Line endings
+         are normalized in check_html and check_css as specified. Symlinks: as "Store API" says.
+         list_pages skips a page whose page.json cannot be read or parsed, and logs a WARNING with its
+         name only.
+      2. tests/test_store.py, with tmp_path and a fake clock that advances one second per call:
+         - publish → version 1, created_at == updated_at, both matching r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ";
+           update twice → current 3, three versions, each vN.html readable via read_html(name, N);
+           update with a stale expected_current → page_changed; list_pages order (updated_at
+           descending); a corrupt page.json is skipped by list_pages; delete returns the version count
+           and removes the folder;
          - every StoreError code in the table is raised by at least one test, each message compared
-           verbatim (bad_offset through check_offset);
+           verbatim (bad_offset through check_offset, unsafe_svg through put of an SVG with <script>,
+           sent once as utf8 and once as base64);
          - "con", "nul", "com1" are bad_name and "con.png" is bad_asset_name; a 64-character asset name
-           is bad_asset_name and a 63-character one is accepted; a title with "‮" or "\t" is
-           bad_title;
+           is bad_asset_name and a 63-character one is accepted; titles with "\u202e", "\t", "\u2028"
+           and "\x85" are bad_title;
          - check_html("a\r\nb\rc") stores "a\nb\nc";
          - write_css/read_css round trip and site.json fields;
          - put_asset for each of the six extensions with minimal valid bytes (and SVG as utf8), the
            magic mismatch, 1 MiB + 1 bytes, the 201st asset;
-         - pages_referencing, including "stylesheet" when site.css references the asset;
+         - pages_referencing finds src="assets/x.png", does not match "myassets/x.png", and lists
+           "stylesheet" last when site.css has url(assets/x.png);
          - a symlinked v1.html and a symlinked asset read as missing (pytest.skip when os.symlink raises
            OSError);
          - purge removes root; no ".tmp" file is left after any write.
-      4. tests/test_fit.py: json_size counts both encodings (1,000 "😀" is larger with ensure_ascii);
-         fit never exceeds the budget for ASCII, '"'-heavy and emoji text; fit returns len(text) when it
-         all fits; fit returns start when one character does not fit.
-      Stop with status=blocked if a message in the plan's table contradicts another part of the plan.
     acceptance:
-      - python -m pytest -q tests/test_store.py tests/test_fit.py passes
+      - python -m pytest -q tests/test_store.py passes
       - grep -c "class StoreError" src/pf_pages/store.py prints 1
       - python -m ruff check . and python -m ruff format --check . exit 0
 
   - id: p3a-page-tools
     title: The five page tools (publish, update, delete, read, list) and purge
-    depends_on: [p2-store]
+    depends_on: [p2b-store]
     complexity: M
     touches:
       - src/pf_pages/tools_pages.py
@@ -681,7 +788,7 @@ phases:
     brief: |
       Read docs/pf-pages-plan.md "Tools" fully. For the SDK patterns (Prepared with state,
       @tool.execute, on_purge) read examples/plugins/today/today_plugin.py of privacyfence at commit
-      567254695aad54efa586c3950eb6d05d43a2f744: `git clone --filter=blob:none https://github.com/privacyfence/privacyfence /tmp/pf-src && git -C /tmp/pf-src checkout 567254695aad54efa586c3950eb6d05d43a2f744`.
+      the SDK pin: `git clone --filter=blob:none https://github.com/privacyfence/privacyfence /tmp/pf-src && git -C /tmp/pf-src checkout SDK_SHA_TO_FILL`.
       Stop with status=blocked if that clone fails.
       1. src/pf_pages/plugin.py: build_plugin(now: Callable[[], datetime] = utc_now) gains used_dirs,
          store_for(ctx) and the purge handler exactly as "Tools" and "Purge" say, and calls
@@ -755,7 +862,7 @@ phases:
       - python -m ruff check . and python -m ruff format --check . exit 0
 
   - id: p4-pages
-    title: Page browser and page view with inlined stylesheet and assets
+    title: Page index and page view with the inlined stylesheet and images
     depends_on: [p3b-asset-tools]
     complexity: M
     touches:
@@ -765,33 +872,36 @@ phases:
       - tests/test_render.py
       - tests/test_pages.py
     brief: |
-      Read docs/pf-pages-plan.md "Pages".
-      1. src/pf_pages/render.py (no SDK import): ASSET_REF_RE, MAX_RENDERED_BYTES = 8_388_608,
-         RenderTooLarge, inline(), browser_html(), message_html(), format_date(ts) ->
-         "YYYY-MM-DD HH:MM UTC", exactly as specified, every interpolated value through
-         html.escape(..., quote=True).
-      2. src/pf_pages/views.py: register_pages(plugin, store_for) registers @plugin.page("/") and
-         @plugin.page("/view") with the answers of the table in "Pages", using the store's list_pages,
-         read_css, list_assets, read_html and get_asset (via a lookup closure returning
-         (mime_type, bytes)). src/pf_pages/plugin.py: call register_pages(plugin, store_for).
+      Read docs/pf-pages-plan.md "Pages" and "Images, securely".
+      1. src/pf_pages/render.py (no SDK import; ASSET_REF_RE imported from store): MAX_RENDERED_BYTES = 8_388_608,
+         RenderTooLarge, inline() and message_html(), exactly as specified, every interpolated value
+         in message_html through html.escape(..., quote=True).
+      2. src/pf_pages/views.py: register_pages(plugin, store_for) registers @plugin.page_index (the
+         PageEntry per page as specified) and @plugin.page("/view") with the answers of the table in
+         "Pages", using the store's list_pages, read_css, read_html and get_asset (via a lookup closure
+         returning (mime_type, bytes)). src/pf_pages/plugin.py: call register_pages(plugin, store_for).
       3. tests/test_render.py (pure): inline replaces "assets/x.png", 'assets/x.png', url(assets/x.png)
-         and url("assets/x.png") in HTML and CSS, leaves an unknown asset alone, does not touch
-         "myassets/x.png"; the style block goes right after <head lang="en"> and at the start with no
-         head; CSS containing "</style>" is emitted as "<\/style>"; with MAX_RENDERED_BYTES
-         monkeypatched (pf_pages.render) to 10,000 and one 4,000-byte asset referenced 1,000 times,
-         inline raises RenderTooLarge; browser_html escapes a title "<b>&" and has
-         href="/plugins/pages/view?p=<name>" target="_blank" rel="noopener"; the empty states show
-         #no-pages and #no-assets.
-      4. tests/test_pages.py with PluginTestHost: after publish + update + css_write + asset_put via
-         call_tool, host.get("/") is 200, headers["content-type"].startswith("text/html"), and lists the
-         page with version 2 and both dates; host.get("/view", query={"p": name}) contains the
-         pf-pages-site-css style block, a "data:image/png;base64," src and the version 2 HTML; query
-         v="1" returns version 1; v="abc", v="0" and v="9" are 404 with the no_version message; no p is
-         404 with "No page was named in the address."; an unknown and a bad name are 404 with
-         "There is no page named"; with pf_pages.render.MAX_RENDERED_BYTES monkeypatched to 1,000 a page
-         is 500 with "Page too large".
-      Stop with status=blocked if host.get does not pass the query to the page handler as
-      request.query (quote what it passes).
+         and url("assets/x.png") in HTML and CSS; leaves an unknown asset alone; does not touch
+         "myassets/x.png"; the mime type in the data URI comes from the extension; the style block goes
+         right after <head lang="en"> and at the start with no head; CSS containing "</style>" is
+         emitted as "<\/style>"; with MAX_RENDERED_BYTES monkeypatched (pf_pages.render) to 10,000 and
+         one 4,000-byte asset referenced 1,000 times, inline raises RenderTooLarge.
+      4. tests/test_pages.py with PluginTestHost:
+         - after publishing pages "a" then "b" via call_tool, `await host.list_pages()` returns two
+           entries, "b" first, with path "/view?p=b", the title, version "1", both timestamps and
+           description "1 version"; after an update of "a", "a" comes first with version "2" and
+           "2 versions"; with no pages it returns [];
+         - after publish + update + css_write + asset_put, host.get("/view", query={"p": name}) is 200,
+           headers["content-type"].startswith("text/html"), and contains the pf-pages-site-css style
+           block, a "data:image/png;base64," src and the version 2 HTML; query v="1" returns version 1;
+         - v="abc", v="0" and v="9" are 404 with the no_version message; no p is 404 with "No page was
+           named in the address."; an unknown and a bad name are 404 with "There is no page named";
+         - with pf_pages.render.MAX_RENDERED_BYTES monkeypatched to 1,000 a page is 500 with
+           "Page too large";
+         - host.get("/") is 404 (the plugin has no page of its own there).
+      Stop with status=blocked if PluginTestHost has no list_pages or the SDK has no page_index /
+      PageEntry (the pin is not at the framework merge), or if host.get does not pass the query to the
+      page handler as request.query (quote what it passes).
     acceptance:
       - python -m pytest -q tests/test_render.py tests/test_pages.py passes
       - python -m pytest -q passes
@@ -813,7 +923,7 @@ phases:
     brief: |
       1. scripts/pages_plugin_entry.py: `from pf_pages.__main__ import main` and `main()`.
          scripts/build.py, modelled on privacyfence's scripts/build_example_plugin.py at commit
-         567254695aad54efa586c3950eb6d05d43a2f744 (clone as p3a's brief says): argparse --out (default
+         the SDK pin (clone as p3a's brief says): argparse --out (default
          "dist"); run `python -m PyInstaller --onefile --name pages-plugin --distpath <tmp> --workpath
          <tmp> --specpath <tmp> scripts/pages_plugin_entry.py`; create <out>/pages/ holding the
          executable and a copy of privacyfence-plugin.yaml; run "<out>/pages/pages-plugin[.exe]
@@ -823,25 +933,30 @@ phases:
          windows-latest], python 3.12: pip install -e ".[dev]", python scripts/build.py --out dist,
          actions/upload-artifact@v4 named pages-plugin-${{ matrix.os }} with path dist/pages/.
       3. README.md: fill every "To be written." section. "Tools": the plan's tool table with each tool's
-         description. "Pages": the browser and /view, that pages open in a new tab, and that this needs
-         PrivacyFence with the plugin-page bounce (feature/plugin-framework-polish plus the framework
-         change PR). "Limits": the limits from "Limits and validation", the line-ending normalization
-         and control-character note, and the card-size and base64 notes from the plan's Risks. "Design":
+         description. "Pages": PrivacyFence's page browser (Plugins menu → Pages) lists every page through
+         the plugin's page index and opens each at /plugins/pages/view?p=<name> in a new tab; the
+         stylesheet and images are inlined into each page ("Images, securely", reworded); this needs a
+         PrivacyFence whose plugin protocol is 1.2 or later (the SDK pin's commit). "Limits": the limits from "Limits and validation", the line-ending normalization
+         and control-character note, that an SVG with an embedded data: raster is refused (store the
+         raster as its own asset), and the card-size and base64 notes from the plan's Risks. "Design":
          the plan's "What was rejected" list, reworded as decisions. "Build": scripts/build.py usage and
          the CI artifacts. "Install": point to
-         https://github.com/privacyfence/privacyfence/blob/feature/plugin-framework-polish/docs/plugins.md#installing-a-plugin
+         https://github.com/privacyfence/privacyfence/blob/SDK_SHA_TO_FILL/docs/plugins.md#installing-a-plugin
          and name the folder dist/pages. "Smoke test": these numbered steps —
          (1) install and "Review and enable": the card lists 10 tools, 6 popup (2 destructive) and 4
          review, and pages; (2) ask Claude to store a stylesheet: popup card with the CSS; (3) store a
          small PNG logo and an SVG: popup cards with type, size and SHA-256; (4) publish a page that
-         uses both: popup card with the HTML; (5) Settings → Plugins → Pages → Open page: the browser
-         lists the page as version 1 with dates; (6) click its name: a new tab shows it styled, with both
-         images; (7) ask for an update: a diff card; the browser shows version 2 and a later Updated;
-         (8) pages_read version 1: a review card, and Claude gets version 1's HTML; (9) delete the page:
-         a destructive popup with no "Always allow"; the browser shows "No pages yet"; (10) "Delete this
-         plugin's data" in Settings: the browser shows no stylesheet and no assets.
-      4. CHANGELOG.md [Unreleased] → "### Added": one line each for the ten tools, the page browser, the
-         page view with inlined stylesheet and assets, and the build script and CI artifacts.
+         uses both: popup card with the HTML; (5) top navigation → Plugins → Pages: PrivacyFence's page
+         browser lists the page as version 1 with dates; (6) click its title: a new tab shows it styled,
+         with both images; (7) ask for an update: a diff card; reload the browser: version 2 and a later
+         Updated; (8) ask to store an SVG containing <script>: the call fails with the unsafe_svg
+         message and stores nothing;
+         (9) pages_read version 1: a review card, and Claude gets version 1's HTML; (10) delete the page:
+         a destructive popup with no "Always allow"; the browser says "This plugin lists no pages."; (11)
+         "Delete this plugin's data" in Settings, then pages_asset_list says "No assets are stored.".
+      4. CHANGELOG.md [Unreleased] → "### Added": one line each for the ten tools, the page index for
+         PrivacyFence's page browser, the page view with the inlined stylesheet and images, the SVG
+         checks, and the build script and CI artifacts.
       5. Retire the plan: delete docs/pf-pages-plan.md and docs/pf-pages-plan-manual-steps.html, and
          remove "docs/pf-pages-plan.md" from .claude/toolkit.yaml docs.must_read (keep README.md).
       Stop with status=blocked if `pip install -e ".[dev]"` cannot install PyInstaller or
@@ -850,6 +965,7 @@ phases:
     acceptance:
       - python scripts/build.py --out dist exits 0 and dist/pages/privacyfence-plugin.yaml exists
       - grep -rn "To be written" README.md prints nothing
+      - grep -c "unsafe_svg\|1\.2" README.md prints 2 or more, and README.md's Smoke test has steps (1) to (11)
       - grep -rn "pf-pages-plan" . --exclude-dir=.git --exclude-dir=dist --exclude-dir=build prints nothing
       - python -m pytest -q passes; python -m ruff check . and python -m ruff format --check . exit 0
 ```
