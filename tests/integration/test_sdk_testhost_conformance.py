@@ -241,6 +241,7 @@ async def sdk():
     async with PluginTestHost(
         load_echo_plugin().plugin, max_gate_floor="auto",
         source_operations=("calendar.list_events", "drive.download"), pages=True,
+        pii=lambda text: "GB82WEST" in text,
     ) as host:
         yield SdkSide(host)
 
@@ -309,6 +310,16 @@ class TestSameOutcomes:
 
         assert_same(on_sdk, on_daemon)
         assert on_sdk.card_shown is False and on_sdk.decisions == ["auto_accepted"]
+
+    async def test_scope_rule_with_pii_shows_a_card(self, sdk, daemon):
+        async def scenario(side):
+            side.allow_scope("dataset", ["alpha"])
+            return await side.call("review_read", {"dataset": "alpha", "text": "GB82WEST12345698765432"})
+
+        on_sdk, on_daemon = await both(sdk, daemon, scenario)
+
+        assert_same(on_sdk, on_daemon)
+        assert on_sdk.card_shown is True and on_sdk.decisions == ["approved"]
 
     @pytest.mark.parametrize("dataset", ["beta", "alpha,beta"])
     async def test_scope_rule_mismatch(self, sdk, daemon, dataset):

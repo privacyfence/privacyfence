@@ -7,13 +7,18 @@ from dataclasses import dataclass, field
 from typing import Any, Union
 
 
-@dataclass(frozen=True)
+@dataclass
 class Card:
-    """What a review or popup card shows: the plugin's preview, a read's payload, and its scopes."""
+    """What a review or popup card shows: the plugin's preview, a read's payload, and its scopes.
+
+    ``pii_flagged`` is True when the host's ``pii`` check flagged the call, which overrides any
+    "Always allow" rule.
+    """
 
     preview: list[dict]
     payload: list[dict] | None
     scopes: dict[str, list[str]]
+    pii_flagged: bool = False
 
 
 @dataclass
@@ -93,3 +98,21 @@ class Rules:
             if scope_type in tool_scopes and scope_rule_matches(returned.get(scope_type), allowed):
                 return scope_type
         return None
+
+
+def flatten_text(blocks: list[dict]) -> str:
+    """Every string in the blocks, one per line, for the PII scan."""
+    lines: list[str] = []
+    for block in blocks:
+        kind = block["type"]
+        if kind == "fields":
+            for item in block["items"]:
+                lines += [item["label"], item["value"]]
+        elif kind == "table":
+            keys = [c["key"] for c in block["columns"]]
+            lines += [c["label"] for c in block["columns"]]
+            for row in block["rows"]:
+                lines += [str(row[k]) for k in keys if row.get(k) is not None]
+        else:
+            lines.append(block["text"])
+    return "\n".join(lines)

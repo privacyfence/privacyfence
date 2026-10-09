@@ -11,7 +11,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .. import blocks as _blocks
 from .._rpc import Peer, RpcError
@@ -26,7 +26,7 @@ from ..responses import ToolDefinitionError
 from . import _pages
 from ._approvals import Approval, Approvals
 from ._confirm import Confirmation, Confirmations
-from ._gate import Card, Decision, Rules, ToolOutcome, resolve_decision
+from ._gate import Card, Decision, Rules, ToolOutcome, flatten_text, resolve_decision
 from ._outputs import DEFAULT_OUTPUT_TYPES, OutputFile, check_types, list_outputs
 from ._source import SOURCE_OPERATIONS, SourceFixtures
 
@@ -208,6 +208,11 @@ class PluginTestHost:
     ``pages=True`` is the manifest's ``pages: true``: the plugin serves pages, and approval pages
     are available. Without it every ``host.get`` / ``host.request`` answers 404 and never reaches
     the plugin.
+
+    ``pii`` stands in for the daemon's PII detector: a function of the text a review card shows
+    that returns True when it finds personal data. A flagged call always shows its card, whatever
+    "Always allow" rules exist, and the card has ``pii_flagged`` set. ``None`` flags nothing, and
+    ``auto`` and ``popup`` gates are never scanned.
     """
 
     def __init__(
@@ -221,6 +226,7 @@ class PluginTestHost:
         output_types: tuple[str, ...] | list[str] | None = None,
         source_operations: Iterable[str] = (),
         pages: bool = False,
+        pii: Callable[[str], bool] | None = None,
     ) -> None:
         if mode not in ("local", "org"):
             raise ValueError("mode must be 'local' or 'org'")
@@ -234,6 +240,7 @@ class PluginTestHost:
                 raise ValueError(f"unknown source operation {operation!r}")
         self.source_operations = allowed
         self.pages = bool(pages)
+        self._pii = pii
         self.outputs = bool(outputs)
         self._output_types = check_types(DEFAULT_OUTPUT_TYPES if output_types is None else output_types) if outputs else ()
         raw = principals if principals is not None else [dict(_DEFAULT_PRINCIPAL)]
@@ -477,7 +484,19 @@ class PluginTestHost:
             self.audit.append({**entry, "decision": "auto_accepted", "auto_accept_rule": "auto"})
         else:
             rule_scope = None
-            if not tool["destructive"]:
+            flagged = False
+            if tool["gate"] == "review":
+                if read_only:
+                    text = flatten_text(card.payload)
+                else:
+                    text = json.dumps(
+                        {"plugin": self.plugin.name, "tool": tool["name"], "scopes": card.scopes},
+                        default=str, indent=2, ensure_ascii=False,
+                    )
+                flagged = bool(self._pii and self._pii(text))
+            if flagged:
+                card.pii_flagged = True
+            elif not tool["destructive"]:
                 rule_scope = self.rules.matching_scope(tool["scopes"], card.scopes)
             if rule_scope is not None:
                 via = "rule"
@@ -488,11 +507,17 @@ class PluginTestHost:
             else:
                 outcome.card_shown = True
                 if not await resolve_decision(decide, card):
-                    self.audit.append({**entry, "decision": "denied", "auto_accept_rule": ""})
+                    self.audit.append({
+                        **entry, "decision": "denied", "auto_accept_rule": "",
+                        **({"pii_detected": True} if flagged else {}),
+                    })
                     outcome.error = {"code": "denied", "detail": "The request was denied."}
                     return outcome
                 via = "card"
-                self.audit.append({**entry, "decision": "approved", "auto_accept_rule": ""})
+                self.audit.append({
+                    **entry, "decision": "approved", "auto_accept_rule": "",
+                    **({"pii_detected": True} if flagged else {}),
+                })
 
         approval = {"approval_id": f"{via}-{call_id}", "decision": "approved", "via": via, "decided_at": _now()}
         outcome.approval = approval

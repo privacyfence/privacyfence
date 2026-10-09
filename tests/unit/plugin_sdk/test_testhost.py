@@ -138,6 +138,40 @@ class TestPluginTestHost:
                 host.rules.allow_scope("nope", ["x"])
         assert extra.card_shown and other.card_shown and nothing.card_shown
 
+    async def test_pii_overrides_a_matching_rule(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin, pii=lambda text: "three" in text) as host:
+            host.rules.allow_scope("calendar", ["primary"])
+            outcome = await host.call_tool("list_events", {"calendar_id": "primary"}, decide="approve")
+        assert outcome.card_shown is True
+        assert outcome.card.pii_flagged is True
+        assert [e["decision"] for e in outcome.audit] == ["approved"]
+        assert outcome.audit[0]["pii_detected"] is True
+
+    async def test_no_pii_check_flags_nothing(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin) as host:
+            host.rules.allow_scope("calendar", ["primary"])
+            outcome = await host.call_tool("list_events", {"calendar_id": "primary"}, decide="deny")
+        assert outcome.card_shown is False and outcome.card.pii_flagged is False
+        assert "pii_detected" not in outcome.audit[0]
+
+    async def test_pii_ignored_on_popup_and_auto(self):
+        scanned = []
+
+        def pii(text):
+            scanned.append(text)
+            return True
+
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin, pii=pii) as host:
+            write = await host.call_tool("rename", {"name": "x"})
+        async with PluginTestHost(auto_plugin(True), max_gate_floor="auto", pii=pii) as host:
+            auto = await host.call_tool("peek")
+        assert write.card_shown and not write.card.pii_flagged
+        assert not auto.card_shown and not auto.card.pii_flagged
+        assert scanned == []
+
     async def test_scope_rule_ignores_destructive_and_other_tools(self):
         plugin, _ = build_plugin()
         async with PluginTestHost(plugin) as host:
