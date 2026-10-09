@@ -229,7 +229,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0121](0121-a-plugin-is-trusted-code-installed-by-an-administrator-into-an-admin-only-directory.md) | A plugin is trusted code, installed by an administrator into an admin-only directory | Accepted; amended by 0131 |
 | [0122](0122-plugin-tools-are-gated-in-two-steps-and-a-read-releases-the-prepared-payload.md) | Plugin tools are gated in two steps, and a read releases the prepared payload | Accepted; amended by 0133 |
 | [0123](0123-the-plugin-source-api-is-ungated-but-audited-without-content.md) | The plugin source API is ungated but audited without content | Accepted; amended by 0128, 0129 |
-| [0124](0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md) | Plugin pages are GET-only, owner-session-only, self-contained and sandboxed | Accepted |
+| [0124](0124-plugin-pages-are-get-only-owner-only-and-sandboxed.md) | Plugin pages are GET-only, owner-session-only, self-contained and sandboxed | Accepted; amended by 0135 |
 | [0125](0125-the-org-mode-plugin-contract-is-reserved-in-protocol-1-and-rejected-in-local-mode.md) | The org-mode plugin contract is reserved in protocol 1 and rejected in local mode | Accepted |
 | [0126](0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md) | The plugin SDK lives in this repository and is published from the same tag | Accepted |
 | [0127](0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) | A plugin approval binds to its content digest and persists until revoked | Accepted |
@@ -240,3 +240,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0132](0132-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md) | A plugin that stops reading its input for 10 seconds is treated as crashed | Accepted; amends 0120 |
 | [0133](0133-a-plugin-writes-result-is-capped-and-pii-scanned-before-it-reaches-the-ai.md) | A plugin write's result is capped at 2,048 bytes and PII-scanned before it reaches the AI | Accepted; amends 0122 |
 | [0134](0134-paged-source-reads-read-one-version-and-measure-utf8-bytes.md) | Paged plugin source reads read one version of the data and measure UTF-8 bytes | Accepted; amends 0128 |
+| [0135](0135-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md) | A plugin lists its pages, and PrivacyFence serves the page browser | Accepted; amends 0124 |

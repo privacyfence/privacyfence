@@ -119,8 +119,23 @@ Pages are served read-only at `/plugins/<name>/` under a sandbox content securit
 must be self-contained**: inline its CSS, scripts and images (as `data:` URIs). The page runs in an
 opaque origin, so requests for separate files carry no session and are refused. A page is a single
 self-contained page that keeps its state in the page itself (script or `#fragment`). Other pages of
-the plugin open only from Settings or a typed URL: links between plugin pages, and links from a
+the plugin open from the page browser, Settings or a typed URL: links between plugin pages, and links from a
 plugin page back into PrivacyFence, do not carry the session and get a 404.
+
+### Page index
+
+To have PrivacyFence's page browser list your pages, register a page index:
+
+```python
+from privacyfence_plugin_sdk import PageEntry
+
+@plugin.page_index
+async def pages(ctx): return [PageEntry("/", "Home")]
+```
+
+`PluginTestHost.list_pages()` returns the entries as the daemon receives them. `types.py` has a
+`PageEntry` TypedDict for the wire shape; `privacyfence_plugin_sdk.PageEntry` is the dataclass to
+return.
 
 ## Confirmations
 

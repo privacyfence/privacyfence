@@ -290,7 +290,7 @@ A [plugin](plugins.md) is a separate program an administrator installs and you e
 is in [ADR 0120](adr/0120-plugins-are-out-of-process-executables-speaking-json-rpc-over-stdio.md) to
 [ADR 0126](adr/0126-the-plugin-sdk-lives-in-this-repository-and-is-published-from-the-same-tag.md),
 and in [ADR 0127](adr/0127-a-plugin-approval-binds-to-its-content-digest-and-persists-until-revoked.md) to
-[ADR 0134](adr/0134-paged-source-reads-read-one-version-and-measure-utf8-bytes.md).
+[ADR 0135](adr/0135-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md).
 
 **Trust model.** A plugin is trusted code: it runs as the service account, the account that holds
 every connector credential, so whoever can replace it can read your data. The privacy boundary of
@@ -325,7 +325,8 @@ connector token.
 **Plugin pages** are served only to your signed-in human session, never to an AI client. They run in
 a sandbox: no `allow-same-origin`, so a page cannot read the session cookie or call PrivacyFence's
 APIs, and the content security policy allows scripts but no form posts and no framing. Only GET
-and HEAD are served.
+and HEAD are served. The page browser that lists them is a PrivacyFence page; plugin pages keep the
+sandbox, and a plugin's images and styles are inlined, never fetched.
 
 **Confirmations** are cards that no rule can accept, with step-up kept, and they are refused while
 any AI session is unattended.
