@@ -40,8 +40,8 @@
         <article class="card stack">
           <h3>Jira</h3>
           <dl class="connector-gates">
-            <dt>Without a card</dt><dd>Projects, issue search with JQL, and an issue's available transitions.</dd>
-            <dt>Reviewed before release</dt><dd>An issue's full details, including its description and comments.</dd>
+            <dt>Without a card</dt><dd>Projects, issue search with JQL, an issue's available transitions, the site's field names, and looking up people's account ids.</dd>
+            <dt>Reviewed before release</dt><dd>An issue's full details, including its description and comments, and issue searches that return extra fields.</dd>
             <dt>Needs your approval</dt><dd>Creating and updating issues, commenting, and moving an issue to a new status.</dd>
           </dl>
         </article>
@@ -62,7 +62,7 @@
           <p class="kicker">Personal data</p>
           <h2 id="pii-heading">Tickets and pages are checked before you see them.</h2>
           <div class="page-copy stack">
-            <p>Before a reviewed read is shown to you, PrivacyFence scans it locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. It scans a Jira issue's description and comments, a Confluence page's body, and the text it can extract from an attachment (up to 20,000 characters; files over 5 MB and images are not scanned).</p>
+            <p>Before a reviewed read is shown to you, PrivacyFence scans it locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. It scans a Jira issue's description, comments and any extra fields requested, a Confluence page's body, and the text it can extract from an attachment (up to 20,000 characters; files over 5 MB and images are not scanned).</p>
             <p>A match sends the read to a card even if an always-allow rule covers it, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
             <p>The privacy filter, separately, decides what may leave PrivacyFence at all. Out of the box it blocks Confluence search excerpts and attachments until you allow them in <strong>Settings → Privacy Filter → Confluence</strong>.</p>
             <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>

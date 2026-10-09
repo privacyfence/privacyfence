@@ -127,6 +127,7 @@ from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
+from .routes_plugin_browser import build_routes as build_plugin_browser_routes
 from .routes_plugins import build_routes as build_plugin_routes
 from .routes_settings import AiClientConnect
 from .routes_settings import build_routes as build_settings_routes
@@ -1065,6 +1066,10 @@ def build_app(
         # the owner's to look at, never an agent's (ADR 0124).
         extra_routes.extend(_owner_only_routes(build_plugin_routes(
             plugin_host, is_owner_session=lambda request: _is_human_session(request, sessions),
+        )))
+        extra_routes.extend(_owner_only_routes(build_plugin_browser_routes(
+            plugin_host, is_owner_session=lambda request: _is_human_session(request, sessions),
+            notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
         )))
 
     if state_stream is not None:

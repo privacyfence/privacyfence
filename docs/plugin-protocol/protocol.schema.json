@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PrivacyFence plugin protocol",
   "description": "Messages exchanged between the PrivacyFence daemon and an out-of-process plugin, JSON-RPC 2.0, one object per line. Receivers ignore unknown fields, except Block and Manifest.",
-  "x-protocol-version": "1.1.0",
+  "x-protocol-version": "1.2.0",
   "x-limits": {
     "MAX_LINE_BYTES": 16777216,
     "MAX_IN_FLIGHT": 16,
@@ -30,11 +30,17 @@
     "OUTPUT_READ_PAGE_BYTES": 90000,
     "OUTPUT_LIST_PAGE": 200,
     "OUTPUT_MAX_DEPTH": 8,
+    "MAX_PAGE_INDEX_ENTRIES": 500,
+    "MAX_PAGE_VERSION_CHARS": 40,
+    "MAX_PAGE_DESCRIPTION_CHARS": 200,
+    "SEND_TIMEOUT_SECONDS": 10.0,
+    "WRITE_RESULT_MAX_BYTES": 2048,
     "TIMEOUT_SECONDS": {
       "initialize": 10.0,
       "tool.prepare": 30.0,
       "tool.execute": 60.0,
       "web.request": 10.0,
+      "pages.list": 10.0,
       "storage.purge": 30.0,
       "source.call": 120.0,
       "confirm.request": 5.0,
@@ -1210,6 +1216,78 @@
       "required": [
         "status",
         "body"
+      ]
+    },
+    "PagesListParams": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "$ref": "#/$defs/PrincipalContext"
+        }
+      },
+      "required": [
+        "principal"
+      ]
+    },
+    "PageEntry": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^/[\\x21\\x22\\x24-\\x5b\\x5d-\\x7e]*$",
+          "description": "Starts with \"/\"; printable ASCII without space, # or backslash. May carry a query after the first \"?\". The part before it is already decoded, has no empty segments and no \".\" or \"..\" segment."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$",
+          "description": "One line: no line breaks, tabs, control or bidirectional characters."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$",
+          "description": "One line: no line breaks, tabs, control or bidirectional characters."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069\\u061c\\u2028\\u2029]*$",
+          "description": "One line: no line breaks, tabs, control or bidirectional characters."
+        }
+      },
+      "required": [
+        "path",
+        "title"
+      ]
+    },
+    "PagesListResult": {
+      "type": "object",
+      "properties": {
+        "pages": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/PageEntry"
+          },
+          "description": "In the order the page browser shows them."
+        }
+      },
+      "required": [
+        "pages"
       ]
     },
     "StoragePurgeParams": {

@@ -1,7 +1,7 @@
 # Plugin protocol reference
 
 How PrivacyFence and a plugin talk to each other: the transport, the manifest, every message with
-its data shapes, the limits and the timeouts. This is protocol version `1.1.0`. For installing and
+its data shapes, the limits and the timeouts. This is protocol version `1.2.0`. For installing and
 running a plugin, see [`plugins.md`](plugins.md); for writing one, the
 [`privacyfence-plugin-sdk`](https://github.com/privacyfence/privacyfence/tree/main/plugin-sdk) does
 the protocol for you. The machine-readable description of every message is
@@ -40,6 +40,8 @@ stdin and stdout.
 - **Bad lines.** Three consecutive lines that are not valid JSON-RPC (bad JSON, over the size cap,
   or not an object) close the connection, and that counts as a crash. A line over the size cap is
   discarded up to its newline and counts once, however many pieces it arrives in.
+- **Unread messages.** A plugin that does not read a message the daemon sends within 10 seconds
+  (`SEND_TIMEOUT_SECONDS`) is treated as crashed ([ADR 0136](adr/0136-a-plugin-that-stops-reading-its-input-for-10-seconds-is-treated-as-crashed.md)).
 - **Non-finite numbers.** `NaN`, `Infinity` and `-Infinity` are not JSON: neither side sends them,
   and a line that carries one is a parse error.
 - **Unknown fields** are ignored by both sides, so a minor version can add fields. The exceptions
@@ -71,6 +73,14 @@ manifest keys `outputs` and `output_types`, and `PrincipalContext.output_dir` an
 requested the revoked approval, and `output_dir` and `output_types` only to a plugin with
 `outputs: true`.
 
+Version `1.2` adds the `pages.list` request, with which a plugin lists its pages for the page browser; a plugin that
+does not implement it answers `method_not_found` and is listed with one page, `/`. It also
+caps what reaches the AI from a write tool: a `tool.execute` result over 2,048 bytes
+(`WRITE_RESULT_MAX_BYTES`), or one the PII check flags, reaches the AI as a fixed sentence.
+The `tool.execute` message itself is unchanged, so a plugin written for 1.0 or 1.1 keeps
+working. `x-limits` also states `SEND_TIMEOUT_SECONDS` (10): a plugin that does not read a
+message within that time is treated as crashed.
+
 ## Errors
 
 A failed request is answered with a JSON-RPC error whose `data` carries the stable name:
@@ -88,13 +98,13 @@ A failed request is answered with a JSON-RPC error whose `data` carries the stab
 | `parse_error` | -32700 | A line that is not JSON |
 | `invalid_request` | -32600 | A batch, a message that is not a request, too many in flight |
 | `method_not_found` | -32601 | An unknown request method |
-| `invalid_params` | -32602 | Parameters that fail validation |
+| `invalid_params` | -32602 | Parameters that fail validation (`data.reason` is `not_downloadable` for a Drive file of a Google type that cannot be downloaded) |
 | `internal_error` | -32603 | A handler failed, or the peer closed |
 | `operation_not_allowed` | -32001 | A source operation outside the manifest's list |
 | `connector_unavailable` | -32002 | The service is not connected (`data.reason`: `disabled`, `not_authenticated` or `unavailable`) |
 | `unknown_principal` | -32003 | A principal other than `local` |
 | `payload_too_large` | -32004 | A result over its limit, or one record larger than a page |
-| `upstream_error` | -32005 | The service answered with an error (`data.reason` is `revision_changed` for a Drive file that changed) |
+| `upstream_error` | -32005 | The service answered with an error (`data.reason` is `revision_changed` for a Drive file or Confluence page that changed, or `cursor_expired` when a Sheets copy is gone and the range must be read again from the start) |
 | `org_only_field` | -32006 | An organization-mode field in local mode |
 | `confirmation_refused` | -32007 | A confirmation or approval refused (`data.reason` is `unattended_session` or `too_many_pending`) |
 | `unknown_tool` | -32008 | A tool name the plugin does not have |
@@ -163,6 +173,7 @@ principal is `local`.
 | `approval.await` | P to D | request | Wait for that answer |
 | `approval.revoked` | D to P | notification | A human revoked an approval |
 | `web.request` | D to P | request | A page request |
+| `pages.list` | D to P | request | List the plugin's pages for the page browser |
 | `storage.purge` | D to P | request | Release and delete the plugin's data |
 | `connector.state_changed` | D to P | notification | A connector was enabled, disabled, signed in or out |
 | `principal.removed` | D to P | notification | Reserved; local mode never sends it |
@@ -174,7 +185,7 @@ principal is `local`.
 Parameters:
 
 ```json
-{"protocol_version": "1.1.0", "purpose": "run", "mode": "local",
+{"protocol_version": "1.2.0", "purpose": "run", "mode": "local",
  "daemon": {"name": "privacyfence", "version": "5.6.0"},
  "plugin": {"name": "today", "manifest_version": "1.2.0"},
  "data_dir": "/var/lib/privacyfence/plugin-data/today/shared",
@@ -192,7 +203,7 @@ declares them twice); neither is sent to any other plugin.
 Result:
 
 ```json
-{"protocol_version": "1.1.0",
+{"protocol_version": "1.2.0",
  "plugin": {"name": "today", "version": "1.2.0"},
  "scope_types": [{"name": "calendar", "description": "Calendar id a call reads"}],
  "tools": [ToolDef, …]}
@@ -278,6 +289,11 @@ its own card. `tool.execute` can therefore name a `call_id` prepared more than 1
 and a read's `call_id` more than once. A plugin that no longer holds the call answers
 `unknown_call`; for a read the daemon still returns the prepared payload.
 
+The SDK keeps a prepared call for 20 minutes, the card's pending lifetime plus the window in which
+an approval is replayed, and at most 256 at a time. If you raise `approvals.pending_ttl_seconds` or
+`approvals.ledger_ttl_seconds`, a write approved after that fails with "lost track of this call"
+rather than running.
+
 When `tool.prepare` fails, the plugin's own error detail never reaches the AI client. The connector
 turns the error into one fixed sentence, which the daemon logs: `connector_unavailable` gives "A
 service this plugin reads from is not connected.", `upstream_error` gives "A service this plugin
@@ -304,8 +320,12 @@ Result: `{"result": <any>, "approval_id": "<optional>"}`.
 
 - For a **read-only** tool the daemon ignores `result` and an error, and returns the prepared
   payload as `{"blocks": payload}`. A plugin cannot release anything the card did not show.
-- For any other tool `result` is returned to the AI client, at most 100,000 bytes serialized. When
-  `approval_id` is present it is added to the result, so the client can call
+- For any other tool `result` (with `approval_id` merged in) reaches the AI only when its JSON is
+  at most 2,048 bytes (`WRITE_RESULT_MAX_BYTES`) and PrivacyFence's PII check finds nothing.
+  Otherwise the AI gets `{"withheld": true, "message": "The action ran, but its result was withheld because it was larger than 2,048 bytes or may contain personal data."}`,
+  plus `approval_id` when that id is one PrivacyFence issued to this plugin (a confirmation or
+  approval card, or a stored approval); any other `approval_id` is dropped. Put larger results in
+  an output file. When `approval_id` is present it is added to the result, so the client can call
   `privacyfence_await_approval` with it. A write that was approved runs once and is never retried.
 
 ### Blocks
@@ -335,6 +355,8 @@ Result:
 ```json
 {"operation": "calendar.list_events", "data": …, "bytes": 1234, "next_cursor": null}
 ```
+
+Sizes are UTF-8 bytes of the JSON.
 
 The checks run in this order, and the first failure is the error: the plugin is being inspected
 (`introspection_only`); the parameters parse (`invalid_params`, `org_only_field`); the principal is
@@ -460,8 +482,8 @@ nothing is left.
 |---|---|
 | `jira.search` | Issues from one provider page (the provider's own page token), cut to fit; the cursor continues inside a provider page or moves to the next |
 | `calendar.list_events` | The same, with the provider's page token |
-| `sheets.get_values` | A run of rows from `first_row`; the next cursor starts after the last row returned |
-| `confluence.get_page` | The page with `body` cut to a slice that fits; `body_offset` and `body_total_chars` say where the slice sits |
+| `sheets.get_values` | A run of rows from `first_row`; the next cursor starts after the last row returned. The whole range is read once; later pages come from a private copy held for 10 idle minutes |
+| `confluence.get_page` | The page with `body` cut to a slice that fits; `body_offset` and `body_total_chars` say where the slice sits. A page that changes between pages is `revision_changed` |
 | `drive.download` | A byte range of the file, up to `length` (8 MiB at most) |
 | `salesforce.report_run` | One report run sorted by `page_by`, starting after the previous page's last value, cut to fit; grouped reports are read as one table. A column that is not unique, does not advance or is not a column of the run is `invalid_params` with `reason` `bad_page_by`, `not_unique`, `not_advancing` or `not_flat`; a read that would lose rows (RowCount check) is `invalid_params` with `reason` `rows_lost`; more than `salesforce.report_max_pages` runs is `invalid_params` with `reason` `page_limit`. Without `page_by` it is one run as saved, not paged |
 
@@ -474,7 +496,7 @@ shorter than asked, fails with `upstream_error` and `data.reason` `revision_chan
 the end of the file is `invalid_params`. A Google-native file (Docs and Slides exported as text,
 Sheets as CSV) cannot be ranged: it is exported whole to a private spool file, with no size cap of
 PrivacyFence's own, served in chunks of at most 8 MiB, and deleted after 10 idle minutes. An export
-Google refuses is `upstream_error`.
+Google refuses is `upstream_error`. Other Google-native types (Forms, Drawings, folders, shortcuts, …) are `invalid_params` with `data.reason` `not_downloadable`.
 
 ### Confirmations
 
@@ -494,7 +516,9 @@ may be pending at once, and at most 8 per plugin; a request over either cap is r
 `confirm.await` takes `approval_id` (one of this plugin's own) and `timeout_ms` (0 to 300,000;
 default 300,000) and answers `{"status": "approved" | "denied" | "expired", "decided_at": "…"}`, or
 `timeout` when still pending. A confirmation carries no deny note. The same `approval_id` works with
-`privacyfence_await_approval`.
+`privacyfence_await_approval`. A card stays pending up to 15 minutes, longer than one await: call
+`confirm.await` again after `timeout` until it answers a final status. The SDK's
+`ctx.confirm.wait()` does.
 
 ### Approvals
 
@@ -526,7 +550,9 @@ that could not be read. `approval.await` takes `approval_id` and `timeout_ms` (0
 answers `{"status": "approved" | "denied" | "expired", "decided_at"?}`, or `timeout` while pending; for
 an id that was answered without a card it answers `approved`. When a human revokes an approval in
 Settings, a running plugin gets the notification `approval.revoked` with `approval_id`, `kind`,
-`subject_id` and `digest`, best effort. Purging or uninstalling a plugin deletes its approvals.
+`subject_id` and `digest`, best effort. Purging or uninstalling a plugin deletes its approvals. A card stays pending up to 15 minutes,
+longer than one await: call `approval.await` again after `timeout` until it answers a final status.
+The SDK's `ctx.approvals.wait()` does.
 
 **The embedding rule.** The card shows PrivacyFence's fields (plugin, kind, subject, digest) first,
 outside any frame. When `page` is given, the plugin's page loads in a sandboxed frame at
@@ -602,8 +628,28 @@ succeeded) is asked; any other page request gets 404.
   or call PrivacyFence's APIs, and its requests for separate files carry no cookie and are refused.
   A page must inline its CSS, scripts and images (as `data:` URIs). A plugin page is a single
   self-contained page that keeps its state in the page itself (script or `#fragment`). Other pages
-  of the same plugin open only from Settings or a typed URL: a link from a plugin page to another
+  of the same plugin open from the page browser ([`pages.list`](#pageslist)), Settings or a typed URL: a link from a plugin page to another
   page, or back into PrivacyFence, does not carry the session and gets the owner-only 404.
+
+### `pages.list`
+
+Sent to a running plugin whose manifest sets `pages: true`, to list its pages for the page browser.
+Params: `{"principal": PrincipalContext}`. Result: `{"pages": [PageEntry, ...]}`, at most 500 entries,
+in the order the browser shows them. Unknown fields are ignored.
+
+| Field | Rule |
+|---|---|
+| `path` | Required. 1 to 512 characters of printable ASCII with no space, `#` or backslash, starting with `/`. It may carry a query after the first `?`. The part before `?` is already URL-decoded, has no NUL or `//`, and no `.` or `..` segment. |
+| `title` | Required, 1 to 120 characters on one line, not only whitespace. |
+| `version` | Optional, 1 to 40 characters on one line. |
+| `created_at`, `updated_at` | Optional. RFC 3339 with a time zone. |
+| `description` | Optional, 1 to 200 characters on one line. |
+
+The first bad entry fails the whole result with `invalid_params`, and the detail names the entry and
+field (`pages[3].title must not be empty`); the browser then shows that the plugin returned an
+invalid page list. A plugin that answers `method_not_found` is listed with one page, `/`, titled with
+its display name. The page browser at `/plugin-pages` lists the entries; each opens
+`/plugins/<name><path>` in a new tab.
 
 ### Storage
 
@@ -654,6 +700,7 @@ mode does not start plugins.
 | Requests in flight, each direction | 16 |
 | Consecutive invalid lines before disconnect | 3 |
 | Tool result and payload, serialized | 100,000 bytes |
+| Write tool result reaching the AI, serialized | 2,048 bytes |
 | Preview | 64 KiB, 50 blocks |
 | Table cell | 4,096 characters |
 | Tools per plugin | 64 |
@@ -667,7 +714,10 @@ mode does not start plugins.
 | Output list page, read page | 200 files, 90,000 bytes |
 | Page body | 8 MiB |
 | Page path | 512 characters |
+| Page index entries | 500 (`MAX_PAGE_INDEX_ENTRIES`) |
+| Page index version, description | 40 and 200 characters (`MAX_PAGE_VERSION_CHARS`, `MAX_PAGE_DESCRIPTION_CHARS`) |
 | Pending confirmations, pending approvals | 64 each |
+| Send timeout (a message the plugin does not read) | 10 seconds |
 
 | Request | Timeout (seconds) |
 |---|---|
@@ -675,6 +725,7 @@ mode does not start plugins.
 | `tool.prepare` | 30 |
 | `tool.execute` | 60 |
 | `web.request` | 10 |
+| `pages.list` | 10 |
 | `storage.purge` | 30 |
 | `source.call` | 120 |
 | `confirm.request` | 5 |

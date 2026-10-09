@@ -195,7 +195,7 @@ class TestToolDef:
 
 class TestInitializeResult:
     WIRE = {
-        "protocol_version": "1.1.0",
+        "protocol_version": "1.2.0",
         "plugin": {"name": "today", "version": "1.2.0"},
         "scope_types": [{"name": "calendar", "description": "A calendar id"}],
         "tools": [_tool()],
@@ -599,6 +599,91 @@ class TestWebResponse:
         _raises("payload_too_large", p.WebResponse.from_wire, {"status": 200, "body": body, "body_encoding": "base64"})
 
 
+class TestPagesListResult:
+    ENTRY = {
+        "path": "/archive?year=2026",
+        "title": "Archive",
+        "version": "v3",
+        "created_at": "2026-10-09T10:00:00Z",
+        "updated_at": "2026-10-09T10:00:00+02:00",
+        "description": "Everything filed so far.",
+    }
+
+    def _bad(self, field, value, *, index=0):
+        entries = [{"path": "/", "title": "Home"} for _ in range(index)] + [{**self.ENTRY, field: value}]
+        err = _raises("invalid_params", p.PagesListResult.from_wire, {"pages": entries})
+        assert err.detail.startswith(f"pages[{index}].{field}"), err.detail
+
+    def test_valid_list_with_every_field(self):
+        result = p.PagesListResult.from_wire({"pages": [self.ENTRY, {"path": "/", "title": "Home"}]})
+        assert result.pages[0] == p.PageEntry(**self.ENTRY)
+        assert result.to_wire() == {"pages": [self.ENTRY, {"path": "/", "title": "Home"}]}
+
+    def test_empty_list_and_unknown_fields(self):
+        assert p.PagesListResult.from_wire({"pages": [], "extra": 1}).pages == ()
+        assert p.PagesListResult.from_wire({"pages": [{"path": "/", "title": "T", "x": 1}]}).pages[0].title == "T"
+
+    def test_limit_of_entries(self):
+        entries = [{"path": "/", "title": "T"}] * c.MAX_PAGE_INDEX_ENTRIES
+        assert len(p.PagesListResult.from_wire({"pages": entries}).pages) == c.MAX_PAGE_INDEX_ENTRIES
+        err = _raises("invalid_params", p.PagesListResult.from_wire, {"pages": [*entries, entries[0]]})
+        assert err.detail.startswith("pages")
+
+    @pytest.mark.parametrize("bad", ["x", {}, {"pages": "x"}, {"pages": ["x"]}, {"pages": [{"title": "T"}]}])
+    def test_invalid_shapes(self, bad):
+        _raises("invalid_params", p.PagesListResult.from_wire, bad)
+
+    @pytest.mark.parametrize(
+        "path",
+        ["", "a", "a/b", "/a#b", "/a\\b", "/..", "/a/../b", "/./x", "/a/.", "/a%2Fb", "/a\tb", "/a\nb", "/a b",
+         "//a", "/a//b", "/" + "a" * c.MAX_PAGE_PATH_CHARS, "/\u00e9"],
+    )
+    def test_bad_path(self, path):
+        self._bad("path", path)
+
+    def test_path_with_a_query_may_hold_dots(self):
+        entry = p.PageEntry.from_wire({"path": "/a?next=../b&x=%2F", "title": "T"})
+        assert entry.path == "/a?next=../b&x=%2F"
+
+    def test_error_names_the_index(self):
+        self._bad("title", "", index=3)
+
+    @pytest.mark.parametrize("title", ["", "   ", "x" * (c.MAX_TITLE_CHARS + 1), "a\nb", "a\u202eb", "a\tb"])
+    def test_bad_title(self, title):
+        self._bad("title", title)
+
+    @pytest.mark.parametrize("version", ["", "v" * (c.MAX_PAGE_VERSION_CHARS + 1), "a\nb", 3])
+    def test_bad_version(self, version):
+        self._bad("version", version)
+
+    @pytest.mark.parametrize("stamp", ["yesterday", "2026-10-09T10:00:00", "2026-10-09", "", 5])
+    @pytest.mark.parametrize("field", ["created_at", "updated_at"])
+    def test_bad_timestamp(self, field, stamp):
+        self._bad(field, stamp)
+
+    @pytest.mark.parametrize("stamp", ["0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"])
+    @pytest.mark.parametrize("field", ["created_at", "updated_at"])
+    def test_timestamp_that_overflows_in_utc_is_refused(self, field, stamp):
+        self._bad(field, stamp)
+
+    @pytest.mark.parametrize("description", ["", "d" * (c.MAX_PAGE_DESCRIPTION_CHARS + 1), "a\nb"])
+    def test_bad_description(self, description):
+        self._bad("description", description)
+
+    def test_boundary_lengths_are_accepted(self):
+        entry = p.PageEntry.from_wire({
+            "path": "/" + "a" * (c.MAX_PAGE_PATH_CHARS - 1),
+            "title": "t" * c.MAX_TITLE_CHARS,
+            "version": "v" * c.MAX_PAGE_VERSION_CHARS,
+            "description": "d" * c.MAX_PAGE_DESCRIPTION_CHARS,
+        })
+        assert len(entry.path) == c.MAX_PAGE_PATH_CHARS
+
+    def test_mode_is_checked(self):
+        with pytest.raises(ValueError):
+            p.PagesListResult.from_wire({"pages": []}, mode="x")
+
+
 class TestArgsDigest:
     def test_stable_under_key_order(self):
         assert p.args_digest({"a": 1, "b": [1, 2], "c": {"x": 1, "y": 2}}) == p.args_digest(
@@ -660,6 +745,7 @@ class TestSchema:
         "ApprovalAwaitResult", "ApprovalRevokedParams", "WebRequestParams",
         "WebRequestResult", "StoragePurgeParams", "StoragePurgeResult", "ToolsChangedParams",
         "ConnectorStateChangedParams", "PrincipalRemovedParams", "PluginDisablingParams", "ShutdownParams",
+        "PagesListParams", "PageEntry", "PagesListResult",
     ]
 
     def test_declares_2020_12(self, schema):
@@ -683,6 +769,8 @@ class TestSchema:
             ("ApprovalCheckParams", p.ApprovalCheckParams),
             ("ApprovalAwaitParams", p.ApprovalAwaitParams),
             ("WebRequestResult", p.WebResponse),
+            ("PageEntry", p.PageEntry),
+            ("PagesListResult", p.PagesListResult),
         ],
     )
     def test_def_properties_match_the_dataclass(self, schema, name, cls):
@@ -702,6 +790,8 @@ class TestSchema:
             ("ApprovalCheckParams", p.ApprovalCheckParams),
             ("ApprovalAwaitParams", p.ApprovalAwaitParams),
             ("WebRequestResult", p.WebResponse),
+            ("PageEntry", p.PageEntry),
+            ("PagesListResult", p.PagesListResult),
         ],
     )
     def test_required_keys_are_all_handled(self, schema, name, cls):
@@ -731,6 +821,7 @@ class TestSchema:
         assert defs["ApprovalCheckParams"]["properties"]["digest"]["pattern"] == f"^{c.DIGEST_RE.pattern}$"
         assert defs["PrincipalContext"]["properties"]["output_types"]["items"]["enum"] == list(c.OUTPUT_TYPES)
         assert defs["Manifest"]["properties"]["output_types"]["items"]["enum"] == list(c.OUTPUT_TYPES)
+        assert defs["PageEntry"]["properties"]["path"]["pattern"] == f"^{c.PAGE_ENTRY_PATH_RE.pattern}$"
 
     def test_reserved_plugin_names_match_the_constants(self, schema):
         assert set(schema["$defs"]["Manifest"]["properties"]["name"]["not"]["enum"]) == c.RESERVED_PLUGIN_NAMES
@@ -747,6 +838,9 @@ class TestSchema:
             defs["Manifest"]["properties"]["display_name"],
             defs["ToolDef"]["properties"]["title"],
             defs["ToolDef"]["properties"]["effect"],
+            defs["PageEntry"]["properties"]["title"],
+            defs["PageEntry"]["properties"]["version"],
+            defs["PageEntry"]["properties"]["description"],
             defs["ApprovalRequestParams"]["properties"]["subject_id"],
             defs["ApprovalCheckParams"]["properties"]["subject_id"],
             defs["ApprovalRevokedParams"]["properties"]["subject_id"],

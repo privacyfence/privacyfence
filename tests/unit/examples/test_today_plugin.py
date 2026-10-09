@@ -38,6 +38,8 @@ def make_host(crash_tool: bool = False) -> PluginTestHost:
         max_gate_floor="auto",
         outputs=True,
         output_types=("text/csv",),
+        source_operations=("calendar.list_events",),
+        pages=True,
     )
 
 
@@ -281,6 +283,30 @@ class TestPublishConfirmation:
             page = (await host.get("/")).text
         assert "Team lunch" in page and "bring slides" in page and "Nothing is published yet" not in page
 
+    async def test_a_late_approval_still_publishes(self, monkeypatch):
+        import privacyfence_plugin_sdk.plugin as sdk_plugin
+        from privacyfence_plugin_sdk.testing import _confirm
+
+        monkeypatch.setattr(sdk_plugin, "_CONFIRM_AWAIT_MAX_MS", 50)
+        monkeypatch.setattr(_confirm, "_AWAIT_MAX_MS", 50)
+        awaits: list[dict] = []
+        original = _confirm.Confirmations.await_
+
+        async def counting(self, params):
+            awaits.append(params)
+            return await original(self, params)
+
+        monkeypatch.setattr(_confirm.Confirmations, "await_", counting)
+        async with make_host() as host:
+            await self.refreshed(host)
+            outcome = await host.call_tool("publish", {})
+            await asyncio.sleep(0.2)
+            await host.decide_confirmation(outcome.released["approval_id"], "approve")
+            await until(
+                lambda: principal_dir(host).joinpath("day.json").read_text(encoding="utf-8").count('"published": {')
+            )
+        assert len(awaits) >= 2
+
     @pytest.mark.parametrize("decision", ["deny", "expire"])
     async def test_a_refused_confirmation_publishes_nothing(self, decision):
         async with make_host() as host:
@@ -395,6 +421,10 @@ class TestLayoutNote:
 
 
 class TestPage:
+    async def test_it_lists_its_page_for_the_page_browser(self):
+        async with make_host() as host:
+            assert await host.list_pages() == [{"path": "/", "title": "Today"}]
+
     async def test_it_is_served_with_the_sandbox_headers_and_is_self_contained(self):
         async with make_host() as host:
             page = await host.get("/")

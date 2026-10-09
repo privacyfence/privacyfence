@@ -19,6 +19,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
@@ -33,11 +34,15 @@ from privacyfence.plugins.constants import (
     MAX_DESCRIPTION_CHARS,
     MAX_EFFECT_CHARS,
     MAX_PAGE_BODY_BYTES,
+    MAX_PAGE_DESCRIPTION_CHARS,
+    MAX_PAGE_INDEX_ENTRIES,
     MAX_PAGE_PATH_CHARS,
+    MAX_PAGE_VERSION_CHARS,
     MAX_PREVIEW_BYTES,
     MAX_SCOPE_VALUE_CHARS,
     MAX_SCOPE_VALUES,
     MAX_TITLE_CHARS,
+    PAGE_ENTRY_PATH_RE,
     SCOPE_TYPE_RE,
     SUBJECT_ID_MAX_CHARS,
     TOOL_NAME_RE,
@@ -641,6 +646,103 @@ class WebResponse:
         }
 
 
+_ONE_LINE_MESSAGE = "must not contain line breaks, tabs, control or bidirectional characters"
+
+
+def _one_line(obj: dict, key: str, where: str, *, max_len: int) -> str | None:
+    value = _opt_str(obj, key, where, max_len=max_len)
+    if value is not None and clean_line(value) != value:
+        raise _bad(f"{where}.{key} {_ONE_LINE_MESSAGE}")
+    return value
+
+
+def _timestamp(obj: dict, key: str, where: str) -> str | None:
+    value = _opt_str(obj, key, where)
+    if value is None:
+        return None
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        raise _bad(f"{where}.{key} must be an RFC 3339 timestamp with a time zone") from None
+    if parsed.tzinfo is None:
+        raise _bad(f"{where}.{key} must be an RFC 3339 timestamp with a time zone")
+    try:
+        parsed.astimezone(timezone.utc)
+    except OverflowError:
+        raise _bad(f"{where}.{key} must be an RFC 3339 timestamp with a time zone") from None
+    return value
+
+
+@dataclass(frozen=True)
+class PageEntry:
+    path: str
+    title: str
+    version: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    description: str | None = None
+
+    WIRE_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"path", "title", "version", "created_at", "updated_at", "description"}
+    )
+
+    @classmethod
+    def from_wire(cls, obj: Any, *, mode: str = "local", where: str = "page") -> Self:
+        from privacyfence.plugins.pages import normalize_path  # pages imports this module
+
+        _check_mode(mode)
+        data = _obj(obj, where)
+        path = _str(_req(data, "path", where), f"{where}.path", min_len=1, max_len=MAX_PAGE_PATH_CHARS)
+        if not PAGE_ENTRY_PATH_RE.fullmatch(path):
+            raise _bad(f"{where}.path must start with \"/\" and hold only printable ASCII without space, # or \\")
+        bare = path.partition("?")[0]
+        if normalize_path(bare) != bare or any(seg in (".", "..") for seg in bare.split("/")):
+            raise _bad(f"{where}.path must be decoded, without empty or dot segments")
+        title = _str(_req(data, "title", where), f"{where}.title", min_len=1, max_len=MAX_TITLE_CHARS)
+        if not title.strip():
+            raise _bad(f"{where}.title must not be only whitespace")
+        if clean_line(title) != title:
+            raise _bad(f"{where}.title {_ONE_LINE_MESSAGE}")
+        return cls(
+            path=path,
+            title=title,
+            version=_one_line(data, "version", where, max_len=MAX_PAGE_VERSION_CHARS),
+            created_at=_timestamp(data, "created_at", where),
+            updated_at=_timestamp(data, "updated_at", where),
+            description=_one_line(data, "description", where, max_len=MAX_PAGE_DESCRIPTION_CHARS),
+        )
+
+    def to_wire(self) -> dict:
+        out: dict[str, Any] = {"path": self.path, "title": self.title}
+        for key in ("version", "created_at", "updated_at", "description"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
+        return out
+
+
+@dataclass(frozen=True)
+class PagesListResult:
+    pages: tuple[PageEntry, ...]
+
+    WIRE_KEYS: ClassVar[frozenset[str]] = frozenset({"pages"})
+
+    @classmethod
+    def from_wire(cls, obj: Any, *, mode: str = "local") -> Self:
+        _check_mode(mode)
+        data = _obj(obj, "pages.list result")
+        raw = _req(data, "pages", "pages.list result")
+        if not isinstance(raw, list):
+            raise _bad("pages must be a list")
+        if len(raw) > MAX_PAGE_INDEX_ENTRIES:
+            raise _bad(f"pages has more than {MAX_PAGE_INDEX_ENTRIES} entries")
+        return cls(pages=tuple(PageEntry.from_wire(e, mode=mode, where=f"pages[{i}]") for i, e in enumerate(raw)))
+
+    def to_wire(self) -> dict:
+        return {"pages": [e.to_wire() for e in self.pages]}
+
+
 def args_digest(args: dict) -> str:
     """Digest of a call's arguments, independent of key order, that both sides compute."""
     canonical = json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -675,6 +777,8 @@ __all__ = [
     "ConfirmRequestParams",
     "ExecuteResult",
     "InitializeResult",
+    "PageEntry",
+    "PagesListResult",
     "PrepareResult",
     "PrincipalContext",
     "RpcError",

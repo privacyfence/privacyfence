@@ -25,7 +25,8 @@ from privacyfence.audit_log import AuditEntry
 from privacyfence.calendar_client import CalendarEvent
 from privacyfence.plugins import host as host_mod
 from privacyfence.plugins import source_ops, storage
-from privacyfence.plugins import supervisor as supervisor_mod
+from privacyfence.plugins import rpc, supervisor as supervisor_mod
+from privacyfence.plugins.page_index import PAGE_INDEX_INVALID, PAGE_INDEX_NO_ANSWER
 from privacyfence.plugins.host import CHANGED_SINCE_REVIEW, PluginHost
 from privacyfence.plugins.manifest import MANIFEST_FILENAME, ManifestError
 from privacyfence.plugins.state import HASH_DRIFT_REASON
@@ -48,7 +49,7 @@ SDK_PLUGIN = textwrap.dedent('''
     import sys
 
     sys.path.insert(0, {sdk_src!r})
-    from privacyfence_plugin_sdk import Plugin, Prepared, SourceError, Text
+    from privacyfence_plugin_sdk import PageEntry, Plugin, Prepared, SourceError, Text
 
     MODE, NAME = sys.argv[1], sys.argv[2]
     HERE = os.path.dirname(os.path.abspath(__file__))
@@ -151,6 +152,11 @@ SDK_PLUGIN = textwrap.dedent('''
     @plugin.on("approval.revoked")
     async def revoked(ctx, params):
         REVOKED.append(params)
+
+
+    @plugin.page_index
+    async def page_index(ctx):
+        return [PageEntry(path="/info", title="Info", version="2"), PageEntry(path="/revoked", title="Revoked")]
 
 
     @plugin.page("/revoked")
@@ -321,7 +327,7 @@ class TestStartEnabled:
         params = host._initialize_params(host._plugins["stub"], "run")
 
         shared, per_principal = storage.install_dir("stub"), storage.principal_dir("stub", LOCAL_PRINCIPAL)
-        assert params["protocol_version"] == "1.1.0" and params["purpose"] == "run" and params["mode"] == "local"
+        assert params["protocol_version"] == "1.2.0" and params["purpose"] == "run" and params["mode"] == "local"
         assert params["daemon"] == {"name": "privacyfence", "version": "9.9.9"}
         assert params["plugin"] == {"name": "stub", "manifest_version": "1.0.0"}
         assert params["data_dir"] == str(shared) and shared.is_dir()
@@ -1056,6 +1062,58 @@ class TestUninstallForgetsApprovals:
         assert summaries[-1] == "removed; data and rules deleted"
 
 
+class TestPendingCardsEndWithThePlugin:
+    async def _open_cards(self, env):
+        plugin_dir = env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        approval_id = (await env.page(host, "/approval"))["body"].split()[0]
+        confirm_id = (await env.page(host, "/confirm"))["body"]
+        return host, approval_id, confirm_id, plugin_dir
+
+    async def test_a_running_plugins_connector_owns_the_cards_it_requested(self, env):
+        host, approval_id, confirm_id, _ = await self._open_cards(env)
+        owns = host.connectors()[SDK]._owns_approval
+
+        assert owns(confirm_id) is True
+        assert owns(approval_id) is True
+        assert owns("0" * 32) is False
+
+    async def test_disable_expires_pending_cards(self, env):
+        host, approval_id, confirm_id, _ = await self._open_cards(env)
+
+        await host.disable(SDK)
+
+        assert env.registry.await_status(approval_id) == "expired"
+        assert env.registry.await_status(confirm_id) == "expired"
+        assert env.registry.answer(approval_id, "confirm") is False
+        await until(lambda: "code; expired" in env.audit.summaries("plugin_approval"))
+        assert host._approval_store.for_plugin(SDK) == []
+
+    async def test_purge_expires_pending_cards_and_stores_nothing(self, env):
+        host, approval_id, confirm_id, _ = await self._open_cards(env)
+
+        await host.purge(SDK)
+
+        assert env.registry.await_status(approval_id) == "expired"
+        assert env.registry.await_status(confirm_id) == "expired"
+        assert env.registry.answer(approval_id, "confirm") is False
+        assert host._approval_store.for_plugin(SDK) == []
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot delete the folder of a running plugin")
+    async def test_removal_expires_pending_cards(self, env):
+        host, approval_id, confirm_id, plugin_dir = await self._open_cards(env)
+        TestUninstall._remove(plugin_dir)
+
+        await host.rescan()
+
+        assert env.registry.await_status(approval_id) == "expired"
+        assert env.registry.await_status(confirm_id) == "expired"
+        await until(lambda: "code; expired" in env.audit.summaries("plugin_approval"))
+        assert host._approval_store.for_plugin(SDK) == []
+
+
 class TestOutputDir:
     async def test_created_0700_and_passed_only_with_outputs(self, env):
         env.add(SDK, sdk=True, outputs=True)
@@ -1379,7 +1437,7 @@ class TestWebRequest:
         response = await env.page(host, "/info")
 
         assert response["status"] == 200
-        assert env.row(host, SDK)["page_url"] == f"/plugins/{SDK}/"
+        assert env.row(host, SDK)["page_url"] == f"/plugin-pages/{SDK}"
 
     async def test_page_links_list_only_running_plugins_with_pages(self, env):
         env.add(SDK, sdk=True)
@@ -1388,7 +1446,7 @@ class TestWebRequest:
         assert host.page_links() == []
 
         await env.enable(host, SDK)
-        assert host.page_links() == [(host._plugins[SDK].manifest.display_name, f"/plugins/{SDK}/")]
+        assert host.page_links() == [(host._plugins[SDK].manifest.display_name, f"/plugin-pages/{SDK}")]
 
         host._plugins[SDK].state = "starting"
         assert host.page_links() == []
@@ -1435,6 +1493,116 @@ class TestWebRequest:
 
         with pytest.raises(LookupError):
             await host.web_request("nothing", "/", {}, LOCAL_PRINCIPAL)
+
+
+class TestPageIndex:
+    async def test_entries_come_back(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+
+        index = await host.list_pages(SDK, LOCAL_PRINCIPAL)
+
+        assert index.error == ""
+        assert [(e.path, e.title) for e in index.entries] == [("/info", "Info"), ("/revoked", "Revoked")]
+
+    async def test_no_index_gives_the_display_name_fallback(self, env):
+        env.add("stub", pages=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        index = await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+        assert index.error == ""
+        assert [(e.path, e.title) for e in index.entries] == [("/", "Stub")]
+
+    async def test_timeout_is_no_answer(self, env, monkeypatch):
+        monkeypatch.setitem(rpc.TIMEOUT_SECONDS, "pages.list", 0.05)
+        env.add("stub", mode="pages-slow", pages=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        index = await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+        assert index.error == PAGE_INDEX_NO_ANSWER
+        assert index.entries == ()
+
+    async def test_invalid_result_is_invalid_and_not_logged(self, env, caplog):
+        env.add("stub", mode="pages-invalid", pages=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        with caplog.at_level("WARNING", logger="privacyfence.plugins.page_index"):
+            index = await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+        assert index.error == PAGE_INDEX_INVALID
+        assert index.entries == ()
+        assert caplog.records
+        assert '"path"' not in caplog.text and "'path'" not in caplog.text
+
+    async def test_stopped_plugin_raises(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+
+        with pytest.raises(LookupError):
+            await host.list_pages(SDK, LOCAL_PRINCIPAL)
+
+    async def test_plugin_without_pages_raises(self, env):
+        env.add("stub", pages=False)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        with pytest.raises(LookupError):
+            await host.list_pages("stub", LOCAL_PRINCIPAL)
+
+    async def test_list_all_pages_orders_and_skips_lookup_errors(self, env, monkeypatch):
+        for name, display in (("zed", "zed"), ("alpha", "Beta"), ("beta", "beta"), ("gone", "Aaa")):
+            env.add(name, pages=True, display_name=display)
+        host = env.host()
+        await host.start()
+        for name in ("zed", "alpha", "beta", "gone"):
+            await env.enable(host, name)
+        real = host.list_pages
+
+        async def flaky(name, principal):
+            if name == "gone":
+                raise LookupError(name)
+            return await real(name, principal)
+
+        monkeypatch.setattr(host, "list_pages", flaky)
+
+        indexes = await host.list_all_pages(LOCAL_PRINCIPAL)
+
+        assert [i.name for i in indexes] == ["alpha", "beta", "zed"]
+
+    async def test_list_pages_does_not_wait_for_a_host_action(self, env):
+        env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        held = asyncio.Event()
+        release = asyncio.Event()
+
+        async def hold() -> None:
+            async with host._lock:
+                held.set()
+                await release.wait()
+
+        holder = asyncio.create_task(hold())
+        await held.wait()
+        try:
+            index = await asyncio.wait_for(host.list_pages(SDK, LOCAL_PRINCIPAL), 2)
+        finally:
+            release.set()
+            await holder
+
+        assert index.error == ""
 
 
 class TestRowsChangedListener:
@@ -1579,3 +1747,153 @@ class TestDaemonThreadExecutor:
         started[0]()
 
         assert ran == [] and executor._active == 0
+
+
+@pytest.fixture
+def spawned(monkeypatch):
+    """Every child process any supervisor spawns during the test, introspection runs included."""
+    procs: list = []
+    original = supervisor_mod.Supervisor._spawn
+
+    async def spy(self, *args, **kwargs):
+        child = await original(self, *args, **kwargs)
+        procs.append(child.proc)
+        return child
+
+    monkeypatch.setattr(supervisor_mod.Supervisor, "_spawn", spy)
+    return procs
+
+
+def _alive(procs: list) -> list:
+    return [p for p in procs if p.returncode is None]
+
+
+class TestActionsRunOneAtATime:
+    async def test_rescan_during_purge_leaves_one_supervisor(self, env, spawned, monkeypatch):
+        monkeypatch.setattr(supervisor_mod, "SHUTDOWN_GRACE_SECONDS", 0.5)
+        monkeypatch.setattr(supervisor_mod, "TERMINATE_GRACE_SECONDS", 0.5)
+        env.add("stub", mode="slow-shutdown")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        purge = asyncio.create_task(host.purge("stub"))
+        await asyncio.sleep(0)
+        await host.rescan()
+        await purge
+
+        await until(lambda: len(_alive(spawned)) <= 1)
+        live = _alive(spawned)
+        supervisor = host._plugins["stub"].supervisor
+        assert supervisor is not None
+        assert live == [supervisor._child.proc]
+        assert env.row(host, "stub")["state"] == "running"
+
+    @pytest.mark.parametrize("disable_first", [True, False])
+    async def test_disable_racing_rescan_leaves_nothing_running(self, env, spawned, disable_first):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        first, second = (host.disable("stub"), host.rescan()) if disable_first else (host.rescan(), host.disable("stub"))
+        await asyncio.gather(first, second)
+
+        await until(lambda: not _alive(spawned))
+        row = env.row(host, "stub")
+        assert row["state"] == "disabled" and row["reason"] == "disabled by you"
+        assert host._store.load()["stub"].enabled is False
+        assert host._plugins["stub"].supervisor is None
+
+    async def test_actions_run_one_at_a_time(self, env, spawned):
+        env.add(SDK, sdk=True, mode="purge-hang")
+        host = env.host()
+        host.purge_timeout = 0.5
+        await host.start()
+        await env.enable(host, SDK)
+
+        purge = asyncio.create_task(host.purge(SDK))
+        await asyncio.sleep(0)
+        await host.disable(SDK)
+        await purge
+
+        summaries = env.audit.summaries("plugin_lifecycle")
+        assert summaries.index("data purged (timeout)") < len(summaries) - 1 - summaries[::-1].index("disabled")
+        await until(lambda: not _alive(spawned))
+        assert host._plugins[SDK].supervisor is None
+
+    async def test_start_plugin_refuses_a_second_supervisor(self, env, spawned, caplog):
+        env.add("stub")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        plugin = host._plugins["stub"]
+        supervisor = plugin.supervisor
+        count = len(spawned)
+
+        with caplog.at_level("WARNING", logger=host_mod.logger.name):
+            await host._start_plugin(plugin)
+
+        assert len(spawned) == count
+        assert plugin.supervisor is supervisor
+        assert any("already has a supervisor" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+    async def test_action_queued_before_stop_all_does_nothing(self, env, spawned, monkeypatch):
+        monkeypatch.setattr(host_mod, "STOP_ALL_LOCK_WAIT_SECONDS", 0.2)
+        env.add(SDK, sdk=True, mode="purge-hang")
+        env.add("stub")
+        host = env.host()
+        host.purge_timeout = 2
+        await host.start()
+        await env.enable(host, SDK)
+
+        purge = asyncio.create_task(host.purge(SDK))
+        await asyncio.sleep(0)
+        rescan = asyncio.create_task(host.rescan())
+        enable = asyncio.create_task(host.enable("stub", executable_sha256="x", manifest_sha256="y"))
+        await asyncio.sleep(0)
+        await host.stop_all()
+        results = await asyncio.gather(purge, rescan, enable, return_exceptions=True)
+
+        assert results[1] is None
+        assert isinstance(results[2], ValueError)
+        await until(lambda: not _alive(spawned))
+        assert env.row(host, "stub")["last_error"] == host_mod.REASON_STOPPING
+
+    async def test_stop_all_does_not_wait_for_a_long_action(self, env, spawned, monkeypatch):
+        monkeypatch.setattr(host_mod, "STOP_ALL_LOCK_WAIT_SECONDS", 0.2)
+        env.add(SDK, sdk=True, mode="purge-hang")
+        host = env.host()
+        host.purge_timeout = 2
+        await host.start()
+        await env.enable(host, SDK)
+
+        purge = asyncio.create_task(host.purge(SDK))
+        await asyncio.sleep(0)
+        started = time.monotonic()
+        await host.stop_all()
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 1.5
+        assert not _alive(spawned)
+        await asyncio.gather(purge, return_exceptions=True)
+        assert not _alive(spawned)
+
+    async def test_disable_completes_for_a_plugin_that_stopped_reading(self, env, spawned):
+        env.add("stub", mode="stop-reading")
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+        count = len(spawned)
+        peer = host._plugins["stub"].supervisor.peer
+        filler = asyncio.create_task(peer.notify("x", {"pad": "x" * 512_000}))
+        await asyncio.sleep(0.1)
+
+        await asyncio.wait_for(host.disable("stub"), 5)
+
+        await asyncio.gather(filler, return_exceptions=True)
+        await until(lambda: not _alive(spawned))
+        row = env.row(host, "stub")
+        assert row["state"] == "disabled" and row["reason"] == "disabled by you"
+        assert host._plugins["stub"].supervisor is None
+        assert len(spawned) == count

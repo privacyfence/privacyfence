@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from privacyfence.plugins import rpc
 from privacyfence.plugins import supervisor as sv
 from privacyfence.plugins.protocol import InitializeResult, RpcError
 from privacyfence.plugins.supervisor import LaunchSpec, StartError, Supervisor, child_env
@@ -424,11 +427,59 @@ class TestShutdown:
         assert h.states[-1] == ("disabled", "executable or manifest changed, enable again")
         assert h.sleeps == []
 
+    async def test_stop_does_not_wait_for_a_grandchilds_pipe(self, make):
+        h = make("spawn-child")  # its sleeping child inherits stderr
+        await h.sup.start()
+        started = time.monotonic()
+        await asyncio.wait_for(h.sup.stop(), 5)
+        # Windows leaves the grandchild running, so the log drain waits its full time there.
+        limit = sv.LOG_DRAIN_SECONDS + 1.0 if sys.platform == "win32" else 1.0
+        assert time.monotonic() - started < limit
+
     async def test_daemon_shutdown_sends_no_disabling_notice(self, make):
         h = make("ok")
         await h.sup.start()
         await h.sup.stop(reason="shutdown")
         assert h.states[-1] == ("disabled", None)
+
+
+class TestStuckReader:
+    async def test_disable_kills_a_plugin_that_stopped_reading(self, make, monkeypatch):
+        monkeypatch.setattr(sv, "SHUTDOWN_NOTIFY_TIMEOUT_SECONDS", 0.2)
+        h = make("stop-reading")
+        await h.sup.start()
+        proc = h.sup._child.proc
+        filler = asyncio.create_task(h.sup.peer.notify("x", {"pad": "x" * 512_000}))
+        await asyncio.sleep(0.2)
+        started = time.monotonic()
+        await asyncio.wait_for(h.sup.stop(reason="user"), 5)
+        elapsed = time.monotonic() - started
+        assert proc.returncode is not None
+        assert h.states[-1] == ("disabled", "disabled by you")
+        assert "backoff" not in h.names
+        assert h.sleeps == []
+        assert elapsed < sv.TERMINATE_GRACE_SECONDS + 1
+        await asyncio.gather(filler, return_exceptions=True)
+
+    async def test_a_send_timeout_while_running_is_a_crash(self, make, monkeypatch, caplog):
+        monkeypatch.setattr(rpc, "SEND_TIMEOUT_SECONDS", 0.3)
+        h = make("stop-reading")
+
+        async def stop_at_first(count: int) -> None:
+            await h.sup.stop()
+
+        h.on_sleep = stop_at_first
+        await h.sup.start()
+        proc = h.sup._child.proc
+        with caplog.at_level(logging.INFO, logger=sv.logger.name):
+            with pytest.raises(RpcError) as exc:
+                await h.sup.peer.notify("x", {"pad": "x" * 512_000})
+            assert exc.value.code == "timeout"
+            await asyncio.wait_for(h.sup.join(), 5)
+        assert ("backoff", "crashed 1 time") in h.states
+        assert h.sleeps == [1.0]
+        assert "crashed (write_timeout)" in caplog.text
+        assert proc.returncode is not None
 
 
 def _alive(pid: int) -> bool:
@@ -543,6 +594,50 @@ class TestLog:
         await h.sup.stop()
         assert h.log.startswith("keep\n")
         assert not h.log_path.with_name("stub.log.1").exists()
+
+    def test_stderr_log_rotates_while_writing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sv, "LOG_MAX_BYTES", 10)
+        log = sv._StderrLog(tmp_path / "x.log")
+        log.append(b"a" * 25)
+        sizes = [(tmp_path / name).stat().st_size for name in ("x.log", "x.log.1", "x.log.2")]
+        assert sizes == [5, 10, 10]
+
+    def test_stderr_log_appends_from_two_threads(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sv, "LOG_MAX_BYTES", 10_000)
+        log = sv._StderrLog(tmp_path / "x.log")
+
+        def work() -> None:
+            for _ in range(100):
+                log.append(b"y" * 50)
+
+        threads = [threading.Thread(target=work) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        sizes = [p.stat().st_size for p in tmp_path.glob("x.log*")]
+        assert sum(sizes) == 10_000
+        assert max(sizes) <= 10_000
+
+    async def test_running_log_stays_under_the_cap(self, make, monkeypatch):
+        monkeypatch.setattr(sv, "LOG_MAX_BYTES", 4096)
+        h = make("spam-stderr")
+        await h.sup.start()
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if h.log_path.exists() and "SPAM_DONE" in h.log:
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("the plugin's stderr never reached the log")
+            assert h.sup.state == "running"
+            assert h.log_path.stat().st_size <= 4096
+            for index in (1, 2, 3):
+                assert h.log_path.with_name(f"stub.log.{index}").stat().st_size <= 4096
+            assert not h.log_path.with_name("stub.log.4").exists()
+        finally:
+            await h.sup.stop()
 
 
 class TestIntrospect:

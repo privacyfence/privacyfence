@@ -11,7 +11,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 from .. import blocks as _blocks
 from .._rpc import Peer, RpcError
@@ -23,18 +23,24 @@ from ..plugin import (
     args_digest,
 )
 from ..responses import ToolDefinitionError
+from .. import _page_index
 from . import _pages
 from ._approvals import Approval, Approvals
 from ._confirm import Confirmation, Confirmations
-from ._gate import Card, Decision, Rules, ToolOutcome, resolve_decision
+from ._gate import Card, Decision, Rules, ToolOutcome, flatten_text, resolve_decision
 from ._outputs import DEFAULT_OUTPUT_TYPES, OutputFile, check_types, list_outputs
-from ._source import SourceFixtures
+from ._source import SOURCE_OPERATIONS, SourceFixtures
 
 # Copied from the protocol, like the limits in plugin.py. The daemon's own tests compare them.
 _MAX_LINE_BYTES = 16 * 1024 * 1024
 _MAX_IN_FLIGHT = 16
 _INVALID_LINES_LIMIT = 3
 _INLINE_RESULT_BYTES = 100_000
+_WRITE_RESULT_MAX_BYTES = 2048
+_WRITE_RESULT_WITHHELD = (
+    "The action ran, but its result was withheld because it was larger than 2,048 bytes "
+    "or may contain personal data."
+)
 _MAX_TITLE_CHARS = 120
 _MAX_EFFECT_CHARS = 200
 _MAX_DESCRIPTION_CHARS = 1024
@@ -44,7 +50,7 @@ _MAX_SCOPE_VALUE_CHARS = 200
 _MCP_TOOL_NAME_MAX = 64
 _MAX_SCOPE_TYPES = 20
 
-_TIMEOUTS = {"initialize": 10.0, "tool.prepare": 30.0, "tool.execute": 60.0}
+_TIMEOUTS = {"initialize": 10.0, "tool.prepare": 30.0, "tool.execute": 60.0, "pages.list": 10.0}
 _TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")
 _SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")
 _GATES = ("auto", "review", "popup")
@@ -200,6 +206,23 @@ class PluginTestHost:
     (``host.output_dir``) that ``ctx.outputs`` writes to, and ``output_types`` (the manifest's
     ``output_types``, ``application/json`` and ``text/csv`` by default) decides which extensions it
     may use and which files ``host.list_outputs`` shows.
+
+    ``source_operations`` is the manifest's ``source_operations``: the ``source.call`` operations the
+    plugin may use, none by default. Any other operation is refused with ``operation_not_allowed``,
+    and a name that is not a source operation raises ``ValueError``.
+
+    ``pages=True`` is the manifest's ``pages: true``: the plugin serves pages, and approval pages
+    are available. Without it every ``host.get`` / ``host.request`` answers 404 and never reaches
+    the plugin.
+
+    ``pii`` stands in for the daemon's PII detector: a function of the text a review card shows
+    that returns True when it finds personal data. A flagged call always shows its card, whatever
+    "Always allow" rules exist, and the card has ``pii_flagged`` set. ``None`` flags nothing, and
+    ``auto`` and ``popup`` gates are never scanned.
+
+    A write tool's result over 2,048 bytes is withheld from ``outcome.released``, as the daemon
+    does; ``outcome.result`` stays what the plugin returned. Only that cap is mirrored: the
+    daemon also withholds a result its PII detector flags, which this host cannot run.
     """
 
     def __init__(
@@ -211,6 +234,9 @@ class PluginTestHost:
         max_gate_floor: str = "review",
         outputs: bool = False,
         output_types: tuple[str, ...] | list[str] | None = None,
+        source_operations: Iterable[str] = (),
+        pages: bool = False,
+        pii: Callable[[str], bool] | None = None,
     ) -> None:
         if mode not in ("local", "org"):
             raise ValueError("mode must be 'local' or 'org'")
@@ -218,6 +244,13 @@ class PluginTestHost:
             raise ValueError("max_gate_floor must be 'review' or 'auto'")
         if output_types is not None and not outputs:
             raise ValueError("output_types needs outputs=True")
+        allowed = frozenset(source_operations)
+        for operation in sorted(allowed, key=str):
+            if operation not in SOURCE_OPERATIONS:
+                raise ValueError(f"unknown source operation {operation!r}")
+        self.source_operations = allowed
+        self.pages = bool(pages)
+        self._pii = pii
         self.outputs = bool(outputs)
         self._output_types = check_types(DEFAULT_OUTPUT_TYPES if output_types is None else output_types) if outputs else ()
         raw = principals if principals is not None else [dict(_DEFAULT_PRINCIPAL)]
@@ -231,14 +264,14 @@ class PluginTestHost:
         self._principal_specs = [dict(p) for p in raw]
         self._tools: list[dict] = []
         self._scope_types: list[str] = []
-        self.source = SourceFixtures()
+        self.source = SourceFixtures(self.source_operations)
         self.rules = Rules(lambda: set(self._scope_types))
         self.audit: list[dict] = []
         self._confirmations = Confirmations(
             plugin.name, lambda: set(self._principals), lambda entry: self.audit.append(entry)
         )
         self._approvals = Approvals(
-            plugin.name, lambda: set(self._principals), lambda: bool(plugin._reg.pages),
+            plugin.name, lambda: set(self._principals), lambda: self.pages,
             lambda entry: self.audit.append(entry),
         )
         self._stopped = False
@@ -461,7 +494,19 @@ class PluginTestHost:
             self.audit.append({**entry, "decision": "auto_accepted", "auto_accept_rule": "auto"})
         else:
             rule_scope = None
-            if not tool["destructive"]:
+            flagged = False
+            if tool["gate"] == "review":
+                if read_only:
+                    text = flatten_text(card.payload)
+                else:
+                    text = json.dumps(
+                        {"plugin": self.plugin.name, "tool": tool["name"], "scopes": card.scopes},
+                        default=str, indent=2, ensure_ascii=False,
+                    )
+                flagged = bool(self._pii and self._pii(text))
+            if flagged:
+                card.pii_flagged = True
+            elif not tool["destructive"]:
                 rule_scope = self.rules.matching_scope(tool["scopes"], card.scopes)
             if rule_scope is not None:
                 via = "rule"
@@ -472,11 +517,17 @@ class PluginTestHost:
             else:
                 outcome.card_shown = True
                 if not await resolve_decision(decide, card):
-                    self.audit.append({**entry, "decision": "denied", "auto_accept_rule": ""})
+                    self.audit.append({
+                        **entry, "decision": "denied", "auto_accept_rule": "",
+                        **({"pii_detected": True} if flagged else {}),
+                    })
                     outcome.error = {"code": "denied", "detail": "The request was denied."}
                     return outcome
                 via = "card"
-                self.audit.append({**entry, "decision": "approved", "auto_accept_rule": ""})
+                self.audit.append({
+                    **entry, "decision": "approved", "auto_accept_rule": "",
+                    **({"pii_detected": True} if flagged else {}),
+                })
 
         approval = {"approval_id": f"{via}-{call_id}", "decision": "approved", "via": via, "decided_at": _now()}
         outcome.approval = approval
@@ -502,6 +553,10 @@ class PluginTestHost:
             approval_id = executed.get("approval_id") if isinstance(executed, dict) else None
             if approval_id is not None and isinstance(result, dict):
                 released = {**result, "approval_id": approval_id}
+            if len(json.dumps(released, separators=(",", ":"), ensure_ascii=False).encode()) > _WRITE_RESULT_MAX_BYTES:
+                released = {"withheld": True, "message": _WRITE_RESULT_WITHHELD}
+                if approval_id in self._confirmations._cards or approval_id in self._approvals._cards:
+                    released["approval_id"] = approval_id
             outcome.released = released
         return outcome
 
@@ -569,7 +624,31 @@ class PluginTestHost:
         other method gets 405 and a path the daemon rejects gets 400, and neither reaches the plugin.
         """
         peer = self._running_peer()
-        return await _pages.serve(peer, self._principal(principal), method, path, query)
+        return await _pages.serve(peer, self._principal(principal), method, path, query, enabled=self.pages)
+
+    async def list_pages(self, principal: str | None = None) -> list[dict]:
+        """The pages the plugin lists for the page browser, as the daemon would validate them.
+
+        A plugin without a page index lists its root page. An invalid list raises ``AssertionError``.
+        """
+        if not self.pages:
+            raise LookupError(f"plugin {self.plugin.name} does not serve pages")
+        peer = self._running_peer()
+        try:
+            result = await peer.request(
+                "pages.list", {"principal": self._principal(principal)}, timeout=_TIMEOUTS["pages.list"])
+        except RpcError as exc:
+            if exc.code == "method_not_found":
+                return [{"path": "/", "title": self.plugin.name}]
+            if exc.code == "invalid_params":
+                raise AssertionError(exc.detail) from None
+            raise
+        try:
+            if not isinstance(result, dict) or set(result) != {"pages"}:
+                raise ValueError("pages.list result must be an object holding only pages")
+            return _page_index.validate_page_entries(result["pages"])
+        except ValueError as exc:
+            raise AssertionError(str(exc)) from None
 
     # ------------------------------------------------------------------ confirmations
 

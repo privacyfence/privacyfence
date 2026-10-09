@@ -414,6 +414,42 @@ class TestFinalize:
         assert harness.audits[-1] == (PLUGIN, "processor-code", "denied")
 
 
+class TestExpirePlugin:
+    async def test_expire_plugin_expires_and_stores_nothing(self, harness):
+        approval_id = (await harness.request())["approval_id"]
+
+        assert harness.service.expire_plugin(PLUGIN) == 1
+        assert harness.registry.answer(approval_id, "confirm") is False
+        await harness.settled()
+
+        assert harness.registry.await_status(approval_id) == "expired"
+        assert harness.store.find(*_key()) is None
+        assert harness.audits[-1] == (PLUGIN, "processor-code", "expired")
+
+    async def test_a_confirm_after_the_epoch_moved_is_not_stored(self, harness):
+        approval_id = (await harness.request())["approval_id"]
+        harness.service._epochs[PLUGIN] = 1
+
+        harness.registry.answer(approval_id, "confirm")
+        await harness.settled()
+
+        assert harness.registry.await_status(approval_id) == "expired"
+        assert harness.store.find(*_key()) is None
+        assert harness.audits[-1] == (PLUGIN, "processor-code", "expired")
+
+    async def test_other_plugins_cards_are_untouched(self, harness):
+        mine = (await harness.request())["approval_id"]
+        other = (await harness.request("other"))["approval_id"]
+
+        assert harness.service.expire_plugin(PLUGIN) == 1
+
+        assert harness.registry.await_status(mine) == "expired"
+        assert harness.registry.await_status(other) == "pending"
+        harness.registry.answer(other, "confirm")
+        await harness.settled()
+        assert harness.registry.await_status(other) == "approved"
+
+
 class TestAwait:
     async def test_await_approved(self, harness):
         approval_id = (await harness.request())["approval_id"]
@@ -446,6 +482,19 @@ class TestAwait:
             with pytest.raises(RpcError) as exc:
                 await harness.service.await_("other", {"approval_id": approval})
             assert exc.value.code == "invalid_params"
+
+    async def test_owns_only_its_own_plugins_cards(self, harness):
+        approval_id = (await harness.request())["approval_id"]
+        assert harness.service.owns(PLUGIN, approval_id) is True
+        assert harness.service.owns("other", approval_id) is False
+        assert harness.service.owns(PLUGIN, "nope") is False
+
+    async def test_owns_a_stored_approval_until_it_is_revoked(self, harness):
+        harness.store.add(_record("a1"))
+        assert harness.service.owns(PLUGIN, "a1") is True
+        assert harness.service.owns("other", "a1") is False
+        harness.store.revoke(PLUGIN, "a1", now="2026-10-09T00:00:00Z")
+        assert harness.service.owns(PLUGIN, "a1") is False
 
     @pytest.mark.parametrize("params", [{}, {"approval_id": ""}, {"approval_id": "x", "timeout_ms": -1}])
     async def test_bad_params(self, harness, params):

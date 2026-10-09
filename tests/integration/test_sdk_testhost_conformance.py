@@ -12,6 +12,8 @@ Known differences, which these tests deliberately do not compare (and do not hid
 - Daemon responses also carry ``Permissions-Policy`` and ``Cross-Origin-Opener-Policy``.
 - A call accepted by an "Always allow" rule reports ``approval.via == "rule"`` on the test host and
   ``"card"`` on the daemon, which does not tell the two apart in protocol 1.
+- The fallback entry of a plugin without a page index has the display name as its title on the daemon
+  and the plugin name on the test host; the echo plugin has an index, so that is not compared here.
 - Revoking an approval adds an ``echo-template; revoked`` row to the audit log on the daemon and none
   on the test host, so the approval audit comparisons leave that row out.
 """
@@ -27,6 +29,7 @@ import pytest
 
 from privacyfence import auto_accept
 from privacyfence.plugins import storage
+from privacyfence.principal import LOCAL_PRINCIPAL
 from tests.fixtures.plugins.echo.harness import (  # noqa: I001  (puts the SDK sources on sys.path)
     Stack,
     install_echo,
@@ -92,6 +95,9 @@ class SdkSide:
     async def page(self, method: str, path: str) -> dict:
         response = await self.host.request(method, path)
         return {"status": response.status, "headers": response.headers, "body": response.body}
+
+    async def page_list(self) -> list[dict]:
+        return await self.host.list_pages()
 
     async def download(self, data: bytes, revision: str) -> tuple[dict, int]:
         self.host.source.load(samples.drive_download(data, revision=revision, file_id="FILE-1"))
@@ -169,6 +175,10 @@ class DaemonSide:
             await client.aclose()
         return {"status": response.status_code, "headers": dict(response.headers), "body": response.content}
 
+    async def page_list(self) -> list[dict]:
+        index = await self.stack.run(self.stack.host.list_pages("echo", LOCAL_PRINCIPAL))
+        return [entry.to_wire() for entry in index.entries]
+
     async def download(self, data: bytes, revision: str) -> tuple[dict, int]:
         self.stack.drive.data = data
         self.stack.drive.revision = revision
@@ -238,7 +248,11 @@ def recorded(events: list[dict], name: str) -> list[dict]:
 
 @pytest.fixture
 async def sdk():
-    async with PluginTestHost(load_echo_plugin().plugin, max_gate_floor="auto") as host:
+    async with PluginTestHost(
+        load_echo_plugin().plugin, max_gate_floor="auto",
+        source_operations=("calendar.list_events", "drive.download"), pages=True,
+        pii=lambda text: "GB82WEST" in text,
+    ) as host:
         yield SdkSide(host)
 
 
@@ -307,6 +321,16 @@ class TestSameOutcomes:
         assert_same(on_sdk, on_daemon)
         assert on_sdk.card_shown is False and on_sdk.decisions == ["auto_accepted"]
 
+    async def test_scope_rule_with_pii_shows_a_card(self, sdk, daemon):
+        async def scenario(side):
+            side.allow_scope("dataset", ["alpha"])
+            return await side.call("review_read", {"dataset": "alpha", "text": "GB82WEST12345698765432"})
+
+        on_sdk, on_daemon = await both(sdk, daemon, scenario)
+
+        assert_same(on_sdk, on_daemon)
+        assert on_sdk.card_shown is True and on_sdk.decisions == ["approved"]
+
     @pytest.mark.parametrize("dataset", ["beta", "alpha,beta"])
     async def test_scope_rule_mismatch(self, sdk, daemon, dataset):
         async def scenario(side):
@@ -367,6 +391,20 @@ class TestSamePages:
 
         assert_same(on_sdk, on_daemon)
         assert on_sdk == 400
+
+
+class TestSamePageList:
+    async def test_the_page_index_lists_the_same_entries(self, sdk, daemon):
+        async def scenario(side):
+            return await side.page_list()
+
+        on_sdk, on_daemon = await both(sdk, daemon, scenario)
+
+        assert_same(on_sdk, on_daemon)
+        assert on_sdk == [
+            {"path": "/", "title": "Echo home"},
+            {"path": "/events?limit=1", "title": "Echo events", "version": "1", "updated_at": "2026-10-09T10:00:00Z"},
+        ]
 
 
 class TestSameDownload:

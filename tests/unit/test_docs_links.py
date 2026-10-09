@@ -59,6 +59,12 @@ def _markdown_files() -> list[Path]:
     )
 
 
+def _is_plan_doc(path: Path) -> bool:
+    """A `docs/*-plan.md` quotes drafts of files that do not exist yet, so its links are not checked."""
+    rel = path.relative_to(REPO_ROOT).parts
+    return len(rel) == 2 and rel[0] == "docs" and rel[1].endswith("-plan.md")
+
+
 def _slug(heading: str) -> str:
     """GitHub's heading-anchor slug.
 
@@ -91,6 +97,8 @@ def _anchors(path: Path) -> set[str]:
 def _relative_links() -> list[tuple[Path, int, str]]:
     found = []
     for path in _markdown_files():
+        if _is_plan_doc(path):
+            continue
         text = path.read_text(encoding="utf-8")
         for match in _LINK.finditer(text):
             target = match.group(1)
@@ -105,6 +113,8 @@ def _self_links() -> list[tuple[Path, int, str]]:
     alike, since README.md's screenshots are the latter."""
     found = []
     for path in _markdown_files():
+        if _is_plan_doc(path):
+            continue
         text = path.read_text(encoding="utf-8")
         for pattern in (_LINK, _IMG):
             for match in pattern.finditer(text):
@@ -173,3 +183,10 @@ def test_absolute_self_url_resolves(path: Path, line: int, url: str):
     resolved = (REPO_ROOT / file_part).resolve()
     assert resolved.is_relative_to(REPO_ROOT), f"{where}: self-referencing URL escapes the repo: {url}"
     _assert_resolves(where, resolved, anchor, url)
+
+
+def test_only_top_level_plan_docs_are_skipped():
+    assert _is_plan_doc(REPO_ROOT / "docs" / "x-plan.md")
+    assert not _is_plan_doc(REPO_ROOT / "docs" / "guide.md")
+    assert not _is_plan_doc(REPO_ROOT / "docs" / "adr" / "x-plan.md")
+    assert not _is_plan_doc(REPO_ROOT / "x-plan.md")

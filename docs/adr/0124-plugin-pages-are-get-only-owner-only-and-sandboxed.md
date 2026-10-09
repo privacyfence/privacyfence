@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-07. Implemented: `src/privacyfence/web/routes_plugins.py`,
 `src/privacyfence/plugins/pages.py`, `src/privacyfence/web/server.py` (`_SecurityHeadersMiddleware`).
+Amended by [ADR 0139](0139-plugin-pages-are-listed-by-the-plugin-and-browsed-in-privacyfence.md): pages are also opened from the page browser.
 
 ## Context
 

@@ -18,6 +18,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -75,6 +76,7 @@ _MAX_ID_CHARS = 256
 _MAX_RANGE_CHARS = 512
 _MAX_TIME_CHARS = 64
 _MAX_JQL_CHARS = 8192
+_SNAPSHOT_ID = re.compile(r"[0-9a-f]{16}")
 _MAX_REPORT_COLUMNS = 100
 
 
@@ -153,8 +155,16 @@ def _state_token(state: dict) -> str | None:
     return value
 
 
+def _utf8_json(value: Any) -> bytes:
+    try:
+        return json.dumps(value, default=str, ensure_ascii=False).encode()
+    except UnicodeEncodeError:
+        # A lone surrogate cannot be UTF-8 encoded; escaping it can.
+        return json.dumps(value, default=str).encode()
+
+
 def _encoded_size(value: Any) -> int:
-    return len(json.dumps(value, default=str).encode())
+    return len(_utf8_json(value))
 
 
 def _fit_prefix(items: list, budget: int) -> int:
@@ -389,21 +399,39 @@ def _bound_sheets(params: dict) -> dict:
     return {key: params[key] for key in ("spreadsheet_id", "range", "value_render_option")}
 
 
+def _cursor_expired() -> RpcError:
+    return RpcError(
+        "upstream_error",
+        "the rows this cursor pointed at are no longer held; read the range again from the start",
+        extra={"reason": "cursor_expired"},
+    )
+
+
 def _run_sheets(client: Any, params: dict, spool: DownloadSpool) -> tuple[Any, str | None]:
     state = params["state"]
-    first = 0
-    if state is not None:
-        _state_keys(state, {"k"})
-        first = _state_count(state, "k")
-    values = client.get_sheet_values(params["spreadsheet_id"], params["range"], params["value_render_option"])
-    if first > len(values):
+    if state is None:
+        values = client.get_sheet_values(params["spreadsheet_id"], params["range"], params["value_render_option"])
+        fitted = _fit_prefix(values, SOURCE_PAGE_BUDGET_BYTES)
+        data = {"values": values[:fitted], "first_row": 0}
+        if fitted >= len(values):
+            return data, None
+        snapshot = spool.put_rows(params["plugin"], values)
+        return data, cursors.encode("sheets.get_values", _bound_sheets(params), {"k": fitted, "s": snapshot})
+    _state_keys(state, {"k", "s"})
+    first = _state_count(state, "k")
+    snapshot = state["s"]
+    if not isinstance(snapshot, str) or not _SNAPSHOT_ID.fullmatch(snapshot):
         raise _bad_cursor()
-    fitted = _fit_prefix(values[first:], SOURCE_PAGE_BUDGET_BYTES)
-    end = first + fitted
-    data = {"values": values[first:end], "first_row": first}
-    if end >= len(values):
+    try:
+        rows, end, total = spool.rows_page(params["plugin"], snapshot, first, SOURCE_PAGE_BUDGET_BYTES)
+    except KeyError:
+        raise _cursor_expired() from None
+    if first > total:
+        raise _bad_cursor()
+    data = {"values": rows, "first_row": first}
+    if end >= total:
         return data, None
-    return data, cursors.encode("sheets.get_values", _bound_sheets(params), {"k": end})
+    return data, cursors.encode("sheets.get_values", _bound_sheets(params), {"k": end, "s": snapshot})
 
 
 # --- confluence.get_page -----------------------------------------------------------------------
@@ -417,13 +445,19 @@ def _bound_confluence(params: dict) -> dict:
     return {"page_id": params["page_id"]}
 
 
+def _page_changed() -> RpcError:
+    return RpcError("upstream_error", "the page changed while it was being read", extra={"reason": "revision_changed"})
+
+
 def _run_confluence(client: Any, params: dict, spool: DownloadSpool) -> tuple[Any, str | None]:
     state = params["state"]
-    start = 0
+    start, version = 0, None
     if state is not None:
-        _state_keys(state, {"o"})
-        start = _state_count(state, "o")
+        _state_keys(state, {"o", "v"})
+        start, version = _state_count(state, "o"), _state_count(state, "v")
     page = dataclasses.asdict(client.get_page(params["page_id"]))
+    if version is not None and page["version"] != version:
+        raise _page_changed()
     body = page.get("body") or ""
     if start > len(body):
         raise _bad_cursor()
@@ -448,7 +482,7 @@ def _run_confluence(client: Any, params: dict, spool: DownloadSpool) -> tuple[An
     page["body"] = body[start:end]
     if end >= len(body):
         return page, None
-    return page, cursors.encode("confluence.get_page", _bound_confluence(params), {"o": end})
+    return page, cursors.encode("confluence.get_page", _bound_confluence(params), {"o": end, "v": page["version"]})
 
 
 # --- calendar.list_events ----------------------------------------------------------------------
@@ -615,11 +649,11 @@ async def _serve(
         logger.warning("source call %s by plugin %s failed upstream: %s", operation, plugin, type(exc).__name__)
         raise RpcError("upstream_error", _UPSTREAM_DETAIL) from None
 
-    payload = json.dumps(data, default=str)
-    if len(payload.encode()) > MAX_SOURCE_RESULT_BYTES:
+    body = _utf8_json(data)
+    if len(body) > MAX_SOURCE_RESULT_BYTES:
         raise RpcError("payload_too_large", "the result is larger than the source result limit")
-    seen["bytes"] = str(len(payload))
-    return {"operation": operation, "data": json.loads(payload), "bytes": len(payload), "next_cursor": cursor}
+    seen["bytes"] = str(len(body))
+    return {"operation": operation, "data": json.loads(body), "bytes": len(body), "next_cursor": cursor}
 
 
 async def handle_source_call(

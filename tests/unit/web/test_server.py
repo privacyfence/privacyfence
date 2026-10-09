@@ -371,6 +371,15 @@ class TestCacheControlOnSensitivePages:
         assert r.status_code == 200
         assert r.headers.get("cache-control") == "no-store"
 
+    def test_the_plugin_page_browser_is_no_store(self):
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions, plugin_host=_PageHost())
+        client = TestClient(app, base_url="http://localhost")
+        client.cookies.set(SESSION_COOKIE, sessions.create(provenance=PROVENANCE_HUMAN))
+        r = client.get("/plugin-pages")
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "no-store"
+
     def test_the_unauthorized_landing_page_is_no_store(self):
         # Regression test: this page names a live bearer-secret command
         # (session_auth.unauthorized_html), so it must never be cached.
@@ -458,7 +467,13 @@ class _PageHost:
         return {"status": 200, "headers": {"content-type": "text/html"}, "body": "<p>hi</p>"}
 
     def page_links(self):
-        return [("Today", "/plugins/today/")]
+        return [("Today", "/plugin-pages/today")]
+
+    async def list_pages(self, name, principal):
+        raise LookupError(name)
+
+    async def list_all_pages(self, principal):
+        return []
 
 
 def _route_paths(app) -> set[str]:
@@ -513,7 +528,8 @@ class TestPluginPagesSandboxCsp:
 
     def test_approvals_page_has_the_plugins_menu_from_the_host(self):
         r = self._client().get("/approvals")
-        assert '<a class="pf-shell-nav-item" href="/plugins/today/" target="_blank" rel="noopener">Today</a>' in r.text
+        assert '<a class="pf-shell-nav-item" href="/plugin-pages/today">Today</a>' in r.text
+        assert '<a class="pf-shell-nav-item" href="/plugin-pages">All plugin pages</a>' in r.text
 
     def test_middleware_alone_branches_on_the_path(self):
         async def app(scope, receive, send):
@@ -529,6 +545,12 @@ class TestPluginPagesSandboxCsp:
     def test_local_app_mounts_the_plugin_routes(self):
         app = build_app(WebApprovalUI(), plugin_host=_PageHost())
         assert {"/plugins/{name}", "/plugins/{name}/{path:path}"} <= _route_paths(app)
+
+    def test_plugin_pages_are_mounted_only_with_a_plugin_host(self):
+        with_host = _route_paths(build_app(WebApprovalUI(), plugin_host=_PageHost()))
+        without = _route_paths(build_app(WebApprovalUI()))
+        assert {"/plugin-pages", "/plugin-pages/{name}"} <= with_host
+        assert not any(path.startswith("/plugin-pages") for path in without)
 
     def test_org_app_has_no_plugins_route(self, tmp_path, monkeypatch):
         from privacyfence import org_identity as oi
@@ -550,9 +572,10 @@ class TestPluginPagesSandboxCsp:
 
         app = build_app(WebApprovalUI(), org=org, plugin_host=host, allowed_hosts=frozenset({"pf.example.com"}))
 
-        assert not any(path.startswith("/plugins") for path in _route_paths(app))
-        r = TestClient(app, base_url=issuer).get("/plugins/today/")
-        assert r.status_code == 404
+        assert not any(path.startswith(("/plugins", "/plugin-pages")) for path in _route_paths(app))
+        client = TestClient(app, base_url=issuer)
+        for path in ("/plugins/today/", "/plugin-pages", "/plugin-pages/today"):
+            assert client.get(path).status_code == 404, path
         assert host.calls == []
 
 

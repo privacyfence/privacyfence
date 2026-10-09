@@ -17,7 +17,7 @@ from pathlib import Path
 if len(sys.argv) > 1 and (Path(sys.argv[1]) / "privacyfence_plugin_sdk").is_dir():
     sys.path.insert(0, sys.argv[1])
 
-from privacyfence_plugin_sdk import Html, Plugin, Prepared, SourceError, Text, blocks  # noqa: E402
+from privacyfence_plugin_sdk import Html, PageEntry, Plugin, Prepared, SourceError, Text, blocks  # noqa: E402
 
 plugin = Plugin(name="echo", version="1.0.0")
 plugin.scope_type("dataset", "A dataset a call reads")
@@ -160,6 +160,14 @@ async def publish_run(ctx, prepared, approval):
 @plugin.page("/")
 async def home(ctx, request):
     return Html(PAGE)
+
+
+@plugin.page_index
+async def pages(ctx) -> list[PageEntry]:
+    return [
+        PageEntry("/", "Echo home"),
+        PageEntry("/events?limit=1", "Echo events", version="1", updated_at="2026-10-09T10:00:00Z"),
+    ]
 
 
 @plugin.page("/events")

@@ -8,7 +8,7 @@ import pytest
 
 from privacyfence.plugins import constants, cursors
 from privacyfence_plugin_sdk._rpc import RpcError
-from privacyfence_plugin_sdk import Plugin, Prepared, ToolDefinitionError, blocks
+from privacyfence_plugin_sdk import Html, Plugin, Prepared, ToolDefinitionError, blocks
 from privacyfence_plugin_sdk.testing import PluginTestHost, SourceFixtureMissing, samples
 from privacyfence_plugin_sdk.testing import _host as host_module
 from privacyfence_plugin_sdk.testing import _source as source_module
@@ -138,6 +138,40 @@ class TestPluginTestHost:
                 host.rules.allow_scope("nope", ["x"])
         assert extra.card_shown and other.card_shown and nothing.card_shown
 
+    async def test_pii_overrides_a_matching_rule(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin, pii=lambda text: "three" in text) as host:
+            host.rules.allow_scope("calendar", ["primary"])
+            outcome = await host.call_tool("list_events", {"calendar_id": "primary"}, decide="approve")
+        assert outcome.card_shown is True
+        assert outcome.card.pii_flagged is True
+        assert [e["decision"] for e in outcome.audit] == ["approved"]
+        assert outcome.audit[0]["pii_detected"] is True
+
+    async def test_no_pii_check_flags_nothing(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin) as host:
+            host.rules.allow_scope("calendar", ["primary"])
+            outcome = await host.call_tool("list_events", {"calendar_id": "primary"}, decide="deny")
+        assert outcome.card_shown is False and outcome.card.pii_flagged is False
+        assert "pii_detected" not in outcome.audit[0]
+
+    async def test_pii_ignored_on_popup_and_auto(self):
+        scanned = []
+
+        def pii(text):
+            scanned.append(text)
+            return True
+
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin, pii=pii) as host:
+            write = await host.call_tool("rename", {"name": "x"})
+        async with PluginTestHost(auto_plugin(True), max_gate_floor="auto", pii=pii) as host:
+            auto = await host.call_tool("peek")
+        assert write.card_shown and not write.card.pii_flagged
+        assert not auto.card_shown and not auto.card.pii_flagged
+        assert scanned == []
+
     async def test_scope_rule_ignores_destructive_and_other_tools(self):
         plugin, _ = build_plugin()
         async with PluginTestHost(plugin) as host:
@@ -147,7 +181,7 @@ class TestPluginTestHost:
 
     async def test_source_fixture_missing_raises(self):
         plugin, _ = build_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
             with pytest.raises(SourceFixtureMissing, match="calendar.list_events"):
                 await host.call_tool("agenda")
             assert [c.operation for c in host.source.calls] == ["calendar.list_events"]
@@ -159,7 +193,7 @@ class TestPluginTestHost:
 
     async def test_source_when_fail_and_specificity(self):
         plugin, _ = build_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("calendar.list_events",)) as host:
             host.source.when("calendar.list_events").returns([{"title": "Any"}])
             host.source.when("calendar.list_events", time_min="2026-10-07T00:00:00Z").returns([{"title": "Specific"}])
             specific = await host.call_tool("agenda")
@@ -214,6 +248,22 @@ class TestPluginTestHost:
         assert outcome.result == {"renamed": "new", "via": "card"} == outcome.released
         assert seen["executed"] == 2 and again.card_shown  # a second call is a new card, not a replay
 
+    async def test_write_result_over_the_cap_is_withheld(self):
+        plugin = Plugin(name="big", version="1.0.0")
+
+        @plugin.tool("bulk", description="Write a lot.", gate="popup", effect="Writes.")
+        async def bulk(ctx, args):
+            return Prepared(preview=[blocks.text("bulk")])
+
+        @bulk.execute
+        async def do_bulk(ctx, prepared, approval):
+            return {"text": "x" * 3000}
+
+        async with PluginTestHost(plugin) as host:
+            outcome = await host.call_tool("bulk")
+        assert outcome.result == {"text": "x" * 3000}
+        assert outcome.released == {"withheld": True, "message": host_module._WRITE_RESULT_WITHHELD}
+
     async def test_unknown_tool_and_missing_argument(self):
         plugin, _ = build_plugin()
         async with PluginTestHost(plugin) as host:
@@ -239,7 +289,7 @@ class TestPluginTestHost:
         plugin, seen = build_plugin()
         chunk = constants.DRIVE_CHUNK_BYTES
         data = bytes(range(256)) * (chunk // 256) + b"tail" * 1000 + bytes(7)
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("drive.download",)) as host:
             host.source.load(samples.drive_download(data, revision="r1"))
             outcome = await host.call_tool("fetch", {"file_id": "EXAMPLE-1"})
             assert outcome.error is None
@@ -247,6 +297,80 @@ class TestPluginTestHost:
         assert seen["downloaded"] == data and seen["revision"] == "r1"
         assert len(calls) == 2 and "cursor" not in calls[0]
         assert cursors.decode(calls[1]["cursor"], "drive.download", {"file_id": "EXAMPLE-1"}) == {"r": "r1", "o": chunk}
+
+    async def test_an_operation_outside_source_operations_is_refused(self):
+        plugin, _ = build_plugin()
+        async with PluginTestHost(plugin, source_operations=("jira.search",)) as host:
+            host.source.load(samples.get("calendar.list_events"))
+            with pytest.raises(RpcError) as refused:
+                host.source._serve({"principal": "local", "operation": "calendar.list_events", "params": {}}, "local")
+            outcome = await host.call_tool("agenda")
+        assert (refused.value.code, refused.value.detail) == (
+            "operation_not_allowed", "the plugin may not use this operation")
+        assert outcome.error["code"] == "operation_not_allowed" and outcome.released is None
+
+    def test_an_unknown_source_operation_is_a_value_error(self):
+        plugin, _ = build_plugin()
+        with pytest.raises(ValueError, match="unknown source operation 'gmail.list'"):
+            PluginTestHost(plugin, source_operations=("gmail.list",))
+
+    async def test_pages_off_is_a_404_that_never_reaches_the_plugin(self):
+        plugin = Plugin(name="paged", version="1.0.0")
+        ran = []
+
+        @plugin.page("/")
+        async def home(ctx, request):
+            ran.append(request)
+            return Html("hi")
+
+        async with PluginTestHost(plugin) as host:
+            response = await host.get("/")
+            bad = await host.get("/a/../b")
+        assert (response.status, response.body) == (404, b"Not Found")
+        assert response.headers["x-frame-options"] == "DENY" and "content-security-policy" in response.headers
+        assert bad.status == 400 and ran == []
+
+    async def test_an_approval_page_needs_pages(self):
+        plugin = Plugin(name="approver", version="1.0.0")
+
+        @plugin.page("/approval")
+        async def approval_page(ctx, request):
+            return Html("approve")
+
+        async with PluginTestHost(plugin) as host:
+            with pytest.raises(RpcError, match="pages: true") as refused:
+                await host._approvals.request({
+                    "principal": "local", "kind": "template", "subject_id": "a", "digest": "sha256:" + "0" * 64,
+                    "title": "T", "preview": [blocks.text("p")], "page": "/approval"})
+            assert refused.value.code == "invalid_params"
+
+    async def test_a_google_form_is_not_downloadable(self):
+        form = "application/vnd.google-apps.form"
+        fixtures = source_module.SourceFixtures()
+        fixtures.load(samples.drive_download(b"x", mime_type=form))
+        fixtures.load(samples.drive_download(b"doc", file_id="DOC-1", mime_type="application/vnd.google-apps.document"))
+
+        def serve(file_id):
+            return fixtures._serve({"principal": "local", "operation": "drive.download",
+                                    "params": {"file_id": file_id}}, "local")
+
+        with pytest.raises(RpcError) as refused:
+            serve("EXAMPLE-1")
+        assert (refused.value.code, refused.value.detail) == (
+            "invalid_params", f"files of type {form} cannot be downloaded")
+        assert refused.value.extra == {"reason": "not_downloadable"}
+        assert serve("DOC-1")["data"]["eof"] is True
+
+    async def test_non_ascii_counts_utf8_bytes(self, monkeypatch):
+        monkeypatch.setattr(source_module, "MAX_SOURCE_RESULT_BYTES", 100)
+        fixtures = source_module.SourceFixtures()
+        data = {"v": "\u00e9" * 20}
+        fixtures.load({"operation": "calendar.list_events", "data": data})
+        result = fixtures._serve({"principal": "local", "operation": "calendar.list_events",
+                                  "params": {"time_min": "2025-01-01T00:00:00Z", "time_max": "2025-01-02T00:00:00Z"}},
+                                 "local")
+        assert result["bytes"] == len(json.dumps(data, ensure_ascii=False).encode())
+        assert result["bytes"] < 100 < len(json.dumps(data).encode())
 
     def test_drive_download_sample_matches_the_daemons_chunk_shape(self):
         fixtures = source_module.SourceFixtures()
@@ -303,6 +427,15 @@ class TestPluginTestHost:
                                  "params": {"file_id": "BIG-1", "length": 1}}, "local")
         assert reply["data"]["total_size_bytes"] == constants.DRIVE_CHUNK_BYTES * 8 + 1 and reply["next_cursor"]
 
+    _REQUIRED_PARAMS = {
+        "salesforce.report_run": {"report_id": "R1"},
+        "jira.search": {"jql": "project = X"},
+        "drive.download": {"file_id": "F1"},
+        "sheets.get_values": {"spreadsheet_id": "S1", "range": "A1:B2"},
+        "confluence.get_page": {"page_id": "page-1"},
+        "calendar.list_events": {"time_min": "2025-01-01T00:00:00Z", "time_max": "2025-01-02T00:00:00Z"},
+    }
+
     @pytest.mark.parametrize("operation", constants.SOURCE_OPERATIONS)
     def test_every_operation_has_a_sample(self, operation):
         fixture = samples.get(operation)
@@ -310,7 +443,8 @@ class TestPluginTestHost:
         assert samples.get(operation) is not fixture
         fixtures = source_module.SourceFixtures()
         fixtures.load(fixture)
-        reply = fixtures._serve({"principal": "local", "operation": operation, "params": fixture["params"]}, "local")
+        reply = fixtures._serve({"principal": "local", "operation": operation,
+                                  "params": {**self._REQUIRED_PARAMS[operation], **fixture["params"]}}, "local")
         assert reply["data"] == fixture["data"] and reply["bytes"] == len(json.dumps(fixture["data"]))
 
     def test_sample_data_shapes(self):
@@ -326,6 +460,7 @@ class TestPluginTestHost:
                      "MAX_SCOPE_VALUE_CHARS", "MCP_TOOL_NAME_MAX"):
             assert getattr(host_module, "_" + name) == getattr(constants, name), name
         assert host_module._MAX_SCOPE_TYPES == 20
+        assert host_module._WRITE_RESULT_MAX_BYTES == constants.WRITE_RESULT_MAX_BYTES
         for name in ("SOURCE_OPERATIONS", "DRIVE_CHUNK_BYTES", "MAX_SOURCE_RESULT_BYTES"):
             assert getattr(source_module, name) == getattr(constants, name), name
         assert cursors_module.CURSOR_MAX_CHARS == constants.CURSOR_MAX_CHARS
@@ -432,7 +567,7 @@ class TestPaging:
 
     async def test_returns_pages_serves_each_page_for_the_cursor_before_it(self):
         plugin, seen = self.paging_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("jira.search",)) as host:
             host.source.when("jira.search", jql="project = A").returns_pages(
                 [[{"key": "A-1"}], [{"key": "A-2"}], [{"key": "A-3"}]])
             outcome = await host.call_tool("count", {"jql": "project = A"})
@@ -446,7 +581,7 @@ class TestPaging:
 
     async def test_a_cursor_for_another_query_or_none_of_ours_is_refused(self):
         plugin, _ = self.paging_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("jira.search",)) as host:
             host.source.when("jira.search", jql="project = A").returns_pages([[{"key": "A-1"}], [{"key": "A-2"}]])
             host.source.when("jira.search", jql="project = B").returns_pages([[{"key": "B-1"}], [{"key": "B-2"}]])
             first = host.source.handle(
@@ -475,7 +610,7 @@ class TestPaging:
                 seen.extend(r["dataCells"][0]["value"] for r in page.data["factMap"]["T!T"]["rows"])
             return Prepared(preview=[blocks.text("rows")], payload=[blocks.text("ok")])
 
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("salesforce.report_run",)) as host:
             for fixture in samples.salesforce_report_pages():
                 host.source.load(fixture)
             outcome = await host.call_tool("rows", {})
@@ -484,7 +619,7 @@ class TestPaging:
 
     async def test_a_report_cursor_for_another_page_by_is_refused(self):
         plugin = Plugin(name="reports", version="1.0.0")
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("salesforce.report_run",)) as host:
             def page(keys):
                 return {"reportMetadata": {"detailColumns": ["K"]},
                         "factMap": {"T!T": {"rows": [{"dataCells": [{"value": k}]} for k in keys]}}}
@@ -515,7 +650,7 @@ class TestPaging:
 
     async def test_the_sample_pages_fetch_each_other(self):
         plugin, seen = self.paging_plugin()
-        async with PluginTestHost(plugin) as host:
+        async with PluginTestHost(plugin, source_operations=("calendar.list_events", "jira.search")) as host:
             host.source.load(samples.get("calendar.list_events"))
             host.source.load(samples.get("calendar.list_events", page=2))
             await host.call_tool("collect")

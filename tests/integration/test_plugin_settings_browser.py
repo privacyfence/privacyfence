@@ -15,6 +15,8 @@ pytest.importorskip(
     reason="playwright (test-only) not installed -- pip install -e '.[test]' && playwright install chromium",
 )
 
+from privacyfence.plugins.page_index import PageIndex  # noqa: E402
+from privacyfence.plugins.protocol import PageEntry  # noqa: E402
 from privacyfence.settings_controller import SettingsController  # noqa: E402
 from privacyfence.web.server import WebServer  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
@@ -57,7 +59,7 @@ _REVIEW = {
 
 _ROWS = [
     {"name": "alpha", "display_name": "Alpha Notes", "version": "1.0.0", "state": "running", "reason": "",
-     "enabled": True, "pages": True, "page_url": "/plugins/alpha/", "tools_note": "", "review": None,
+     "enabled": True, "pages": True, "page_url": "/plugin-pages/alpha", "tools_note": "", "review": None,
      "last_error": None,
      "approvals": [
          {"approval_id": f"ap{i}", "kind": "report", "subject_id": f"weekly-report-{i}-with-a-long-subject-name",
@@ -91,6 +93,32 @@ class _TwoRowHost:
         future.set_result(None)
         return future
 
+    def page_links(self) -> list[tuple[str, str]]:
+        return [("Alpha Notes", "/plugin-pages/alpha")]
+
+    def _alpha(self) -> PageIndex:
+        return PageIndex("alpha", "Alpha Notes", (
+            PageEntry(path="/", title="Alpha home", description="Where the notes start"),
+            PageEntry(path="/events?limit=1", title="Alpha events", version="1",
+                      updated_at="2026-10-09T10:00:00Z"),
+        ))
+
+    async def list_pages(self, name, principal) -> PageIndex:
+        if name != "alpha":
+            raise LookupError(name)
+        return self._alpha()
+
+    async def list_all_pages(self, principal) -> list[PageIndex]:
+        return [self._alpha()]
+
+    async def web_request(self, name, path, query, principal) -> dict:
+        if name != "alpha":
+            raise LookupError(name)
+        return {
+            "status": 200, "headers": {"content-type": "text/html; charset=utf-8"},
+            "body": f"<p id=\"alpha-body\">Alpha page {path}</p>", "body_encoding": "utf8",
+        }
+
     async def rescan(self): ...
     async def inspect(self, name): ...
     async def enable(self, name, *, executable_sha256, manifest_sha256): ...
@@ -106,7 +134,7 @@ def plugin_server(pf_home):  # noqa: F811
     host = _TwoRowHost()
     controller = SettingsController(str(config_path), connectors=[], connector_host=None, plugin_host=host)
     port = _free_port()
-    server = WebServer(WebApprovalUI(), host="localhost", port=port, controller=controller)
+    server = WebServer(WebApprovalUI(), host="localhost", port=port, controller=controller, plugin_host=host)
     server.start()
     try:
         _wait_until_connectable("localhost", port)
@@ -124,6 +152,19 @@ def _open_plugins(page, server) -> None:
 
 
 class TestPhoneLayout:
+    @pytest.mark.parametrize(("case", "width"), _phone_cases(["plugin-pages"]))
+    def test_page_browser(self, phone_page, plugin_server, case, width):  # noqa: F811
+        server, _host = plugin_server
+        _sign_in_local(phone_page, server)
+        phone_page.goto(f"{server.base_url}/plugin-pages")
+        phone_page.wait_for_selector(".pf-plugin-pages")
+
+        assert phone_page.locator("h1").inner_text() == "Plugin pages"
+        assert phone_page.locator(".pf-plugin-pages a").count() == 2
+        assert phone_page.get_by_text("Where the notes start").is_visible()
+        _phone_screenshot(phone_page, f"{case}-{width}")
+        _assert_phone_layout(phone_page, width, main="main")
+
     @pytest.mark.parametrize(("case", "width"), _phone_cases(["settings-plugins"]))
     def test_plugins_section(self, phone_page, plugin_server, case, width):  # noqa: F811
         server, _host = plugin_server
@@ -131,22 +172,27 @@ class TestPhoneLayout:
 
         assert phone_page.locator(".pf-plugin-row").count() == 2
         assert phone_page.get_by_text("Beta Reports").first.is_visible()
-        assert phone_page.locator('.pf-plugin-row a[href="/plugins/alpha/"]').inner_text() == "Open page"
+        link = phone_page.locator('.pf-plugin-row a[href="/plugin-pages/alpha"]')
+        assert link.inner_text() == "Pages"
+        assert link.get_attribute("target") is None
         # The same page is in the top navigation's Plugins menu (inline and in the narrow Menu),
-        # and Beta Reports, which has no page, is not.
-        assert phone_page.locator('[data-pf-plugins] a[href="/plugins/alpha/"]').count() == 2
-        assert phone_page.locator("[data-pf-plugins] a").count() == 2
+        # after "All plugin pages", and Beta Reports, which has no page, is not.
+        assert phone_page.locator('[data-pf-plugins] a[href="/plugin-pages/alpha"]').count() == 2
+        assert phone_page.locator('[data-pf-plugins] a[href="/plugin-pages"]').count() == 2
+        assert phone_page.locator("[data-pf-plugins] a").count() == 4
+        assert phone_page.locator("[data-pf-plugins] a[target]").count() == 0
         assert not phone_page.locator("[data-pf-plugins]").first.get_attribute("hidden")
         assert phone_page.get_by_text("The plugin changed since you reviewed it").is_visible()
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=".pf-page")
 
-        # Picking a plugin from the narrow Menu opens it in a new tab and closes the menus here.
+        # Picking a plugin from the narrow Menu closes the menus, so a page restored from the
+        # back/forward cache does not show them open.
         menu = phone_page.locator("details.pf-shell-menu")
         menu.evaluate("(el) => { el.open = true; }")
         plugins = menu.locator("details.pf-shell-plugins")
         plugins.evaluate("(el) => { el.open = true; }")
-        plugins.locator('a[href="/plugins/alpha/"]').evaluate(
+        plugins.locator('a[href="/plugin-pages/alpha"]').evaluate(
             "(el) => { el.addEventListener('click', (ev) => ev.preventDefault()); el.click(); }"
         )
         assert menu.evaluate("(el) => el.open") is False
@@ -191,3 +237,28 @@ class TestPhoneLayout:
 
         dialog.get_by_role("button", name="Cancel").evaluate("(el) => el.click()")
         assert phone_page.locator(".pf-plugin-modal").count() == 0
+
+
+class TestOpeningAPluginPage:
+    def test_an_entry_opens_the_plugin_page_in_a_new_tab(self, browser, plugin_server):  # noqa: F811
+        server, _host = plugin_server
+        context = browser.new_context()
+        try:
+            page = context.new_page()
+            _sign_in_local(page, server)
+            page.goto(f"{server.base_url}/approvals")
+            page.locator("summary", has_text="Plugins").first.click()
+            page.locator('.pf-shell-plugins-panel a[href="/plugin-pages/alpha"]').first.click()
+            page.wait_for_url("**/plugin-pages/alpha")
+            assert page.locator("h1").inner_text() == "Alpha Notes"
+            assert page.locator("h2").count() == 0
+
+            with context.expect_page() as opened:
+                page.get_by_role("link", name="Alpha home").click()
+            tab = opened.value
+            tab.wait_for_load_state("load")
+            assert tab.url == f"{server.base_url}/plugins/alpha/"
+            assert tab.locator("#alpha-body").inner_text() == "Alpha page /"
+            assert "Not Found" not in tab.content()
+        finally:
+            context.close()
