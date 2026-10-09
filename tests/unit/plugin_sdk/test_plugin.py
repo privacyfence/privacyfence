@@ -8,7 +8,6 @@ import json
 import pytest
 
 from privacyfence.plugins import constants
-import privacyfence_plugin_sdk.plugin as plugin_module
 from privacyfence_plugin_sdk.testing import _pages as pages_module
 from privacyfence.plugins.protocol import InitializeResult, PrepareResult, args_digest
 from privacyfence_plugin_sdk import (
@@ -331,13 +330,13 @@ class TestPrepareExecute:
         now = [1000.0]
         daemon.plugin._clock = lambda: now[0]
         await daemon.result("tool.prepare", prepare_params(principal, "w1", "rename", {"name": "x"}))
-        now[0] += plugin_module._PREPARED_CALL_LIFETIME_SECONDS - 1
+        now[0] += sdk_plugin._PREPARED_CALL_LIFETIME_SECONDS - 1
         ok = await daemon.result("tool.execute", execute_params(principal, "w1", "rename", {"name": "x"}))
         assert ok["result"]["renamed"] == "x"
 
     async def test_store_evicts_the_oldest_beyond_the_cap(self, daemon, principal, monkeypatch):
         await daemon.initialize()
-        monkeypatch.setattr(plugin_module, "_MAX_PREPARED_CALLS", 2)
+        monkeypatch.setattr(sdk_plugin, "_MAX_PREPARED_CALLS", 2)
         for call_id in ("c1", "c2", "c3"):
             await daemon.result("tool.prepare", prepare_params(principal, call_id, "rename", {"name": "x"}))
         assert list(daemon.plugin._prepared) == ["c2", "c3"]

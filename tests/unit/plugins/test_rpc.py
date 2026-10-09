@@ -575,7 +575,7 @@ class _StuckWriter:
 class TestSendTimeout:
     async def _stuck_peer(self, monkeypatch, **kwargs):
         monkeypatch.setattr(rpc, "SEND_TIMEOUT_SECONDS", 0.2)
-        (ra, _), _other = await _streams()
+        (ra, _), _ = await _streams()
         writer = _StuckWriter(**kwargs)
         closes: list[str] = []
         peer = RpcPeer(ra, writer, handlers={}, on_close=closes.append)  # type: ignore[arg-type]
