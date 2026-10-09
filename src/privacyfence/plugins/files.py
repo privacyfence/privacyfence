@@ -146,6 +146,14 @@ def resolve_file(spec: FileParamSpec, value: str, *, tool_title: str) -> Incomin
     )
 
 
+# The labels of the block above. A plugin's own fields block may not use one, so no row a plugin
+# writes can pass for a row the daemon read from the file.
+RESERVED_LABELS = ("File", "Source", "Size", "Declared type", "Detected type", "SHA-256")
+CHECKED_HEADING = "Read and checked by PrivacyFence from the file's bytes"
+PLUGIN_HEADING = "From the plugin"
+RESERVED_LABEL_MESSAGE = "a preview or payload row uses a label PrivacyFence reserves for the file it checked"
+
+
 def card_block(file: IncomingFile) -> dict:
     return {"type": "fields", "items": [
         {"label": "File", "value": file.name},
@@ -157,6 +165,25 @@ def card_block(file: IncomingFile) -> dict:
     ]}
 
 
+def checked_heading() -> dict:
+    return {"type": "heading", "text": CHECKED_HEADING}
+
+
+def plugin_heading() -> dict:
+    return {"type": "heading", "text": PLUGIN_HEADING}
+
+
+def refuse_reserved_labels(validated: list[dict]) -> None:
+    """Raise ``ValueError`` if a validated ``fields`` block uses a label of ``card_block``,
+    compared case-insensitively and trimmed."""
+    reserved = {label.casefold() for label in RESERVED_LABELS}
+    for block in validated:
+        if block.get("type") == "fields" and any(
+            item["label"].strip().casefold() in reserved for item in block["items"]
+        ):
+            raise ValueError(RESERVED_LABEL_MESSAGE)
+
+
 def param_description(description: str, spec: FileParamSpec) -> str:
     hint = FILE_PARAM_HINT.format(max_bytes=spec.max_bytes, types=", ".join(spec.media_types))
     description = description.strip()
@@ -164,6 +191,8 @@ def param_description(description: str, spec: FileParamSpec) -> str:
 
 
 __all__ = [
-    "FILE_PARAM_HINT", "IncomingFile", "UNNAMED_FILE", "card_block", "declared_media_type",
-    "file_reference", "param_description", "resolve_file", "sniff_media_type",
+    "CHECKED_HEADING", "FILE_PARAM_HINT", "IncomingFile", "PLUGIN_HEADING", "RESERVED_LABELS",
+    "RESERVED_LABEL_MESSAGE", "UNNAMED_FILE", "card_block", "checked_heading", "declared_media_type",
+    "file_reference", "param_description", "plugin_heading", "refuse_reserved_labels", "resolve_file",
+    "sniff_media_type",
 ]

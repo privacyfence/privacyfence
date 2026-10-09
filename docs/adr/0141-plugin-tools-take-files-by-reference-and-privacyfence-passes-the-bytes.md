@@ -74,6 +74,10 @@ Plugin protocol 1.3 adds file parameters.
 - The plugin never sees a path or a token, and what it stores is its own data, deleted with the plugin's
   data.
 - A plugin written for 1.0 to 1.2 is unchanged: it declares no file parameter, so it is never sent `files`.
+- The card puts the daemon's file block under a heading saying PrivacyFence read and checked it, and the
+  plugin's preview under a heading saying it comes from the plugin; a preview or payload `fields` row
+  labelled like one of the daemon's six rows (case and surrounding spaces ignored) fails the prepare as an
+  invalid preview, so no plugin row can pass for a checked one.
 - Plugins run in local mode only, so the file is read under the local-mode rules; a future organization-mode
   plugin host must revisit that.
 

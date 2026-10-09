@@ -16,7 +16,16 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from .. import blocks as _blocks
-from .._files import FILE_PARAM_KEY, MAX_FILE_PARAMS_PER_TOOL, declared_media_type, file_specs, sniff_media_type
+from .._files import (
+    CHECKED_HEADING,
+    FILE_PARAM_KEY,
+    MAX_FILE_PARAMS_PER_TOOL,
+    PLUGIN_HEADING,
+    declared_media_type,
+    file_specs,
+    refuse_reserved_labels,
+    sniff_media_type,
+)
 from .._rpc import Peer, RpcError
 from ..plugin import (
     _MAX_SCOPE_TYPE_DESCRIPTION_CHARS,
@@ -585,9 +594,14 @@ class PluginTestHost:
         except RpcError as exc:
             outcome.error = {"code": exc.code, "detail": _PREPARE_SENTENCES.get(exc.code, _PREPARE_FALLBACK)}
             return outcome
-        card = self._validate_prepared(tool, prepared)
+        card = self._validate_prepared(tool, prepared, files=bool(incoming))
         if card is not None and incoming:
-            card.preview = [self._file_block(f) for f in incoming.values()] + card.preview
+            card.preview = [
+                {"type": "heading", "text": CHECKED_HEADING},
+                *(self._file_block(f) for f in incoming.values()),
+                {"type": "heading", "text": PLUGIN_HEADING},
+                *card.preview,
+            ]
         if card is None:
             outcome.error = {"code": "invalid_preview", "detail": _INVALID_PREVIEW}
             return outcome
@@ -677,7 +691,7 @@ class PluginTestHost:
         return outcome
 
     @staticmethod
-    def _validate_prepared(tool: dict, prepared: Any) -> Card | None:
+    def _validate_prepared(tool: dict, prepared: Any, *, files: bool = False) -> Card | None:
         """The daemon's checks on a ``tool.prepare`` result. ``None`` means an invalid preview."""
         if not isinstance(prepared, dict):
             return None
@@ -686,6 +700,9 @@ class PluginTestHost:
             payload = prepared.get("payload")
             if payload is not None:
                 payload = _blocks.validate_blocks(payload, max_bytes=None)
+            if files:
+                refuse_reserved_labels(preview)
+                refuse_reserved_labels(payload or [])
         except ValueError:
             return None
         if tool["read_only"] != (payload is not None):

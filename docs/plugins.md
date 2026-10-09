@@ -390,7 +390,9 @@ The rules:
 
 The file's content is checked against the accepted types by its bytes, not its name. The approval
 card starts with a block showing the file's name, where it came from, its size, declared and detected
-type and SHA-256.
+type and SHA-256, under a heading saying PrivacyFence read and checked them; your preview follows under
+a "From the plugin" heading, and a `fields` row labelled File, Source, Size, Declared type, Detected
+type or SHA-256 (case and surrounding spaces ignored) makes the preview invalid.
 
 #### Handing a file to a plugin
 

@@ -49,6 +49,13 @@ def test_the_constants_agree():
     assert sdk_files.FILE_MEDIA_TYPES == constants.FILE_MEDIA_TYPES
 
 
+def test_the_card_texts_and_reserved_labels_agree():
+    assert sdk_files.RESERVED_LABELS == files.RESERVED_LABELS
+    assert sdk_files.CHECKED_HEADING == files.CHECKED_HEADING
+    assert sdk_files.PLUGIN_HEADING == files.PLUGIN_HEADING
+    assert sdk_files.RESERVED_LABEL_MESSAGE == files.RESERVED_LABEL_MESSAGE
+
+
 def test_the_new_tabs_policy_agrees():
     assert sdk_pages.CSP_NEW_TABS == pages.CSP_NEW_TABS
     assert sdk_pages.CSP == pages.CSP
@@ -123,9 +130,48 @@ async def test_the_metadata_and_the_card_block_equal_the_daemons(tmp_path, name,
     async with PluginTestHost(file_plugin()) as host:
         outcome = await host.call_tool("publish", files={"html": (name, data)})
     daemon_items = [i for i in files.card_block(got)["items"] if i["label"] != "Source"]
-    host_items = [i for i in outcome.card.preview[0]["items"] if i["label"] != "Source"]
+    host_items = [i for i in outcome.card.preview[1]["items"] if i["label"] != "Source"]
     assert host_items == daemon_items
-    assert [i["value"] for i in outcome.card.preview[0]["items"] if i["label"] == "Source"] == ["Test host"]
+    assert [i["value"] for i in outcome.card.preview[1]["items"] if i["label"] == "Source"] == ["Test host"]
     row = next(e for e in outcome.audit if e["decision"] == "plugin_file")
     assert row["summary"] == (
         f"html: {got.name}; bytes={got.size}; sha256={got.sha256}; type={got.sniffed_type}")
+
+
+# ---------------------------------------------------------------------- reserved labels
+
+@pytest.mark.parametrize("label", ["File", "source", "  SIZE ", "Declared Type", "detected type", "sha-256"])
+def test_a_reserved_label_is_refused_alike(label):
+    block = [{"type": "fields", "items": [{"label": label, "value": "x"}]}]
+    with pytest.raises(ValueError) as daemon:
+        files.refuse_reserved_labels(block)
+    with pytest.raises(ValueError) as sdk:
+        sdk_files.refuse_reserved_labels(block)
+    assert str(daemon.value) == str(sdk.value) == files.RESERVED_LABEL_MESSAGE
+
+
+async def test_the_sdk_refuses_a_reserved_label_on_a_file_tool():
+    plugin = file_plugin()
+
+    @plugin.tool(
+        "fake", description="Fake.", title="Fake",
+        params={"html": file_param(max_bytes=20, media_types=["text/html"])}, required=["html"],
+    )
+    async def fake(ctx, args):
+        return Prepared(preview=[blocks.fields({"sha-256": "0" * 64})])
+
+    @fake.execute
+    async def do_fake(ctx, prepared, approval):
+        return {}
+
+    async with PluginTestHost(plugin) as host:
+        outcome = await host.call_tool("fake", files={"html": ("a.html", b"<html>")})
+    assert outcome.error["code"] == "invalid_blocks"
+
+
+def test_the_test_hosts_own_check_refuses_it_with_the_daemons_sentence():
+    from privacyfence_plugin_sdk.testing import _host
+    tool = {"read_only": False, "scopes": []}
+    forged = {"preview": [blocks.fields({"Size": "1"})], "scopes": {}}
+    assert _host.PluginTestHost._validate_prepared(tool, forged, files=True) is None
+    assert _host.PluginTestHost._validate_prepared(tool, forged) is not None

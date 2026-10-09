@@ -64,7 +64,11 @@ _spec.loader.exec_module(_preview)
 CHECK_PAGE = _preview.CHECK_PAGE
 
 JIRA_URL = "https://jira.example.test/browse/PF-1"
-BLANK_PAGE = f'<!doctype html><html><body><a id="go" href="{JIRA_URL}" target="_blank">go</a></body></html>'
+BLANK_PAGE = (
+    f'<!doctype html><html><body><a id="go" href="{JIRA_URL}" target="_blank">go</a>'
+    f'<button id="open" onclick="window.handle = window.open(\'{JIRA_URL}\')">open</button>'
+    '</body></html>'
+)
 SAME_PAGE = f'<!doctype html><html><body><a id="go" href="{JIRA_URL}">go</a></body></html>'
 OWN_PAGE = '<!doctype html><html><body><a id="go" href="/plugins/demo/two" target="_blank">go</a></body></html>'
 FONT_PAGE = """<!doctype html><html><head><meta charset="utf-8">
@@ -84,7 +88,7 @@ document.addEventListener("securitypolicyviolation", function (e) { v.push({dire
 
 JIRA_BODY = (
     '<p id="jira">jira</p><script>document.title = JSON.stringify('
-    "{opener: window.opener === null, referrer: document.referrer})</script>"
+    "{opener_is_null: window.opener === null, referrer: document.referrer})</script>"
 )
 
 SECOND_PAGE = '<!doctype html><html><body><p id="second">second page</p></body></html>'
@@ -313,8 +317,13 @@ class TestNewTabs:
                 page.locator("#go").click()
             popup = info.value
             popup.wait_for_selector("#jira")
-            assert json.loads(popup.title()) == {"opener": True, "referrer": ""}
+            assert json.loads(popup.title()) == {"opener_is_null": True, "referrer": ""}
             assert page.locator("#go").is_visible()  # the opener tab was not navigated
+            # The plugin page keeps no handle to a tab it opens: window.open returns null or a closed window.
+            with context.expect_page(timeout=5000) as second:
+                page.locator("#open").click()
+            second.value.wait_for_selector("#jira")
+            assert page.evaluate("window.handle === null || window.handle.closed") is True
         finally:
             context.close()
 

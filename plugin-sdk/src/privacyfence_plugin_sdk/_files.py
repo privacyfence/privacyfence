@@ -19,6 +19,11 @@ from ._rpc import RpcError
 FILE_PARAM_KEY = "x-privacyfence-file"
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_FILE_PARAMS_PER_TOOL = 1
+# The labels of the daemon's file block and the headings around it (copies; a test compares them).
+RESERVED_LABELS = ("File", "Source", "Size", "Declared type", "Detected type", "SHA-256")
+CHECKED_HEADING = "Read and checked by PrivacyFence from the file's bytes"
+PLUGIN_HEADING = "From the plugin"
+RESERVED_LABEL_MESSAGE = "a preview or payload row uses a label PrivacyFence reserves for the file it checked"
 FILE_MEDIA_TYPES = (
     "text/html", "text/plain", "application/json", "application/pdf",
     "image/png", "image/jpeg", "image/gif", "image/webp",
@@ -105,6 +110,17 @@ def file_param(description: str = "", *, max_bytes: int, media_types: Sequence[s
         spec["description"] = description
     spec[FILE_PARAM_KEY] = {"max_bytes": max_bytes, "media_types": list(media_types)}
     return spec
+
+
+def refuse_reserved_labels(validated: list[dict]) -> None:
+    """Raise ``ValueError`` if a validated ``fields`` block uses a label of the daemon's file block,
+    compared case-insensitively and trimmed."""
+    reserved = {label.casefold() for label in RESERVED_LABELS}
+    for block in validated:
+        if block.get("type") == "fields" and any(
+            item["label"].strip().casefold() in reserved for item in block["items"]
+        ):
+            raise ValueError(RESERVED_LABEL_MESSAGE)
 
 
 def file_specs(properties: Mapping[str, Mapping]) -> dict[str, Mapping]:

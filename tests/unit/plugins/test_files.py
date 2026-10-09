@@ -245,6 +245,24 @@ class TestCardBlock:
         ]
 
 
+class TestReservedLabels:
+    @pytest.mark.parametrize("label", ["File", "source", "  SIZE ", "Declared Type", "DETECTED TYPE", "sha-256"])
+    def test_a_daemon_label_is_refused_however_it_is_written(self, label):
+        with pytest.raises(ValueError, match="reserves"):
+            files.refuse_reserved_labels([{"type": "fields", "items": [{"label": label, "value": "x"}]}])
+
+    def test_other_labels_and_blocks_pass(self):
+        files.refuse_reserved_labels([
+            {"type": "fields", "items": [{"label": "Filename", "value": "File"}, {"label": "Target", "value": "x"}]},
+            {"type": "field", "label": "File", "value": "x"},
+            {"type": "text", "text": "File"},
+        ])
+
+    def test_the_headings_are_heading_blocks(self):
+        assert files.checked_heading() == {"type": "heading", "text": files.CHECKED_HEADING}
+        assert files.plugin_heading() == {"type": "heading", "text": files.PLUGIN_HEADING}
+
+
 class TestParamDescription:
     def test_appends_the_hint(self):
         text = files.param_description("  The page. ", ANY_TEXT)

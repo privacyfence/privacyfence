@@ -1038,7 +1038,7 @@ def file_plugin() -> Plugin:
         info = ctx.files["html"]
         with pytest.raises(RuntimeError, match="execute function only"):
             _ = info.content
-        return Prepared(preview=[blocks.fields({"File": info.name, "Size": str(info.size), "SHA": info.sha256})])
+        return Prepared(preview=[blocks.fields({"Name": info.name, "Bytes": str(info.size), "Digest": info.sha256})])
 
     @publish.execute
     async def do_publish(ctx, prepared, approval):
