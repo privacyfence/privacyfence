@@ -1056,6 +1056,49 @@ class TestUninstallForgetsApprovals:
         assert summaries[-1] == "removed; data and rules deleted"
 
 
+class TestPendingCardsEndWithThePlugin:
+    async def _open_cards(self, env):
+        plugin_dir = env.add(SDK, sdk=True)
+        host = env.host()
+        await host.start()
+        await env.enable(host, SDK)
+        approval_id = (await env.page(host, "/approval"))["body"].split()[0]
+        confirm_id = (await env.page(host, "/confirm"))["body"]
+        return host, approval_id, confirm_id, plugin_dir
+
+    async def test_disable_expires_pending_cards(self, env):
+        host, approval_id, confirm_id, _ = await self._open_cards(env)
+
+        await host.disable(SDK)
+
+        assert env.registry.await_status(approval_id) == "expired"
+        assert env.registry.await_status(confirm_id) == "expired"
+        assert env.registry.answer(approval_id, "confirm") is False
+        await until(lambda: "code; expired" in env.audit.summaries("plugin_approval"))
+        assert host._approval_store.for_plugin(SDK) == []
+
+    async def test_purge_expires_pending_cards_and_stores_nothing(self, env):
+        host, approval_id, confirm_id, _ = await self._open_cards(env)
+
+        await host.purge(SDK)
+
+        assert env.registry.await_status(approval_id) == "expired"
+        assert env.registry.await_status(confirm_id) == "expired"
+        assert env.registry.answer(approval_id, "confirm") is False
+        assert host._approval_store.for_plugin(SDK) == []
+
+    async def test_removal_expires_pending_cards(self, env):
+        host, approval_id, confirm_id, plugin_dir = await self._open_cards(env)
+        TestUninstall._remove(plugin_dir)
+
+        await host.rescan()
+
+        assert env.registry.await_status(approval_id) == "expired"
+        assert env.registry.await_status(confirm_id) == "expired"
+        await until(lambda: "code; expired" in env.audit.summaries("plugin_approval"))
+        assert host._approval_store.for_plugin(SDK) == []
+
+
 class TestOutputDir:
     async def test_created_0700_and_passed_only_with_outputs(self, env):
         env.add(SDK, sdk=True, outputs=True)
