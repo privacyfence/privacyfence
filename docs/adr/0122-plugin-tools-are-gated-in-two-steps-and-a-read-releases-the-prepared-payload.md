@@ -7,6 +7,7 @@ Accepted — 2026-10-07. Implemented: `src/privacyfence/plugins/connector.py`,
 `src/privacyfence/plugins/tools.py`, `src/privacyfence/auto_accept.py` (`register_dynamic_tools`),
 `src/privacyfence/policy/scopes.py`, `src/privacyfence/policy/propose.py`.
 Amended by [ADR 0137](0137-a-plugin-writes-result-is-capped-and-pii-scanned-before-it-reaches-the-ai.md): a write's result is capped and PII-scanned.
+Amended by [ADR 0141](0141-plugin-tools-take-files-by-reference-and-privacyfence-passes-the-bytes.md): a tool can take a file by reference.
 
 ## Context
 
