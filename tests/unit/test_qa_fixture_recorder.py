@@ -1209,6 +1209,92 @@ class TestReportPagingCheck:
         text = json.dumps(res.raw)
         assert "Real Person" not in text and "005ak" not in text
 
+    def test_report_paging_check_record_row_count_matches_kept_rows(self):
+        res = self._check(self._sf(), record=True)
+        assert res.ok, res.note
+        group = res.raw["factMap"]["T!T"]
+        assert len(group["rows"]) == 2
+        assert group["aggregates"] == [{"label": "2", "value": 2}]
+
+    def test_report_paging_check_record_row_count_leaves_other_aggregates(self):
+        sf = self._sf()
+        real = sf.restful.side_effect
+
+        def restful(path, params=None, method="GET", **kwargs):
+            out = real(path, params=params, method=method, **kwargs)
+            if method == "POST":
+                out["reportMetadata"]["aggregates"] = ["s!Amount", "RowCount"]
+                group = out["factMap"]["T!T"]
+                group["aggregates"] = [{"label": "9", "value": 9}, *group["aggregates"]]
+            return out
+
+        sf.restful.side_effect = restful
+        res = self._check(sf, record=True)
+        assert res.ok, res.note
+        assert res.raw["factMap"]["T!T"]["aggregates"] == [
+            {"label": "9", "value": 9}, {"label": "2", "value": 2},
+        ]
+
+    def test_report_paging_check_record_replaces_record_and_report_ids(self):
+        acme, beta = "001ak00003cU5KbAAK", "001ak00003cU5cLAAS"
+        report = "00Oak00000RkbHxEAJ"
+        sf = self._sf()
+        real = sf.restful.side_effect
+
+        def restful(path, params=None, method="GET", **kwargs):
+            out = real(path, params=params, method=method, **kwargs)
+            if method == "POST":
+                out["attributes"] = {"reportId": report, "type": "Report"}
+                out["reportMetadata"]["id"] = report
+                rows = out["factMap"]["T!T"]["rows"]
+                for row, rid in zip(rows, (acme, beta, "001ak00003cU5dMAAS")):
+                    row["dataCells"][0]["recordId"] = rid
+                    row["dataCells"].append({"label": "Account", "recordId": rid, "value": rid})
+                    row["dataCells"].append({"label": rid, "value": rid[:15]})
+            return out
+
+        sf.restful.side_effect = restful
+        res = self._check(sf, record=True)
+        assert res.ok, res.note
+        text = json.dumps(res.raw)
+        for real_id in (acme, beta, report, acme[:15]):
+            assert real_id not in text
+        rows = res.raw["factMap"]["T!T"]["rows"]
+        assert len(rows) == 2
+        # The cell value, its label and its recordId share one placeholder per record.
+        for row in rows:
+            cell = row["dataCells"][-2]
+            assert cell["value"] == cell["recordId"] == row["dataCells"][0]["recordId"]
+            assert cell["value"].startswith("qa-placeholder-id-")
+        assert rows[0]["dataCells"][-2]["value"] != rows[1]["dataCells"][-2]["value"]
+        assert res.raw["attributes"]["reportId"] == res.raw["reportMetadata"]["id"]
+        assert res.raw["attributes"]["reportId"].startswith("qa-placeholder-id-")
+
+    def test_report_paging_check_record_keeps_non_id_cell_values(self):
+        res = self._check(self._sf(), record=True)
+        values = [c["value"] for r in res.raw["factMap"]["T!T"]["rows"] for c in r["dataCells"]]
+        assert "PFQA-00001" in values and "Acme [QATEST]" in values
+
+    @pytest.mark.parametrize("value, expected", [
+        ("001ak00003cU5KbAAK", True), ("001ak00003cU5Kb", True), ("PFQA-00001", False),
+        ("Budapest", False), ("Internationalis", False), ("1234567890123456", False), (None, False),
+        ("0é1ak00003cU5KbAAK", False),
+    ])
+    def test_looks_like_salesforce_id(self, value, expected):
+        assert recorder._looks_like_salesforce_id(value) is expected
+
+    def test_recorded_run_report_page_is_accepted_by_the_client(self):
+        path = Path(__file__).parent.parent / "fixtures" / "live" / "salesforce" / "run_report_page.json"
+        if not path.exists():
+            pytest.skip("run_report_page.json not recorded yet")
+        from privacyfence.salesforce_client import report_page_keys
+        recorded = json.loads(path.read_text())
+        meta = recorded["reportMetadata"]
+        col = meta["sortBy"][0]["sortColumn"]
+        row_count = recorded["factMap"]["T!T"]["aggregates"][0]["value"]
+        keys, count = report_page_keys(recorded, col, None, row_count)
+        assert count == row_count == len(keys) == 2
+
     def test_report_paging_check_record_fails_without_qatest_rows(self):
         rows = [("Real One", "PFQA-00001"), ("Real Two", "PFQA-00002")]
         res = self._check(self._sf(rows=rows), record=True)
