@@ -80,6 +80,7 @@ the request on the card, once.
 | Tool | Always allow buttons |
 |---|---|
 | `jira_get_issue` | this project, if I'm reporter, if I'm assignee |
+| `jira_search_issues_with_fields` |  |
 
 ### Salesforce
 
