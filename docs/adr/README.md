@@ -237,3 +237,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0129](0129-drive-binary-downloads-for-plugins-are-http-range-reads-with-no-size-cap.md) | Drive binary downloads for plugins are HTTP Range reads with no size cap | Accepted; amends 0123 |
 | [0130](0130-plugin-outputs-are-a-folder-that-privacyfence-reads-through-its-own-tools.md) | Plugin outputs are a folder that PrivacyFence reads through its own tools | Accepted |
 | [0131](0131-a-plugins-child-processes-run-under-its-account-unsupervised.md) | A plugin's child processes run under its account, unsupervised, and the plugin confines them | Accepted; amends 0121 |
+| [0132](0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) | Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project | Accepted |
