@@ -884,16 +884,16 @@ class TestCheckSalesforce:
 
     def test_owner_relationship_redacted(self, monkeypatch):
         sf = MagicMock()
-        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+        sf.query.return_value = {"records": [{"Id": "00O5e000004AbCdEAK", "Name": "PrivacyFence QA Report"}]}
         sf.Account.get.return_value = {
-            "attributes": {"type": "Account"}, "Id": "001a",
+            "attributes": {"type": "Account"}, "Id": "001xx000003DGb2AAG",
             "Name": "PrivacyFence QA — Acme Test Co [QATEST]",
             "Owner": {"Id": "005xx", "Name": "Real Owner", "Email": "real@company.com"},
         }
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
 
         results = recorder.check_salesforce(
-            record=True, manifest={"salesforce": {"seed_record_id": "001a"}},
+            record=True, manifest={"salesforce": {"seed_record_id": "001xx000003DGb2AAG"}},
         )
 
         get_record = next(r for r in results if r.method == "get_record")
@@ -903,12 +903,12 @@ class TestCheckSalesforce:
     def test_untagged_record_is_refused(self, monkeypatch):
         sf = MagicMock()
         sf.Account.get.return_value = {
-            "attributes": {"type": "Account"}, "Id": "001x", "Name": "Some real unrelated account",
+            "attributes": {"type": "Account"}, "Id": "001xx000003DGb3AAG", "Name": "Some real unrelated account",
         }
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
 
         results = recorder.check_salesforce(
-            record=True, manifest={"salesforce": {"seed_record_id": "001x"}},
+            record=True, manifest={"salesforce": {"seed_record_id": "001xx000003DGb3AAG"}},
         )
 
         get_record = next(r for r in results if r.method == "get_record")
@@ -926,7 +926,7 @@ class TestCheckSalesforce:
 
     def _report_sf(self, describe=None, narrowed=None, summary=None, full=None):
         sf = MagicMock()
-        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+        sf.query.return_value = {"records": [{"Id": "00O5e000004AbCdEAK", "Name": "PrivacyFence QA Report"}]}
         full = full or self._report_result(["NAME", "CITY"], [["Acme", "Zurich"], ["Beta", "Bern"]])
         describe = describe or {"reportMetadata": {
             "detailColumns": ["NAME", "CITY"],
@@ -950,7 +950,7 @@ class TestCheckSalesforce:
 
     def _run_report_result(self, monkeypatch, sf):
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
-        results = recorder.check_salesforce(record=True, manifest={"salesforce": {"seed_record_id": "001a"}})
+        results = recorder.check_salesforce(record=True, manifest={"salesforce": {"seed_record_id": "001xx000003DGb2AAG"}})
         return next(r for r in results if r.method == "run_report")
 
     def test_run_report_check_passes_on_honoured_overrides(self, monkeypatch):
@@ -974,7 +974,7 @@ class TestCheckSalesforce:
 
     def test_run_report_check_degrades_on_mock_responses(self, monkeypatch):
         sf = MagicMock()
-        sf.query.return_value = {"records": [{"Id": "r1", "Name": "PrivacyFence QA Report"}]}
+        sf.query.return_value = {"records": [{"Id": "00O5e000004AbCdEAK", "Name": "PrivacyFence QA Report"}]}
 
         res = self._run_report_result(monkeypatch, sf)
 
@@ -1029,7 +1029,7 @@ class TestCheckSalesforce:
         sf = MagicMock()
         sf.query.return_value = {"records": []}
         monkeypatch.setattr(recorder, "_build_salesforce_client", lambda: self._client(sf))
-        results = recorder.check_salesforce(record=False, manifest={"salesforce": {"seed_record_id": "001a"}})
+        results = recorder.check_salesforce(record=False, manifest={"salesforce": {"seed_record_id": "001xx000003DGb2AAG"}})
         assert not any(r.method == "run_report" for r in results)
 
 
