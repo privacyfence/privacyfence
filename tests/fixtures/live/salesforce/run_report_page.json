@@ -1,0 +1,437 @@
+{
+  "allData": true,
+  "attributes": {
+    "describeUrl": "https://example.com/qa-placeholder",
+    "instancesUrl": "https://example.com/qa-placeholder",
+    "reportId": "00Oak00000RkbHxEAJ",
+    "reportName": "PrivacyFence QA Report",
+    "type": "Report"
+  },
+  "factMap": {
+    "T!T": {
+      "aggregates": [
+        {
+          "label": "3",
+          "value": 3
+        }
+      ],
+      "rows": [
+        {
+          "dataCells": [
+            {
+              "label": "PFQA-00014",
+              "value": "PFQA-00014"
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5KbAAK",
+              "value": null
+            },
+            {
+              "label": "Andras Takacs",
+              "value": "005ak00000iCxfiAAC"
+            },
+            {
+              "label": "PrivacyFence QA \u2014 Acme Test Co [QATEST]",
+              "recordId": "001ak00003cU5KbAAK",
+              "value": "001ak00003cU5KbAAK"
+            },
+            {
+              "label": "Florida",
+              "value": "Florida"
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5KbAAK",
+              "value": null
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5KbAAK",
+              "value": null
+            },
+            {
+              "label": "9/30/2026",
+              "value": "2026-09-30"
+            },
+            {
+              "label": "St Louise",
+              "recordId": "001ak00003cU5KbAAK",
+              "value": "St Louise"
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5KbAAK",
+              "value": null
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5KbAAK",
+              "value": null
+            },
+            {
+              "escapedLabel": "-",
+              "label": "-",
+              "value": null
+            }
+          ]
+        },
+        {
+          "dataCells": [
+            {
+              "label": "PFQA-00015",
+              "value": "PFQA-00015"
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5cLAAS",
+              "value": null
+            },
+            {
+              "label": "Andras Takacs",
+              "value": "005ak00000iCxfiAAC"
+            },
+            {
+              "label": "PrivacyFence QA \u2014 Globex Test Co [QATEST]",
+              "recordId": "001ak00003cU5cLAAS",
+              "value": "001ak00003cU5cLAAS"
+            },
+            {
+              "label": "-",
+              "value": null
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5cLAAS",
+              "value": null
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5cLAAS",
+              "value": null
+            },
+            {
+              "label": "9/30/2026",
+              "value": "2026-09-30"
+            },
+            {
+              "label": "Budapest",
+              "recordId": "001ak00003cU5cLAAS",
+              "value": "Budapest"
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5cLAAS",
+              "value": null
+            },
+            {
+              "label": "-",
+              "recordId": "001ak00003cU5cLAAS",
+              "value": null
+            },
+            {
+              "escapedLabel": "-",
+              "label": "-",
+              "value": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "groupingsAcross": {
+    "groupings": []
+  },
+  "groupingsDown": {
+    "groupings": []
+  },
+  "hasDetailRows": true,
+  "picklistColors": {},
+  "reportExtendedMetadata": {
+    "aggregateColumnInfo": {
+      "RowCount": {
+        "dataType": "int",
+        "label": "Record Count"
+      }
+    },
+    "availableDashboardSettings": null,
+    "detailColumnInfo": {
+      "ACCOUNT.NAME": {
+        "dataType": "string",
+        "entityColumnName": "Account.Name",
+        "fieldInfo": {
+          "entityName": "Account",
+          "fieldName": "Name",
+          "lookupEntityName": "Account"
+        },
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.Name",
+        "inactiveFilterValues": [],
+        "isLookup": true,
+        "label": "Account Name",
+        "uniqueCountable": true
+      },
+      "ADDRESS1_CITY": {
+        "dataType": "string",
+        "entityColumnName": "Account.BillingAddress",
+        "fieldInfo": {
+          "entityName": "Account",
+          "fieldName": "BillingCity"
+        },
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.BillingCity",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Billing City",
+        "uniqueCountable": true
+      },
+      "ADDRESS1_STATE": {
+        "dataType": "string",
+        "entityColumnName": "Account.BillingAddress",
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.BillingState",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Billing State/Province (text only)",
+        "uniqueCountable": true
+      },
+      "Account.PF_QA_Number__c": {
+        "dataType": "string",
+        "entityColumnName": "Account.PF_QA_Number__c",
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.PF_QA_Number__c",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "PF QA Number",
+        "uniqueCountable": true
+      },
+      "DESCRIPTION": {
+        "dataType": "textarea",
+        "entityColumnName": "Account.Description",
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.Description",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Description",
+        "uniqueCountable": false
+      },
+      "DUE_DATE": {
+        "dataType": "date",
+        "entityColumnName": "Account.LastActivityDate",
+        "fieldInfo": {
+          "entityName": "Account",
+          "fieldName": "LastActivityDate"
+        },
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.LastActivityDate",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Last Activity",
+        "uniqueCountable": true
+      },
+      "DUNS_NUMBER": {
+        "dataType": "string",
+        "entityColumnName": "Account.DunsNumber",
+        "fieldInfo": {
+          "entityName": "Account",
+          "fieldName": "DunsNumber"
+        },
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.DunsNumber",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "D-U-N-S Number",
+        "uniqueCountable": true
+      },
+      "LAST_UPDATE": {
+        "dataType": "date",
+        "entityColumnName": "Account.LastModifiedDate",
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.LastModifiedDate",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Last Modified Date",
+        "uniqueCountable": true
+      },
+      "RATING": {
+        "dataType": "picklist",
+        "entityColumnName": "Account.Rating",
+        "fieldInfo": {
+          "entityName": "Account",
+          "fieldName": "Rating"
+        },
+        "filterValues": [
+          {
+            "apiName": "Hot",
+            "label": "Hot",
+            "name": "Hot"
+          },
+          {
+            "apiName": "Warm",
+            "label": "Warm",
+            "name": "Warm"
+          },
+          {
+            "apiName": "Cold",
+            "label": "Cold",
+            "name": "Cold"
+          }
+        ],
+        "filterable": true,
+        "fullyQualifiedName": "Account.Rating",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Rating",
+        "uniqueCountable": true
+      },
+      "TYPE": {
+        "dataType": "picklist",
+        "entityColumnName": "Account.Type",
+        "fieldInfo": {
+          "entityName": "Account",
+          "fieldName": "Type"
+        },
+        "filterValues": [
+          {
+            "apiName": "Prospect",
+            "label": "Prospect",
+            "name": "Prospect"
+          },
+          {
+            "apiName": "Customer - Direct",
+            "label": "Customer - Direct",
+            "name": "Customer - Direct"
+          },
+          {
+            "apiName": "Customer - Channel",
+            "label": "Customer - Channel",
+            "name": "Customer - Channel"
+          },
+          {
+            "apiName": "Channel Partner / Reseller",
+            "label": "Channel Partner / Reseller",
+            "name": "Channel Partner / Reseller"
+          },
+          {
+            "apiName": "Installation Partner",
+            "label": "Installation Partner",
+            "name": "Installation Partner"
+          },
+          {
+            "apiName": "Technology Partner",
+            "label": "Technology Partner",
+            "name": "Technology Partner"
+          },
+          {
+            "apiName": "Other",
+            "label": "Other",
+            "name": "Other"
+          }
+        ],
+        "filterable": true,
+        "fullyQualifiedName": "Account.Type",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Type",
+        "uniqueCountable": true
+      },
+      "USERS.NAME": {
+        "dataType": "string",
+        "entityColumnName": "User.Name",
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.Owner.Name",
+        "inactiveFilterValues": [],
+        "isLookup": true,
+        "label": "Account Owner",
+        "uniqueCountable": true
+      },
+      "YEAR_STARTED": {
+        "dataType": "string",
+        "entityColumnName": "Account.YearStarted",
+        "fieldInfo": {
+          "entityName": "Account",
+          "fieldName": "YearStarted"
+        },
+        "filterValues": [],
+        "filterable": true,
+        "fullyQualifiedName": "Account.YearStarted",
+        "inactiveFilterValues": [],
+        "isLookup": false,
+        "label": "Year Started",
+        "uniqueCountable": true
+      }
+    },
+    "groupingColumnInfo": {}
+  },
+  "reportMetadata": {
+    "aggregates": [
+      "RowCount"
+    ],
+    "chart": null,
+    "crossFilters": [],
+    "currency": null,
+    "dashboardSetting": null,
+    "description": null,
+    "detailColumns": [
+      "Account.PF_QA_Number__c",
+      "DUE_DATE",
+      "USERS.NAME",
+      "ACCOUNT.NAME",
+      "ADDRESS1_STATE",
+      "TYPE",
+      "RATING",
+      "LAST_UPDATE",
+      "ADDRESS1_CITY",
+      "YEAR_STARTED",
+      "DUNS_NUMBER",
+      "DESCRIPTION"
+    ],
+    "developerName": "PrivacyFence_QA_Report_DLH",
+    "division": null,
+    "folderId": "005ak00000iCxfiAAC",
+    "groupingsAcross": [],
+    "groupingsDown": [],
+    "hasDetailRows": true,
+    "hasRecordCount": true,
+    "historicalSnapshotDates": [],
+    "id": "qa-placeholder-id-1",
+    "name": "PrivacyFence QA Report",
+    "presentationOptions": {
+      "hasStackedSummaries": true
+    },
+    "reportBooleanFilter": null,
+    "reportFilters": [],
+    "reportFormat": "TABULAR",
+    "reportType": {
+      "label": "Accounts",
+      "type": "AccountList"
+    },
+    "scope": "user",
+    "showGrandTotal": true,
+    "showSubtotals": true,
+    "sortBy": [
+      {
+        "sortColumn": "Account.PF_QA_Number__c",
+        "sortOrder": "Asc"
+      }
+    ],
+    "standardDateFilter": {
+      "column": "CREATED_DATE",
+      "durationValue": "CUSTOM",
+      "endDate": null,
+      "startDate": "2026-09-04"
+    },
+    "standardFilters": null,
+    "supportsRoleHierarchy": false,
+    "userOrHierarchyFilterId": null
+  }
+}
