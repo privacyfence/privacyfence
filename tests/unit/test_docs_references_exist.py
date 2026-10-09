@@ -10,6 +10,9 @@ A deliberate citation of a deleted document stays possible, in the one form that
 followed: a git revision spec, `<commit>^:docs/<name>.md`, which `git show` resolves. When the
 checkout has its git history, the test also checks that each such citation resolves.
 
+A plan document (`docs/*-plan.md`) may also name an ADR it is about to create: a reference from
+one to a missing `docs/adr/` file is ignored, and only that.
+
 Two places are exempt. `CHANGELOG.md` records what each release shipped, including the docs it
 had then. `docs/adr/` records are frozen once accepted; their Markdown links are still checked by
 `test_docs_links.py`, and fixing one is a permitted edit. This file is skipped too: its
@@ -72,11 +75,22 @@ def _references() -> list[tuple[str, int, str | None, str]]:
     return refs
 
 
+def _is_plan_doc(rel: str) -> bool:
+    parts = rel.split("/")
+    return len(parts) == 2 and parts[0] == "docs" and parts[1].endswith("-plan.md")
+
+
+def _is_dangling(rel: str, path: str, root: Path = REPO_ROOT) -> bool:
+    if (root / path).is_file():
+        return False
+    return not (_is_plan_doc(rel) and path.startswith("docs/adr/"))
+
+
 def test_every_current_docs_reference_exists():
     dangling = [
         f"{rel}:{lineno}: {path}"
         for rel, lineno, rev, path in _references()
-        if rev is None and not (REPO_ROOT / path).is_file()
+        if rev is None and _is_dangling(rel, path)
     ]
     assert not dangling, (
         "These name a docs/ file that does not exist. Point them at the doc that holds the content "
@@ -112,3 +126,17 @@ def test_the_pattern_reads_both_forms():
     assert _REF.search("mydocs/x.md") is None
     linked = _REF.search("(https://github.com/privacyfence/privacyfence/blob/main/docs/how-it-works.md)")
     assert linked is not None and linked.group(2) == "docs/how-it-works.md"
+
+
+def test_a_plan_doc_may_name_an_adr_that_does_not_exist_yet(tmp_path):
+    assert not _is_dangling("docs/x-plan.md", "docs/adr/0999-new.md", tmp_path)
+
+
+def test_the_plan_exemption_is_narrow(tmp_path):
+    assert _is_dangling("docs/guide.md", "docs/adr/0999-new.md", tmp_path)
+    assert _is_dangling("docs/adr/0001-a.md", "docs/adr/0999-new.md", tmp_path)
+    assert _is_dangling("docs/x-plan.md", "docs/other.md", tmp_path)
+    assert _is_dangling("docs/sub/x-plan.md", "docs/adr/0999-new.md", tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "other.md").write_text("x")
+    assert not _is_dangling("docs/guide.md", "docs/other.md", tmp_path)
