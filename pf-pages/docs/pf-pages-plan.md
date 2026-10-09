@@ -121,12 +121,11 @@ root/assets.json                  {"<asset name>": {"mime_type", "size", "sha256
 
 ```python
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")                                       # fullmatch; a page's name
-ASSET_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,57}\.(png|jpg|jpeg|gif|svg|webp)")  # fullmatch; at most 63 chars
+ASSET_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,57}\.(png|jpg|jpeg)")  # fullmatch; at most 63 chars
 WINDOWS_RESERVED = frozenset({"con", "prn", "aux", "nul",
                               *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))})
 TITLE_FORBIDDEN_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
-ASSET_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
-               "svg": "image/svg+xml", "webp": "image/webp"}
+ASSET_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
 MAX_TITLE_CHARS = 120
 MAX_HTML_BYTES = 1_048_576      # UTF-8, after line-ending normalization
 MAX_CSS_BYTES = 262_144         # UTF-8, after line-ending normalization
@@ -146,8 +145,9 @@ MAX_ASSETS = 200
   return text exactly as stored, except that the SDK's blocks strip control characters other than
   newline and tab, and bidirectional controls. The README says so.
 
-An asset's bytes must match its extension: PNG starts `\x89PNG\r\n\x1a\n`, JPEG `\xff\xd8\xff`, GIF
-`GIF87a` or `GIF89a`, WebP `RIFF` + 4 bytes + `WEBP`, and SVG decodes as UTF-8 and contains `<svg`.
+An asset's bytes must match its extension: PNG starts `\x89PNG\r\n\x1a\n`, and JPEG (`.jpg`, `.jpeg`)
+starts `\xff\xd8\xff`. Only these two formats are supported: both are plain raster data that
+carry no script, no links and no references to other files.
 
 ### Images, securely
 
@@ -160,9 +160,9 @@ response:
    disk or the network.
 2. **Checked on the way in.**
    - The name must match `ASSET_NAME_RE`, so it can never be a path.
-   - The bytes must match the extension (the magic numbers above), with a 1 MiB cap.
-   - An SVG must also pass `check_svg` (below), because SVG is the one image format that can carry
-     script and links.
+   - Only PNG and JPEG are accepted, and the bytes must match the extension (the magic numbers
+     above), with a 1 MiB cap. Neither format can carry script or links, so there is no markup to
+     check or sanitize.
 3. **Out only inlined.** When `/view` is served, `inline` replaces each `assets/<name>` reference
    with a `data:<mime>;base64,…` URI of the stored bytes. The MIME type comes from the extension,
    never from the content or from the AI.
@@ -171,31 +171,6 @@ response:
    - There is no URL from which an image could be fetched on its own.
 4. **Rendered in the sandbox.** Even an image that slipped through runs inside the page's opaque
    origin, with no cookie, no same-origin access and no popups.
-
-`check_svg(text: str) -> None` lives in `src/pf_pages/svg.py`, which imports nothing from the
-package. It raises `UnsafeSvg(ValueError)` with attribute `what`, and `Store.decode_asset` turns that
-into `StoreError("unsafe_svg")`. It is an **allowlist on namespaces
-plus a denylist on what can run, load or link**. It raises `unsafe_svg` (with `{what}` filled in)
-(through `UnsafeSvg`) on the first rule that fails, in this order:
-
-| # | Rule | `{what}` |
-|---|---|---|
-| 1 | Case-insensitive pre-checks on the text: `<!DOCTYPE`, `<!ENTITY` or `<?xml-stylesheet` appears | `a DOCTYPE, ENTITY or xml-stylesheet declaration` |
-| 2 | `xml.etree.ElementTree.fromstring(text)` raises `ET.ParseError` or `ValueError`, or the root tag is not `{http://www.w3.org/2000/svg}svg` | `XML that is not a single SVG document` |
-| 3 | An element's tag (from `root.iter()`) is not in the SVG namespace `{http://www.w3.org/2000/svg}` | `an element outside the SVG namespace` |
-| 4 | An element's local name is in `{"script", "foreignObject", "iframe", "embed", "object", "audio", "video", "set", "animate", "animateMotion", "animateTransform", "handler", "listener"}` | `a <name> element` |
-| 5 | An attribute has a namespace other than none, `http://www.w3.org/1999/xlink` or `http://www.w3.org/XML/1998/namespace` | `an attribute outside the SVG namespace` |
-| 6 | An attribute's local name starts with `on` (case-insensitive) | `an event handler attribute (<name>)` |
-| 7 | An attribute with local name `href` whose value, stripped, does not start with `#` | `a link to <value cut to 40 characters>` |
-| 8 | Any attribute value, or any `<style>` element's text, contains a backslash, or contains `@import` (case-insensitive) | `a CSS escape or @import` |
-| 9 | Any attribute value, or any `<style>` element's text, has a `url(` (case-insensitive) whose argument, stripped of spaces and quotes, does not start with `#` | `an external url()` |
-
-Rule 7 also refuses an `<image>` with an embedded `data:` raster, which many exported SVGs contain.
-That is deliberate: the README "Limits" section says to store the raster as its own asset and
-reference it from the HTML instead.
-
-`check_svg` is defence in depth, not the boundary. A page's own HTML can already run script in the
-sandbox. The boundary is the ADR 0124 sandbox together with the inlining above.
 
 `StoreError(ValueError)` carries one of these messages exactly (`{…}` filled in):
 
@@ -211,13 +186,10 @@ sandbox. The boundary is the ADR 0124 sandbox together with the inlining above.
 | `no_version` | `Page '{name}' has no version {n}; its versions are 1 to {current}.` |
 | `page_changed` | `Page '{name}' changed since this call was prepared (it is now at version {current}). Call the tool again.` |
 | `too_many_pages` | `There are already 500 pages. Delete one first.` |
-| `bad_asset_name` | `An asset name is up to 63 lowercase letters, digits, hyphens and underscores, ending in .png, .jpg, .jpeg, .gif, .svg or .webp, and not a reserved device name such as con.png.` |
-| `bad_encoding` | `encoding is base64 or utf8.` |
+| `bad_asset_name` | `An asset name is up to 63 lowercase letters, digits, hyphens and underscores, ending in .png, .jpg or .jpeg, and not a reserved device name such as con.png.` |
 | `bad_base64` | `The content is not valid base64.` |
-| `utf8_not_svg` | `Only .svg assets can be sent as utf8 text; send other images as base64.` |
 | `asset_too_large` | `The asset is larger than 1 MiB (1,048,576 bytes).` |
 | `asset_mismatch` | `The content is not a {mime_type} image.` |
-| `unsafe_svg` | `The SVG contains {what}, which pages may not use. Remove it and send the image again.` |
 | `no_asset` | `There is no asset named '{name}'.` |
 | `too_many_assets` | `There are already 200 assets. Delete one first.` |
 | `bad_offset` | `offset must be between 0 and {length}.` |
@@ -250,7 +222,7 @@ class Store:
     def check_html(self, html: str) -> bytes        # normalized line endings, then empty / size checks
     def check_css(self, css: str) -> bytes
     def check_offset(self, value: object, length: int) -> int   # None -> 0; int 0..length -> it; else bad_offset
-    def decode_asset(self, name: str, content: str, encoding: str) -> bytes   # name, encoding, size, magic
+    def decode_asset(self, name: str, content: str) -> bytes   # name, base64, size, magic
     # pages
     def list_pages(self) -> list[PageInfo]            # updated_at descending, then name
     def get_page(self, name: str) -> PageInfo | None
@@ -332,7 +304,7 @@ or `-` when it is empty.
 | `delete` | popup | no | yes | `page` | **`name`** string | Delete a page |
 | `read` | review | yes | no | `page` | **`name`** string, `version` integer, `offset` integer | Read a page |
 | `list` | review | yes | no | — | `offset` integer | List pages |
-| `asset_put` | popup | no | no | `asset` | **`name`**, **`content`**, `encoding` strings | Store an asset |
+| `asset_put` | popup | no | no | `asset` | **`name`**, **`content`** strings | Store an image |
 | `asset_list` | review | yes | no | — | — | List assets |
 | `asset_delete` | popup | no | yes | `asset` | **`name`** string | Delete an asset |
 
@@ -365,12 +337,10 @@ Descriptions and `effect` lines, verbatim:
   newest." `offset`: "Character offset to start at; default 0."
 - `list`: "List the published pages with their title, newest version, created and updated dates and
   size, 100 per call, most recently updated first." `offset`: "Number of pages to skip; default 0."
-- `asset_put`: "Store an image the pages can use as assets/<name>, replacing one with the same
-  name; the replaced image is not kept. PNG, JPEG, GIF and WebP are sent as base64; SVG can be sent
-  as base64 or as utf8 text. At most 1 MiB." `name`: "File name ending in .png, .jpg, .jpeg, .gif, .svg or .webp: lowercase
-  letters, digits, hyphens and underscores." `content`: "The file's bytes as base64, or the SVG text
-  when encoding is utf8." `encoding`: "base64 (the default) or utf8 (SVG only)." Effect: "Stores an
-  image for the published pages."
+- `asset_put`: "Store a PNG or JPEG image the pages can use as assets/<name>, replacing one with the
+  same name; the replaced image is not kept. Send the file's bytes as base64. At most 1 MiB." `name`:
+  "File name ending in .png, .jpg or .jpeg: lowercase letters, digits, hyphens and underscores."
+  `content`: "The file's bytes as base64." Effect: "Stores an image for the published pages."
 - `asset_list`: "List the stored assets with their type, size and date."
 - `asset_delete`: "Delete an asset. Pages that reference it show a broken image." `name`: "The
   asset's file name." Effect: "Deletes an image the published pages may use."
@@ -430,7 +400,7 @@ Descriptions and `effect` lines, verbatim:
   "Version", created "Created", updated "Updated", size "Size (bytes)")]`, 100 rows from
   `offset`; or `[text("No pages are published.")]`.
 - `asset_put`: `fields` {Asset, Type, Size, SHA-256, Replaces: `no` or `"yes ({old:,} bytes)"`,
-  Reference: `assets/<name>`}; for an SVG also `heading("SVG")` and `code(head, "xml")`. Prepare
+  Reference: `assets/<name>`}. Prepare
   fails early with every `decode_asset` error and with `too_many_assets` (only for a new name). State:
   name, bytes. Execute → `{"ok": True, "name", "mime_type", "bytes": n, "sha256", "reference":
   "assets/<name>"}`.
@@ -493,7 +463,7 @@ The plugin returns at most 500 entries (`MAX_PAGES` is 500, so every page fits).
 ```python
 # in store.py (so pages_referencing and inline agree); render.py imports it from there
 ASSET_REF_RE = re.compile(
-    r"""(?P<lead>["'(]\s*)assets/(?P<name>[a-z0-9][a-z0-9_-]{0,57}\.(?:png|jpg|jpeg|gif|svg|webp))(?=\s*["')])"""
+    r"""(?P<lead>["'(]\s*)assets/(?P<name>[a-z0-9][a-z0-9_-]{0,57}\.(?:png|jpg|jpeg))(?=\s*["')])"""
 )
 # in render.py
 class RenderTooLarge(Exception): ...
@@ -519,7 +489,7 @@ src/pf_pages/plugin.py              build_plugin(now=utc_now) -> Plugin; plugin 
 scripts/pages_plugin_entry.py       PyInstaller entry: from pf_pages.__main__ import main; main()
 scripts/build.py                    python scripts/build.py --out dist  ->  dist/pages/{pages-plugin[.exe], privacyfence-plugin.yaml}
 tests/conftest.py                   pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]
-tests/test_scaffold.py, test_store.py, test_svg.py, test_fit.py, test_tools_pages.py, test_tools_assets.py, test_render.py, test_pages.py
+tests/test_scaffold.py, test_store.py, test_fit.py, test_tools_pages.py, test_tools_assets.py, test_render.py, test_pages.py
 .github/workflows/ci.yml
 README.md, CHANGELOG.md, LICENSE, CLAUDE.md, .gitignore, .claude/toolkit.yaml
 ```
@@ -546,6 +516,9 @@ extra `dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "pyinstaller>=6.
 - **A version number the AI chooses.** Versions are 1, 2, 3, … assigned by the store. An update
   binds to the version it was prepared against (`expected_current`), so two overlapping updates
   cannot silently overwrite each other.
+- **SVG, GIF and WebP images.** SVG is markup that can carry script, links and references to other
+  files, so accepting it safely needs a sanitizer. GIF and WebP add nothing a page needs that PNG and
+  JPEG lack. Only PNG and JPEG are accepted, so there is nothing to sanitize.
 - **A page browser served by the plugin.** Links from a sandboxed plugin page carry no session
   cookie (ADR 0124), and making them work would loosen the sandbox for every plugin. PrivacyFence
   serves the browser instead, from the plugin's page index.
@@ -571,7 +544,7 @@ Step by step, with links: [the manual steps page](https://claude.ai/artifact/S3i
     this plan branch there.
 - **After** (`ma1-smoke-test`): on a packaged PrivacyFence built from the branch that holds the
   framework change, install the built `pages` plugin, enable it, and run the README's smoke test:
-  - store CSS, a PNG and an SVG;
+  - store CSS, a PNG and a JPEG;
   - publish and update a page;
   - open it from the Plugins menu's page browser in a new tab;
   - read it, then delete it.
@@ -590,16 +563,12 @@ Step by step, with links: [the manual steps page](https://claude.ai/artifact/S3i
   popup gate, and it is said in the README.
 - **Base64 through the AI.** Every asset byte passes through the AI's output as base64 (about 1.37
   characters per byte), so large images are slow and token-expensive. The 1 MiB cap keeps the worst
-  case bounded. The README says to prefer SVG and small, compressed images.
+  case bounded. The README says to prefer small, compressed PNG and JPEG images.
 - **The framework must land first.** `@plugin.page_index` and `PageEntry` exist only from the
   framework plan's merge commit on, which is why the pin is filled at handover. On an install
   without that change there is no page browser: the Plugins menu and the Settings link go to
   `/plugins/pages/`, which this plugin does not serve (404). The README says which PrivacyFence the
   plugin needs.
-- **SVG checks are partly a denylist.** `check_svg` only allows the SVG namespace, and rejects
-  every way an SVG can run script, load something or link out that the plan knows of. The sandbox
-  stays the boundary: an SVG shown through `<img>` never runs script, and one framed by a page runs
-  in the page's opaque origin. A page's own HTML can run script there anyway.
 - **`text/html` inlining is string-level.** `inline` rewrites only `"assets/…"`, `'assets/…'` and
   `(assets/…)` references. A page that builds an asset URL in script does not get it inlined. That
   is documented, not handled.
@@ -693,42 +662,28 @@ phases:
       - python -m ruff check . and python -m ruff format --check . exit 0
       - python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))" exits 0
 
-  - id: p2a-svg-fit
-    title: SVG checks and card-fitting helpers
+  - id: p2a-fit
+    title: Card-fitting helpers
     depends_on: [p1-scaffold]
     complexity: S
     touches:
-      - src/pf_pages/svg.py
       - src/pf_pages/fit.py
-      - tests/test_svg.py
       - tests/test_fit.py
     brief: |
-      Read docs/pf-pages-plan.md "Images, securely" (the check_svg table) and "Fitting text into a
-      card". Neither module imports anything from the package or the SDK.
-      1. src/pf_pages/svg.py: SVG_NS = "http://www.w3.org/2000/svg", XLINK_NS, XML_NS, the forbidden
-         element set, UnsafeSvg(ValueError) with attribute `what`, and check_svg(text) applying the nine
-         rules in the table's order, with exactly the {what} strings.
-      2. src/pf_pages/fit.py: PAYLOAD_BUDGET, PREVIEW_BUDGET, READ_CHUNK_CHARS, PREVIEW_CHARS,
+      Read docs/pf-pages-plan.md "Fitting text into a card". fit.py imports nothing from the package or
+      the SDK.
+      1. src/pf_pages/fit.py: PAYLOAD_BUDGET, PREVIEW_BUDGET, READ_CHUNK_CHARS, PREVIEW_CHARS,
          json_size(), fit() as specified.
-      3. tests/test_svg.py: a plain `<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"
-         fill="url(#g)"/></svg>` passes, and so does one with `xlink:href="#a"`; then one failing case per
-         rule, each asserting `what`: `<!DOCTYPE svg>`, `<!ENTITY`, `<?xml-stylesheet href="x"?>`;
-         malformed "<svg><g></svg>", a namespace-less `<svg>`, a root `<html>`; an XHTML-namespaced
-         `<h:img xmlns:h="http://www.w3.org/1999/xhtml" src="https://x"/>` child; `<script>`,
-         `<foreignObject>`, `<set>`; an attribute in a made-up namespace; `onload=` and `ONCLICK=`;
-         `<a href="https://x">`, `<use href="https://x#y">`, `<image href="data:image/png;base64,AA">`;
-         `style="fill:\75rl(x)"` and `<style>@import "x";</style>`; `fill="URL(https://x)"`,
-         `filter="url('https://x')"`, `<style>rect{fill:url(https://x)}</style>`.
-      4. tests/test_fit.py: json_size counts both encodings (1,000 "😀" is larger with ensure_ascii); fit
+      2. tests/test_fit.py: json_size counts both encodings (1,000 "😀" is larger with ensure_ascii); fit
          never exceeds the budget for ASCII, '"'-heavy and emoji text; fit returns len(text) when it all
          fits; fit returns start when one character does not fit.
     acceptance:
-      - python -m pytest -q tests/test_svg.py tests/test_fit.py passes
+      - python -m pytest -q tests/test_fit.py passes
       - python -m ruff check . and python -m ruff format --check . exit 0
 
   - id: p2b-store
     title: Storage, validation and versions
-    depends_on: [p2a-svg-fit]
+    depends_on: [p2a-fit]
     complexity: M
     touches:
       - src/pf_pages/store.py
@@ -746,8 +701,8 @@ phases:
          raises no_page, and page_changed when page.current != expected_current; delete raises no_page
          and page_changed the same way; read_html raises no_page and no_version; put_asset raises
          too_many_assets only for a new name; delete_asset raises no_asset; check_offset raises
-         bad_offset; decode_asset calls svg.check_svg for every .svg and turns UnsafeSvg into
-         StoreError("unsafe_svg", message with {what}); pages_referencing uses ASSET_REF_RE. Line endings
+         bad_offset; decode_asset decodes base64 (bad_base64), checks the size and the PNG/JPEG magic
+         bytes (asset_mismatch); pages_referencing uses ASSET_REF_RE. Line endings
          are normalized in check_html and check_css as specified. Symlinks: as "Store API" says.
          list_pages skips a page whose page.json cannot be read or parsed, and logs a WARNING with its
          name only.
@@ -758,15 +713,15 @@ phases:
            descending); a corrupt page.json is skipped by list_pages; delete returns the version count
            and removes the folder;
          - every StoreError code in the table is raised by at least one test, each message compared
-           verbatim (bad_offset through check_offset, unsafe_svg through put of an SVG with <script>,
-           sent once as utf8 and once as base64);
+           verbatim (bad_offset through check_offset);
          - "con", "nul", "com1" are bad_name and "con.png" is bad_asset_name; a 64-character asset name
            is bad_asset_name and a 63-character one is accepted; titles with "\u202e", "\t", "\u2028"
            and "\x85" are bad_title;
          - check_html("a\r\nb\rc") stores "a\nb\nc";
          - write_css/read_css round trip and site.json fields;
-         - put_asset for each of the six extensions with minimal valid bytes (and SVG as utf8), the
-           magic mismatch, 1 MiB + 1 bytes, the 201st asset;
+         - put_asset for .png, .jpg and .jpeg with minimal valid bytes; "logo.svg", "a.gif" and
+           "a.webp" are bad_asset_name; PNG bytes named .jpg and JPEG bytes named .png are asset_mismatch;
+           1 MiB + 1 bytes; the 201st asset;
          - pages_referencing finds src="assets/x.png", does not match "myassets/x.png", and lists
            "stylesheet" last when site.css has url(assets/x.png);
          - a symlinked v1.html and a symlinked asset read as missing (pytest.skip when os.symlink raises
@@ -849,8 +804,9 @@ phases:
          - the five tools' gate, read_only, destructive and scopes (parametrized);
          - css_write then css_read returns the CSS; a second css_write shows a diff block; css_read
            with nothing stored says "No stylesheet is stored.";
-         - asset_put of a base64 PNG and of a utf8 SVG succeed with the reference "assets/<name>"; bad
-           base64 → {"ok": False, "error": <bad_base64 message>}; utf8 for a .png → utf8_not_svg;
+         - asset_put of a base64 PNG and of a base64 JPEG succeed with the reference "assets/<name>"; bad
+           base64 → {"ok": False, "error": <bad_base64 message>}; "logo.svg" → bad_asset_name;
+           tool_definitions() shows asset_put with exactly the parameters name and content;
          - asset_list shows both; asset_delete's preview "Used by" names a page published with
            src="assets/<name>" (publish it through call_tool("publish", ...));
          - card.scopes is {"asset": [name]} for asset_put and asset_delete and {} for the css tools and
@@ -937,26 +893,24 @@ phases:
          the plugin's page index and opens each at /plugins/pages/view?p=<name> in a new tab; the
          stylesheet and images are inlined into each page ("Images, securely", reworded); this needs a
          PrivacyFence whose plugin protocol is 1.2 or later (the SDK pin's commit). "Limits": the limits from "Limits and validation", the line-ending normalization
-         and control-character note, that an SVG with an embedded data: raster is refused (store the
-         raster as its own asset), and the card-size and base64 notes from the plan's Risks. "Design":
+         and control-character note, that only PNG and JPEG images are accepted, and the card-size and base64 notes from the plan's Risks. "Design":
          the plan's "What was rejected" list, reworded as decisions. "Build": scripts/build.py usage and
          the CI artifacts. "Install": point to
          https://github.com/privacyfence/privacyfence/blob/SDK_SHA_TO_FILL/docs/plugins.md#installing-a-plugin
          and name the folder dist/pages. "Smoke test": these numbered steps —
          (1) install and "Review and enable": the card lists 10 tools, 6 popup (2 destructive) and 4
          review, and pages; (2) ask Claude to store a stylesheet: popup card with the CSS; (3) store a
-         small PNG logo and an SVG: popup cards with type, size and SHA-256; (4) publish a page that
+         small PNG logo and a JPEG photo: popup cards with type, size and SHA-256; (4) publish a page that
          uses both: popup card with the HTML; (5) top navigation → Plugins → Pages: PrivacyFence's page
          browser lists the page as version 1 with dates; (6) click its title: a new tab shows it styled,
          with both images; (7) ask for an update: a diff card; reload the browser: version 2 and a later
-         Updated; (8) ask to store an SVG containing <script>: the call fails with the unsafe_svg
-         message and stores nothing;
-         (9) pages_read version 1: a review card, and Claude gets version 1's HTML; (10) delete the page:
+         Updated; (8) ask to store logo.svg: the call fails with the bad_asset_name message and
+         stores nothing; (9) pages_read version 1: a review card, and Claude gets version 1's HTML; (10) delete the page:
          a destructive popup with no "Always allow"; the browser says "This plugin lists no pages."; (11)
          "Delete this plugin's data" in Settings, then pages_asset_list says "No assets are stored.".
       4. CHANGELOG.md [Unreleased] → "### Added": one line each for the ten tools, the page index for
-         PrivacyFence's page browser, the page view with the inlined stylesheet and images, the SVG
-         checks, and the build script and CI artifacts.
+         PrivacyFence's page browser, the page view with the inlined stylesheet and images, PNG and JPEG
+         images only, and the build script and CI artifacts.
       5. Retire the plan: delete docs/pf-pages-plan.md and docs/pf-pages-plan-manual-steps.html, and
          remove "docs/pf-pages-plan.md" from .claude/toolkit.yaml docs.must_read (keep README.md).
       Stop with status=blocked if `pip install -e ".[dev]"` cannot install PyInstaller or
@@ -965,7 +919,7 @@ phases:
     acceptance:
       - python scripts/build.py --out dist exits 0 and dist/pages/privacyfence-plugin.yaml exists
       - grep -rn "To be written" README.md prints nothing
-      - grep -c "unsafe_svg\|1\.2" README.md prints 2 or more, and README.md's Smoke test has steps (1) to (11)
+      - grep -c "PNG and JPEG\|1\.2" README.md prints 2 or more, and README.md's Smoke test has steps (1) to (11)
       - grep -rn "pf-pages-plan" . --exclude-dir=.git --exclude-dir=dist --exclude-dir=build prints nothing
       - python -m pytest -q passes; python -m ruff check . and python -m ruff format --check . exit 0
 ```
