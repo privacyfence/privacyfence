@@ -244,6 +244,9 @@ class TestMetaToolManifest:
         assert mcp_tools.CREATE_UPLOAD_SLOT_TOOL in mcp_tools.META_TOOLS
         assert mcp_tools.CREATE_UPLOAD_SLOT_TOOL.name in mcp_tools.META_TOOL_NAMES
 
+    def test_create_upload_slot_says_a_plugin_tools_file_parameter_takes_the_upload(self):
+        assert "a plugin tool's file parameter" in mcp_tools.CREATE_UPLOAD_SLOT_TOOL.description
+
     def test_create_upload_slot_requires_filename_and_reason(self):
         schema = mcp_tools.CREATE_UPLOAD_SLOT_TOOL.input_schema
         assert set(schema["required"]) == {"filename", "reason"}

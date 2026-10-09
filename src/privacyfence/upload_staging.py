@@ -323,6 +323,17 @@ class UploadStagingStore:
             return None
         return self._decrypt(token, lookup_id, raw)
 
+    def declared_path(self, token: bytes, principal_id: str) -> str | None:
+        """The ``filename`` the slot was created with, under ``peek``'s lookup, filled check and
+        principal check (``None`` in the same cases), without changing the slot's expiry."""
+        lookup_id = _lookup_id(token)
+        with self._lock:
+            self._sweep_expired_locked()
+            slot = self._pending.get(lookup_id)
+            if slot is None or slot.principal_id != principal_id or not slot.filled:
+                return None
+            return slot.declared_path
+
     def claim(self, token: bytes, principal_id: str) -> bytes | None:
         """Returns the plaintext on a successful, single-use claim, or
         ``None`` for a missing, expired, wrong-principal, unfilled, or
