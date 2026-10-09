@@ -131,7 +131,12 @@ class TestPhoneLayout:
 
         assert phone_page.locator(".pf-plugin-row").count() == 2
         assert phone_page.get_by_text("Beta Reports").first.is_visible()
-        assert phone_page.locator('a[href="/plugins/alpha/"]').inner_text() == "Open page"
+        assert phone_page.locator('.pf-plugin-row a[href="/plugins/alpha/"]').inner_text() == "Open page"
+        # The same page is in the top navigation's Plugins menu (inline and in the narrow Menu),
+        # and Beta Reports, which has no page, is not.
+        assert phone_page.locator('[data-pf-plugins] a[href="/plugins/alpha/"]').count() == 2
+        assert phone_page.locator("[data-pf-plugins] a").count() == 2
+        assert not phone_page.locator("[data-pf-plugins]").first.get_attribute("hidden")
         assert phone_page.get_by_text("The plugin changed since you reviewed it").is_visible()
         _phone_screenshot(phone_page, f"{case}-{width}")
         _assert_phone_layout(phone_page, width, main=".pf-page")
