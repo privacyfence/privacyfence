@@ -56,6 +56,12 @@ class TestLoad:
         assert (m.source_operations, m.max_gate_floor, m.pages, m.service_credentials) == (
             frozenset(), "review", False, False)
 
+    def test_page_new_tabs_defaults_to_false(self, tmp_path):
+        assert load_manifest(_write(tmp_path, VALID)).page_new_tabs is False
+
+    def test_page_new_tabs_with_pages(self, tmp_path):
+        assert load_manifest(_write(tmp_path, _with(pages=True, page_new_tabs=True))).page_new_tabs is True
+
     def test_outputs_default_off(self, tmp_path):
         m = load_manifest(_write(tmp_path, VALID))
         assert (m.outputs, m.output_types) == (False, ())
@@ -142,6 +148,8 @@ class TestLoad:
         ({"pages": "yes"}, "pages must be true or false"),
         ({"service_credentials": 1}, "service_credentials must be true or false"),
         ({"outputs": "yes"}, "outputs must be true or false"),
+        ({"pages": True, "page_new_tabs": "yes"}, "page_new_tabs must be true or false"),
+        ({"pages": False, "page_new_tabs": True}, "^page_new_tabs needs pages: true$"),
         ({"outputs": True, "output_types": ["image/png"]}, "output type image/png is not supported"),
         ({"outputs": True, "output_types": "text/csv"}, "output_types must be a list of strings"),
         ({"outputs": True, "output_types": [3]}, "output_types must be a list of strings"),

@@ -790,6 +790,7 @@ class PluginHost:
                 "max_gate_floor": manifest.max_gate_floor,
                 "source_operations": sorted(manifest.source_operations),
                 "pages": manifest.pages,
+                "page_new_tabs": manifest.page_new_tabs,
                 "service_credentials": manifest.service_credentials,
                 "outputs": manifest.outputs,
                 "output_types": list(manifest.output_types),
@@ -945,6 +946,15 @@ class PluginHost:
                 ],
             })
         return rows
+
+    def page_new_tabs(self, name: str) -> bool:
+        """Whether ``name`` is running, serves pages and its manifest lets them open new tabs."""
+        plugin = self._plugins.get(name)
+        manifest = plugin.manifest if plugin is not None else None
+        return bool(
+            plugin is not None and plugin.state == "running" and manifest is not None
+            and manifest.pages and manifest.page_new_tabs
+        )
 
     async def web_request(self, name: str, path: str, query: dict[str, str], principal: Principal) -> dict:
         plugin = self._plugins.get(name)

@@ -226,5 +226,11 @@ class TestCsp:
         )
         assert "allow-same-origin" not in pages.CSP_EMBEDDED
 
+    def test_new_tabs_adds_only_the_popup_flags(self):
+        assert pages.CSP_NEW_TABS == pages.CSP.replace(
+            "sandbox allow-scripts", "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox", 1)
+        assert pages.CSP_NEW_TABS.replace(" allow-popups allow-popups-to-escape-sandbox", "") == pages.CSP
+        assert "allow-same-origin" not in pages.CSP_NEW_TABS
+
     def test_embedded_differs_only_in_frame_ancestors(self):
         assert pages.CSP_EMBEDDED.replace("frame-ancestors 'self'", "frame-ancestors 'none'") == pages.CSP

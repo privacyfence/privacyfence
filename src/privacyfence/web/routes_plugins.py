@@ -17,7 +17,8 @@ The one exception is the page a pending plugin approval card frames. A request c
 origin frame that one response, only when the host says ``<id>`` is this plugin's card, still
 waiting for a human, and framing exactly this normalized path. Any other ``pf_approval`` is
 ignored and the page is served unframeable, as always. The query, ``pf_approval`` included, reaches
-the plugin unchanged either way.
+the plugin unchanged either way. A page of a plugin whose manifest sets ``page_new_tabs`` gets
+``set_plugin_new_tabs``, so the middleware sends ``CSP_NEW_TABS``; the embed flag wins over it.
 """
 from __future__ import annotations
 
@@ -80,6 +81,12 @@ async def _embed_allowed(host: PageHost, name: str, raw: str, query: dict[str, s
     return await check(name, approval_id, path) is True
 
 
+def _new_tabs_allowed(host: PageHost, name: str) -> bool:
+    """Whether ``name``'s manifest lets its pages open new tabs. A host without ``page_new_tabs`` answers no."""
+    check = getattr(host, "page_new_tabs", None)
+    return check is not None and check(name) is True
+
+
 def build_routes(plugin_host: PageHost, *, is_owner_session: Callable[[Request], bool]) -> list[BaseRoute]:
     """The page routes, for ``build_app`` to wrap with ``_owner_only_routes`` and mount.
 
@@ -95,6 +102,8 @@ def build_routes(plugin_host: PageHost, *, is_owner_session: Callable[[Request],
         raw = _raw_remainder(request, name)
         if raw is None:
             return _not_found()
+        if _new_tabs_allowed(plugin_host, name):
+            csp.set_plugin_new_tabs(request)
         query_string = request.scope.get("query_string", b"").decode("latin-1")
         query = parse_query(query_string)
         if await _embed_allowed(plugin_host, name, raw, query):
