@@ -78,14 +78,29 @@ class TestPluginsMenu:
         assert [html.index(n) for n in names] == sorted(html.index(n) for n in names) and len(names) == 3
         assert "<b>" not in html
 
-    def test_links_open_in_a_new_tab(self):
-        html = web_shell.header_html("approvals", plugin_pages=(("Today", "/plugins/today/"),))
-        assert '<a class="pf-shell-nav-item" href="/plugins/today/" target="_blank" rel="noopener">Today</a>' in html
+    def test_links_open_in_this_tab(self):
+        html = web_shell.header_html("approvals", plugin_pages=(("Today", "/plugin-pages/today"),))
+        assert '<a class="pf-shell-nav-item" href="/plugin-pages/today">Today</a>' in html
+        assert 'target="_blank"' not in html
+        assert "rel=" not in html
+
+    def test_all_plugin_pages_is_the_first_item(self):
+        html = web_shell.header_html("approvals", plugin_pages=self.PAGES)
+        panel = html[html.index('<div class="pf-shell-plugins-panel">'):]
+        first = '<a class="pf-shell-nav-item" href="/plugin-pages">All plugin pages</a>'
+        assert panel.startswith('<div class="pf-shell-plugins-panel">' + first)
+
+    def test_stream_script_builds_the_same_menu(self):
+        html = web_shell.wrap("", title="t", active="approvals", plugin_pages=())
+        assert "all.href = '/plugin-pages';" in html
+        assert "all.textContent = 'All plugin pages';" in html
+        assert "a.target" not in html
+        assert "a.rel" not in html
 
     def test_hidden_while_there_are_no_plugin_pages(self):
         html = web_shell.header_html("approvals", plugin_pages=())
         assert "data-pf-plugins hidden" in html
-        assert "<a class=\"pf-shell-nav-item\" href=\"/plugins" not in html
+        assert "<a class=\"pf-shell-nav-item\" href=\"/plugin" not in html
 
     def test_absent_without_a_plugin_host_or_in_org_mode(self):
         assert "data-pf-plugins" not in web_shell.header_html("approvals")
