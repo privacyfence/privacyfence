@@ -342,8 +342,11 @@ async def test_the_ai_gets_what_the_card_showed():
 ```
 
 With pytest, `pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]` provides a `plugin_host`
-fixture. `await PluginTestHost(plugin).introspect()` starts the plugin the way Settings does when you review
+fixture.
+
+`await PluginTestHost(plugin).introspect()` starts the plugin the way Settings does when you review
 it, and returns its tool list.
+
 Where the test host differs from PrivacyFence:
 
 - `PluginTestHost(plugin, max_gate_floor="auto")` is how a test declares the manifest's floor; the

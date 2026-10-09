@@ -398,9 +398,9 @@ A Calendar event:
 | `attachments` | list of objects | See the attachment table. |
 | `visibility` | string | "default", "public", "private" or "confidential" |
 | `color_id` | string | "1" to "11", or "" for the calendar's default color |
-| `recurrence` | list of strings | Raw RRULE, EXDATE, RDATE and EXRULE lines; only present on a series' own master event, empty otherwise (including on individual expanded instances, which carry `recurring_event_id` instead) |
+| `recurrence` | list of strings | Raw RRULE, EXDATE, RDATE and EXRULE lines; non-empty only on a series' own master event, empty otherwise (including on individual expanded instances, which carry `recurring_event_id` instead) |
 | `recurring_event_id` | string | Non-empty if and only if this is one expanded instance of a recurring series: the id of that series' master event (a distinct id from this instance's own) |
-| `original_start_time` | string | This instance's originally-scheduled start (ISO 8601 or date), before any per-instance reschedule; only present on a recurring instance |
+| `original_start_time` | string | This instance's originally-scheduled start (ISO 8601 or date), before any per-instance reschedule; non-empty only on a recurring instance |
 
 A Calendar attendee:
 

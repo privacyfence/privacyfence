@@ -44,10 +44,6 @@ _MAX_SCOPE_VALUE_CHARS = 200
 _MCP_TOOL_NAME_MAX = 64
 _MAX_SCOPE_TYPES = 20
 
-async def _refuse_while_introspecting(_params: dict) -> Any:
-    raise RpcError("introspection_only", "not available while introspecting")
-
-
 _TIMEOUTS = {"initialize": 10.0, "tool.prepare": 30.0, "tool.execute": 60.0}
 _TOOL_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,40}")
 _SCOPE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,30}")
@@ -88,6 +84,10 @@ class _PipeWriter:
 
     def close(self) -> None:
         self._target.feed_eof()
+
+
+async def _refuse_while_introspecting(_params: dict) -> Any:
+    raise RpcError("introspection_only", "not available while introspecting")
 
 
 def _now() -> str:
@@ -290,7 +290,19 @@ class PluginTestHost:
             await self._start(purpose="introspect")
             return self.tools
         finally:
+            await self._end_introspection()
             await self._teardown()
+
+    async def _end_introspection(self) -> None:
+        """Send ``shutdown`` and let the runner stop, as PrivacyFence does when an inspection start
+        ends, so the plugin's shutdown handlers run here too."""
+        peer, task = self._peer, self._serve_task
+        if peer is None:
+            return
+        with contextlib.suppress(Exception):
+            await peer.notify("shutdown", {"grace_ms": 0})
+            if task is not None:
+                await asyncio.wait_for(asyncio.shield(task), _SETTLE_TIMEOUT)
 
     async def _start(self, purpose: str = "run") -> None:
         data_dir = self.data_dir

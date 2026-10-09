@@ -166,7 +166,10 @@ class TestPluginTestHost:
             host.source.fail("calendar.list_events", "upstream_error", reason="rate_limited", time_min="2026-10-07T00:00:00Z")
             failed = await host.call_tool("agenda")
         assert specific.released["blocks"][0]["text"] == "Specific"
-        assert failed.error["code"] == "upstream_error"  # the plugin let the SourceError escape; its code is passed through
+        # The plugin let the SourceError escape: its code is passed through, and the host shows the
+        # fixed sentence for it.
+        assert failed.error["code"] == "upstream_error"
+        assert failed.error["detail"] == "A service this plugin reads from returned an error."
 
     async def test_source_refuses_org_fields_and_unknown_principals(self):
         plugin, _ = build_plugin()
@@ -363,6 +366,33 @@ class TestIntrospect:
         host = PluginTestHost(plugin)
         await host.introspect()
         assert plugin._host.introspecting is True
+
+    async def test_it_ends_with_shutdown_like_a_review(self):
+        plugin, _ = build_plugin()
+        seen = []
+
+        @plugin.on("shutdown")
+        async def on_shutdown(ctx, params):
+            seen.append(params)
+
+        await PluginTestHost(plugin).introspect()
+        assert seen == [{"grace_ms": 0}]
+
+    async def test_only_source_and_confirm_calls_are_answered_and_refused(self, monkeypatch):
+        wired = {}
+        real_peer = host_module.Peer
+
+        def spy(*args, **kwargs):
+            wired.update(kwargs["handlers"])
+            return real_peer(*args, **kwargs)
+
+        monkeypatch.setattr(host_module, "Peer", spy)
+        plugin, _ = build_plugin()
+        await PluginTestHost(plugin).introspect()
+        assert wired == {
+            "source.call": host_module._refuse_while_introspecting,
+            "confirm.request": host_module._refuse_while_introspecting,
+        }
 
     async def test_source_and_confirm_calls_are_refused(self):
         with pytest.raises(RpcError) as raised:
