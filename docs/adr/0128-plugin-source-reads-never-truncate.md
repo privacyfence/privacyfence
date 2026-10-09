@@ -6,6 +6,7 @@ Accepted — 2026-10-08. Implemented: `src/privacyfence/plugins/cursors.py`,
 `src/privacyfence/plugins/source_ops.py`, `src/privacyfence/jira_client.py`
 (`search_issues_page`), `src/privacyfence/calendar_client.py` (`list_events_page`).
 Amends [ADR 0123](0123-the-plugin-source-api-is-ungated-but-audited-without-content.md).
+Salesforce report paging: [ADR 0132](0132-salesforce-reports-page-by-a-unique-key-column.md).
 
 ## Context
 
