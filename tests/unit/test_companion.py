@@ -417,7 +417,7 @@ class TestPendingSeparation:
             def start(self):
                 started.append("started")
 
-        monkeypatch.setattr(companion.threading, "Thread", _Thread)
+        monkeypatch.setattr(companion, "threading", SimpleNamespace(**{**vars(threading), "Thread": _Thread}))
 
         companion._start_pending_separation_check()
 
@@ -1253,7 +1253,7 @@ class TestTrayLoop:
                 if self.name != "privacyfence-status-poll":
                     self.target(*self.args)
 
-        monkeypatch.setattr(companion.threading, "Thread", _Thread)
+        monkeypatch.setattr(companion, "threading", SimpleNamespace(**{**vars(threading), "Thread": _Thread}))
         shown = []
         monkeypatch.setattr(companion, "_show_recovery_code", lambda: shown.append(True) or True)
         companion._run_tray()
@@ -1272,7 +1272,7 @@ class TestTrayLoop:
                 if self.name != "privacyfence-status-poll":
                     self.target(*self.args)
 
-        monkeypatch.setattr(companion.threading, "Thread", _Thread)
+        monkeypatch.setattr(companion, "threading", SimpleNamespace(**{**vars(threading), "Thread": _Thread}))
         calls = []
         monkeypatch.setattr(companion, "_run_service_action", lambda action: calls.append(action) or True)
         monkeypatch.setattr(companion, "_show_service_status", lambda: calls.append("status") or True)
