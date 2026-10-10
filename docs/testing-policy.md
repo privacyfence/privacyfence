@@ -55,7 +55,7 @@ and on dispatch. A 100% pass rate is required to merge.
 | `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest` |
 | `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
-| `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, whole-tree `mypy src/privacyfence`, `scripts/mypy_strict_modules.py` (all blocking); `ruff format` is not run (ADR 0148) |
+| `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, whole-tree `mypy src/privacyfence`, `scripts/mypy_strict_modules.py` (all blocking); `ruff format` is not run (ADR 0150) |
 
 `pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
 also runs `playwright install --with-deps chromium`. Browser tests skip when Playwright or Chromium
