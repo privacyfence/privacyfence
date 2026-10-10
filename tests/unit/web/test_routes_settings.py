@@ -889,6 +889,17 @@ class TestConnectorToggleDirectional:
 
 
 class TestOrgConfigUpload:
+    def test_a_csrf_sent_as_a_file_is_unauthorized(self, client, sessions):
+        _authed(client, sessions)
+        r = client.post(
+            "/api/settings/org_config/upload",
+            files={
+                "csrf": ("csrf.txt", b"x", "text/plain"),
+                "file": ("org_config.json", b'{"version": 1}', "application/json"),
+            },
+        )
+        assert r.status_code == 401
+
     def test_valid_bundle_is_installed(self, client, controller, sessions, tmp_path):
         csrf = _authed(client, sessions)
         r = client.post(

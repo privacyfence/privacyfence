@@ -899,8 +899,8 @@ def create_app(
             step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(principal)),
             webauthn_stepup.step_up_disabled_notice(principal),
         ]
-        parts = [p for p in parts if p]
-        return " ".join(parts) if parts else None
+        present = [p for p in parts if p]
+        return " ".join(present) if present else None
 
     def _off_notice_html() -> str | None:
         # Unlike _banner_html above (a live
