@@ -194,6 +194,8 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "grist_update_records": Verb.UPDATE,
     "grist_create_table": Verb.RESTRUCTURE,
     "grist_add_columns": Verb.RESTRUCTURE,
+    "grist_import_csv": Verb.CREATE,
+    "grist_update_csv": Verb.UPDATE,
     "contacts_update": Verb.UPDATE,
     "contacts_create": Verb.CREATE,
     "contacts_add_label": Verb.LABEL,

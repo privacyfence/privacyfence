@@ -36,7 +36,8 @@ deliberately, from the Settings page or the bridge's ``privacyfence_propose_poli
 
 * ``apps_script.read_content``/``write_content``/``read_execution_log`` are governed by
   ``apps_script.project``, a scope with no entry here.
-* ``grist.read_records``/``add_records``/``update_records``/``create_table``/``add_columns`` are
+* ``grist.read_records``/``add_records``/``update_records``/``create_table``/``add_columns``/
+  ``import_csv``/``update_csv`` are
   governed by ``grist.document``, a scope with no entry here.
 * ``slack.create_group_chat``'s subject is an audience, and no scope type measures one.
 * ``gmail.create_filter``/``update_filter`` could only be scoped by "anything in Gmail", and an

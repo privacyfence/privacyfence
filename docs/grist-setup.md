@@ -88,6 +88,8 @@ each one.
 | `grist_update_records` | Needs your approval | Changes cells of existing records; the card shows old and new values |
 | `grist_create_table` | Needs your approval | Creates a table with its columns |
 | `grist_add_columns` | Needs your approval | Adds columns to an existing table |
+| `grist_import_csv` | Needs your approval | Adds every row of a CSV file as a new record, in one approval |
+| `grist_update_csv` | Needs your approval | Updates records matched to the rows of a CSV file by one key column, and can add the rows that match nothing |
 
 Each card names the Grist server the data comes from or goes to.
 
@@ -101,6 +103,37 @@ Under OAuth, some servers do not let apps list documents. The assistant then ask
 Document ID, shown in Grist under the document's Settings (the gear icon). One id form is used
 everywhere: the full Document ID, not the shorter id in the document's address. An auto-accept
 rule names that full Document ID.
+
+## Bulk import and update from a CSV file
+
+`grist_add_records` and `grist_update_records` take at most 100 records inline. To load or refresh
+a larger table, the assistant hands PrivacyFence a CSV file instead, and you approve it once.
+
+- **Handing over the file.** The assistant gives either `local_path`, a path on your computer, or
+  `upload_id`, the id `privacyfence_create_upload_slot` returned after the file's bytes were sent
+  to its upload URL. On an organization install only `upload_id` is available.
+- **Header.** The first row names the columns, by column id or by label as `grist_list_tables`
+  shows them. The delimiter is a comma, a semicolon or a tab. Formula columns and columns of
+  other types than Text, Numeric, Int, Bool, Date, Choice and Any cannot be written.
+- **Cells.** An empty cell is left out: an import leaves the column at Grist's default, and an
+  update does not change the cell. An update therefore cannot clear a cell. Dates are written as
+  `YYYY-MM-DD`, and numbers with a point as the decimal mark.
+- **Update.** `grist_update_csv` matches each row to the record whose key column has the same
+  value. The key column must be a Text, Choice, Int or Numeric column, in the header, unique in
+  the file and unique in the table. Only cells that differ change. Rows that match no record are
+  skipped, or added when the assistant sets `create_missing`.
+- **Limits.** At most 20000 rows, 100 columns and 50 MB. A file over a limit, or with a cell that
+  does not fit its column, is refused before the card is shown, with the line and column of the
+  first problems.
+- **The card.** It names the server, the document and the table, and shows the counts, the first
+  20 rows (import) or the first 20 changed cells and unmatched rows (update), and the file's
+  SHA-256. The approval is bound to that SHA-256: a different file needs a new approval.
+- **Writes.** The rows go to Grist in chunks, which are not atomic. If Grist refuses a chunk, the
+  assistant is told how many rows were written. After a failed import the rows written so far stay
+  in the table; running `grist_update_csv` again with the same file finishes a failed update.
+
+[ADR 0148](adr/0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md)
+records why.
 
 ## Auto-accept rules
 
