@@ -51,8 +51,8 @@ salesforce:
   seed_record_id: ""
 
 grist:
-  # docs/connector-qa.md, "Seed: Grist" -- required: the QA document's id, from
-  # its URL after /doc/. There is no resolve-by-name fallback.
+  # docs/connector-qa.md, "Seed: Grist" -- required: the QA document's full
+  # Document ID from its Settings, not the shorter id in its address. There is no resolve-by-name fallback.
   doc_id: ""
   # Table whose rows must all be [QATEST] (check_grist reads and records it).
   table_id: QaSeed

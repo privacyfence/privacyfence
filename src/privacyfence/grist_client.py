@@ -109,6 +109,20 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _int_id(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_id(record: Any) -> int:
+    rec_id = _int_id(_as_dict(record).get("id"))
+    if rec_id is None:
+        raise GristClientError("Grist returned a record without a usable id.")
+    return rec_id
+
+
 class GristClient:
     """Grist REST calls for one server and one credential."""
 
@@ -205,8 +219,11 @@ class GristClient:
         documents: list[GristDocument] = []
         for org in _as_list(self._request("GET", "/api/orgs"))[:_MAX_ORGS]:
             org = _as_dict(org)
+            org_id = _int_id(org.get("id"))
+            if org_id is None:
+                continue
             team = str(org.get("name") or "")
-            workspaces = self._request("GET", f"/api/orgs/{int(org['id'])}/workspaces")
+            workspaces = self._request("GET", f"/api/orgs/{org_id}/workspaces")
             for workspace in _as_list(workspaces):
                 workspace = _as_dict(workspace)
                 for doc in _as_list(workspace.get("docs")):
@@ -264,7 +281,7 @@ class GristClient:
     @staticmethod
     def _records(body: Any) -> list[GristRecord]:
         return [
-            GristRecord(id=int(_as_dict(r).get("id", 0)), fields=_as_dict(_as_dict(r).get("fields")))
+            GristRecord(id=_record_id(r), fields=_as_dict(_as_dict(r).get("fields")))
             for r in _as_list(_as_dict(body).get("records"))
         ]
 
@@ -321,7 +338,7 @@ class GristClient:
             f"/api/docs/{doc_id}/tables/{table_id}/records",
             json_body={"records": [{"fields": row} for row in rows]},
         )
-        return [int(_as_dict(r)["id"]) for r in _as_list(_as_dict(body).get("records"))]
+        return [_record_id(r) for r in _as_list(_as_dict(body).get("records"))]
 
     def update_records(
         self, doc_id: str, table_id: str, rows: list[tuple[int, dict[str, Any]]],

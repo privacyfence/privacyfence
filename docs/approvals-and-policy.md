@@ -312,10 +312,12 @@ catalogue, and `privacyfence_check_policy` predicts whether a call would run wit
 proposal always waits for you on the same confirmation dialog; nothing is written unless you
 confirm, and it is refused outright in an unattended session.
 
-Some operations can only be allowed from Settings or a proposal, never from a card, because nothing
-on the card names a resource to scope the rule to: Apps Script projects (scope "Apps Script —
-project"), Gmail filters ("Gmail — anything (unconditional)") and creating a Slack group chat
-("Slack — anything (unconditional)").
+Some operations can only be allowed from Settings or a proposal, never from a card. For most of
+them nothing on the card names a resource to scope the rule to: Apps Script projects (scope "Apps
+Script — project"), Gmail filters ("Gmail — anything (unconditional)") and creating a Slack group
+chat ("Slack — anything (unconditional)"). Grist documents (scope "Grist — document") are the
+exception: the card does name the document, but it proposes rules only from a fixed set of scopes,
+and that set does not include Grist.
 
 In an organization deployment each person manages their own rules on their own **Settings** page;
 rules are never shared between people.

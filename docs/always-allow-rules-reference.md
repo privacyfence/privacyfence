@@ -234,8 +234,9 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 
 ## Rules you can't create from a card
 
-Some operations never offer an **Always allow** button because nothing on the card names a
-resource to scope the rule to: Apps Script projects, Gmail filters, and creating a Slack group
-chat. You can still allow them from **Settings → Auto-accept → Add a rule**, or by letting the AI
+Some operations never offer an **Always allow** button, either because nothing on the card names a
+resource to scope the rule to (Apps Script projects, Gmail filters, and creating a Slack group
+chat) or because the card only proposes the fixed set of scopes it has always had, which does not
+include Grist documents. You can still allow them from **Settings → Auto-accept → Add a rule**, or by letting the AI
 system propose a rule with `privacyfence_propose_policy_change`. Either way the rule is written
 only after you confirm it. See [Approvals and policy](approvals-and-policy.md#always-allow-and-policy-rules).

@@ -1537,6 +1537,8 @@ class SettingsController:
         }
 
     def grist_connect(self, api_key: str, server_url: str = "") -> dict[str, Any]:
+        if "grist" in self._busy_connectors:
+            return self.snapshot()
         bundle, bundle_error = self._grist_bundle()
         if bundle is None:
             self._grist_auth = {"error": bundle_error}
