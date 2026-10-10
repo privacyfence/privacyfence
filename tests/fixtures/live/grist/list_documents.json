@@ -1,0 +1,29 @@
+[
+  {
+    "access": "owners",
+    "createdAt": "2026-10-10T07:20:06.502Z",
+    "docs": [
+      {
+        "access": "owners",
+        "createdAt": "2026-10-10T07:20:50.402Z",
+        "forks": [],
+        "id": "qa-placeholder-id-2",
+        "isPinned": false,
+        "name": "PrivacyFence QA [QATEST]",
+        "trunkId": null,
+        "type": null,
+        "updatedAt": "2026-10-10T13:31:01.580Z",
+        "urlId": "https://example.com/qa-placeholder"
+      }
+    ],
+    "id": "qa-placeholder-id-1",
+    "isSupportWorkspace": false,
+    "name": "Home",
+    "orgDomain": "qa-placeholder-team",
+    "owner": {
+      "Id": "qa-placeholder-account-id",
+      "Name": "QA Placeholder"
+    },
+    "updatedAt": "2026-10-10T07:20:06.533Z"
+  }
+]

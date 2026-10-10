@@ -47,6 +47,7 @@ bundle:
 - [`salesforce-setup.md`](salesforce-setup.md)
 - [`atlassian-setup.md`](atlassian-setup.md) — Jira and Confluence
 - [`telegram-setup.md`](telegram-setup.md)
+- [`grist-setup.md`](grist-setup.md)
 
 ### AI agent setup
 

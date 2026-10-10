@@ -256,6 +256,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "gmail_download_attachment": WIDE, "drive_download_file": WIDE,
     "confluence_download_attachment": WIDE,
     "salesforce_get_record": WIDE, "salesforce_search": WIDE, "salesforce_run_report": WIDE,
+    "grist_get_records": WIDE, "grist_add_records": WIDE, "grist_update_records": WIDE,
     "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "drive_sheets_get_values": WIDE, "slack_get_channel_history": WIDE,

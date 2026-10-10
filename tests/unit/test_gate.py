@@ -1051,6 +1051,22 @@ class TestPreflightAutoAccept:
         assert matched_rule == "r-apps-script"
         assert matched_rule_id == "r-apps-script"
 
+    def test_stored_grist_document_rule_auto_accepts_only_that_document(self):
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-grist", predicate="grist.document", value=["DOC1"],
+                operations=frozenset({"grist.read_records"}),
+            ),
+        ])
+        verdict, matched_rule, _id, _reason = gate.preflight_auto_accept(
+            "grist.read_records", {"doc_id": "DOC1", "table_id": "T"},
+        )
+        assert (verdict, matched_rule) == ("auto_accept", "r-grist")
+        verdict, _rule, _id, _reason = gate.preflight_auto_accept(
+            "grist.read_records", {"doc_id": "DOC2", "table_id": "T"},
+        )
+        assert verdict != "auto_accept"
+
     def test_store_layer_upgrades_requires_review_to_unknown_when_data_dependent(self):
         auto_accept.set_policy_v2_store_rules([
             PolicyRule(

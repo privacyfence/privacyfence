@@ -30,12 +30,14 @@ pairs it adds. Taking every write-family widening on a ``drive.folder`` proposal
 sandbox-folder grant's thirteen operation keys exactly -- which is the point: the width a grant
 always had is something the user is shown and chooses, rather than something one boolean hides.
 
-**What the popup deliberately does not propose.** Three operation groups are configurable only
+**What the popup deliberately does not propose.** Several operation groups are configurable only
 deliberately, from the Settings page or the bridge's ``privacyfence_propose_policy_change`` (see
 ``policy/catalogue.EXTRA_SCOPES``), never reactively off one gated call (ADR 0077):
 
 * ``apps_script.read_content``/``write_content``/``read_execution_log`` are governed by
   ``apps_script.project``, a scope with no entry here.
+* ``grist.read_records``/``add_records``/``update_records``/``create_table``/``add_columns`` are
+  governed by ``grist.document``, a scope with no entry here.
 * ``slack.create_group_chat``'s subject is an audience, and no scope type measures one.
 * ``gmail.create_filter``/``update_filter`` could only be scoped by "anything in Gmail", and an
   unconditional rule for an operation that can silently archive or forward mail indefinitely must be
@@ -170,6 +172,14 @@ def _jira_project_keys(ctx: ReviewContext) -> Any:
         issue_key = ctx.args.get("issue_key", "") or ""
         project_key = issue_key.split("-")[0] if "-" in issue_key else ""
     return [project_key] if project_key else NO_VALUE
+
+
+def _jira_result_project_keys(ctx: ReviewContext) -> Any:
+    """Every project present across a search's results -- ``approved_project_keys_all_results``'
+    value. A JQL search has no single ``issue_key`` argument; each result's key prefix is its project."""
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    keys = {k.rsplit("-", 1)[0] for item in items if "-" in (k := getattr(item, "key", "") or "")}
+    return sorted(keys) or NO_VALUE
 
 
 def _confluence_space_keys(ctx: ReviewContext) -> Any:
@@ -326,6 +336,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
         "approved_project_keys", "jira.project", "jira",
         (Verb.READ, Verb.CREATE, Verb.COMMENT, Verb.UPDATE, Verb.TRANSITION), _jira_project_keys, "this project",
     ),
+    _scope("approved_project_keys_all_results", "jira.project", "jira", (Verb.SEARCH,), _jira_result_project_keys, "this project"),
     _scope("i_am_reporter", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm reporter", group="jira.my_issues/reporter"),
     _scope("i_am_assignee", "jira.my_issues", "jira", (Verb.READ,), _no_value_needed, "if I'm assignee", group="jira.my_issues/assignee"),
     # ── Confluence ────────────────────────────────────────────────────────────────────────────

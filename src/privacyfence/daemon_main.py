@@ -81,6 +81,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import portalocker
 import yaml
@@ -132,6 +133,7 @@ from .connectors.confluence import ConfluenceConnector
 from .connectors.contacts import ContactsConnector
 from .connectors.drive import DriveConnector
 from .connectors.gmail import GmailConnector
+from .connectors.grist import GristConnector
 from .connectors.jira import JiraConnector
 from .connectors.salesforce import SalesforceConnector
 from .connectors.slack import SlackConnector
@@ -148,6 +150,12 @@ from .connector_host import ConnectorHost
 from .contacts_client import ContactsClient, ContactsClientError
 from .drive_client import DriveClient, DriveClientError
 from .gmail_client import GmailClient, GmailClientError
+from .grist_auth import GristClientError
+from .grist_auth import authorize_interactive as grist_authorize_interactive
+from .grist_auth import bundle_settings as grist_bundle_settings
+from .grist_auth import load_token_file as load_grist_token
+from .grist_auth import resolve_credential as grist_resolve_credential
+from .grist_client import GristClient
 from .jira_client import JiraClient, JiraClientError
 from .salesforce_client import DEFAULT_REPORT_MAX_PAGES, SalesforceClient, SalesforceClientError
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
@@ -175,6 +183,7 @@ TOKEN_FILES: dict[str, str] = {
     "apps_script": "credentials/apps_script_token.json",
     "slack": "credentials/slack_token.json",
     "salesforce": "credentials/salesforce_token.json",
+    "grist": "credentials/grist_token.json",
     "atlassian": "credentials/atlassian_token.json",
     "telegram": "credentials/telegram.session",
 }
@@ -1563,6 +1572,19 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.warning("Telegram connector disabled: %s", exc)
             failures["telegram"] = _classify_connector_failure(exc)
 
+    # Grist
+    if enabled("grist"):
+        try:
+            grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=download_mode == "org")
+            token_path = _resolve_path(TOKEN_FILES["grist"])
+            server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)
+            client = GristClient(server_url, credential)
+            client.check_connection()
+            connectors.append(GristConnector(client))
+        except GristClientError as exc:
+            logger.warning("Grist connector disabled: %s", exc)
+            failures["grist"] = _classify_connector_failure(exc)
+
     return connectors, failures
 
 
@@ -1734,6 +1756,21 @@ def run_salesforce_oauth(org_config: dict[str, Any]) -> int:
         print(f"Salesforce OAuth setup failed: {exc}", file=sys.stderr)
         return 1
     print(f"Salesforce OAuth complete. Authorized for instance: {token.get('instance_url')}")
+    return 0
+
+
+def run_grist_oauth(org_config: dict[str, Any]) -> int:
+    try:
+        bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=False)
+        if bundle.oauth is None:
+            print("No Grist OAuth app in the organization config.", file=sys.stderr)
+            return 1
+        record = grist_authorize_interactive(bundle.oauth, _resolve_path(TOKEN_FILES["grist"]))
+    except GristClientError as exc:
+        print(f"Grist OAuth setup failed: {exc}", file=sys.stderr)
+        return 1
+    host = urlparse(str(record.get("server_url") or bundle.oauth.server_url)).netloc
+    print(f"Grist OAuth complete. Signed in to {host}.")
     return 0
 
 
@@ -2097,6 +2134,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slack-oauth", action="store_true")
     parser.add_argument("--salesforce-oauth", action="store_true")
     parser.add_argument("--atlassian-oauth", action="store_true")
+    parser.add_argument("--grist-oauth", action="store_true")
     parser.add_argument("--telegram-setup", action="store_true")
     # The break-glass path from ADR 0013 -- see
     # run_print_sign_in_link() for what it does and what it deliberately does
@@ -2208,7 +2246,8 @@ def main(argv: list[str] | None = None) -> int:
         args.gmail_oauth or args.drive_oauth or args.contacts_oauth
         or args.calendar_oauth or args.tasks_oauth or args.apps_script_oauth
         or args.slack_oauth
-        or args.salesforce_oauth or args.atlassian_oauth or args.telegram_setup
+        or args.salesforce_oauth or args.atlassian_oauth or args.grist_oauth
+        or args.telegram_setup
     )
 
     try:
@@ -2239,6 +2278,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_salesforce_oauth(org_config)
             if args.atlassian_oauth:
                 return run_atlassian_oauth(org_config)
+            if args.grist_oauth:
+                return run_grist_oauth(org_config)
             if args.telegram_setup:
                 return run_telegram_setup()
         # ADR 0003 decision 6: only on the path that actually starts the

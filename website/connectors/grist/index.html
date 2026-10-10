@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grist for AI assistants, over MCP — PrivacyFence</title>
+  <meta name="description" content="Let AI assistants list your Grist documents and tables, read records after your review, and add or change records only with your approval. Works with docs.getgrist.com, team sites and self-hosted Grist.">
+  <meta name="pf-content-group" content="connector">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/grist/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/grist/">
+  <meta property="og:title" content="PrivacyFence for Grist">
+  <meta property="og:description" content="Grist for AI assistants: documents and tables listed straight away, records read after review, changes only with approval. Nothing is deleted.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connector · Grist</p>
+      <h1>Your Grist documents for your AI assistant, changed only when you approve.</h1>
+      <p class="lede">PrivacyFence connects an AI assistant to Grist so it can find your documents and tables, read records after you have reviewed them, and add or change records, tables and columns only with your approval. It works with docs.getgrist.com, team sites and self-hosted Grist. Nothing it does deletes anything.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="can-do-heading">
+      <div class="section-heading">
+        <p class="kicker">What the assistant can do</p>
+        <h2 id="can-do-heading">List straight away, read after review, change after approval.</h2>
+        <p>Every Grist tool has a gate fixed in code. The <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/tools-reference.md#grist">Tools reference</a> lists each one.</p>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Without a card</h3>
+          <p>Your documents, and each document's tables and columns. The call is still audited.</p>
+        </article>
+        <article class="card stack">
+          <h3>Reviewed before release</h3>
+          <p>The records of a table, optionally filtered and sorted. A large table is read page by page, and you see exactly which records each page would release.</p>
+        </article>
+        <article class="card stack">
+          <h3>Needs your approval</h3>
+          <p>Adding records, changing cells, creating a table and adding columns. The card shows the document, the server and, for a change, the old and new values. Nothing can be deleted.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">Connect with your own API key, or your organization's Grist sign-in.</h2>
+      </div>
+      <ol class="steps page-copy">
+        <li>With a personal API key, create one in Grist under <strong>Account settings → Developer → API Key</strong>. Every Grist edition has one. The key acts as you, with your access to your documents.</li>
+        <li>If your organization registered a PrivacyFence app in Grist, you sign in on Grist's own page instead. Your administrator sets that up once.</li>
+        <li>In PrivacyFence's Settings page, enter the server address (docs.getgrist.com, your team site or your own server) and the key. You type them into PrivacyFence's own page, never into the AI client.</li>
+      </ol>
+      <p class="actions cluster">
+        <a class="button primary" href="https://github.com/privacyfence/privacyfence/blob/main/docs/grist-setup.md">Set it up</a>
+        <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
+      </p>
+    </section>
+
+    <!-- include: other-connectors current="grist" -->
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Try it on your own computer.</h2>
+          <p>Install PrivacyFence on macOS, Windows or Linux and connect Grist with your API key.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/download/">Download PrivacyFence</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
