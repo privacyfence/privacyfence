@@ -75,6 +75,12 @@ the request on the card, once.
 | `gmail_get_message` | if I'm sender, this sender domain |
 | `gmail_get_thread` | if I'm sender, this sender domain |
 
+### Grist
+
+| Tool | Always allow buttons |
+|---|---|
+| `grist_get_records` |  |
+
 ### Jira
 
 | Tool | Always allow buttons |
