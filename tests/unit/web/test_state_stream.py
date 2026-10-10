@@ -12,7 +12,7 @@ import json
 import pytest
 
 from privacyfence.web import state_stream as ss
-from privacyfence.web.state_stream import StateStream, call_soon_threadsafe, set_loop
+from privacyfence.web.state_stream import StateStream, call_soon_threadsafe, clear_loop, get_loop, set_loop
 
 
 @pytest.fixture(autouse=True)
@@ -182,6 +182,20 @@ class TestPushDebouncing:
 
 
 class TestCallOnMainDispatcher:
+    def test_clear_loop_leaves_a_different_loop_alone(self):
+        loop = asyncio.new_event_loop()
+        other = asyncio.new_event_loop()
+        try:
+            set_loop(loop)
+            clear_loop(other)
+            assert get_loop() is loop
+            clear_loop(loop)
+            assert get_loop() is None
+        finally:
+            set_loop(None)
+            loop.close()
+            other.close()
+
     def test_runs_inline_with_no_loop_captured(self):
         set_loop(None)
         calls = []
