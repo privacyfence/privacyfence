@@ -51,7 +51,7 @@ import socketserver
 import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ class _LoopbackHTTPServer(HTTPServer):
     def server_bind(self) -> None:
         socketserver.TCPServer.server_bind(self)
         host, port = self.server_address[:2]
-        self.server_name = host
+        self.server_name = cast(str, host)  # AF_INET TCPServer: server_address is (str, int)
         self.server_port = port
 
 

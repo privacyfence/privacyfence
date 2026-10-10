@@ -202,7 +202,7 @@ def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: s
     authed_user = response.get("authed_user") or {}
     access_token = authed_user.get("access_token", "")
     if not access_token:
-        raise SlackClientError(f"Slack OAuth did not return a user access token: {response.data}")
+        raise SlackClientError(f"Slack OAuth did not return a user access token: {response.data!r}")
 
     return {
         "access_token": access_token,
@@ -539,7 +539,7 @@ class SlackClient:
                     limit=page_size,
                     cursor=cursor,
                 )
-                page_raw = response.get("channels", [])
+                page_raw: list[dict[str, Any]] = response.get("channels", [])
                 for raw in page_raw:
                     self._channel_name_cache[raw.get("id", "")] = raw.get("name", "")
 
@@ -594,7 +594,8 @@ class SlackClient:
                     limit=page_size,
                     cursor=cursor,
                 )
-                page = [self._parse_dm(raw) for raw in response.get("channels", [])]
+                dm_raw: list[dict[str, Any]] = response.get("channels", [])
+                page = [self._parse_dm(raw) for raw in dm_raw]
                 if participant:
                     page = [
                         d for d in page
@@ -649,7 +650,7 @@ class SlackClient:
                     limit=page_size,
                     cursor=cursor,
                 )
-                page_raw = response.get("channels", [])
+                page_raw: list[dict[str, Any]] = response.get("channels", [])
                 if allowed is not None:
                     page_raw = [raw for raw in page_raw if raw.get("id", "") in allowed]
                 page_chats = _map_concurrent(page_raw, self._parse_group_chat)
@@ -678,8 +679,8 @@ class SlackClient:
         self,
         channel_id: str,
         limit: int = 50,
-        oldest: str = None,
-        latest: str = None,
+        oldest: str | None = None,
+        latest: str | None = None,
         cursor: str = "",
     ) -> tuple[list[SlackMessage], bool, str]:
         """Fetch recent messages in a channel via ``conversations.history``.
@@ -717,9 +718,10 @@ class SlackClient:
                 f"{self._describe_error(exc)}"
             ) from exc
 
+        history_raw: list[dict[str, Any]] = response.get("messages", [])
         messages = [
             self._parse_message(raw, channel_id, channel_name)
-            for raw in response.get("messages", [])
+            for raw in history_raw
         ]
         has_more = bool(response.get("has_more", False))
         next_cursor = (response.get("response_metadata") or {}).get("next_cursor") or ""
@@ -754,9 +756,10 @@ class SlackClient:
                 f"{self._describe_error(exc)}"
             ) from exc
 
+        replies_raw: list[dict[str, Any]] = response.get("messages", [])
         messages = [
             self._parse_message(raw, channel_id, channel_name)
-            for raw in response.get("messages", [])
+            for raw in replies_raw
         ]
         has_more = bool(response.get("has_more", False))
         next_cursor = (response.get("response_metadata") or {}).get("next_cursor") or ""
@@ -792,7 +795,7 @@ class SlackClient:
         except SlackApiError as exc:
             logger.debug("Could not fetch message %s/%s (non-fatal): %s", channel_id, ts, exc)
             return None
-        raw_messages = response.get("messages", [])
+        raw_messages: list[dict[str, Any]] = response.get("messages", [])
         if not raw_messages:
             return None
         return self._parse_message(raw_messages[0], channel_id, channel_name)
@@ -1134,7 +1137,8 @@ class SlackClient:
         try:
             while True:
                 response = self._client.users_list(cursor=cursor, limit=200)
-                for raw in response.get("members", []):
+                members_raw: list[dict[str, Any]] = response.get("members", [])
+                for raw in members_raw:
                     user = self._parse_user(raw)
                     if user.id:
                         users[user.id] = user
@@ -1206,7 +1210,8 @@ class SlackClient:
                     limit=200,
                     cursor=cursor,
                 )
-                for raw in response.get("channels", []):
+                channels_raw: list[dict[str, Any]] = response.get("channels", [])
+                for raw in channels_raw:
                     channel_id = raw.get("id", "")
                     if not channel_id:
                         continue
@@ -1590,9 +1595,9 @@ class SlackClient:
         """
         cached = self._member_cache.get(channel_id)
         if cached is not None:
-            members, fetched_at = cached
+            cached_members, fetched_at = cached
             if datetime.now(timezone.utc) - fetched_at < _MEMBERSHIP_CACHE_TTL:
-                return members
+                return cached_members
         members: list[str] = []
         cursor: str | None = None
         try:
