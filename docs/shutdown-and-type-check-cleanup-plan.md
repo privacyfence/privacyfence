@@ -20,8 +20,9 @@ Everything lands in one PR that closes all four issues.
 
 ## Current state
 
-Measured on `main` at `eca5130d` (5.6.0, after the plugin framework was parked off `main` in
-`6142f9de`).
+Measured on `main` at `55f5d42e` (5.6.1 plus the Grist connector, after the plugin framework was
+parked off `main` in `6142f9de`). The `#867` CI timings are from the run on `eca5130d`; nothing
+between that commit and `55f5d42e` touches the web server, the event streams or their tests.
 
 ### #864: companion tests patch the global `Thread`
 
@@ -90,12 +91,12 @@ No other test patches `Thread`: `grep -rn '"Thread"' tests` finds only the three
 
 - `.github/workflows/tests.yml:406-413`: the `static-analysis` job runs `mypy src/privacyfence` with
   `continue-on-error: true`. `:415-424` runs `python scripts/mypy_strict_modules.py` blocking.
-- `mypy src/privacyfence` (mypy 2.4.0, the project's `[tool.mypy]` settings) reports **93 errors
+- `mypy src/privacyfence` (mypy 2.4.0, the project's `[tool.mypy]` settings) reports **95 errors
   in 23 files**:
 
   | File | Errors | File | Errors |
   |---|---|---|---|
-  | `daemon_main.py` | 29 | `connectors/salesforce.py` | 2 |
+  | `daemon_main.py` | 31 | `connectors/salesforce.py` | 2 |
   | `slack_client.py` | 14 | `connectors/drive.py` | 2 |
   | `web/server.py` | 7 | `approval_ui.py` | 2 |
   | `telegram_client.py` | 7 | `web/routes_approvals.py` | 1 |
@@ -108,15 +109,15 @@ No other test patches `Thread`: `grep -rn '"Thread"' tests` finds only the three
   | `gate.py` | 2 | `approvals.py` | 1 |
   | | | `app_credentials.py` | 1 |
 
-  By code: 29 `arg-type`, 25 `assignment`, 12 `attr-defined`, 9 `union-attr`, 8 `var-annotated`,
+  By code: 30 `arg-type`, 26 `assignment`, 12 `attr-defined`, 9 `union-attr`, 8 `var-annotated`,
   and 10 others.
-- 28 of `daemon_main.py`'s 29 errors come from one pattern. In `build_connectors`
+- 30 of `daemon_main.py`'s 31 errors come from one pattern. In `build_connectors`
   (`daemon_main.py:1263`), every connector block reuses the names `client` and `connector`, so
-  mypy fixes their types from the Gmail block (`:1314`, `:1320`) and rejects every later block.
-  The 29th (`:876`) passes a `LiveStepUpConfig` to `WebServer(step_up=...)`, typed
+  mypy fixes their types from the Gmail block (`:1323`, `:1329`) and rejects every later block,
+  the Grist block (`:1576`) included. The 31st (`:885`) passes a `LiveStepUpConfig` to `WebServer(step_up=...)`, typed
   `StepUpConfig | None` at `server.py:853` (`build_app`) and `server.py:1224` (`WebServer.__init__`).
   `LiveStepUpConfig` (`step_up_config.py:432`) stands in for a `StepUpConfig` by delegation.
-- `ruff format --check .` (ruff 0.16.10) would reformat **354 of 575 files**: 130 of 135 in `src/`,
+- `ruff format --check .` (ruff 0.16.10) would reformat **361 of 588 files**: 130 of 135 in `src/`,
   202 of 243 in `tests/` and 22 of 27 in `scripts/`. It runs nowhere today.
 - The `plugin-sdk/src` `mypy --strict` item in #865 no longer applies on `main`: the SDK left with
   the parked framework (`6142f9de`). It goes back with the framework.
@@ -267,21 +268,22 @@ Rules for p4 to p7:
    which are decided here. If any other fix would change what the code does at runtime (a branch
    taken, a value returned, an exception raised), stop with `status=blocked` and name the line.
 
-Every error in `mypy src/privacyfence` on `eca5130d`, with its fix. Line numbers are from
-`eca5130d`; in `web/server.py` and `web/routes_approvals.py` they move after p2/p3, so p7 finds
+Every error in `mypy src/privacyfence` on `55f5d42e`, with its fix. Line numbers are from
+`55f5d42e`; in `web/server.py` and `web/routes_approvals.py` they move after p2/p3, so p7 finds
 those lines by their content.
 
-**p4: `daemon_main.py` (29)**
+**p4: `daemon_main.py` (31)**
 
-- 28 errors in `build_connectors` (`:1338`-`:1521`): rename each connector block's `client` to
+- 30 errors in `build_connectors` (`:1347`-`:1583`): rename each connector block's `client` to
   `<name>_client` and `connector` to `<name>_connector`, where `<name>` is `gmail`, `drive`,
-  `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence` or
-  `telegram`. None of these names is bound in `daemon_main.py` today. A block that never binds
-  `connector` (Salesforce appends `SalesforceConnector(client)` directly) renames only `client`.
-- `:1606` (`add_done_callback`): `asyncio.run_coroutine_threadsafe` returns a
+  `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`,
+  `telegram` or `grist`. None of these names is bound in `daemon_main.py` today. A block that never binds
+  `connector` (Salesforce and Grist append `SalesforceConnector(client)` / `GristConnector(client)`
+  directly) renames only `client`. Grist's block already uses `grist_bundle`; that name stays.
+- `:1628` (`add_done_callback`): `asyncio.run_coroutine_threadsafe` returns a
   `concurrent.futures.Future`. Annotate `_log_cache_warm_failure(future: "concurrent.futures.Future[None]")`
   and `import concurrent.futures`.
-- `:876` (`step_up=local_step_up`, a `LiveStepUpConfig` where `StepUpConfig | None` is expected):
+- `:885` (`step_up=local_step_up`, a `LiveStepUpConfig` where `StepUpConfig | None` is expected):
   pass `step_up=cast(StepUpConfig, local_step_up)` with the comment
   `# LiveStepUpConfig mirrors every StepUpConfig attribute by delegation (step_up_config.py:432)`.
   Import `cast` from `typing` and `StepUpConfig` from `.step_up_config` if they are missing.
@@ -349,11 +351,11 @@ those lines by their content.
   - `:141`: annotate `table: dict[str, Any] = {"rows": ...}` at `:139`. The function already
     returns `dict`.
   - `:1572`: `base64.binascii.Error` becomes `binascii.Error`, and add `import binascii`.
-- `policy/propose.py:601,623` (2): change `_rules_from_pairs`'s third parameter annotation from
+- `policy/propose.py:612,634` (2): change `_rules_from_pairs`'s third parameter annotation from
   `dict[str, tuple[tuple[str, Any], ...]]` to `Mapping[str, tuple[tuple[str, Any], ...]]`. Import
   `Mapping` from wherever the module already imports typing names, or from `collections.abc`.
-- `gate.py:1149,1275` (2): pass
-  `cast(PendingApprovalRegistry, registry)  # _resolve_decision returns _PENDING only when registry is not None (gate.py:480)`.
+- `gate.py:1150,1276` (2): pass
+  `cast(PendingApprovalRegistry, registry)  # _resolve_decision returns _PENDING only when registry is not None (gate.py:481)`.
 - `approval_ui.py:147,150` (2): annotate `def _unconfigured(self) -> NoReturn:` (`:141`), with
   `from typing import NoReturn`. It always raises.
 - `approvals.py:974` (1): `should_auto_accept(cast(str, approval.operation_key), ...)` with
@@ -373,15 +375,15 @@ those lines by their content.
     `timeout_graceful_shutdown` as `int | None`. Every use in the module and in tests is
     arithmetic or a comparison, so an int behaves the same.
 - `web/routes_settings.py` (2):
-  - `:774`: `parts = [p for p in parts if p]` becomes `present = [p for p in parts if p]`, and
+  - `:775`: `parts = [p for p in parts if p]` becomes `present = [p for p in parts if p]`, and
     the return uses `present`.
-  - **(runtime)** `:927`, `org_config_upload`: `form.get("csrf")` can be an `UploadFile`. Today
+  - **(runtime)** `:928`, `org_config_upload`: `form.get("csrf")` can be an `UploadFile`. Today
     that reaches `hmac.compare_digest` and raises TypeError, a 500. It becomes
     `csrf = form.get("csrf")` and
     `if not isinstance(csrf, str) or not _csrf_matches(request, csrf): return JSONResponse({"error": "unauthorized"}, status_code=401)`.
     A new test, `TestOrgConfigUpload.test_a_csrf_sent_as_a_file_is_unauthorized` in
     `tests/unit/web/test_routes_settings.py`, posts the token as a file part and expects 401.
-- `web/routes_approvals.py:895` (1): the same `present = [...]` rename as `routes_settings.py:774`.
+- `web/routes_approvals.py:895` (1): the same `present = [...]` rename as `routes_settings.py:775`.
 - `web/mcp_dispatch.py:238` (1): in the `if entry is not None:` branch, rename the unpacked
   `fut` to `existing` (`existing, recorded_at = entry`, `not existing.done()`,
   `return await existing`). Keep the later `fut: asyncio.Future = ...` as it is.
@@ -408,14 +410,14 @@ those lines by their content.
 
   > `ruff format` is not enforced and is not run in CI: it would rewrite most of the tree and
   > conflict with every open branch. Match the surrounding code's style instead
-  > (`CONTRIBUTING.md`, "Code Style"). See ADR 0143.
+  > (`CONTRIBUTING.md`, "Code Style"). See ADR 0148.
 
-- p9 turns "ADR 0143" (and p8's "ADR 0142" in §1.9) into links once the ADRs exist. The checks
+- p9 turns "ADR 0148" (and p8's "ADR 0147" in §1.9) into links once the ADRs exist. The checks
   that make plain text necessary until then:
   - `tests/unit/test_docs_links.py` and `tests/unit/test_docs_references_exist.py` fail on a link
     or a `docs/adr/....md` path to a file that does not exist yet, and `verify.fast` runs them
-    after every merge. So until p9, every mention of ADR 0142 or 0143 (docs, workflow and
-    `pyproject.toml` comments, script docstrings) is plain text: "ADR 0142", never a path.
+    after every merge. So until p9, every mention of ADR 0147 or 0148 (docs, workflow and
+    `pyproject.toml` comments, script docstrings) is plain text: "ADR 0147", never a path.
   - `tests/unit/test_docs_no_history.py` rejects issue numbers (`#865`) and
     "as of/since <version>" in the contributor docs, so no new doc text uses them.
 - The enforced static checks, as §1.9 and every other listing will state them, are four:
@@ -434,17 +436,17 @@ plans. p9 deletes the plan and removes both entries.
 
 ## ADRs
 
-The plugin framework reserves 0136-0141 (`6142f9de`). The next free number is 0142.
+The plugin framework reserves 0136-0141 (`6142f9de`), and the Grist connector took 0142-0146 (`55f5d42e`). The next free number is 0147.
 
-- **ADR 0142: the whole-tree mypy run is blocking.** `mypy src/privacyfence` at the project's
+- **ADR 0147: the whole-tree mypy run is blocking.** `mypy src/privacyfence` at the project's
   default settings gates every merge, alongside the per-module strict ratchet.
   - Rejected: keeping it informational, since #865 shows the noise hid new errors.
   - Rejected: only adding modules to the strict list one at a time, which leaves most of the
     tree unchecked for years.
   - Consequence: mypy is not pinned (`pyproject.toml` `lint` extra, `mypy>=1.10`), so a new mypy
     release can turn `main` red. The fix is then a follow-up PR, not a return to advisory.
-- **ADR 0143: `ruff format` is not enforced.**
-  - Rejected: one formatting-only PR plus `ruff format --check .` in CI. It touches 354 of 575
+- **ADR 0148: `ruff format` is not enforced.**
+  - Rejected: one formatting-only PR plus `ruff format --check .` in CI. It touches 361 of 588
     files, conflicts with every open branch and with `feature/plugin-framework-parked`, and buys
     no correctness.
   - The `ruff check` rule set in `[tool.ruff.lint]` stays the style gate.
@@ -497,7 +499,7 @@ final_checks:
   - |-
     docs/shutdown-and-type-check-cleanup-plan.md is deleted and `grep -rn "shutdown-and-type-check-cleanup-plan" --include=*.md --include=*.py --include=*.yml --include=*.yaml .` finds nothing
   - |-
-    docs/adr/0142-the-whole-tree-mypy-run-is-blocking.md and docs/adr/0143-ruff-format-is-not-enforced.md exist, each with Status "Accepted", and both are in docs/adr/README.md's index
+    docs/adr/0147-the-whole-tree-mypy-run-is-blocking.md and docs/adr/0148-ruff-format-is-not-enforced.md exist, each with Status "Accepted", and both are in docs/adr/README.md's index
   - |-
     `awk '/^## \[Unreleased\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md | grep -c "live-update connection"` prints 1, and CHANGELOG.md has no new `## [X.Y.Z]` heading
   - |-
@@ -709,11 +711,12 @@ phases:
       - src/privacyfence/daemon_main.py
     brief: |
       Read Design D4: the rules, then "p4: daemon_main.py".
-      1. `mypy src/privacyfence 2>&1 | grep '^src/privacyfence/daemon_main.py:.*error'` shows 29
-         errors: 28 in build_connectors, one at ~876 (step_up) and one at ~1606.
+      1. `mypy src/privacyfence 2>&1 | grep '^src/privacyfence/daemon_main.py:.*error'` shows 31
+         errors: 30 in build_connectors (Grist's block included), one at ~885 (step_up) and
+         one at ~1628.
       2. Apply D4's p4 fixes exactly: the per-block renames in `build_connectors` (rename
          nothing outside it), the `_log_cache_warm_failure` annotation with
-         `import concurrent.futures`, and the `cast(StepUpConfig, local_step_up)` at ~876 with
+         `import concurrent.futures`, and the `cast(StepUpConfig, local_step_up)` at ~885 with
          its comment. Keep imports sorted.
       3. Re-run step 1's command: it prints nothing. If an error remains that D4 does not cover,
          fix it under D4's rules, or stop with status=blocked if the fix needs a runtime change.
@@ -871,7 +874,7 @@ phases:
       - tests/unit/test_definition_of_done_drift.py
     brief: |
       Read Design D5 and the plan's "Current state → #865" list of places first. Until p9, cite
-      ADR 0142 and ADR 0143 as plain text only, never as a link or a docs/adr/ path (D5). Do not
+      ADR 0147 and ADR 0148 as plain text only, never as a link or a docs/adr/ path (D5). Do not
       write issue numbers or "since <version>" into docs/ files.
       1. `mypy src/privacyfence` prints "Success: no issues found". If not, stop with
          status=blocked and paste the errors: an earlier phase is incomplete.
@@ -880,7 +883,7 @@ phases:
              `Type-check (mypy, whole tree, blocking)`.
            - Delete its `continue-on-error: true` line.
            - Replace the comment above it with these two lines:
-             "# Blocking: the whole tree at [tool.mypy]'s default settings (ADR 0142). The strict"
+             "# Blocking: the whole tree at [tool.mypy]'s default settings (ADR 0147). The strict"
              "# flags for promoted modules are the next step's job."
            - Keep the command `mypy src/privacyfence`.
          Then run `grep -rn "Type-check (mypy" .github scripts`. If anything other than tests.yml
@@ -893,7 +896,7 @@ phases:
               [[tool.mypy.overrides]] ratchet below".
            b. The `[tool.mypy]` comment (~363-382): replace the paragraph from "mypy is adopted
               incrementally" through "...gated nothing at all.)" with a comment that says:
-              - the whole tree is checked at these settings and blocks the merge (ADR 0142);
+              - the whole tree is checked at these settings and blocks the merge (ADR 0147);
               - the `[[tool.mypy.overrides]]` blocks below add strict flags to promoted modules,
                 which `scripts/mypy_strict_modules.py` checks, also blocking, in the next CI
                 step;
@@ -907,7 +910,7 @@ phases:
              informational whole-tree run, so the ratchet's promoted modules genuinely gate the
              merge while the ~87 pre-existing errors in the rest of the tree stay
              visible-but-advisory, exactly as before." with "beside the whole-tree run (also
-             blocking, ADR 0142), so the promoted modules are held to the strict flags on top
+             blocking, ADR 0147), so the promoted modules are held to the strict flags on top
              of the defaults the whole tree must meet."
            - In "mypy is meant to go ...", replace the sentence saying the whole-tree step is
              `continue-on-error: true` with "The whole-tree mypy step checks only the default
@@ -930,7 +933,7 @@ phases:
               `python3 scripts/mypy_strict_modules.py` in the command block.
            b. Rewrite the paragraph after the block. It says that Ruff (`ruff check .`),
               Bandit, the whole-tree mypy run and the promoted-module mypy run are all blocking
-              CI checks; that the whole tree is checked at `[tool.mypy]`'s settings (ADR 0142);
+              CI checks; that the whole tree is checked at `[tool.mypy]`'s settings (ADR 0147);
               and that promoting a module to the strict flags is still a one-block edit in
               `pyproject.toml`.
            c. Then add D5's `ruff format` paragraph verbatim.
@@ -947,7 +950,7 @@ phases:
            - The static-analysis row (~58) becomes "`ruff check .`,
              `bandit -c pyproject.toml -r src`, whole-tree `mypy src/privacyfence`,
              `scripts/mypy_strict_modules.py` (all blocking); `ruff format` is not run
-             (ADR 0143)".
+             (ADR 0148)".
            - At ~270, add `mypy src/privacyfence` next to `mypy_strict_modules.py`.
       10. docs/release-testing.md (~35-36): add `mypy src/privacyfence` to the list of commands
           pre_release_check.py runs.
@@ -980,17 +983,17 @@ phases:
       - |-
         grep -rni "informational" docs/coding-and-testing-guidelines.md docs/testing-policy.md .github/pull_request_template.md .github/workflows/tests.yml tests/unit/test_definition_of_done_drift.py | grep -i mypy prints nothing
       - |-
-        grep -rn "adr/014[23]" docs/coding-and-testing-guidelines.md docs/testing-policy.md docs/release-testing.md pyproject.toml .github scripts prints nothing
+        grep -rn "adr/014[78]" docs/coding-and-testing-guidelines.md docs/testing-policy.md docs/release-testing.md pyproject.toml .github scripts prints nothing
       - |-
         python3 -m pytest tests/unit -q passes
 
   - id: p9-retire-plan
-    title: "Write ADRs 0142 and 0143, dispatch the connector live check, and retire the plan"
+    title: "Write ADRs 0147 and 0148, dispatch the connector live check, and retire the plan"
     depends_on: [p1-companion-thread-patch, p8-mypy-blocking-and-docs]
     complexity: S
     touches:
-      - docs/adr/0142-the-whole-tree-mypy-run-is-blocking.md
-      - docs/adr/0143-ruff-format-is-not-enforced.md
+      - docs/adr/0147-the-whole-tree-mypy-run-is-blocking.md
+      - docs/adr/0148-ruff-format-is-not-enforced.md
       - docs/adr/README.md
       - docs/coding-and-testing-guidelines.md
       - docs/README.md
@@ -1000,10 +1003,10 @@ phases:
     brief: |
       Read the plan's ADRs section, Design D6, and docs/adr/README.md (rules and template)
       first.
-      1. Write docs/adr/0142-the-whole-tree-mypy-run-is-blocking.md from the template:
-           - Title: "ADR 0142: The whole-tree mypy run is blocking".
+      1. Write docs/adr/0147-the-whole-tree-mypy-run-is-blocking.md from the template:
+           - Title: "ADR 0147: The whole-tree mypy run is blocking".
            - Status: "Accepted — <today's date>. Implemented in the PR that adds this ADR."
-           - Context: `mypy src/privacyfence` reported 93 errors in 23 files, and the
+           - Context: `mypy src/privacyfence` reported 95 errors in 23 files, and the
              `continue-on-error` step let new errors hide among them (#865).
            - Decision: `mypy src/privacyfence` at `[tool.mypy]`'s settings blocks every merge,
              alongside the strict per-module ratchet in `scripts/mypy_strict_modules.py`, which
@@ -1015,9 +1018,9 @@ phases:
          Link #865 as https://github.com/privacyfence/privacyfence/issues/865, and link
          `../../.github/workflows/tests.yml` and `../../scripts/mypy_strict_modules.py` as
          relative paths. Never link the plan document.
-      2. Write docs/adr/0143-ruff-format-is-not-enforced.md the same way:
-           - Title: "ADR 0143: `ruff format` is not enforced".
-           - Context: `ruff format --check .` would rewrite 354 of 575 files (#865).
+      2. Write docs/adr/0148-ruff-format-is-not-enforced.md the same way:
+           - Title: "ADR 0148: `ruff format` is not enforced".
+           - Context: `ruff format --check .` would rewrite 361 of 588 files (#865).
            - Decision: it is not run in CI and not required. `ruff check` with
              `[tool.ruff.lint]`'s rules stays the style gate, and contributors match the
              surrounding code.
@@ -1025,11 +1028,11 @@ phases:
              churn and the conflicts with every open branch and `feature/plugin-framework-parked`.
            - Consequence: revisit when no long-lived branch is open.
          Link `../../pyproject.toml` for `[tool.ruff.lint]`.
-      3. Add both to the index table in docs/adr/README.md after 0135, with "Accepted". Do not
+      3. Add both to the index table in docs/adr/README.md after 0146, with "Accepted". Do not
          add rows for 0136-0141: they stay reserved for the parked plugin framework.
-      4. In docs/coding-and-testing-guidelines.md §1.9, turn p8's plain-text "ADR 0142" and
-         "ADR 0143" into `[ADR 0142](adr/0142-the-whole-tree-mypy-run-is-blocking.md)` and
-         `[ADR 0143](adr/0143-ruff-format-is-not-enforced.md)`. Leave the plain-text mentions
+      4. In docs/coding-and-testing-guidelines.md §1.9, turn p8's plain-text "ADR 0147" and
+         "ADR 0148" into `[ADR 0147](adr/0147-the-whole-tree-mypy-run-is-blocking.md)` and
+         `[ADR 0148](adr/0148-ruff-format-is-not-enforced.md)`. Leave the plain-text mentions
          in workflow, pyproject.toml, script and testing-policy text as they are.
       5. D6: delete docs/shutdown-and-type-check-cleanup-plan.md (`git rm`).
            - Remove its entry and comment from `CONTRIBUTOR_DOCS` in scripts/build_site.py.
@@ -1051,14 +1054,14 @@ phases:
          check out. `ruff check .` passes.
       8. Confirm that p3's CHANGELOG entry is under `## [Unreleased]`. If it is missing, add it
          as p3's step 6 says.
-      Commit message: "Record ADRs 0142 and 0143 and retire the shutdown/type-check plan".
+      Commit message: "Record ADRs 0147 and 0148 and retire the shutdown/type-check plan".
     acceptance:
       - |-
-        test -f docs/adr/0142-the-whole-tree-mypy-run-is-blocking.md && test -f docs/adr/0143-ruff-format-is-not-enforced.md
+        test -f docs/adr/0147-the-whole-tree-mypy-run-is-blocking.md && test -f docs/adr/0148-ruff-format-is-not-enforced.md
       - |-
-        grep -c "0142-the-whole-tree-mypy-run-is-blocking.md\|0143-ruff-format-is-not-enforced.md" docs/adr/README.md prints 2
+        grep -c "0147-the-whole-tree-mypy-run-is-blocking.md\|0148-ruff-format-is-not-enforced.md" docs/adr/README.md prints 2
       - |-
-        grep -c "adr/0142-the-whole-tree-mypy-run-is-blocking.md\|adr/0143-ruff-format-is-not-enforced.md" docs/coding-and-testing-guidelines.md prints at least 2
+        grep -c "adr/0147-the-whole-tree-mypy-run-is-blocking.md\|adr/0148-ruff-format-is-not-enforced.md" docs/coding-and-testing-guidelines.md prints at least 2
       - |-
         test ! -e docs/shutdown-and-type-check-cleanup-plan.md, and grep -rn "shutdown-and-type-check-cleanup-plan" scripts docs prints nothing
       - |-
