@@ -132,7 +132,7 @@ applies:
 | **Connecting…** | A sign-in is in progress. The Authenticate link is disabled until it finishes or times out. | Finish the sign-in in the browser tab. |
 | **Connected** | The connector is signed in and loaded; its tools are available. | Nothing. |
 | **Disabled** | The connector is switched off. | Turn the switch on to use it. |
-| **Organization config missing** | The installed bundle has no section for this provider (Google, Slack, Salesforce, Atlassian or Grist), or no bundle is installed. | [Install the bundle](#install-the-organization-config-bundle-desktop-install), or ask your administrator to add the provider. |
+| **Organization config missing** | The installed bundle has no section for this provider (Google, Slack, Salesforce or Atlassian), or no bundle is installed. | [Install the bundle](#install-the-organization-config-bundle-desktop-install), or ask your administrator to add the provider. Grist never shows this pill: a malformed Grist section shows a disabled Authenticate link with the error instead. |
 | **App credentials missing** | Telegram only: this build of PrivacyFence carries no Telegram app credentials. | See [telegram-setup.md](telegram-setup.md). |
 | **Not connected** | The provider is configured but the connector is not loaded: you never signed in, the credentials expired or were revoked, or the connector failed its check when PrivacyFence built it. | Click **Authenticate…**. If it keeps failing, check the log (see [platform-support.md](platform-support.md)). |
 

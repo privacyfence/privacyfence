@@ -2211,7 +2211,7 @@ class TestAnyConnectorAuthenticated:
 
 
 class TestGristApiKeyConnect:
-    """grist_connect: the local-mode API-key form (plan 3.5). The key goes
+    """grist_connect: the local-mode API-key form. The key goes
     straight to the worker and the token file; it is never kept on the
     controller or put in the snapshot."""
 
@@ -2280,6 +2280,12 @@ class TestGristApiKeyConnect:
         assert controller.snapshot()["grist_auth"]["error"] == "Grist rejected the API key."
         assert calls_refresh == []
         assert "grist" not in controller._busy_connectors
+
+    def test_second_submit_while_busy_starts_no_second_worker(self, controller, recorded):
+        controller.grist_connect(self.KEY, "https://docs.getgrist.com")
+        controller.grist_connect(self.KEY, "https://docs.getgrist.com")
+        assert len(recorded) == 1
+        assert "grist" in controller._busy_connectors
 
     def test_pinned_url_wins_and_request_without_server_url_works(self, controller, recorded, monkeypatch):
         from privacyfence.grist_client import GristClient

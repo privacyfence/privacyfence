@@ -325,7 +325,13 @@ _JS = r"""
     // cleared once the result (success or error) has been seen in a snapshot.
     gristModalOpen: false,
     gristSubmitted: false,
+    // True once the submitted form's row has been seen busy: a snapshot pushed
+    // before the worker marks it busy must not close the modal.
+    gristSawBusy: false,
     gristServerUrl: '',
+    // What is being typed, kept across re-renders; the key is only ever page
+    // state, cleared on submit and never posted anywhere but grist_connect.
+    gristApiKey: '',
   };
   var pyState = null;
 
@@ -1265,6 +1271,8 @@ _JS = r"""
         esc(ui.gristServerUrl || GRIST_DEFAULT_URL) + '"' + (busy ? ' disabled' : '') + '/>';
     }
     html += '<div class="pf-modal-desc">API key</div>';
+    // The key is restored through .value after the render (see render()), not
+    // written into the markup.
     html += '<input type="password" autocomplete="off" class="field pf-modal-input" data-grist-field="api_key" aria-label="API key"' +
       (busy ? ' disabled' : '') + '/>';
     html += '<div class="pf-modal-desc">Create a key in Grist under Account settings → Developer → API Key.</div>';
@@ -1281,6 +1289,8 @@ _JS = r"""
   function closeGristModal() {
     ui.gristModalOpen = false;
     ui.gristSubmitted = false;
+    ui.gristSawBusy = false;
+    ui.gristApiKey = '';
   }
 
   function submitGristModal() {
@@ -1290,7 +1300,9 @@ _JS = r"""
     if (urlEl) ui.gristServerUrl = url;
     var key = keyEl ? keyEl.value : '';
     if (keyEl) keyEl.value = '';
+    ui.gristApiKey = '';
     ui.gristSubmitted = true;
+    ui.gristSawBusy = false;
     post('grist_connect', { server_url: url, api_key: key });
   }
 
@@ -1320,12 +1332,33 @@ _JS = r"""
       ui.telegramModalOpen = false;
       ui.telegramAuthWasActive = false;
     }
-    // The Grist result arrives by snapshot push: once a submitted form is no
-    // longer busy and carries no error, the connect worked -- close the modal.
+    // What is typed in the Grist form survives the rebuild below: capture it
+    // (and which field has focus) before the DOM is replaced.
+    var gristFocus = '', gristSel = null, gristWasOpen = false;
+    if (ui.gristModalOpen) {
+      var gristKeyEl = document.querySelector('[data-grist-field="api_key"]');
+      var gristUrlEl = document.querySelector('[data-grist-field="server_url"]');
+      gristWasOpen = !!gristKeyEl;
+      if (gristKeyEl && !gristKeyEl.disabled) ui.gristApiKey = gristKeyEl.value;
+      if (gristUrlEl && !gristUrlEl.disabled) ui.gristServerUrl = gristUrlEl.value;
+      var gristActive = document.activeElement;
+      if (gristActive && gristActive.getAttribute && gristActive.getAttribute('data-grist-field')) {
+        gristFocus = gristActive.getAttribute('data-grist-field');
+        gristSel = [gristActive.selectionStart, gristActive.selectionEnd];
+      }
+    }
+    // The Grist result arrives by snapshot push. A submitted form is settled
+    // only once its row has been seen busy and is idle again: no error means
+    // the connect worked (close the modal), an error stays visible in it.
     if (ui.gristModalOpen && ui.gristSubmitted) {
       var gristRow = state.connectors.find(function (c) { return c.key === 'grist'; }) || {};
-      if (!gristRow.busy && !(state.grist_auth && state.grist_auth.error)) closeGristModal();
-      else if (!gristRow.busy) ui.gristSubmitted = false;
+      if (gristRow.busy) ui.gristSawBusy = true;
+      else if (ui.gristSawBusy) {
+        if (state.grist_auth && state.grist_auth.error) {
+          ui.gristSubmitted = false;
+          ui.gristSawBusy = false;
+        } else closeGristModal();
+      }
     }
     // .split (base.css): the nav and the content, one column when narrow
     // and two from 900 px up (see _CSS).
@@ -1343,9 +1376,15 @@ _JS = r"""
       var input = document.querySelector('[data-telegram-field]');
       if (input) input.focus();
     }
-    if (ui.gristModalOpen && !ui.gristSubmitted) {
-      var gristInput = document.querySelector('[data-grist-field="api_key"]');
-      if (gristInput && document.activeElement !== gristInput) gristInput.focus();
+    if (ui.gristModalOpen) {
+      var gristKeyNew = document.querySelector('[data-grist-field="api_key"]');
+      if (gristKeyNew && ui.gristApiKey) gristKeyNew.value = ui.gristApiKey;
+      var gristTarget = gristWasOpen ? document.querySelector('[data-grist-field="' + gristFocus + '"]') : gristKeyNew;
+      if (gristTarget && !gristTarget.disabled) {
+        gristTarget.focus();
+        // Not every input type has a selection (type=url throws).
+        try { if (gristSel) gristTarget.setSelectionRange(gristSel[0], gristSel[1]); } catch (err) { /* no selection */ }
+      }
     }
   }
 

@@ -275,6 +275,14 @@ class TestListDocuments:
             GristDocument("idB", "Zed", "WS", "Beta"),
         ]
 
+    def test_org_without_a_usable_id_is_skipped(self, net: Net, client: GristClient) -> None:
+        net.reply(
+            ok([{"name": "no id"}, {"id": "x", "name": "bad"}, {"id": None}, "junk", {"id": 3, "name": "Ok"}]),
+            ok([{"name": "W", "docs": [{"id": "idA", "name": "Abe"}]}]),
+        )
+        assert client.list_documents() == [GristDocument("idA", "Abe", "W", "Ok")]
+        assert [c["url"] for c in net.calls] == [f"{SERVER}/api/orgs", f"{SERVER}/api/orgs/3/workspaces"]
+
     def test_org_cap(self, net: Net, client: GristClient) -> None:
         net.reply(ok([{"id": i, "name": f"o{i}"} for i in range(30)]), ok([]))
         client.list_documents()
@@ -505,6 +513,14 @@ class TestGetRecordsById:
         assert json.loads(call["params"]["filter"]) == {"id": [5, 6]}
         assert recs == [GristRecord(5, {"A": "x"})]
 
+    @pytest.mark.parametrize("record", [{"fields": {}}, {"id": "x"}, {"id": None}])
+    def test_record_without_a_usable_id_is_a_client_error(
+        self, net: Net, client: GristClient, record: dict,
+    ) -> None:
+        net.reply(ok({"records": [record]}))
+        with pytest.raises(GristClientError, match="usable id"):
+            client.get_records_by_id("doc1", "T", [1])
+
     def test_bad_ids_before_request(self, net: Net, client: GristClient) -> None:
         with pytest.raises(GristClientError):
             client.get_records_by_id("a/b", "T", [1])
@@ -514,6 +530,11 @@ class TestGetRecordsById:
 
 
 class TestAddRecords:
+    def test_created_record_without_a_usable_id_is_a_client_error(self, net: Net, client: GristClient) -> None:
+        net.reply(ok({"records": [{"id": 7}, {"id": "x"}]}))
+        with pytest.raises(GristClientError, match="usable id"):
+            client.add_records("doc1", "T", [{"A": 1}, {"A": 2}])
+
     def test_posts_fields_and_returns_ids(self, net: Net, client: GristClient) -> None:
         net.reply(ok({"records": [{"id": 7}, {"id": 8}]}))
         ids = client.add_records("doc1", "T", [{"A": 1}, {"A": None}])

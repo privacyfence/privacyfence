@@ -260,7 +260,7 @@ after seeding is expected.
       `Table1` or `Table2`, rename it there to `QaSeed` or `QaLifecycle`. Renaming a page does not
       rename its table, and the recorder addresses tables by id (a wrong id answers HTTP 404).
 - [ ] Create a second document with a different name, as the contrast case.
-- [ ] Set `grist.doc_id` (the id in the document's URL after `/doc/`; required),
+- [ ] Set `grist.doc_id` (the full Document ID from the document's Settings, not the shorter id in its address; required),
       `grist.table_id` (default `QaSeed`) and `grist.lifecycle_table_id` (default `QaLifecycle`).
 
 | Optional rule | Predicate | Value | Operations |

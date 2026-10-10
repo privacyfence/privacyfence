@@ -187,6 +187,18 @@ class TestPrivacyPageAdminGating:
         assert '"gmail_append_signature"' not in body
         assert '"calendar_free_busy"' in body
 
+    def test_state_carries_the_grist_stub_keys_with_signin_unavailable(self, tmp_path, monkeypatch):
+        # The page script reads these three keys unconditionally; org mode has no Grist sign-in
+        # of its own, so "unavailable" is what keeps the Authenticate link disabled there.
+        _seed(tmp_path, monkeypatch, "carol")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ADMIN)
+        body = client.get("/settings/privacy").text
+        assert '"grist_signin": "unavailable"' in body
+        assert '"grist_server_url_pinned": ""' in body
+        assert '"grist_auth": {"error": ""}' in body
+
 
 class TestPrivacyStateFromConfig:
     """Org mode's own Privacy Filter state comes from the exact same

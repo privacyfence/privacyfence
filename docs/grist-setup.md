@@ -147,8 +147,11 @@ own reason. Check the client id, the client secret and the redirect URI register
 
 **`Could not reach the Grist server at <host>`** — check the server address and your network.
 
-**`The Grist server answered with a redirect (HTTP 3xx).`** — the server address is not the
+**`The Grist server answered with a redirect (HTTP 30x).`** — the server address is not the
 final one; enter the address Grist ends up at.
+
+**`Grist's sign-in server answered with a redirect (HTTP 30x).`** — the sign-in server address in
+the organization config is not the final one; enter the address it ends up at.
 
 **`Could not reach Grist's sign-in server at <host>`** — check the sign-in server address and your
 network.
