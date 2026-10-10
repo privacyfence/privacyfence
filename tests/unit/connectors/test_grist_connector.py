@@ -217,30 +217,30 @@ class TestGetRecords:
         connector, client = make_connector()
         client.get_document.return_value = make_doc()
         client.get_records.return_value = GristRecordPage(
-            records=[GristRecord(id=i, fields={"N": i}) for i in (501, 502)],
-            truncated=True, next_after_id=502,
+            records=[GristRecord(id=i, fields={"N": i}) for i in (6, 7)],
+            truncated=True, next_after_id=7,
         )
 
-        result = await connector.call("grist_get_records", {**self.ARGS, "limit": 2, "after_id": 500})
+        result = await connector.call("grist_get_records", {**self.ARGS, "limit": 2, "after_id": 5})
 
         client.get_records.assert_called_once_with(
-            DOC_ID, "Contacts", filters={}, sort="", limit=2, after_id=500,
+            DOC_ID, "Contacts", filters={}, sort="", limit=2, after_id=5,
         )
         call = gated_call_spy[0]
-        assert call["preview"]["Page"] == "After record #500, records #501–#502; more follow"
-        assert call["args"]["after_id"] == 500
+        assert call["preview"]["Page"] == "After record #5, records #6–#7; more follow"
+        assert call["args"]["after_id"] == 5
         assert call["summary"] == "Read 2 record(s) from Budget / Contacts"
-        assert result["next_after_id"] == 502
-        assert [r["id"] for r in result["records"]] == [501, 502]
+        assert result["next_after_id"] == 7
+        assert [r["id"] for r in result["records"]] == [6, 7]
 
     async def test_last_page_past_the_end(self, gated_call_spy):
         connector, client = make_connector()
         client.get_document.return_value = make_doc()
         client.get_records.return_value = GristRecordPage(records=[], truncated=False)
 
-        result = await connector.call("grist_get_records", {**self.ARGS, "after_id": 1000})
+        result = await connector.call("grist_get_records", {**self.ARGS, "after_id": 9})
 
-        assert gated_call_spy[0]["preview"]["Page"] == "After record #1000; last page"
+        assert gated_call_spy[0]["preview"]["Page"] == "After record #9; last page"
         assert gated_call_spy[0]["details_text"] == "(no records)"
         assert result["records"] == [] and result["truncated"] is False
         assert result["next_after_id"] is None
