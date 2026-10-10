@@ -65,6 +65,14 @@ def set_loop(loop: asyncio.AbstractEventLoop | None) -> None:
     _loop = loop
 
 
+def clear_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Clear the captured loop only if it is still ``loop``, so a server whose shutdown finishes
+    late never clears the loop a newer server in the same process captured since."""
+    global _loop
+    if _loop is loop:
+        _loop = None
+
+
 def get_loop() -> asyncio.AbstractEventLoop | None:
     """The ASGI app's own running event loop, once captured by
     ``_state_stream_loop_lifespan`` -- ``None`` before startup or after

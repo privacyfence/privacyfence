@@ -988,6 +988,34 @@ class TestStop:
         assert WebServer(WebApprovalUI(), host="localhost", port=0).stopped
 
 
+class TestEachServerKeepsItsOwnLoop:
+    def test_a_late_shutdown_does_not_clear_a_newer_servers_loop(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        from privacyfence.web import state_stream
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        a = WebServer(WebApprovalUI(), host="localhost", port=TestStop._free_port())
+        b = WebServer(WebApprovalUI(), host="localhost", port=TestStop._free_port())
+        a_stopped = False
+        try:
+            a.start()
+            TestStop._wait_until_connectable("localhost", a.port)
+            loop_a = a.wait_until_ready()
+            b.start()
+            TestStop._wait_until_connectable("localhost", b.port)
+            loop_b = b.wait_until_ready()
+            a.stop()
+            a_stopped = True
+            assert b.wait_until_ready() is loop_b
+            assert loop_b is not loop_a
+            assert loop_b.is_running()
+            assert state_stream.get_loop() is loop_b
+        finally:
+            b.stop()
+            if not a_stopped:
+                a.stop()
+
+
 # --------------------------------------------------------------------------- #
 # Audience separation (ADR 0061): the MCP bearer token and the approval
 # surface's session cookie/CSRF token are different secrets, checked in
