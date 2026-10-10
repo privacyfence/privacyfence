@@ -80,147 +80,50 @@ button.reset { font: inherit; font-size: .85rem; background: none; border: 1px s
 
     <article class="task" data-task="mb1">
       <div class="task-head">
-        <h3>1. Create a Grist QA account, seed document and OAuth app</h3>
-        <div class="meta"><span class="pill">mb1-grist-qa-account</span><span>about 20 min</span></div>
+        <h3>1. Create a Grist QA account, seed document and API key</h3>
+        <div class="meta"><span class="pill">mb1-grist-qa-account</span><span>about 15 min</span></div>
       </div>
-      <p class="why">Phase p10 records live fixtures from this document, signed in through this app. Use an account that holds nothing real.</p>
+      <p class="why">Phase p12 records live fixtures from this document with this account's API key. Use an account that holds nothing real. If you already did an earlier version of this task, only steps 5 and 8–9 may be new.</p>
       <ol class="steps">
         <li><label><input type="checkbox" id="mb1-1"><span class="step-body">Sign up for a Grist account with a dedicated QA e-mail address at <a href="https://docs.getgrist.com/signin" target="_blank" rel="noopener">docs.getgrist.com/signin</a>.<span class="see">You land on an empty document list.</span></span></label></li>
         <li><label><input type="checkbox" id="mb1-2"><span class="step-body">Click <strong>Add New → Add Empty Document</strong> and rename it (click its name at the top) to <code>PrivacyFence QA [QATEST]</code>.</span></label></li>
-        <li><label><input type="checkbox" id="mb1-3"><span class="step-body">Rename the table <code>Table1</code> to <code>QaSeed</code>, then check under <strong>Raw Data</strong> (left panel) that its id is exactly <code>QaSeed</code>.</span></label></li>
-        <li><label><input type="checkbox" id="mb1-4"><span class="step-body">Rename column <code>A</code> to <code>Name</code> and <code>B</code> to <code>Note</code>, and delete column <code>C</code>. Both must be data columns, not formulas.</span></label></li>
-        <li><label><input type="checkbox" id="mb1-5"><span class="step-body">Add two rows:
+        <li><label><input type="checkbox" id="mb1-3"><span class="step-body">Rename the table <code>Table1</code> to <code>QaSeed</code>, rename column <code>A</code> to <code>Name</code> and <code>B</code> to <code>Note</code>, and delete column <code>C</code>. Check under <strong>Raw Data</strong> (left panel) that the table id is exactly <code>QaSeed</code>. Both columns must be data columns, not formulas.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-4"><span class="step-body">Add two rows to <code>QaSeed</code>:
           <pre>Name: PrivacyFence QA seed [QATEST]        Note: Synthetic PrivacyFence QA row. No real information.
 Name: PrivacyFence QA second row [QATEST]  Note: Synthetic PrivacyFence QA row. No real information.</pre></span></label></li>
-        <li><label><input type="checkbox" id="mb1-6"><span class="step-body">In the same document, add a second table <code>QaLifecycle</code> with the same two data columns <code>Name</code> and <code>Note</code> and no rows; the weekly live check adds and updates test rows there, never in <code>QaSeed</code>. Then create a second empty document named <code>PrivacyFence QA contrast</code>, the "other document" case for auto-accept rules.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-5"><span class="step-body">In the same document, add a second table <code>QaLifecycle</code> with the same two data columns <code>Name</code> and <code>Note</code>, and no rows.<span class="see">The weekly live check adds and updates test rows there, never in <code>QaSeed</code>.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-6"><span class="step-body">Create a second empty document named <code>PrivacyFence QA contrast</code>, the "other document" case for auto-accept rules.</span></label></li>
         <li><label><input type="checkbox" id="mb1-7"><span class="step-body">Note the seed document's id: the part of its address after <code>docs.getgrist.com/</code> and before the next <code>/</code>, or <strong>Document ID</strong> under <strong>Settings</strong> (gear icon).<span class="see">It looks like <code>8CAN8gKdxY7zSw4dX9fJ2a</code>. It is not a secret.</span></span></label></li>
-        <li><label><input type="checkbox" id="mb1-8"><span class="step-body">Open profile picture → <strong>Account settings</strong> → <strong>Developer</strong>, and under <strong>OAuth apps</strong> click <strong>Register app</strong>.</span></label></li>
-        <li><label><input type="checkbox" id="mb1-9"><span class="step-body">Fill in: <strong>Application name</strong> <code>PrivacyFence QA</code>; <strong>Redirect URI</strong> <code>http://localhost:53685/callback</code> exactly; permissions <code>doc:read</code>, <code>doc:write</code>, <code>doc.schema:write</code> and <code>offline_access</code>, and nothing else. Click <strong>Register</strong>.<span class="see">Grist shows the client id and the client secret.</span></span></label></li>
-        <li><label><input type="checkbox" id="mb1-10"><span class="step-body">Copy the client id and the client secret straight into your password manager, as "Grist QA OAuth app".</span></label></li>
-        <li><label><input type="checkbox" id="mb1-11"><span class="step-body">Find the sign-in discovery document. Open <a href="https://docs.getgrist.com/.well-known/oauth-authorization-server" target="_blank" rel="noopener">docs.getgrist.com/.well-known/oauth-authorization-server</a>. If it shows JSON with an <code>authorization_endpoint</code>, the sign-in server is the server itself. Otherwise open <a href="https://login.getgrist.com/.well-known/oauth-authorization-server" target="_blank" rel="noopener">login.getgrist.com/.well-known/oauth-authorization-server</a>; if that shows the JSON, the sign-in server is <code>https://login.getgrist.com</code>.<span class="see">Write down which one worked. Task 2 asks for it.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-8"><span class="step-body">Open profile picture → <strong>Account settings</strong> → <strong>Developer</strong>, and under <strong>API Key</strong> create a key.<span class="see">A long key appears, with a copy button.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-9"><span class="step-body">Copy the key straight into your password manager, as "Grist QA API key".</span></label></li>
       </ol>
-      <p class="secret">The client secret is the app's password. Never paste it into a chat, the plan, a PR, an issue or a GitHub secret. Besides your password manager it lives only in the runner's QA bundle (task 2) and, if that bundle is signed, briefly on the machine that re-signs it (<a href="https://github.com/privacyfence/privacyfence/blob/plan/grist-connector/docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md" target="_blank" rel="noopener">ADR 0019</a>).</p>
-      <p class="done-when"><strong>Done when:</strong> the seed document (tables <code>QaSeed</code> with two rows and an empty <code>QaLifecycle</code>) and the contrast document exist, the "PrivacyFence QA" app has the redirect URI <code>http://localhost:53685/callback</code> and exactly the four permissions, its client id and secret are in your password manager, and you know which address serves the discovery document.</p>
+      <p class="secret">The key acts as the QA account, with access to every document it can open. Never paste it into a chat, the plan, a PR, an issue or a GitHub secret. Its only other copy is the runner file in task 2 (<a href="https://github.com/privacyfence/privacyfence/blob/plan/grist-connector/docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md" target="_blank" rel="noopener">ADR 0019</a>). If you already registered an OAuth app on this account, keep it: task 3 uses it.</p>
+      <p class="done-when"><strong>Done when:</strong> the seed document has <code>QaSeed</code> with two <code>[QATEST]</code> rows and an empty <code>QaLifecycle</code>, the contrast document exists, and the QA account's API key is in your password manager.</p>
     </article>
 
     <article class="task" data-task="mb2">
       <div class="task-head">
-        <h3>2. Put the Grist app on the QA runner and sign it in once</h3>
-        <div class="meta"><span class="pill">mb2-runner-qa-state</span><span>about 15 min</span></div>
+        <h3>2. Put the API key and the seed ids on the QA runner</h3>
+        <div class="meta"><span class="pill">mb2-runner-qa-state</span><span>about 5 min</span></div>
       </div>
-      <p class="why">Phase p10 dispatches <code>qa-record-fixture.yml</code>, which copies <code>~/privacyfence/</code> from the runner (labelled <code>privacyfence-test</code>) into its checkout (<a href="https://github.com/privacyfence/privacyfence/blob/plan/grist-connector/docs/connector-qa.md#persistent-qa-state" target="_blank" rel="noopener">connector-qa.md, Persistent QA state</a>). The script in step 4 also tries Grist's real sign-in once, before any code is written.</p>
+      <p class="why">Phase p12 dispatches <code>qa-record-fixture.yml</code>, which copies <code>~/privacyfence/</code> from the runner (labelled <code>privacyfence-test</code>) into its checkout (<a href="https://github.com/privacyfence/privacyfence/blob/plan/grist-connector/docs/connector-qa.md#persistent-qa-state" target="_blank" rel="noopener">connector-qa.md, Persistent QA state</a>). No bundle change is needed: without a Grist OAuth app in the bundle, Grist uses the API key.</p>
       <ol class="steps">
         <li><label><input type="checkbox" id="mb2-1"><span class="step-body">SSH into the runner host and switch to the runner user (the account whose home holds <code>~/privacyfence/</code>).</span></label></li>
-        <li><label><input type="checkbox" id="mb2-2"><span class="step-body">Add the app to the QA bundle. Save this as <code>~/grist_bundle_edit.py</code> (copy button), run <code>python3 ~/grist_bundle_edit.py</code> and answer its prompts; the secret is read without echo, from your password manager:
-          <div class="codehead"><span>grist_bundle_edit.py</span><button class="copy" type="button" data-copy="bundleedit">Copy</button></div>
-          <pre id="bundleedit">#!/usr/bin/env python3
-"""Adds the Grist QA OAuth app to ~/privacyfence/org/org_config.json on the QA runner."""
-import getpass, json, os, sys, urllib.parse
-
-LOOPBACK = {"localhost", "127.0.0.1", "::1"}
-
-
-def address(prompt, default=""):
-    raw = input(prompt).strip().rstrip("/") or default
-    if not raw:
-        return ""
-    parts = urllib.parse.urlsplit(raw)
-    host = (parts.hostname or "").lower()
-    if not host or not (parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK)):
-        sys.exit(f"{raw!r} must be an https:// address (http:// only for localhost).")
-    return urllib.parse.urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, "", ""))
-
-
-path = os.path.expanduser("~/privacyfence/org/org_config.json")
-bundle = json.load(open(path))
-section = {
-    "server_url": address("Grist server [https://docs.getgrist.com]: ", "https://docs.getgrist.com"),
-    "client_id": input("Client id: ").strip(),
-    "client_secret": getpass.getpass("Client secret (not shown): ").strip(),
-}
-auth = address("Sign-in server from task 1 step 11 (blank if it is the server itself): ")
-if auth:
-    section["auth_server_url"] = auth
-bundle["grist"] = section
-with open(path, "w") as fh:
-    json.dump(bundle, fh, indent=2)
-os.chmod(path, 0o600)
-print("Added grist." + (" This bundle is SIGNED: re-sign it (next step)." if "signature" in bundle else ""))</pre>
-          <span class="see">Then delete it: <code>rm ~/grist_bundle_edit.py</code>.</span></span></label></li>
-        <li><label><input type="checkbox" id="mb2-3"><span class="step-body">Only if the script said the bundle is signed (editing it voided the signature, and the runner's daemon would refuse it): copy <code>~/privacyfence/org/org_config.json</code> to the machine that holds the signing key, run <code>python3 scripts/build_org_bundle.py --merge -o org_config.json --sign-key &lt;key&gt;</code> there from a checkout of <code>main</code>, copy the signed file back to <code>~/privacyfence/org/org_config.json</code> (mode 600), and delete the copy on the signing machine, since it contains every client secret in the bundle (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/configuration-reference.md#organization-config-bundle-org_configjson" target="_blank" rel="noopener">configuration-reference.md</a>).</span></label></li>
-        <li><label><input type="checkbox" id="mb2-4"><span class="step-body">Save the bootstrap script below as <code>~/grist_bootstrap.py</code> (copy button), then run <code>python3 ~/grist_bootstrap.py</code>.
-          <span class="see">It prints a Grist sign-in address. Open it in any browser, sign in as the QA account and approve the four permissions. The browser then fails to load a <code>localhost:53685</code> page; that is expected. Copy that page's full address from the address bar and paste it at the script's prompt.</span>
-          <div class="codehead"><span>grist_bootstrap.py</span><button class="copy" type="button" data-copy="bootstrap">Copy</button></div>
-          <pre id="bootstrap">#!/usr/bin/env python3
-"""One-time Grist sign-in for the PrivacyFence QA runner: writes ~/privacyfence/credentials/grist_token.json."""
-import base64, hashlib, json, os, secrets, sys, time, urllib.error, urllib.parse, urllib.request
-
-HOME = os.path.expanduser("~/privacyfence")
-REDIRECT = "http://localhost:53685/callback"
-SCOPES = "doc:read doc:write doc.schema:write offline_access"
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-opener = urllib.request.build_opener(NoRedirect)
-g = json.load(open(os.path.join(HOME, "org", "org_config.json")))["grist"]
-server = g["server_url"].rstrip("/")
-auth = (g.get("auth_server_url") or server).rstrip("/")
-disc = json.load(opener.open(auth + "/.well-known/oauth-authorization-server", timeout=30))
-
-verifier = secrets.token_urlsafe(64)
-challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-state = secrets.token_urlsafe(16)
-query = urllib.parse.urlencode({
-    "response_type": "code", "client_id": g["client_id"], "redirect_uri": REDIRECT, "state": state,
-    "scope": SCOPES, "prompt": "consent", "code_challenge": challenge, "code_challenge_method": "S256",
-})
-print("\nOpen this in a browser signed in as the QA Grist account:\n\n" + disc["authorization_endpoint"] + "?" + query + "\n")
-back = input("Paste the full localhost:53685 address the browser ended on: ").strip()
-params = urllib.parse.parse_qs(urllib.parse.urlsplit(back).query)
-if params.get("state", [""])[0] != state:
-    sys.exit("The state does not match. Run the script again and use the address it prints.")
-if "code" not in params:
-    sys.exit("No code in that address: " + json.dumps(params))
-
-form = {"grant_type": "authorization_code", "code": params["code"][0], "redirect_uri": REDIRECT, "code_verifier": verifier}
-headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
-methods = disc.get("token_endpoint_auth_methods_supported") or ["client_secret_basic"]
-if "client_secret_basic" in methods:
-    pair = urllib.parse.quote(g["client_id"], safe="") + ":" + urllib.parse.quote(g["client_secret"], safe="")
-    headers["Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode()
-else:
-    form.update(client_id=g["client_id"], client_secret=g["client_secret"])
-request = urllib.request.Request(disc["token_endpoint"], data=urllib.parse.urlencode(form).encode(), headers=headers)
-try:
-    token = json.load(opener.open(request, timeout=30))
-except urllib.error.HTTPError as exc:
-    sys.exit(f"Token exchange failed: HTTP {exc.code} {exc.read()[:300].decode(errors='replace')}")
-if not token.get("refresh_token"):
-    sys.exit("Grist returned no refresh_token. Check that the app allows offline_access.")
-
-record = {
-    "server_url": server.lower(), "access_token": token["access_token"],
-    "refresh_token": token["refresh_token"], "expires_at": time.time() + float(token.get("expires_in", 3600)),
-}
-path = os.path.join(HOME, "credentials", "grist_token.json")
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as fh:
-    json.dump(record, fh)
-os.chmod(path, 0o600)
-print("Wrote " + path + ". Token endpoint auth: " + ("basic" if "Authorization" in headers else "post") + ".")</pre>
-          <span class="see">Success prints <code>Wrote …/grist_token.json</code>. On any error, copy the error line (it never contains the secret) to the <code>/implement</code> session instead of starting it, so the plan can be corrected.</span></span></label></li>
-        <li><label><input type="checkbox" id="mb2-5"><span class="step-body">Delete the script: <code>rm ~/grist_bootstrap.py</code>. Check the token file: <code>ls -l ~/privacyfence/credentials/grist_token.json</code> shows <code>-rw-------</code>.</span></label></li>
-        <li><label><input type="checkbox" id="mb2-6"><span class="step-body">Append the seed ids to <code>~/privacyfence/tests/fixtures/qa_environment.yaml</code>, using the document id from task 1 step 7:
+        <li><label><input type="checkbox" id="mb2-2"><span class="step-body">Create the credential file with owner-only permissions before anything goes into it, and open it:
+          <pre>install -m 600 /dev/null ~/privacyfence/credentials/grist_token.json
+${EDITOR:-nano} ~/privacyfence/credentials/grist_token.json</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb2-3"><span class="step-body">Type this, pasting the key from your password manager in place of <code>KEY</code>, then save:
+          <pre>{"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "KEY"}</pre>
+          <span class="see">If you created a token file with an earlier version of this page, replace its whole content with this.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb2-4"><span class="step-body">Check it: <code>ls -l ~/privacyfence/credentials/grist_token.json</code> shows <code>-rw-------</code>, and <code>python3 -m json.tool ~/privacyfence/credentials/grist_token.json &gt;/dev/null &amp;&amp; echo ok</code> prints <code>ok</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb2-5"><span class="step-body">Append the seed ids to <code>~/privacyfence/tests/fixtures/qa_environment.yaml</code>, using the document id from task 1 step 7:
           <pre>grist:
   doc_id: "8CAN8gKdxY7zSw4dX9fJ2a"
   table_id: QaSeed
   lifecycle_table_id: QaLifecycle</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb2-6"><span class="step-body">If an earlier version of this page made you add a <code>grist</code> section to <code>~/privacyfence/org/org_config.json</code>, remove that section again. With an OAuth app in the bundle, the runner would refuse the API key.</span></label></li>
       </ol>
-      <p class="done-when"><strong>Done when:</strong> on the runner, <code>~/privacyfence/org/org_config.json</code> has a <code>grist</code> section, <code>~/privacyfence/credentials/grist_token.json</code> exists with mode 600 and the keys <code>server_url</code>, <code>access_token</code>, <code>refresh_token</code> and <code>expires_at</code>, and <code>qa_environment.yaml</code> has a <code>grist</code> section with <code>doc_id</code>, <code>table_id</code> and <code>lifecycle_table_id</code>. Tell the <code>/implement</code> session that both before-steps are done, and whether the script reported "basic" or "post".</p>
+      <p class="done-when"><strong>Done when:</strong> on the runner, <code>~/privacyfence/credentials/grist_token.json</code> exists with mode 600 and holds <code>auth</code> <code>"api_key"</code>, <code>server_url</code> and <code>api_key</code>; <code>qa_environment.yaml</code> has a <code>grist</code> section with <code>doc_id</code>, <code>table_id</code> and <code>lifecycle_table_id</code>; and the runner's bundle has no <code>grist</code> section. Then tell the <code>/implement</code> session that both before-steps are done.</p>
     </article>
   </section>
 
@@ -232,44 +135,47 @@ print("Wrote " + path + ". Token endpoint auth: " + ("basic" if "Authorization" 
 
     <article class="task" data-task="ma1">
       <div class="task-head">
-        <h3>3. Sign in to Grist from Settings and drive every Grist tool from an AI client</h3>
-        <div class="meta"><span class="pill">ma1-local-mode-check</span><span>about 30 min</span></div>
+        <h3>3. Connect with an API key, drive every Grist tool, then sign in with OAuth</h3>
+        <div class="meta"><span class="pill">ma1-local-mode-check</span><span>about 40 min</span></div>
       </div>
-      <p class="why">Proves the real OAuth sign-in, what the approval cards show and that real writes land. Unit tests and the recorder cannot show any of this.</p>
+      <p class="why">Proves the key form, what the approval cards show and that real writes land, and gives the OAuth sign-in its first run against real Grist. The live check uses only the API key.</p>
       <ol class="steps">
-        <li><label><input type="checkbox" id="ma1-1"><span class="step-body">On a machine without a packaged PrivacyFence install, check out <code>feature/grist-connector</code> and start it from source with <code>./scripts/dev_start.sh</code> (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/dev-vs-live-setup.md" target="_blank" rel="noopener">dev-vs-live-setup.md</a>).</span></label></li>
-        <li><label><input type="checkbox" id="ma1-2"><span class="step-body">Install a bundle that carries the Grist app (the QA bundle from task 2, or one built with <code>build_org_bundle.py --grist-client-id … --grist-client-secret …</code>) from <strong>Settings → General → Organization Configuration</strong>.</span></label></li>
-        <li><label><input type="checkbox" id="ma1-3"><span class="step-body">Open <strong>Settings → Connectors</strong> and click <strong>Authenticate…</strong> on the Grist row.<span class="see">A browser tab opens Grist's consent page listing the four permissions. Approve; the tab says you can close it, and Grist shows <strong>Connected</strong>.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-4"><span class="step-body">Connect an AI client to this daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/connect-claude-code.md" target="_blank" rel="noopener">Claude Code</a> is quickest) and ask it to list your Grist documents.<span class="see">Either it lists them with no card, or it says the server does not let PrivacyFence list documents and asks for an id. Note which.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-5"><span class="step-body">Give it the QA document id and ask for its tables, then the QaSeed records.<span class="see">Tables come back with no card. The records show a review card with Server, Document, Team, Table, Filter and Sort, and a table of the two rows. Release it.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-6"><span class="step-body">Ask it to add a record with Name <code>Manual check [QATEST]</code>.<span class="see">An approval card names the server, shows the values in a table and says "New records are added to that table." Approve, and see the row in Grist.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-7"><span class="step-body">Ask it to change that record's Note to <code>changed</code>.<span class="see">The card shows a Record / Column / Current / New table. Approve, and check Grist.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-8"><span class="step-body">Ask it to create a table <code>PfQaScratch</code> with a Text column <code>Title</code>, then to add an Int column <code>Count</code>. Approve both and check Grist. Deny one more request and see the client report the denial.</span></label></li>
-        <li><label><input type="checkbox" id="ma1-9"><span class="step-body">In <strong>Settings → Auto-accept</strong>, add a <strong>Grist — document</strong> rule for the QA document id with the verb <strong>read</strong>. Read QaSeed again.<span class="see">No card this time. A read of the contrast document still shows a card, and no Grist card ever offered "Always allow".</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-10"><span class="step-body">In Grist, open <strong>Account settings → Developer → Authorized apps</strong> and revoke the app. Ask for the records again.<span class="see">The call fails with "Your Grist sign-in has expired or was revoked…". Authenticate… again restores it.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma1-11"><span class="step-body">Delete the <code>Manual check [QATEST]</code> row and the <code>PfQaScratch</code> table by hand in Grist. The connector cannot delete anything.</span></label></li>
+        <li><label><input type="checkbox" id="ma1-1"><span class="step-body">On a machine without a packaged PrivacyFence install and without a Grist section in its bundle, check out <code>feature/grist-connector</code> and start it from source with <code>./scripts/dev_start.sh</code> (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/dev-vs-live-setup.md" target="_blank" rel="noopener">dev-vs-live-setup.md</a>).</span></label></li>
+        <li><label><input type="checkbox" id="ma1-2"><span class="step-body">Open <strong>Settings → Connectors</strong> and click <strong>Authenticate…</strong> on the Grist row.<span class="see">A dialog asks for the server address (prefilled <code>https://docs.getgrist.com</code>) and an API key.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-3"><span class="step-body">Enter a wrong key first (any text) and click <strong>Connect</strong>.<span class="see">The dialog shows "Grist refused the sign-in (HTTP 401)…" and stays open.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-4"><span class="step-body">Paste the QA key and click <strong>Connect</strong>.<span class="see">The dialog closes and Grist shows <strong>Connected</strong>.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-5"><span class="step-body">Connect an AI client to this daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/connect-claude-code.md" target="_blank" rel="noopener">Claude Code</a> is quickest) and ask it to list your Grist documents, then the tables of the QA document.<span class="see">Both answer without an approval card.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-6"><span class="step-body">Ask it to read the QaSeed records.<span class="see">A review card shows Server, Document, Team, Table, Filter and Sort, and a table of the two rows. Release it.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-7"><span class="step-body">Ask it to add a record with Name <code>Manual check [QATEST]</code>.<span class="see">An approval card names the server, shows the values in a table and says "New records are added to that table." Approve, and see the row in Grist.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-8"><span class="step-body">Ask it to change that record's Note to <code>changed</code>.<span class="see">The card shows a Record / Column / Current / New table. Approve, and check Grist.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-9"><span class="step-body">Ask it to create a table <code>PfQaScratch</code> with a Text column <code>Title</code>, then to add an Int column <code>Count</code>. Approve both and check Grist. Deny one more request and see the client report the denial.</span></label></li>
+        <li><label><input type="checkbox" id="ma1-10"><span class="step-body">In <strong>Settings → Auto-accept</strong>, add a <strong>Grist — document</strong> rule for the QA document id with the verb <strong>read</strong>. Read QaSeed again.<span class="see">No card this time. A read of the contrast document still shows a card, and no Grist card ever offered "Always allow".</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-11"><span class="step-body">Now the OAuth path, which needs a Grist edition with OAuth apps. Under <strong>Account settings → Developer → OAuth apps</strong>, use your QA app or register one: redirect URI <code>http://localhost:53685/callback</code>, permissions <code>doc:read</code>, <code>doc:write</code>, <code>doc.schema:write</code> and <code>offline_access</code> only.</span></label></li>
+        <li><label><input type="checkbox" id="ma1-12"><span class="step-body">Build a bundle with the app (<code>python3 scripts/build_org_bundle.py -o org_config.json --grist-server-url https://docs.getgrist.com --grist-client-id &lt;id&gt; --grist-client-secret &lt;secret&gt;</code>, typed only on this machine) and install it from <strong>Settings → General → Organization Configuration</strong>.<span class="see">The Grist row now needs a fresh sign-in: the saved API key is refused while the bundle carries an app.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-13"><span class="step-body">Click <strong>Authenticate…</strong> on the Grist row.<span class="see">A browser tab opens Grist's consent page listing the four permissions. Approve; the tab says you can close it, and Grist shows <strong>Connected</strong>.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-14"><span class="step-body">Ask the client to list your documents, then read QaSeed.<span class="see">Listing either works or says the server does not let PrivacyFence list documents (note which); the read shows its review card.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-15"><span class="step-body">In Grist, open <strong>Authorized apps</strong> and revoke the app. Read QaSeed again.<span class="see">The call fails with "Your Grist sign-in has expired or was revoked…". Authenticate… again restores it.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-16"><span class="step-body">Delete the <code>Manual check [QATEST]</code> row and the <code>PfQaScratch</code> table by hand in Grist. The connector cannot delete anything.</span></label></li>
       </ol>
-      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste one line, for example <code>ma1 local mode: PASS (sign-in, listing allowed/refused, review card, 4 write cards, rule, revoke)</code>, or <code>FAIL at step N: what you saw</code>.</p>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste one line, for example <code>ma1 local mode: PASS (API key: wrong-key error, review card, 4 write cards, rule; OAuth: sign-in, listing allowed/refused, revoke)</code>, or <code>FAIL at step N: what you saw</code>.</p>
     </article>
 
     <article class="task" data-task="ma2">
       <div class="task-head">
-        <h3>4. Sign in to Grist on /connect in an org-mode test deployment</h3>
-        <div class="meta"><span class="pill">ma2-org-mode-check</span><span>about 20 min · only if you run one</span></div>
+        <h3>4. Connect Grist on /connect in an org-mode test deployment</h3>
+        <div class="meta"><span class="pill">ma2-org-mode-check</span><span>about 25 min · only if you run one</span></div>
       </div>
-      <p class="why">Proves the bundle's <code>grist</code> section, the org redirect and the per-person sign-in. No CI job runs an org deployment against Grist.</p>
+      <p class="why">Proves the bundle's <code>grist</code> section, the per-person key form, the org redirect and the OAuth sign-in. No CI job runs an org deployment against Grist.</p>
       <ol class="steps">
-        <li><label><input type="checkbox" id="ma2-1"><span class="step-body">In the Grist app's settings, add the redirect URI <code>https://&lt;server&gt;/oauth/callback/grist</code> on its own line, where <code>&lt;server&gt;</code> is your deployment's <code>--server-issuer-url</code>.</span></label></li>
-        <li><label><input type="checkbox" id="ma2-2"><span class="step-body">Add Grist to the test bundle and sign it (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/configuration-reference.md#organization-config-bundle-org_configjson" target="_blank" rel="noopener">configuration-reference.md</a>):
+        <li><label><input type="checkbox" id="ma2-1"><span class="step-body">Add Grist with only a server to the test bundle and sign it (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/configuration-reference.md#organization-config-bundle-org_configjson" target="_blank" rel="noopener">configuration-reference.md</a>):
           <pre>python3 scripts/build_org_bundle.py --merge -o org_config.json \
-  --grist-client-id &lt;id&gt; --grist-client-secret &lt;secret&gt; \
-  [--grist-auth-server-url https://login.getgrist.com] --sign-key &lt;your signing key&gt;</pre>
-          <span class="see">Use <code>--grist-auth-server-url</code> only if task 1 step 11 found discovery on another address. Type the secret only on the machine that builds the bundle.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma2-3"><span class="step-body">Install it on the test server and restart the daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md" target="_blank" rel="noopener">org-mode-setup-guide.md</a>).</span></label></li>
-        <li><label><input type="checkbox" id="ma2-4"><span class="step-body">Sign in as a test person, open <code>/connect</code> and click <strong>Connect</strong> on the Grist row.<span class="see">Grist's consent page, then back to <code>/connect</code> with Grist <strong>Connected</strong>.</span></span></label></li>
-        <li><label><input type="checkbox" id="ma2-5"><span class="step-body">From an AI client connected to that deployment as the same person, read QaSeed and approve the card.</span></label></li>
+  --grist-server-url https://docs.getgrist.com --sign-key &lt;your signing key&gt;</pre></span></label></li>
+        <li><label><input type="checkbox" id="ma2-2"><span class="step-body">Install it on the test server and restart the daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md" target="_blank" rel="noopener">org-mode-setup-guide.md</a>). Sign in as a test person and open <code>/connect</code>.<span class="see">The Grist box names <code>https://docs.getgrist.com</code> and asks only for an API key.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-3"><span class="step-body">Paste the QA key, click <strong>Connect</strong>, then read QaSeed from an AI client connected as that person and approve the card.<span class="see">The box shows "Connected to https://docs.getgrist.com".</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-4"><span class="step-body">Add the redirect URI <code>https://&lt;server&gt;/oauth/callback/grist</code> to the Grist OAuth app (its own line), where <code>&lt;server&gt;</code> is your deployment's <code>--server-issuer-url</code>. Rebuild the bundle with <code>--grist-client-id</code> and <code>--grist-client-secret</code> added, sign, install, restart.</span></label></li>
+        <li><label><input type="checkbox" id="ma2-5"><span class="step-body">On <code>/connect</code>, click <strong>Connect</strong> on the Grist row.<span class="see">Grist's consent page, then back to <code>/connect</code> with Grist <strong>Connected</strong>. Read QaSeed again from the client.</span></span></label></li>
       </ol>
-      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste <code>ma2 org mode: PASS</code>, <code>FAIL at step N: what you saw</code>, or <code>ma2: skipped, no org-mode test deployment</code>.</p>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste <code>ma2 org mode: PASS (key and OAuth)</code>, <code>FAIL at step N: what you saw</code>, or <code>ma2: skipped, no org-mode test deployment</code>.</p>
     </article>
   </section>
 </div>
