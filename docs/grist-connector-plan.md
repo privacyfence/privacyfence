@@ -93,8 +93,7 @@ only in Grist's paid editions); any Grist server; keep the schema tools, knowing
   `build_site._without_current_connector` raises without it), `tests/unit/test_website_connectors_page.py`
   (card counts, `"120 tools"` / `"Eleven connectors"`, `"120 connector tools"` on how-it-works,
   `len(REFERENCE) == 11`), `tests/unit/test_website_docs_allowlist.py` (every `docs/*.md` is
-  listed in `docs/README.md` or `CONTRIBUTOR_DOCS`), the plugin `RESERVED_PLUGIN_NAMES` in four
-  synced copies, `tests/unit/test_connector_tool_annotations.py` (Grist adds no destructive tool),
+  listed in `docs/README.md` or `CONTRIBUTOR_DOCS`), `tests/unit/test_connector_tool_annotations.py` (Grist adds no destructive tool),
   and `tests/unit/test_systemic_gate_invariants.py`.
 - Next free ADR number: **0142**.
 
@@ -660,8 +659,7 @@ texts from §3.2.1 and §3.2.2 with what to do).
   `atomic_write_json`, 0600) and never in `settings.yaml`, the settings snapshot, a log line or the
   audit log. Rejected: OAuth only (Grist's OAuth apps are in its paid editions, so free and
   community self-hosted users could not connect); API key only (full account access with no scopes,
-  where the organization could have scoped OAuth). Consequence: `grist` becomes a reserved plugin
-  name, so a plugin already called `grist` is refused.
+  where the organization could have scoped OAuth).
 - **0143** — Which Grist server: in local mode without a Grist bundle section, the person's choice
   (API key); a bundle `server_url` pins it for both kinds; org mode offers Grist only with one. A
   credential is used only with the server it was entered or issued for (a mismatch asks to connect
@@ -765,32 +763,6 @@ final_checks:
   - After python3 scripts/generate_tools_reference.py and python3 scripts/generate_always_allow_reference.py, git diff --exit-code docs/tools-reference.md docs/always-allow-rules-reference.md exits 0
   - The PR description links the qa-record-fixture.yml run (p12-qa-recorder) and the connector-live-check.yml run (p13-docs-adrs-retire), which is the definition-of-done QA row
 phases:
-  - id: p0-reserve-name
-    title: Reserve the plugin name grist in the daemon, the SDK, the protocol schema and its doc
-    depends_on: []
-    complexity: S
-    touches:
-      - src/privacyfence/plugins/constants.py
-      - plugin-sdk/src/privacyfence_plugin_sdk/plugin.py
-      - docs/plugin-protocol/protocol.schema.json
-      - docs/plugin-protocol.md
-    brief: |
-      Read first: the must-read docs and plan §3.0. A new connector's name is reserved so no plugin can
-      take it; the list exists in four copies that tests keep equal.
-      1. src/privacyfence/plugins/constants.py RESERVED_PLUGIN_NAMES (l.104-109): add "grist" after "telegram".
-      2. plugin-sdk/src/privacyfence_plugin_sdk/plugin.py _RESERVED_PLUGIN_NAMES (l.73-78): the same.
-      3. docs/plugin-protocol/protocol.schema.json: add "grist" to $defs.Manifest.properties.name.not.enum
-         (after "telegram", near l.554). Do not change "x-protocol-version".
-      4. docs/plugin-protocol.md (l.146-148): add `grist` to the list of connector names after `telegram`.
-      5. grep -rn '"telegram"' plugin-sdk docs/plugin-protocol* src/privacyfence/plugins and add "grist" to any
-         other copy of this list the grep finds; name it in your report.
-      6. ruff check . and python3 -m pytest tests/unit -q.
-      Stop condition: if a test demands a protocol or SDK version bump for this change, stop with status=blocked.
-    acceptance:
-      - python3 -m pytest tests/unit/plugin_sdk/test_plugin.py tests/unit/plugins/test_protocol.py -q passes
-      - 'grep -n ''"grist"'' src/privacyfence/plugins/constants.py plugin-sdk/src/privacyfence_plugin_sdk/plugin.py docs/plugin-protocol/protocol.schema.json matches in all three files'
-      - python3 -m pytest tests/unit -q passes
-      - ruff check . passes
   - id: p1-auth
     title: Grist auth module (bundle settings, credential file for OAuth and API keys, OAuth discovery, sign-in and refresh) and its tests
     depends_on: []
@@ -887,7 +859,7 @@ phases:
       - ruff check . passes
   - id: p3-connector-listing
     title: GristConnector with the two auto listing tools, and every per-connector table, page and guide a new connector module requires
-    depends_on: [p0-reserve-name, p2-client]
+    depends_on: [p2-client]
     complexity: M
     touches:
       - src/privacyfence/connectors/grist.py
@@ -919,7 +891,7 @@ phases:
          other five tools (later phases add them); do not add them now.
       2. src/privacyfence/auto_accept.py TOOL_TO_GATE: "grist_list_documents": "auto", "grist_list_tables": "auto"
          (with a "# Grist" comment line like the other connectors' groups).
-      3. Bookkeeping ("grist" is already a reserved plugin name, from p0-reserve-name):
+      3. Bookkeeping:
          "privacyfence.connectors.grist" to scripts/pyinstaller_common.py's list; "grist": "Grist" to both
          CONNECTOR_TITLES and CONNECTOR_SHORT in scripts/generate_tools_reference.py (after "confluence");
          GristConnector to CONNECTOR_CLASSES (and its import) in tests/unit/connectors/test_readme_manifest_alignment.py.
