@@ -360,7 +360,7 @@ select = ["E4", "E7", "E9", "F", "B"]
 
 [tool.mypy]
 python_version = "3.11"
-# The whole tree is checked at these settings and blocks the merge (ADR 0147). The
+# The whole tree is checked at these settings and blocks the merge (ADR 0149). The
 # `[[tool.mypy.overrides]]` blocks below add strict flags to promoted modules, which
 # `scripts/mypy_strict_modules.py` checks, also blocking, in the next CI step. See
 # url_safety.py's override just below for why the flags are spelled out.

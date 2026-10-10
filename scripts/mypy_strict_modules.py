@@ -8,7 +8,7 @@ promoted to blocking". The whole-tree mypy step in `.github/workflows/tests.yml`
 would change which errors mypy *prints* and nothing else.
 
 This script is what makes promotion blocking. CI runs it as an ordinary step beside the
-whole-tree run (also blocking, ADR 0147), so the promoted modules are held to the strict flags on top
+whole-tree run (also blocking, ADR 0149), so the promoted modules are held to the strict flags on top
 of the defaults the whole tree must meet.
 
 pyproject.toml stays the single source of truth for *which* modules those are: the list is read

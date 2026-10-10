@@ -403,7 +403,7 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
-      # Blocking: the whole tree at [tool.mypy]'s default settings (ADR 0147). The strict
+      # Blocking: the whole tree at [tool.mypy]'s default settings (ADR 0149). The strict
       # flags for promoted modules are the next step's job.
       - name: Type-check (mypy, whole tree, blocking)
         run: mypy src/privacyfence
