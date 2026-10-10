@@ -19,7 +19,9 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import apps_script_client, paths, slack_client
+import json
+
+from privacyfence import apps_script_client, grist_auth, paths, slack_client
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_connect as rc
@@ -166,8 +168,8 @@ class TestConnectPageLook:
 
     def test_rows_are_cards_and_nothing_is_styled_inline(self):
         html = self._page()
-        # Ten OAuth services, and Telegram, which this install has no app credentials for.
-        assert html.count('<li class="service card cluster">') == 11
+        # Ten OAuth services, Telegram (no app credentials on this install) and Grist.
+        assert html.count('<li class="service card cluster">') == 12
         body = html.split('<div class="pf-connect stack">', 1)[1]
         assert "style=" not in body
 
@@ -519,3 +521,145 @@ class TestTelegramFlow:
         )
 
         assert called == []
+
+
+# ---------------------------------------------------------------------------- #
+# Grist
+# ---------------------------------------------------------------------------- #
+
+_GRIST_SERVER = "https://grist.example.com"
+_GRIST_OAUTH = {"server_url": _GRIST_SERVER, "client_id": "gid", "client_secret": "gsecret"}
+_GRIST_ENDPOINTS = grist_auth.GristOAuthEndpoints(
+    authorization_endpoint="https://login.example.com/oidc/auth",
+    token_endpoint="https://login.example.com/oidc/token",
+    client_secret_basic=True,
+)
+
+
+def _grist_page(grist_section, *, token_record=None):
+    org_config = {} if grist_section is None else {"grist": grist_section}
+    app, sessions, _registry = _app(org_config=org_config)
+    session_id, principal = _signed_in(sessions)
+    if token_record is not None:
+        token_file = paths.user_dir(principal) / "credentials" / "grist_token.json"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(json.dumps(token_record))
+    r = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id})
+    assert r.status_code == 200
+    return r.text
+
+
+def _grist_box(html):
+    return html.split("Grist</span>", 1)[1].split("</li>", 1)[0]
+
+
+class TestGristBox:
+    def test_without_a_section_it_is_not_set_up(self):
+        box = _grist_box(_grist_page(None))
+        assert "Not set up by your organization" in box
+        assert "/oauth/start/grist" not in box
+
+    def test_a_server_only_section_names_the_server_and_has_no_link_yet(self):
+        box = _grist_box(_grist_page({"server_url": _GRIST_SERVER}))
+        assert "Your organization uses https://grist.example.com." in box
+        assert "/oauth/start/grist" not in box
+        assert "Not set up by your organization" not in box
+
+    def test_an_oauth_section_offers_connect(self):
+        box = _grist_box(_grist_page(_GRIST_OAUTH))
+        assert 'href="/oauth/start/grist"' in box
+        assert ">Connect</a>" in box
+
+    def test_a_valid_oauth_credential_shows_connected_and_reconnect(self):
+        record = {
+            "auth": "oauth", "server_url": _GRIST_SERVER, "access_token": "a", "refresh_token": "r", "expires_at": 1.0,
+        }
+        box = _grist_box(_grist_page(_GRIST_OAUTH, token_record=record))
+        assert "Connected" in box
+        assert ">Reconnect</a>" in box
+
+    def test_an_api_key_left_over_from_before_oauth_is_not_connected(self):
+        record = {"auth": "api_key", "server_url": _GRIST_SERVER, "api_key": "k"}
+        box = _grist_box(_grist_page(_GRIST_OAUTH, token_record=record))
+        assert "Not connected" in box
+        assert ">Connect</a>" in box
+
+    def test_a_credential_for_another_server_is_not_connected(self):
+        record = {
+            "auth": "oauth", "server_url": "https://other.example.com",
+            "access_token": "a", "refresh_token": "r", "expires_at": 1.0,
+        }
+        box = _grist_box(_grist_page(_GRIST_OAUTH, token_record=record))
+        assert "Not connected" in box
+
+
+class TestGristOAuth:
+    def _start(self, monkeypatch, org_config):
+        app, sessions, registry = _app(org_config=org_config)
+        session_id, principal = _signed_in(sessions)
+        monkeypatch.setattr(grist_auth, "discover", lambda auth_url, server_url: _GRIST_ENDPOINTS)
+        client = _client(app)
+        r = client.get("/oauth/start/grist", cookies={org_session.SESSION_COOKIE: session_id})
+        return client, r, registry, principal
+
+    def test_start_redirects_to_the_discovered_endpoint_with_pkce_and_scopes(self, monkeypatch):
+        _client_, r, _registry, _principal = self._start(monkeypatch, {"grist": _GRIST_OAUTH})
+        assert r.status_code == 302
+        location = r.headers["location"]
+        assert location.startswith("https://login.example.com/oidc/auth?")
+        qs = dict(up.parse_qsl(up.urlparse(location).query))
+        assert qs["client_id"] == "gid"
+        assert qs["redirect_uri"] == f"{ISSUER}/oauth/callback/grist"
+        assert qs["prompt"] == "consent"
+        assert qs["code_challenge_method"] == "S256" and qs["code_challenge"]
+        assert qs["scope"] == grist_auth.GRIST_SCOPES
+
+    def test_start_passes_the_bundles_servers_to_discovery(self, monkeypatch):
+        seen = []
+        app, sessions, _registry = _app(org_config={"grist": {**_GRIST_OAUTH, "auth_server_url": "https://auth.example.com"}})
+        session_id, _principal = _signed_in(sessions)
+        monkeypatch.setattr(
+            grist_auth, "discover", lambda auth_url, server_url: seen.append((auth_url, server_url)) or _GRIST_ENDPOINTS,
+        )
+        _client(app).get("/oauth/start/grist", cookies={org_session.SESSION_COOKIE: session_id})
+        assert seen == [("https://auth.example.com", _GRIST_SERVER)]
+
+    def test_start_without_an_app_is_not_configured(self, monkeypatch):
+        _client_, r, _registry, _principal = self._start(monkeypatch, {"grist": {"server_url": _GRIST_SERVER}})
+        assert r.status_code == 302
+        assert r.headers["location"] == "/connect?error=grist"
+
+    def test_start_with_unusable_sign_in_settings_redirects_back_with_error(self, monkeypatch):
+        app, sessions, _registry = _app(org_config={"grist": _GRIST_OAUTH})
+        session_id, _principal = _signed_in(sessions)
+
+        def boom(auth_url, server_url):
+            raise grist_auth.GristClientError("not usable")
+
+        monkeypatch.setattr(grist_auth, "discover", boom)
+        r = _client(app).get("/oauth/start/grist", cookies={org_session.SESSION_COOKIE: session_id})
+        assert r.headers["location"] == "/connect?error=grist"
+
+    def test_callback_exchanges_the_code_and_saves_the_credential(self, monkeypatch):
+        client, start, registry, principal = self._start(monkeypatch, {"grist": _GRIST_OAUTH})
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+        calls = []
+
+        def fake_exchange(config, endpoints, code, redirect_uri, code_verifier):
+            calls.append((config.client_id, code, redirect_uri, bool(code_verifier)))
+            return {
+                "auth": "oauth", "server_url": config.server_url,
+                "access_token": "at", "refresh_token": "rt", "expires_at": 9.0,
+            }
+
+        monkeypatch.setattr(grist_auth, "exchange_code", fake_exchange)
+        evicted = []
+        monkeypatch.setattr(registry, "evict", lambda pid: evicted.append(pid))
+
+        r = client.get(f"/oauth/callback/grist?code=c1&state={state}")
+
+        assert r.headers["location"] == "/connect?connected=grist"
+        assert calls == [("gid", "c1", f"{ISSUER}/oauth/callback/grist", True)]
+        saved = json.loads((paths.user_dir(principal) / "credentials" / "grist_token.json").read_text())
+        assert saved["auth"] == "oauth" and saved["refresh_token"] == "rt"
+        assert evicted == [principal.id]
