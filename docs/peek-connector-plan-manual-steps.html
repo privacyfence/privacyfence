@@ -1,0 +1,283 @@
+<title>Peek Connector Manual Steps</title>
+<style>
+/* Layout: one reading column; two parts (before / after implementation), each a stack of numbered task cards with a checklist. */
+:root {
+  --bg: #f5f6f9;
+  --surface: #ffffff;
+  --ink: #161c2b;
+  --ink-soft: #4b5468;
+  --line: #d9dde7;
+  --accent: #3a56c5;
+  --accent-soft: #e6eafa;
+  --warn-bg: #fff4e0;
+  --warn-ink: #7a4b00;
+  --code-bg: #eef0f5;
+  --font-body: "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11141c; --surface: #191e2a; --ink: #e5e8f0; --ink-soft: #a6adbf; --line: #2c3344;
+    --accent: #8fa5f5; --accent-soft: #232c4a; --warn-bg: #3a2b10; --warn-ink: #f3c977; --code-bg: #20273a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11141c; --surface: #191e2a; --ink: #e5e8f0; --ink-soft: #a6adbf; --line: #2c3344;
+  --accent: #8fa5f5; --accent-soft: #232c4a; --warn-bg: #3a2b10; --warn-ink: #f3c977; --code-bg: #20273a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55; padding-inline: 16px; padding-block: 32px 64px; }
+.wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+h1 { font-size: 1.75rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-size: 1.2rem; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.05rem; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--ink-soft); max-width: 65ch; }
+.eyebrow { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 600; }
+.intro { display: flex; flex-direction: column; gap: 8px; }
+.part { display: flex; flex-direction: column; gap: 16px; }
+.part-head { display: flex; flex-direction: column; gap: 4px; border-bottom: 2px solid var(--accent); padding-bottom: 8px; }
+.task { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.task-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: .8rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pill { background: var(--accent-soft); color: var(--ink); border-radius: 999px; padding: 2px 10px; }
+.why { color: var(--ink-soft); font-size: .92rem; }
+ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+ol.steps > li { counter-increment: step; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+ol.steps > li > label { display: contents; cursor: pointer; }
+ol.steps input[type="checkbox"] { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.step-body { min-width: 0; }
+.step-body::before { content: counter(step) ". "; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+li.done .step-body { color: var(--ink-soft); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { display: block; color: var(--ink-soft); font-size: .88rem; margin-top: 2px; }
+code { font-family: var(--font-mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.45; background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.done-when, .report { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); border-radius: 0 6px 6px 0; font-size: .92rem; }
+.secret { background: var(--warn-bg); color: var(--warn-ink); border-radius: 6px; padding: 10px 12px; font-size: .9rem; }
+.progress { font-size: .85rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+button.reset { font: inherit; font-size: .85rem; background: none; border: 1px solid var(--line); color: var(--ink-soft); border-radius: 6px; padding: 4px 10px; cursor: pointer; align-self: flex-start; }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <p class="eyebrow">PrivacyFence · plan/peek-connector</p>
+    <h1>Peek connector: the steps only you can do</h1>
+    <p class="lede">Do the three <strong>Before implementation</strong> tasks before you run <code>/implement</code>; the QA-recording phase needs all of them. Do the <strong>After implementation</strong> checks once the feature PR is up, and tick them in the PR. Your ticks here are saved in this browser only.</p>
+    <p class="progress" id="progress"></p>
+    <button class="reset" type="button" id="reset">Clear all ticks</button>
+  </header>
+
+  <section class="part" aria-labelledby="before">
+    <div class="part-head">
+      <p class="eyebrow">Part 1</p>
+      <h2 id="before">Before implementation</h2>
+    </div>
+
+    <article class="task" data-task="mb1">
+      <div class="task-head">
+        <h3>1. Add the account comment endpoint to your Peek fork</h3>
+        <div class="meta"><span class="pill">mb1-fork-comment-endpoint</span><span>about 45 min</span></div>
+      </div>
+      <p class="why">Peek's comment API takes no token today: it posts as whatever name the browser sends, and on a public page as "anonymous". PrivacyFence posts only through a separate route that takes the token and signs the comment with your account name. The browser route stays as it is. The exact contract is in <a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-connector/docs/peek-connector-plan.md#31-the-fork-change-privacyfence-needs-done-by-the-maintainer-mb1" target="_blank" rel="noopener">plan §3.1</a>.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="mb1-1"><span class="step-body">In a checkout of <a href="https://github.com/andras-tkcs/peek" target="_blank" rel="noopener">andras-tkcs/peek</a>, create a branch and run <code>mise install</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-2"><span class="step-body">In <a href="https://github.com/andras-tkcs/peek/blob/main/internal/server/routes.go" target="_blank" rel="noopener">internal/server/routes.go</a>, add this line to the token-gated block, after the <code>/stats</code> route:
+          <pre>mux.HandleFunc("POST /api/uploads/{slug}/account-comments", s.authToken(s.handleAddAccountComment))</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb1-3"><span class="step-body">In <a href="https://github.com/andras-tkcs/peek/blob/main/internal/server/comments.go" target="_blank" rel="noopener">internal/server/comments.go</a>, add the handler. This sketch reuses <code>handleAddComment</code>'s validation; check names and types against your fork before you commit it:
+          <pre>func (s *Server) handleAddAccountComment(w http.ResponseWriter, r *http.Request) {
+	owner, ok := requireAPIToken(w, r)
+	if !ok {
+		return
+	}
+	if !s.commentLimiter.allow(s.clientIP(r)) {
+		jsonError(w, http.StatusTooManyRequests, "too many comments, slow down")
+		return
+	}
+	slug := r.PathValue("slug")
+	u, err := s.store.GetUpload(r.Context(), slug)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if u.OwnerAccountID != owner.AccountID &amp;&amp; !owner.IsAdmin {
+		jsonError(w, http.StatusForbidden, "not owner")
+		return
+	}
+	var in commentIn
+	if err := decodeJSON(w, r, &amp;in, defaultJSONBodyLimit); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	in.Selector = strings.TrimSpace(in.Selector)
+	in.Body = strings.TrimSpace(in.Body)
+	in.Text = strings.TrimSpace(in.Text)
+	anchorKind, ok := normalizeCommentAnchorKind(in.Selector, in.Text, strings.TrimSpace(in.AnchorKind))
+	if !ok {
+		jsonError(w, http.StatusBadRequest, "invalid anchor kind")
+		return
+	}
+	if in.Body == "" {
+		jsonError(w, http.StatusBadRequest, "comment body required")
+		return
+	}
+	if len(in.Body) &gt; 4000 || len(in.Selector) &gt; 500 || len(in.Text) &gt; 200 {
+		jsonError(w, http.StatusRequestEntityTooLarge, "field too long")
+		return
+	}
+	h := sha256.Sum256([]byte(s.secret + "|account:" + strconv.FormatInt(owner.AccountID, 10)))
+	vidHash := hex.EncodeToString(h[:])[:16]
+	if err := s.store.AddComment(r.Context(), u.ID, in.Selector, in.Text, anchorKind, owner.Name, vidHash, in.Body); err != nil {
+		jsonError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	list, err := s.store.ListComments(r.Context(), u.ID)
+	if err != nil || len(list) == 0 {
+		jsonError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	c := list[0]
+	for _, x := range list {
+		if x.ID &gt; c.ID {
+			c = x
+		}
+	}
+	s.auditRequest(r, owner.Name, "comment.create", "slug="+slug)
+	jsonOK(w, commentOut{
+		ID: c.ID, Selector: c.ElementSelector, Text: c.ElementText,
+		AnchorKind: commentAnchorKind(c.ElementSelector, c.ElementText, c.AnchorKind),
+		Author: c.AuthorName, Body: c.Body, CreatedAt: c.CreatedAt.Unix(),
+	})
+}</pre>
+          <span class="see">Any <code>name</code> in the request body is ignored: the author is always the token's account. If <code>AccountID</code> is not an <code>int64</code> in your fork, adjust the hash line.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-4"><span class="step-body">Add Go tests next to <code>comments_test.go</code>: 401 without a token, 403 for another account's page, 200 with the account name as author (a <code>name</code> in the body is ignored), 400 for an empty body, and the browser route still answering as before.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-5"><span class="step-body">Run <code>mise run check-full</code>; it must pass. Merge to your fork's main and deploy that build wherever you run Peek (the QA server in task 2 needs it too).</span></label></li>
+        <li><label><input type="checkbox" id="mb1-6"><span class="step-body">Try it against a page you own, with your token in an environment variable (never in a file you share):
+          <pre>curl -sS -X POST -H "Authorization: Bearer $PEEK_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"body":"[QATEST] probe"}' https://&lt;your peek&gt;/api/uploads/&lt;slug&gt;/account-comments
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
+  -d '{"body":"x"}' https://&lt;your peek&gt;/api/uploads/&lt;slug&gt;/account-comments</pre>
+          <span class="see">The first prints JSON with <code>"author"</code> set to your account name; the second prints <code>401</code>. Delete the probe page or leave the comment; it is harmless.</span></span></label></li>
+      </ol>
+      <p class="done-when"><strong>Done when:</strong> a POST to <code>/api/uploads/&lt;a page you own&gt;/account-comments</code> with your token and <code>{"body":"[QATEST] probe"}</code> answers 200 with your account name as <code>author</code>, and the same request without the <code>Authorization</code> header answers 401.</p>
+    </article>
+
+    <article class="task" data-task="mb2">
+      <div class="task-head">
+        <h3>2. A QA Peek server, a QA account and a seed page</h3>
+        <div class="meta"><span class="pill">mb2-peek-qa-server</span><span>about 20 min</span></div>
+      </div>
+      <p class="why">Phase p9 records live fixtures from this page, and the weekly live check publishes, comments on and deletes a scratch page with this account. Use a server and an account that hold nothing real.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="mb2-1"><span class="step-body">Run the fork build from task 1 somewhere the self-hosted runner (label <code>privacyfence-test</code>) can reach over <code>https://</code>, for example with the fork's <code>docker-compose.yml</code> and <code>PEEK_BASE_URL=https://peek-qa.&lt;your domain&gt;</code>. Its data volume holds the QA data only.<span class="see">On first start the server log prints a one-time setup URL.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb2-2"><span class="step-body">Open the setup URL and create the admin. Then, from the dashboard, invite a second, non-admin account for QA (a dedicated QA e-mail address) and accept the invite.<span class="see">A non-admin QA account sees only its own pages, which keeps the recorded fixture small.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb2-3"><span class="step-body">Signed in as the QA account, upload a page from the dashboard: save this as <code>PrivacyFence QA [QATEST].html</code> and upload it as <strong>private</strong>:
+          <pre>&lt;!doctype html&gt;&lt;title&gt;PrivacyFence QA [QATEST]&lt;/title&gt;
+&lt;h1&gt;PrivacyFence QA page [QATEST]&lt;/h1&gt;&lt;p&gt;Synthetic page. No real information.&lt;/p&gt;</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb2-4"><span class="step-body">Open the page and leave one page-level comment: <code>[QATEST] seed comment</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb2-5"><span class="step-body">Note the page's slug: the last part of its link, <code>…/p/&lt;slug&gt;</code>. It is not a secret.</span></label></li>
+      </ol>
+      <p class="done-when"><strong>Done when:</strong> the QA server is reachable over https from the runner, the QA account owns the private page <code>PrivacyFence QA [QATEST].html</code> with one comment containing <code>[QATEST]</code>, and you have its slug.</p>
+    </article>
+
+    <article class="task" data-task="mb3">
+      <div class="task-head">
+        <h3>3. Put the QA token and the seed slug on the QA runner</h3>
+        <div class="meta"><span class="pill">mb3-runner-qa-state</span><span>about 10 min</span></div>
+      </div>
+      <p class="why">Phase p9 dispatches <code>qa-record-fixture.yml</code>, which copies <code>~/privacyfence/</code> from the runner into its checkout (<a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-connector/docs/connector-qa.md#persistent-qa-state" target="_blank" rel="noopener">connector-qa.md, Persistent QA state</a>). PrivacyFence's own <code>--peek-login</code> does not exist until this plan lands, so the token comes from Peek's CLI.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="mb3-1"><span class="step-body">On any machine, install the Peek CLI (<code>go install github.com/andras-tkcs/peek/cmd/peek@latest</code>, or a release binary) and sign in as the QA account: <code>peek login --host https://peek-qa.&lt;your domain&gt;</code>.<span class="see">A browser opens Peek's approval page. Approve; the CLI prints that it is logged in.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb3-2"><span class="step-body">Read the token from the CLI's config file: <code>~/.config/peek/config.json</code> on Linux, <code>~/Library/Application Support/peek/config.json</code> on macOS. Copy the <code>"token"</code> value straight into your password manager as "Peek QA token".</span></label></li>
+        <li><label><input type="checkbox" id="mb3-3"><span class="step-body">SSH into the runner host as the runner user, create the credential file with owner-only permissions before anything goes into it, and open it:
+          <pre>install -m 600 /dev/null ~/privacyfence/credentials/peek_token.json
+${EDITOR:-nano} ~/privacyfence/credentials/peek_token.json</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb3-4"><span class="step-body">Type this, pasting the token from your password manager in place of <code>TOKEN</code>, then save:
+          <pre>{"base_url": "https://peek-qa.&lt;your domain&gt;", "token": "TOKEN"}</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb3-5"><span class="step-body">Check it: <code>ls -l ~/privacyfence/credentials/peek_token.json</code> shows <code>-rw-------</code>, and <code>python3 -m json.tool ~/privacyfence/credentials/peek_token.json &gt;/dev/null &amp;&amp; echo ok</code> prints <code>ok</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb3-6"><span class="step-body">Append the seed slug from task 2 to <code>~/privacyfence/tests/fixtures/qa_environment.yaml</code>:
+          <pre>peek:
+  page_slug: "&lt;slug&gt;"</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb3-7"><span class="step-body">Check <code>~/privacyfence/org/org_config.json</code> has no <code>"peek"</code> section. If it has one, its <code>base_url</code> must equal the token file's exactly, or the runner will refuse the token.</span></label></li>
+        <li><label><input type="checkbox" id="mb3-8"><span class="step-body">Delete the Peek CLI's <code>config.json</code> from step 2 on the machine from step 1 (the CLI has no logout command), so the token's only copies are the runner file and your password manager.</span></label></li>
+      </ol>
+      <p class="secret">The token acts as the QA account. Never paste it into a chat, the plan, a PR, an issue or a GitHub secret. Its only working copy is the runner file (<a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-connector/docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md" target="_blank" rel="noopener">ADR 0019</a>).</p>
+      <p class="done-when"><strong>Done when:</strong> on the runner, <code>~/privacyfence/credentials/peek_token.json</code> exists with mode 600 and holds <code>base_url</code> and <code>token</code>; <code>qa_environment.yaml</code> has <code>peek:</code> with <code>page_slug:</code>; and the runner's <code>org_config.json</code> has no <code>peek</code> section, or one whose <code>base_url</code> matches. Then tell the <code>/implement</code> session that the three before-steps are done.</p>
+    </article>
+  </section>
+
+  <section class="part" aria-labelledby="after">
+    <div class="part-head">
+      <p class="eyebrow">Part 2</p>
+      <h2 id="after">After implementation</h2>
+    </div>
+
+    <article class="task" data-task="ma1">
+      <div class="task-head">
+        <h3>4. Connect Peek in Settings and drive every Peek tool</h3>
+        <div class="meta"><span class="pill">ma1-local-mode-check</span><span>about 30 min</span></div>
+      </div>
+      <p class="why">Proves the sign-in dialog against a real Peek, what the approval cards show, and that real writes land. Unit tests and the recorder cannot show any of that.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="ma1-1"><span class="step-body">On a machine without a packaged PrivacyFence install, check out <code>feature/peek-connector</code> and start it from source with <code>./scripts/dev_start.sh</code> (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/dev-vs-live-setup.md" target="_blank" rel="noopener">dev-vs-live-setup.md</a>).</span></label></li>
+        <li><label><input type="checkbox" id="ma1-2"><span class="step-body">Open <strong>Settings → Connectors</strong> and click <strong>Authenticate…</strong> on the Peek row. Type <code>http://peek-qa.&lt;your domain&gt;</code> (http, on purpose) and click <strong>Continue</strong>.<span class="see">The dialog says the address must start with https://.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-3"><span class="step-body">Fix it to <code>https://…</code> and click <strong>Continue</strong>.<span class="see">A browser opens Peek's approval page, and the dialog shows the same code under "Approve in Peek".</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-4"><span class="step-body">Click <strong>Done</strong> before approving.<span class="see">"Peek has not recorded your approval yet…". Approve in the browser, click <strong>Done</strong> again, and Peek shows <strong>Connected</strong>.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-5"><span class="step-body">Connect an AI client to this daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/connect-claude-code.md" target="_blank" rel="noopener">Claude Code</a> is quickest) and ask it to list your Peek pages.<span class="see">It answers without a card.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-6"><span class="step-body">Ask for the seed page's comments, then its visit stats.<span class="see">Each shows a review card naming the server and the page, with a table. The stats card and answer carry names and times only, no IP address or browser.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-7"><span class="step-body">Ask it to publish a small HTML page named <code>manual-check.html</code> with password visibility and a password you make up.<span class="see">The approval card shows Server, Name, Visibility, Size and "Password: Set (not shown)", and the page's text. The password appears nowhere on the card. Approve, open the link, and check the password works.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-8"><span class="step-body">Ask it to make that page public, then to comment "Looks good [QATEST]" on it.<span class="see">Two cards: "password → public", then the comment with "Anchored to: Whole page". In Peek the comment shows your account name as author.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-9"><span class="step-body">Ask it to delete <code>manual-check.html</code>. Deny the first card and see the client report the denial; ask again and approve.<span class="see">The card says the page, comments and visit history cannot be restored. The page is gone from Peek.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-10"><span class="step-body">Optional: against a stock Peek server without the fork's endpoint, ask for a comment.<span class="see">The client gets "This Peek server does not accept comments from PrivacyFence…", and no anonymous comment appears.</span></span></label></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste one line, for example <code>ma1 local mode: PASS (sign-in errors, 2 review cards without IPs, publish/visibility/comment/delete cards, password hidden)</code>, or <code>FAIL at step N: what you saw</code>.</p>
+    </article>
+
+    <article class="task" data-task="ma2">
+      <div class="task-head">
+        <h3>5. Connect Peek on /connect in an org-mode test deployment</h3>
+        <div class="meta"><span class="pill">ma2-org-mode-check</span><span>about 20 min · only if you run one</span></div>
+      </div>
+      <p class="why">Proves the bundle's <code>peek</code> section and the per-person device sign-in on <code>/connect</code>. No CI job runs an org deployment against Peek.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="ma2-1"><span class="step-body">Add Peek to the test bundle and sign it (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/configuration-reference.md#organization-config-bundle-org_configjson" target="_blank" rel="noopener">configuration-reference.md</a>):
+          <pre>python3 scripts/build_org_bundle.py --merge -o org_config.json \
+  --peek-base-url https://peek-qa.&lt;your domain&gt; --sign-key &lt;your signing key&gt;</pre></span></label></li>
+        <li><label><input type="checkbox" id="ma2-2"><span class="step-body">Install it on the test server and restart the daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md" target="_blank" rel="noopener">org-mode-setup-guide.md</a>). Sign in as a test person and open <code>/connect</code>.<span class="see">The Peek box says "Your organization uses https://peek-qa.…" and offers <strong>Connect Peek</strong>; there is no address field.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-3"><span class="step-body">Click <strong>Connect Peek</strong>, then <strong>Open Peek</strong>, approve the code in Peek, come back and click <strong>Done</strong>.<span class="see">The box shows <strong>Connected</strong>. A phone works for this too.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-4"><span class="step-body">From an AI client connected as that person, read the seed page's comments and release the card.</span></label></li>
+        <li><label><input type="checkbox" id="ma2-5"><span class="step-body">Rebuild the bundle with a different <code>--peek-base-url</code>, install, restart, reload <code>/connect</code>.<span class="see">Peek shows <strong>Not connected</strong>: the saved token is never sent to the new server. Restore the bundle afterwards.</span></span></label></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste <code>ma2 org mode: PASS</code>, <code>FAIL at step N: what you saw</code>, or <code>ma2: skipped, no org-mode test deployment</code>.</p>
+    </article>
+  </section>
+</div>
+
+<script>
+(function () {
+  var KEY = 'pf-peek-manual-steps';
+  function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+  var state = load();
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  function paint() {
+    var done = 0;
+    boxes.forEach(function (b) {
+      b.closest('li').classList.toggle('done', b.checked);
+      if (b.checked) done++;
+    });
+    document.getElementById('progress').textContent = done + ' of ' + boxes.length + ' steps ticked';
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!state[b.id];
+    b.addEventListener('change', function () { state[b.id] = b.checked; save(state); paint(); });
+  });
+  document.getElementById('reset').addEventListener('click', function () {
+    state = {}; save(state); boxes.forEach(function (b) { b.checked = false; }); paint();
+  });
+  paint();
+})();
+</script>
