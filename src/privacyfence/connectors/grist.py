@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
 from .. import local_files
@@ -105,6 +105,7 @@ _CSV_LOOKUP_KEYS = 200
 _CSV_LOOKUP_JSON_CHARS = 4_000
 _CSV_SAMPLE_ROWS = 20
 _CSV_SCAN_CHARS = 1_000_000
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _CSV_UPLOAD_SOURCE = "uploaded via privacyfence_create_upload_slot"
 
 
@@ -289,7 +290,8 @@ def _cell_text(value: Any) -> str:
 
 def _csv_cell_text(value: Any, column_type: str) -> str:
     if column_type == "Date" and isinstance(value, (int, float)) and not isinstance(value, bool):
-        return datetime.fromtimestamp(value, timezone.utc).date().isoformat()
+        # Not fromtimestamp(): Windows rejects negative timestamps, and a date can be before 1970.
+        return (_EPOCH + timedelta(seconds=value)).date().isoformat()
     return _cell_text(value)
 
 

@@ -1033,6 +1033,12 @@ class TestImportCsv:
         assert kwargs["preview_tables"][0]["footer"] == "Showing 20 of 30 rows."
         assert kwargs["write_content_scan_text"] == text[:10]
 
+    async def test_dates_before_1970_render_too(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Born\n1815-12-10\n")
+        client.add_records.return_value = [1]
+        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        assert gated_call_spy[0]["preview_tables"][0]["rows"] == [["1815-12-10"]]
+
     async def test_dates_render_as_in_the_file(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Born\n2024-02-29\n")
         client.add_records.return_value = [1]
@@ -1046,7 +1052,7 @@ class TestImportCsv:
         connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
         client.add_records.return_value = [1]
         await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
-        (tmp_path / "people.csv").write_text("Name\nGrace\n", encoding="utf-8")
+        (tmp_path / "people.csv").write_bytes(b"Name\nGrace\n")
         await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
 
         first, second = gated_call_spy[0]["args"], gated_call_spy[1]["args"]
@@ -1349,7 +1355,7 @@ class TestUpdateCsv:
             GristColumn("Score", "Score", "Numeric", False), GristColumn("Name", "Name", "Text", False),
         ]
         path = tmp_path / "k.csv"
-        path.write_text("Score,Name\n3,Ada\n", encoding="utf-8")
+        path.write_bytes(b"Score,Name\n3,Ada\n")
         table_server(client, {1: {"Score": 3.0, "Name": "old"}})
         await connector.call(
             "grist_update_csv", {**CSV_ARGS, "key_column": "Score", "local_path": str(path)},
@@ -1378,7 +1384,7 @@ class TestUpdateCsv:
         client.add_records.return_value = [1]
         await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
         await connector.call("grist_update_csv", {**self.ARGS, "local_path": path, "create_missing": True})
-        (tmp_path / "people.csv").write_text("Name\nGrace\n", encoding="utf-8")
+        (tmp_path / "people.csv").write_bytes(b"Name\nGrace\n")
         await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
 
         keys = [canonical_key("grist", "grist_update_csv", c["args"]) for c in gated_call_spy]
