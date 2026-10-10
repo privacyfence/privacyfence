@@ -1,4 +1,4 @@
-"""Parsing and checking of a CSV file for ``grist_import_csv`` and ``grist_update_csv`` (ADR 0147).
+"""Parsing and checking of a CSV file for ``grist_import_csv`` and ``grist_update_csv`` (ADR 0148).
 
 Pure functions only: no I/O and no network. Every failure raises ``GristCsvError`` before anything
 is written, and no message ever carries a cell's value, because ``routes_mcp`` logs the text of

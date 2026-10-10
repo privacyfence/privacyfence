@@ -234,4 +234,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0144](0144-grist-rules-are-per-document-and-set-from-settings-not-the-card.md) | Grist rules are per document and set from Settings, not from the approval card | Accepted |
 | [0145](0145-the-grist-connector-only-adds.md) | The Grist connector only adds | Accepted |
 | [0146](0146-grist-records-page-by-record-id.md) | Grist records page by record id | Accepted |
-| [0147](0147-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted |
+| [0147](0147-pii-number-patterns-ignore-decimal-digits.md) | PII number patterns ignore digits glued to a decimal point | Accepted |
+| [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted |

@@ -18,7 +18,7 @@ These run whatever the language, because they match a format rather than a label
 | Category | What matches |
 |---|---|
 | IBAN (bank account number) | 2 letters + 2 digits + 11–30 letters or digits **written without spaces**, that also pass the ISO 7064 mod-97-10 checksum. An IBAN written in groups (`DE89 3704 0044 …`) is not detected |
-| Credit card number | 13–19 digits (spaces or dashes allowed) that pass the Luhn checksum. If the digits are grouped, the grouping must look like a real card: groups of 4 with a possibly shorter last group, or Amex 4-6-5 / Diners Club 4-6-4. Digits grouped in pairs never match |
+| Credit card number | 13–19 digits (spaces or dashes allowed) that pass the Luhn checksum. If the digits are grouped, the grouping must look like a real card: groups of 4 with a possibly shorter last group, or Amex 4-6-5 / Diners Club 4-6-4. Digits grouped in pairs never match. Digits glued to a decimal point, such as the fraction in `0.6838738069560423`, never match; a whole number written with `.0` still does |
 | IP address *(can be turned off)* | an IPv4 address (`a.b.c.d`) |
 | Financial figures (currency amounts) *(can be turned off)* | a number next to `$`, `€` or `£`, or next to `USD`, `EUR`, `GBP`, `HUF`, `CHF` (before or after) or `Ft` (after). A bare number never matches |
 
@@ -29,7 +29,7 @@ These run whatever the language, because they match a format rather than a label
 | Category | Trigger keywords / pattern |
 |---|---|
 | Hungarian TAJ number (social security) | `TAJ`, optionally `szám` / `száma`, then 9 digits as 3-3-3 (spaces or dashes allowed) |
-| Hungarian tax ID (adóazonosító jel) | a standalone 10-digit number starting with `8` |
+| Hungarian tax ID (adóazonosító jel) | a standalone 10-digit number starting with `8`, not one side of a decimal number such as `14908.8288798133` (a whole number written with `.0` still matches) |
 | Hungarian ID card number | 6 digits + 2 uppercase letters (case-sensitive) |
 | Hungarian personal data reference | `személyi szám*`, `lakcím*`, `születési dátum*` / `hely*` / `idő*`, `anyja nev*`, `útlevél szám*` |
 | Salary/compensation information | `fizetés*`, `jövedel*` (jövedelem), `bruttó bér*`, `nettó bér*` |

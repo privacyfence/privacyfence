@@ -132,7 +132,7 @@ a larger table, the assistant hands PrivacyFence a CSV file instead, and you app
   assistant is told how many rows were written. After a failed import the rows written so far stay
   in the table; running `grist_update_csv` again with the same file finishes a failed update.
 
-[ADR 0147](adr/0147-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md)
+[ADR 0148](adr/0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md)
 records why.
 
 ## Auto-accept rules

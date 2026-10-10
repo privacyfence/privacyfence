@@ -97,7 +97,7 @@ _NO_TEAM = "(not shown by Grist)"
 _CELL_LIMIT = 200
 _SCALARS = (str, int, float, bool, type(None))
 
-# Bulk CSV import and update (ADR 0147).
+# Bulk CSV import and update (ADR 0148).
 _CSV_MAX_BYTES = 50_000_000
 _CSV_CHUNK_ROWS = 500
 _CSV_CHUNK_JSON_CHARS = 1_000_000
@@ -877,7 +877,7 @@ class GristConnector(Connector):
         return {"doc_id": doc_id, "table_id": table_id, "column_ids": created}
 
     # ------------------------------------------------------------------ #
-    # Popup gate (bulk writes from a CSV file, ADR 0147)
+    # Popup gate (bulk writes from a CSV file, ADR 0148)
     # ------------------------------------------------------------------ #
 
     def _read_csv(self, local_path: str, upload_id: str) -> tuple[bytes, str]:
