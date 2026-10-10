@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -80,7 +81,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import portalocker
@@ -882,7 +883,8 @@ def _maybe_start_web_server(
         notifications_enabled=bool(notifications_config.get("enabled", True)),
         notifications_detail=str(notifications_config.get("detail", "minimal")),
         # Mounts /security for local-mode passkey enrollment.
-        step_up=local_step_up,
+        # LiveStepUpConfig mirrors every StepUpConfig attribute by delegation (step_up_config.py:432)
+        step_up=cast(step_up_config.StepUpConfig, local_step_up),
         # ADR 0006 option D / ADR 0037: a relabel only, never an attested source.
         agent_overrides=agent_overrides.from_config(config),
     )
@@ -1320,21 +1322,21 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not google_client_config:
                 raise GmailClientError("Google organization config not installed")
-            client = GmailClient(
+            gmail_client = GmailClient(
                 client_config=google_client_config,
                 token_file=_resolve_path(TOKEN_FILES["gmail"]),
             )
-            email = client.check_connection()
+            email = gmail_client.check_connection()
             logger.info("Gmail connector ready for %s", email)
-            connector = GmailConnector(client)
-            connector.my_email = email
-            connector.append_signature = bool(
+            gmail_connector = GmailConnector(gmail_client)
+            gmail_connector.my_email = email
+            gmail_connector.append_signature = bool(
                 (config.get("gmail", {}) or {}).get("append_signature_to_drafts", False)
             )
-            connector.download_mode = download_mode
-            connector.download_config = download_config
-            connector.download_base_url = download_base_url
-            connectors.append(connector)
+            gmail_connector.download_mode = download_mode
+            gmail_connector.download_config = download_config
+            gmail_connector.download_base_url = download_base_url
+            connectors.append(gmail_connector)
         except (GmailClientError, FileNotFoundError) as exc:
             logger.warning("Gmail connector disabled: %s", exc)
             failures["gmail"] = _classify_connector_failure(exc)
@@ -1344,18 +1346,18 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not google_client_config:
                 raise DriveClientError("Google organization config not installed")
-            client = DriveClient(
+            drive_client = DriveClient(
                 client_config=google_client_config,
                 token_file=_resolve_path(TOKEN_FILES["drive"]),
             )
-            email = client.check_connection()
+            email = drive_client.check_connection()
             logger.info("Drive connector ready for %s", email)
-            connector = DriveConnector(client)
-            connector.my_email = email
-            connector.download_mode = download_mode
-            connector.download_config = download_config
-            connector.download_base_url = download_base_url
-            connectors.append(connector)
+            drive_connector = DriveConnector(drive_client)
+            drive_connector.my_email = email
+            drive_connector.download_mode = download_mode
+            drive_connector.download_config = download_config
+            drive_connector.download_base_url = download_base_url
+            connectors.append(drive_connector)
         except (DriveClientError, FileNotFoundError) as exc:
             logger.warning("Drive connector disabled: %s", exc)
             failures["drive"] = _classify_connector_failure(exc)
@@ -1365,18 +1367,18 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not google_client_config:
                 raise CalendarClientError("Google organization config not installed")
-            client = CalendarClient(
+            calendar_client = CalendarClient(
                 client_config=google_client_config,
                 token_file=_resolve_path(TOKEN_FILES["calendar"]),
             )
-            email = client.check_connection()
+            email = calendar_client.check_connection()
             logger.info("Calendar connector ready for %s", email)
-            connector = CalendarConnector(client, rooms=org_config.get("rooms", []))
-            connector.my_email = email
-            connector.free_busy_full_details = bool(
+            calendar_connector = CalendarConnector(calendar_client, rooms=org_config.get("rooms", []))
+            calendar_connector.my_email = email
+            calendar_connector.free_busy_full_details = bool(
                 (config.get("calendar", {}) or {}).get("free_busy_full_event_details", True)
             )
-            connectors.append(connector)
+            connectors.append(calendar_connector)
         except (CalendarClientError, FileNotFoundError) as exc:
             logger.warning("Calendar connector disabled: %s", exc)
             failures["calendar"] = _classify_connector_failure(exc)
@@ -1386,15 +1388,15 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not google_client_config:
                 raise ContactsClientError("Google organization config not installed")
-            client = ContactsClient(
+            contacts_client = ContactsClient(
                 client_config=google_client_config,
                 token_file=_resolve_path(TOKEN_FILES["contacts"]),
             )
-            email = client.check_connection()
+            email = contacts_client.check_connection()
             logger.info("Contacts connector ready for %s", email)
-            connector = ContactsConnector(client)
-            connector.my_email = email
-            connectors.append(connector)
+            contacts_connector = ContactsConnector(contacts_client)
+            contacts_connector.my_email = email
+            connectors.append(contacts_connector)
         except (ContactsClientError, FileNotFoundError) as exc:
             logger.warning("Contacts connector disabled: %s", exc)
             failures["contacts"] = _classify_connector_failure(exc)
@@ -1404,13 +1406,13 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not google_client_config:
                 raise TasksClientError("Google organization config not installed")
-            client = TasksClient(
+            tasks_client = TasksClient(
                 client_config=google_client_config,
                 token_file=_resolve_path(TOKEN_FILES["tasks"]),
             )
-            email = client.check_connection()
+            email = tasks_client.check_connection()
             logger.info("Tasks connector ready for %s", email)
-            connectors.append(TasksConnector(client))
+            connectors.append(TasksConnector(tasks_client))
         except (TasksClientError, FileNotFoundError) as exc:
             logger.warning("Tasks connector disabled: %s", exc)
             failures["tasks"] = _classify_connector_failure(exc)
@@ -1420,15 +1422,15 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not google_client_config:
                 raise AppsScriptClientError("Google organization config not installed")
-            client = AppsScriptClient(
+            apps_script_client = AppsScriptClient(
                 client_config=google_client_config,
                 token_file=_resolve_path(TOKEN_FILES["apps_script"]),
             )
-            email = client.check_connection()
+            email = apps_script_client.check_connection()
             logger.info("Apps Script connector ready for %s", email)
-            connector = AppsScriptConnector(client)
-            connector.my_email = email
-            connectors.append(connector)
+            apps_script_connector = AppsScriptConnector(apps_script_client)
+            apps_script_connector.my_email = email
+            connectors.append(apps_script_connector)
         except (AppsScriptClientError, FileNotFoundError) as exc:
             logger.warning("Apps Script connector disabled: %s", exc)
             failures["apps_script"] = _classify_connector_failure(exc)
@@ -1440,12 +1442,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not slack_org.get("client_id"):
                 raise SlackClientError("Slack organization config not installed")
             token = load_slack_token(_resolve_path(TOKEN_FILES["slack"]))
-            client = SlackClient(
+            slack_client = SlackClient(
                 user_token=token.get("access_token", ""),
                 user_cache_file=str(user_dir() / "slack_user_cache.json"),
                 channel_cache_file=str(user_dir() / "slack_channel_cache.json"),
             )
-            workspace = client.check_connection()
+            workspace = slack_client.check_connection()
             # Directory-cache warming (if stale) happens after the whole
             # connector list is built, in the background -- see
             # _warm_connector_caches() in run_app(). Doing it here,
@@ -1453,9 +1455,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             # until a full users.list/conversations.list re-sync finished,
             # which read as "the app isn't running yet."
             logger.info("Slack connector ready for workspace %r", workspace)
-            connector = SlackConnector(client)
-            connector.my_email = token.get("email", "")
-            connectors.append(connector)
+            slack_connector = SlackConnector(slack_client)
+            slack_connector.my_email = token.get("email", "")
+            connectors.append(slack_connector)
         except (SlackClientError, FileNotFoundError) as exc:
             logger.warning("Slack connector disabled: %s", exc)
             failures["slack"] = _classify_connector_failure(exc)
@@ -1468,11 +1470,11 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 raise SalesforceClientError("Salesforce organization config not installed")
             token = load_salesforce_token(_resolve_path(TOKEN_FILES["salesforce"]))
             merged = {**sf_org, **token}
-            client = SalesforceClient(config=merged, token_file=_resolve_path(TOKEN_FILES["salesforce"]))
-            client.check_connection()
-            client.report_max_pages = _salesforce_report_max_pages(config)
+            salesforce_client = SalesforceClient(config=merged, token_file=_resolve_path(TOKEN_FILES["salesforce"]))
+            salesforce_client.check_connection()
+            salesforce_client.report_max_pages = _salesforce_report_max_pages(config)
             logger.info("Salesforce connector ready for %s", merged.get("instance_url"))
-            connectors.append(SalesforceConnector(client))
+            connectors.append(SalesforceConnector(salesforce_client))
         except (SalesforceClientError, FileNotFoundError) as exc:
             logger.warning("Salesforce connector disabled: %s", exc)
             failures["salesforce"] = _classify_connector_failure(exc)
@@ -1500,16 +1502,16 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 raise JiraClientError("Atlassian organization config not installed")
             if not atlassian_token:
                 raise JiraClientError("Jira is not authenticated. Use Authenticate… in PrivacyFence Settings.")
-            client = JiraClient(
+            jira_client = JiraClient(
                 config=atlassian_config,
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
                 user_directory=atlassian_users,
             )
-            info = client.check_connection()
+            info = jira_client.check_connection()
             logger.info("Jira connector ready: %s", info)
-            connector = JiraConnector(client)
-            connector.my_email = atlassian_token.get("account_email", "")
-            connectors.append(connector)
+            jira_connector = JiraConnector(jira_client)
+            jira_connector.my_email = atlassian_token.get("account_email", "")
+            connectors.append(jira_connector)
         except (JiraClientError, FileNotFoundError) as exc:
             logger.warning("Jira connector disabled: %s", exc)
             failures["jira"] = _classify_connector_failure(exc)
@@ -1520,19 +1522,19 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
                 raise ConfluenceClientError("Atlassian organization config not installed")
             if not atlassian_token:
                 raise ConfluenceClientError("Confluence is not authenticated. Use Authenticate… in PrivacyFence Settings.")
-            client = ConfluenceClient(
+            confluence_client = ConfluenceClient(
                 config=atlassian_config,
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
                 user_directory=atlassian_users,
             )
-            url = client.check_connection()
+            url = confluence_client.check_connection()
             logger.info("Confluence connector ready: %s", url)
-            connector = ConfluenceConnector(client)
-            connector.my_email = atlassian_token.get("account_email", "")
-            connector.download_mode = download_mode
-            connector.download_config = download_config
-            connector.download_base_url = download_base_url
-            connectors.append(connector)
+            confluence_connector = ConfluenceConnector(confluence_client)
+            confluence_connector.my_email = atlassian_token.get("account_email", "")
+            confluence_connector.download_mode = download_mode
+            confluence_connector.download_config = download_config
+            confluence_connector.download_base_url = download_base_url
+            connectors.append(confluence_connector)
         except (ConfluenceClientError, FileNotFoundError) as exc:
             logger.warning("Confluence connector disabled: %s", exc)
             failures["confluence"] = _classify_connector_failure(exc)
@@ -1578,11 +1580,11 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=download_mode == "org")
             token_path = _resolve_path(TOKEN_FILES["grist"])
             server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)
-            client = GristClient(server_url, credential)
-            client.check_connection()
-            connector = GristConnector(client)
-            connector.download_mode = download_mode
-            connectors.append(connector)
+            grist_client = GristClient(server_url, credential)
+            grist_client.check_connection()
+            grist_connector = GristConnector(grist_client)
+            grist_connector.download_mode = download_mode
+            connectors.append(grist_connector)
         except GristClientError as exc:
             logger.warning("Grist connector disabled: %s", exc)
             failures["grist"] = _classify_connector_failure(exc)
@@ -1630,7 +1632,7 @@ def _warm_connector_caches(connectors: list, web_loop: asyncio.AbstractEventLoop
             future.add_done_callback(_log_cache_warm_failure)
 
 
-def _log_cache_warm_failure(future: "asyncio.Future[None]") -> None:
+def _log_cache_warm_failure(future: "concurrent.futures.Future[None]") -> None:
     # Defensive only -- ensure_chat_directory_fresh() is documented never to
     # raise, same as ensure_directories_fresh(). If it somehow does, this is
     # a background warm with nothing waiting on its result, so log instead
