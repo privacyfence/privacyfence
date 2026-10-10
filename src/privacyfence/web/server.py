@@ -810,7 +810,10 @@ async def _combined_lifespan(managers: list) -> AsyncIterator[None]:
 
 
 @contextlib.asynccontextmanager
-async def _state_stream_loop_lifespan(ready_event: threading.Event | None = None) -> AsyncIterator[None]:
+async def _state_stream_loop_lifespan(
+    ready_event: threading.Event | None = None,
+    on_loop: Callable[[asyncio.AbstractEventLoop | None], None] | None = None,
+) -> AsyncIterator[None]:
     """Captures this ASGI app's own running event loop into
     web/state_stream.py's module-level ``_loop`` for the app's whole
     lifetime -- settings_controller.call_on_main's fallback dispatcher
@@ -825,12 +828,16 @@ async def _state_stream_loop_lifespan(ready_event: threading.Event | None = None
     loop, the one every connector call actually runs on."""
     loop = asyncio.get_running_loop()
     _state_stream.set_loop(loop)
+    if on_loop is not None:
+        on_loop(loop)
     if ready_event is not None:
         ready_event.set()
     try:
         yield
     finally:
-        _state_stream.set_loop(None)
+        if on_loop is not None:
+            on_loop(None)
+        _state_stream.clear_loop(loop)
 
 
 def build_app(
@@ -848,6 +855,7 @@ def build_app(
     notifications_enabled: bool = True,
     notifications_detail: str = "minimal",
     loop_ready: threading.Event | None = None,
+    on_loop: Callable[[asyncio.AbstractEventLoop | None], None] | None = None,
     principal_resolver: Callable[[Request], Principal] | None = None,
     org: OrgAuth | None = None,
     step_up: StepUpConfig | None = None,
@@ -902,6 +910,9 @@ def build_app(
     always constructs and shares one pair for its whole lifetime. Every
     optional surface's parameter defaults to ``None``, so a caller (a test,
     usually) that omits it simply does not get that surface.
+
+    ``on_loop`` is called with this app's loop once it is captured, and with
+    ``None`` on shutdown; WebServer keeps it as its own.
 
     ``mint_mcp_token``/``mcp_url`` (local mode, both or neither) add the
     settings page's "Connect an AI client" section (ADR 0104) --
@@ -1035,7 +1046,7 @@ def build_app(
 
     if state_stream is not None:
         extra_routes.append(_state_stream_route(state_stream, sessions=sessions))
-        lifespans.append(_state_stream_loop_lifespan(loop_ready))
+        lifespans.append(_state_stream_loop_lifespan(loop_ready, on_loop))
         set_main_dispatcher(_state_stream.call_soon_threadsafe)
 
     lifespan = None
@@ -1355,6 +1366,7 @@ class WebServer:
         # the direct successor of the old IPCServerThread's own ``_ready``
         # Event) blocks on to learn that loop.
         self._loop_ready = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
         # "::1" (not the bracketed "[::1]" a Host header would spell it
         # as) -- _parse_host_header normalizes every incoming Host header
         # the same way urlsplit's own .hostname does below, brackets
@@ -1384,6 +1396,7 @@ class WebServer:
             notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail,
             loop_ready=self._loop_ready,
+            on_loop=self._set_loop,
             principal_resolver=principal_resolver,
             org=org,
             step_up=step_up,
@@ -1447,11 +1460,14 @@ class WebServer:
         started". Returns ``None`` on a timeout, or if this server's own
         state_stream was never built (nothing to wait for -- see __init__:
         that only happens when ``web_ui`` is falsy, which no real caller
-        passes)."""
+        passes). It is this server's own loop, never another server's."""
         if self.state_stream is None:
             return None
         self._loop_ready.wait(timeout=timeout)
-        return _state_stream.get_loop()
+        return self._loop
+
+    def _set_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
+        self._loop = loop
 
     @property
     def stopped(self) -> bool:
