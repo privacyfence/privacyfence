@@ -326,7 +326,10 @@ connector token.
 a sandbox: no `allow-same-origin`, so a page cannot read the session cookie or call PrivacyFence's
 APIs, and the content security policy allows scripts but no form posts and no framing. Only GET
 and HEAD are served. The page browser that lists them is a PrivacyFence page; plugin pages keep the
-sandbox, and a plugin's images and styles are inlined, never fetched.
+sandbox, and a plugin's images and styles are inlined, never fetched. A plugin page opens new tabs
+only when its manifest says so, and those tabs carry no PrivacyFence session. A file reaches a
+plugin only through an approval card showing its name, size, types and SHA-256, and the plugin never
+gets a path.
 
 **Confirmations** are cards that no rule can accept, with step-up kept, and they are refused while
 any AI session is unattended.

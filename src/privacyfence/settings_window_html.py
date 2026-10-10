@@ -1281,13 +1281,17 @@ _JS = r"""
         '<span class="badge ' + (t.gate === 'auto' ? 'badge-warning' : 'badge-info') + '">' + esc(PLUGIN_GATE_LABELS[t.gate] || t.gate) + '</span>' +
         '<span class="badge badge-dashed">' + (t.read_only ? 'Read-only' : 'Writes') + '</span>' +
         (t.destructive ? '<span class="badge badge-danger">Destructive</span>' : '') + '</div>' +
-        (t.description ? '<div class="pf-plugin-meta">' + esc(t.description) + '</div>' : '') + '</li>';
+        (t.description ? '<div class="pf-plugin-meta">' + esc(t.description) + '</div>' : '') +
+        (t.file ? '<div class="pf-plugin-meta">Takes a file in ' + esc(t.file.param) + ': ' +
+          t.file.media_types.map(function (m) { return esc(m); }).join(', ') + ', up to ' + esc(Number(t.file.max_bytes).toLocaleString('en-US')) + ' bytes.</div>' : '') +
+        '</li>';
     });
     if (r.tools.length === 0) html += '<li class="pf-plugin-meta">This plugin declares no tools.</li>';
     html += '</ul>';
     html += '<div class="pf-plugin-facts">Reads from your connectors: ' +
       (r.source_operations.length ? esc(r.source_operations.join(', ')) : 'nothing') + '.</div>';
     html += '<div class="pf-plugin-facts">Serves its own pages: ' + (r.pages ? 'yes' : 'no') + '.</div>';
+    if (r.page_new_tabs) html += '<div class="pf-plugin-facts"><strong>Its pages can open links in new tabs.</strong> A tab opened that way is outside PrivacyFence\'s sandbox.</div>';
     if (r.outputs) {
       var kinds = (r.output_types || []).map(function (t) { return PLUGIN_OUTPUT_LABELS[t] || t; });
       html += '<div class="pf-plugin-facts">Publishes output files' + (kinds.length ? ': ' + esc(kinds.join(', ')) : '') + '.</div>';

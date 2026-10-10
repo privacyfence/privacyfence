@@ -50,7 +50,7 @@ from privacyfence.plugins.events import EventFanout
 from privacyfence.plugins.manifest import Manifest, ManifestError
 from privacyfence.plugins.outputs import OWNER as OUTPUTS_OWNER, PluginOutputsConnector, PluginTable
 from privacyfence.plugins.page_index import PageIndex, index_from_result
-from privacyfence.plugins.protocol import InitializeResult, RpcError, principal_context
+from privacyfence.plugins.protocol import InitializeResult, RpcError, file_params, principal_context
 from privacyfence.plugins.spool import DownloadSpool
 from privacyfence.plugins.state import HASH_DRIFT_REASON, PluginStateStore, STATE_FILENAME
 from privacyfence.plugins.supervisor import LaunchSpec, StartError, Supervisor
@@ -137,6 +137,20 @@ def _now() -> str:
 
 def _approval_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _review_tool(plugin: str, defn: Any) -> dict:
+    """One tool as the enable dialog lists it; ``file`` names its file parameter, if it has one."""
+    entry: dict[str, Any] = {
+        "name": mcp_tool_name(plugin, defn.name),
+        "gate": defn.gate,
+        "read_only": defn.read_only,
+        "destructive": defn.destructive,
+        "description": defn.description,
+    }
+    for spec in file_params(defn).values():
+        entry["file"] = {"param": spec.param, "max_bytes": spec.max_bytes, "media_types": list(spec.media_types)}
+    return entry
 
 
 class PluginHost:
@@ -790,19 +804,11 @@ class PluginHost:
                 "max_gate_floor": manifest.max_gate_floor,
                 "source_operations": sorted(manifest.source_operations),
                 "pages": manifest.pages,
+                "page_new_tabs": manifest.page_new_tabs,
                 "service_credentials": manifest.service_credentials,
                 "outputs": manifest.outputs,
                 "output_types": list(manifest.output_types),
-                "tools": [
-                    {
-                        "name": mcp_tool_name(plugin.name, d.name),
-                        "gate": d.gate,
-                        "read_only": d.read_only,
-                        "destructive": d.destructive,
-                        "description": d.description,
-                    }
-                    for d in defs
-                ],
+                "tools": [_review_tool(plugin.name, d) for d in defs],
             }
             return plugin.review
 
@@ -945,6 +951,15 @@ class PluginHost:
                 ],
             })
         return rows
+
+    def page_new_tabs(self, name: str) -> bool:
+        """Whether ``name`` is running, serves pages and its manifest lets them open new tabs."""
+        plugin = self._plugins.get(name)
+        manifest = plugin.manifest if plugin is not None else None
+        return bool(
+            plugin is not None and plugin.state == "running" and manifest is not None
+            and manifest.pages and manifest.page_new_tabs
+        )
 
     async def web_request(self, name: str, path: str, query: dict[str, str], principal: Principal) -> dict:
         plugin = self._plugins.get(name)

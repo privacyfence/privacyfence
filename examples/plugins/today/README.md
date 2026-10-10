@@ -38,7 +38,7 @@ python scripts/build_example_plugin.py today --with-crash-tool --out dist/plugin
 dist/plugins/today/today-plugin --self-test
 ```
 
-On Windows the executable is `today-plugin.exe`. The self-test prints `today ok protocol 1.2.0` and
+On Windows the executable is `today-plugin.exe`. The self-test prints `today ok protocol 1.3.0` and
 exits. The plugin lists its page for the page browser. The folder `dist/plugins/today/` holds the
 executable, `privacyfence-plugin.yaml` and `build-flags.json`. Leave out `--with-crash-tool` for a build without the hidden tool.
 

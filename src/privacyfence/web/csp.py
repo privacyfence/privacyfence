@@ -51,6 +51,7 @@ _STATE_KEY = "csp_nonce"
 # _SecurityHeadersMiddleware when it builds that response's headers; neither is ever set by default.
 _FRAME_SELF_KEY = "csp_frame_self"
 _PLUGIN_EMBED_KEY = "csp_plugin_embed"
+_PLUGIN_NEW_TABS_KEY = "csp_plugin_new_tabs"
 
 
 def new_nonce() -> str:
@@ -120,6 +121,18 @@ def plugin_embed_for(scope_or_request: Request | MutableMapping[str, Any]) -> bo
     return _state_flag(scope_or_request, _PLUGIN_EMBED_KEY)
 
 
+def set_plugin_new_tabs(request: Request) -> None:
+    """Let this one ``/plugins/`` response's page open links in new tabs: the middleware sends
+    plugins/pages.py's ``CSP_NEW_TABS`` instead of ``CSP``. web/routes_plugins.py sets it only for a
+    plugin whose manifest sets ``page_new_tabs``."""
+    setattr(request.state, _PLUGIN_NEW_TABS_KEY, True)
+
+
+def plugin_new_tabs_for(scope_or_request: Request | MutableMapping[str, Any]) -> bool:
+    """Whether ``set_plugin_new_tabs`` was called for this response."""
+    return _state_flag(scope_or_request, _PLUGIN_NEW_TABS_KEY)
+
+
 def build_csp(nonce: str, *, app_origin: str = "", frame_self: bool = False) -> str:
     """The full policy for a fully self-contained document (see
     approval_window_html.py's own module docstring: fonts/icons/PDFs are
@@ -184,6 +197,6 @@ def build_csp(nonce: str, *, app_origin: str = "", frame_self: bool = False) -> 
 
 
 __all__ = [
-    "build_csp", "frame_self_for", "new_nonce", "nonce_for", "plugin_embed_for", "set_frame_self",
-    "set_nonce", "set_plugin_embed",
+    "build_csp", "frame_self_for", "new_nonce", "nonce_for", "plugin_embed_for", "plugin_new_tabs_for",
+    "set_frame_self", "set_nonce", "set_plugin_embed", "set_plugin_new_tabs",
 ]

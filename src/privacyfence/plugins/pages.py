@@ -28,6 +28,11 @@ CSP = (
 # differs, and it names this origin only; the page still runs sandboxed in an opaque origin.
 CSP_EMBEDDED = ("sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; form-action 'none'; "
                 "base-uri 'none'; frame-ancestors 'self'")
+# CSP plus popups that escape the sandbox, for a plugin whose manifest sets page_new_tabs (ADR 0124's amendment).
+CSP_NEW_TABS = (
+    "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'self' data: 'unsafe-inline'; "
+    "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+)
 CACHE_CONTROL = "private, no-store"
 
 _ALLOWED_STATUSES = frozenset({200, 204, 400, 404, 500})
@@ -152,6 +157,6 @@ async def render_plugin_page(
 
 
 __all__ = [
-    "CACHE_CONTROL", "CSP", "CSP_EMBEDDED", "PageHost", "filter_response", "normalize_path", "parse_query",
+    "CACHE_CONTROL", "CSP", "CSP_EMBEDDED", "CSP_NEW_TABS", "PageHost", "filter_response", "normalize_path", "parse_query",
     "render_plugin_page",
 ]

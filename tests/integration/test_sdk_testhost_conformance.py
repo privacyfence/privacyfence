@@ -35,8 +35,10 @@ from tests.fixtures.plugins.echo.harness import (  # noqa: I001  (puts the SDK s
     install_echo,
     load_echo_plugin,
     calendar_event,
+    card_pairs,
     mcp_session,
     until,
+    upload_file,
     web_session,
 )
 from privacyfence_plugin_sdk.responses import ToolDefinitionError  # noqa: E402
@@ -310,6 +312,25 @@ class TestSameOutcomes:
 
         assert_same(on_sdk, on_daemon)
         assert on_sdk.card_shown is True and on_sdk.released == {"stored": 1, "via": "card"}
+
+    async def test_file_put(self, sdk, daemon):
+        outcome = await sdk.host.call_tool("file_put", decide="approve", files={"file": ("note.txt", b"hello")})
+        sdk_pairs = [
+            (item["label"], item["value"])
+            for block in outcome.card.preview if block["type"] == "fields" for item in block["items"]
+        ]
+
+        daemon.stack.popups.decision = "accept"
+        async with mcp_session(daemon.stack.server) as mcp:
+            ref = await upload_file(mcp, b"hello")
+            result = await mcp.call("echo_file_put", file=ref)
+        daemon_pairs = card_pairs(daemon.stack.popups.write[-1][1]["preview_blocks"])
+
+        assert outcome.error is None and result.is_error is False
+        assert outcome.released == result.structured_content
+        assert outcome.released == {"name": "note.txt", "size": 5, "sha256": hashlib.sha256(b"hello").hexdigest()}
+        assert [p for p in sdk_pairs if p[0] != "Source"] == [p for p in daemon_pairs if p[0] != "Source"]
+        assert dict(sdk_pairs)["Source"] == "Test host" and dict(daemon_pairs)["Source"] == "Upload slot"
 
     async def test_scope_rule_match(self, sdk, daemon):
         async def scenario(side):

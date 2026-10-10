@@ -13,9 +13,11 @@ from privacyfence.web.csp import (
     new_nonce,
     nonce_for,
     plugin_embed_for,
+    plugin_new_tabs_for,
     set_frame_self,
     set_nonce,
     set_plugin_embed,
+    set_plugin_new_tabs,
 )
 
 
@@ -98,6 +100,29 @@ class TestPluginEmbed:
         scope = {"type": "http", "headers": [], "state": {}}
         set_plugin_embed(Request(scope))
         assert frame_self_for(scope) is False
+
+
+class TestPluginNewTabs:
+    def test_unset_by_default(self):
+        assert plugin_new_tabs_for(_request({})) is False
+        assert plugin_new_tabs_for({"type": "http"}) is False
+
+    def test_set_is_visible_on_the_request_and_the_raw_scope(self):
+        scope = {"type": "http", "headers": [], "state": {}}
+        set_plugin_new_tabs(Request(scope))
+        assert plugin_new_tabs_for(Request(scope)) is True
+        assert plugin_new_tabs_for(scope) is True
+
+    def test_does_not_set_the_other_flags(self):
+        scope = {"type": "http", "headers": [], "state": {}}
+        set_plugin_new_tabs(Request(scope))
+        assert frame_self_for(scope) is False
+        assert plugin_embed_for(scope) is False
+
+    def test_the_embed_flag_does_not_set_it(self):
+        scope = {"type": "http", "headers": [], "state": {}}
+        set_plugin_embed(Request(scope))
+        assert plugin_new_tabs_for(scope) is False
 
 
 class TestBuildCspFrameSelf:

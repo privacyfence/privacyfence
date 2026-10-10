@@ -63,6 +63,38 @@ Block builders (`blocks.heading`, `fields`, `table`, `text`, `code`, `diff`) val
 rules PrivacyFence applies, and raise `ValueError` on a mistake. A tool definition PrivacyFence
 would refuse raises `ToolDefinitionError` when the tool is registered.
 
+## File parameters
+
+A tool can take a file the AI points to by path or upload slot. The plugin never sees the path:
+
+```python
+from privacyfence_plugin_sdk import file_param
+
+@plugin.tool("publish", description="Publish a page.",
+             params={"html": file_param("The page.", max_bytes=1_048_576, media_types=["text/html"])},
+             required=["html"])
+async def publish(ctx, args):
+    page = ctx.files["html"]            # name, size, media_type, sniffed_type, sha256
+    return Prepared(preview=[blocks.fields({"File": page.name, "Size": f"{page.size:,} bytes"})])
+
+@publish.execute
+async def do_publish(ctx, prepared, approval):
+    data = ctx.files["html"].content    # the bytes, in the execute function only
+    ...
+```
+
+- `ctx.files` maps the parameter name to an `IncomingFile`. The tool function sees the metadata only;
+  reading `.content` there raises `RuntimeError`. The execute function gets the bytes, after the
+  card (or a saved rule) accepted the call, and `digest_mismatch` answers an execute whose bytes differ
+  from the prepared ones.
+- `media_type` is the type the name claims, `sniffed_type` the one the bytes show; the latter is always
+  one of the parameter's `media_types`.
+- At most one file parameter per tool, `max_bytes` up to 8 MiB, and the tool is not `read_only` and not
+  on the `auto` gate.
+- `ctx.files` is empty for a call that gave no file, and for every tool without a file parameter.
+- A PrivacyFence older than plugin protocol 1.3 cannot send files: the SDK leaves such a tool out of
+  the tool list it offers and logs a warning.
+
 ## Reading from connected services
 
 ```python
@@ -240,6 +272,11 @@ async def test_the_ai_gets_what_the_card_showed():
         assert outcome.released == {"blocks": outcome.card.payload}
 ```
 
+A tool with a file parameter is called with `files=`: `await host.call_tool("publish", files={"html": b"<h1>Hi</h1>"})`.
+Plain bytes are named `file` plus the extension of the parameter's first media type; pass
+`(name, bytes)` to choose the name. The tool function sees the file's metadata and the execute function
+gets the bytes, as with PrivacyFence, whose size and detected-type refusals the host repeats.
+
 With pytest, add `pytest_plugins = ["privacyfence_plugin_sdk.testing.pytest"]` to `conftest.py` and
 use the `plugin_host` fixture: `async with plugin_host(plugin) as host`. The host also drives pages,
 confirmations, events, purge and shutdown. The module docstring of `privacyfence_plugin_sdk.testing`
@@ -254,6 +291,8 @@ Where the test host differs from PrivacyFence:
   default is `"review"`, which refuses a tool on the `auto` gate.
 - `PluginTestHost(plugin, source_operations=(...), pages=True)` takes the manifest's `source_operations` and
   `pages`; it checks source-call parameters as PrivacyFence does.
+- `PluginTestHost(plugin, pages=True, page_new_tabs=True)` takes the manifest's `page_new_tabs`; page
+  responses then carry the policy that lets a page open links in new tabs.
 - `pii=` takes a function that models the PII check, which overrides an "Always allow" rule.
 - It withholds a write result over 2,048 bytes but does not run PrivacyFence's PII detector on it.
 - It ignores a `tools.changed` the plugin sends.

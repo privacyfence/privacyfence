@@ -153,7 +153,7 @@ class AuditEntry:
                             # "sign_in_code_minted" |
                             # "step_up_requirement_enabled" | "step_up_requirement_disabled" |
                             # "plugin_source" | "plugin_confirm" | "plugin_lifecycle" |
-                            # "plugin_approval" | "plugin_output"
+                            # "plugin_approval" | "plugin_output" | "plugin_file"
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
                             #  web/routes_security.py's register_verify/delete_credential,
                             #  recorded for either mode's own passkey enrollment surface. Tamper-
@@ -342,6 +342,11 @@ class AuditEntry:
                             #  entry. ``connector`` is "plugin:<name>", ``tool`` "plugin_outputs_read",
                             #  ``summary`` "read <path>; offset=<n>; bytes=<n>". File contents are never
                             #  recorded.)
+                            # ("plugin_file": plugins/connector.py, one entry per file parameter after
+                            #  the gate passed and the upload slot was committed, so a denied call has
+                            #  none. ``connector`` is "plugin:<name>", ``tool`` the MCP tool name,
+                            #  ``summary`` "<param>: <name>; bytes=<n>; sha256=<hex>; type=<detected>".
+                            #  The file's content is never recorded.)
                             # ("plugin_lifecycle": plugins/host.py, including the state changes
                             #  plugins/supervisor.py reports, a change in a plugin's own standing that
                             #  is not one call: ``connector`` is

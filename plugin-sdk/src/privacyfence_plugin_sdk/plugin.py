@@ -10,12 +10,23 @@ import logging
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from . import blocks as _blocks
+from ._files import (
+    FILE_MEDIA_TYPES,
+    FILE_PARAM_KEY,
+    MAX_FILE_BYTES,
+    MAX_FILE_PARAMS_PER_TOOL,
+    IncomingFile,
+    file_specs,
+    parse_files,
+    refuse_reserved_labels,
+)
 from ._page_index import validate_page_entries
 from ._rpc import Peer, RpcError, open_stdio
 from .responses import (
@@ -33,7 +44,7 @@ from .responses import (
 
 logger = logging.getLogger("privacyfence_plugin_sdk")
 
-PROTOCOL_VERSION = "1.2.0"
+PROTOCOL_VERSION = "1.3.0"
 _PROTOCOL_MAJOR = 1
 
 # --- _limits: copied from the protocol; a test compares each with the daemon's constants ---------
@@ -86,6 +97,7 @@ _OUTPUT_EXTENSIONS = {
 _OUTPUT_MAX_DEPTH = 8
 _NO_OUTPUT_FOLDER = "this plugin has no output folder"
 _CHUNK_ATTEMPTS = 2
+_FILE_PROTOCOL_MINOR = 3  # the first protocol minor version whose daemon sends files
 
 __all__ = [
     "PROTOCOL_VERSION", "Context", "PageRequest", "Plugin", "Prepared", "Principal", "ToolHandle",
@@ -476,8 +488,12 @@ class OutputsClient:
 class Context:
     """What a handler gets: who is asking, where its data lives, and the calls back to PrivacyFence."""
 
-    def __init__(self, host: _Host, principal: Principal, data_dir: Path) -> None:
+    def __init__(
+        self, host: _Host, principal: Principal, data_dir: Path,
+        files: Mapping[str, IncomingFile] | None = None,
+    ) -> None:
         self._host = host
+        self.files: Mapping[str, IncomingFile] = MappingProxyType(dict(files or {}))
         self.principal = principal
         self.data_dir = data_dir
         self.source = SourceClient(host, principal, data_dir)
@@ -521,6 +537,7 @@ class _PreparedEntry:
     digest: str
     prepared: Prepared
     expires: float
+    files: dict[str, str] = field(default_factory=dict)  # parameter -> SHA-256
 
 
 @dataclass
@@ -537,6 +554,26 @@ def _page_key(path: str) -> str:
     return "/" if path in ("", "/") else path
 
 
+def _check_file_param(tool: str, name: str, schema: dict) -> None:
+    where = f"parameter {name} of {tool}"
+    if schema.get("type") != "string":
+        raise ToolDefinitionError(f"{where}: a file parameter must have type string")
+    spec = schema[FILE_PARAM_KEY]
+    if not isinstance(spec, dict) or set(spec) != {"max_bytes", "media_types"}:
+        raise ToolDefinitionError(f"{where}: {FILE_PARAM_KEY} takes max_bytes and media_types only")
+    max_bytes = spec["max_bytes"]
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 1 <= max_bytes <= MAX_FILE_BYTES:
+        raise ToolDefinitionError(f"{where}: max_bytes must be 1 to {MAX_FILE_BYTES}")
+    types = spec["media_types"]
+    if (
+        not isinstance(types, list)
+        or not types
+        or not all(isinstance(t, str) and t in FILE_MEDIA_TYPES for t in types)
+        or len(set(types)) != len(types)
+    ):
+        raise ToolDefinitionError(f"{where}: media_types must be a non-empty list of distinct supported types")
+
+
 def _validate_parameters(tool: str, params: dict, required: list[str]) -> dict:
     properties: dict[str, dict] = {}
     for name, spec in params.items():
@@ -548,7 +585,11 @@ def _validate_parameters(tool: str, params: dict, required: list[str]) -> dict:
             raise ToolDefinitionError(
                 f"parameter {name} of {tool}: only string, integer, number and boolean are supported"
             )
+        if FILE_PARAM_KEY in spec:
+            _check_file_param(tool, name, spec)
         properties[name] = dict(spec)
+    if sum(FILE_PARAM_KEY in spec for spec in properties.values()) > MAX_FILE_PARAMS_PER_TOOL:
+        raise ToolDefinitionError(f"tool {tool} may take at most {MAX_FILE_PARAMS_PER_TOOL} file parameter")
     unknown = [r for r in required if r not in properties]
     if unknown:
         raise ToolDefinitionError(f"{tool}: required names an undeclared parameter {unknown[0]}")
@@ -577,6 +618,8 @@ class Plugin:
         self._data_dir = Path(".")
         self._principals: dict[str, Principal] = {}
         self._initialized = False
+        self._daemon_minor = _FILE_PROTOCOL_MINOR
+        self._warned_file_tools: set[str] = set()
         self._stop: asyncio.Event | None = None
 
     # ------------------------------------------------------------------ registration
@@ -653,10 +696,16 @@ class Plugin:
                 )
         if len(self._reg.tools) >= _MAX_TOOLS:
             raise ToolDefinitionError(f"at most {_MAX_TOOLS} tools are allowed")
+        parameters = _validate_parameters(name, params, required)
+        if file_specs(parameters["properties"]):
+            if read_only:
+                raise ToolDefinitionError(f"tool {name} takes a file and cannot be read-only")
+            if gate == "auto":
+                raise ToolDefinitionError(f"tool {name} takes a file and must use the review or popup gate")
         definition: dict[str, Any] = {
             "name": name,
             "description": description,
-            "parameters": _validate_parameters(name, params, required),
+            "parameters": parameters,
             "read_only": read_only,
             "destructive": destructive,
             "gate": gate,
@@ -708,6 +757,21 @@ class Plugin:
 
     # ------------------------------------------------------------------ tool definitions
 
+    def _offered_definitions(self) -> list[dict]:
+        """``tool_definitions()`` without the tools this daemon is too old to send files to."""
+        out = []
+        for definition in self.tool_definitions():
+            if self._daemon_minor < _FILE_PROTOCOL_MINOR and file_specs(definition["parameters"]["properties"]):
+                if definition["name"] not in self._warned_file_tools:
+                    self._warned_file_tools.add(definition["name"])
+                    logger.warning(
+                        "tool %s takes a file, which needs PrivacyFence with plugin protocol 1.3; it is not offered",
+                        definition["name"],
+                    )
+                continue
+            out.append(definition)
+        return out
+
     def tool_definitions(self) -> list[dict]:
         """The ``ToolDef`` list sent at initialize and by ``tools_changed``; raises on a bad registry."""
         out = []
@@ -728,7 +792,7 @@ class Plugin:
         peer = self._host.peer
         if peer is None or peer.closed:
             raise RuntimeError("the plugin is not connected to PrivacyFence")
-        await peer.notify("tools.changed", {"tools": self.tool_definitions()})
+        await peer.notify("tools.changed", {"tools": self._offered_definitions()})
 
     # ------------------------------------------------------------------ runtime
 
@@ -748,8 +812,12 @@ class Plugin:
             return self._principals.get(raw) or Principal(raw, "", self._data_dir)
         return Principal("", "", self._data_dir)
 
-    def _ctx(self, raw: Any) -> Context:
-        return Context(self._host, self._principal(raw), self._data_dir)
+    def _ctx(self, raw: Any, files: Mapping[str, IncomingFile] | None = None) -> Context:
+        return Context(self._host, self._principal(raw), self._data_dir, files)
+
+    @staticmethod
+    def _file_specs(handle: ToolHandle) -> dict[str, Mapping]:
+        return file_specs(handle.definition["parameters"]["properties"])
 
     def _sweep(self) -> None:
         now = self._clock()
@@ -772,13 +840,17 @@ class Plugin:
         if version.partition(".")[0] != str(_PROTOCOL_MAJOR):
             raise RpcError("version_mismatch", f"this plugin speaks protocol {PROTOCOL_VERSION}")
         self._data_dir = Path(self._need(params, "data_dir", str))
+        try:
+            self._daemon_minor = int(version.split(".")[1])
+        except (IndexError, ValueError):
+            self._daemon_minor = 0
         self._host.introspecting = params.get("purpose") == "introspect"
         principals = params.get("principals", [])
         for raw in principals if isinstance(principals, list) else []:
             if isinstance(raw, dict):
                 self._principal(raw)
         try:
-            tools = self.tool_definitions()
+            tools = self._offered_definitions()
         except ToolDefinitionError as exc:
             logger.error("tool definitions refused: %s", exc)
             raise RpcError("internal_error", "the plugin's tool definitions are invalid") from None
@@ -801,7 +873,8 @@ class Plugin:
         if handle is None:
             raise RpcError("unknown_tool", "the plugin has no such tool")
         args = self._need(params, "args", dict)
-        ctx = self._ctx(self._need(params, "principal", dict))
+        files = parse_files(params.get("files"), self._file_specs(handle), with_content=False)
+        ctx = self._ctx(self._need(params, "principal", dict), files)
         try:
             prepared = await handle(ctx, args)
         except SourceError as exc:
@@ -813,6 +886,9 @@ class Plugin:
             payload = None
             if prepared.payload is not None:
                 payload = _blocks.validate_blocks(prepared.payload, max_bytes=None)
+            if files:
+                refuse_reserved_labels(preview)
+                refuse_reserved_labels(payload or [])
         except ValueError as exc:
             raise RpcError("invalid_blocks", str(exc)) from None
         if handle.read_only and payload is None:
@@ -831,6 +907,7 @@ class Plugin:
             digest=args_digest(args),
             prepared=prepared,
             expires=self._clock() + _PREPARED_CALL_LIFETIME_SECONDS,
+            files={p: f.sha256 for p, f in files.items()},
         )
         out: dict[str, Any] = {"preview": preview, "scopes": scopes}
         if payload is not None:
@@ -868,9 +945,12 @@ class Plugin:
             raise RpcError("unknown_call", "no prepared call with this id")
         if given != entry.digest or args_digest(args) != entry.digest:
             raise RpcError("digest_mismatch", "the arguments differ from the prepared call")
+        files = parse_files(params.get("files"), self._file_specs(handle), with_content=True)
+        if {p: f.sha256 for p, f in files.items()} != entry.files:
+            raise RpcError("digest_mismatch", "the files differ from the prepared call")
         if not handle.read_only or approval.get("via") == "auto":
             del self._prepared[call_id]
-        ctx = self._ctx(self._need(params, "principal", dict))
+        ctx = self._ctx(self._need(params, "principal", dict), files)
         result: Any = None
         if handle._execute is not None:
             try:

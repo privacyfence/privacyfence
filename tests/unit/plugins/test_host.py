@@ -28,6 +28,7 @@ from privacyfence.plugins import source_ops, storage
 from privacyfence.plugins import rpc, supervisor as supervisor_mod
 from privacyfence.plugins.page_index import PAGE_INDEX_INVALID, PAGE_INDEX_NO_ANSWER
 from privacyfence.plugins.host import CHANGED_SINCE_REVIEW, PluginHost
+from privacyfence.plugins.protocol import ToolDef
 from privacyfence.plugins.manifest import MANIFEST_FILENAME, ManifestError
 from privacyfence.plugins.state import HASH_DRIFT_REASON
 from privacyfence.principal import LOCAL_PRINCIPAL
@@ -327,7 +328,7 @@ class TestStartEnabled:
         params = host._initialize_params(host._plugins["stub"], "run")
 
         shared, per_principal = storage.install_dir("stub"), storage.principal_dir("stub", LOCAL_PRINCIPAL)
-        assert params["protocol_version"] == "1.2.0" and params["purpose"] == "run" and params["mode"] == "local"
+        assert params["protocol_version"] == "1.3.0" and params["purpose"] == "run" and params["mode"] == "local"
         assert params["daemon"] == {"name": "privacyfence", "version": "9.9.9"}
         assert params["plugin"] == {"name": "stub", "manifest_version": "1.0.0"}
         assert params["data_dir"] == str(shared) and shared.is_dir()
@@ -827,6 +828,7 @@ class TestInspectReturnsSummary:
             "max_gate_floor": "auto",
             "source_operations": ["calendar.list_events"],
             "pages": True,
+            "page_new_tabs": False,
             "service_credentials": False,
             "outputs": False,
             "output_types": [],
@@ -876,6 +878,33 @@ class TestInspectReturnsSummary:
 
         with pytest.raises(LookupError):
             await host.inspect("nothing")
+
+
+class TestReviewToolEntry:
+    @staticmethod
+    def _defn(parameters):
+        return ToolDef(
+            name="publish", description="Publish a page.", parameters=parameters,
+            read_only=False, destructive=False, gate="popup",
+        )
+
+    def test_a_tool_with_a_file_parameter_names_it(self):
+        defn = self._defn({"type": "object", "properties": {
+            "title": {"type": "string"},
+            "html": {"type": "string", "x-privacyfence-file": {
+                "max_bytes": 1048576, "media_types": ["text/html", "text/plain"]}},
+        }})
+
+        assert host_mod._review_tool("sdk-demo", defn) == {
+            "name": "sdk-demo_publish", "gate": "popup", "read_only": False, "destructive": False,
+            "description": "Publish a page.",
+            "file": {"param": "html", "max_bytes": 1048576, "media_types": ["text/html", "text/plain"]},
+        }
+
+    def test_a_tool_without_one_has_no_file_entry(self):
+        entry = host_mod._review_tool("sdk-demo", self._defn({"type": "object", "properties": {}}))
+
+        assert "file" not in entry
 
 
 class TestSourceCallRouted:
@@ -1486,6 +1515,37 @@ class TestWebRequest:
 
         with pytest.raises(LookupError):
             await host.web_request("stub", "/", {}, LOCAL_PRINCIPAL)
+
+    async def test_page_new_tabs_only_for_a_running_pages_plugin_that_sets_it(self, env):
+        env.add("tabs", pages=True, page_new_tabs=True)
+        env.add("plain", pages=True)
+        host = env.host()
+        await host.start()
+        assert host.page_new_tabs("tabs") is False
+
+        await env.enable(host, "tabs")
+        await env.enable(host, "plain")
+        assert host.page_new_tabs("tabs") is True
+        assert host.page_new_tabs("plain") is False
+        assert host.page_new_tabs("nothing") is False
+
+        host._plugins["tabs"].state = "starting"
+        assert host.page_new_tabs("tabs") is False
+
+    async def test_page_new_tabs_is_false_without_pages(self, env):
+        env.add("stub", pages=False)
+        host = env.host()
+        await host.start()
+        await env.enable(host, "stub")
+
+        assert host.page_new_tabs("stub") is False
+
+    async def test_review_carries_page_new_tabs(self, env):
+        env.add("tabs", pages=True, page_new_tabs=True)
+        host = env.host()
+        await host.start()
+
+        assert (await host.inspect("tabs"))["page_new_tabs"] is True
 
     async def test_unknown_plugin(self, env):
         host = env.host()

@@ -195,7 +195,7 @@ class TestToolDef:
 
 class TestInitializeResult:
     WIRE = {
-        "protocol_version": "1.2.0",
+        "protocol_version": "1.3.0",
         "plugin": {"name": "today", "version": "1.2.0"},
         "scope_types": [{"name": "calendar", "description": "A calendar id"}],
         "tools": [_tool()],
@@ -684,6 +684,23 @@ class TestPagesListResult:
             p.PagesListResult.from_wire({"pages": []}, mode="x")
 
 
+class TestFileParams:
+    @staticmethod
+    def _defn(properties):
+        return p.ToolDef(
+            name="put", description="d", parameters={"type": "object", "properties": properties},
+            read_only=False, destructive=False, gate="review",
+        )
+
+    def test_returns_the_spec_of_a_file_parameter(self):
+        spec = {"max_bytes": 1024, "media_types": ["text/html", "text/plain"]}
+        defn = self._defn({"html": {"type": "string", c.FILE_PARAM_KEY: spec}, "note": {"type": "string"}})
+        assert p.file_params(defn) == {"html": p.FileParamSpec("html", 1024, ("text/html", "text/plain"))}
+
+    def test_empty_without_a_file_parameter(self):
+        assert p.file_params(self._defn({"note": {"type": "string"}})) == {}
+
+
 class TestArgsDigest:
     def test_stable_under_key_order(self):
         assert p.args_digest({"a": 1, "b": [1, 2], "c": {"x": 1, "y": 2}}) == p.args_digest(
@@ -745,7 +762,7 @@ class TestSchema:
         "ApprovalAwaitResult", "ApprovalRevokedParams", "WebRequestParams",
         "WebRequestResult", "StoragePurgeParams", "StoragePurgeResult", "ToolsChangedParams",
         "ConnectorStateChangedParams", "PrincipalRemovedParams", "PluginDisablingParams", "ShutdownParams",
-        "PagesListParams", "PageEntry", "PagesListResult",
+        "PagesListParams", "PageEntry", "PagesListResult", "FileParamSpec", "ToolFile",
     ]
 
     def test_declares_2020_12(self, schema):
@@ -858,7 +875,7 @@ class TestSchema:
     def test_manifest_properties(self, schema):
         assert set(schema["$defs"]["Manifest"]["properties"]) == {
             "name", "display_name", "version", "protocol", "command", "source_operations", "tools",
-            "max_gate_floor", "pages", "service_credentials", "outputs", "output_types",
+            "max_gate_floor", "pages", "page_new_tabs", "service_credentials", "outputs", "output_types",
         }
 
     def test_documented_example_transcripts_validate(self):

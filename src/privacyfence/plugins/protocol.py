@@ -29,6 +29,7 @@ from privacyfence.plugins.constants import (
     CONFIRM_AWAIT_MAX_MS,
     DIGEST_RE,
     ERROR_CODES,
+    FILE_PARAM_KEY,
     GATES,
     INLINE_RESULT_BYTES,
     MAX_DESCRIPTION_CHARS,
@@ -743,6 +744,23 @@ class PagesListResult:
         return {"pages": [e.to_wire() for e in self.pages]}
 
 
+@dataclass(frozen=True)
+class FileParamSpec:
+    param: str
+    max_bytes: int
+    media_types: tuple[str, ...]
+
+
+def file_params(defn: ToolDef) -> dict[str, FileParamSpec]:
+    """The file parameters of a validated tool, by name (empty for most tools)."""
+    out: dict[str, FileParamSpec] = {}
+    for pname, schema in defn.parameters.get("properties", {}).items():
+        spec = schema.get(FILE_PARAM_KEY)
+        if spec is not None:
+            out[pname] = FileParamSpec(pname, spec["max_bytes"], tuple(spec["media_types"]))
+    return out
+
+
 def args_digest(args: dict) -> str:
     """Digest of a call's arguments, independent of key order, that both sides compute."""
     canonical = json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -776,6 +794,7 @@ __all__ = [
     "ApprovalRequestParams",
     "ConfirmRequestParams",
     "ExecuteResult",
+    "FileParamSpec",
     "InitializeResult",
     "PageEntry",
     "PagesListResult",
@@ -786,5 +805,6 @@ __all__ = [
     "ToolDef",
     "WebResponse",
     "args_digest",
+    "file_params",
     "principal_context",
 ]

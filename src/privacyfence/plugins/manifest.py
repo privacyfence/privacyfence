@@ -27,7 +27,8 @@ MANIFEST_FILENAME = "privacyfence-plugin.yaml"
 
 _SEMVER_RE = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?")
 _KEYS = {"name", "display_name", "version", "protocol", "command", "source_operations", "tools",
-         "max_gate_floor", "pages", "service_credentials", "outputs", "output_types"}
+         "max_gate_floor", "pages", "service_credentials", "outputs", "output_types",
+         "page_new_tabs"}
 _REQUIRED = {"name", "display_name", "version", "protocol", "command", "tools"}
 _MAX_MANIFEST_BYTES = 64 * 1024
 
@@ -49,6 +50,7 @@ class Manifest:
     service_credentials: bool
     outputs: bool = False
     output_types: tuple[str, ...] = ()
+    page_new_tabs: bool = False
 
 
 def _str(data: dict, key: str) -> str:
@@ -123,6 +125,9 @@ def load_manifest(plugin_dir: Path, *, mode: str = "local") -> Manifest:
     if floor not in ("review", "auto"):
         raise ManifestError("max_gate_floor must be \"review\" or \"auto\"")
     pages = _bool(data, "pages")
+    page_new_tabs = _bool(data, "page_new_tabs")
+    if page_new_tabs and not pages:
+        raise ManifestError("page_new_tabs needs pages: true")
     service_credentials = _bool(data, "service_credentials")
     if service_credentials and mode == "local":
         raise ManifestError("service_credentials is not allowed in local mode")
@@ -145,6 +150,7 @@ def load_manifest(plugin_dir: Path, *, mode: str = "local") -> Manifest:
         name=name, display_name=display_name, version=version, protocol=protocol,
         command=tuple(command), source_operations=frozenset(ops), max_gate_floor=floor,
         pages=pages, service_credentials=service_credentials, outputs=outputs, output_types=output_types,
+        page_new_tabs=page_new_tabs,
     )
 
 

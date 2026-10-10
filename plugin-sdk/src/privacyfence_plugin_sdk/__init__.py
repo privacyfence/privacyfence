@@ -6,6 +6,7 @@ stdout. This package handles the protocol so a plugin only registers tools, page
 from __future__ import annotations
 
 from . import blocks
+from ._files import IncomingFile, file_param
 from .plugin import PROTOCOL_VERSION, Context, PageRequest, Plugin, Prepared, Principal, ToolHandle
 from .responses import (
     ApprovalTicket,
@@ -28,6 +29,7 @@ __all__ = [
     "Context",
     "DownloadedFile",
     "Html",
+    "IncomingFile",
     "PageEntry",
     "PageRequest",
     "Plugin",
@@ -39,4 +41,5 @@ __all__ = [
     "ToolDefinitionError",
     "ToolHandle",
     "blocks",
+    "file_param",
 ]

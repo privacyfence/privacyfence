@@ -20,6 +20,7 @@ from privacyfence_plugin_sdk import (
     Text,
     ToolDefinitionError,
     blocks,
+    file_param,
     plugin as sdk_plugin,
 )
 
@@ -103,6 +104,12 @@ class TestLimits:
     def test_matches_the_daemons_constants(self, sdk_name, constant):
         assert getattr(sdk_plugin, sdk_name) == getattr(constants, constant)
 
+    def test_file_constants_match_the_daemons(self):
+        from privacyfence_plugin_sdk import _files
+
+        for name in ("FILE_PARAM_KEY", "MAX_FILE_BYTES", "MAX_FILE_PARAMS_PER_TOOL", "FILE_MEDIA_TYPES"):
+            assert getattr(_files, name) == getattr(constants, name)
+
     def test_timeouts_and_patterns(self):
         assert sdk_plugin._SOURCE_CALL_TIMEOUT_SECONDS == constants.TIMEOUT_SECONDS["source.call"]
         assert sdk_plugin._CONFIRM_REQUEST_TIMEOUT_SECONDS == constants.TIMEOUT_SECONDS["confirm.request"]
@@ -139,7 +146,7 @@ class TestInitialize:
     async def test_result_shape_parses_with_the_daemons_validator(self, daemon):
         result = await daemon.initialize()
         parsed = InitializeResult.from_wire(result)
-        assert parsed.protocol_version == "1.2.0"
+        assert parsed.protocol_version == "1.3.0"
         assert (parsed.plugin_name, parsed.plugin_version) == ("demo", "1.2.0")
         assert {t.name for t in parsed.tools} == {"list_events", "rename"}
         assert result["plugin"] == {"name": "demo", "version": "1.2.0"}
@@ -191,6 +198,31 @@ class TestToolDefinitionErrors:
         ({"title": "A\nB"}, "tool.title must not contain line breaks, tabs, control or bidirectional characters"),
         ({"effect": "A\tB"}, "tool.effect must not contain line breaks, tabs, control or bidirectional characters"),
         ({"name": "a" * 42}, "must match"),
+        ({"params": {"f": {**file_param(max_bytes=10, media_types=["text/html"]), "type": "integer"}}},
+         "parameter f of ok_tool: a file parameter must have type string"),
+        ({"params": {"f": {"type": "string", "x-privacyfence-file": {"max_bytes": 10}}}},
+         "parameter f of ok_tool: x-privacyfence-file takes max_bytes and media_types only"),
+        ({"params": {"f": {"type": "string", "x-privacyfence-file": "text/html"}}},
+         "parameter f of ok_tool: x-privacyfence-file takes max_bytes and media_types only"),
+        ({"params": {"f": file_param(max_bytes=0, media_types=["text/html"])}},
+         "parameter f of ok_tool: max_bytes must be 1 to 8388608"),
+        ({"params": {"f": file_param(max_bytes=8 * 1024 * 1024 + 1, media_types=["text/html"])}},
+         "parameter f of ok_tool: max_bytes must be 1 to 8388608"),
+        ({"params": {"f": file_param(max_bytes=True, media_types=["text/html"])}},
+         "parameter f of ok_tool: max_bytes must be 1 to 8388608"),
+        ({"params": {"f": file_param(max_bytes=10, media_types=[])}},
+         "parameter f of ok_tool: media_types must be a non-empty list of distinct supported types"),
+        ({"params": {"f": file_param(max_bytes=10, media_types=["text/html", "text/html"])}},
+         "parameter f of ok_tool: media_types must be a non-empty list of distinct supported types"),
+        ({"params": {"f": file_param(max_bytes=10, media_types=["video/mp4"])}},
+         "parameter f of ok_tool: media_types must be a non-empty list of distinct supported types"),
+        ({"params": {"f": file_param(max_bytes=10, media_types=["text/html"]),
+                     "g": file_param(max_bytes=10, media_types=["text/html"])}},
+         "tool ok_tool may take at most 1 file parameter"),
+        ({"read_only": True, "params": {"f": file_param(max_bytes=10, media_types=["text/html"])}},
+         "tool ok_tool takes a file and cannot be read-only"),
+        ({"gate": "auto", "params": {"f": file_param(max_bytes=10, media_types=["text/html"])}},
+         "tool ok_tool takes a file and must use the review or popup gate"),
     ])
     def test_floor_violations_raise_at_registration(self, kwargs, fragment):
         plugin = self.make()
@@ -993,3 +1025,133 @@ class TestRevokedEvent:
         await daemon.result("storage.purge", {"scope": "all"})
         assert seen == [("a1", "local")]
         await daemon.stop()
+
+
+def file_plugin() -> Plugin:
+    plugin = Plugin(name="filer", version="1.0.0")
+
+    @plugin.tool(
+        "publish", description="Publish a page.",
+        params={"html": file_param("The page.", max_bytes=1000, media_types=["text/html"]), "slug": {"type": "string"}},
+    )
+    async def publish(ctx, args):
+        info = ctx.files["html"]
+        with pytest.raises(RuntimeError, match="execute function only"):
+            _ = info.content
+        return Prepared(preview=[blocks.fields({"Name": info.name, "Bytes": str(info.size), "Digest": info.sha256})])
+
+    @publish.execute
+    async def do_publish(ctx, prepared, approval):
+        return {"content": ctx.files["html"].content.decode(), "name": ctx.files["html"].name}
+
+    @plugin.tool("plain", description="No file.")
+    async def plain(ctx, args):
+        return Prepared(preview=[blocks.text("plain")])
+
+    @plain.execute
+    async def do_plain(ctx, prepared, approval):
+        return {"files": dict(ctx.files)}
+
+    return plugin
+
+
+HTML = b"<!doctype html><p>hi</p>"
+
+
+def wire_file(data=HTML, *, content=False, **overrides):
+    import hashlib
+
+    item = {"name": "page.html", "size": len(data), "media_type": "text/html", "sniffed_type": "text/html",
+            "sha256": hashlib.sha256(data).hexdigest()}
+    if content:
+        item["content_base64"] = base64.b64encode(data).decode()
+    item.update(overrides)
+    return item
+
+
+async def initialize_as(daemon, version):
+    return await daemon.result("initialize", {
+        "protocol_version": version, "purpose": "run", "mode": "local",
+        "daemon": {"name": "privacyfence", "version": "9.9.9"},
+        "plugin": {"name": daemon.plugin.name, "manifest_version": daemon.plugin.version},
+        "data_dir": str(daemon.data_dir), "principals": [{"id": "local", "display_name": "L", "storage_dir": "/x"}],
+        "limits": {"max_line_bytes": 16 * 1024 * 1024, "max_in_flight": 16, "inline_result_bytes": 100000},
+    })
+
+
+class TestFileParameters:
+    @pytest.fixture
+    async def filer(self, make_daemon):
+        d = await make_daemon(file_plugin())
+        await initialize_as(d, "1.3.0")
+        yield d
+        await d.stop()
+
+    async def test_prepare_shows_metadata_only(self, filer, principal):
+        params = prepare_params(principal, "f1", "publish", {"slug": "a"})
+        params["files"] = {"html": wire_file()}
+        result = await filer.result("tool.prepare", params)
+        assert result["preview"][0]["items"][0]["value"] == "page.html"
+
+    async def test_execute_reads_the_content(self, filer, principal):
+        args = {"slug": "a"}
+        prep = prepare_params(principal, "f1", "publish", args)
+        prep["files"] = {"html": wire_file()}
+        await filer.result("tool.prepare", prep)
+        run = execute_params(principal, "f1", "publish", args)
+        run["files"] = {"html": wire_file(content=True)}
+        done = await filer.result("tool.execute", run)
+        assert done == {"result": {"content": HTML.decode(), "name": "page.html"}}
+
+    async def test_execute_with_other_bytes_is_a_digest_mismatch(self, filer, principal):
+        prep = prepare_params(principal, "f1", "publish")
+        prep["files"] = {"html": wire_file()}
+        await filer.result("tool.prepare", prep)
+        run = execute_params(principal, "f1", "publish")
+        run["files"] = {"html": wire_file(b"<html>other</html>", content=True)}
+        data = await filer.error("tool.execute", run)
+        assert (data["code"], data["detail"]) == ("digest_mismatch", "the files differ from the prepared call")
+        run["files"] = {}
+        assert (await filer.error("tool.execute", run))["code"] == "digest_mismatch"
+
+    async def test_a_tool_without_a_file_parameter_sees_no_files(self, filer, principal):
+        await filer.result("tool.prepare", prepare_params(principal, "p1", "plain"))
+        done = await filer.result("tool.execute", execute_params(principal, "p1", "plain"))
+        assert done == {"result": {"files": {}}}
+
+    async def test_files_for_a_tool_without_one_are_refused(self, filer, principal):
+        params = prepare_params(principal, "p1", "plain")
+        params["files"] = {"html": wire_file()}
+        data = await filer.error("tool.prepare", params)
+        assert data["code"] == "invalid_params" and data["detail"].startswith("files.html:")
+
+    async def test_ctx_files_is_read_only(self, filer):
+        ctx = filer.plugin._ctx("local")
+        with pytest.raises(TypeError):
+            ctx.files["x"] = None
+
+    async def test_older_daemon_is_not_offered_the_file_tool(self, make_daemon, caplog):
+        d = await make_daemon(file_plugin())
+        with caplog.at_level("WARNING", logger="privacyfence_plugin_sdk"):
+            result = await initialize_as(d, "1.2.0")
+        assert [t["name"] for t in result["tools"]] == ["plain"]
+        assert [r.getMessage() for r in caplog.records] == [
+            "tool publish takes a file, which needs PrivacyFence with plugin protocol 1.3; it is not offered"]
+        await d.plugin.tools_changed()
+        await asyncio.sleep(0.05)
+        changed = [m for m in d.incoming if m["method"] == "tools.changed"]
+        assert [t["name"] for t in changed[-1]["params"]["tools"]] == ["plain"]
+        assert len(caplog.records) == 1  # once per tool
+        await d.stop()
+
+    async def test_a_daemon_with_1_3_keeps_the_file_tool(self, make_daemon):
+        d = await make_daemon(file_plugin())
+        result = await initialize_as(d, "1.3.0")
+        assert [t["name"] for t in result["tools"]] == ["publish", "plain"]
+        await d.stop()
+
+    async def test_unparsable_version_counts_as_old(self, make_daemon):
+        d = await make_daemon(file_plugin())
+        result = await initialize_as(d, "1.x.0")
+        assert [t["name"] for t in result["tools"]] == ["plain"]
+        await d.stop()

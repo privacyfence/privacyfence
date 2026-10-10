@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 
 from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
 from privacyfence.plugins import pages as plugin_pages
-from privacyfence.web.csp import build_csp, set_frame_self, set_plugin_embed
+from privacyfence.web.csp import build_csp, set_frame_self, set_plugin_embed, set_plugin_new_tabs
 from privacyfence.web.server import (
     DEFAULT_PORT,
     SHUTDOWN_GRACE_SECONDS,
@@ -593,6 +593,35 @@ def _flagging_app(*flags):
 
 def _csp_directives(csp: str) -> dict[str, str]:
     return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
+
+
+class TestPluginNewTabs:
+    """The new-tabs flag swaps only the plugin page's CSP, for that response only; the embed flag wins."""
+
+    @staticmethod
+    def _client(app):
+        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
+
+    def test_flag_gives_the_new_tabs_csp_and_keeps_the_other_headers(self):
+        r = self._client(_flagging_app(set_plugin_new_tabs)).get("/plugins/echo/")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP_NEW_TABS]
+        assert r.headers.get_list("x-frame-options") == ["DENY"]
+        assert r.headers["cross-origin-opener-policy"] == "same-origin"
+        assert r.headers["referrer-policy"] == "no-referrer"
+        assert r.headers["cache-control"] == "private, no-store"
+
+    def test_embed_wins(self):
+        r = self._client(_flagging_app(set_plugin_new_tabs, set_plugin_embed)).get("/plugins/echo/approval")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP_EMBEDDED]
+        assert r.headers.get_list("x-frame-options") == ["SAMEORIGIN"]
+
+    def test_flag_outside_plugins_changes_nothing(self):
+        r = self._client(_flagging_app(set_plugin_new_tabs)).get("/approvals")
+        assert "allow-popups" not in r.headers["content-security-policy"]
+
+    def test_no_flag_keeps_the_sandbox(self):
+        r = self._client(_flagging_app()).get("/plugins/echo/")
+        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
 
 
 class TestPluginEmbed:
