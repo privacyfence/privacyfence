@@ -305,6 +305,9 @@ TOOL_TO_GATE: dict[str, str] = {
     "apps_script_get_content":         "review",
     "apps_script_write_content":       "popup",
     "apps_script_get_execution_log":   "review",
+    # Grist
+    "grist_list_documents":            "auto",
+    "grist_list_tables":               "auto",
 }
 
 @dataclass

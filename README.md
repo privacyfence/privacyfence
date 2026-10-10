@@ -75,6 +75,7 @@ MCP-compatible client can connect. See
 | Salesforce | Read records, search, run reports (read-only) |
 | Jira | Read, create, update, comment on and transition issues |
 | Confluence | Search and read pages and attachments; create and update pages |
+| Grist | List documents and tables; read records after review; add and update records, add tables and columns (nothing is deleted) |
 
 [Connectors](https://privacyfence.eu/connectors/) summarizes what each one reviews and which writes
 need approval; the [Tools reference](https://privacyfence.eu/docs/tools-reference/) lists every

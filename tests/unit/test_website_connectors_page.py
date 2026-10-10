@@ -57,4 +57,4 @@ def test_the_totals_in_the_copy_match():
     total = sum(int(ref["tools"]) for ref in REFERENCE.values())
     assert f"{total} tools" in PAGE
     assert f"{total} connector tools" in read_page("/how-it-works/")
-    assert len(REFERENCE) == 11 and "Eleven connectors" in PAGE
+    assert len(REFERENCE) == 12 and "Twelve connectors" in PAGE
