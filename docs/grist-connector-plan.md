@@ -43,49 +43,49 @@ only in Grist's paid editions); any Grist server; keep the schema tools, knowing
   (`:600-640`). Slack uses port 53682 and Atlassian 53684 (`atlassian_oauth.py:25`).
   `oauth_loopback.run_browser_oauth` (`:148`) does the loopback listener, `state` and PKCE.
 - **Typed credentials in Settings**: only Telegram's phone/code/2FA form so far:
-  `settings_controller.py:1424-1535` (`telegram_start_auth` and friends, run through `_run_async`),
-  the modal in `settings_window_html.py:1355-1440` and `:1499-1573`, and in org mode
+  `settings_controller.py:1362-1473` (`telegram_start_auth` and friends, run through `_run_async`),
+  the modal in `settings_window_html.py:1185-1268` and `:1327-1377`, and in org mode
   `web/routes_connect.py` (`_check_telegram_post` `:421-426`, `telegram_start` `:428-454`,
-  `_telegram_box_html` `:613-671`, routes `:538-541`). The settings audit records only an action's
-  name (`web/routes_settings.py:886`), never its arguments.
+  `_telegram_box_html` `:614-668`, routes `:538-541`). The settings audit records only an action's
+  name (`web/routes_settings.py:881`), never its arguments.
 - **Daemon wiring**: `daemon_main.TOKEN_FILES` (`:169-180`), resolved per principal by
-  `_resolve_path` (`:280-299`). `build_connectors()` (`:1275-1578`) builds each connector in a
-  `try`; the Salesforce block (`:1466-1481`) is the pattern; `_classify_connector_failure`
-  (`:1222-1258`) maps a message containing `"Use Authenticate…"` to `not_authenticated` and one
+  `_resolve_path` (`:278-297`). `build_connectors()` (`:1263-1566`) builds each connector in a
+  `try`; the Salesforce block (`:1454-1469`) is the pattern; `_classify_connector_failure`
+  (`:1210-1246`) maps a message containing `"Use Authenticate…"` to `not_authenticated` and one
   containing `"organization config not installed"` to `no_org_config`. CLI:
-  `run_salesforce_oauth` (`:1786-1802`) and the `--salesforce-oauth` flag (`:2190`, dispatched at
-  `:2314-2335`). Token writers go through `secure_files.atomic_write_json` (mode `0600`) and are
+  `run_salesforce_oauth` (`:1721-1737`) and the `--salesforce-oauth` flag (`:2098`, dispatched at
+  `:2222-2243`). Token writers go through `secure_files.atomic_write_json` (mode `0600`) and are
   listed in `TOKEN_WRITE_SITES` (`tests/unit/test_systemic_gate_invariants.py:177-188`, 10
   entries, pinned by `test_ten_token_write_sites_are_listed` at `:248`).
-- **Settings page (local mode)**: `settings_controller.authenticate_connector` (`:1258-1275`)
-  dispatches to `_authenticate_salesforce` (`:1331-1357`) and friends; `ALL_CONNECTORS`
+- **Settings page (local mode)**: `settings_controller.authenticate_connector` (`:1196-1213`)
+  dispatches to `_authenticate_salesforce` (`:1269-1295`) and friends; `ALL_CONNECTORS`
   (`:89-92`), `ORG_CONFIG_SERVICE` (`:115-121`), `ORG_BUNDLE_SERVICES` (`:122`). The page's
   Authenticate… button is generic, so no HTML change is needed for an OAuth connector.
 - **Org mode**: `web/routes_connect.py` `OAUTH_SERVICES` (`:100`), `_GRANT_KEY` (`:108-109`),
-  `SERVICE_LABELS` (`:112-115`), `_ORG_CONFIG_SECTION` (`:118-119`), `_is_configured`
-  (`:138-148`), `_build_authorize_url` (`:244-284`), `_exchange_and_save` (`:290-330`); the
+  `SERVICE_LABELS` (`:111-115`), `_ORG_CONFIG_SECTION` (`:118-119`), `_is_configured`
+  (`:138-148`), `_build_authorize_url` (`:244-284`), `_exchange_and_save` (`:290-326`); the
   `/oauth/start/{service}` and `/oauth/callback/{service}` routes are generic. The bundle is built
   by `scripts/build_org_bundle.py` (standard library only): one argument group and section per
   service, `_CONNECTOR_CALLBACKS` (`:52-57`, indexed for every service at `:744`), the
   `services` tuple at `:692`.
 - **QA**: `scripts/qa_authenticate_connectors.py` `STEPS` (`:74-84`) runs each `--<x>-oauth` flag;
-  `scripts/qa_fixture_recorder.py` `CONNECTOR_CHECKS` (`:1776`) and `EXPECTED_FIXTURES` (`:1802`)
+  `scripts/qa_fixture_recorder.py` `CONNECTOR_CHECKS` (`:1739`) and `EXPECTED_FIXTURES` (`:1765`)
   must have equal keys (import-time assert); `RawCapture` (`:595-628`) wraps a client's
-  `_request(fn, *args, **kwargs)`; `LIFECYCLE_CHECKS` (`:2353`); `lifecycle_confluence`
-  (`:2195-2240`) is the create-and-update-without-delete precedent. Live credentials exist only on
+  `_request(fn, *args, **kwargs)`; `LIFECYCLE_CHECKS` (`:2316`); `lifecycle_confluence`
+  (`:2158-2202`) is the create-and-update-without-delete precedent. Live credentials exist only on
   the self-hosted runner under `~/privacyfence/` (ADR 0019, `docs/connector-qa.md` "Persistent QA
   state").
-- **Policy tables** a new tool must appear in: `auto_accept.TOOL_TO_GATE` (`:177`),
-  `TOOL_TO_OPERATION` (`:84`), `policy/registry.py` `TOOL_TO_VERB` (`:141`),
+- **Policy tables** a new tool must appear in: `auto_accept.TOOL_TO_GATE` (`:176`),
+  `TOOL_TO_OPERATION` (`:83`), `policy/registry.py` `TOOL_TO_VERB` (`:141`),
   `write_effects.EFFECT_BY_TOOL` (`:42`), optionally `gate._TOOL_LAYOUT` (`:254-296`).
   `policy/scopes.SCOPE_SELECTORS` is the frozen set checked against `tests/unit/policy/_v1_reference.py`;
   a scope with no v1 predicate goes in `NEW_SCOPE_SELECTORS` (`:555`) and is offered through
-  `policy/catalogue.EXTRA_SCOPES` (`:47`), the Apps Script precedent (`apps_script.project`).
-  `policy/propose.py` only proposes from `SCOPE_SELECTORS` (`:514-516`), so an `EXTRA_SCOPES`
+  `policy/catalogue.EXTRA_SCOPES` (`:46`), the Apps Script precedent (`apps_script.project`).
+  `policy/propose.py` only proposes from `SCOPE_SELECTORS` (`:502`), so an `EXTRA_SCOPES`
   operation never gets the popup's "Always allow" (ADR 0077).
 - **Every-connector bookkeeping enforced by tests**: `tests/unit/connectors/test_readme_manifest_alignment.py`
   `CONNECTOR_CLASSES` (`:36-40`), `scripts/generate_tools_reference.py`
-  `CONNECTOR_TITLES`/`CONNECTOR_SHORT` (`:44-70`), `docs/tools-reference.md` (generated),
+  `CONNECTOR_TITLES`/`CONNECTOR_SHORT` (`:44-71`), `docs/tools-reference.md` (generated),
   `docs/always-allow-rules-reference.md` (generated; lists every review and popup tool),
   `scripts/pyinstaller_common.py` hidden imports (`:74-86`), `tests/unit/test_website_connector_pages.py`
   `CONNECTORS` (`:28-40`: a README row, a setup guide in `scripts/build_site.py` `CONNECTOR_GUIDES`
@@ -110,9 +110,10 @@ only in Grist's paid editions); any Grist server; keep the schema tools, knowing
   `test_readme_manifest_alignment.py` (`_SRC_TOOL_GATE_RE`), `test_write_effects.py` and
   `test_systemic_gate_invariants.py` read the source; a shared helper that passes the tool name as a
   variable defeats them and is not allowed.
-- This plan and its manual-steps page are listed in `scripts/build_site.py` `CONTRIBUTOR_DOCS` and in
+- This plan (`grist-connector-plan.md`) is listed in `scripts/build_site.py` `CONTRIBUTOR_DOCS` and in
   `docs/README.md`'s contributor half while the work is open (the plan branch's own commit does
-  that, so `tests/unit/test_website_docs_allowlist.py` passes); the last phase removes both entries.
+  that, so `tests/unit/test_website_docs_allowlist.py`, which checks `docs/*.md` only, passes); the
+  last phase removes both entries. The manual-steps page is HTML and is in neither list.
 - Every phase ends with `ruff check .` and `python3 -m pytest tests/unit -q` passing in full.
 
 ### 3.1 Grist API, API keys and OAuth used
@@ -499,9 +500,9 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   (`grist_bundle_settings`, `load_grist_token` and `grist_resolve_credential` are
   `grist_auth.bundle_settings`, `load_token_file` and `resolve_credential` imported under those
   names, like `load_salesforce_token`. `download_mode` is the `org_mode.resolve_mode(org_config)`
-  value `build_connectors` already computes near its top (`daemon_main.py:1306`); reuse it.)
+  value `build_connectors` already computes near its top (`daemon_main.py:1294`); reuse it.)
 - `run_grist_oauth(org_config) -> int` and a `--grist-oauth` flag, in the shape of
-  `run_salesforce_oauth` (`:1786-1802`) and its flag/dispatch: no OAuth app in the bundle → print
+  `run_salesforce_oauth` (`:1721-1737`) and its flag/dispatch: no OAuth app in the bundle → print
   `"No Grist OAuth app in the organization config."` to stderr, return 1; success → print
   `f"Grist OAuth complete. Signed in to {host}."`, return 0; `GristClientError` → print
   `f"Grist OAuth setup failed: {exc}"`, return 1. There is no CLI flag for an API key; the
@@ -510,7 +511,7 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   sets `has_org = True` for `"grist"` (an API key needs no bundle in local mode), so Grist gets no
   `ORG_CONFIG_SERVICE` entry and is not added to `ORG_BUNDLE_SERVICES`; `authenticate_connector`
   gains `elif connector == "grist": self._authenticate_grist(org_config)`; `_authenticate_grist` is
-  `_authenticate_salesforce` (`:1331-1357`) with `grist_auth.bundle_settings(..., org_mode=False)`
+  `_authenticate_salesforce` (`:1269-1295`) with `grist_auth.bundle_settings(..., org_mode=False)`
   (no OAuth app → `self.error = "Grist uses an API key on this install. Use Authenticate… on the Grist row."`;
   a `GristClientError` from a malformed section → `self.error = f"Grist organization config is not usable: {exc}"`)
   and `grist_auth.authorize_interactive`, error text `f"Grist authentication failed: {result}"`.
@@ -522,7 +523,7 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   carries a Grist OAuth app, `"unavailable"` when the helper returned an error, else `"api_key"`;
   `"grist_server_url_pinned"` (the bundle's `server_url`, or `""`); and
   `"grist_auth": {"error": <str>}` (the pending form error, else the helper's error, else `""`).
-  The org-mode settings snapshot in `web/routes_settings.py` (`:1331-1350`, which stubs
+  The org-mode settings snapshot in `web/routes_settings.py` (`:1320-1339`, which stubs
   `"telegram_auth"`) gets the same three keys as stubs (`"unavailable"`, `""`, `{"error": ""}`).
   New action `grist_connect(self, api_key: str, server_url: str = "") -> dict[str, Any]` (the page
   sends `server_url: ""` when the address is pinned):
@@ -545,7 +546,7 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   `telegram_submit_2fa`; ADR 0070 makes *enabling* a connector sensitive, and that still applies.
   The approval card naming the server on every Grist call answers the arbitrary-server risk (ADR 0143).
 - `settings_window_html.py`: reads the new keys defensively (`state.grist_auth || {error: ''}`, as
-  Telegram's at `:1376`). When `grist_signin == "oauth"` the Grist row keeps the generic
+  Telegram's at `:1206`). When `grist_signin == "oauth"` the Grist row keeps the generic
   Authenticate… (`authenticate_connector`); when it is `"unavailable"` the row's auth link is
   `aria-disabled` and `grist_auth.error` shows under the row. When it is `"api_key"` the row gets
   `data-grist-auth="1"` (as Telegram's `data-telegram-auth`), opening a modal with **Server
@@ -557,7 +558,7 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   (`_run_async`), so on each render: while the row is `busy`, show "Connecting…"; once
   `ui.gristSubmitted` is true, the row is no longer `busy` and `grist_auth.error` is `""`, close
   the modal and reset the flag (the shape of Telegram's `telegramAuthWasActive` check,
-  `settings_window_html.py:1416-1421`); a non-empty error is shown and the modal stays open. The key
+  `settings_window_html.py:1247-1252`); a non-empty error is shown and the modal stays open. The key
   field is cleared after every submit.
 
 ### 3.6 Org mode
@@ -924,9 +925,9 @@ phases:
             <li data-connector="grist"><a href="/connectors/grist/">Grist</a></li> after the Telegram line, and
             update the partial's header comment ("the other four") to the new count. The Grist page includes
             the partial with current="grist" exactly as the Telegram page does with current="telegram";
-            scripts/build_site.py's _without_current_connector (l.304-310) raises BuildError without that line.
+            scripts/build_site.py's _without_current_connector (l.306-312) raises BuildError without that line.
          k. docs/README.md: add "- [`grist-setup.md`](grist-setup.md)" after the telegram-setup.md line in the
-            user-and-operator half's connector guide list (l.46-51), so test_website_docs_allowlist.py passes.
+            user-and-operator half's connector guide list (l.44-49), so test_website_docs_allowlist.py passes.
       6. Create tests/unit/connectors/test_grist_connector.py (module docstring; pytestmark unit): TestDispatch
          (unknown tool → ValueError); TestListDocuments (including GristAccessDenied → the §3.3 refusal message) and TestListTables (never call gated_call — use the
          gated_call_spy fixture pattern from tests/unit/connectors/test_salesforce_connector.py:75-84 and assert it
@@ -1101,7 +1102,7 @@ phases:
     brief: |
       Read first: plan §3.4 "Rule scope", and how apps_script.project is wired: policy/scopes.py:515-572,
       policy/catalogue.py:1-60, the propose.py docstring's "What the popup deliberately does not propose",
-      tests/unit/policy/test_scopes.py:395-420, tests/unit/policy/test_catalogue.py:20-70, tests/unit/test_gate.py:1040-1060.
+      tests/unit/policy/test_scopes.py:395-420, tests/unit/policy/test_catalogue.py:20-70, tests/unit/test_gate.py:1037-1052.
       1. scopes.py: add _grist_document_matches (the _apps_script_project_matches shape on ctx.args["doc_id"]) and
          the "grist.document" entry in NEW_SCOPE_SELECTORS exactly as §3.4; extend the "Scope types with no old
          predicate" comment and the module docstring's NEW_SCOPE_SELECTORS sentence to name grist.document.
@@ -1143,10 +1144,10 @@ phases:
       - tests/unit/test_settings_controller.py
     brief: |
       Read first: plan §3.5 (the daemon, CLI and "OAuth path" bullets) and §3.2.1; the Salesforce wiring this copies:
-      daemon_main.py TOKEN_FILES (l.169-180), the Salesforce block of build_connectors (l.1466-1481), run_salesforce_oauth
-      (l.1786-1802), the --salesforce-oauth flag and dispatch (l.2183-2192, 2299-2335); settings_controller.py
-      authenticate_connector and _authenticate_salesforce (l.1258-1357), ALL_CONNECTORS (l.89-92), _connectors_state
-      (l.1797-1830).
+      daemon_main.py TOKEN_FILES (l.169-180), the Salesforce block of build_connectors (l.1454-1469), run_salesforce_oauth
+      (l.1721-1737), the --salesforce-oauth flag and dispatch (l.2091-2100, 2207-2243); settings_controller.py
+      authenticate_connector and _authenticate_salesforce (l.1196-1295), ALL_CONNECTORS (l.89-92), _connectors_state
+      (l.1734-1767).
       1. daemon_main.py: TOKEN_FILES["grist"]; imports (GristClient, GristClientError, GristConnector, and grist_auth's
          bundle_settings, load_token_file, resolve_credential and authorize_interactive under the names in §3.5); the
          build_connectors block exactly as §3.5; run_grist_oauth and --grist-oauth with the exact messages.
@@ -1186,14 +1187,14 @@ phases:
       - tests/unit/test_settings_window_html.py
     brief: |
       Read first: plan §3.5 ("API-key path", org_settings_scope/routes_settings and settings_window_html bullets) and
-      §3.2.1 (save_api_key, GristApiKey); the Telegram flow this copies: settings_controller.py:1420-1535,
-      settings_window_html.py:1355-1440 and 1499-1573, web/org_settings_scope.py:134-137, web/routes_settings.py:254-261.
+      §3.2.1 (save_api_key, GristApiKey); the Telegram flow this copies: settings_controller.py:1357-1473,
+      settings_window_html.py:1185-1268 and 1327-1377, web/org_settings_scope.py:126-129, web/routes_settings.py:251-258.
       1. settings_controller.py: the _grist_bundle helper; snapshot keys grist_signin, grist_server_url_pinned and
          grist_auth; self._grist_auth initialised next to _telegram_auth; grist_connect (api_key first, server_url
          defaulting to "") and grist_cancel_auth exactly as §3.5. The key is never stored
          on self, put in the snapshot or logged.
       2. web/org_settings_scope.py and web/routes_settings.py: the two actions as §3.5 (LOCAL_MODE, non-sensitive), and the
-         three stub keys in the org-mode settings snapshot (web/routes_settings.py:1331-1350).
+         three stub keys in the org-mode settings snapshot (web/routes_settings.py:1320-1339).
       3. settings_window_html.py: the Grist row and modal as §3.5, reusing the Telegram modal's CSS classes and helpers.
       4. Tests: test_settings_controller.py — grist_connect with an OAuth app in the bundle sets the "connects with OAuth"
          error; empty key and bad URL set their errors; success (GristClient.check_connection monkeypatched, _run_async
@@ -1264,7 +1265,7 @@ phases:
     brief: |
       Read first: plan §3.6 (the "API key" bullet and the rendering bullet's form) and §3.2.1 (GristApiKey, save_api_key);
       the Telegram handlers and box in web/routes_connect.py (_check_telegram_post l.421-426, telegram_start l.428-454,
-      _telegram_box_html l.613-671, routes l.538-541).
+      _telegram_box_html l.614-668, routes l.538-541).
       1. Rename _check_telegram_post to _check_form_post and update its callers.
       2. Add the form to _grist_box_html for a section without an OAuth app, the grist_errors store, the grist_connect
          handler and Route("/connect/grist", grist_connect, methods=["POST"]) exactly as §3.6.
@@ -1294,7 +1295,7 @@ phases:
       - docs/connector-qa.md
     brief: |
       Read first: docs/connector-qa.md (whole), docs/testing-policy.md "Layer 5", scripts/qa_fixture_recorder.py
-      _build_salesforce_client (l.948-956), check_confluence (l.811-865), lifecycle_confluence (l.2195-2240), RawCapture
+      _build_salesforce_client (l.948-956), check_confluence (l.811-865), lifecycle_confluence (l.2158-2202), RawCapture
       (l.595-628), and the `.claude/skills/steward/SKILL.md` notes on qa-record-fixture.yml.
       1. scripts/qa_fixture_recorder.py:
          - _build_grist_client(): bundle = grist_auth.bundle_settings(daemon_main.load_org_config().get("grist") or {},
@@ -1372,19 +1373,19 @@ phases:
       - scripts/build_site.py
     brief: |
       Read first: docs/adr/README.md (template and rules), plan §3 and §4, docs/configuration-reference.md (l.95-110 and
-      219-260), CHANGELOG.md's "## [Unreleased]" section.
+      213-254), CHANGELOG.md's "## [Unreleased]" section.
       1. The setup guide grist-setup.md in docs/: check every statement against the code as it now is (error texts from
          grist_auth.py and grist_client.py, the option names in build_org_bundle.py, the port and callback paths) and
          correct it.
       2. docs/configuration-reference.md: add grist to the connectors.<name>.enabled list (l.103), Grist to the sentence
-         listing per-service guides (l.223-227) as "[Grist setup](grist-setup.md)", and `--grist-oauth` to the CLI flag
+         listing per-service guides (l.217-221) as "[Grist setup](grist-setup.md)", and `--grist-oauth` to the CLI flag
          table next to `--salesforce-oauth`. docs/approvals-and-policy.md: in the scope table with the "Apps Script
          project" row (l.386), add "| Grist document | identity | document ids | `grist.document` | the document is one
          of these |" after it.
          docs/connecting-a-service.md: add Grist to the provider lists (l.4, l.134, l.181) and the row
          "| Grist | 53685 |" to the loopback-port table (l.72-77). docs/org-mode-setup-guide.md: add the row
          "| Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |"
-         before the Telegram row of the per-connector table (l.191), and the four --grist-* options to the build-options table (l.271-272)
+         before the Telegram row of the per-connector table (l.193), and the four --grist-* options to the build-options table (l.271-273)
          matching configuration-reference.md's rows.
       3. CHANGELOG.md under "## [Unreleased]" (never a version heading): one Added line — "Grist connector: list tables
          and columns, read records after review, and add or update records and add tables and columns with approval,
