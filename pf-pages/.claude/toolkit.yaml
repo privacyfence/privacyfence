@@ -1,0 +1,33 @@
+# devflow project profile for pf-pages (the PrivacyFence "pages" plugin).
+# Read by /devflow:make-plan, /devflow:implement and /devflow:dod; see the devflow plugin's
+# project-profile skill for what each key does.
+project:
+  name: pf-pages
+docs:
+  must_read:
+    - README.md
+    - docs/pf-pages-plan.md
+  plan_dir: docs
+  changelog:
+    file: CHANGELOG.md
+    section: "## [Unreleased]"
+git:
+  main_branch: main
+  branch_pattern: "<type>/<kebab-case>"
+  branch_types: [feature, fix, chore, tests, plan]
+  merge_style: merge-commit
+verify:
+  fast:
+    - python -m ruff check .
+    - python -m pytest -q
+  dod:
+    - python -m ruff check .
+    - python -m ruff format --check .
+    - python -m pytest -q
+    - python -m pf_pages --self-test
+  dod_manual:
+    - "A change to what a tool releases or writes, or to the page browser: run the smoke test in README.md#smoke-test on a packaged PrivacyFence install and paste the result into the PR."
+stacks: [python]
+models:
+  worker: sonnet
+  reviewer: opus

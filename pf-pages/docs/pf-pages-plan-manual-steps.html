@@ -1,0 +1,85 @@
+<title>pf-pages Setup Checklist</title>
+<style>
+/* Layout: one readable column; each manual item is a bordered section with a checklist of steps. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1d232b; --muted: #5b6573; --line: #d9dee5;
+  --accent: #2f5fa7; --ok: #2d7a46;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161c; --surface: #1a2028; --fg: #e4e8ee; --muted: #9aa5b3; --line: #2c3540;
+  --accent: #7fa8e6; --ok: #6cc28b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161c; --surface: #1a2028; --fg: #e4e8ee; --muted: #9aa5b3; --line: #2c3540;
+  --accent: #7fa8e6; --ok: #6cc28b; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+main { max-width: 46rem; margin: 0 auto; padding-inline: 16px; padding-block: 2rem 3rem; display: grid; gap: 1.5rem; }
+h1 { font-size: 1.6rem; margin: 0; text-wrap: balance; }
+h2 { font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 1rem 0 0; }
+h3 { font-size: 1.1rem; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 65ch; }
+section.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 1.1rem 1.2rem; display: grid; gap: .75rem; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: .5rem 1rem; color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: .55rem; counter-reset: s; }
+ol.steps li { display: grid; grid-template-columns: auto 1fr; gap: .6rem; align-items: start; counter-increment: s; }
+ol.steps li label { min-width: 0; }
+ol.steps li label::before { content: counter(s) ". "; color: var(--muted); font-variant-numeric: tabular-nums; }
+input[type="checkbox"] { width: 1.05rem; height: 1.05rem; margin-top: .2rem; accent-color: var(--accent); }
+input:checked + label { color: var(--muted); }
+input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--accent); }
+code { font-family: var(--font-mono); font-size: .88em; overflow-wrap: anywhere; }
+.done { border-left: 3px solid var(--ok); padding-left: .7rem; font-size: .93rem; }
+.done b { color: var(--ok); }
+</style>
+<main>
+  <header style="display:grid;gap:.5rem">
+    <h1>pf-pages setup checklist</h1>
+    <p class="lede">These are the steps only you can do for the <code>pages</code> plugin plan: one before implementation starts and one after the last phase merges. Ticks are saved in this browser only.</p>
+  </header>
+
+  <h2>Before implementation</h2>
+  <section class="item" id="mb1">
+    <h3>Land the framework page browser, create privacyfence/pf-pages, and hand over</h3>
+    <div class="meta"><span>id <code>mb1-ready</code></span><span>about 10 minutes, plus the framework PR</span></div>
+    <ol class="steps">
+      <li><input type="checkbox" id="mb1-0"><label for="mb1-0">Make sure the framework PR from <a href="https://github.com/privacyfence/privacyfence/blob/plan/plugin-page-browser/docs/plugin-page-browser-plan.md" target="_blank" rel="noopener">the page-browser plan</a> (branch <code>feature/plugin-page-browser</code>) has merged into its base. The plugin needs its SDK (<code>@plugin.page_index</code>).</label></li>
+      <li><input type="checkbox" id="mb1-1"><label for="mb1-1">Open <a href="https://github.com/organizations/privacyfence/repositories/new" target="_blank" rel="noopener">New repository for privacyfence</a>. Name it <code>pf-pages</code>, choose Public (the SDK it depends on is public, so CI needs no token), and tick <b>Add a README file</b> so a <code>main</code> branch exists. Choose <b>Create repository</b>.</label></li>
+      <li><input type="checkbox" id="mb1-2"><label for="mb1-2">Open <a href="https://github.com/apps/claude/installations/select_target" target="_blank" rel="noopener">the Claude GitHub app installations</a>, pick the <code>privacyfence</code> organization, and make sure <code>pf-pages</code> is among the selected repositories (or that the app has all repositories). Save.</label></li>
+      <li><input type="checkbox" id="mb1-3"><label for="mb1-3">Go back to the Claude Code session that wrote this plan and say <code>pf-pages is ready</code>. It writes the framework merge commit into the plan as the SDK pin, adds the repository, and pushes the plan branch <code>plan/pf-pages</code> there: the plan, this page, and <code>.claude/toolkit.yaml</code>.</label></li>
+      <li><input type="checkbox" id="mb1-4"><label for="mb1-4">Open <a href="https://github.com/privacyfence/pf-pages/tree/plan/pf-pages" target="_blank" rel="noopener">plan/pf-pages on GitHub</a> and check that <code>docs/pf-pages-plan.md</code> and <code>.claude/toolkit.yaml</code> are there, and that the plan no longer contains <code>&lt;SDK_SHA&gt;</code>.</label></li>
+    </ol>
+    <p class="done"><b>Done when</b> https://github.com/privacyfence/pf-pages/blob/plan/pf-pages/docs/pf-pages-plan.md exists and contains no <code>&lt;SDK_SHA&gt;</code>. Then start a new session on <code>pf-pages</code> and run <code>/devflow:implement https://github.com/privacyfence/pf-pages/blob/plan/pf-pages/docs/pf-pages-plan.md</code>.</p>
+  </section>
+
+  <h2>After implementation</h2>
+  <section class="item" id="ma1">
+    <h3>Run the smoke test on a packaged PrivacyFence install</h3>
+    <div class="meta"><span>id <code>ma1-smoke-test</code></span><span>about 30 minutes, plus build time</span></div>
+    <ol class="steps">
+      <li><input type="checkbox" id="ma1-1"><label for="ma1-1">Note the branch that holds the framework page browser (where <code>feature/plugin-page-browser</code> merged, <code>feature/plugins-nav-menu</code> unless it has moved on). Without it there is no page browser and the plugin's pages are not listed.</label></li>
+      <li><input type="checkbox" id="ma1-2"><label for="ma1-2">Get a packaged PrivacyFence built from that branch. On <a href="https://github.com/privacyfence/privacyfence/actions/workflows/build.yml" target="_blank" rel="noopener">the build workflow</a> choose <b>Run workflow</b> with that branch, or ask Claude to dispatch it. Install the artifact for your OS from that run.</label></li>
+      <li><input type="checkbox" id="ma1-3"><label for="ma1-3">From the feature PR's latest <a href="https://github.com/privacyfence/pf-pages/actions/workflows/ci.yml" target="_blank" rel="noopener">pf-pages CI run</a>, download the <code>pages-plugin-&lt;your OS&gt;</code> artifact and unzip it to a folder named <code>pages</code>.</label></li>
+      <li><input type="checkbox" id="ma1-4"><label for="ma1-4">As an administrator, copy the <code>pages</code> folder into the plugins directory, following <a href="https://github.com/privacyfence/privacyfence/blob/feature/plugin-framework-polish/docs/plugins.md#installing-a-plugin" target="_blank" rel="noopener">Installing a plugin</a>. On macOS that is <code>/Library/PrivacyFence/plugins</code>, on Windows <code>C:\Program Files\PrivacyFence Plugins</code>, and on Linux <code>/usr/local/lib/privacyfence/plugins</code>.</label></li>
+      <li><input type="checkbox" id="ma1-5"><label for="ma1-5">In Settings → Plugins, choose <b>Rescan</b>, then <b>Review and enable</b> on Pages. The card should list 10 tools: 6 Popup (2 of them destructive), 4 Review, and pages. Enable it.</label></li>
+      <li><input type="checkbox" id="ma1-6"><label for="ma1-6">Follow steps 2 to 11 of the <a href="https://github.com/privacyfence/pf-pages/blob/feature/pages-plugin/README.md#smoke-test" target="_blank" rel="noopener">README smoke test</a>: stylesheet, a PNG and a JPEG, publish, open Plugins → Pages in the top navigation, click a page (it opens in a new tab, styled and with both images), update (diff card, version 2), an SVG file (refused: PNG and JPEG only), read version 1, delete, and delete the plugin's data.</label></li>
+    </ol>
+    <p class="done"><b>Report back</b> as a comment on the feature PR: <code>ma1-smoke-test: pass on &lt;OS&gt; &lt;PrivacyFence version&gt;</code>, or <code>fail at step &lt;n&gt;: &lt;what you saw&gt;</code>, and tick the item in the PR description.</p>
+  </section>
+</main>
+<script>
+(function () {
+  var KEY = "pf-pages-manual-steps";
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { saved = {}; }
+  document.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+    box.checked = saved[box.id] === true;
+    box.addEventListener("change", function () {
+      saved[box.id] = box.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* storage unavailable */ }
+    });
+  });
+})();
+</script>
