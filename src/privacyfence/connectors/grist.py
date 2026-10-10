@@ -51,6 +51,13 @@ _FILTER_ERROR = (
 )
 _SORT_ERROR = "sort must be column ids separated by commas, each optionally prefixed with -."
 _LIMIT_ERROR = "limit must be between 1 and 500."
+_AFTER_ID_ERROR = (
+    "after_id must be a record id from next_after_id, or 0 for the first page."
+)
+_AFTER_ID_SORT_ERROR = (
+    "after_id pages in record-id order: leave sort empty when passing after_id."
+)
+_MAX_RECORD_ID = 2**31 - 1
 _ADD_RECORDS_ERROR = (
     "records must be a JSON array of 1 to 100 objects mapping column ids to text, numbers, "
     "true/false or null."
@@ -120,6 +127,17 @@ def _validate_limit(limit: Any) -> int:
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
         raise ValueError(_LIMIT_ERROR)
     return limit
+
+
+def _validate_after_id(after_id: Any, sort: str) -> int:
+    if (
+        isinstance(after_id, bool) or not isinstance(after_id, int)
+        or not 0 <= after_id <= _MAX_RECORD_ID
+    ):
+        raise ValueError(_AFTER_ID_ERROR)
+    if after_id and sort:
+        raise ValueError(_AFTER_ID_SORT_ERROR)
+    return after_id
 
 
 def _is_fields(value: Any) -> bool:
@@ -283,8 +301,11 @@ class GristConnector(Connector):
                 name="grist_get_records",
                 description=(
                     "Read records from one table of a Grist document, optionally filtered and "
-                    "sorted. Returns {doc_id, table_id, records: [{id, fields}], truncated}. "
-                    "Use grist_list_tables first to find the table and column ids. "
+                    "sorted. Returns {doc_id, table_id, records: [{id, fields}], truncated, "
+                    "next_after_id}. truncated is true when more records match. To read a whole "
+                    "table, leave sort empty and call again with after_id set to next_after_id "
+                    "until truncated is false; each page needs its own approval. Use "
+                    "grist_list_tables first to find the table and column ids. "
                     "Requires user approval."
                 ),
                 params=[
@@ -303,12 +324,20 @@ class GristConnector(Connector):
                         "sort", "str", required=False, default="",
                         description="Column ids separated by commas, each optionally prefixed "
                                     "with - for descending, such as -Date,Name. Empty means "
-                                    "Grist's own order.",
+                                    "record-id order, the only order after_id pages through.",
                     ),
                     ToolParam(
                         "limit", "int", required=False, default=100,
                         description="Most records to return, 1 to 500. Default 100; the result "
                                     "says truncated when there were more.",
+                    ),
+                    ToolParam(
+                        "after_id", "int", required=False, default=0,
+                        description="Return only records with an id above this one: pass the "
+                                    "previous page's next_after_id to read the next page. 0 "
+                                    "(the default) starts at the first record. Cannot be "
+                                    "combined with sort. next_after_id is null on the last "
+                                    "page and whenever sort is set.",
                     ),
                     _REASON,
                 ],
@@ -442,6 +471,7 @@ class GristConnector(Connector):
 
     async def _get_records(
         self, doc_id: str, table_id: str, filter: str = "", sort: str = "", limit: int = 100,
+        after_id: int = 0,
     ) -> Any:
         try:
             validate_doc_id(doc_id)
@@ -451,10 +481,12 @@ class GristConnector(Connector):
         filters = _parse_filter(filter)
         sort = _validate_sort(sort)
         limit = _validate_limit(limit)
+        after_id = _validate_after_id(after_id, sort)
 
         doc = await self._doc_info(doc_id)
         page = await self._fetch(
-            self._client.get_records, doc_id, table_id, filters=filters, sort=sort, limit=limit,
+            self._client.get_records, doc_id, table_id,
+            filters=filters, sort=sort, limit=limit, after_id=after_id,
         )
         records = page.records
         columns: list[str] = []
@@ -470,7 +502,11 @@ class GristConnector(Connector):
         else:
             details = "(no records)"
         if page.truncated:
-            details = f"Showing the first {limit} records; more match.\n\n{details}"
+            details = f"Showing {limit} records; more match.\n\n{details}"
+        page_range = f"After record #{after_id}" if after_id else "First page"
+        if records and not sort:
+            page_range += f", records #{records[0].id}–#{records[-1].id}"
+        page_range += "; more follow" if page.truncated else "; last page"
         tables = [{
             "headers": ["id", *columns],
             "rows": [[str(r.id), *[_cell_text(r.fields.get(c)) for c in columns]] for r in records],
@@ -487,6 +523,7 @@ class GristConnector(Connector):
                 "table_id": table_id,
                 "records": [asdict(r) for r in records],
                 "truncated": page.truncated,
+                "next_after_id": page.next_after_id,
             },
             gate="review",
             preview={
@@ -496,6 +533,7 @@ class GristConnector(Connector):
                 "Table": table_id,
                 "Filter": filter or "(none)",
                 "Sort": sort or "(none)",
+                "Page": page_range,
             },
             new_info={"Records": str(len(records)), "Record content": "values of every visible column"},
             details_text=details,
@@ -505,7 +543,7 @@ class GristConnector(Connector):
             my_email="",
             args={
                 "doc_id": doc_id, "table_id": table_id,
-                "filter": filter, "sort": sort, "limit": limit,
+                "filter": filter, "sort": sort, "limit": limit, "after_id": after_id,
             },
         )
 

@@ -358,23 +358,43 @@ class TestGetRecords:
         call = net.calls[0]
         assert call["method"] == "GET"
         assert call["url"] == f"{SERVER}/api/docs/doc1/tables/T/records"
-        assert call["params"] == {"limit": "3"}
+        assert call["params"] == {"limit": "3", "sort": "id"}
         assert page.truncated is True
         assert page.records == [GristRecord(1, {"A": 1}), GristRecord(2, {"A": 2})]
+        assert page.next_after_id == 2
 
     def test_not_truncated(self, net: Net, client: GristClient) -> None:
         net.reply(ok({"records": [{"id": 1, "fields": {}}]}))
         page = client.get_records("doc1", "T", limit=5)
         assert page.truncated is False
+        assert page.next_after_id is None
         assert len(page.records) == 1
 
     def test_filter_and_sort(self, net: Net, client: GristClient) -> None:
-        net.reply(ok({"records": []}))
-        client.get_records("doc1", "T", filters={"S": ["Ä", 1]}, sort="-A,B")
+        net.reply(ok({"records": [{"id": i, "fields": {}} for i in (9, 3, 5)]}))
+        page = client.get_records("doc1", "T", filters={"S": ["Ä", 1]}, sort="-A,B", limit=2)
         params = net.calls[0]["params"]
         assert json.loads(params["filter"]) == {"S": ["Ä", 1]}
         assert params["sort"] == "-A,B"
-        assert params["limit"] == "101"
+        assert params["limit"] == "3"
+        assert page.truncated is True
+        assert page.next_after_id is None
+
+    def test_after_id_widens_the_fetch_and_skips_up_to_it(self, net: Net, client: GristClient) -> None:
+        net.reply(ok({"records": [{"id": i, "fields": {}} for i in (2, 7, 8, 11, 12)]}))
+        page = client.get_records("doc1", "T", filters={"S": ["x"]}, limit=2, after_id=7)
+        params = net.calls[0]["params"]
+        assert params["limit"] == "10"
+        assert params["sort"] == "id"
+        assert json.loads(params["filter"]) == {"S": ["x"]}
+        assert [r.id for r in page.records] == [8, 11]
+        assert page.truncated is True
+        assert page.next_after_id == 11
+
+    def test_after_id_with_sort_is_refused_before_request(self, net: Net, client: GristClient) -> None:
+        with pytest.raises(GristClientError, match="cannot be combined with sort"):
+            client.get_records("doc1", "T", sort="Name", after_id=3)
+        assert net.calls == []
 
     def test_bad_ids_before_request(self, net: Net, client: GristClient) -> None:
         with pytest.raises(GristClientError):
@@ -382,6 +402,98 @@ class TestGetRecords:
         with pytest.raises(GristClientError):
             client.get_records("doc1", "1T")
         assert net.calls == []
+
+
+class FakeGristTable:
+    """The records endpoint's own semantics (filter, sort by id, limit), over a table that can
+    change between calls, so paging is tested against the server's rules rather than a script."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, ids: list[int]) -> None:
+        self.ids = list(ids)
+        self.calls = 0
+        monkeypatch.setattr(
+            requests.Session, "request", lambda _session, method, url, **kw: self._request(**kw),
+        )
+
+    def _request(self, *, params: dict[str, str], **_: Any) -> FakeResponse:
+        self.calls += 1
+        assert params["sort"] == "id"
+        rows = sorted(self.ids)[:int(params["limit"])]
+        return ok({"records": [{"id": i, "fields": {"N": i}} for i in rows]})
+
+
+def read_all(client: GristClient, limit: int, between_pages: Any = None) -> tuple[list[int], int]:
+    ids: list[int] = []
+    after_id, pages = 0, 0
+    while True:
+        page = client.get_records("doc1", "T", limit=limit, after_id=after_id)
+        pages += 1
+        ids += [r.id for r in page.records]
+        if not page.truncated:
+            assert page.next_after_id is None
+            return ids, pages
+        assert page.next_after_id == page.records[-1].id
+        after_id = page.next_after_id
+        if between_pages:
+            between_pages()
+
+
+class TestPaging:
+    def test_first_middle_and_last_page(self, monkeypatch: pytest.MonkeyPatch, client: GristClient) -> None:
+        FakeGristTable(monkeypatch, list(range(1, 3501)))
+        first = client.get_records("doc1", "T", limit=500)
+        assert [first.records[0].id, first.records[-1].id, first.next_after_id] == [1, 500, 500]
+        middle = client.get_records("doc1", "T", limit=500, after_id=1500)
+        assert [middle.records[0].id, middle.records[-1].id, middle.next_after_id] == [1501, 2000, 2000]
+        last = client.get_records("doc1", "T", limit=500, after_id=3000)
+        assert [last.records[0].id, last.records[-1].id] == [3001, 3500]
+        assert last.truncated is False and last.next_after_id is None
+
+    def test_whole_table_with_gaps_reads_every_row_once(
+        self, monkeypatch: pytest.MonkeyPatch, client: GristClient,
+    ) -> None:
+        table = [i for i in range(1, 4001) if i % 7]
+        FakeGristTable(monkeypatch, table)
+        ids, pages = read_all(client, 500)
+        assert ids == table
+        assert pages == 7
+
+    def test_exact_multiple_of_limit_ends_with_an_empty_page(
+        self, monkeypatch: pytest.MonkeyPatch, client: GristClient,
+    ) -> None:
+        FakeGristTable(monkeypatch, list(range(1, 1001)))
+        ids, pages = read_all(client, 500)
+        assert ids == list(range(1, 1001))
+        assert pages == 2
+        assert client.get_records("doc1", "T", limit=500, after_id=1000).records == []
+
+    def test_empty_table(self, monkeypatch: pytest.MonkeyPatch, client: GristClient) -> None:
+        FakeGristTable(monkeypatch, [])
+        page = client.get_records("doc1", "T", limit=500)
+        assert page.records == [] and page.truncated is False and page.next_after_id is None
+
+    def test_record_added_between_pages_is_read_once(
+        self, monkeypatch: pytest.MonkeyPatch, client: GristClient,
+    ) -> None:
+        server = FakeGristTable(monkeypatch, list(range(1, 1201)))
+
+        def add_row() -> None:
+            server.ids.append(max(server.ids) + 1)
+
+        ids, _ = read_all(client, 500, between_pages=add_row)
+        assert ids == sorted(set(ids))
+        assert ids == server.ids
+
+    def test_record_deleted_between_pages_shifts_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, client: GristClient,
+    ) -> None:
+        server = FakeGristTable(monkeypatch, list(range(1, 1201)))
+
+        def delete_an_early_row() -> None:
+            server.ids.remove(min(server.ids))
+
+        ids, _ = read_all(client, 500, between_pages=delete_an_early_row)
+        assert ids == list(range(1, 1201))
 
 
 class TestGetRecordsById:

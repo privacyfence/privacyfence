@@ -233,3 +233,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0143](0143-the-bundle-pins-the-grist-server-and-a-credential-stays-with-its-server.md) | The bundle pins the Grist server, and a credential stays with its server | Accepted |
 | [0144](0144-grist-rules-are-per-document-and-set-from-settings-not-the-card.md) | Grist rules are per document and set from Settings, not from the approval card | Accepted |
 | [0145](0145-the-grist-connector-only-adds.md) | The Grist connector only adds | Accepted |
+| [0146](0146-grist-records-page-by-record-id.md) | Grist records page by record id | Accepted |

@@ -136,13 +136,14 @@ def make_doc(**overrides):
     return GristDocument(**defaults)
 
 
-def two_records(truncated=False):
+def two_records(truncated=False, next_after_id=None):
     return GristRecordPage(
         records=[
             GristRecord(id=1, fields={"Name": "Ada", "Score": 3}),
             GristRecord(id=2, fields={"Name": "Grace", "Tags": ["a", "b"], "Note": None}),
         ],
         truncated=truncated,
+        next_after_id=next_after_id,
     )
 
 
@@ -161,12 +162,13 @@ class TestGetRecords:
         )
 
         call = gated_call_spy[0]
-        assert list(call["preview"]) == ["Server", "Document", "Team", "Table", "Filter", "Sort"]
+        assert list(call["preview"]) == ["Server", "Document", "Team", "Table", "Filter", "Sort", "Page"]
         assert call["preview"]["Server"] == "docs.getgrist.com"
         assert call["preview"]["Document"] == "Budget"
         assert call["preview"]["Team"] == "Acme"
         assert call["preview"]["Filter"] == '{"Score": [3]}'
         assert call["preview"]["Sort"] == "-Score,Name"
+        assert call["preview"]["Page"] == "First page; last page"
         assert "Ada" not in " ".join(call["preview"].values())
         assert call["gate"] == "review"
         assert call["tool"] == "grist_get_records"
@@ -176,14 +178,15 @@ class TestGetRecords:
         assert call["preview_tables"][0]["rows"][0] == ["1", "Ada", "3", "", ""]
         assert call["args"] == {
             "doc_id": DOC_ID, "table_id": "Contacts",
-            "filter": '{"Score": [3]}', "sort": "-Score,Name", "limit": 50,
+            "filter": '{"Score": [3]}', "sort": "-Score,Name", "limit": 50, "after_id": 0,
         }
         assert call["table_only"] is True
         client.get_records.assert_called_once_with(
-            DOC_ID, "Contacts", filters={"Score": [3]}, sort="-Score,Name", limit=50,
+            DOC_ID, "Contacts", filters={"Score": [3]}, sort="-Score,Name", limit=50, after_id=0,
         )
         assert result["records"][0] == {"id": 1, "fields": {"Name": "Ada", "Score": 3}}
         assert result["truncated"] is False
+        assert result["next_after_id"] is None
 
     async def test_defaults_show_none(self, gated_call_spy):
         connector, client = make_connector()
@@ -195,16 +198,62 @@ class TestGetRecords:
         assert gated_call_spy[0]["preview"]["Filter"] == "(none)"
         assert gated_call_spy[0]["preview"]["Sort"] == "(none)"
         assert gated_call_spy[0]["args"]["limit"] == 100
+        assert gated_call_spy[0]["args"]["after_id"] == 0
+        assert gated_call_spy[0]["preview"]["Page"] == "First page, records #1–#2; last page"
 
     async def test_truncated_prefixes_the_details(self, gated_call_spy):
         connector, client = make_connector()
         client.get_document.return_value = make_doc()
-        client.get_records.return_value = two_records(truncated=True)
+        client.get_records.return_value = two_records(truncated=True, next_after_id=2)
 
         result = await connector.call("grist_get_records", {**self.ARGS, "limit": 2})
 
-        assert gated_call_spy[0]["details_text"].startswith("Showing the first 2 records; more match.\n\n#1")
+        assert gated_call_spy[0]["details_text"].startswith("Showing 2 records; more match.\n\n#1")
+        assert gated_call_spy[0]["preview"]["Page"] == "First page, records #1–#2; more follow"
         assert result["truncated"] is True
+        assert result["next_after_id"] == 2
+
+    async def test_middle_page(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_document.return_value = make_doc()
+        client.get_records.return_value = GristRecordPage(
+            records=[GristRecord(id=i, fields={"N": i}) for i in (501, 502)],
+            truncated=True, next_after_id=502,
+        )
+
+        result = await connector.call("grist_get_records", {**self.ARGS, "limit": 2, "after_id": 500})
+
+        client.get_records.assert_called_once_with(
+            DOC_ID, "Contacts", filters={}, sort="", limit=2, after_id=500,
+        )
+        call = gated_call_spy[0]
+        assert call["preview"]["Page"] == "After record #500, records #501–#502; more follow"
+        assert call["args"]["after_id"] == 500
+        assert call["summary"] == "Read 2 record(s) from Budget / Contacts"
+        assert result["next_after_id"] == 502
+        assert [r["id"] for r in result["records"]] == [501, 502]
+
+    async def test_last_page_past_the_end(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_document.return_value = make_doc()
+        client.get_records.return_value = GristRecordPage(records=[], truncated=False)
+
+        result = await connector.call("grist_get_records", {**self.ARGS, "after_id": 1000})
+
+        assert gated_call_spy[0]["preview"]["Page"] == "After record #1000; last page"
+        assert gated_call_spy[0]["details_text"] == "(no records)"
+        assert result["records"] == [] and result["truncated"] is False
+        assert result["next_after_id"] is None
+
+    async def test_sorted_page_shows_no_id_range(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_document.return_value = make_doc()
+        client.get_records.return_value = two_records(truncated=True)
+
+        result = await connector.call("grist_get_records", {**self.ARGS, "sort": "Name", "limit": 2})
+
+        assert gated_call_spy[0]["preview"]["Page"] == "First page; more follow"
+        assert result["truncated"] is True and result["next_after_id"] is None
 
     async def test_no_records_gives_no_table(self, gated_call_spy):
         connector, client = make_connector()
@@ -250,6 +299,11 @@ class TestGetRecords:
         ({"sort": "a b"}, "sort must be column ids"),
         ({"limit": 0}, "limit must be between 1 and 500."),
         ({"limit": 501}, "limit must be between 1 and 500."),
+        ({"after_id": -1}, "after_id must be a record id"),
+        ({"after_id": True}, "after_id must be a record id"),
+        ({"after_id": "5"}, "after_id must be a record id"),
+        ({"after_id": 2**31}, "after_id must be a record id"),
+        ({"after_id": 5, "sort": "Name"}, "leave sort empty when passing after_id"),
     ])
     async def test_bad_arguments_raise_before_anything_is_fetched(self, gated_call_spy, extra, message):
         connector, client = make_connector()
