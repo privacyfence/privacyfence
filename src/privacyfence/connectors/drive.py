@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import binascii
 import json
 import logging
 import time
@@ -136,7 +137,7 @@ def _sheet_values_table(values: list[list], limit: int = _SHEET_ROW_LIMIT) -> di
     read (_sheets_get_values) and write (_sheets_write_range) -- that
     shows real cell data in v2's right pane, so they can never disagree
     about where the cap/footer lands."""
-    table = {"rows": [[str(cell) for cell in row] for row in values[:limit]]}
+    table: dict[str, Any] = {"rows": [[str(cell) for cell in row] for row in values[:limit]]}
     if len(values) > limit:
         table["footer"] = f"… and {len(values) - limit} more row(s)"
     return table
@@ -1569,7 +1570,7 @@ class DriveConnector(Connector):
             display_name = name.strip() or "(unnamed file)"
             try:
                 decoded = base64.b64decode(content_base64, validate=True)
-            except (base64.binascii.Error, ValueError):
+            except (binascii.Error, ValueError):
                 decoded = b""
             size_bytes = len(decoded)
             source = "inline content"

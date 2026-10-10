@@ -56,6 +56,7 @@ bridge share.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
 from ..auto_accept import ReviewContext, _domain_of, _file_from
@@ -572,7 +573,7 @@ def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
 
 
 def _rules_from_pairs(
-    pairs: Iterable[tuple[str, str]], value: Any, conditions_of: dict[str, tuple[tuple[str, Any], ...]],
+    pairs: Iterable[tuple[str, str]], value: Any, conditions_of: Mapping[str, tuple[tuple[str, Any], ...]],
 ) -> list[PolicyRule]:
     """Turn ``(predicate, operation_key)`` pairs into merged ``PolicyRule``s with stable ids.
 
