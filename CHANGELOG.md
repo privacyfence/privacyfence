@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.6.0] — 2026-10-10
+
 ### Added
 
 - **Salesforce reports past 2,000 rows.** `salesforce_run_report` takes `page_by`, a column with a unique value per row, and reads the whole report page by page with a cursor, each page one report run; a grouped report is read as one table. A column that is not unique or cannot be paged fails with no rows, and `salesforce.report_max_pages` (default 50) caps the runs one read may use.
@@ -3202,7 +3204,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.5.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.6.0...HEAD
+[5.6.0]: https://github.com/privacyfence/privacyfence/compare/v5.5.0...v5.6.0
 [5.5.0]: https://github.com/privacyfence/privacyfence/compare/v5.4.0...v5.5.0
 [5.4.0]: https://github.com/privacyfence/privacyfence/compare/v5.3.0...v5.4.0
 [5.3.0]: https://github.com/privacyfence/privacyfence/compare/v5.2.1...v5.3.0
