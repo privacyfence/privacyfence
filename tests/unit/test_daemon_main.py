@@ -1239,6 +1239,84 @@ class TestBuildConnectorsCrossCutting:
 
 
 # ---------------------------------------------------------------------------- #
+# build_connectors: Grist
+# ---------------------------------------------------------------------------- #
+
+class TestBuildConnectorsGrist:
+    API_KEY = {"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "k"}
+    OAUTH = {
+        "auth": "oauth", "server_url": "https://docs.getgrist.com",
+        "access_token": "at", "refresh_token": "rt", "expires_at": 4102444800,
+    }
+    OAUTH_APP = {"client_id": "cid", "client_secret": "csecret"}
+
+    def _patch(self, monkeypatch, record, *, check_error=None):
+        from privacyfence.grist_client import GristClient
+
+        def load(path):
+            if record is None:
+                raise daemon_main.GristClientError(
+                    "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                )
+            return record
+
+        def check(self):
+            if check_error is not None:
+                raise check_error
+            return "docs.getgrist.com"
+
+        monkeypatch.setattr(daemon_main, "load_grist_token", load)
+        monkeypatch.setattr(GristClient, "check_connection", check)
+
+    def test_api_key_file_builds_connector_without_a_bundle_section(self, monkeypatch):
+        self._patch(monkeypatch, self.API_KEY)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert [c.name for c in connectors] == ["grist"]
+        assert "grist" not in failures
+
+    def test_oauth_file_builds_through_token_provider(self, monkeypatch):
+        from privacyfence.grist_auth import GristTokenProvider
+
+        self._patch(monkeypatch, self.OAUTH)
+        connectors, failures = daemon_main.build_connectors({}, {"grist": self.OAUTH_APP})
+        assert [c.name for c in connectors] == ["grist"]
+        assert isinstance(connectors[0]._client._credential, GristTokenProvider)
+        assert "grist" not in failures
+
+    def test_org_mode_without_grist_section_is_no_org_config(self, monkeypatch):
+        self._patch(monkeypatch, self.API_KEY)
+        org = {"mode": "org", "server": {"issuer_url": "https://pf.example.com"}}
+        _connectors, failures = daemon_main.build_connectors({}, org)
+        assert failures["grist"] == "no_org_config"
+
+    def test_no_file_is_not_authenticated(self, monkeypatch):
+        self._patch(monkeypatch, None)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["grist"] == "not_authenticated"
+
+    def test_api_key_file_while_bundle_has_oauth_app_is_not_authenticated(self, monkeypatch):
+        self._patch(monkeypatch, self.API_KEY)
+        connectors, failures = daemon_main.build_connectors({}, {"grist": self.OAUTH_APP})
+        assert connectors == []
+        assert failures["grist"] == "not_authenticated"
+
+    def test_credential_for_another_server_is_not_authenticated(self, monkeypatch):
+        self._patch(monkeypatch, self.OAUTH)
+        org = {"grist": {**self.OAUTH_APP, "server_url": "https://grist.example.com"}}
+        connectors, failures = daemon_main.build_connectors({}, org)
+        assert connectors == []
+        assert failures["grist"] == "not_authenticated"
+
+    def test_disabled_has_no_entry(self, monkeypatch):
+        self._patch(monkeypatch, self.API_KEY)
+        config = {"connectors": {"grist": {"enabled": False}}}
+        connectors, failures = daemon_main.build_connectors(config, {})
+        assert connectors == []
+        assert "grist" not in failures
+
+
+# ---------------------------------------------------------------------------- #
 # build_connectors: per-connector failure reasons -- the data model the
 # privacyfence_status meta-tool needs to tell "never set up" /
 # "auth expired" / an actual runtime error apart, instead of every un-built
@@ -2123,7 +2201,7 @@ class TestParseArgs:
         assert not any([
             args.gmail_oauth, args.drive_oauth, args.contacts_oauth, args.calendar_oauth,
             args.tasks_oauth, args.apps_script_oauth, args.slack_oauth, args.salesforce_oauth,
-            args.atlassian_oauth, args.telegram_setup,
+            args.atlassian_oauth, args.grist_oauth, args.telegram_setup,
         ])
 
     def test_config_flag_overrides_default(self):
@@ -2140,6 +2218,7 @@ class TestParseArgs:
         ("--slack-oauth", "slack_oauth"),
         ("--salesforce-oauth", "salesforce_oauth"),
         ("--atlassian-oauth", "atlassian_oauth"),
+        ("--grist-oauth", "grist_oauth"),
         ("--telegram-setup", "telegram_setup"),
     ])
     def test_each_oauth_flag_sets_only_its_own_attribute(self, flag, attr):
@@ -2147,7 +2226,8 @@ class TestParseArgs:
         assert getattr(args, attr) is True
         other_attrs = {
             "gmail_oauth", "drive_oauth", "contacts_oauth", "calendar_oauth", "tasks_oauth",
-            "apps_script_oauth", "slack_oauth", "salesforce_oauth", "atlassian_oauth", "telegram_setup",
+            "apps_script_oauth", "slack_oauth", "salesforce_oauth", "atlassian_oauth", "grist_oauth",
+            "telegram_setup",
         } - {attr}
         assert not any(getattr(args, other) for other in other_attrs)
 
@@ -2290,6 +2370,34 @@ class TestSalesforceOauthRunner:
         code = daemon_main.run_salesforce_oauth({"salesforce": {"consumer_key": "ck", "consumer_secret": "cs"}})
         assert code == 1
         assert "bad login url" in capsys.readouterr().err
+
+
+class TestGristOauthRunner:
+    APP = {"grist": {"client_id": "cid", "client_secret": "cs"}}
+
+    def test_no_oauth_app_prints_error_and_returns_1(self, capsys):
+        assert daemon_main.run_grist_oauth({}) == 1
+        assert "No Grist OAuth app in the organization config." in capsys.readouterr().err
+
+    def test_success_prints_host_and_returns_0(self, monkeypatch, capsys):
+        seen = {}
+
+        def fake(config, token_file):
+            seen["config"], seen["token_file"] = config, token_file
+            return {"server_url": "https://docs.getgrist.com"}
+
+        monkeypatch.setattr(daemon_main, "grist_authorize_interactive", fake)
+        assert daemon_main.run_grist_oauth(self.APP) == 0
+        assert "Grist OAuth complete. Signed in to docs.getgrist.com." in capsys.readouterr().out
+        assert seen["config"].client_id == "cid"
+        assert seen["token_file"].endswith("grist_token.json")
+
+    def test_client_error_prints_to_stderr_and_returns_1(self, monkeypatch, capsys):
+        def raiser(config, token_file):
+            raise daemon_main.GristClientError("consent denied")
+        monkeypatch.setattr(daemon_main, "grist_authorize_interactive", raiser)
+        assert daemon_main.run_grist_oauth(self.APP) == 1
+        assert "Grist OAuth setup failed: consent denied" in capsys.readouterr().err
 
 
 class TestAtlassianOauthRunner:
@@ -3047,6 +3155,7 @@ class TestMain:
         ("--slack-oauth", "run_slack_oauth"),
         ("--salesforce-oauth", "run_salesforce_oauth"),
         ("--atlassian-oauth", "run_atlassian_oauth"),
+        ("--grist-oauth", "run_grist_oauth"),
     ])
     def test_oauth_flag_dispatches_to_the_right_runner(self, monkeypatch, flag, runner_name):
         self._patch_config(monkeypatch)

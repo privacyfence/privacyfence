@@ -1021,7 +1021,7 @@ class TestAuthenticateDispatch:
         ("contacts", "_authenticate_google"), ("calendar", "_authenticate_google"),
         ("tasks", "_authenticate_google"), ("apps_script", "_authenticate_google"), ("slack", "_authenticate_slack"),
         ("salesforce", "_authenticate_salesforce"), ("jira", "_authenticate_atlassian"),
-        ("confluence", "_authenticate_atlassian"),
+        ("confluence", "_authenticate_atlassian"), ("grist", "_authenticate_grist"),
     ])
     def test_dispatches_to_the_right_per_service_method(self, controller, monkeypatch, cname, method):
         calls = []
@@ -1210,6 +1210,73 @@ class TestAuthenticateSalesforce:
         _drain_run_async(recorded)
 
         assert refresh_calls == [1]
+
+
+class TestAuthenticateGrist:
+    APP = {"grist": {"client_id": "cid", "client_secret": "cs"}}
+
+    def test_no_oauth_app_says_api_key_and_runs_nothing(self, controller, monkeypatch):
+        run_async_calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda *a: run_async_calls.append(a))
+
+        controller._authenticate_grist({})
+
+        assert controller.error == "Grist uses an API key on this install. Use Authenticate… on the Grist row."
+        assert run_async_calls == []
+
+    def test_malformed_section_sets_error(self, controller, monkeypatch):
+        monkeypatch.setattr(sc, "_run_async", lambda *a: pytest.fail("must not run"))
+        controller._authenticate_grist({"grist": {"client_id": "cid"}})
+        assert controller.error.startswith("Grist organization config is not usable: ")
+
+    def test_success_signs_in_and_refreshes(self, controller, monkeypatch, tmp_path):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        seen = {}
+
+        def fake(config, token_file):
+            seen["client_id"], seen["token_file"] = config.client_id, token_file
+            return {}
+
+        monkeypatch.setattr(sc.grist_auth, "authorize_interactive", fake)
+        refresh_calls = []
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
+
+        controller._authenticate_grist(self.APP)
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+
+        assert seen["client_id"] == "cid"
+        assert seen["token_file"] == str(tmp_path / "data" / "credentials" / "grist_token.json")
+        assert refresh_calls == [1]
+        assert controller.error == ""
+
+    def test_failure_sets_error(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+
+        def boom(config, token_file):
+            raise sc.grist_auth.GristClientError("consent denied")
+
+        monkeypatch.setattr(sc.grist_auth, "authorize_interactive", boom)
+        monkeypatch.setattr(controller, "_push_snapshot", lambda: None)
+
+        controller._authenticate_grist(self.APP)
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+
+        assert controller.error == "Grist authentication failed: consent denied"
+
+    def test_authenticate_connector_without_app_sets_api_key_error(self, controller):
+        controller.authenticate_connector("grist")
+        assert controller.error == "Grist uses an API key on this install. Use Authenticate… on the Grist row."
+
+    def test_row_has_org_without_a_bundle(self, controller):
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "grist")
+        assert row["has_org"] is True
+        assert row["label"] == "Grist"
 
 
 class TestAuthenticateAtlassian:
