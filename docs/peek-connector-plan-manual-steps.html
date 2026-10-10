@@ -115,7 +115,7 @@ What to build:
 
 Tests (internal/server, next to comments_test.go): no token → 401; a token for another account's upload → 403; an admin token on someone else's upload → 200; success → 200, author is the account name even when the body carries "name"; empty body → 400; an over-long field → 413; an invalid anchor kind → 400; the comment then appears in GET .../comments; the browser route still behaves as before (an existing test covering it keeps passing).
 
-Docs: add the route to the API reference in docs/src/content/docs/reference.md (and wherever else the token API routes are listed), and a line in the skills/peek SKILL.md only if it documents API routes.
+Docs: add the route to the API reference page (reference.md in the Astro docs site's content folder, src/content/docs under the docs directory) and wherever else the token API routes are listed, and a line in the skills/peek SKILL.md only if it documents API routes.
 
 Out of scope: no CLI command, no change to the browser comment route, the page UI, the GET comments endpoint or anything else. View restrictions are a separate change.
 

@@ -32,7 +32,7 @@ local and organization mode.
   | Call | Request | Answer |
   |---|---|---|
   | list pages | `GET /api/uploads` | `[{"slug","name","owner","size","visibility","url","created_at"}]` (`created_at` Unix seconds) |
-  | upload | `POST /api/upload`, multipart: `file` (with filename), `visibility`, `password` | `{"slug","url","visibility"}`; 413 `file too large` above the server's `max_upload` (2 MiB default) |
+  | upload | `POST /api/upload`, multipart: `file` (with filename), `visibility`, `password` | `{"slug","url","visibility"}`; above the server's `max_upload` (2 MiB default) usually 400 `file too large or invalid form`, sometimes 413 `file too large`; passwords are `TrimSpace`d by the server |
   | set visibility | `POST /api/uploads/{slug}/visibility`, JSON `{"visibility","password"}` | `{"visibility"}`; values `public`, `password`, `private`; password ≤ 72 bytes |
   | delete | `DELETE /api/uploads/{slug}` | `{"deleted": slug}` |
   | stats | `GET /api/uploads/{slug}/stats` | `{"slug","name","total_visits","unique_visitors","recent":[{"name","ip","user_agent","visited_at"}]}` |
@@ -43,7 +43,9 @@ local and organization mode.
   Posting a comment today (`POST /api/uploads/{slug}/comments`, `comments.go:76-150`) has **no token
   path**: it checks only the browser's page access, takes the author name from the body, and on a
   public page accepts anyone as `"anonymous"`. A token sent there is ignored. Slugs are
-  `[A-Za-z0-9_-]+` (`internal/objectstore/slug.go`). The raw page HTML is served only to browsers
+  `[A-Za-z0-9_-]+` (`internal/objectstore/slug.go`), up to 67 characters (`internal/uploads/slug.go`:
+  60, a dash, and a 6-character suffix on a clash). Peek builds `verification_url` and each page's
+  `url` from its own configured `--base-url`, not from the address the request came in on. The raw page HTML is served only to browsers
   holding a view token (`pages.go:84-125`), so the API cannot read a page's content back.
 - **Connectors** are `Connector` subclasses (`src/privacyfence/connector.py:78-96`), discovered by
   `connector_catalog.connector_classes()`. The shape template is `connectors/salesforce.py`
@@ -148,11 +150,12 @@ Module docstring: the Peek REST client and Peek's device sign-in; a token is onl
 server it was issued for (ADR 0147); redirects are never followed; nothing logs a token, a device
 code, a password, page content or a comment body.
 
-- `class PeekClientError(Exception)`.
+- `class PeekClientError(Exception)` with `__init__(self, message: str, *, status: int | None = None)`
+  storing `self.status` (the HTTP status when the error came from an answer, else `None`).
 - Constants: `REQUEST_TIMEOUT_SECONDS = 30`; `VISIBILITIES = ("public", "password", "private")`;
   `PASSWORD_MAX_BYTES = 72`; `UPLOAD_MAX_BYTES = 10 * 1024 * 1024` (PrivacyFence's own ceiling on a
   page it reads; the server's own `max_upload`, 2 MiB by default, still applies);
-  `_SLUG_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")`.
+  `_SLUG_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")`.
 - `normalize_base_url(raw: str) -> str`: strip whitespace and trailing `/`; `urllib.parse.urlsplit`.
   Every rejection raises `PeekClientError`. Messages (exact): empty or no host →
   `"Enter the Peek server address, such as https://peek.example.com."`; a scheme other than `https`,
@@ -183,7 +186,14 @@ does the request and the error mapping for every call (sign-in and client alike)
 - a 2xx whose body is not JSON → `f"Peek answered with something other than JSON (HTTP {status}). Check the Peek server address."`
 
 `detail` is the JSON `error` string cut to 200 characters, else `"no detail"`. `host` is the URL's
-`netloc`.
+`netloc`. Every error raised for an HTTP answer carries `status=<the status code>`. Callers that
+need their own wording for a status catch `PeekClientError`, look at `exc.status` and raise a new
+`PeekClientError(<their text>, status=exc.status) from exc`:
+
+- `start_device_login` and `poll_device_login`: 404 or 405 →
+  `"Peek has no device sign-in at this address (HTTP <status>). Check the Peek server address."`
+- `PeekClient.add_comment`: 404 or 405 → the "no account comment endpoint" text in the table below
+  (`get_page` has already confirmed the page exists).
 
 **Device sign-in.**
 
@@ -249,12 +259,16 @@ Methods:
 `upload_page` and `set_visibility` check, before any request: visibility in `VISIBILITIES`, else
 `PeekClientError("visibility must be public, password or private.")`; a password for `password`
 visibility and none otherwise, and at most 72 UTF-8 bytes, else
-`PeekClientError("A password of 1 to 72 bytes goes with password visibility, and only with it.")`.
+`PeekClientError("A password of 1 to 72 bytes goes with password visibility, and only with it.")`;
+a password that differs from its `.strip()` →
+`PeekClientError("A Peek password cannot start or end with a space.")` (Peek trims it, so the page
+would get a different password than the one approved).
 
 ### 3.3 `src/privacyfence/connectors/peek.py`
 
 `class PeekConnector(Connector)`, `name == "peek"`, `__init__(self, client: PeekClient, download_mode: str = "local")`,
-a `client` property. `_auto_audit` copied from `connectors/salesforce.py:634-653`. `_fetch` widened to
+a `client` property. `__init__` only stores its arguments and never touches the client:
+`connector_catalog.py:39` builds `cls(None).tool_specs()` for the tool catalog. `_auto_audit` copied from `connectors/salesforce.py:634-653`. `_fetch` widened to
 keyword arguments: `async def _fetch(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any`
 runs `await asyncio.to_thread(func, *args, **kwargs)` and re-raises `PeekClientError` as
 `RuntimeError(str(exc)) from exc` after `logger.warning`. Argument validation raises `ValueError`
@@ -316,7 +330,8 @@ Validation (`ValueError`, exact, before any fetch or gate):
 - visibility (both tools) → `"visibility must be public, password or private."`; password missing
   with `password` → `"A password is required when visibility is password."`; given otherwise →
   `"password must be empty unless visibility is password."`; over 72 UTF-8 bytes →
-  `"password must be 72 bytes or fewer."`.
+  `"password must be 72 bytes or fewer."`; differs from its `.strip()` →
+  `"password must not start or end with a space."`.
 - `peek_add_comment`: stripped `body` empty or over 4000 characters → `"body must be 1 to 4000 characters."`;
   `selector` over 500 → `"selector must be 500 characters or fewer."`; `element_text` over 200 →
   `"element_text must be 200 characters or fewer."`; `element_text` without `selector` →
@@ -358,8 +373,13 @@ Each tool first fetches what it shows (through `_fetch`), then gates, then (for 
   `filtered_data=None`, `gate="popup"`,
   `preview={"Name": name, "Visibility": visibility, "Size": f"{len(data):,} bytes"}` plus
   `"Password": "Set (not shown)"` for password visibility,
-  `details_text=html_to_text.html_to_text(text) or "(the page has no visible text)"`,
-  `args={"name": name, "visibility": visibility}`. Never the password or the HTML in `args` or `raw_data`.
+  `details_text = (html_to_text.html_to_text(text) or "(the page has no visible text)") + "\n\n--- HTML source (everything that is published) ---\n" + text`,
+  where `text = data.decode("utf-8")`: the approver sees the visible text first and then the whole
+  source, because scripts, comments, hidden elements, attributes and image URLs are published too
+  and would otherwise never be seen;
+  `upload_pii_scan_text=text` (the whole source gets the real PII scan, as `drive_upload_file`
+  does), `args={"name": name, "visibility": visibility}`. Never the password or the HTML in `args`
+  or `raw_data`.
 - `peek_set_visibility` (fetch `get_page`): `tool_name="Change Peek Page Visibility"`,
   `summary=f"{page.name}: {page.visibility} → {visibility}"`, `sender=page.name`,
   `raw_data={"slug": slug, "visibility": visibility}`, `filtered_data=None`, `gate="popup"`,
@@ -421,8 +441,8 @@ has. A per-page scope is a follow-up (§3.7).
           failures["peek"] = _classify_connector_failure(exc)
   ```
 - `run_peek_login(org_config: dict[str, Any]) -> int` and a `--peek-login` flag (help: "Sign in to
-  Peek with Peek's device sign-in and save the token."), dispatched like `--telegram-setup`
-  (`:2207-2243`, it takes `org_config`). Steps, every message exact:
+  Peek with Peek's device sign-in and save the token."), dispatched like `--salesforce-oauth` (`:2207-2243`), passing `org_config`.
+  Steps, every message exact:
   1. `pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=False)`; a
      `PeekClientError` → print `str(exc)` to stderr, return 1.
   2. `base = pinned or peek_normalize_base_url(input("Peek server address: "))`.
@@ -437,7 +457,9 @@ has. A per-page scope is a follow-up (§3.7).
      return 1; `pending` → continue.
   5. Any `PeekClientError` in 2-4 → print `f"Peek sign-in failed: {exc}"` to stderr, return 1.
   Add `--peek-login` to the "is any auth flag set" check (`:2208-2211`) and to
-  `test_oauth_and_telegram_flags_do_not_trigger_the_separation_gate`'s parameters.
+  `test_oauth_and_telegram_flags_do_not_trigger_the_separation_gate`'s parameters, with
+  `daemon_main.run_peek_login` monkeypatched to `lambda org_config: 0` in that test (it stubs only
+  `run_gmail_oauth` and `run_telegram_setup` today; the real function would call `input()`).
 - `settings_controller.py`: `"peek"` appended to `ALL_CONNECTORS`; `_connectors_state` sets
   `has_org = True` for `"peek"` (no bundle needed in local mode). Peek is not added to
   `ORG_CONFIG_SERVICE` or `ORG_BUNDLE_SERVICES`; `connector_label("peek")` is already `"Peek"`;
@@ -450,7 +472,8 @@ has. A per-page scope is a follow-up (§3.7).
   (`pinned_base_url` from the helper; `error` is the pending error, else the helper's error, else
   `""`). The device code and the token are never in the snapshot or on `self` outside `_peek_auth`'s
   `device_code`. Actions:
-  - `peek_start_login(self, base_url: str = "") -> dict[str, Any]`: helper error →
+  - `peek_start_login(self, base_url: str = "") -> dict[str, Any]` (only Settings calls it: the
+    settings API is not reachable with an AI client's MCP token, ADR 0061): helper error →
     `_peek_auth = {"step": None, "error": <it>}`, return the snapshot. `url = pinned or peek_normalize_base_url(base_url)`;
     a `PeekClientError` → `_peek_auth = {"step": None, "error": str(exc)}`. Otherwise mark `"peek"`
     busy and `_run_async` a worker that runs `peek_start_device_login(url)` and then
@@ -505,10 +528,12 @@ has. A per-page scope is a follow-up (§3.7).
   - `SERVICE_LABELS["peek"] = "Peek"`. Peek is not in `OAUTH_SERVICES`, `_GRANT_KEY` or
     `_ORG_CONFIG_SECTION`.
   - `_is_configured(org_config, "peek")`: `bundle_base_url(org_config.get("peek") or {}, org_mode=True)`
-    succeeds. `_is_connected(principal, "peek")` (it gains an `org_config` parameter only if needed;
-    otherwise a separate `_peek_connected(principal, org_config) -> bool`): load
-    `paths.user_dir(principal) / TOKEN_FILES["peek"]` with `load_token_file` and `resolve_server`
-    against the bundle's base URL; any `PeekClientError` means not connected.
+    succeeds. `_is_connected` keeps its two-argument signature (`web/server.py:346-349`
+    `local_status_payload` calls it for every `SERVICE_LABELS` key) and gains, before the
+    `_token_file_path` line, `if service == "peek":` returning `True` when
+    `load_token_file(str(paths.user_dir(principal) / _token_files()["peek"]))` succeeds and `False`
+    on `PeekClientError`. The pin check is only in `_peek_box_html`: it shows Connected only when
+    `resolve_server(<bundle base URL>, record)` also succeeds.
   - `_PeekState` dataclass (`step: str | None = None` (`None` or `"approve"`), `base_url`,
     `device_code`, `user_code`, `verification_url`, `expires_at: float = 0.0`, `error`,
     `created_at`) and `_PeekAuthStore`, a copy of `_TelegramAuthStore` with a 15-minute TTL;
@@ -530,7 +555,9 @@ has. A per-page scope is a follow-up (§3.7).
   - Every handler ends with `RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})`.
     Routes added after the Telegram ones.
   - `_peek_box_html(principal, org_config, peek_state, csrf) -> str`, rendered after the Telegram box
-    in `_render_connect_page`: not configured → the generic row
+    in `_render_connect_page`, which gains the keyword argument `peek_state: _PeekState | None = None`
+    (`None` means a fresh `_PeekState()`, so the existing test callers at
+    `tests/unit/web/test_routes_connect.py:153-156` keep working): not configured → the generic row
     (`<li class="service card cluster">` with "Not set up by your organization", so the
     `test_routes_connect.py:170` count goes up by one). Configured →
     `<li class="service peek card stack">` with the head chip "Peek" and the Connected / Not connected
@@ -553,6 +580,12 @@ has. A per-page scope is a follow-up (§3.7).
 - No Peek-specific auto-accept scope (a per-page `peek.page` scope offered from Settings, the Grist
   `grist.document` shape, is a follow-up).
 - No connector icon (only real brand assets go in `resources/connector_icons/`).
+- No mention in the website's prose connector lists that no test checks (`website/index.html`,
+  `website/canonical-description.md`, the FAQ); those follow when the connector is released.
+- `peek_start_login` is not a step-up (sensitive) action, though unlike an OAuth sign-in it picks
+  where the connector's data goes. The settings API is not reachable with an AI client's MCP token
+  (ADR 0061), every Peek card names the server, and a bundle can pin it; ADR 0147 records this as a
+  rejected alternative, with the Grist connector's same choice as precedent.
 
 ### 3.8 Setup guide `peek-setup.md` (in `docs/`)
 
@@ -568,7 +601,14 @@ in local mode; organization mode needs it); `## What the assistant can do` (the 
 gates; link the tools reference `#peek`); `## Privacy` (stats carry visitor names and times only,
 never IP addresses or browsers; a page password is sent to Peek and never shown on the card or kept
 by PrivacyFence; a token is only sent to the server it was issued for); `## Troubleshooting` (the
-exact error texts from §3.2 and §3.5, each with what to do).
+exact error texts from §3.2 and §3.5, each with what to do; including "sign-in address on another
+server", whose usual cause is a Peek `--base-url` that differs from the address typed in
+PrivacyFence, such as a host alias, a port, or `http` behind a TLS proxy: type exactly Peek's own
+base URL).
+
+`p2-connector-listing` writes a minimal guide with exactly these headings and one or two sentences
+under each (enough for the page and docs tests); `p10-docs-adrs-retire` writes the full content,
+once every error text exists in code.
 
 ## 4. ADRs
 
@@ -584,7 +624,9 @@ exact error texts from §3.2 and §3.5, each with what to do).
   redirects are never followed; the sign-in address Peek answers with must be on the same server;
   every Peek approval card names the server. Sign-in stays a non-sensitive Settings action, like
   every connector's. Rejected: a free server address in organization mode (a person could send
-  organization data to any server).
+  organization data to any server); making `peek_start_login` a step-up action because it chooses
+  the destination (the settings API is not reachable with an MCP token, ADR 0061; the card names
+  the server on every call; Grist made the same choice).
 - **0148** — Peek comments are posted only through a token-authenticated account comment endpoint,
   under the account's own name; on a Peek server without it, `peek_add_comment` fails with a message
   saying so. Rejected: sending the token to the browser comment endpoint (it ignores the token and,
@@ -618,8 +660,10 @@ Step-by-step page: see `manual_steps_artifact` in the manifest.
 - **Peek response shapes.** The parsers come from reading the fork's Go source, not a live server.
   `p9-qa-recorder` records real responses; a parser a fixture contradicts is fixed in that phase. If a
   recorded shape makes a §3.3 behaviour impossible, stop with `status=blocked`.
-- **The fork endpoint.** If `p9`'s live check or lifecycle gets 404/405 from `account-comments`,
-  `mb1` is not done: stop with `status=blocked` and say so.
+- **The fork endpoint.** Only `lifecycle_peek` posts a comment, and `--lifecycle` runs only in
+  `connector-live-check.yml` (`:134`), which `p10` dispatches. If Peek's lifecycle row there fails
+  with the "no account comment endpoint" message, `mb1` is not done: stop with `status=blocked` and
+  say so.
 - **Tests that enumerate connectors.** `tests/unit/test_daemon_main.py`,
   `test_settings_controller.py` (`TestSnapshotStructure` pins the snapshot keys,
   `test_connectors_cover_all_connectors`), `test_settings_window_html.py`, `web/test_routes_settings.py`,
@@ -647,7 +691,7 @@ manual_steps_source: docs/peek-connector-plan-manual-steps.html
 manual_before:
   - id: mb1-fork-comment-endpoint
     title: Add the account comment endpoint (POST /api/uploads/{slug}/account-comments) to the Peek fork, through /devflow:make-plan with the prompt on the manual-steps page, and deploy it
-    why: p9-qa-recorder's live check and lifecycle post a comment through it; without it peek_add_comment can only report that the server lacks it.
+    why: p10-docs-adrs-retire's connector-live-check.yml run includes lifecycle_peek, which posts a comment through it; without it peek_add_comment can only report that the server lacks it.
     done_when: A POST to https://<your Peek>/api/uploads/<a page you own>/account-comments with your token and {"body":"[QATEST] probe"} answers 200 with JSON whose "author" is your account name, and the same request without the Authorization header answers 401.
   - id: mb2-peek-qa-server
     title: A QA Peek server running the fork, a QA account on it, and a seed page with one comment
@@ -699,13 +743,13 @@ phases:
          token is only ever sent to the server it was issued for"). Fake requests at the boundary with monkeypatch on
          requests.Session.request (no network). Classes: TestNormalizeBaseUrl (every rule and message; path prefix
          kept; scheme and host lower-cased; http://localhost, http://127.0.0.1 and http://[::1] accepted),
-         TestValidateSlug ("PhiUs-lMbZE_Sw" accepted; "../x", "a/b", "a?b", "" and 65 characters rejected),
+         TestValidateSlug ("PhiUs-lMbZE_Sw" and a 67-character slug accepted; "../x", "a/b", "a?b", "" and 129 characters rejected),
          TestBundleBaseUrl (absent → ""; org_mode and absent → "Peek organization config not installed"; a bad URL →
          the "not usable" message), TestSendErrors (connection error, 302, 401, 403 with {"error": "not owner"}, 404,
-         500 with a 300-character error cut to 200, 500 without JSON, 200 with an HTML body; exact messages; assert
-         allow_redirects=False and timeout=30), TestStartDeviceLogin (parses; expires_at from expires_in; a missing
-         key; a verification_url on another host or another path prefix rejected; interval 0 becomes 2; repr hides
-         the device code), TestPollDeviceLogin (each of the five statuses; approved without token and an unknown
+         500 with a 300-character error cut to 200, 500 without JSON, 200 with an HTML body; exact messages; each
+         error's status attribute; assert allow_redirects=False and timeout=30), TestStartDeviceLogin (parses; expires_at from expires_in; a missing
+         key; a verification_url on another host or another path prefix rejected; interval 0 becomes 2; 404 and 405 give
+         the "no device sign-in at this address" message; repr hides the device code), TestPollDeviceLogin (each of the five statuses; approved without token and an unknown
          status rejected; repr hides the token), TestTokenFile (round trip; mode 0o600 on POSIX; missing file →
          "not authenticated"; invalid JSON, a list, a missing token and a non-loopback http base_url → "could not be
          read"; trailing slash normalized on load), TestResolveServer (no pin → the record's URL; equal pin → it;
@@ -714,7 +758,7 @@ phases:
          as ISO 8601 UTC, missing keys give "" and 0), TestGetPage (found; missing → its message, no extra request),
          TestGetComments (sorted by created_at then id), TestGetStats (ip and user_agent dropped: the PeekVisit has
          only visitor_name and visited_at), TestUploadPage (multipart file name and "text/html"; password sent only
-         for password visibility; the visibility and password checks raise before any request), TestSetVisibility,
+         for password visibility; the visibility, password and leading/trailing-space checks raise before any request), TestSetVisibility,
          TestDeletePage, TestAddComment (path account-comments; 404 and 405 → the "no account comment endpoint"
          message). Every slug-taking method rejects a bad slug before any request. Assert no token, device code or
          password appears in any raised message or repr.
@@ -752,6 +796,7 @@ phases:
       - tests/unit/connectors/test_readme_manifest_alignment.py
       - tests/unit/test_website_connector_pages.py
       - tests/unit/test_website_connectors_page.py
+      - tests/unit/test_website_pages.py
     brief: |
       Read first: the must-read docs, plan §3.0, §3.3 (connector spec) and §3.8 (setup guide), and
       src/privacyfence/connectors/salesforce.py (template for _fetch, _auto_audit and tool_specs style).
@@ -769,8 +814,8 @@ phases:
          0 review, 0 popup).
       5. Website and docs, required by tests/unit/test_website_connector_pages.py and test_website_connectors_page.py.
          Read the current numbers first; never assume "eleven" or "120":
-         a. The setup guide peek-setup.md in docs/, with the sections in plan §3.8 (describe all seven tools and both
-            modes now; the feature ships as a whole).
+         a. A minimal setup guide peek-setup.md in docs/: the §3.8 headings, each with one or two sentences (§3.8's
+            last paragraph); p10 writes the full content.
          b. README.md "## Connectors" table: the last row "| Peek | List your shared HTML pages; read comments and
             visit counts after review; publish pages, change who can open them, comment on and delete them |".
          c. website/connectors/peek/index.html, modelled on website/connectors/telegram/index.html (same head, meta
@@ -798,7 +843,9 @@ phases:
          i. tests/unit/test_website_connectors_page.py: len(REFERENCE) and the connector count word, one more each.
          j. website/_partials/other-connectors.html: <li data-connector="peek"><a href="/connectors/peek/">Peek</a></li>
             as the last connector line (before "All connectors"), and update the partial's header comment count.
-         k. docs/README.md: "- [`peek-setup.md`](peek-setup.md)" as the last line of the "### Connector setup" list in
+         k. tests/unit/test_website_pages.py: test_there_are_twelve_second_level_pages (l.200) counts the
+            /connectors/<x>/ pages: rename it to the next number word and assert one more than it asserts now.
+         l. docs/README.md: "- [`peek-setup.md`](peek-setup.md)" as the last line of the "### Connector setup" list in
             the user-and-operator half, so test_website_docs_allowlist.py passes.
       6. Create tests/unit/connectors/test_peek_connector.py (module docstring; pytestmark unit): TestDispatch (unknown
          tool → ValueError); TestListPages (never calls gated_call — use the gated_call_spy fixture pattern from
@@ -899,7 +946,8 @@ phases:
          data-review="2" data-popup="1"; h1 total and how-it-works total +1.
       4. Tests: TestUploadPage — html source: preview keys exactly Server, Name, Visibility, Size (plus Password "Set
          (not shown)" for password visibility), no HTML and no password in preview, args or raw_data; details_text is
-         the page's visible text (a <script> body does not appear); default visibility private; name defaults
+         the page's visible text, then the "--- HTML source" line and the whole source (a <script> body appears only
+         after that line); upload_pii_scan_text is the whole source; default visibility private; name defaults
          (page.html; local file's basename; a name with a directory keeps only its basename); local_path with
          local_files monkeypatched (require_local_files, read_local_file) reads the bytes; upload_id becomes the
          upload: reference; local_path in org mode → its message and nothing read; commit_uploads is called after the
@@ -941,7 +989,7 @@ phases:
       2. Tables: TOOL_TO_GATE popup ×3; TOOL_TO_OPERATION peek.set_visibility / peek.add_comment / peek.delete_page;
          TOOL_TO_VERB SHARE / COMMENT / DELETE; write_effects.EFFECT_BY_TOOL with the three exact §3.4 strings;
          gate._TOOL_LAYOUT WIDE for peek_add_comment only. tests/unit/test_connector_tool_annotations.py:
-         add "peek_delete_page" to DESTRUCTIVE_TOOLS.
+         add "peek_delete_page" to DESTRUCTIVE_TOOLS and update the comment above it to name it.
       3. Regenerate docs/tools-reference.md and docs/always-allow-rules-reference.md; website card → "7 tools: 1 without
          a card · 2 reviewed · 4 need approval" with data-tools="7" data-auto="1" data-review="2" data-popup="4"; h1
          total and how-it-works total +3.
@@ -987,7 +1035,8 @@ phases:
          poll_device_login monkeypatched) writes the token file and returns 0 with its message; a pinned URL skips the
          input() prompt; denied, expired (time past expires_at), consumed and a PeekClientError each return 1 with
          their messages; --peek-login dispatches to it; add "--peek-login" to
-         test_oauth_and_telegram_flags_do_not_trigger_the_separation_gate's parameters.
+         test_oauth_and_telegram_flags_do_not_trigger_the_separation_gate's parameters and monkeypatch
+         daemon_main.run_peek_login to lambda org_config: 0 there (plan §3.5).
          test_settings_controller.py — the peek row exists with has_org True and no bundle; update any assertion
          that pins the exact connector list or count.
       4. ruff check . and python3 -m pytest tests/unit -q.
@@ -1062,7 +1111,9 @@ phases:
          tuple, exactly as §3.6.
       2. docs/configuration-reference.md: the --peek-base-url row from §3.6 after the Atlassian rows
          (tests/unit/test_docs_configuration_reference.py requires every option documented).
-      3. web/routes_connect.py: everything in §3.6's routes_connect bullet: SERVICE_LABELS, configured/connected checks,
+      3. web/routes_connect.py: everything in §3.6's routes_connect bullet: SERVICE_LABELS, configured checks, the
+         two-argument "peek" branch in _is_connected (web/server.py's local_status_payload calls it for every label),
+         _render_connect_page's peek_state=None default,
          _PeekState and _PeekAuthStore, the _check_form_post rename (unless it exists), the three handlers and routes,
          _peek_box_html and its place in _render_connect_page, .pf-peek-code in _STYLE with tokens only. Device sign-in
          calls go through asyncio.to_thread.
@@ -1076,8 +1127,9 @@ phases:
          verification_url; /connect/peek/finish approved (poll monkeypatched) writes
          user_dir(principal)/credentials/peek_token.json with the bundle's base_url, evicts the principal and shows
          Connected; pending, denied and expired show their messages; cancel clears; no token or device code appears
-         in any response body; the row-count assertion (l.170) goes up by one. web/test_server.py — update the status
-         payload assertion (around l.1487) if it pins SERVICE_LABELS.
+         in any response body; the row-count assertion (l.170) goes up by one; _is_connected(principal, "peek") is True
+         with a token file and False without. web/test_server.py — local_status_payload includes "peek"; update the
+         status payload assertion (around l.1487) if it pins SERVICE_LABELS.
       5. ruff check . and python3 -m pytest tests/unit -q.
       Stop condition: plan §6 "Tests that enumerate connectors".
     acceptance:
@@ -1115,11 +1167,13 @@ phases:
            get_comments ("get_comments.json": the raw comments answer with authors redacted; ok only when there is at
            least one comment and every body contains [QATEST], refusing to record otherwise). Stats are never recorded
            (they carry IP addresses).
-         - lifecycle_peek(manifest): upload a private page "[QATEST] lifecycle <suffix>.html" with a [QATEST] body, set it
-           to public, add_comment "[QATEST] lifecycle comment", get_comments and confirm it with the QA account's name as
+         - lifecycle_peek(manifest): using LIFECYCLE_TAG (l.1858) like the other lifecycles, upload a private page
+           f"{LIFECYCLE_TAG} peek {suffix}.html" with a body carrying the tag, set it to public, add_comment
+           f"{LIFECYCLE_TAG} comment", get_comments and confirm it with the QA account's name as
            author, delete_page, then list_pages and confirm it is gone. LifecycleResult("peek", ok, note, cleanup_ok=<the
            delete was confirmed>); a failure after the upload still tries the delete.
-         - Register "peek" in CONNECTOR_CHECKS, EXPECTED_FIXTURES ("list_pages.json", "get_comments.json") and
+         - Register "peek" in CONNECTOR_CHECKS (the line must read exactly `    "peek": check_peek,`: qa-record-fixture.yml
+           greps `^    "${CONNECTOR}": check_`), EXPECTED_FIXTURES ("list_pages.json", "get_comments.json") and
            LIFECYCLE_CHECKS; update the comment above LIFECYCLE_CHECKS to name Peek.
       2. tests/fixtures/qa_environment.yaml.example: a peek section (page_slug: "") with comments in the file's style.
       3. docs/connector-qa.md: a Peek row in the QA accounts table (a QA account on a QA Peek server running the fork
@@ -1145,7 +1199,7 @@ phases:
          lifecycle_peek (success; a failing add_comment still deletes) against a fake client, following the existing
          per-connector tests there; TestFixturePresence passes.
       7. ruff check . and python3 -m pytest tests/unit -q. New text follows plan §3.0.
-      Stop condition: plan §6 "The runner credential" and "The fork endpoint".
+      Stop condition: plan §6 "The runner credential". (The fork endpoint is first exercised live in p10.)
     acceptance:
       - ls tests/fixtures/live/peek/ lists list_pages.json and get_comments.json
       - python3 -m pytest tests/unit/test_qa_fixture_recorder.py tests/unit/test_peek_client.py -q passes, with TestLiveFixtureParsing not skipped
@@ -1176,9 +1230,9 @@ phases:
       Read first: docs/adr/README.md (template and rules), plan §3 and §4, docs/configuration-reference.md (l.95-110 and
       300-325), docs/connecting-a-service.md, docs/org-mode-setup-guide.md's per-connector table, CHANGELOG.md's
       "## [Unreleased]" section.
-      1. The setup guide peek-setup.md in docs/: check every statement against the code as it now is (error texts in
-         peek_client.py, settings_controller.py, routes_connect.py and daemon_main.py, the option name in
-         build_org_bundle.py, the fork endpoint contract in plan §3.1) and correct it.
+      1. The setup guide peek-setup.md in docs/: write the full §3.8 content over p2's minimal version, every statement
+         checked against the code as it now is (error texts in peek_client.py, settings_controller.py, routes_connect.py
+         and daemon_main.py, the option name in build_org_bundle.py, the fork endpoint contract in plan §3.1).
       2. docs/configuration-reference.md: add peek to the connectors.<name>.enabled list (l.103), Peek to the sentence
          listing per-service guides as "[Peek setup](peek-setup.md)", and `--peek-login` to the CLI flag table next to
          `--telegram-setup`. docs/connecting-a-service.md: a Peek bullet in "### Provider differences" (device sign-in:
@@ -1206,12 +1260,14 @@ phases:
          src/privacyfence/*_client.py and connectors/**. A queued run is waiting on the connector-live-check concurrency
          group: wait, never re-dispatch. Put the run URL in your final report. If it opens or updates the
          chore/connector-live-fixture-drift PR for another connector, leave that PR alone (steward skill) and mention it.
+      Stop condition: plan §6 "The fork endpoint" (Peek's lifecycle row fails with the "no account comment endpoint"
+      message).
     acceptance:
       - ls docs/adr/ lists four new Peek ADR files, each containing "Accepted", and docs/adr/README.md has a row for each
       - test ! -e docs/peek-connector-plan.md && test ! -e docs/peek-connector-plan-manual-steps.html
       - grep -rn "peek-connector-plan" . --exclude-dir=.git finds nothing
       - grep -n "Peek connector" CHANGELOG.md matches a line below "## [Unreleased]" and above the next "## [" heading
-      - The connector-live-check.yml run on this phase branch concluded success, or failed only in another connector's row (URL in the final report)
+      - The connector-live-check.yml run on this phase branch concluded success, or failed only in another connector's row; Peek's check and lifecycle rows passed (URL in the final report)
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
 ```
