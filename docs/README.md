@@ -96,6 +96,8 @@ privacyfence.eu.
   organization deployment, the per-client script, the evidence to record, and the results table.
 - [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
   `downloads.privacyfence.eu` Worker, and how downloads are counted.
+- [`grist-connector-plan.md`](grist-connector-plan.md) — the in-flight plan for the Grist
+  connector; deleted by its last phase.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they

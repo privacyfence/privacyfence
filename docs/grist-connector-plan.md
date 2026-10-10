@@ -84,6 +84,22 @@ tool); local and org mode.
 
 ## 3. Design
 
+### 3.0 Rules for every phase
+
+- No project history in code, comments, docstrings, user-visible strings or standing docs: no phase
+  ids (`p3`), plan names, "Phase N", bare `#123` issue numbers or "as of" phrasing
+  (`tests/unit/test_code_no_history.py`, `tests/unit/test_docs_no_history.py`, ADR 0056). Cite an ADR
+  number for a reason instead.
+- Every `gated_call(...)` in `connectors/grist.py` passes its tool name as a string literal
+  (`tool="grist_add_records"`) and its gate as a literal (`gate="popup"`), inline at the call site.
+  `test_readme_manifest_alignment.py` (`_SRC_TOOL_GATE_RE`), `test_write_effects.py` and
+  `test_systemic_gate_invariants.py` read the source; a shared helper that passes the tool name as a
+  variable defeats them and is not allowed.
+- This plan and its manual-steps page are listed in `scripts/build_site.py` `CONTRIBUTOR_DOCS` and in
+  `docs/README.md`'s contributor half while the work is open (the plan branch's own commit does
+  that, so `tests/unit/test_website_docs_allowlist.py` passes); the last phase removes both entries.
+- Every phase ends with `ruff check .` and `python3 -m pytest tests/unit -q` passing in full.
+
 ### 3.1 Grist API used
 
 Base: `{server_url}/api`. Auth header `Authorization: Bearer <api_key>`. Endpoints (Grist OpenAPI,
@@ -135,7 +151,10 @@ and counts only, never the key or a cell value.
     `scheme://netloc[/path]` with the scheme and host lower-cased.
 - Credential file `credentials/grist_token.json`, JSON object `{"server_url": "<normalized>", "api_key": "<key>"}`:
   - `save_token_file(path: str, server_url: str, api_key: str) -> None` → `secure_files.atomic_write_json`.
-  - `load_token_file(path: str) -> dict[str, str]`: missing file or missing/empty keys → `GristClientError("Grist is not authenticated. Use Authenticate… in PrivacyFence Settings.")`.
+  - `load_token_file(path: str) -> dict[str, str]`: missing file or missing/empty keys → `GristClientError("Grist is not authenticated. Use Authenticate… in PrivacyFence Settings.")`;
+    a file that is not valid JSON, or not a JSON object →
+    `GristClientError("Grist's saved credentials could not be read. Use Authenticate… in PrivacyFence Settings to connect again.")`
+    (so a damaged file disables Grist only, never the whole `build_connectors` run).
   - `effective_server_url(token: dict[str, str], pinned: str) -> str`: with `pinned` empty, returns
     `normalize_server_url(token["server_url"])`; otherwise returns `normalize_server_url(pinned)`,
     and if the token's normalized `server_url` differs, raises
@@ -143,7 +162,8 @@ and counts only, never the key or a cell value.
     so a key is never sent to a server it was not entered for.
 - `class GristClient`:
   - `__init__(self, server_url: str, api_key: str)`; stores `normalize_server_url(server_url)`.
-    `__repr__` must not include the key.
+    `__repr__` must not include the key. Read-only property `host -> str`: the server URL's host
+    (with port, if any), used in log lines and on every approval card (§3.3).
   - `_request(self, method: str, path: str, *, params: dict[str, str] | None = None, json_body: Any = None) -> Any`:
     the single choke point (the QA recorder's `RawCapture` wraps it; keep `method` as the first
     positional parameter). Returns parsed JSON, or `None` for an empty body. Error mapping:
@@ -153,9 +173,12 @@ and counts only, never the key or a cell value.
     - 404 → `f"Grist found no such document, table or record (HTTP 404)."`
     - any other non-2xx → `f"Grist API error (HTTP {status}): {detail}"`, with `detail` the response
       JSON's `"error"` string cut to 200 characters, or `"no detail"`.
+    - a 2xx whose non-empty body is not JSON (a proxy's or login page's HTML, for example) →
+      `f"The Grist server answered with something other than JSON (HTTP {status}). Check the server address in PrivacyFence Settings."`
   - `check_connection() -> int` (number of orgs).
   - `list_documents() -> list[GristDocument]`: at most 20 orgs and 500 documents, sorted by
-    `(team, workspace, name)`; `id` is `urlId` when present, otherwise `id`; `team` is the org's `name`.
+    `(team, workspace, name)`; `id` is the document's `id` (never `urlId`: a urlId resolves only on
+    its own team site, and `grist.document` rules need one stable id); `team` is the org's `name`.
   - `get_document(doc_id) -> GristDocument`.
   - `list_columns(doc_id, table_id) -> list[GristColumn]` (`label` falls back to `id`).
   - `list_tables(doc_id) -> list[GristTable]` (at most 100 tables).
@@ -171,7 +194,10 @@ and counts only, never the key or a cell value.
 ### 3.3 `src/privacyfence/connectors/grist.py`
 
 `class GristConnector(Connector)`, `name == "grist"`, `__init__(self, client: GristClient)`.
-`_fetch` and `_auto_audit` copied from `connectors/salesforce.py:628-653` with `GristClientError`.
+`_auto_audit` copied from `connectors/salesforce.py:634-653`. `_fetch` is the Salesforce one
+(`:628-632`) widened to keyword arguments: `async def _fetch(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any`
+calling `await asyncio.to_thread(func, *args, **kwargs)` and re-raising `GristClientError` as
+`RuntimeError(str(exc)) from exc` (after `logger.warning`).
 Argument validation raises `ValueError` before anything is fetched or gated. JSON-string parameters
 (`ToolParam` has no list type, as in Salesforce's `filters`) are parsed with `json.loads`; a parse
 failure or wrong shape raises `ValueError` with the message given below.
@@ -253,7 +279,9 @@ Cell display helper `_cell_text(value) -> str`: `None` → `""`; `str` as-is; an
 
 `gated_call` arguments (all keyword; `connector=self.name`; every call passes
 `args={"doc_id": doc_id, "table_id": table_id}` plus, for `grist_get_records`, `"filter"`, `"sort"`
-and `"limit"`):
+and `"limit"`). Every `preview` dict below starts with `"Server": self._client.host`: in local mode
+the server is whatever the user typed, so the card always says where the data comes from or goes
+to. The dicts are listed without that first key:
 
 - `grist_get_records` (fetch `get_document` and `get_records`, then gate): `tool_name="Read Grist Records"`,
   `summary=f"Read {len(records)} record(s) from {doc.name} / {table_id}"`, `sender=doc.name`,
@@ -317,7 +345,7 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   if enabled("grist"):
       try:
           pinned = (org_config.get("grist") or {}).get("server_url", "")
-          if org_mode.resolve_mode(org_config) == "org" and not pinned:
+          if download_mode == "org" and not pinned:
               raise GristClientError("Grist organization config not installed")
           token = load_grist_token(_resolve_path(TOKEN_FILES["grist"]))
           client = GristClient(server_url=effective_server_url(token, pinned), api_key=token["api_key"])
@@ -328,14 +356,16 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
           failures["grist"] = _classify_connector_failure(exc)
   ```
   (`load_grist_token` is `grist_client.load_token_file` imported under that name, like
-  `load_salesforce_token`.)
+  `load_salesforce_token`. `download_mode` is the `org_mode.resolve_mode(org_config)` value
+  `build_connectors` already computes near its top (`daemon_main.py:1306`); reuse it rather than
+  calling `resolve_mode` again.)
 - `settings_controller.py`: `"grist"` appended to `ALL_CONNECTORS`; `_connectors_state` sets
   `has_org = True` for `"grist"` (no bundle is needed in local mode) instead of reading
   `ORG_CONFIG_SERVICE`; `connector_label("grist")` is already `"Grist"`.
 - New action `grist_connect(self, server_url: str, api_key: str) -> dict[str, Any]`:
   1. `api_key = api_key.strip()`; empty → `self._grist_auth = {"error": "Enter your Grist API key."}`, return snapshot.
-  2. `pinned = (self._org_config().get("grist") or {}).get("server_url", "")` (use whatever accessor
-     `_connectors_state`'s caller already uses for the org config); the URL used is `pinned` if set,
+  2. `pinned = (self._org_config_or_empty().get("grist") or {}).get("server_url", "")`
+     (`settings_controller.py:1136`); the URL used is `pinned` if set,
      else `server_url`; `normalize_server_url` failures set `_grist_auth = {"error": str(exc)}`.
   3. Mark `"grist"` busy and `_run_async` a worker that builds `GristClient(url, api_key)`, calls
      `check_connection()`, then `save_token_file(str(data_dir() / TOKEN_FILES["grist"]), url, api_key)`.
@@ -346,17 +376,24 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   the stored URL's key).
 - `web/org_settings_scope.py`: `"grist_connect"` and `"grist_cancel_auth"` as
   `ActionScope(modes=frozenset({LOCAL_MODE}))`, next to the Telegram ones.
-  `web/routes_settings.py`: both in `_NON_SENSITIVE_ACTIONS` (same class as `authenticate_connector`
-  and `telegram_submit_2fa`: connecting a credential is not one of the sensitive settings, ADR 0070
-  makes *enabling* sensitive).
+  `web/routes_settings.py`: both in `_NON_SENSITIVE_ACTIONS`. The module docstring
+  (`web/routes_settings.py:74-80`) already states that connector auth stays ungated, alongside
+  `authenticate_connector` and `telegram_submit_2fa`; ADR 0070 makes *enabling* a connector
+  sensitive, and that still applies to Grist. The arbitrary-server risk is answered by the card
+  naming the server on every Grist approval (§3.3) and recorded in ADR 0143.
 - `settings_window_html.py`: the Grist row gets `data-grist-auth="1"` (as Telegram's
   `data-telegram-auth`), opening a modal with two fields: **Server address** (`type="url"`,
   prefilled `https://docs.getgrist.com`, hidden and replaced by the text "Your organization uses
   <pinned>" when `grist_server_url_pinned` is set) and **API key** (`type="password"`,
   `autocomplete="off"`), a short line "Create a key in Grist under Profile settings → API.", and
-  **Connect** / **Cancel**. Connect posts `grist_connect` with `{server_url, api_key}`; the modal
-  closes when `grist_auth` comes back `null` after a submit, and shows `grist_auth.error` otherwise.
-  The key field is cleared after every submit.
+  **Connect** / **Cancel**. Connect posts `grist_connect` with `{server_url, api_key}` and sets a
+  client-side `ui.gristSubmitted = true`. The result arrives by snapshot push (the work runs through
+  `_run_async`), so on each render: while the Grist row is `busy`, show "Connecting…"; once
+  `ui.gristSubmitted` is true, the row is no longer `busy` and `grist_auth.error` is `""`, close the
+  modal and reset the flag (the same shape as Telegram's `telegramAuthWasActive` check,
+  `settings_window_html.py:1416-1421`); a non-empty `grist_auth.error` is shown in the modal, which
+  stays open. The key field is cleared after every submit. `snapshot()["grist_auth"]` is therefore
+  always `{"error": <str>}`, with `""` for no error.
 
 ### 3.6 Org mode
 
@@ -364,9 +401,11 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   --grist-server-url URL`. The script stays standard-library only: it strips a trailing `/` and
   rejects (via `SystemExit("--grist-server-url must be an https:// address.")`) anything whose
   `urlsplit` scheme is not `https` or whose host is empty. `"grist"` joins the
-  `services = [...]` tuple at `:692` so a Grist-only bundle is not "nothing to write". It gets no
-  `_CONNECTOR_CALLBACKS` entry (no OAuth callback).
-- `web/routes_connect.py`: `_is_configured("grist")` is `bool((org_config.get("grist") or {}).get("server_url"))`;
+  `services = [...]` tuple at `:692` so a Grist-only bundle is not "nothing to write", and
+  `_CONNECTOR_CALLBACKS` gets `"grist": ()` (no OAuth callback; the org-mode summary at `:744`
+  indexes that dict for every service, so a missing key would raise `KeyError`).
+- `web/routes_connect.py` (its test asserts the number of service rows, `tests/unit/web/test_routes_connect.py:170`
+  `== 11`, which becomes 12): `_is_configured("grist")` is `bool((org_config.get("grist") or {}).get("server_url"))`;
   `_is_connected("grist")` checks the token file. A new `_grist_box_html(...)` renders, when
   configured, a form `POST /connect/grist` with the CSRF field, the pinned server shown as text,
   an `<input type="password" name="api_key" autocomplete="off">`, and **Connect**; when connected,
@@ -395,7 +434,7 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
 
 See §4.
 
-### 3.9 Setup guide `docs/grist-setup.md`
+### 3.9 Setup guide `grist-setup.md` (in `docs/`)
 
 Sections: `# Grist setup`; `## What you need` (a Grist account on docs.getgrist.com, a team site,
 or a self-hosted server; nothing for an administrator in local mode); `## Create an API key`
@@ -415,12 +454,19 @@ exact error texts from §3.2 with what to do).
   `settings.yaml`, the settings snapshot, a log line or the audit log. Rejected: Grist OAuth (only for
   integrations registered with Grist Labs, and unavailable on self-hosted servers); the OS keyring (no
   other connector credential uses one, and the daemon runs under its own service account).
+  Consequence to record: `grist` becomes a reserved plugin name, so a plugin already called `grist`
+  is refused from this release on.
 - **0143** — The Grist server is the user's choice in local mode and the organization's in org mode:
   an org-mode install offers Grist only when the bundle's `grist.server_url` is set, a bundle's URL
   overrides the user's in either mode, and a key is never sent to a server other than the one it was
   entered for (a mismatch asks to reconnect). Only `https` (or `http` to loopback); redirects are
-  never followed. Rejected: getgrist.com only (rules out self-hosted Grist, which privacy-minded
-  users run); a free URL in org mode (a person could send organization data to any server).
+  never followed. Every Grist approval card names the server. Connecting Grist stays a
+  non-sensitive Settings action like every other connector sign-in (`web/routes_settings.py`'s
+  docstring), because the card shows the server on every read and write. Rejected: getgrist.com only
+  (rules out self-hosted Grist, which privacy-minded users run); a free URL in org mode (a person
+  could send organization data to any server); classing `grist_connect` as a step-up action (it
+  would make Grist the only connector whose sign-in needs a passkey, for a risk the card already
+  shows).
 - **0144** — Grist auto-accept rules are scoped per document (`grist.document`) and made on
   Settings or through the bridge tool, never from the approval card's "Always allow". Rejected:
   adding the scope to `SCOPE_SELECTORS`, which is the frozen v1-equivalence set
@@ -461,7 +507,7 @@ Step-by-step page: see `manual_steps_artifact` in the manifest.
 - **Website goes live on merge.** `pages.yml` deploys `website/` from `main`, so
   `/connectors/grist/` is public once the feature PR merges, before a release carries the connector.
   The page's "Set it up" button therefore links the GitHub copy of the guide on `main`
-  (`https://github.com/privacyfence/privacyfence/blob/main/docs/grist-setup.md`), which the test
+  (the GitHub copy of the guide on `main`; the exact href is in p2's brief), which the test
   accepts. If the maintainer wants the page held back to the release, that is a change to
   `p2-connector-listing` only.
 - **Counts on the website.** Each tool phase changes the totals in `website/connectors/index.html`,
@@ -506,8 +552,34 @@ final_checks:
   - ADRs 0142, 0143, 0144 and 0145 exist in docs/adr/, are Accepted, and are in the docs/adr/README.md index
   - CHANGELOG.md has the Grist entry under "## [Unreleased]" and no new version heading
   - After python3 scripts/generate_tools_reference.py and python3 scripts/generate_always_allow_reference.py, git diff --exit-code docs/tools-reference.md docs/always-allow-rules-reference.md exits 0
-  - The PR description links the qa-record-fixture.yml run and a connector-live-check.yml run dispatched against the feature branch (definition-of-done QA row)
+  - The PR description links the qa-record-fixture.yml run (p9-qa-recorder) and the connector-live-check.yml run (p10-docs-adrs-retire), which is the definition-of-done QA row
 phases:
+  - id: p0-reserve-name
+    title: Reserve the plugin name grist in the daemon, the SDK, the protocol schema and its doc
+    depends_on: []
+    complexity: S
+    touches:
+      - src/privacyfence/plugins/constants.py
+      - plugin-sdk/src/privacyfence_plugin_sdk/plugin.py
+      - docs/plugin-protocol/protocol.schema.json
+      - docs/plugin-protocol.md
+    brief: |
+      Read first: the must-read docs and plan §3.0. A new connector's name is reserved so no plugin can
+      take it; the list exists in four copies that tests keep equal.
+      1. src/privacyfence/plugins/constants.py RESERVED_PLUGIN_NAMES (l.104-109): add "grist" after "telegram".
+      2. plugin-sdk/src/privacyfence_plugin_sdk/plugin.py _RESERVED_PLUGIN_NAMES (l.73-78): the same.
+      3. docs/plugin-protocol/protocol.schema.json: add "grist" to $defs.Manifest.properties.name.not.enum
+         (after "telegram", near l.554). Do not change "x-protocol-version".
+      4. docs/plugin-protocol.md (l.146-148): add `grist` to the list of connector names after `telegram`.
+      5. grep -rn '"telegram"' plugin-sdk docs/plugin-protocol* src/privacyfence/plugins and add "grist" to any
+         other copy of this list the grep finds; name it in your report.
+      6. ruff check . and python3 -m pytest tests/unit -q.
+      Stop condition: if a test demands a protocol or SDK version bump for this change, stop with status=blocked.
+    acceptance:
+      - python3 -m pytest tests/unit/plugin_sdk/test_plugin.py tests/unit/plugins/test_protocol.py -q passes
+      - 'grep -n ''"grist"'' src/privacyfence/plugins/constants.py plugin-sdk/src/privacyfence_plugin_sdk/plugin.py docs/plugin-protocol/protocol.schema.json matches in all three files'
+      - python3 -m pytest tests/unit -q passes
+      - ruff check . passes
   - id: p1-client
     title: Grist REST client, credential file helpers and their tests
     depends_on: []
@@ -525,7 +597,7 @@ phases:
          effective_server_url, and GristClient with _request as the single HTTP choke point
          (requests.Session, timeout=30, allow_redirects=False) and every public method in §3.2.
          Use the exact error strings from §3.2. Never log the API key or a cell value; log the host and counts.
-         Copy the request/session style of src/privacyfence/salesforce_client.py (requests.post with timeout).
+         Use requests.Session.request(method, url, params=..., json=..., headers=..., timeout=30, allow_redirects=False).
       2. Create tests/unit/test_grist_client.py (pytestmark = pytest.mark.unit; module docstring naming the
          module and the invariant "the API key never leaves for any server but the one it was entered for").
          Fake the HTTP boundary by monkeypatching the client's requests.Session.request (no network). Classes:
@@ -538,7 +610,9 @@ phases:
          403, 404, 500 with {"error": ...} cut to 200 chars, 500 without JSON — exact messages; assert
          allow_redirects=False and the Authorization header were sent; assert the key is not in any raised
          message), and one class per public method asserting method, path, params/body and parsing:
-         TestListDocuments (urlId preferred over id, sorting, org cap 20), TestGetDocument (missing workspace/org
+         TestListDocuments (the doc's id is used even when urlId is present, sorting, org cap 20),
+         TestTokenFile also covers invalid JSON and a non-object file (the "could not be read" message),
+         TestRequestErrors also covers a 200 with an HTML body (the "other than JSON" message), TestHost, TestGetDocument (missing workspace/org
          keys give ""), TestListTables, TestListColumns (label falls back to id), TestGetRecords (limit+1
          requested, truncated flag, filter JSON-encoded), TestGetRecordsById, TestAddRecords, TestUpdateRecords,
          TestAddTable, TestAddColumns. Each id-taking method rejects a bad id before any request.
@@ -557,20 +631,21 @@ phases:
       - ruff check . passes
   - id: p2-connector-listing
     title: GristConnector with the two auto listing tools, and every per-connector table, page and guide a new connector module requires
-    depends_on: [p1-client]
+    depends_on: [p0-reserve-name, p1-client]
     complexity: M
     touches:
       - src/privacyfence/connectors/grist.py
       - tests/unit/connectors/test_grist_connector.py
       - src/privacyfence/auto_accept.py
-      - src/privacyfence/plugins/constants.py
       - scripts/pyinstaller_common.py
       - scripts/generate_tools_reference.py
       - scripts/build_site.py
       - docs/tools-reference.md
-      - docs/grist-setup.md
+      - docs/grist-setup*.md
+      - docs/README.md
       - README.md
       - website/connectors/grist/index.html
+      - website/_partials/other-connectors.html
       - website/connectors/index.html
       - website/how-it-works/index.html
       - website/compare/mcp-gateways/index.html
@@ -588,21 +663,24 @@ phases:
          other five tools (later phases add them); do not add them now.
       2. src/privacyfence/auto_accept.py TOOL_TO_GATE: "grist_list_documents": "auto", "grist_list_tables": "auto"
          (with a "# Grist" comment line like the other connectors' groups).
-      3. Bookkeeping: add "grist" to RESERVED_PLUGIN_NAMES in src/privacyfence/plugins/constants.py;
+      3. Bookkeeping ("grist" is already a reserved plugin name, from p0-reserve-name):
          "privacyfence.connectors.grist" to scripts/pyinstaller_common.py's list; "grist": "Grist" to both
          CONNECTOR_TITLES and CONNECTOR_SHORT in scripts/generate_tools_reference.py (after "confluence");
          GristConnector to CONNECTOR_CLASSES (and its import) in tests/unit/connectors/test_readme_manifest_alignment.py.
       4. Run python3 scripts/generate_tools_reference.py to regenerate docs/tools-reference.md (Grist row:
          2 tools, 2 auto, 0 review, 0 popup).
       5. Website and docs, required by tests/unit/test_website_connector_pages.py and test_website_connectors_page.py:
-         a. docs/grist-setup.md with the sections in plan §3.9 (describe all seven tools and both modes now;
+         a. The setup guide grist-setup.md in docs/, with the sections in plan §3.9 (describe all seven tools and both modes now;
             the feature ships as a whole).
          b. README.md "## Connectors" table: row "| Grist | List documents and tables; read records after review; add and update records, add tables and columns (nothing is deleted) |" after Confluence.
          c. website/connectors/grist/index.html, modelled on website/connectors/telegram/index.html (same head,
             meta pf-content-group connector, canonical/og URLs for /connectors/grist/). Copy: list straight away,
             read records after review, add and change only with approval, works with docs.getgrist.com, team
             sites and self-hosted Grist, you paste your own API key. Its "Set it up" button is exactly
-            <a class="button primary" href="https://github.com/privacyfence/privacyfence/blob/main/docs/grist-setup.md">Set it up</a>.
+            <a class="button primary" href="GUIDE_URL">Set it up</a>.
+            where GUIDE_URL is https://github.com/privacyfence/privacyfence/blob/main/ followed by docs/ and the guide's
+            file name grist-setup.md, with no space (written split here because test_docs_references_exist.py
+            rejects a plan naming a doc path that does not exist yet).
          d. scripts/build_site.py: "/connectors/grist/": "connectors/grist/index.html" in PAGES (after telegram)
             and "grist-setup" in CONNECTOR_GUIDES.
          e. tests/unit/test_website_connector_pages.py CONNECTORS: "grist": ("/connectors/grist/", "grist-setup", "Grist").
@@ -614,6 +692,13 @@ phases:
          g. website/how-it-works/index.html: "120 connector tools" → "122 connector tools".
          h. website/compare/mcp-gateways/index.html: "Its own eleven connectors" → "Its own twelve connectors".
          i. tests/unit/test_website_connectors_page.py: len(REFERENCE) == 12 and "Twelve connectors".
+         j. website/_partials/other-connectors.html: add
+            <li data-connector="grist"><a href="/connectors/grist/">Grist</a></li> after the Telegram line, and
+            update the partial's header comment ("the other four") to the new count. The Grist page includes
+            the partial with current="grist" exactly as the Telegram page does with current="telegram";
+            scripts/build_site.py's _without_current_connector (l.304-310) raises BuildError without that line.
+         k. docs/README.md: add "- [`grist-setup.md`](grist-setup.md)" after the telegram-setup.md line in the
+            user-and-operator half's connector guide list (l.46-51), so test_website_docs_allowlist.py passes.
       6. Create tests/unit/connectors/test_grist_connector.py (module docstring; pytestmark unit): TestDispatch
          (unknown tool → ValueError); TestListDocuments and TestListTables (never call gated_call — use the
          gated_call_spy fixture pattern from tests/unit/connectors/test_salesforce_connector.py:75-84 and assert it
@@ -623,14 +708,16 @@ phases:
          (shape as SALESFORCE_SIBLINGS) calling assert_tool_definitions_complete; TestEveryToolIsAudited calling
          assert_all_tools_leave_an_audit_trail.
       7. Run ruff check . and python3 -m pytest tests/unit -q (the whole unit suite: many cross-connector tests discover
-         the new module).
+         the new module), and python3 scripts/build_site.py --out /tmp/pf-site-check --no-docs --offline to confirm the
+         site builds and its link check passes.
       Stop condition: if a unit test outside the files in touches fails because of the new connector module
       (another hand-maintained connector list this plan does not name), stop with status=blocked and name the test.
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_grist_connector.py -q passes
-      - python3 -m pytest tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/web/test_tool_schema_portability.py tests/unit/test_connector_tool_annotations.py tests/unit/test_systemic_gate_invariants.py -q passes
+      - python3 -m pytest tests/unit/test_website_docs_allowlist.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connector_pages.py tests/unit/test_website_connectors_page.py tests/unit/test_pyinstaller_hidden_imports.py tests/unit/web/test_tool_schema_portability.py tests/unit/test_connector_tool_annotations.py tests/unit/test_systemic_gate_invariants.py -q passes
       - python3 -m pytest tests/unit -q passes
       - grep -n "| \[Grist\](#grist) | 2 | 2 | 0 | 0 |" docs/tools-reference.md matches
+      - python3 scripts/build_site.py --out /tmp/pf-site-check --no-docs --offline exits 0
       - ruff check . passes
   - id: p3-get-records
     title: grist_get_records, the review-gated read
@@ -645,6 +732,7 @@ phases:
       - docs/tools-reference.md
       - website/connectors/index.html
       - website/how-it-works/index.html
+      - docs/always-allow-rules-reference.md
     brief: |
       Read first: plan §3.3 (grist_get_records row, filter/sort/limit validation, _cell_text, its gated_call
       arguments) and §3.4; src/privacyfence/connectors/salesforce.py _get_record (l.403-447) as the pattern.
@@ -656,12 +744,13 @@ phases:
       2. auto_accept.py: TOOL_TO_GATE "grist_get_records": "review"; TOOL_TO_OPERATION "grist_get_records":
          "grist.read_records". policy/registry.py TOOL_TO_VERB "grist_get_records": Verb.READ. gate.py
          _TOOL_LAYOUT "grist_get_records": WIDE.
-      3. python3 scripts/generate_tools_reference.py; then website/connectors/index.html Grist card →
+      3. python3 scripts/generate_tools_reference.py and python3 scripts/generate_always_allow_reference.py (it lists
+         every review and popup tool); then website/connectors/index.html Grist card →
          data-tools="3" data-auto="2" data-review="1" data-popup="0", printed line
          "3 tools: 2 without a card · 1 reviewed · 0 need approval", heading total 123 tools;
          website/how-it-works/index.html "123 connector tools".
       4. Tests in tests/unit/connectors/test_grist_connector.py: TestGetRecords — preview dict has exactly the
-         keys Document, Team, Table, Filter, Sort and no cell value (data minimization); details_text carries the
+         keys Server, Document, Team, Table, Filter, Sort (Server first, equal to client.host) and no cell value (data minimization); details_text carries the
          cells; pii_scan_text == details_text; preview_tables headers start with "id"; args carry doc_id,
          table_id, filter, sort, limit; truncated prefix; empty result gives "(no records)" and no table; each
          filter/sort/limit ValueError message (gated_call_spy stays empty); GristClientError → RuntimeError.
@@ -672,7 +761,7 @@ phases:
       5. ruff check . and python3 -m pytest tests/unit -q.
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_grist_connector.py -q passes
-      - python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/policy/test_registry.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py -q passes
+      - python3 -m pytest tests/unit/test_systemic_gate_invariants.py tests/unit/policy/test_registry.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_generate_always_allow_reference.py -q passes
       - grep -n "| \[Grist\](#grist) | 3 | 2 | 1 | 0 |" docs/tools-reference.md matches
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
@@ -690,6 +779,7 @@ phases:
       - docs/tools-reference.md
       - website/connectors/index.html
       - website/how-it-works/index.html
+      - docs/always-allow-rules-reference.md
     brief: |
       Read first: plan §3.3 (records validation, column checks, the two tools' gated_call arguments) and §3.4;
       the popup patterns in src/privacyfence/connectors/contacts.py:305-342 and connectors/jira.py:806-839.
@@ -701,19 +791,26 @@ phases:
       2. Tables: auto_accept TOOL_TO_GATE popup ×2; TOOL_TO_OPERATION grist.add_records / grist.update_records;
          registry TOOL_TO_VERB CREATE / UPDATE; write_effects.EFFECT_BY_TOOL with the two exact strings in §3.4
          (under a "# ── Grist ──" header like the others); gate._TOOL_LAYOUT WIDE for both.
-      3. Regenerate docs/tools-reference.md; website card → 5 tools: 2 auto, 1 review, 2 popup
+      3. Regenerate docs/tools-reference.md (python3 scripts/generate_tools_reference.py) and
+         docs/always-allow-rules-reference.md (python3 scripts/generate_always_allow_reference.py); website card → 5 tools: 2 auto, 1 review, 2 popup
          ("5 tools: 2 without a card · 1 reviewed · 2 need approval"), heading 125 tools; how-it-works 125.
       4. Tests: TestAddRecords and TestUpdateRecords — preview dict holds only the §3.3 keys; preview_tables
          shape; update's Current/New table and "→" details lines; gate == "popup"; filtered_data is None; the
          client write is called only after the spy returns and not at all when the spy raises
          (monkeypatch gated_call to raise RuntimeError); every validation message in §3.3 for records,
          unknown column, formula column, missing ids, duplicate ids — and gated_call_spy stays empty for each;
-         added_ids/updated_ids returned. Extend GRIST_SIBLINGS. The audit-trail test needs arg_overrides with
-         valid JSON for records.
+         added_ids/updated_ids returned. Extend GRIST_SIBLINGS.
+         TestEveryToolIsAudited: build the connector on a MagicMock client whose get_document returns
+         GristDocument("DOC1", "QA doc", "Home", "Personal"), list_columns returns [GristColumn("Name", "Name",
+         "Text", False)], list_tables returns [GristTable("Table1", [GristColumn("Name", "Name", "Text", False)])],
+         get_records_by_id returns [GristRecord(1, {"Name": "old"})], add_records returns [2], host is
+         "docs.getgrist.com"; and pass arg_overrides {"grist_add_records": {"doc_id": "DOC1", "table_id": "Table1",
+         "records": '[{"Name": "a"}]'}, "grist_update_records": {"doc_id": "DOC1", "table_id": "Table1",
+         "records": '[{"id": 1, "fields": {"Name": "b"}}]'}} plus doc_id/table_id overrides for the read tools.
       5. ruff check . and python3 -m pytest tests/unit -q.
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_grist_connector.py -q passes
-      - python3 -m pytest tests/unit/test_write_effects.py tests/unit/policy/test_registry.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py -q passes
+      - python3 -m pytest tests/unit/test_write_effects.py tests/unit/policy/test_registry.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py tests/unit/test_generate_always_allow_reference.py -q passes
       - grep -n "| \[Grist\](#grist) | 5 | 2 | 1 | 2 |" docs/tools-reference.md matches
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
@@ -730,6 +827,7 @@ phases:
       - docs/tools-reference.md
       - website/connectors/index.html
       - website/how-it-works/index.html
+      - docs/always-allow-rules-reference.md
     brief: |
       Read first: plan §3.3 (columns validation, type allowlist, the two tools' gated_call arguments), §3.4, §3.7.
       1. connectors/grist.py: add grist_create_table and grist_add_columns (specs, call(), siblings of each other)
@@ -738,17 +836,21 @@ phases:
          → write → return the §3.3 dict (create_table returns the table id Grist assigned).
       2. Tables: TOOL_TO_GATE popup ×2; TOOL_TO_OPERATION grist.create_table / grist.add_columns; TOOL_TO_VERB
          RESTRUCTURE ×2; EFFECT_BY_TOOL with the exact §3.4 strings. No _TOOL_LAYOUT entry (NARROW default).
-      3. Regenerate docs/tools-reference.md; website card → 7 tools: 2 auto, 1 review, 4 popup
+      3. Regenerate docs/tools-reference.md (python3 scripts/generate_tools_reference.py) and
+         docs/always-allow-rules-reference.md (python3 scripts/generate_always_allow_reference.py); website card → 7 tools: 2 auto, 1 review, 4 popup
          ("7 tools: 2 without a card · 1 reviewed · 4 need approval"), heading 127 tools; how-it-works 127.
       4. Tests: TestCreateTable and TestAddColumns — preview keys, the Column/Label/Type table, default type Text,
          every type in the allowlist accepted (parametrize), Ref:Bad-Id and "DateTime" rejected with the exact
          message, existing table / missing table / existing column messages, no write when the gate raises.
-         Extend GRIST_SIBLINGS and the audit-trail arg_overrides.
+         Extend GRIST_SIBLINGS. In TestEveryToolIsAudited's fake client, add_table returns "NewTable" and add_columns
+         returns ["Count"]; arg_overrides add {"grist_create_table": {"doc_id": "DOC1", "table_id": "NewTable",
+         "columns": '[{"id": "Title"}]'}, "grist_add_columns": {"doc_id": "DOC1", "table_id": "Table1",
+         "columns": '[{"id": "Count", "type": "Int"}]'}}.
       5. Confirm no Grist tool sets destructive (test_connector_tool_annotations.py unchanged and passing).
       6. ruff check . and python3 -m pytest tests/unit -q.
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_grist_connector.py -q passes
-      - python3 -m pytest tests/unit/test_write_effects.py tests/unit/policy/test_registry.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py -q passes
+      - python3 -m pytest tests/unit/test_write_effects.py tests/unit/policy/test_registry.py tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py tests/unit/test_generate_always_allow_reference.py -q passes
       - grep -n "| \[Grist\](#grist) | 7 | 2 | 1 | 4 |" docs/tools-reference.md matches
       - python3 -m pytest tests/unit/connectors/test_grist_connector.py -q --cov=privacyfence.connectors.grist --cov-branch --cov-report=term-missing reports 100% for src/privacyfence/connectors/grist.py
       - python3 -m pytest tests/unit -q passes
@@ -765,6 +867,8 @@ phases:
       - docs/always-allow-rules-reference.md
       - tests/unit/policy/test_scopes.py
       - tests/unit/policy/test_catalogue.py
+      - tests/unit/policy/test_propose.py
+      - tests/unit/policy/test_registry.py
       - tests/unit/test_gate.py
     brief: |
       Read first: plan §3.4 "Rule scope", and how apps_script.project is wired: policy/scopes.py:515-572,
@@ -785,8 +889,11 @@ phases:
          create, update, restructure; rules_for_catalogue_entry("grist.document", ["DOC1"], [Verb.READ, Verb.CREATE])
          compiles to grist.read_records and grist.add_records with predicate grist.document; an empty value is
          rejected like apps_script.project's. test_gate.py — next to the apps_script.project case: a stored
-         grist.document rule auto-accepts grist_get_records for that doc_id and not for another; and
-         propose.proposals_for for a grist_add_records context returns no proposal (no Always allow on the card).
+         grist.document rule auto-accepts grist_get_records for that doc_id and not for another.
+         test_propose.py::test_the_extra_scope_operations_stay_unproposed (l.261): add the five Grist tools with
+         make_ctx(connector="grist", args={"doc_id": "DOC1", "table_id": "Table1"}) to its tuple.
+         test_registry.py: add the five grist.* operation keys to _GRANT_MANIFEST_UNREACHABLE_OPERATIONS (l.31) and
+         update its comment ("six" → "eleven", and name grist.document among the EXTRA_SCOPES).
       6. ruff check . and python3 -m pytest tests/unit -q.
       Stop condition: if propose.proposals_for returns a proposal for a Grist tool without a PROPOSABLE_SCOPES
       entry, stop with status=blocked (plan §6).
@@ -851,20 +958,27 @@ phases:
     touches:
       - scripts/build_org_bundle.py
       - src/privacyfence/web/routes_connect.py
+      - docs/configuration-reference.md
       - tests/unit/test_build_org_bundle.py
       - tests/unit/web/test_routes_connect.py
     brief: |
       Read first: plan §3.6 (the spec), web/routes_connect.py (the whole module, in particular the Telegram routes
       and _telegram_box_html), scripts/build_org_bundle.py's Salesforce option group (l.188-193, 505-511, 692).
       1. scripts/build_org_bundle.py: a "Grist" argument group with --grist-server-url, validation and section
-         writing exactly as §3.6; "grist" in the services tuple at l.692. No _CONNECTOR_CALLBACKS entry.
+         writing exactly as §3.6; "grist" in the services tuple at l.692; "grist": () in _CONNECTOR_CALLBACKS.
+         docs/configuration-reference.md "Build options" table: a row
+         "| `--grist-server-url URL` | none | `grist.server_url` | The Grist server people connect to (https only). Each person pastes their own API key; see [Grist setup](grist-setup.md). |"
+         after the Atlassian rows (tests/unit/test_docs_configuration_reference.py requires every option documented).
       2. web/routes_connect.py: rename _check_telegram_post to _check_form_post (update its callers);
          _is_configured/_is_connected for grist; SERVICE_LABELS gets "grist": "Grist" if the page uses it;
          _grist_box_html; the grist_connect handler and Route("/connect/grist", …, methods=["POST"]) exactly as
          §3.6, with per-principal errors kept beside telegram_states. The check_connection call runs in
          asyncio.to_thread. The key never goes into a log line, an error message or the redirect.
       3. Tests: test_build_org_bundle.py — --grist-server-url writes {"grist": {"server_url": ...}} with the trailing
-         slash stripped; an http:// or host-less URL exits with the exact message; a Grist-only bundle is written.
+         slash stripped; an http:// or host-less URL exits with the exact message; a Grist-only bundle is written;
+         an org-mode build (--mode org with the existing tests' signing and IdP arguments) that includes
+         --grist-server-url completes and prints no Grist redirect URI. web/test_routes_connect.py's service-row
+         count assertion (l.170) becomes 12.
          web/test_routes_connect.py — the connect page shows "Not set up by your organization" without the bundle
          section and the key form with it (pinned server shown); POST without CSRF → 401, cross-origin → 403,
          signed out → the signed-out redirect; empty key → error shown on the next GET; success (check_connection
@@ -873,7 +987,7 @@ phases:
          error; the key does not appear in any response body.
       4. ruff check . and python3 -m pytest tests/unit -q.
     acceptance:
-      - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/web/test_routes_connect.py -q passes
+      - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/web/test_routes_connect.py tests/unit/test_docs_configuration_reference.py -q passes
       - grep -n '"/connect/grist"' src/privacyfence/web/routes_connect.py matches
       - grep -n "_check_telegram_post" src/privacyfence/web/routes_connect.py finds nothing
       - python3 -m pytest tests/unit -q passes
@@ -932,8 +1046,8 @@ phases:
          parser mishandles, fix grist_client.py and its unit test (plan §6).
       6. tests/unit/test_qa_fixture_recorder.py: check_grist and lifecycle_grist against a fake client
          (pattern: the existing per-connector tests there); TestFixturePresence passes with the recorded files.
-      7. Dispatch .github/workflows/connector-live-check.yml (no inputs) against this phase branch and note the run
-         URL in your final report (the feature PR links it). Then ruff check . and python3 -m pytest tests/unit -q.
+      7. ruff check . and python3 -m pytest tests/unit -q. New text in docs/connector-qa.md and the recorder follows
+         plan §3.0 (no phase ids or issue numbers; test_docs_no_history.py scans it).
       Stop condition: the dispatched run fails at its QA-state copy step or with "Grist is not authenticated" —
       manual step mb2-runner-qa-state is not done; stop with status=blocked (plan §6).
     acceptance:
@@ -948,7 +1062,7 @@ phases:
     depends_on: [p6-policy-scope, p8-org-mode, p9-qa-recorder]
     complexity: S
     touches:
-      - docs/grist-setup.md
+      - docs/grist-setup*.md
       - docs/configuration-reference.md
       - docs/README.md
       - docs/approvals-and-policy.md
@@ -960,15 +1074,16 @@ phases:
       - docs/adr/README.md
       - docs/grist-connector-plan.md
       - docs/grist-connector-plan-manual-steps.html
+      - scripts/build_site.py
     brief: |
       Read first: docs/adr/README.md (template and rules), plan §3 and §4, docs/configuration-reference.md
       (l.95-110 and 219-260), CHANGELOG.md's "## [Unreleased]" section.
-      1. docs/grist-setup.md: check every statement against the code as it now is (error texts from grist_client.py,
+      1. The setup guide grist-setup.md in docs/: check every statement against the code as it now is (error texts from grist_client.py,
          the Settings labels, the /connect wording) and correct it.
       2. docs/configuration-reference.md: add grist to the connectors.<name>.enabled list (l.103); add the
          --grist-server-url row to "Build options" and Grist to the sentence listing per-service guides
          ("Grist needs only a server address; each person pastes their own key, see Grist setup").
-         docs/README.md: link grist-setup.md wherever the other connector setup guides are linked.
+         (The --grist-server-url row is already there.)
          docs/approvals-and-policy.md: in the scope table that has the "Apps Script project" row (l.386), add
          "| Grist document | identity | document ids | `grist.document` | the document is one of these |" after it.
       3. CHANGELOG.md under "## [Unreleased]" (never a version heading): one Added line —
@@ -979,16 +1094,23 @@ phases:
          Implemented.", Context, Decision, Alternatives considered, Consequences, Verification naming the tests that
          enforce each, Related). Link source files and ADRs 0019, 0070, 0072, 0077, 0115 where relevant; never link
          the plan. Add the four rows to the index in docs/adr/README.md.
-      5. git rm docs/grist-connector-plan.md docs/grist-connector-plan-manual-steps.html; grep -rn "grist-connector-plan"
-         . --exclude-dir=.git must find nothing.
+      5. git rm docs/grist-connector-plan.md docs/grist-connector-plan-manual-steps.html; remove
+         "grist-connector-plan.md" from scripts/build_site.py CONTRIBUTOR_DOCS and its line from docs/README.md's
+         contributor half; grep -rn "grist-connector-plan" . --exclude-dir=.git must find nothing.
       6. python3 scripts/generate_tools_reference.py and python3 scripts/generate_always_allow_reference.py leave no
          diff; ruff check . and python3 -m pytest tests/unit -q pass.
+      7. Push this phase branch and dispatch .github/workflows/connector-live-check.yml (no inputs) against it with the
+         GitHub MCP actions_run_trigger: it carries every phase, so it is the definition-of-done live check for
+         src/privacyfence/*_client.py and connectors/**. A queued run is waiting on the connector-live-check
+         concurrency group: wait, never re-dispatch. Put the run URL in your final report. If it opens or updates the
+         chore/connector-live-fixture-drift PR for another connector, leave that PR alone (steward skill) and mention it.
     acceptance:
       - ls docs/adr/0142-*.md docs/adr/0143-*.md docs/adr/0144-*.md docs/adr/0145-*.md lists four files, each containing "Accepted"
       - grep -c "014[2-5]" docs/adr/README.md prints at least 4
       - test ! -e docs/grist-connector-plan.md && test ! -e docs/grist-connector-plan-manual-steps.html
       - grep -rn "grist-connector-plan" . --exclude-dir=.git finds nothing
       - grep -n "Grist connector" CHANGELOG.md matches a line below "## [Unreleased]" and above the next "## [" heading
+      - The connector-live-check.yml run on this phase branch concluded success, or failed only in another connector's row (URL in the final report)
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
 ```
