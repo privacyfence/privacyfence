@@ -1,0 +1,121 @@
+<style>
+/* Layout: one reading column, a checklist per item, step numbers that are real order */
+:root {
+  --bg: #f7f8f6; --surface: #ffffff; --fg: #1d2420; --muted: #5b6660; --line: #d9dfdb;
+  --accent: #2f6f5e; --accent-soft: #e3efe9; --warn: #8a5a00; --warn-soft: #fbf1dc;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141917; --surface: #1c2320; --fg: #e3e9e5; --muted: #9aa69f; --line: #2f3a35;
+  --accent: #7cc6ad; --accent-soft: #1f332c; --warn: #e3b25a; --warn-soft: #33291a; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #141917; --surface: #1c2320; --fg: #e3e9e5; --muted: #9aa69f; --line: #2f3a35;
+  --accent: #7cc6ad; --accent-soft: #1f332c; --warn: #e3b25a; --warn-soft: #33291a; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--body); padding: 0 16px; }
+main { max-width: 760px; margin: 0 auto; padding-block: 32px 64px; display: grid; gap: 28px; }
+h1 { font-size: 1.6rem; margin: 0; text-wrap: balance; }
+h2 { font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 8px 0 0; }
+h3 { font-size: 1.1rem; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 65ch; }
+section.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; display: grid; gap: 12px; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.85rem; color: var(--muted); }
+.meta code { font-family: var(--mono); color: var(--fg); }
+ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 10px; }
+ol.steps li { counter-increment: s; display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: start; }
+ol.steps li::before { content: counter(s); font-family: var(--mono); font-size: 0.8rem; color: var(--muted); min-width: 1.4em; text-align: right; padding-top: 2px; }
+ol.steps input { margin-top: 4px; accent-color: var(--accent); }
+ol.steps label { min-width: 0; }
+.see { display: block; color: var(--muted); font-size: 0.9rem; margin-top: 2px; }
+code, pre { font-family: var(--mono); font-size: 0.86rem; }
+pre { background: var(--accent-soft); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; white-space: pre; }
+.done { background: var(--accent-soft); border-radius: 6px; padding: 10px 12px; font-size: 0.92rem; }
+.report { background: var(--warn-soft); border-radius: 6px; padding: 10px 12px; font-size: 0.92rem; }
+.report strong, .done strong { color: var(--fg); }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.progress { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+</style>
+
+<title>Plugin Hardening 3 Steps</title>
+<main>
+  <header style="display:grid;gap:8px">
+    <h1>Plugin framework hardening, round 3: your steps</h1>
+    <p class="lede">The plan <a href="https://github.com/privacyfence/privacyfence/blob/plan/plugin-framework-hardening-3/docs/plugin-framework-hardening-3-plan.md">plugin-framework-hardening-3</a> needs two decisions from you before <code>/implement</code> starts. Before its pull request merges, it needs one check in your browser. Ticks are saved in this browser only.</p>
+    <p class="progress" id="progress">0 of 0 steps ticked</p>
+  </header>
+
+  <h2>Before implementation</h2>
+  <section class="item" id="mb1">
+    <h3>1. Merge PR 874, or decide to start with it open</h3>
+    <div class="meta"><span><code>mb1-pr874-merged</code></span><span>About 5 minutes to check</span></div>
+    <ol class="steps">
+      <li><input type="checkbox" id="mb1-1"><label for="mb1-1">Open <a href="https://github.com/privacyfence/privacyfence/pull/874">pull request 874</a> (plugin pages open links in new tabs; plugin tools take files, protocol 1.3).
+        <span class="see">It was open and blocked when this plan was written. Merge it once its checks are green and you are happy with the review.</span></label></li>
+      <li><input type="checkbox" id="mb1-2"><label for="mb1-2">If you would rather not wait, you can start anyway. This plan's branch is cut from 874's branch, and its PR then shows 874's changes as well until 874 merges.</label></li>
+      <li><input type="checkbox" id="mb1-3"><label for="mb1-3">In a terminal in your checkout, run:
+        <pre>git fetch origin
+git ls-tree origin/feature/plugin-files-and-page-links docs/ | grep -c plugin-files-and-page-links-plan</pre>
+        <span class="see">It should print <code>0</code>: 874's own plan document is already gone.</span></label></li>
+      <li><input type="checkbox" id="mb1-4"><label for="mb1-4">If 874 is merged, also check that no two ADRs share a number:
+        <pre>git checkout main && git pull
+ls docs/adr | cut -c1-4 | sort | uniq -d</pre>
+        <span class="see">It should print nothing.</span></label></li>
+    </ol>
+    <p class="done"><strong>Done when:</strong> PR 874 shows Merged, or you have decided to start with it open, and the commands above print what they should. Then run <code>/implement</code> with the <a href="https://github.com/privacyfence/privacyfence/blob/plan/plugin-framework-hardening-3/docs/plugin-framework-hardening-3-plan.md">plan URL</a>.</p>
+  </section>
+
+  <section class="item" id="mb2">
+    <h3>2. Run Plan A first, or accept resolving conflicts at the end</h3>
+    <div class="meta"><span><code>mb2-plan-a-first</code></span><span>About 2 minutes to check</span></div>
+    <ol class="steps">
+      <li><input type="checkbox" id="mb2-1"><label for="mb2-1">Look at <a href="https://github.com/privacyfence/privacyfence/blob/plan/plugin-protocol-hardening-2/docs/plugin-protocol-hardening-2-plan.md">Plan A (plugin-protocol-hardening-2)</a>. It holds the two high-severity fixes and must land before plugin development. Both plans edit the same plugin source files.</label></li>
+      <li><input type="checkbox" id="mb2-2"><label for="mb2-2">After Plan A's PR is merged, run:
+        <pre>git fetch origin
+git ls-tree origin/main docs/adr/ | grep -c '0147-'</pre>
+        <span class="see">It should print <code>1</code>.</span></label></li>
+      <li><input type="checkbox" id="mb2-3"><label for="mb2-3">If you start this plan before Plan A merges, expect the second of the two PRs to need a merge of main with conflicts in <code>source_ops.py</code>, <code>spool.py</code>, <code>outputs.py</code>, <code>host.py</code>, <code>connector.py</code> and <code>blocks.py</code>.</label></li>
+    </ol>
+    <p class="done"><strong>Done when:</strong> Plan A's PR shows Merged and the command prints 1, or you have decided to run this plan first.</p>
+  </section>
+
+  <h2>After implementation</h2>
+
+  <section class="item" id="ma1">
+    <h3>3. A plugin page and the 30-minute idle timeout</h3>
+    <div class="meta"><span><code>ma1-plugin-page-session</code></span><span>About 40 minutes, mostly waiting</span></div>
+    <ol class="steps">
+      <li><input type="checkbox" id="ma1-1"><label for="ma1-1">Run the feature branch from source (<a href="https://github.com/privacyfence/privacyfence/blob/plan/plugin-framework-hardening-3/docs/dev-vs-live-setup.md#developmentsource-run">Dev vs. live setup</a>) with a plugin that serves pages enabled, for example the <code>today</code> example.</label></li>
+      <li><input type="checkbox" id="ma1-2"><label for="ma1-2">Sign in through the companion app and open Plugins → Today. Reload the page every 10 minutes for 40 minutes.
+        <span class="see">The page keeps loading, and <code>/approvals</code> in another tab is still signed in at the end.</span></label></li>
+      <li><input type="checkbox" id="ma1-3"><label for="ma1-3">Leave the browser alone for 31 minutes, then reload the plugin page.
+        <span class="see">You should get "not found" (plugin pages answer 404 to a session that is not signed in), and signing in again through the companion brings the page back.</span></label></li>
+      <li><input type="checkbox" id="ma1-4"><label for="ma1-4">Open <code>http://localhost:&lt;port&gt;//example.com/x?bootstrap=x</code>.
+        <span class="see">You stay on PrivacyFence (at <code>/example.com/x</code>, a not-found page). You are not sent to example.com.</span></label></li>
+    </ol>
+    <p class="report"><strong>Report back:</strong> paste <code>ma1: pass</code> into the PR, or which step behaved differently.</p>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY = 'pf-plugin-framework-hardening-3-steps';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type=checkbox]'));
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+  function update() {
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    document.getElementById('progress').textContent = n + ' of ' + boxes.length + ' steps ticked';
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!saved[b.id];
+    b.addEventListener('change', function () {
+      saved[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* storage unavailable */ }
+      update();
+    });
+  });
+  update();
+})();
+</script>
