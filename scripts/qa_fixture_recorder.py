@@ -30,7 +30,7 @@ this imports the same ``privacyfence`` package and third-party clients
 
     .venv/bin/python scripts/qa_fixture_recorder.py --lifecycle [connector ...]
         For each write-capable connector that supports it (calendar,
-        confluence, jira, tasks -- see the comment above LIFECYCLE_CHECKS
+        confluence, grist, jira, tasks -- see the comment above LIFECYCLE_CHECKS
         below for why the other connectors aren't included), creates a
         fresh, uniquely-tagged QA object, reads it back, updates it, reads
         it back again, then deletes it and confirms the deletion actually
@@ -74,7 +74,9 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from privacyfence import daemon_main  # noqa: E402
 from privacyfence.app_credentials import telegram_app_credentials  # noqa: E402
+from privacyfence import grist_auth  # noqa: E402
 from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientError  # noqa: E402
+from privacyfence.grist_client import GristAccessDenied, GristClient, GristClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
 from privacyfence.salesforce_client import (  # noqa: E402
     ReportFilter,
@@ -945,6 +947,90 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     return results
 
 
+def _build_grist_client() -> tuple[GristClient, bool]:
+    """The client and whether its credential is an OAuth one. The runner holds
+    an API-key file; the same code serves an OAuth sign-in."""
+    bundle = grist_auth.bundle_settings(daemon_main.load_org_config().get("grist") or {}, org_mode=False)
+    token_path = daemon_main._resolve_path(daemon_main.TOKEN_FILES["grist"])
+    server, credential = grist_auth.resolve_credential(bundle, grist_auth.load_token_file(token_path), token_path)
+    return GristClient(server, credential), bool(credential.can_refresh)
+
+
+def _grist_doc_workspaces(captures: list[Any], doc_id: str) -> list[Any]:
+    """The workspace holding ``doc_id`` from list_documents' raw calls, cut down to that one
+    document. Calls are the orgs list first, then one workspaces list per org."""
+    for call in captures[1:]:
+        if not isinstance(call, list):
+            continue
+        for workspace in call:
+            docs = workspace.get("docs") if isinstance(workspace, dict) else None
+            kept = [d for d in (docs or []) if isinstance(d, dict) and d.get("id") == doc_id]
+            if kept:
+                return [{**workspace, "docs": kept}]
+    return []
+
+
+def check_grist(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
+    cfg = manifest.get("grist") or {}
+    doc_id = cfg.get("doc_id", "")
+    table_id = cfg.get("table_id", "QaSeed")
+    if not doc_id:
+        return [CheckResult("grist", "list_documents", "", False, "grist.doc_id missing from qa_environment.yaml")]
+
+    results: list[CheckResult] = []
+    client, is_oauth = _build_grist_client()
+
+    # list_documents -- only ever recorded cut down to the one QA document.
+    try:
+        with RawCapture(client) as cap:
+            documents = client.list_documents()
+        ok = any(d.id == doc_id for d in documents)
+        note = "found" if ok else f"document {doc_id!r} not in list_documents() result"
+        raw = None
+        if record and ok:
+            raw = deidentify_structural_fields(redact(_grist_doc_workspaces(cap.calls, doc_id)))
+        results.append(CheckResult("grist", "list_documents", doc_id, ok, note, raw, "list_documents.json"))
+    except GristAccessDenied:
+        if is_oauth:
+            results.append(CheckResult(
+                "grist", "list_documents", doc_id, True, "server does not let OAuth apps list documents",
+            ))
+        else:
+            results.append(CheckResult("grist", "list_documents", doc_id, False, "Grist refused list_documents"))
+    except GristClientError as exc:
+        results.append(CheckResult("grist", "list_documents", doc_id, False, str(exc)))
+
+    # list_columns
+    try:
+        with RawCapture(client) as cap:
+            columns = client.list_columns(doc_id, table_id)
+        ok = bool(columns)
+        note = f"{len(columns)} column(s)" if ok else f"table {table_id!r} has no columns"
+        raw = cap.captured if (record and ok) else None
+        results.append(CheckResult("grist", "list_columns", table_id, ok, note, raw, "list_columns.json"))
+    except GristClientError as exc:
+        results.append(CheckResult("grist", "list_columns", table_id, False, str(exc)))
+
+    # get_records -- recorded raw, so every row must be QA content first.
+    try:
+        with RawCapture(client) as cap:
+            page = client.get_records(doc_id, table_id)
+        untagged = [r.id for r in page.records if QATEST_TAG not in str(r.fields.get("Name", ""))]
+        ok = bool(page.records) and not untagged
+        if not page.records:
+            note = f"table {table_id!r} has no rows"
+        elif untagged:
+            note = f"row(s) {untagged} do not carry {QATEST_TAG} in Name -- refusing to record"
+        else:
+            note = f"{len(page.records)} row(s), all tagged {QATEST_TAG}"
+        raw = cap.captured if (record and ok) else None
+        results.append(CheckResult("grist", "get_records", table_id, ok, note, raw, "get_records.json"))
+    except GristClientError as exc:
+        results.append(CheckResult("grist", "get_records", table_id, False, str(exc)))
+
+    return results
+
+
 def _build_salesforce_client() -> SalesforceClient:
     org_config = daemon_main.load_org_config()
     sf_org = org_config.get("salesforce") or {}
@@ -1740,6 +1826,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
     "confluence": check_confluence,
     "jira": check_jira,
     "salesforce": check_salesforce,
+    "grist": check_grist,
     "gmail": check_gmail,
     "drive": check_drive,
     "calendar": check_calendar,
@@ -1766,6 +1853,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "confluence": ("list_spaces.json", "get_page.json"),
     "jira": ("list_projects.json", "get_issue.json"),
     "salesforce": ("list_reports.json", "run_report_page.json", "get_record.json"),
+    "grist": ("list_documents.json", "list_columns.json", "get_records.json"),
     "gmail": ("get_message.json", "list_send_as.json"),
     "drive": ("get_file_metadata.json",),
     "calendar": ("get_event.json",),
@@ -1801,7 +1889,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #
 # Scoped to only the connectors whose PrivacyFence client exposes a full
 # create/get/update triple:
-#   - calendar, confluence, jira, tasks
+#   - calendar, confluence, grist, jira, tasks
 # Deliberately excludes the rest of CONNECTOR_CHECKS's connectors, checked
 # against each *_client.py before writing this rather than assumed:
 #   - contacts -- ContactsClient.create_contact()'s own docstring says
@@ -2202,6 +2290,44 @@ def lifecycle_confluence(manifest: dict[str, Any]) -> LifecycleResult:
     return LifecycleResult("confluence", ok, note, cleanup_ok=None)
 
 
+def lifecycle_grist(manifest: dict[str, Any]) -> LifecycleResult:
+    """Verifies add/get/update/get-after-update in the lifecycle table only.
+
+    Never deletes: GristClient has no delete (records are never removed through
+    PrivacyFence), so the rows this adds accumulate in ``lifecycle_table_id`` and
+    need occasional manual cleanup there, like lifecycle_confluence's pages. It
+    never writes to the seed table, whose rows check_grist requires to be
+    ``[QATEST]``.
+    """
+    cfg = manifest.get("grist") or {}
+    doc_id = cfg.get("doc_id", "")
+    if not doc_id:
+        return LifecycleResult("grist", False, "grist.doc_id missing from qa_environment.yaml")
+    table_id = cfg.get("lifecycle_table_id", "QaLifecycle")
+    client, _ = _build_grist_client()
+    suffix = uuid.uuid4().hex[:8]
+    name = f"{LIFECYCLE_TAG} grist row {suffix}"
+
+    try:
+        ids = client.add_records(doc_id, table_id, [
+            {"Name": name, "Note": "created by qa_fixture_recorder.py --lifecycle"},
+        ])
+        if len(ids) != 1:
+            raise GristClientError(f"add_records returned {len(ids)} id(s), expected 1")
+        row_id = ids[0]
+        fetched = client.get_records_by_id(doc_id, table_id, [row_id])
+        if len(fetched) != 1 or fetched[0].fields.get("Name") != name:
+            raise GristClientError("get after add did not return the added row")
+        client.update_records(doc_id, table_id, [(row_id, {"Note": "updated"})])
+        refetched = client.get_records_by_id(doc_id, table_id, [row_id])
+        if len(refetched) != 1 or refetched[0].fields.get("Note") != "updated":
+            raise GristClientError("get after update did not reflect the new Note")
+        ok, note = True, "add, get, update, get-after-update all verified"
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
+        ok, note = False, str(exc)
+    return LifecycleResult("grist", ok, note, cleanup_ok=None)
+
+
 def lifecycle_jira(manifest: dict[str, Any]) -> LifecycleResult:
     cfg = manifest.get("jira") or {}
     project_key = cfg.get("project_key", "PFQA")
@@ -2316,6 +2442,7 @@ def lifecycle_tasks(manifest: dict[str, Any]) -> LifecycleResult:
 LIFECYCLE_CHECKS: dict[str, Callable[[dict[str, Any]], LifecycleResult]] = {
     "calendar": lifecycle_calendar,
     "confluence": lifecycle_confluence,
+    "grist": lifecycle_grist,
     "jira": lifecycle_jira,
     "tasks": lifecycle_tasks,
 }

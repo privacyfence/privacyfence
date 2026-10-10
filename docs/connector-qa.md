@@ -34,6 +34,7 @@ Use dedicated accounts that share nothing with a personal or production identity
 | Slack | A Slack Developer Program sandbox | Register the app inside the sandbox and never activate public distribution (see [`slack-setup.md`](slack-setup.md)). Sandboxes expire; check the expiry date whenever you rotate credentials and extend it from **Sandboxes → Extend**. |
 | Atlassian | A free Jira + Confluence Cloud site | One OAuth app covers both products. |
 | Salesforce | A Developer Edition org | Use `--salesforce-login-url https://login.salesforce.com` when building the bundle. |
+| Grist | A getgrist.com account holding nothing real | The runner connects with that account's personal API key, in `credentials/grist_token.json` written by hand as `{"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "…"}` with mode 600. There is no bundle section. |
 | Telegram | Your own account | No dedicated account; `privacyfence-app --telegram-setup` signs in with a phone number and code. |
 
 For each of Google, Slack, Atlassian and Salesforce, follow the "For IT admins" section of
@@ -249,6 +250,24 @@ after seeding is expected.
 | Approved report | `approved_report_ids` | the report id | `salesforce.run_report` |
 | Approved object type | `approved_object_types` | `[Account]` | `salesforce.read_record` (optionally `salesforce.search`) |
 
+### Seed: Grist
+
+- [ ] In the Grist QA account, create a document named exactly `PrivacyFence QA [QATEST]`.
+- [ ] In it, a table `QaSeed` with the text columns `Name` and `Note` and two rows whose `Name`
+      carries `[QATEST]`.
+- [ ] Add an empty table `QaLifecycle` with the same two columns. `--lifecycle` writes only there.
+- [ ] Create a second document with a different name, as the contrast case.
+- [ ] Set `grist.doc_id` (the id in the document's URL after `/doc/`; required),
+      `grist.table_id` (default `QaSeed`) and `grist.lifecycle_table_id` (default `QaLifecycle`).
+
+| Optional rule | Predicate | Value | Operations |
+|---|---|---|---|
+| Approved document | `grist.document` | the document id | `grist.read_records` |
+
+`--lifecycle` adds one `[QATEST-LIFECYCLE]` row to `grist.lifecycle_table_id`, reads it back,
+updates its `Note` and reads it back again. It never deletes the row, because PrivacyFence has no
+Grist delete; the rows accumulate and need occasional manual cleanup there.
+
 ### Seed: Jira
 
 - [ ] Create a project with key exactly `PFQA` (any template).
@@ -303,6 +322,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 | `apps_script` | `seed_script_title`, `seed_script_id` | `get_content.json` | — |
 | `telegram` | `chat_id`, `history_limit` | `get_messages.json` | — |
 | `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id` | `list_reports.json`, `run_report_page.json`, `get_record.json` | — |
+| `grist` | **`doc_id`**, `table_id`, `lifecycle_table_id` | `list_documents.json`, `list_columns.json`, `get_records.json` | adds and updates one row in `lifecycle_table_id`; never deletes it |
 | `jira` | `project_key`, `seed_issue_summary`, `seed_issue_key` | `list_projects.json`, `get_issue.json` | creates, updates and deletes one issue in `project_key` |
 | `confluence` | `space_key`, `seed_page_title`, `seed_page_id` | `list_spaces.json`, `get_page.json` | creates and updates one page in `space_key`; never deletes it |
 
@@ -328,6 +348,9 @@ Confluence) and Salesforce, in that order. Each step opens a browser tab for con
 | `--continue-on-error` | Runs every requested step instead of stopping at the first failure. |
 | `--config PATH` | Settings file passed through to the daemon. Default: `config/settings.yaml`. |
 
+Grist has no step here: its QA credential is an API key file written by hand (see
+[QA accounts and organization config](#qa-accounts-and-organization-config)).
+
 Telegram is not included; run `privacyfence-app --telegram-setup` by hand (see
 [`telegram-setup.md`](telegram-setup.md)). Tokens are written to the git-ignored `credentials/`
 directory under the file names in `daemon_main.TOKEN_FILES` (`token.json` for Gmail,
@@ -349,9 +372,9 @@ Always use the project venv; the recorder imports the same third-party clients a
 - `--record` makes the same calls, redacts identity fields (`redact()` and the connector-specific
   passes), de-identifies structural ids and URLs (`deidentify_structural_fields()`), and writes
   `tests/fixtures/live/<connector>/<method>.json` for every result that passed.
-- `--lifecycle` runs for `calendar`, `confluence`, `jira` and `tasks` only (the comment above
+- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira` and `tasks` only (the comment above
   `LIFECYCLE_CHECKS` says why the others are excluded) and never writes a fixture. A cleanup that
-  ran but left the object behind fails the run.
+  ran but left the object behind fails the run. Confluence and Grist have no cleanup step.
 
 With no connector named, every connector implemented for the mode runs. `--report-file PATH` also
 saves the report; `-v`/`--verbose` turns on DEBUG logging on stderr. The exit status is non-zero
@@ -602,6 +625,18 @@ For each representative read, list, search, create, update, send or upload tool:
   rejected before any card appears.
 - **Report overrides.** `salesforce_run_report` with `columns`, `filters` or `summary_only` narrows that run only. The approved-report rule still reads it without a card, and `--check`'s `run_report` row covers the three live.
 - **Report paging.** `--check`'s `run_report_page` row covers `sortBy`, `greaterThan`, the `RowCount` aggregate and flattening a summary report live, on the QA report's `PF QA Number` column. It records only the `[QATEST]` rows of the first page.
+
+### Grist checks
+
+- **Connect.** Connecting with an API key and signing in with the OAuth app both succeed, and the
+  popup cards for the four writes (`grist_add_records`, `grist_update_records`,
+  `grist_create_table`, `grist_add_columns`) name the server.
+- **Review card.** `grist_get_records` on the `QaSeed` table prompts for review.
+- **Approved document.** With the `grist.document` rule from Settings (see
+  [Seed: Grist](#seed-grist)), a read of that document passes without a card; another document
+  prompts.
+- **Listing.** `grist_list_documents` lists the QA documents. Where the server refuses it under
+  OAuth, the tool answers with that refusal message.
 
 ### Jira checks
 
