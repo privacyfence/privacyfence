@@ -671,7 +671,8 @@ class SalesforceClient:
             return None
 
         def _run(sf):
-            return sf.query(f"SELECT Name FROM Report WHERE Id = '{report_id}' LIMIT 1")
+            # report_id matched _SALESFORCE_ID_RE above (alphanumeric only), so it cannot break out of the quotes.
+            return sf.query(f"SELECT Name FROM Report WHERE Id = '{report_id}' LIMIT 1")  # nosec B608  # validated ID
 
         records = self._call(_run).get("records", [])
         return (records[0].get("Name") or None) if records else None
