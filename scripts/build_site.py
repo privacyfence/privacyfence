@@ -178,6 +178,8 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "ai-client-qa.md",
         "downloads-and-release-kpi.md",
         "releasing.md",
+        # The open plan for the web-server shutdown and type-check work; its last phase deletes it.
+        "shutdown-and-type-check-cleanup-plan.md",
     }
 )
 
