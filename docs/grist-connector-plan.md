@@ -114,9 +114,14 @@ stored one whenever a refresh returns a new `refresh_token`); errors are HTTP 4x
 `error`/`error_description`; `localhost` redirect URIs may be `http://`; an app can register
 several redirect URIs, each matched exactly. Endpoints come from the RFC 8414 discovery document
 `GET {auth_server_url}/.well-known/oauth-authorization-server` (`authorization_endpoint`,
-`token_endpoint`, `token_endpoint_auth_methods_supported`). On getgrist.com the authorization
-endpoint is on `login.getgrist.com`, which is why the authorization server is a separate,
-optional bundle value (§3.2.1). OAuth apps are part of Grist's full edition for self-hosted
+`token_endpoint`, `token_endpoint_auth_methods_supported`). Seen live on getgrist.com:
+`https://docs.getgrist.com/.well-known/oauth-authorization-server` and the same path on
+`login.getgrist.com` both return issuer `https://login.getgrist.com/`, `authorization_endpoint`
+`https://login.getgrist.com/oidc/auth`, `token_endpoint` `https://login.getgrist.com/oidc/token`,
+`code_challenge_methods_supported` `["S256"]`, and `token_endpoint_auth_methods_supported`
+including `client_secret_basic` and `client_secret_post`. Discovery therefore starts at the Grist
+server and follows the issuer it names (§3.2.1); the optional bundle value `auth_server_url` is
+only for a server that does not serve the document itself. OAuth apps are part of Grist's full edition for self-hosted
 servers.
 
 **Scopes requested**: exactly `doc:read doc:write doc.schema:write offline_access`. Never
@@ -169,14 +174,17 @@ issued for; redirects are never followed; nothing logs a token or the client sec
   `GristClientError("Grist organization config not installed")`.
 - `@dataclass(frozen=True) class GristOAuthEndpoints(authorization_endpoint: str, token_endpoint: str, client_secret_basic: bool)`.
 - `discover(auth_server_url: str, server_url: str) -> GristOAuthEndpoints`: `GET {auth_server_url}/.well-known/oauth-authorization-server`
-  (`timeout=30`, `allow_redirects=False`). The document's `issuer`, with a trailing `/` stripped,
-  must equal `auth_server_url` (RFC 8414 §3.3); both endpoints must be present, pass the same
-  scheme rule as `normalize_server_url`, and have a host equal to `auth_server_url`'s or
-  `server_url`'s host (the token endpoint receives the client secret and the refresh token).
-  Otherwise `GristClientError(f"Grist's sign-in settings at {host} are not usable. Check the Grist server address (and, for getgrist.com, the sign-in server) in the organization config.")`.
+  (`timeout=30`, `allow_redirects=False`). Let `issuer` be the document's `issuer` with a trailing
+  `/` stripped, normalized like a server URL. If `issuer != auth_server_url` (getgrist.com does this:
+  `https://docs.getgrist.com/.well-known/oauth-authorization-server` names the issuer
+  `https://login.getgrist.com/`), fetch `{issuer}/.well-known/oauth-authorization-server` once,
+  require that document's own `issuer` to equal `issuer` (RFC 8414 §3.3), and use it; the configured
+  server vouches for the issuer it names, and nothing is followed further. Both endpoints must be
+  present, pass the same scheme rule as `normalize_server_url`, and have exactly the issuer's host
+  (the token endpoint receives the client secret and the refresh token). Otherwise `GristClientError(f"Grist's sign-in settings at {host} are not usable. Check the Grist server address (and, for getgrist.com, the sign-in server) in the organization config.")`.
   `client_secret_basic` is `True` when `token_endpoint_auth_methods_supported` is absent (the
   RFC 8414 default) or contains `"client_secret_basic"`; otherwise the secret is sent in the form
-  (`client_secret_post`). Results are cached per `auth_server_url` in a module dict (add its reset
+  (`client_secret_post`). getgrist.com lists `client_secret_basic`. Results are cached per `auth_server_url` in a module dict (add its reset
   to `tests/conftest.py` `_reset()`).
 - Client authentication at the token endpoint: with `client_secret_basic`, an `Authorization:
   Basic` header of `quote(client_id, safe="") + ":" + quote(client_secret, safe="")`
@@ -499,8 +507,8 @@ organization server, `https://<server>/oauth/callback/grist` on its own line; pe
 `doc:read`, `doc:write`, `doc.schema:write`, `offline_access`; a sentence that Grist says
 `doc.schema:write` can reveal any data in a document through formulas and that PrivacyFence uses
 it only to add tables and columns); `## Values` (table: server address, client id, client secret,
-sign-in server, with the `build_org_bundle.py` option for each; for getgrist.com the sign-in
-server is the one in the Grist app's documentation); `## Build and distribute the bundle`;
+sign-in server, with the `build_org_bundle.py` option for each; the sign-in server is left unset
+for getgrist.com and for any server that serves `/.well-known/oauth-authorization-server` itself); `## Build and distribute the bundle`;
 `## Users connect` (Authenticate… in Settings, or Connect on the connections page); `## What the
 assistant can do` (the seven tools and their gates; link to the tools reference `#grist`; some
 servers do not let apps list documents, and then the assistant asks for the document id from its
@@ -521,10 +529,10 @@ on the card); `## Troubleshooting` (the exact error texts from §3.2.1 and §3.2
   becomes a reserved plugin name, so a plugin already called `grist` is refused.
 - **0143** — The Grist server and its sign-in server come only from the bundle, never from a
   person; a token is used only with the server it was issued for (a mismatch asks to sign in
-  again); only `https` (or `http` to loopback); redirects are never followed; the discovery
-  document's `issuer` must equal the configured sign-in server and its endpoints must sit on that
-  host or the Grist server's host, so a tampered discovery answer cannot send the client secret or a
-  refresh token elsewhere; every Grist approval card names the server. Rejected: a user-entered server address in local mode (an OAuth app is
+  again); only `https` (or `http` to loopback); redirects are never followed; discovery starts at
+  the configured server, follows the issuer it names at most once (that issuer must confirm itself),
+  and accepts only endpoints on the issuer's host, so the client secret and refresh tokens go only
+  where the configured server points; every Grist approval card names the server. Rejected: a user-entered server address in local mode (an OAuth app is
   registered per server anyway, and a free address lets data go to any server).
 - **0144** — Grist auto-accept rules are scoped per document (`grist.document`) and made on
   Settings or through the bridge tool, never from the approval card's "Always allow". Rejected:
@@ -552,8 +560,8 @@ Step-by-step page: see `manual_steps_artifact` in the manifest.
 
 ## 6. Risks and open questions
 
-- **OAuth details not yet seen live.** §3.1 comes from Grist's help and API reference. Unverified:
-  the client-authentication method at the token endpoint (handled by reading discovery), whether
+- **OAuth details not yet seen live.** §3.1 comes from Grist's help, API reference and the
+  getgrist.com discovery document (seen live). Unverified: whether
   `prompt=consent` plus `offline_access` returns a refresh token on every sign-in, and the exact
   token response fields. `mb2`'s bootstrap script exercises discovery, the authorize URL and the
   code exchange on the real server before any phase starts; if it fails, the user reports the
@@ -672,7 +680,10 @@ phases:
          auth_server_url to server_url; missing keys → "organization config not installed"), TestDiscover (parses the
          endpoints; client_secret_basic True when the methods key is absent or lists client_secret_basic, False when it
          lists only client_secret_post; http endpoint on a non-loopback host rejected; a redirect rejected; cached
-         per URL), TestBuildAuthorizeUrl (every parameter, scope string exactly GRIST_SCOPES, prompt=consent,
+         per URL; the getgrist.com shape from plan §3.1 as a fixture: discovery at the server names issuer
+         https://login.getgrist.com/, the issuer's own document is fetched once and its endpoints used; an issuer whose
+         own document names a different issuer is rejected; an endpoint on a host other than the issuer's is
+         rejected), TestBuildAuthorizeUrl (every parameter, scope string exactly GRIST_SCOPES, prompt=consent,
          S256), TestExchangeCode (Basic auth header vs form secret per discovery; record shape with server_url and
          expires_at; no refresh_token → its message; 400 with error/error_description → its message),
          TestRefresh (new refresh_token replaces the old; absent keeps the old; invalid_grant → the expired message),
