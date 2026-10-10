@@ -127,6 +127,8 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     "telegram_submit_code": ActionScope(modes=frozenset({LOCAL_MODE})),
     "telegram_submit_2fa": ActionScope(modes=frozenset({LOCAL_MODE})),
     "telegram_cancel_auth": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "grist_connect": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "grist_cancel_auth": ActionScope(modes=frozenset({LOCAL_MODE})),
     "set_notifications_detail": ActionScope(modes=frozenset({LOCAL_MODE})),
     # ---------------------------------------------------------------- #
     # ORG_MODE-only, admin-only (ADR 0035 decision 3): pin a DCR

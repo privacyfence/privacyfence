@@ -321,6 +321,11 @@ _JS = r"""
     // null, and without this the auto-close-on-success check in render()
     // couldn't tell "flow just succeeded" apart from "flow never started".
     telegramAuthWasActive: false,
+    // Grist API-key form: gristSubmitted is set when Connect is posted and
+    // cleared once the result (success or error) has been seen in a snapshot.
+    gristModalOpen: false,
+    gristSubmitted: false,
+    gristServerUrl: '',
   };
   var pyState = null;
 
@@ -710,6 +715,8 @@ _JS = r"""
       'Signing in opens a browser window on the machine running PrivacyFence -- not necessarily this device.</div>';
     html += renderWelcomeBanner(state);
     html += '<div class="pf-connector-list">';
+    var gristSignin = state.grist_signin || 'unavailable';
+    var gristAuth = state.grist_auth || { error: '' };
     state.connectors.forEach(function (c) {
       var status = connectorStatus(c);
       html += '<div class="card pf-connector-row">';
@@ -718,7 +725,16 @@ _JS = r"""
       html += '<span>' + esc(c.label) + '</span><span class="badge ' + status.cls + '">' + esc(status.text) + '</span></div>';
       html += '<div class="pf-connector-actions">';
       var authDisabled = c.busy;
-      if (c.key === 'telegram') {
+      if (c.key === 'grist' && gristSignin === 'unavailable') {
+        // A malformed organization section: the error shows under the row.
+        html += '<div class="pf-link pf-auth-link" role="button" aria-label="' + esc(c.auth_label) + ' Grist" aria-disabled="true">' +
+          esc(c.auth_label) + '</div>';
+      } else if (c.key === 'grist' && gristSignin === 'api_key') {
+        // An API key, not OAuth: its own small modal (renderGristModal),
+        // opened client-side like Telegram's (data-grist-auth).
+        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Grist"' +
+          (authDisabled ? ' aria-disabled="true"' : ' data-grist-auth="1"') + '>' + esc(c.auth_label) + '</div>';
+      } else if (c.key === 'telegram') {
         // Telegram's phone/code/2FA flow needs its own multi-step modal
         // (see renderTelegramModal below) instead of the generic single-
         // click OAuth flow every other connector uses -- intercepted here
@@ -739,7 +755,11 @@ _JS = r"""
       // action this click sends has to match which direction the very
       // next click will actually take (ADR 0070).
       html += toggleHtml(c.enabled, c.enabled ? 'disable_connector' : 'enable_connector', { connector: c.key }, false, c.label + ' enabled');
-      html += '</div></div>';
+      html += '</div>';
+      if (c.key === 'grist' && gristSignin === 'unavailable' && gristAuth.error) {
+        html += '<div class="pf-modal-error" style="flex-basis:100%">' + esc(gristAuth.error) + '</div>';
+      }
+      html += '</div>';
     });
     html += '</div></div>';
     return html;
@@ -1224,6 +1244,56 @@ _JS = r"""
     return html;
   }
 
+  // Grist API-key modal (see settings_controller.py's grist_connect/
+  // grist_cancel_auth). Shown only when grist_signin === 'api_key'.
+  var GRIST_DEFAULT_URL = 'https://docs.getgrist.com';
+
+  function renderGristModal(state) {
+    if (!ui.gristModalOpen) return '';
+    var auth = state.grist_auth || { error: '' };
+    var pinned = state.grist_server_url_pinned || '';
+    var busy = (state.connectors.find(function (c) { return c.key === 'grist'; }) || {}).busy;
+
+    var html = '<div class="pf-modal-overlay" role="presentation">';
+    html += '<div class="pf-modal" role="dialog" aria-modal="true" aria-label="Connect to Grist">';
+    html += '<div class="pf-modal-title">Connect to Grist</div>';
+    if (pinned) {
+      html += '<div class="pf-modal-desc">Your organization uses ' + esc(pinned) + '.</div>';
+    } else {
+      html += '<div class="pf-modal-desc">Server address</div>';
+      html += '<input type="url" class="field pf-modal-input" data-grist-field="server_url" aria-label="Server address" value="' +
+        esc(ui.gristServerUrl || GRIST_DEFAULT_URL) + '"' + (busy ? ' disabled' : '') + '/>';
+    }
+    html += '<div class="pf-modal-desc">API key</div>';
+    html += '<input type="password" autocomplete="off" class="field pf-modal-input" data-grist-field="api_key" aria-label="API key"' +
+      (busy ? ' disabled' : '') + '/>';
+    html += '<div class="pf-modal-desc">Create a key in Grist under Account settings → Developer → API Key.</div>';
+    if (busy) html += '<div class="pf-modal-desc">Connecting…</div>';
+    else if (auth.error) html += '<div class="pf-modal-error">' + esc(auth.error) + '</div>';
+    html += '<div class="pf-modal-buttons">';
+    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel Grist sign-in" data-grist-cancel="1">Cancel</div>';
+    html += '<div class="button primary" role="button" tabindex="0" aria-label="Connect"' +
+      ' data-grist-submit="1"' + (busy ? ' aria-disabled="true"' : '') + '>' + (busy ? 'Working…' : 'Connect') + '</div>';
+    html += '</div></div></div>';
+    return html;
+  }
+
+  function closeGristModal() {
+    ui.gristModalOpen = false;
+    ui.gristSubmitted = false;
+  }
+
+  function submitGristModal() {
+    var keyEl = document.querySelector('[data-grist-field="api_key"]');
+    var urlEl = document.querySelector('[data-grist-field="server_url"]');
+    var url = urlEl ? urlEl.value : '';
+    if (urlEl) ui.gristServerUrl = url;
+    var key = keyEl ? keyEl.value : '';
+    if (keyEl) keyEl.value = '';
+    ui.gristSubmitted = true;
+    post('grist_connect', { server_url: url, api_key: key });
+  }
+
   // A narrow tabstrip scrolls sideways inside itself, and a re-render starts
   // it back at the left: bring the selected tab into view without moving the
   // page itself (scrollIntoView would also scroll the document vertically).
@@ -1250,6 +1320,13 @@ _JS = r"""
       ui.telegramModalOpen = false;
       ui.telegramAuthWasActive = false;
     }
+    // The Grist result arrives by snapshot push: once a submitted form is no
+    // longer busy and carries no error, the connect worked -- close the modal.
+    if (ui.gristModalOpen && ui.gristSubmitted) {
+      var gristRow = state.connectors.find(function (c) { return c.key === 'grist'; }) || {};
+      if (!gristRow.busy && !(state.grist_auth && state.grist_auth.error)) closeGristModal();
+      else if (!gristRow.busy) ui.gristSubmitted = false;
+    }
     // .split (base.css): the nav and the content, one column when narrow
     // and two from 900 px up (see _CSS).
     var html = '<div class="split pf-settings-layout">' + renderNav(state) + '<div class="pf-content">';
@@ -1259,11 +1336,16 @@ _JS = r"""
     }
     html += renderSection(state) + '</div></div>';
     html += renderTelegramModal(state);
+    html += renderGristModal(state);
     document.getElementById('app').innerHTML = html;
     revealSelectedTabs();
     if (ui.telegramModalOpen) {
       var input = document.querySelector('[data-telegram-field]');
       if (input) input.focus();
+    }
+    if (ui.gristModalOpen && !ui.gristSubmitted) {
+      var gristInput = document.querySelector('[data-grist-field="api_key"]');
+      if (gristInput && document.activeElement !== gristInput) gristInput.focus();
     }
   }
 
@@ -1338,6 +1420,20 @@ _JS = r"""
 
     var telegramSubmitEl = e.target.closest('[data-telegram-submit]');
     if (telegramSubmitEl) { submitTelegramModal(telegramSubmitEl.getAttribute('data-telegram-submit')); return; }
+
+    var gristAuthEl = e.target.closest('[data-grist-auth]');
+    if (gristAuthEl) { ui.gristModalOpen = true; ui.gristSubmitted = false; render(pyState); return; }
+
+    var gristCancelEl = e.target.closest('[data-grist-cancel]');
+    if (gristCancelEl) {
+      closeGristModal();
+      post('grist_cancel_auth', {});
+      render(pyState);
+      return;
+    }
+
+    var gristSubmitEl = e.target.closest('[data-grist-submit]');
+    if (gristSubmitEl) { if (gristSubmitEl.getAttribute('aria-disabled') !== 'true') submitGristModal(); return; }
 
     var repoEl = e.target.closest('[data-action="open_repo"]');
     if (repoEl) { post('open_repo', {}); return; }
@@ -1443,6 +1539,12 @@ _JS = r"""
   }
 
   function onKeydown(e) {
+    if (e.key === 'Escape' && ui.gristModalOpen) {
+      closeGristModal();
+      post('grist_cancel_auth', {});
+      render(pyState);
+      return;
+    }
     if (e.key === 'Escape' && ui.telegramModalOpen) {
       ui.telegramModalOpen = false;
       ui.telegramAuthWasActive = false;
@@ -1472,6 +1574,7 @@ _JS = r"""
       submitAddPolicyRule();
       return;
     }
+    if (el.hasAttribute('data-grist-field')) { submitGristModal(); return; }
     if (el.hasAttribute('data-telegram-field')) {
       var state = pyState || {};
       var step = ((state.telegram_auth || {}).step) || 'phone';
