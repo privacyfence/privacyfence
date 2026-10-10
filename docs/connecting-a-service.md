@@ -1,7 +1,7 @@
 # Connecting a service
 
 A **connector** is PrivacyFence's link to one of your accounts: Gmail, Drive, Calendar, Contacts,
-Tasks, Apps Script, Slack, Jira, Confluence, Salesforce or Telegram. Connecting one takes two
+Tasks, Apps Script, Slack, Jira, Confluence, Salesforce, Grist or Telegram. Connecting one takes two
 steps, done by different people:
 
 1. **An administrator registers an app with the provider once** and packages its credentials into
@@ -75,6 +75,7 @@ machine's loopback address (`127.0.0.1`). It runs only while a sign-in is in pro
 | Slack | 53682 |
 | Salesforce | 53683 |
 | Atlassian (Jira and Confluence) | 53684 |
+| Grist | 53685 |
 
 ### Time limit and errors
 
@@ -131,7 +132,7 @@ applies:
 | **Connecting…** | A sign-in is in progress. The Authenticate link is disabled until it finishes or times out. | Finish the sign-in in the browser tab. |
 | **Connected** | The connector is signed in and loaded; its tools are available. | Nothing. |
 | **Disabled** | The connector is switched off. | Turn the switch on to use it. |
-| **Organization config missing** | The installed bundle has no section for this provider (Google, Slack, Salesforce or Atlassian), or no bundle is installed. | [Install the bundle](#install-the-organization-config-bundle-desktop-install), or ask your administrator to add the provider. |
+| **Organization config missing** | The installed bundle has no section for this provider (Google, Slack, Salesforce, Atlassian or Grist), or no bundle is installed. | [Install the bundle](#install-the-organization-config-bundle-desktop-install), or ask your administrator to add the provider. |
 | **App credentials missing** | Telegram only: this build of PrivacyFence carries no Telegram app credentials. | See [telegram-setup.md](telegram-setup.md). |
 | **Not connected** | The provider is configured but the connector is not loaded: you never signed in, the credentials expired or were revoked, or the connector failed its check when PrivacyFence built it. | Click **Authenticate…**. If it keeps failing, check the log (see [platform-support.md](platform-support.md)). |
 
@@ -180,4 +181,5 @@ provider-specific troubleshooting:
 | Slack | [slack-setup.md](slack-setup.md) |
 | Salesforce | [salesforce-setup.md](salesforce-setup.md) |
 | Jira, Confluence | [atlassian-setup.md](atlassian-setup.md) |
+| Grist | [grist-setup.md](grist-setup.md) |
 | Telegram | [telegram-setup.md](telegram-setup.md) |

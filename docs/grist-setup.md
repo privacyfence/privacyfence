@@ -132,6 +132,9 @@ table id.
 **`This Grist server does not let PrivacyFence list your documents.`** — open the document in
 Grist, then Settings (the gear icon) → Document ID, and give the assistant that id.
 
+**`Grist sign-in failed: <error>`** — Grist refused the sign-in; the text after the colon is Grist's
+own reason. Check the client id, the client secret and the redirect URI registered for the app.
+
 **`Grist did not return a refresh token.`** — the app in Grist must allow `offline_access`.
 
 **`Your Grist sign-in has expired or was revoked.`** — use **Authenticate…** to sign in again.
@@ -140,6 +143,9 @@ Grist, then Settings (the gear icon) → Document ID, and give the assistant tha
 
 **`The Grist server answered with a redirect (HTTP 3xx).`** — the server address is not the
 final one; enter the address Grist ends up at.
+
+**`Could not reach Grist's sign-in server at <host>`** — check the sign-in server address and your
+network.
 
 **`Grist's sign-in settings at <host> are not usable.`** — check the Grist server address, and
 the sign-in server if set, in the organization config.

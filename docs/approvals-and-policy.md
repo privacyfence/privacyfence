@@ -384,6 +384,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Salesforce report | identity | report ids | `approved_report_ids` | the report is one of these |
 | Contacts label | identity | label names | `label_name_allowlist` | the label being applied or removed is one of these |
 | Apps Script project | identity | script ids | `apps_script.project` | the script is one of these |
+| Grist document | identity | document ids | `grist.document` | the document is one of these |
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 

@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Grist connector.** List tables and columns, read records after review, and add or update records and add tables and columns with approval, on getgrist.com or a self-hosted Grist. Connect with your own Grist API key, or, when your organization registered a Grist OAuth app, sign in with Authenticate… in Settings or on the connections page. Nothing is deleted.
+
 ## [5.6.0] — 2026-10-10
 
 ### Added
