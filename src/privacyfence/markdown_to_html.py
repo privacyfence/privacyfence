@@ -76,12 +76,14 @@ def _render_block(lines: list[str]) -> str:
     ):
         return _render_table(lines)
 
-    if all(_UL_ITEM_RE.match(line) for line in lines):
-        items = "".join(f"<li>{_inline(_UL_ITEM_RE.match(line).group(1))}</li>" for line in lines)
+    matches = [m for line in lines if (m := _UL_ITEM_RE.match(line))]
+    if len(matches) == len(lines):
+        items = "".join(f"<li>{_inline(m.group(1))}</li>" for m in matches)
         return f"<ul>{items}</ul>"
 
-    if all(_OL_ITEM_RE.match(line) for line in lines):
-        items = "".join(f"<li>{_inline(_OL_ITEM_RE.match(line).group(1))}</li>" for line in lines)
+    matches = [m for line in lines if (m := _OL_ITEM_RE.match(line))]
+    if len(matches) == len(lines):
+        items = "".join(f"<li>{_inline(m.group(1))}</li>" for m in matches)
         return f"<ol>{items}</ol>"
 
     text = "<br>".join(_inline(line.strip()) for line in lines)
