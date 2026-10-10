@@ -85,6 +85,29 @@ class TestResolvers:
         client = SimpleNamespace(list_reports=lambda: [SimpleNamespace(id="R1", name="Pipeline")])
         assert _resolver_for("salesforce", "reports")(client, "R1") == "Pipeline"
 
+    def test_resolve_salesforce_report_by_direct_lookup(self):
+        client = SimpleNamespace(get_report_name=lambda rid: "Pipeline", list_reports=lambda: [])
+        assert _resolver_for("salesforce", "reports")(client, "00O000000000001") == "Pipeline"
+
+    def test_resolve_salesforce_report_matches_15_char_id_to_18_char(self):
+        client = SimpleNamespace(list_reports=lambda: [SimpleNamespace(id="00O000000000001AAA", name="Pipeline")])
+        assert _resolver_for("salesforce", "reports")(client, "00O000000000001") == "Pipeline"
+
+    def test_resolve_grist_document(self):
+        client = SimpleNamespace(get_document=lambda did: SimpleNamespace(name="Budget"))
+        assert _resolver_for("grist", "documents")(client, "abc") == "Budget"
+
+    def test_resolve_grist_document_falls_back_to_the_list(self):
+        def boom(did):
+            raise RuntimeError("boom")
+
+        client = SimpleNamespace(get_document=boom, list_documents=lambda: [SimpleNamespace(id="abc", name="Budget")])
+        assert _resolver_for("grist", "documents")(client, "abc") == "Budget"
+
+    def test_grist_document_rule_maps_to_the_resource_type(self):
+        from privacyfence.settings_controller import RULE_NAME_TO_RESOURCE_TYPE
+        assert RULE_NAME_TO_RESOURCE_TYPE["grist.document"].config_key == "documents"
+
     def test_resolve_salesforce_report_swallows_a_client_error(self):
         client = SimpleNamespace(list_reports=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         assert _resolver_for("salesforce", "reports")(client, "R1") is None

@@ -93,11 +93,40 @@ def _resolve_calendar(client: Any, resource_id: str) -> str | None:
         return None
 
 
-def _resolve_salesforce_report(client: Any, resource_id: str) -> str | None:
+def _first_name(*lookups: Callable[[], str | None]) -> str | None:
+    """The first lookup that yields a name; one that raises just falls through to the next."""
+    for lookup in lookups:
+        name = _try_lookup(lookup)
+        if name:
+            return name
+    return None
+
+
+def _try_lookup(lookup: Callable[[], str | None]) -> str | None:
     try:
-        return _find_by(client.list_reports(), "id", resource_id)
+        return lookup()
     except Exception:
         return None
+
+
+def _resolve_salesforce_report(client: Any, resource_id: str) -> str | None:
+    # A rule may hold the 15-character form of an ID while Salesforce returns the 18-character one
+    # (same 15-character prefix), and the report list is capped, so look the report up by ID first.
+    def by_list() -> str | None:
+        for report in client.list_reports() or []:
+            rid = str(report.id)
+            if rid == resource_id or (len(resource_id) >= 15 and rid[:15] == resource_id[:15]):
+                return report.name or None
+        return None
+
+    return _first_name(lambda: client.get_report_name(resource_id), by_list)
+
+
+def _resolve_grist_document(client: Any, resource_id: str) -> str | None:
+    return _first_name(
+        lambda: client.get_document(resource_id).name or None,
+        lambda: _find_by(client.list_documents(), "id", resource_id),
+    )
 
 
 @dataclass(frozen=True)
@@ -235,6 +264,14 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
         connector="salesforce", config_key="reports",
         capabilities={"run": GrantCapability("Read auto-accept", (("salesforce.run_report", "approved_report_ids"),))},
         resolver=_resolve_salesforce_report,
+    ),
+    GrantResourceType(
+        connector="grist", config_key="documents",
+        # Name resolution only: grist.document is governed through the policy engine's own scope,
+        # not a grant capability, so the Auto-accept page maps its predicate here by hand
+        # (settings_controller.RULE_NAME_TO_RESOURCE_TYPE).
+        capabilities={},
+        resolver=_resolve_grist_document,
     ),
 )
 
