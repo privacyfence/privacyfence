@@ -4,16 +4,13 @@
 
 Accepted — 2026-10-09. Implemented: `src/privacyfence/salesforce_client.py` (`run_report_page`,
 `build_keyset_metadata`, `report_page_keys`, `ReportPagingError`), `src/privacyfence/connectors/salesforce.py`
-(`salesforce_run_report`), `src/privacyfence/plugins/source_ops.py` (`salesforce.report_run`),
-`plugin-sdk/src/privacyfence_plugin_sdk/plugin.py` (`report_pages`).
-Amends [ADR 0128](0128-plugin-source-reads-never-truncate.md).
+(`salesforce_run_report`), `src/privacyfence/cursors.py` (the cursor envelope).
 
 ## Context
 
 Salesforce's Analytics API returns at most 2,000 detail rows per report run, and an asynchronous
-run has the same cap. `salesforce_run_report` and the plugin source operation `salesforce.report_run`
-stopped there and told the caller to narrow the report with filters. [ADR 0128](0128-plugin-source-reads-never-truncate.md)
-left it as the one source operation that did not page.
+run has the same cap. `salesforce_run_report` stopped
+there and told the caller to narrow the report with filters.
 A read that quietly returns the first 2,000 rows of a larger report is worse than one that fails
 ([issue #854](https://github.com/privacyfence/privacyfence/issues/854)).
 
@@ -41,8 +38,7 @@ report one page at a time. Without `page_by` nothing changes.
   both sides of a page boundary, blank keys and case-only differences.
 - No error message holds a cell value, because an error reaches the AI client before any approval
   card.
-- Each page of `salesforce_run_report` is its own card. On a plugin, a page that does not fit the
-  result budget is cut to fit, and the next run starts after the last key served.
+- Each page of `salesforce_run_report` is its own card.
 
 ## Alternatives considered
 
@@ -54,7 +50,7 @@ report one page at a time. Without `page_by` nothing changes.
   reports. Flattening them shows no new data.
 - **A stateful server-side cursor that de-duplicates across pages.** It needs daemon state with a
   lifetime and cleanup. The stateless keyset cursor, the refusal of a repeated last key and the
-  `RowCount` check give the same guarantee, and the SDK also refuses a key repeated across pages.
+  `RowCount` check give the same guarantee.
 - **Splitting a run into sub-pages with a row offset.** Re-running a page and skipping rows breaks
   when rows change in between. Continuing after the last key served needs no offset.
 - **Comparing key order in Python** to detect a column that does not advance. Salesforce's text
@@ -69,8 +65,7 @@ report one page at a time. Without `page_by` nothing changes.
   best. Record-ID columns are not guaranteed to work, because Salesforce compares text
   case-insensitively; the `RowCount` check then refuses the read instead of losing a row.
 - `salesforce.report_max_pages` is a cost cap, not a boundary. The cursor is unsigned, so a caller
-  can reset the run count; it reads with its own rights either way
-  ([ADR 0128](0128-plugin-source-reads-never-truncate.md)).
+  can reset the run count; it reads with its own rights either way.
 - Aggregates on a later page cover only the rows from that page on, not the whole report.
 - Pages may change between calls when the report's data changes; the cursor does not freeze it. A
   change that loses rows fails the read through the `RowCount` check.
@@ -79,13 +74,11 @@ report one page at a time. Without `page_by` nothing changes.
 
 `tests/unit/test_salesforce_client.py` and `tests/unit/test_salesforce_report_paging.py` (the 4,500-row
 read, filter logic, flattening and each refusal), `TestRunReportPaged` in
-`tests/unit/connectors/test_salesforce_connector.py`, the Salesforce tests in
-`tests/unit/plugins/test_source_ops.py`, `TestSalesforce` in `tests/integration/test_plugin_paging.py`,
-`tests/unit/plugin_sdk/test_plugin.py` for `report_pages`, and the `run_report_page` row of
+`tests/unit/connectors/test_salesforce_connector.py`, `tests/unit/test_cursors.py`, and the
+`run_report_page` row of
 `scripts/qa_fixture_recorder.py`, which checks `sortBy`, `greaterThan`, `RowCount` and flattening
 against the QA org.
 
 ## Related
 
 - [Issue #854](https://github.com/privacyfence/privacyfence/issues/854)
-- [ADR 0128](0128-plugin-source-reads-never-truncate.md)

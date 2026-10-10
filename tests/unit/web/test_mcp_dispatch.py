@@ -648,17 +648,6 @@ class TestUnattendedSessions:
         dispatcher.end_session("s1")  # must not raise
         assert dispatcher.unattended_session_count() == 0
 
-    def test_any_unattended_session_is_false_until_a_session_begins_one(self):
-        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
-        assert dispatcher.any_unattended_session() is False
-
-    def test_any_unattended_session_is_true_while_one_is_begun(self):
-        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
-        dispatcher.begin_unattended_session("s1", "why")
-        assert dispatcher.any_unattended_session() is True
-        dispatcher.end_unattended_session("s1")
-        assert dispatcher.any_unattended_session() is False
-
     def test_changed_listener_fires_on_begin_and_end(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
         events = []

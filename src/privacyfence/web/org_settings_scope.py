@@ -111,14 +111,6 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     "refresh_connectors": ActionScope(modes=frozenset({LOCAL_MODE})),
     "authenticate_connector": ActionScope(modes=frozenset({LOCAL_MODE})),
 
-    # Plugins (ADR 0120): the install's own PluginHost, which only local mode has.
-    "rescan_plugins": ActionScope(modes=frozenset({LOCAL_MODE})),
-    "inspect_plugin": ActionScope(modes=frozenset({LOCAL_MODE})),
-    "enable_plugin": ActionScope(modes=frozenset({LOCAL_MODE})),
-    "disable_plugin": ActionScope(modes=frozenset({LOCAL_MODE})),
-    "purge_plugin_data": ActionScope(modes=frozenset({LOCAL_MODE})),
-    "revoke_plugin_approval": ActionScope(modes=frozenset({LOCAL_MODE})),
-
     # ---------------------------------------------------------------- #
     # Meaningless, or actively wrong, on a headless server -- the
     # update-checker banner, Telegram's interactive phone/2FA login, and

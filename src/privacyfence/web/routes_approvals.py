@@ -114,7 +114,6 @@ from ..webauthn_stepup import StepUpChallengeStore
 from ..web_approval_ui import WebApprovalUI
 from . import approval_step_up, org_session, step_up_decide
 from .csp import nonce_for as _csp_nonce_for
-from .csp import set_frame_self as _set_csp_frame_self
 from .csp import set_nonce as _set_csp_nonce
 from .routes_security import PF_WEBAUTHN_JS
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
@@ -567,10 +566,6 @@ def _build_route_list(
         # <style>/<script> tags outright.
         nonce = approval_window_html.extract_csp_nonce(card.html) or _csp_nonce_for(request)
         _set_csp_nonce(request, nonce)
-        if card.frame_src:
-            # A plugin approval card frames the plugin's own page from this origin; only this
-            # card's response lets frame-src name 'self'.
-            _set_csp_frame_self(request)
         shim = bridge_shim(
             decide_url=f"/api/approvals/{card.id}/decide", csrf=csrf,
             stepup_options_url=f"/api/approvals/{card.id}/stepup/idp", nonce=nonce,
@@ -821,7 +816,6 @@ def create_app(
     step_up_origin: str = "",
     any_connector_authenticated: Callable[[], bool] | None = None,
     require_human_session: bool = False,
-    plugin_pages: Callable[[], list[tuple[str, str]]] | None = None,
 ) -> Starlette:
     """Build the Starlette app serving local mode's approval surface.
     ``sessions`` (see session_auth.py's own module docstring) is the
@@ -876,9 +870,6 @@ def create_app(
     ``None`` (the default, and every caller that has no settings controller
     to ask) keeps the steady-state copy -- never tell somebody who is
     already set up that they aren't.
-
-    ``plugin_pages`` lists ``(display name, href)`` of each plugin page for the top navigation's
-    Plugins menu, per request; ``None`` (no plugin host) leaves the menu out.
     """
 
     def _resolve_principal(request: Request) -> Principal | None:
@@ -927,7 +918,6 @@ def create_app(
             notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
             banner_html=_banner_html(principal),
             dismissible_notice_html=_off_notice_html(), dismissible_notice_key="pf_step_up_off_dismissed",
-            plugin_pages=tuple(plugin_pages()) if plugin_pages is not None else None,
         )
 
     def _unauthenticated_page(request: Request, next_path: str) -> Response:

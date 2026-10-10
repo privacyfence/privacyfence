@@ -18,9 +18,7 @@ import pytest
 
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.settings_controller import SettingsController
-from privacyfence.web.org_settings_scope import (
-    ACTION_SCOPES, LOCAL_MODE, NOT_APPLICABLE_ACTIONS, ORG_MODE, is_action_permitted,
-)
+from privacyfence.web.org_settings_scope import ACTION_SCOPES, LOCAL_MODE, ORG_MODE, is_action_permitted
 from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, _ORG_ALLOWED_ACTIONS, _ORG_ONLY_SENSITIVE_ACTIONS
 
 _ADMIN = Principal(id="alice", is_admin=True)
@@ -136,16 +134,3 @@ def test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_setting
     # principal who (like LOCAL_PRINCIPAL) isn't an admin, is still denied
     # -- the two modes' answers genuinely differ for the same action name.
     assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=ORG_MODE) is False
-
-
-_PLUGIN_ACTIONS = ("rescan_plugins", "inspect_plugin", "enable_plugin", "disable_plugin", "purge_plugin_data",
-                   "revoke_plugin_approval")
-
-
-@pytest.mark.parametrize("action", _PLUGIN_ACTIONS)
-def test_plugin_actions_are_local_mode_only(action):
-    assert ACTION_SCOPES[action].modes == {LOCAL_MODE}
-    assert action in NOT_APPLICABLE_ACTIONS
-    assert is_action_permitted(action, _ADMIN, mode=ORG_MODE) is False
-    assert is_action_permitted(action, _NON_ADMIN, mode=ORG_MODE) is False
-    assert is_action_permitted(action, _NON_ADMIN, mode=LOCAL_MODE) is True

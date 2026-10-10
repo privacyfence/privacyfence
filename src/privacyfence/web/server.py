@@ -82,7 +82,7 @@ import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -98,7 +98,6 @@ from .. import __version__, paths, privilege_separation, web_shell, webauthn_ste
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
-from ..plugins import pages as plugin_pages
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..settings_controller import SettingsController, set_main_dispatcher
 from ..step_up_config import StepUpConfig
@@ -118,7 +117,7 @@ from .control_channel import (
     send_mcp_token,
     send_recovery_code,
 )
-from .csp import build_csp, frame_self_for, plugin_embed_for, plugin_new_tabs_for
+from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from . import mcp_auth
 from .mcp_auth import PerUserTokenVerifier, load_or_create_mcp_token
@@ -127,13 +126,8 @@ from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
-from .routes_plugin_browser import build_routes as build_plugin_browser_routes
-from .routes_plugins import build_routes as build_plugin_routes
 from .routes_settings import AiClientConnect
 from .routes_settings import build_routes as build_settings_routes
-
-if TYPE_CHECKING:
-    from ..plugins.host import PluginHost
 from .routes_settings import settings_page_state
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
@@ -413,10 +407,6 @@ def _clear_web_base_url_file() -> None:
 # a document, so COOP protected nothing on them. ADR 0108.
 _OAUTH_POPUP_PATHS = frozenset({"/authorize", IDP_CALLBACK_PATH})
 
-# Every response under this prefix, error or not, gets plugins/pages.py's sandbox CSP instead of
-# build_csp()'s, plus its Cache-Control. Local mode is the only one that mounts the routes.
-_PLUGIN_PAGES_PREFIX = "/plugins/"
-
 
 class _SecurityHeadersMiddleware:
     """Plain ASGI middleware (not starlette.middleware.base.
@@ -491,23 +481,7 @@ class _SecurityHeadersMiddleware:
                 headers["x-frame-options"] = "DENY"
                 headers["x-content-type-options"] = "nosniff"
                 headers["referrer-policy"] = "no-referrer"
-                if scope.get("path", "").startswith(_PLUGIN_PAGES_PREFIX):
-                    # A plugin's page runs sandboxed in an opaque origin (ADR 0124): no cookies,
-                    # no same-origin API calls, and nothing from it is cached. The one page a
-                    # pending approval card frames may be framed by this origin, for this
-                    # response only (web/routes_plugins.py sets the flag).
-                    if plugin_embed_for(scope):
-                        headers["content-security-policy"] = plugin_pages.CSP_EMBEDDED
-                        headers["x-frame-options"] = "SAMEORIGIN"
-                    elif plugin_new_tabs_for(scope):
-                        headers["content-security-policy"] = plugin_pages.CSP_NEW_TABS
-                    else:
-                        headers["content-security-policy"] = plugin_pages.CSP
-                    headers["cache-control"] = plugin_pages.CACHE_CONTROL
-                else:
-                    headers["content-security-policy"] = build_csp(
-                        nonce, app_origin=self._app_origin, frame_self=frame_self_for(scope),
-                    )
+                headers["content-security-policy"] = build_csp(nonce, app_origin=self._app_origin)
                 headers["permissions-policy"] = _PERMISSIONS_POLICY
                 headers["cross-origin-opener-policy"] = (
                     "unsafe-none" if scope.get("path") in _OAUTH_POPUP_PATHS else "same-origin"
@@ -681,10 +655,9 @@ def _owner_only_routes(routes: list) -> list:  # noqa: ANN401 -- list[BaseRoute]
     rebuilt = []
     for route in routes:
         assert isinstance(route, Route), (  # nosec B101 -- build_settings_routes() only ever returns plain Route objects
-            f"expected a Route from build_settings_routes() or the plugin routes, got {type(route)!r}"
+            f"expected a plain Route from build_settings_routes(), got {type(route)!r}"
         )
-        # type(route): a Route subclass (routes_plugins.py's GET-and-HEAD one) keeps its class.
-        rebuilt.append(type(route)(
+        rebuilt.append(Route(
             route.path, _owner_only_endpoint(route.endpoint),
             methods=sorted(route.methods) if route.methods else None, name=route.name,
         ))
@@ -882,7 +855,6 @@ def build_app(
     agent_overrides: AgentOverrides | None = None,
     mint_mcp_token: Callable[[bool], str] | None = None,
     mcp_url: str | None = None,
-    plugin_host: PluginHost | None = None,
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -930,8 +902,6 @@ def build_app(
     always constructs and shares one pair for its whole lifetime. Every
     optional surface's parameter defaults to ``None``, so a caller (a test,
     usually) that omits it simply does not get that surface.
-
-    ``plugin_host`` (local mode) is stored on ``app.state.plugin_host`` for the plugin routes.
 
     ``mint_mcp_token``/``mcp_url`` (local mode, both or neither) add the
     settings page's "Connect an AI client" section (ADR 0104) --
@@ -1063,17 +1033,6 @@ def build_app(
             ),
         ))
 
-    if plugin_host is not None:
-        # Owner-only like Settings, and only for a session a human asked for: a plugin page is
-        # the owner's to look at, never an agent's (ADR 0124).
-        extra_routes.extend(_owner_only_routes(build_plugin_routes(
-            plugin_host, is_owner_session=lambda request: _is_human_session(request, sessions),
-        )))
-        extra_routes.extend(_owner_only_routes(build_plugin_browser_routes(
-            plugin_host, is_owner_session=lambda request: _is_human_session(request, sessions),
-            notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
-        )))
-
     if state_stream is not None:
         extra_routes.append(_state_stream_route(state_stream, sessions=sessions))
         lifespans.append(_state_stream_loop_lifespan(loop_ready))
@@ -1097,9 +1056,7 @@ def build_app(
             controller.any_connector_authenticated if controller is not None else None
         ),
         require_human_session=require_human_session,
-        plugin_pages=(lambda: plugin_host.page_links()) if plugin_host is not None else None,
     )
-    app.state.plugin_host = plugin_host
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(
         bootstrapped, principal_resolver or _local_principal_resolver(sessions),
@@ -1266,7 +1223,6 @@ class WebServer:
         trusted_proxies: tuple[str, ...] = (),
         step_up: StepUpConfig | None = None,
         agent_overrides: AgentOverrides | None = None,
-        plugin_host: PluginHost | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own -- every local-mode caller leaves them unset.
@@ -1288,12 +1244,8 @@ class WebServer:
         ``agent_overrides`` (local mode only) is ``settings.yaml``'s ``agent_overrides:`` section,
         parsed once by daemon_main.py (``agent_overrides.from_config``) -- a relabel only, never
         an attested source (see that module).
-
-        ``plugin_host`` (local mode only) is the daemon's ``PluginHost``; it is kept on the server
-        and on the built app for the plugin routes. ``None`` (org mode, a test) means no plugins.
         """
         self.host = host
-        self.plugin_host = plugin_host
         self.port = port
         self.org = org
         # Local mode's real session/bootstrap-code stores, built
@@ -1437,7 +1389,6 @@ class WebServer:
             step_up=step_up,
             step_up_issuer_url=f"http://{host}:{port}",
             agent_overrides=agent_overrides,
-            plugin_host=plugin_host,
             mint_mcp_token=self._mint_mcp_token if self.mcp_verifier is not None else None,
             mcp_url=f"http://{host}:{port}{MCP_PATH}" if self.mcp_verifier is not None else None,
         )

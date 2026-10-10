@@ -1,1 +1,0 @@
-[{"name":"script_get_content","description":"A tool.","parameters":{"type":"object","properties":{}},"read_only":true,"destructive":false,"gate":"review","scopes":[]}]

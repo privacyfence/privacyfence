@@ -1,1 +1,0 @@
-[{"name":"ping","description":"A tool.","parameters":{"type":"object","properties":{"ids":{"type":"array"}}},"read_only":true,"destructive":false,"gate":"review","scopes":[]}]

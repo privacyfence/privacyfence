@@ -1,10 +1,10 @@
-"""The cursor envelope every paged source operation shares (ADR 0128).
+"""The cursor envelope a paged tool result carries (ADR 0133).
 
 A cursor is the base64url text of a small JSON object: the envelope version, the operation, a
 digest of the parameters the cursor was issued for, and the operation's own state. Binding it to
-the parameters stops a plugin from carrying a cursor over to a different query by mistake. It is
-neither secret nor signed, and not a security boundary: the plugin reads with its own rights
-either way. Each adapter validates its own state after ``decode`` returns it.
+the parameters stops a caller from carrying a cursor over to a different query by mistake. It is
+neither secret nor signed, and not a security boundary: the caller reads with its own rights
+either way. Each tool validates its own state after ``decode`` returns it.
 """
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ import binascii
 import hashlib
 import json
 
-from privacyfence.plugins.constants import CURSOR_MAX_CHARS
+
+CURSOR_MAX_CHARS = 4096
 
 _VERSION = 1
 _INVALID = "cursor is not valid"

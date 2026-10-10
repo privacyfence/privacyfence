@@ -326,10 +326,6 @@ class PendingApproval:
     # consume_ledger(). Never audited, logged or serialized to a page: only
     # its intent and note length reach the audit log (ADR 0084).
     deny_feedback: DenialFeedback = field(default_factory=DenialFeedback)
-    # The plugin page a plugin approval card frames (ADR 0127) -- "" for every
-    # other card and dialog. Set once, by plugins/approvals.py, before the
-    # card's html is built, so the card route can allow exactly that frame.
-    frame_src: str = ""
 
     def answer(
         self, result: str, chosen_index: int | None = None, *, decided_via: str = "", batch_id: str = "",
@@ -498,7 +494,7 @@ class PendingApprovalRegistry:
     def add_created_listener(self, listener: Callable[[PendingApproval], None]) -> None:
         """Call ``listener(approval)`` each time ``register_or_coalesce`` creates a new card (never
         for a coalescing hit, and never for a confirm dialog, which follows a card someone is
-        already looking at, unless ``register_confirm`` was asked to ``notify``). Called on the registering thread, after the lock is released, so a
+        already looking at). Called on the registering thread, after the lock is released, so a
         listener must return quickly and hand any slow work to a thread of its own. An exception
         from a listener is logged and never reaches the gated call. Org mode's web push
         (web_push.PushNotifier.on_new_approval) is the one listener."""
@@ -631,7 +627,7 @@ class PendingApprovalRegistry:
         self._notify_created(approval)
         return approval, True
 
-    def register_confirm(self, *, sensitive: bool = False, notify: bool = False) -> PendingApproval:
+    def register_confirm(self, *, sensitive: bool = False) -> PendingApproval:
         """A PII/"Always allow" confirmation dialog -- never coalesced
         (``dedupe_key=None``), never subject to the pending cap (it's a
         short-lived follow-up to a card someone is already looking at, not
@@ -647,12 +643,7 @@ class PendingApprovalRegistry:
         where one is required -- rather than to the "a confirm releases
         nothing of its own" reasoning the default records. Left ``False``
         for the PII and "Always allow" dialogs, which really are second
-        steps inside a decision their own card already gated.
-
-        ``notify`` tells the created-listeners about this dialog, the same
-        notification a new card gets. A plugin's confirmation (ADR 0122) is
-        the one caller that sets it: no card came first, so nobody is
-        already looking. Left ``False`` everywhere else."""
+        steps inside a decision their own card already gated."""
         with self._lock:
             now = time.time()
             approval = PendingApproval(
@@ -660,9 +651,7 @@ class PendingApprovalRegistry:
                 sensitive=sensitive,
             )
             self._pending[approval.id] = approval
-        if notify:
-            self._notify_created(approval)
-        return approval
+            return approval
 
     def set_html(self, approval_id: str, html: str) -> None:
         approval = self._pending.get(approval_id)

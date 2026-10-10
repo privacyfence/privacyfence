@@ -9,13 +9,11 @@ from __future__ import annotations
 import sys
 
 import pytest
-from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
 from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
-from privacyfence.plugins import pages as plugin_pages
-from privacyfence.web.csp import build_csp, set_frame_self, set_plugin_embed, set_plugin_new_tabs
+from privacyfence.web.csp import build_csp
 from privacyfence.web.server import (
     DEFAULT_PORT,
     SHUTDOWN_GRACE_SECONDS,
@@ -371,15 +369,6 @@ class TestCacheControlOnSensitivePages:
         assert r.status_code == 200
         assert r.headers.get("cache-control") == "no-store"
 
-    def test_the_plugin_page_browser_is_no_store(self):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, plugin_host=_PageHost())
-        client = TestClient(app, base_url="http://localhost")
-        client.cookies.set(SESSION_COOKIE, sessions.create(provenance=PROVENANCE_HUMAN))
-        r = client.get("/plugin-pages")
-        assert r.status_code == 200
-        assert r.headers.get("cache-control") == "no-store"
-
     def test_the_unauthorized_landing_page_is_no_store(self):
         # Regression test: this page names a live bearer-secret command
         # (session_auth.unauthorized_html), so it must never be cached.
@@ -458,242 +447,6 @@ class TestSecurityHeadersMiddlewareReplacesNotExtends:
         assert "default-src 'none'" in csp_values[0]
 
 
-class _PageHost:
-    def __init__(self):
-        self.calls = []
-
-    async def web_request(self, name, path, query, principal):
-        self.calls.append((name, path))
-        return {"status": 200, "headers": {"content-type": "text/html"}, "body": "<p>hi</p>"}
-
-    def page_links(self):
-        return [("Today", "/plugin-pages/today")]
-
-    async def list_pages(self, name, principal):
-        raise LookupError(name)
-
-    async def list_all_pages(self, principal):
-        return []
-
-
-def _route_paths(app) -> set[str]:
-    """Walk the middleware chain down to the Starlette app and list its route paths."""
-    seen = 0
-    while not hasattr(app, "routes") and seen < 20:
-        app = getattr(app, "_app", None) or getattr(app, "app", None)
-        seen += 1
-    return {getattr(route, "path", "") for route in app.routes}
-
-
-class TestPluginPagesSandboxCsp:
-    """The plugin-page branch of the security-header middleware (ADR 0124): every response under
-    /plugins/ gets the sandbox CSP and private, no-store, and no other path changes."""
-
-    SANDBOX = (
-        "sandbox allow-scripts; default-src 'self' data: 'unsafe-inline'; "
-        "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
-    )
-
-    def _client(self, host=None):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, plugin_host=host or _PageHost())
-        client = TestClient(app, base_url="http://localhost")
-        client.cookies.set(SESSION_COOKIE, sessions.create(provenance=PROVENANCE_HUMAN))
-        return client
-
-    def test_sandbox_csp_under_plugins(self):
-        r = self._client().get("/plugins/today/")
-        assert r.status_code == 200
-        assert r.headers.get_list("content-security-policy") == [self.SANDBOX]
-        assert r.headers.get_list("cache-control") == ["private, no-store"]
-        assert r.headers["x-frame-options"] == "DENY"
-        assert r.headers["x-content-type-options"] == "nosniff"
-        assert r.headers["referrer-policy"] == "no-referrer"
-        # The headers the middleware sets on every path stay.
-        assert r.headers["cross-origin-opener-policy"] == "same-origin"
-        assert "camera=()" in r.headers["permissions-policy"]
-
-    def test_sandbox_csp_on_an_unrouted_plugins_path_too(self):
-        r = self._client().get("/plugins/")
-        assert r.status_code == 404
-        assert r.headers["content-security-policy"] == self.SANDBOX
-
-    @pytest.mark.parametrize("path", ["/approvals", "/plugins", "/pluginsx/today/", "/settings/plugins/x", "/"])
-    def test_other_paths_keep_the_app_csp(self, path):
-        r = self._client().get(path)
-        csp = r.headers["content-security-policy"]
-        assert "sandbox" not in csp
-        assert "default-src 'none'" in csp
-        assert r.headers.get("cache-control") != "private, no-store"
-
-    def test_approvals_page_has_the_plugins_menu_from_the_host(self):
-        r = self._client().get("/approvals")
-        assert '<a class="pf-shell-nav-item" href="/plugin-pages/today">Today</a>' in r.text
-        assert '<a class="pf-shell-nav-item" href="/plugin-pages">All plugin pages</a>' in r.text
-
-    def test_middleware_alone_branches_on_the_path(self):
-        async def app(scope, receive, send):
-            response = JSONResponse({"ok": True}, headers={"Content-Security-Policy": "default-src *"})
-            await response(scope, receive, send)
-
-        client = TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
-        assert client.get("/plugins/x/").headers.get_list("content-security-policy") == [self.SANDBOX]
-        other = client.get("/x/plugins/").headers.get_list("content-security-policy")
-        assert len(other) == 1
-        assert "default-src 'none'" in other[0]
-
-    def test_local_app_mounts_the_plugin_routes(self):
-        app = build_app(WebApprovalUI(), plugin_host=_PageHost())
-        assert {"/plugins/{name}", "/plugins/{name}/{path:path}"} <= _route_paths(app)
-
-    def test_plugin_pages_are_mounted_only_with_a_plugin_host(self):
-        with_host = _route_paths(build_app(WebApprovalUI(), plugin_host=_PageHost()))
-        without = _route_paths(build_app(WebApprovalUI()))
-        assert {"/plugin-pages", "/plugin-pages/{name}"} <= with_host
-        assert not any(path.startswith("/plugin-pages") for path in without)
-
-    def test_org_app_has_no_plugins_route(self, tmp_path, monkeypatch):
-        from privacyfence import org_identity as oi
-        from privacyfence.web.oauth_provider import OrgOAuthProvider
-        from privacyfence.web.org_session import OrgSessionStore
-        from privacyfence.web.server import OrgAuth
-
-        issuer = "https://pf.example.com"
-        idp = oi.IdpConfig(
-            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
-            authorization_endpoint="https://idp.example.com/authorize",
-            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
-        )
-        monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "c.json"))
-        monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "r.json"))
-        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer}/oauth/idp/callback")
-        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer)
-        host = _PageHost()
-
-        app = build_app(WebApprovalUI(), org=org, plugin_host=host, allowed_hosts=frozenset({"pf.example.com"}))
-
-        assert not any(path.startswith(("/plugins", "/plugin-pages")) for path in _route_paths(app))
-        client = TestClient(app, base_url=issuer)
-        for path in ("/plugins/today/", "/plugin-pages", "/plugin-pages/today"):
-            assert client.get(path).status_code == 404, path
-        assert host.calls == []
-
-
-def _flagging_app(*flags):
-    """An app behind the middleware that sets the given web/csp.py flags on its response, the way
-    a route would."""
-    async def app(scope, receive, send):
-        request = Request(scope)
-        for flag in flags:
-            flag(request)
-        await JSONResponse({"ok": True})(scope, receive, send)
-
-    return app
-
-
-def _csp_directives(csp: str) -> dict[str, str]:
-    return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
-
-
-class TestPluginNewTabs:
-    """The new-tabs flag swaps only the plugin page's CSP, for that response only; the embed flag wins."""
-
-    @staticmethod
-    def _client(app):
-        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
-
-    def test_flag_gives_the_new_tabs_csp_and_keeps_the_other_headers(self):
-        r = self._client(_flagging_app(set_plugin_new_tabs)).get("/plugins/echo/")
-        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP_NEW_TABS]
-        assert r.headers.get_list("x-frame-options") == ["DENY"]
-        assert r.headers["cross-origin-opener-policy"] == "same-origin"
-        assert r.headers["referrer-policy"] == "no-referrer"
-        assert r.headers["cache-control"] == "private, no-store"
-
-    def test_embed_wins(self):
-        r = self._client(_flagging_app(set_plugin_new_tabs, set_plugin_embed)).get("/plugins/echo/approval")
-        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP_EMBEDDED]
-        assert r.headers.get_list("x-frame-options") == ["SAMEORIGIN"]
-
-    def test_flag_outside_plugins_changes_nothing(self):
-        r = self._client(_flagging_app(set_plugin_new_tabs)).get("/approvals")
-        assert "allow-popups" not in r.headers["content-security-policy"]
-
-    def test_no_flag_keeps_the_sandbox(self):
-        r = self._client(_flagging_app()).get("/plugins/echo/")
-        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
-
-
-class TestPluginEmbed:
-    """The embed flag swaps exactly the plugin page's framing headers, for that response only."""
-
-    @staticmethod
-    def _client(app):
-        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
-
-    def test_flag_gives_the_embedded_csp_and_sameorigin(self):
-        r = self._client(_flagging_app(set_plugin_embed)).get("/plugins/echo/approval")
-        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP_EMBEDDED]
-        assert r.headers.get_list("x-frame-options") == ["SAMEORIGIN"]
-        assert r.headers["cache-control"] == "private, no-store"
-        assert r.headers["x-content-type-options"] == "nosniff"
-        assert r.headers["referrer-policy"] == "no-referrer"
-        assert r.headers["cross-origin-opener-policy"] == "same-origin"
-
-    def test_no_flag_keeps_the_sandbox_and_deny(self):
-        r = self._client(_flagging_app()).get("/plugins/echo/approval")
-        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
-        assert r.headers.get_list("x-frame-options") == ["DENY"]
-
-    def test_flag_outside_plugins_changes_nothing(self):
-        r = self._client(_flagging_app(set_plugin_embed)).get("/approvals")
-        assert r.headers.get_list("x-frame-options") == ["DENY"]
-        directives = _csp_directives(r.headers["content-security-policy"])
-        assert directives["frame-src"] == "data:"
-        assert directives["frame-ancestors"] == "'none'"
-
-    def test_flag_does_not_outlive_its_response(self):
-        calls = []
-
-        async def app(scope, receive, send):
-            if not calls:
-                set_plugin_embed(Request(scope))
-            calls.append(1)
-            await JSONResponse({"ok": True})(scope, receive, send)
-
-        client = self._client(app)
-        assert client.get("/plugins/echo/approval").headers["content-security-policy"] == plugin_pages.CSP_EMBEDDED
-        second = client.get("/plugins/echo/approval")
-        assert second.headers["content-security-policy"] == plugin_pages.CSP
-        assert second.headers["x-frame-options"] == "DENY"
-
-
-class TestCardFrameSelf:
-    """The frame-self flag adds 'self' to frame-src for that response, and nothing else."""
-
-    @staticmethod
-    def _client(app):
-        return TestClient(_SecurityHeadersMiddleware(app), base_url="http://localhost")
-
-    def test_flag_adds_self_to_frame_src_only(self):
-        framed = self._client(_flagging_app(set_frame_self)).get("/approvals/abc")
-        plain = self._client(_flagging_app()).get("/approvals/abc")
-        framed_directives = _csp_directives(framed.headers["content-security-policy"])
-        plain_directives = _csp_directives(plain.headers["content-security-policy"])
-        assert framed_directives.pop("frame-src") == "data: 'self'"
-        assert plain_directives.pop("frame-src") == "data:"
-        # The nonce differs per response; every other directive is the same.
-        framed_directives.pop("script-src"), framed_directives.pop("style-src-elem")
-        plain_directives.pop("script-src"), plain_directives.pop("style-src-elem")
-        assert framed_directives == plain_directives
-        assert framed.headers.get_list("x-frame-options") == ["DENY"]
-
-    def test_flag_on_a_plugin_path_changes_nothing(self):
-        r = self._client(_flagging_app(set_frame_self)).get("/plugins/echo/approval")
-        assert r.headers.get_list("content-security-policy") == [plugin_pages.CSP]
-        assert r.headers.get_list("x-frame-options") == ["DENY"]
-
-
 class TestBuildCsp:
     def test_same_nonce_appears_in_every_nonce_source(self):
         csp = build_csp("the-nonce")
@@ -756,18 +509,6 @@ class TestWebServerConstruction:
             mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok",
         )
         assert server.mcp_url == "http://localhost:1234/mcp"
-
-    def test_plugin_host_is_stored_on_the_server_and_the_app(self):
-        host = object()
-        server = WebServer(WebApprovalUI(), port=0, plugin_host=host)
-        assert server.plugin_host is host
-        app = build_app(WebApprovalUI(), plugin_host=host)
-        while not hasattr(app, "state"):
-            app = app._app  # unwrap the middleware layers to the Starlette app
-        assert app.state.plugin_host is host
-
-    def test_plugin_host_defaults_to_none(self):
-        assert WebServer(WebApprovalUI(), port=0).plugin_host is None
 
     def test_build_app_requires_a_token_or_a_verifier_for_an_mcp_dispatcher(self):
         from privacyfence.web.mcp_dispatch import McpDispatcher
@@ -1192,18 +933,39 @@ class TestMcpUrlFile:
 
 
 class TestStop:
+    @staticmethod
+    def _free_port() -> int:
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    @staticmethod
+    def _wait_until_connectable(host: str, port: int, timeout: float = 5.0) -> None:
+        import socket
+        import time
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection((host, port), timeout=0.2):
+                    return
+            except OSError:
+                time.sleep(0.05)
+        raise TimeoutError(f"{host}:{port} never became connectable")
+
     def test_an_open_event_stream_does_not_keep_the_server_running(self, tmp_path, monkeypatch):
         import socket
         import time
 
         from privacyfence import paths
-        from tests.fixtures.plugins.echo.harness import free_port, wait_until_connectable
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        port = free_port()
+        port = self._free_port()
         server = WebServer(WebApprovalUI(), host="localhost", port=port)
         server.start()
-        wait_until_connectable("localhost", port)
+        self._wait_until_connectable("localhost", port)
         session = server.sessions.create(provenance=PROVENANCE_HUMAN)
         with socket.create_connection(("localhost", port)) as stream:
             stream.sendall((

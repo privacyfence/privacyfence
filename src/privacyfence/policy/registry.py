@@ -246,35 +246,6 @@ def _build_registry() -> dict[str, ToolRegistryEntry]:
 
 TOOL_REGISTRY: dict[str, ToolRegistryEntry] = _build_registry()
 
-# Plugin tools added at runtime (``auto_accept.register_dynamic_tools``). Only these can be removed.
-_DYNAMIC_TOOLS: set[str] = set()
-
-
-def register_dynamic(tool: str, operation: str | None, verb: Verb | None, gate: str) -> None:
-    """Add a plugin tool's row, shaped exactly as ``_build_registry`` shapes a static one: a tool
-    with no operation key carries no verb either. Raises ``ValueError`` for a tool already here."""
-    if tool in TOOL_REGISTRY:
-        raise ValueError(f"tool {tool} is already in the registry")
-    if gate not in GATES:
-        raise ValueError(f"tool {tool} has an unknown gate {gate!r}")
-    governed_verb = verb if operation is not None else None
-    if governed_verb is not None:
-        TOOL_TO_VERB[tool] = governed_verb
-    TOOL_REGISTRY[tool] = ToolRegistryEntry(
-        tool=tool, gate=gate, operation=operation, verb=governed_verb,
-        scope_subject=VERB_SCOPE_SUBJECT[governed_verb] if governed_verb is not None else None,
-    )
-    _DYNAMIC_TOOLS.add(tool)
-
-
-def unregister_dynamic(tool: str) -> None:
-    """Remove a row ``register_dynamic`` added. A static tool, or one never added, is left alone."""
-    if tool not in _DYNAMIC_TOOLS:
-        return
-    _DYNAMIC_TOOLS.discard(tool)
-    TOOL_REGISTRY.pop(tool, None)
-    TOOL_TO_VERB.pop(tool, None)
-
 
 def operation_verbs(operation: str) -> frozenset[Verb]:
     """Every verb any tool performs under `operation` key.

@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from html import escape as _html_escape
 
-from .approval_window_html import _STYLES_CSS, _new_nonce, build_preview_body_html
+from .approval_window_html import _STYLES_CSS, _new_nonce
 from .design_css import DOCUMENT_CSS
 
 # The widest each dialog's card gets; a narrower screen gets all of its
@@ -187,7 +187,6 @@ html, body {{ overflow-y: auto; }}
 .pf-card-root {{ width: min({width}px, 100%); }}
 .pf-dialog {{ padding: 24px 20px; }}
 h2 {{ font-size: 19px; margin-bottom: 12px; overflow-wrap: anywhere; }}
-.pf-dialog-blocks {{ margin: 0 0 15px; overflow-wrap: anywhere; }}
 .pf-choice-list {{ display: flex; flex-direction: column; gap: 6px; margin: 4px 0 15px; }}
 /* An option is visibly a control at rest -- a bordered row the height of a
    tap target -- and the highlight a mouse gets on hover, a keyboard gets on
@@ -212,26 +211,13 @@ h2 {{ font-size: 19px; margin-bottom: 12px; overflow-wrap: anywhere; }}
 
 def build_confirmation_html(
     *, title: str, message_lines: list[str], cancel_label: str, confirm_label: str,
-    body_blocks: list[dict] | None = None,
 ) -> str:
     """Two-button Cancel/<confirm_label> dialog. See module docstring for
-    why Cancel is the default.
-
-    ``body_blocks`` are card blocks (the vocabulary
-    ``approval_window_html.build_preview_body_html`` renders, every string
-    escaped there), shown between the message and the buttons. A plugin's
-    confirmation (ADR 0122) is the one caller: its preview arrives as typed
-    blocks and is rendered by the same code as a card's preview pane, never
-    as markup of its own."""
-    blocks_html = (
-        f'<div class="pf-dialog-blocks">{build_preview_body_html(blocks=body_blocks)}</div>'
-        if body_blocks else ""
-    )
+    why Cancel is the default."""
     body_html = (
         '<div class="pf-kicker"><span>PrivacyFence</span></div>'
         f'<h2>{_html_escape(title)}</h2>'
         f'<div class="pf-dialog-message">{_message_html(message_lines)}</div>'
-        f'{blocks_html}'
         f'{_confirm_button_row_html(cancel_label, confirm_label)}'
     )
     return _document(width=CONFIRM_WIDTH, body_html=body_html)
@@ -256,40 +242,3 @@ def build_choice_html(
         f'{_cancel_only_button_row_html(cancel_label)}'
     )
     return _document(width=PICKER_WIDTH, body_html=body_html)
-
-
-def build_plugin_approval_html(
-    *, title: str, fields: list[tuple[str, str]], body_blocks: list[dict],
-    frame_src: str = "", frame_title: str = "",
-) -> str:
-    """A plugin's approval card (ADR 0127): the title, PrivacyFence's own fields, the plugin's
-    preview blocks, optionally the plugin's page in a sandboxed frame, then Deny and Approve.
-
-    The fields come first and outside the frame, so the plugin's page can neither hide nor change
-    what is being approved. A ``Digest`` value is shown whole, in the code style. Every string is
-    escaped here, ``frame_src`` included, although only the approval service builds it. The frame
-    gets ``allow-scripts`` and never ``allow-same-origin``, so the page runs in an opaque origin."""
-    rows = "".join(
-        f'<tr><th scope="row">{_html_escape(label)}</th><td>'
-        + (f'<code class="pf-code">{_html_escape(value)}</code>' if label == "Digest" else _html_escape(value))
-        + "</td></tr>"
-        for label, value in fields
-    )
-    blocks_html = (
-        f'<div class="pf-dialog-blocks">{build_preview_body_html(blocks=body_blocks)}</div>'
-        if body_blocks else ""
-    )
-    frame_html = (
-        f'<iframe class="pf-plugin-frame" sandbox="allow-scripts" src="{_html_escape(frame_src)}" '
-        f'referrerpolicy="no-referrer" title="{_html_escape(frame_title)}" loading="eager"></iframe>'
-        if frame_src else ""
-    )
-    body_html = (
-        '<div class="pf-kicker"><span>PrivacyFence</span></div>'
-        f'<h2>{_html_escape(title)}</h2>'
-        f'<table class="pf-table pf-approval-fields"><tbody>{rows}</tbody></table>'
-        f'{blocks_html}'
-        f'{frame_html}'
-        f'{_confirm_button_row_html("Deny", "Approve")}'
-    )
-    return _document(width=CONFIRM_WIDTH, body_html=body_html)

@@ -65,53 +65,6 @@ class TestWrap:
         assert '<link rel="icon" href="data:image/png;base64,' in html
 
 
-class TestPluginsMenu:
-    PAGES = (("zeta", "/plugins/zeta/"), ("Alpha <b>", "/plugins/alpha/"), ("beta", "/plugins/beta/"))
-
-    def test_sits_between_approvals_and_settings_with_one_link_per_plugin_alphabetically(self):
-        html = web_shell.header_html("approvals", plugin_pages=self.PAGES)
-        approvals, plugins, settings = (
-            html.index('href="/approvals"'), html.index("<summary>Plugins</summary>"), html.index('href="/settings"'),
-        )
-        assert approvals < plugins < settings
-        names = [n for n in ("Alpha &lt;b&gt;", ">beta<", ">zeta<") if n in html]
-        assert [html.index(n) for n in names] == sorted(html.index(n) for n in names) and len(names) == 3
-        assert "<b>" not in html
-
-    def test_links_open_in_this_tab(self):
-        html = web_shell.header_html("approvals", plugin_pages=(("Today", "/plugin-pages/today"),))
-        assert '<a class="pf-shell-nav-item" href="/plugin-pages/today">Today</a>' in html
-        assert 'target="_blank"' not in html
-        assert "rel=" not in html
-
-    def test_all_plugin_pages_is_the_first_item(self):
-        html = web_shell.header_html("approvals", plugin_pages=self.PAGES)
-        panel = html[html.index('<div class="pf-shell-plugins-panel">'):]
-        first = '<a class="pf-shell-nav-item" href="/plugin-pages">All plugin pages</a>'
-        assert panel.startswith('<div class="pf-shell-plugins-panel">' + first)
-
-    def test_stream_script_builds_the_same_menu(self):
-        html = web_shell.wrap("", title="t", active="approvals", plugin_pages=())
-        assert "all.href = '/plugin-pages';" in html
-        assert "all.textContent = 'All plugin pages';" in html
-        assert "a.target" not in html
-        assert "a.rel" not in html
-
-    def test_hidden_while_there_are_no_plugin_pages(self):
-        html = web_shell.header_html("approvals", plugin_pages=())
-        assert "data-pf-plugins hidden" in html
-        assert "<a class=\"pf-shell-nav-item\" href=\"/plugin" not in html
-
-    def test_absent_without_a_plugin_host_or_in_org_mode(self):
-        assert "data-pf-plugins" not in web_shell.header_html("approvals")
-        org = web_shell.header_html("approvals", web_shell.ORG_NAV_ITEMS)
-        assert "data-pf-plugins" not in org
-
-    def test_stream_script_keeps_the_menu_current(self):
-        html = web_shell.wrap("", title="t", active="approvals", plugin_pages=())
-        assert "updatePluginsMenu(state.plugins)" in html
-
-
 class TestBanner:
     """The "loud persistent banner" step_up_config.py's
     StepUpConfig.local_enrollment_banner() drives -- see that function's

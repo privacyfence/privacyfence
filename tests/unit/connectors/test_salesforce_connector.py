@@ -24,7 +24,7 @@ import pytest
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import salesforce as salesforce_module
 from privacyfence.connectors.salesforce import SalesforceConnector
-from privacyfence.plugins import cursors
+from privacyfence import cursors
 from privacyfence.salesforce_client import (
     ReportFilter,
     ReportPage,

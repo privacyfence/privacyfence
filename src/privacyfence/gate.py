@@ -295,26 +295,6 @@ _TOOL_LAYOUT: dict[str, str] = {
     "apps_script_get_execution_log": WIDE,
 }
 
-# Plugin tools whose layout was added at runtime (``auto_accept.register_dynamic_tools``).
-_DYNAMIC_LAYOUT_TOOLS: set[str] = set()
-
-
-def register_dynamic_layout(tool: str, layout: str) -> None:
-    """Give a plugin tool its card layout. Raises ``ValueError`` for a tool that already has one."""
-    if layout not in (WIDE, NARROW):
-        raise ValueError(f"tool {tool} has an unknown layout {layout!r}")
-    if tool in _TOOL_LAYOUT:
-        raise ValueError(f"tool {tool} already has a layout")
-    _TOOL_LAYOUT[tool] = layout
-    _DYNAMIC_LAYOUT_TOOLS.add(tool)
-
-
-def unregister_dynamic_layout(tool: str) -> None:
-    """Remove a layout ``register_dynamic_layout`` added; a static tool's layout is never touched."""
-    if tool in _DYNAMIC_LAYOUT_TOOLS:
-        _DYNAMIC_LAYOUT_TOOLS.discard(tool)
-        _TOOL_LAYOUT.pop(tool, None)
-
 # Every dialog this module shows (the approval popup itself, the PII
 # confirmation, the "Always allow" rule confirmation) runs on this dedicated
 # executor rather than asyncio.to_thread's default pool. That default pool
@@ -908,9 +888,6 @@ async def gated_call(
     my_email: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
-    dedupe_extra: str = "",  # Appended to the decision-ledger / coalescing key when set, so an
-        # approval belongs to one prepared plugin call rather than to every call with these args
-        # (ADR 0122). "" (every other caller) leaves the key exactly canonical_key()'s.
     delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- which
         # transport actually moved (or would move) this call's file bytes (ADR 0017), recorded
         # on the audit entry alongside the ordinary accept/deny decision. "" (every
@@ -1033,8 +1010,6 @@ async def gated_call(
     # not a registry is active.
     registry = _deferred_registry()
     dedupe_key = canonical_key(connector, tool, args)
-    if dedupe_extra:
-        dedupe_key = f"{dedupe_key}:{dedupe_extra}"
     _pop_registry_expirations(registry)
 
     # Every exit from this function -- including one triggered by an

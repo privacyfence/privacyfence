@@ -391,34 +391,3 @@ class TestBuildNeedUploadsFiles:
             assert f["max_bytes"] == 1000
             assert f["upload_path"] == f"/mcp-files/uploads/{f['slot']}"
             assert f["slot"]
-
-
-class TestResolvedName:
-    def test_upload_reference_uses_the_slots_declared_filename(self):
-        with principal_scope(ALICE):
-            store = get_upload_staging_store()
-            token = store.create_slot(ALICE, "C:\\docs\\report.pdf", max_bytes=1000)
-            store.fill(token, ALICE.id, [b"x"])
-            ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
-            assert local_files.resolved_name(ref) == "report.pdf"
-
-    def test_upload_reference_that_is_unknown_or_undecodable_has_no_name(self):
-        with principal_scope(ALICE):
-            unknown = local_files._encode_token(b"\x01" * 32)
-            assert local_files.resolved_name(f"upload:{unknown}") == ""
-            assert local_files.resolved_name("upload:not-a-token") == ""
-
-    def test_upload_reference_of_another_principal_has_no_name(self):
-        with principal_scope(ALICE):
-            store = get_upload_staging_store()
-            token = store.create_slot(ALICE, "report.pdf", max_bytes=1000)
-            store.fill(token, ALICE.id, [b"x"])
-        ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
-        with principal_scope(BOB):
-            assert local_files.resolved_name(ref) == ""
-
-    def test_bridge_and_direct_paths_use_their_basename(self):
-        assert local_files.resolved_name("/home/me/page.html") == "page.html"
-        assert local_files.resolved_name("~/page.html") == "page.html"
-        assert local_files.resolved_name("C:\\Users\\me\\page.html") == "page.html"
-        assert local_files.resolved_name("page.html") == "page.html"

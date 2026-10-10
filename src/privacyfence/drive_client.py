@@ -1519,48 +1519,6 @@ class DriveClient:
             ) from exc
         return b"".join(chunks), export_mime
 
-    def download_range(self, file_id: str, offset: int, length: int) -> bytes:
-        """Read ``length`` bytes of a binary file starting at ``offset``.
-
-        Sends a ``Range`` request, so only the requested bytes cross the wire however large
-        the file is. An offset at or past the end of the file returns ``b""``. Google-native
-        files have no byte ranges and are not supported here.
-        """
-        if not file_id:
-            raise DriveClientError("download_range requires a non-empty file_id")
-        if offset < 0 or length <= 0:
-            raise DriveClientError("download_range requires offset >= 0 and length > 0")
-        try:
-            creds = self._load_credentials()
-            session = AuthorizedSession(creds)
-            url = (
-                f"https://www.googleapis.com/drive/v3/files/{file_id}"
-                "?alt=media&supportsAllDrives=true"
-            )
-            headers = {"Range": f"bytes={offset}-{offset + length - 1}"}
-            with session.get(url, headers=headers, stream=True) as resp:
-                if resp.status_code == 416:
-                    return b""
-                if resp.status_code == 200:
-                    raise DriveClientError("download_range: the server ignored the Range header")
-                resp.raise_for_status()
-                chunks: list[bytes] = []
-                received = 0
-                for chunk in resp.iter_content(chunk_size=min(length + 1, 8 * 1024 * 1024)):
-                    if not chunk:
-                        continue
-                    chunks.append(chunk)
-                    received += len(chunk)
-                    if received > length:
-                        raise DriveClientError(
-                            "download_range: the server returned more than the requested range"
-                        )
-        except DriveClientError:
-            raise
-        except Exception as exc:
-            raise DriveClientError(f"download_range({file_id}) failed: {exc}") from exc
-        return b"".join(chunks)
-
     def download_file(
         self, file_id: str, destination_dir: str = ""
     ) -> dict[str, Any]:

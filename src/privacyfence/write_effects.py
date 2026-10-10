@@ -148,32 +148,6 @@ EFFECT_BY_TOOL: dict[str, str] = {
         "already saved as a version.",
 }
 
-# The tools the connectors ship an effect sentence for, taken before any plugin registers one.
-# The coverage test checks these against the connector sources; plugin tools are not in them.
-STATIC_EFFECT_TOOLS: frozenset[str] = frozenset(EFFECT_BY_TOOL)
-
-# Plugin tools whose sentence was added at runtime (``auto_accept.register_dynamic_tools``).
-_DYNAMIC_EFFECT_TOOLS: set[str] = set()
-
-
-def register_dynamic_effect(tool: str, effect: str) -> None:
-    """Give a plugin tool its effect sentence. An empty sentence (a read-only tool) adds no row,
-    the same rendering ``effect_for`` gives any tool without one. Raises ``ValueError`` for a tool
-    that already has a sentence."""
-    if tool in EFFECT_BY_TOOL:
-        raise ValueError(f"tool {tool} already has an effect sentence")
-    if effect:
-        EFFECT_BY_TOOL[tool] = effect
-        _DYNAMIC_EFFECT_TOOLS.add(tool)
-
-
-def unregister_dynamic_effect(tool: str) -> None:
-    """Remove a sentence ``register_dynamic_effect`` added; a static sentence is never touched."""
-    if tool in _DYNAMIC_EFFECT_TOOLS:
-        _DYNAMIC_EFFECT_TOOLS.discard(tool)
-        EFFECT_BY_TOOL.pop(tool, None)
-
-
 # The card's own label for this row -- see card_builder.build_card_html.
 EFFECT_LABEL = "Effect"
 
