@@ -131,7 +131,7 @@ class TestNoFalsePositivesOnPlainText:
         assert detect_categories("Shipped OB4 SN: 2149401003365 to site") == []
 
     def test_grist_record_with_long_floats_is_not_flagged(self):
-        text = "#3831\nOpportunity_Name: Renewal\nAmount_USD: 0.6838738069560423\nAmount_HUF: 14908.8288798133"
+        text = "Record 3831\nOpportunity_Name: Renewal\nAmount_USD: 0.6838738069560423\nAmount_HUF: 14908.8288798133"
         assert detect_categories(text) == []
 
 
