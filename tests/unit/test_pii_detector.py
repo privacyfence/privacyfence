@@ -115,6 +115,25 @@ class TestNoFalsePositivesOnPlainText:
         # never displayed grouped in pairs, so this must stay unflagged.
         assert detect_categories("CW 35 24 25 26 27 28 29 30") == []
 
+    def test_luhn_valid_decimal_fraction_is_not_a_credit_card(self):
+        # The fraction passes Luhn on its own; only the decimal point rules it out.
+        assert _luhn_valid("6838738069560423")
+        assert detect_categories("Amount_USD: 0.6838738069560423") == []
+
+    def test_decimal_fraction_starting_with_8_is_not_a_hungarian_tax_id(self):
+        assert detect_categories("Amount_USD: 14908.8288798133") == []
+
+    def test_ten_digit_integer_part_of_decimal_is_not_a_hungarian_tax_id(self):
+        assert detect_categories("Total: 8123456789.55") == []
+
+    def test_device_serial_numbers_are_not_credit_cards(self):
+        assert detect_categories("CDOT - RSU RMA (sn: 2149401002920)") == []
+        assert detect_categories("Shipped OB4 SN: 2149401003365 to site") == []
+
+    def test_grist_record_with_long_floats_is_not_flagged(self):
+        text = "#3831\nOpportunity_Name: Renewal\nAmount_USD: 0.6838738069560423\nAmount_HUF: 14908.8288798133"
+        assert detect_categories(text) == []
+
 
 class TestLanguageAgnosticPatterns:
     def test_email_address_is_not_flagged(self):
@@ -130,6 +149,15 @@ class TestLanguageAgnosticPatterns:
 
     def test_valid_credit_card_ungrouped_passes_luhn(self):
         assert detect_categories("Card number 4111111111111111 on file.") == ["Credit card number"]
+
+    def test_card_number_at_end_of_sentence_is_still_flagged(self):
+        assert detect_categories("Card: 4111 1111 1111 1111.") == ["Credit card number"]
+
+    def test_card_number_in_comma_joined_csv_is_still_flagged(self):
+        assert detect_categories("Name,4111111111111111,12/27") == ["Credit card number"]
+
+    def test_card_number_rendered_as_whole_float_is_still_flagged(self):
+        assert detect_categories("Card 379354508162306.0") == ["Credit card number"]
 
     def test_valid_amex_4_6_5_grouping_is_flagged(self):
         assert detect_categories("Amex: 3714 496353 98431") == ["Credit card number"]
@@ -160,6 +188,12 @@ class TestHungarianPatterns:
 
     def test_ado_azonosito_jel(self):
         assert detect_categories("Ad\u00f3azonos\u00edt\u00f3 jel: 8123456789") == ["Hungarian tax ID (ad\u00f3azonos\u00edt\u00f3 jel)"]
+
+    def test_ado_azonosito_jel_at_end_of_sentence_is_still_flagged(self):
+        assert detect_categories("Ad\u00f3azonos\u00edt\u00f3 jel: 8123456789.") == ["Hungarian tax ID (ad\u00f3azonos\u00edt\u00f3 jel)"]
+
+    def test_ado_azonosito_jel_rendered_as_whole_float_is_still_flagged(self):
+        assert detect_categories("Ad\u00f3azonos\u00edt\u00f3 jel: 8123456789.0") == ["Hungarian tax ID (ad\u00f3azonos\u00edt\u00f3 jel)"]
 
     def test_ten_digits_starting_with_8_but_more_digits_follow_is_not_flagged(self):
         # \b8\d{9}\b requires a word boundary right after the 10th digit.
