@@ -79,6 +79,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -856,6 +857,7 @@ def build_app(
     notifications_detail: str = "minimal",
     loop_ready: threading.Event | None = None,
     on_loop: Callable[[asyncio.AbstractEventLoop | None], None] | None = None,
+    stopping: threading.Event | None = None,
     principal_resolver: Callable[[Request], Principal] | None = None,
     org: OrgAuth | None = None,
     step_up: StepUpConfig | None = None,
@@ -937,7 +939,7 @@ def build_app(
     if org is not None:
         return _build_org_app(
             org, web_ui=web_ui, mcp_dispatcher=mcp_dispatcher, allowed_hosts=allowed_hosts,
-            principal_resolver=principal_resolver,
+            principal_resolver=principal_resolver, stopping=stopping,
         )
 
     sessions = sessions or LocalSessionStore()
@@ -1067,6 +1069,7 @@ def build_app(
             controller.any_connector_authenticated if controller is not None else None
         ),
         require_human_session=require_human_session,
+        stopping=stopping,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(
@@ -1078,7 +1081,7 @@ def build_app(
 
 def _build_org_app(
     org: OrgAuth, *, web_ui: WebApprovalUI, mcp_dispatcher: McpDispatcher | None, allowed_hosts: frozenset[str],
-    principal_resolver: Callable[[Request], Principal] | None,
+    principal_resolver: Callable[[Request], Principal] | None, stopping: threading.Event | None = None,
 ) -> ASGIApp:
     """org mode's own route set -- see build_app()'s and this module's own
     docstrings for what's deliberately absent (the local-token settings
@@ -1156,7 +1159,7 @@ def _build_org_app(
     extra_routes.extend(routes_push.build_routes(sessions=org.sessions, store=push_store))
     extra_routes.extend(routes_approvals.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
-        push_public_key=push_public_key,
+        push_public_key=push_public_key, stopping=stopping,
     ))
     extra_routes.extend(routes_org_stepup.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
@@ -1367,6 +1370,8 @@ class WebServer:
         # Event) blocks on to learn that loop.
         self._loop_ready = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Set first thing in stop(): ends the approvals event stream, which polls it once a second.
+        self._stopping = threading.Event()
         # "::1" (not the bracketed "[::1]" a Host header would spell it
         # as) -- _parse_host_header normalizes every incoming Host header
         # the same way urlsplit's own .hostname does below, brackets
@@ -1397,6 +1402,7 @@ class WebServer:
             notifications_detail=notifications_detail,
             loop_ready=self._loop_ready,
             on_loop=self._set_loop,
+            stopping=self._stopping,
             principal_resolver=principal_resolver,
             org=org,
             step_up=step_up,
@@ -1495,6 +1501,15 @@ class WebServer:
             _write_web_base_url_file(self.base_url)
 
     def stop(self) -> None:
+        self._stopping.set()
+        loop = self._loop
+        if loop is not None and self.state_stream is not None:
+            try:
+                loop.call_soon_threadsafe(self.state_stream.close)
+            except RuntimeError:
+                pass  # the loop is already closed
+        open_connections = len(self._server.server_state.connections)
+        started = time.monotonic()
         self._server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=SHUTDOWN_GRACE_SECONDS + _STOP_JOIN_SECONDS)
@@ -1503,6 +1518,12 @@ class WebServer:
                 self._thread.join(timeout=_STOP_JOIN_SECONDS)
             if self._thread.is_alive():
                 logger.warning("The web server thread is still running after stop()")
+        elapsed = time.monotonic() - started
+        if elapsed >= SHUTDOWN_GRACE_SECONDS:
+            logger.warning(
+                "The web server took %.1f s to stop; %d connection(s) were open when it was asked to",
+                elapsed, open_connections,
+            )
         if self.control_channel is not None:
             self.control_channel.stop()
             _clear_web_base_url_file()

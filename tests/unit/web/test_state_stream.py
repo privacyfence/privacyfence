@@ -218,3 +218,27 @@ class TestCallOnMainDispatcher:
             assert calls == ["hi"]
         finally:
             set_loop(None)
+
+
+class TestClose:
+    @staticmethod
+    def _stream() -> StateStream:
+        return StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
+
+    async def test_close_ends_an_open_subscription(self):
+        stream = self._stream()
+        gen = stream.subscribe(_Disconnector(after=10**6))
+        await gen.__anext__()
+        await gen.__anext__()
+        stream.close()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(gen.__anext__(), 0.5)
+
+    async def test_a_subscription_opened_after_close_ends_after_its_initial_events(self):
+        stream = self._stream()
+        stream.close()
+        gen = stream.subscribe(_Disconnector(after=10**6))
+        await gen.__anext__()
+        await gen.__anext__()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(gen.__anext__(), 0.5)
