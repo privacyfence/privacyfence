@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Clearer Grist rule verb.** On Settings → Auto-accept, the Grist document rule's `create` chip now reads "create (add records)", so it is clear that it covers adding records.
+
 ## [5.7.0] — 2026-10-10
 
 ### Added
