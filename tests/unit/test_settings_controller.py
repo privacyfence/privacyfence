@@ -2033,7 +2033,8 @@ class TestSnapshotStructure:
     def test_snapshot_has_one_key_per_page(self, controller):
         state = controller.snapshot()
         assert set(state) == {
-            "error", "general", "connectors", "telegram_auth", "auto_accept", "privacy", "audit", "about",
+            "error", "general", "connectors", "telegram_auth", "grist_signin", "grist_server_url_pinned",
+            "grist_auth", "auto_accept", "privacy", "audit", "about",
         }
 
     def test_connectors_cover_all_connectors(self, controller):
@@ -2207,3 +2208,133 @@ class TestAnyConnectorAuthenticated:
         controller._connectors = ["gmail"]
         rows = controller.snapshot()["connectors"]
         assert any(r["authed"] for r in rows) is controller.any_connector_authenticated()
+
+
+class TestGristApiKeyConnect:
+    """grist_connect: the local-mode API-key form (plan 3.5). The key goes
+    straight to the worker and the token file; it is never kept on the
+    controller or put in the snapshot."""
+
+    KEY = "grist-secret-key-123"
+
+    @pytest.fixture
+    def recorded(self, controller, monkeypatch):
+        calls = []
+        monkeypatch.setattr(sc, "_run_async", lambda work, done: calls.append((None, (work, done), {})))
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: calls_refresh.append(1))
+        calls_refresh.clear()
+        return calls
+
+    @staticmethod
+    def _bundle(monkeypatch, section):
+        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {"grist": section} if section is not None else {})
+
+    @staticmethod
+    def _token_path():
+        return sc.data_dir() / "credentials" / "grist_token.json"
+
+    def test_oauth_app_in_bundle_sets_oauth_error(self, controller, recorded, monkeypatch):
+        self._bundle(monkeypatch, {"client_id": "cid", "client_secret": "sec"})
+        snap = controller.grist_connect(self.KEY, "https://docs.getgrist.com")
+        assert "connects to Grist with OAuth" in snap["grist_auth"]["error"]
+        assert recorded == []
+
+    def test_empty_key_sets_error(self, controller, recorded):
+        snap = controller.grist_connect("   ", "https://docs.getgrist.com")
+        assert snap["grist_auth"]["error"] == "Enter your Grist API key."
+        assert recorded == []
+
+    def test_bad_url_sets_error(self, controller, recorded):
+        snap = controller.grist_connect(self.KEY, "ftp://nope")
+        assert "https://" in snap["grist_auth"]["error"]
+        assert recorded == []
+
+    def test_success_writes_token_and_refreshes(self, controller, recorded, monkeypatch):
+        seen = {}
+        from privacyfence.grist_client import GristClient
+
+        monkeypatch.setattr(GristClient, "check_connection", lambda self: seen.setdefault("ok", True))
+        snap = controller.grist_connect(f"  {self.KEY} ", "https://docs.getgrist.com/")
+        assert "grist" in controller._busy_connectors
+        _run_pair(*recorded[0][1])
+        assert seen["ok"] is True
+        assert json.loads(self._token_path().read_text(encoding="utf-8")) == {
+            "auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": self.KEY,
+        }
+        assert "grist" not in controller._busy_connectors
+        assert calls_refresh == [1]
+        assert controller.snapshot()["grist_auth"] == {"error": ""}
+        assert self.KEY not in json.dumps(snap)
+        assert self.KEY not in json.dumps(controller.snapshot())
+
+    def test_check_connection_failure_sets_error_and_writes_nothing(self, controller, recorded, monkeypatch):
+        from privacyfence.grist_client import GristClient, GristClientError
+
+        def boom(self):
+            raise GristClientError("Grist rejected the API key.")
+
+        monkeypatch.setattr(GristClient, "check_connection", boom)
+        controller.grist_connect(self.KEY, "https://docs.getgrist.com")
+        _run_pair(*recorded[0][1])
+        assert not self._token_path().exists()
+        assert controller.snapshot()["grist_auth"]["error"] == "Grist rejected the API key."
+        assert calls_refresh == []
+        assert "grist" not in controller._busy_connectors
+
+    def test_pinned_url_wins_and_request_without_server_url_works(self, controller, recorded, monkeypatch):
+        from privacyfence.grist_client import GristClient
+
+        self._bundle(monkeypatch, {"server_url": "https://grist.example.org"})
+        monkeypatch.setattr(GristClient, "check_connection", lambda self: "ok")
+        snap = controller.grist_connect(self.KEY)
+        assert snap["grist_server_url_pinned"] == "https://grist.example.org"
+        _run_pair(*recorded[0][1])
+        saved = json.loads(self._token_path().read_text(encoding="utf-8"))
+        assert saved["server_url"] == "https://grist.example.org"
+        controller.grist_connect(self.KEY, "https://other.example.com")
+        _run_pair(*recorded[1][1])
+        assert json.loads(self._token_path().read_text(encoding="utf-8"))["server_url"] == "https://grist.example.org"
+
+    def test_malformed_section_is_unavailable_and_snapshot_still_works(self, controller, recorded, monkeypatch):
+        self._bundle(monkeypatch, {"client_id": "only-id"})
+        snap = controller.snapshot()
+        assert snap["grist_signin"] == "unavailable"
+        assert snap["grist_server_url_pinned"] == ""
+        assert "Grist organization config is not usable" in snap["grist_auth"]["error"]
+        snap = controller.grist_connect(self.KEY, "https://docs.getgrist.com")
+        assert "not usable" in snap["grist_auth"]["error"]
+        assert recorded == []
+
+    def test_signin_is_oauth_with_an_app_and_api_key_without(self, controller, monkeypatch):
+        self._bundle(monkeypatch, {"client_id": "cid", "client_secret": "sec"})
+        assert controller.snapshot()["grist_signin"] == "oauth"
+        self._bundle(monkeypatch, None)
+        snap = controller.snapshot()
+        assert snap["grist_signin"] == "api_key"
+        assert snap["grist_auth"] == {"error": ""}
+
+    def test_cancel_clears_the_error(self, controller):
+        controller.grist_connect("", "")
+        assert controller.snapshot()["grist_auth"]["error"]
+        assert controller.grist_cancel_auth()["grist_auth"] == {"error": ""}
+
+    def test_key_is_not_kept_on_the_controller(self, controller, recorded, monkeypatch):
+        from privacyfence.grist_client import GristClient
+
+        monkeypatch.setattr(GristClient, "check_connection", lambda self: "ok")
+        controller.grist_connect(self.KEY, "https://docs.getgrist.com")
+        _run_pair(*recorded[0][1])
+        assert self.KEY not in repr(vars(controller))
+
+
+calls_refresh: list[int] = []
+
+
+def _run_pair(work, done) -> None:
+    """Drive a recorded _run_async (work, done) pair synchronously."""
+    try:
+        result = work()
+    except Exception as exc:  # noqa: BLE001 -- mirrors _run_async
+        done(False, exc)
+    else:
+        done(True, result)

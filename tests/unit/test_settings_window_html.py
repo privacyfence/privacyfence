@@ -49,6 +49,9 @@ def _make_state(**overrides):
              "authed": False, "enabled": True, "busy": False, "has_org": False, "auth_label": "Authenticate…"},
         ],
         "telegram_auth": {"step": None, "error": ""},
+        "grist_signin": "api_key",
+        "grist_server_url_pinned": "",
+        "grist_auth": {"error": ""},
         "auto_accept": {
             "rules": [
                 {"id": "r-abc123", "sentence": "Gmail - sender: allow read", "connector": "gmail",
@@ -369,6 +372,30 @@ class TestTelegramModalTemplate:
         html = build_html(state)
         embedded = _extract_initial_state(html)
         assert embedded["telegram_auth"] == {"step": "code", "error": "bad code"}
+
+
+class TestGristApiKeyForm:
+    def test_script_carries_the_api_key_form(self):
+        html = build_html(_make_state())
+        assert "data-grist-auth" in html
+        assert 'type="password" autocomplete="off"' in html
+        assert "'grist_connect'" in html
+        assert "'grist_cancel_auth'" in html
+        assert "Account settings → Developer → API Key." in html
+
+    def test_oauth_signin_keeps_the_generic_authenticate_connector(self):
+        html = build_html(_make_state(grist_signin="oauth"))
+        assert "'authenticate_connector'" in html
+        assert embedded_signin(html) == "oauth"
+
+    def test_state_embeds_the_grist_keys(self):
+        embedded = _extract_initial_state(build_html(_make_state(grist_auth={"error": "bad key"})))
+        assert embedded["grist_auth"] == {"error": "bad key"}
+        assert embedded["grist_signin"] == "api_key"
+
+
+def embedded_signin(html):
+    return _extract_initial_state(html)["grist_signin"]
 
 
 class TestNotificationsCard:

@@ -639,6 +639,9 @@ class SettingsController:
         # telegram_submit_2fa/telegram_cancel_auth below and _telegram_auth_
         # state's own docstring for the shape.
         self._telegram_auth: dict[str, Any] | None = None
+        # Pending Grist API-key form error (see grist_connect). Only ever the
+        # error text: the key itself is never kept on self.
+        self._grist_auth: dict[str, Any] | None = None
         # Kept as a single settable slot -- see this class's own docstring
         # for why it's distinct from add_change_listener below.
         self.on_change: Callable[[dict[str, Any]], None] | None = None
@@ -1503,6 +1506,81 @@ class SettingsController:
         return self.snapshot()
 
     # ------------------------------------------------------------------ #
+    # Grist API-key sign-in (local mode). The form posts the key once;
+    # it is passed straight to the worker and saved, never stored on self,
+    # put in the snapshot or logged.
+    # ------------------------------------------------------------------ #
+
+    def _grist_bundle(
+        self, org_config: dict[str, Any] | None = None,
+    ) -> tuple[grist_auth.GristBundle | None, str]:
+        if org_config is None:
+            org_config = self._org_config_or_empty()
+        try:
+            return grist_auth.bundle_settings(org_config.get("grist") or {}, org_mode=False), ""
+        except grist_auth.GristClientError as exc:
+            return None, f"Grist organization config is not usable: {exc}"
+
+    def _grist_snapshot_state(self, org_config: dict[str, Any]) -> dict[str, Any]:
+        bundle, bundle_error = self._grist_bundle(org_config)
+        if bundle is None:
+            signin = "unavailable"
+        elif bundle.oauth is not None:
+            signin = "oauth"
+        else:
+            signin = "api_key"
+        pending = (self._grist_auth or {}).get("error", "")
+        return {
+            "grist_signin": signin,
+            "grist_server_url_pinned": bundle.server_url if bundle is not None else "",
+            "grist_auth": {"error": pending or bundle_error},
+        }
+
+    def grist_connect(self, api_key: str, server_url: str = "") -> dict[str, Any]:
+        bundle, bundle_error = self._grist_bundle()
+        if bundle is None:
+            self._grist_auth = {"error": bundle_error}
+            return self.snapshot()
+        if bundle.oauth is not None:
+            self._grist_auth = {"error": "Your organization connects to Grist with OAuth. Use Authenticate…."}
+            return self.snapshot()
+        api_key = (api_key or "").strip()
+        if not api_key:
+            self._grist_auth = {"error": "Enter your Grist API key."}
+            return self.snapshot()
+        try:
+            url = bundle.server_url or grist_auth.normalize_server_url(server_url or "")
+        except grist_auth.GristClientError as exc:
+            self._grist_auth = {"error": str(exc)}
+            return self.snapshot()
+        from .daemon_main import TOKEN_FILES
+        from .grist_client import GristClient
+        token_file = str(data_dir() / TOKEN_FILES["grist"])
+        self._grist_auth = {"error": ""}
+        self._busy_connectors.add("grist")
+
+        def work() -> None:
+            GristClient(url, grist_auth.GristApiKey(api_key)).check_connection()
+            grist_auth.save_api_key(token_file, url, api_key)
+
+        def done(ok: bool, result: Any) -> None:
+            self._busy_connectors.discard("grist")
+            if ok:
+                self._grist_auth = {"error": ""}
+                self.error = ""
+                self.refresh_connectors()
+            else:
+                self._grist_auth = {"error": str(result)}
+                self._push_snapshot()
+
+        _run_async(work, done)
+        return self.snapshot()
+
+    def grist_cancel_auth(self) -> dict[str, Any]:
+        self._grist_auth = None
+        return self.snapshot()
+
+    # ------------------------------------------------------------------ #
     # Auto-accept (policy v2). See this
     # module's own "Auto-accept (policy v2)" section, above, for the
     # catalogue (_policy_scope_catalogue/_POLICY_EXTRA_SCOPES/
@@ -1692,6 +1770,7 @@ class SettingsController:
             "general": self._general_state(cfg),
             "connectors": self._connectors_state(cfg, org_config),
             "telegram_auth": self._telegram_auth_state(),
+            **self._grist_snapshot_state(org_config),
             "auto_accept": self._auto_accept_state(cfg),
             "privacy": self._privacy_state(cfg),
             "audit": self._audit_state(cfg),
