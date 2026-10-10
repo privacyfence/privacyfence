@@ -84,6 +84,7 @@ VALUE_HINTS: dict[str, str] = {
     "move_within_approved_folders": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
     "label_name_allowlist": "Newsletters, Receipts",
     "approved_project_keys": "MYPROJ, OTHERPROJ",
+    "approved_project_keys_all_results": "MYPROJ, OTHERPROJ",
     "approved_space_keys": "TEAM, DOCS",
     "approved_chats": "123456789, -100987654321",
     "approved_chats_all_results": "123456789, -100987654321",

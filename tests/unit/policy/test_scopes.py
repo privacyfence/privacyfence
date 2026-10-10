@@ -193,6 +193,12 @@ FIXTURES: dict[str, list] = {
         (["ENG"], make_ctx(args={"issue_key": "OPS-1"})),
         ([], make_ctx(args={"project_key": "eng"})),
     ],
+    "approved_project_keys_all_results": [
+        (["ENG", "OPS"], make_ctx(raw_data=[SimpleNamespace(key="ENG-1"), SimpleNamespace(key="ops-2")])),
+        (["ENG", "OPS"], make_ctx(raw_data=[SimpleNamespace(key="ENG-1"), SimpleNamespace(key="HR-2")])),
+        (["ENG"], make_ctx(raw_data=[])),
+        ([], make_ctx(raw_data=[SimpleNamespace(key="ENG-1")])),
+    ],
     "i_am_reporter": [
         (None, make_ctx(my_email="me@example.com", raw_data=SimpleNamespace(reporter="me@example.com"))),
         (None, make_ctx(my_email="me@example.com", raw_data={"reporter": "me@example.com"})),
@@ -319,7 +325,7 @@ class TestVocabularyCompleteness:
         condition_predicates = {p for v1_names in V1_CONDITION_NAMES.values() for p in v1_names}
         covered = set(SCOPE_SELECTORS) | condition_predicates
         assert covered == ARGS_ONLY_RULES | DATA_DEPENDENT_RULES
-        assert len(ARGS_ONLY_RULES | DATA_DEPENDENT_RULES) == 47
+        assert len(ARGS_ONLY_RULES | DATA_DEPENDENT_RULES) == 48
 
     def test_scope_type_to_predicates_round_trips(self):
         by_type = scope_type_to_predicates()

@@ -193,7 +193,10 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
     GrantResourceType(
         connector="jira", config_key="projects",
         capabilities={
-            "read": GrantCapability("Read auto-accept", (("jira.read_issue", "approved_project_keys"),)),
+            "read": GrantCapability("Read auto-accept", (
+                ("jira.read_issue", "approved_project_keys"),
+                ("jira.read_issue", "approved_project_keys_all_results"),
+            )),
             "create": GrantCapability("Auto-accept new issues", (("jira.create_issue", "approved_project_keys"),)),
             "comment": GrantCapability("Auto-accept comments", (("jira.add_comment", "approved_project_keys"),)),
             "update": GrantCapability("Auto-accept updates", (("jira.update_issue", "approved_project_keys"),)),
