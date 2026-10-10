@@ -100,8 +100,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
-| [Grist](#grist) | 3 | 2 | 1 | 0 |
-| **Total** | **123** | **49** | **23** | **51** |
+| [Grist](#grist) | 5 | 2 | 1 | 2 |
+| **Total** | **125** | **49** | **23** | **53** |
 
 ## Gmail
 
@@ -285,3 +285,5 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `grist_list_documents` | read | `auto` | List the Grist documents this account can open, with their workspace and team. |
 | `grist_list_tables` | read | `auto` | List the tables of one Grist document and each table's columns (id, label and type). |
 | `grist_get_records` | read | `review` | Read records from one table of a Grist document, optionally filtered and sorted. |
+| `grist_add_records` | write | `popup` | Add new records to one table of a Grist document. |
+| `grist_update_records` | write | `popup` | Change cells of existing records in one table of a Grist document. |

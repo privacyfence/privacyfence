@@ -129,6 +129,8 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "salesforce_run_report":          "salesforce.run_report",
     "salesforce_search":              "salesforce.search",
     "grist_get_records":              "grist.read_records",
+    "grist_add_records":              "grist.add_records",
+    "grist_update_records":           "grist.update_records",
     "contacts_update":                "contacts.edit",
     "contacts_create":                "contacts.create",
     "contacts_add_label":             "contacts.add_label",
@@ -310,6 +312,8 @@ TOOL_TO_GATE: dict[str, str] = {
     "grist_list_documents":            "auto",
     "grist_list_tables":               "auto",
     "grist_get_records":               "review",
+    "grist_add_records":               "popup",
+    "grist_update_records":            "popup",
 }
 
 @dataclass
