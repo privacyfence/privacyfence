@@ -42,6 +42,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import qa_fixture_recorder as recorder  # noqa: E402
 
 from privacyfence.confluence_client import ConfluenceClient  # noqa: E402
+from privacyfence.grist_client import GristAccessDenied, GristClient  # noqa: E402
 from privacyfence.jira_client import JiraClient  # noqa: E402
 from privacyfence.salesforce_client import SalesforceClient  # noqa: E402
 from privacyfence.gmail_client import GmailClient  # noqa: E402
@@ -2942,3 +2943,174 @@ class TestRunLifecycle:
         rc = recorder.run_lifecycle(["calendar"], report_file=None)
 
         assert rc == 1
+
+
+# ---------------------------------------------------------------------------- #
+# Grist
+# ---------------------------------------------------------------------------- #
+
+class _FakeGristApi:
+    """In-memory Grist REST: answers GristClient._request by method and path."""
+
+    DOC = "qaDocId123"
+
+    def __init__(self, *, names=("[QATEST] one", "[QATEST] two"), docs_status=None):
+        self.rows: dict[int, dict] = {i + 1: {"Name": n, "Note": ""} for i, n in enumerate(names)}
+        self.docs_status = docs_status
+        self.updates = 0
+
+    def __call__(self, method, path, *, params=None, json_body=None):
+        if path == "/api/orgs":
+            if self.docs_status:
+                raise self.docs_status
+            return [{"id": 7, "name": "QA Team", "owner": {"name": "Real Person", "email": "real@example.org"}}]
+        if path == "/api/orgs/7/workspaces":
+            return [
+                {"id": 1, "name": "Home", "orgDomain": "docs-123456", "docs": [{"id": self.DOC, "name": "PrivacyFence QA [QATEST]"}]},
+                {"id": 2, "name": "Other", "docs": [{"id": "otherDoc", "name": "Contrast"}]},
+            ]
+        if path.endswith("/columns"):
+            return {"columns": [
+                {"id": "Name", "fields": {"label": "Name", "type": "Text", "isFormula": False}},
+                {"id": "Note", "fields": {"label": "Note", "type": "Text", "isFormula": False}},
+            ]}
+        records = path.endswith("/records")
+        if records and method == "GET":
+            ids = json.loads(params["filter"])["id"] if params and "filter" in params else list(self.rows)
+            return {"records": [{"id": i, "fields": self.rows[i]} for i in ids if i in self.rows]}
+        if records and method == "POST":
+            new = max(self.rows, default=0) + 1
+            self.rows[new] = dict(json_body["records"][0]["fields"])
+            return {"records": [{"id": new}]}
+        if records and method == "PATCH":
+            self.updates += 1
+            for rec in json_body["records"]:
+                self.rows[rec["id"]].update(rec["fields"])
+            return None
+        raise AssertionError(f"unexpected {method} {path}")
+
+
+def _grist_client(api, *, oauth=False):
+    client = GristClient("https://docs.getgrist.com", SimpleNamespace(can_refresh=oauth, access_token=lambda **kw: "t"))
+    client._request = api
+    return client, oauth
+
+
+class TestCheckGrist:
+    MANIFEST = {"grist": {"doc_id": _FakeGristApi.DOC}}
+
+    def _run(self, monkeypatch, api, *, oauth=False, record=True, manifest=None):
+        monkeypatch.setattr(recorder, "_build_grist_client", lambda: _grist_client(api, oauth=oauth))
+        return recorder.check_grist(record=record, manifest=manifest or self.MANIFEST)
+
+    def test_missing_doc_id_fails_without_a_client(self, monkeypatch):
+        monkeypatch.setattr(recorder, "_build_grist_client", lambda: pytest.fail("no client expected"))
+
+        results = recorder.check_grist(record=True, manifest={})
+
+        assert [(r.ok, r.note) for r in results] == [(False, "grist.doc_id missing from qa_environment.yaml")]
+
+    def test_records_three_fixtures(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeGristApi())
+
+        assert [(r.method, r.ok, r.fixture_relpath) for r in results] == [
+            ("list_documents", True, "list_documents.json"),
+            ("list_columns", True, "list_columns.json"),
+            ("get_records", True, "get_records.json"),
+        ]
+        assert all(r.raw is not None for r in results)
+
+    def test_list_documents_fixture_keeps_only_the_qa_document(self, monkeypatch):
+        raw = self._run(monkeypatch, _FakeGristApi())[0].raw
+
+        assert len(raw) == 1 and len(raw[0]["docs"]) == 1
+        assert "otherDoc" not in json.dumps(raw)
+        assert _FakeGristApi.DOC not in json.dumps(raw)
+        assert "docs-123456" not in json.dumps(raw)
+
+    def test_check_mode_records_nothing(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeGristApi(), record=False)
+
+        assert all(r.ok for r in results)
+        assert all(r.raw is None for r in results)
+
+    def test_document_not_listed_fails(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeGristApi(), manifest={"grist": {"doc_id": "missingDoc"}})
+
+        assert not results[0].ok and results[0].raw is None
+
+    def test_untagged_row_refuses_to_record(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeGristApi(names=("[QATEST] one", "a real customer")))
+
+        get_records = results[2]
+        assert not get_records.ok and get_records.raw is None
+        assert "refusing to record" in get_records.note
+
+    def test_oauth_credential_may_be_refused_the_document_list(self, monkeypatch):
+        api = _FakeGristApi(docs_status=GristAccessDenied("HTTP 403"))
+
+        results = self._run(monkeypatch, api, oauth=True)
+
+        assert results[0].ok and results[0].raw is None
+        assert results[0].note == "server does not let OAuth apps list documents"
+        assert results[1].ok and results[2].ok
+
+    def test_api_key_refused_the_document_list_fails(self, monkeypatch):
+        api = _FakeGristApi(docs_status=GristAccessDenied("HTTP 403"))
+
+        results = self._run(monkeypatch, api, oauth=False)
+
+        assert not results[0].ok
+
+
+class TestLifecycleGrist:
+    MANIFEST = {"grist": {"doc_id": _FakeGristApi.DOC}}
+
+    def test_adds_and_updates_one_row_in_the_lifecycle_table(self, monkeypatch):
+        api = _FakeGristApi()
+        calls = []
+        monkeypatch.setattr(
+            recorder, "_build_grist_client",
+            lambda: _grist_client(lambda m, p, **kw: (calls.append((m, p)), api(m, p, **kw))[1]),
+        )
+
+        result = recorder.lifecycle_grist(self.MANIFEST)
+
+        assert (result.connector, result.ok, result.cleanup_ok) == ("grist", True, None)
+        assert api.updates == 1
+        assert api.rows[3]["Name"].startswith(recorder.LIFECYCLE_TAG)
+        assert api.rows[3]["Note"] == "updated"
+        assert {p for _, p in calls} == {f"/api/docs/{_FakeGristApi.DOC}/tables/QaLifecycle/records"}
+
+    def test_never_writes_to_the_seed_table(self, monkeypatch):
+        api = _FakeGristApi()
+        paths = []
+        monkeypatch.setattr(
+            recorder, "_build_grist_client",
+            lambda: _grist_client(lambda m, p, **kw: (paths.append(p), api(m, p, **kw))[1]),
+        )
+
+        recorder.lifecycle_grist({"grist": {"doc_id": _FakeGristApi.DOC, "lifecycle_table_id": "Scratch"}})
+
+        assert all("/tables/Scratch/" in p for p in paths)
+
+    def test_missing_doc_id_fails(self):
+        result = recorder.lifecycle_grist({})
+
+        assert not result.ok and "doc_id" in result.note
+
+    def test_update_that_does_not_persist_is_reported(self, monkeypatch):
+        api = _FakeGristApi()
+        original = api.__call__
+
+        def lossy(method, path, **kw):
+            return None if method == "PATCH" else original(method, path, **kw)
+
+        monkeypatch.setattr(recorder, "_build_grist_client", lambda: _grist_client(lossy))
+
+        result = recorder.lifecycle_grist(self.MANIFEST)
+
+        assert not result.ok and "did not reflect" in result.note
+
+    def test_registered_for_lifecycle(self):
+        assert recorder.LIFECYCLE_CHECKS["grist"] is recorder.lifecycle_grist

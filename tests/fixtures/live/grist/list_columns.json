@@ -1,0 +1,48 @@
+{
+  "columns": [
+    {
+      "fields": {
+        "colRef": 2,
+        "description": "",
+        "displayCol": 0,
+        "formula": "",
+        "isFormula": false,
+        "label": "Name",
+        "parentId": 1,
+        "parentPos": 2,
+        "recalcDeps": null,
+        "recalcWhen": 0,
+        "reverseCol": 0,
+        "rules": null,
+        "summarySourceCol": 0,
+        "type": "Text",
+        "untieColIdFromLabel": false,
+        "visibleCol": 0,
+        "widgetOptions": ""
+      },
+      "id": "Name"
+    },
+    {
+      "fields": {
+        "colRef": 3,
+        "description": "",
+        "displayCol": 0,
+        "formula": "",
+        "isFormula": false,
+        "label": "Note",
+        "parentId": 1,
+        "parentPos": 3,
+        "recalcDeps": null,
+        "recalcWhen": 0,
+        "reverseCol": 0,
+        "rules": null,
+        "summarySourceCol": 0,
+        "type": "Text",
+        "untieColIdFromLabel": false,
+        "visibleCol": 0,
+        "widgetOptions": ""
+      },
+      "id": "Note"
+    }
+  ]
+}
