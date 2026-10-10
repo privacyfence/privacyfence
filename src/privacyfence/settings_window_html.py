@@ -883,7 +883,7 @@ _JS = r"""
       group.verbs.forEach(function (verb) {
         var on = !!checkedVerbs[verb];
         html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
-          '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc(verb) + '</div>';
+          '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc((group.verb_labels || {})[verb] || verb) + '</div>';
       });
       html += '</div>';
     }

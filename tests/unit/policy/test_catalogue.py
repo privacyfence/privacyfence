@@ -98,3 +98,9 @@ class TestRulesForCatalogueEntry:
         # merge_rules mints the same content-derived id store.compile_rules_from_config would read
         # back -- proving this is a real, persistable PolicyRule, not just a plain construction.
         assert rules == store.merge_rules(rules)
+
+
+def test_grist_create_chip_is_labelled_add_records():
+    entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "grist.document")
+    assert entry["verb_labels"] == {"create": "create (add records)"}
+    assert all("verb_labels" not in e for e in catalogue.scope_catalogue() if e["id"] != "grist.document")
