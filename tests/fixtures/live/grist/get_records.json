@@ -1,0 +1,18 @@
+{
+  "records": [
+    {
+      "fields": {
+        "Name": "PrivacyFence QA seed [QATEST]",
+        "Note": "Synthetic PrivacyFence QA row. No real information."
+      },
+      "id": 1
+    },
+    {
+      "fields": {
+        "Name": "PrivacyFence QA second row [QATEST]",
+        "Note": "Synthetic PrivacyFence QA row. No real information."
+      },
+      "id": 2
+    }
+  ]
+}
