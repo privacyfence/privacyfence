@@ -152,6 +152,10 @@ EFFECT_BY_TOOL: dict[str, str] = {
         "New records are added to that table.",
     "grist_update_records":
         "The cells shown change to their new values. Other cells and records are not touched.",
+    "grist_create_table":
+        "A new table is added to the document. Nothing existing changes.",
+    "grist_add_columns":
+        "New, empty columns are added to that table. Existing columns and values do not change.",
 }
 
 # The card's own label for this row -- see card_builder.build_card_html.

@@ -59,6 +59,18 @@ _UPDATE_RECORDS_ERROR = (
     'records must be a JSON array of 1 to 100 {"id": <record id>, "fields": {...}} objects '
     "with distinct ids."
 )
+_COLUMNS_ERROR = (
+    'columns must be a JSON array of 1 to 50 {"id": ..., "label": ..., "type": ...} objects '
+    "with distinct ids."
+)
+_SIMPLE_TYPES = frozenset(
+    {"Text", "Numeric", "Int", "Bool", "Date", "Choice", "ChoiceList", "Any"}
+)
+_COLUMNS_DESCRIPTION = (
+    'A JSON array of {"id": <column id>, "label": <optional label>, "type": <optional type>} '
+    "objects. Types: Text (default), Numeric, Int, Bool, Date, Choice, ChoiceList, Any, "
+    "Ref:<TableId>, RefList:<TableId>. 1 to 50 columns."
+)
 _NO_TEAM = "(not shown by Grist)"
 _CELL_LIMIT = 200
 _SCALARS = (str, int, float, bool, type(None))
@@ -149,6 +161,57 @@ def _parse_update_records(raw: str) -> list[tuple[int, dict[str, Any]]]:
     if len({rec_id for rec_id, _ in rows}) != len(rows):
         raise ValueError(_UPDATE_RECORDS_ERROR)
     return rows
+
+
+def _validate_column_type(value: Any) -> str:
+    if isinstance(value, str):
+        if value in _SIMPLE_TYPES:
+            return value
+        kind, sep, target = value.partition(":")
+        if sep and kind in ("Ref", "RefList") and _is_table_id(target):
+            return value
+    raise ValueError(
+        f"Unsupported column type {value!r}. Use one of Text, Numeric, Int, Bool, Date, "
+        "Choice, ChoiceList, Any, Ref:<TableId>, RefList:<TableId>."
+    )
+
+
+def _is_table_id(value: str) -> bool:
+    try:
+        validate_identifier(value, "table")
+    except GristClientError:
+        return False
+    return True
+
+
+def _parse_columns(raw: str) -> list[dict[str, str]]:
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(_COLUMNS_ERROR) from exc
+    if not isinstance(parsed, list) or not 1 <= len(parsed) <= 50:
+        raise ValueError(_COLUMNS_ERROR)
+    columns: list[dict[str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict) or not _is_column_id(item.get("id")):
+            raise ValueError(_COLUMNS_ERROR)
+        label = item.get("label", item["id"])
+        if not isinstance(label, str) or len(label) > 100:
+            raise ValueError(_COLUMNS_ERROR)
+        col_type = _validate_column_type(item.get("type", "Text"))
+        columns.append({"id": item["id"], "label": label or item["id"], "type": col_type})
+    if len({c["id"] for c in columns}) != len(columns):
+        raise ValueError(_COLUMNS_ERROR)
+    return columns
+
+
+def _column_preview(columns: list[dict[str, str]]) -> tuple[list[dict[str, Any]], str]:
+    table = [{
+        "headers": ["Column", "Label", "Type"],
+        "rows": [[c["id"], c["label"], c["type"]] for c in columns],
+    }]
+    details = "\n".join(f"{c['id']} ({c['type']}) {c['label']}" for c in columns)
+    return table, details
 
 
 def _check_writable_columns(table_id: str, written: set[str], columns: list[GristColumn]) -> None:
@@ -292,6 +355,41 @@ class GristConnector(Connector):
                 ],
                 read_only=False,
             ),
+            ToolSpec(
+                name="grist_create_table",
+                description=(
+                    "Create a new table, with its columns, in a Grist document. Returns "
+                    "{doc_id, table_id, column_ids}; table_id is the id Grist assigned. Use "
+                    "grist_add_columns to add columns to a table that already exists and "
+                    "grist_list_tables to see the existing tables. Requires user approval."
+                ),
+                params=[
+                    ToolParam("doc_id", "str", description=_DOC_ID_DESCRIPTION),
+                    ToolParam(
+                        "table_id", "str",
+                        description="The id for the new table, such as Contacts.",
+                    ),
+                    ToolParam("columns", "str", description=_COLUMNS_DESCRIPTION),
+                    _REASON,
+                ],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="grist_add_columns",
+                description=(
+                    "Add new columns to an existing table of a Grist document. Returns "
+                    "{doc_id, table_id, column_ids}. Use grist_create_table to create a new "
+                    "table and grist_list_tables to see the existing columns. "
+                    "Requires user approval."
+                ),
+                params=[
+                    ToolParam("doc_id", "str", description=_DOC_ID_DESCRIPTION),
+                    ToolParam("table_id", "str", description=_TABLE_ID_DESCRIPTION),
+                    ToolParam("columns", "str", description=_COLUMNS_DESCRIPTION),
+                    _REASON,
+                ],
+                read_only=False,
+            ),
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
@@ -305,6 +403,10 @@ class GristConnector(Connector):
             return await self._add_records(**args)
         if tool == "grist_update_records":
             return await self._update_records(**args)
+        if tool == "grist_create_table":
+            return await self._create_table(**args)
+        if tool == "grist_add_columns":
+            return await self._add_columns(**args)
         raise ValueError(f"Unknown Grist tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -517,6 +619,90 @@ class GristConnector(Connector):
         )
         await self._fetch(self._client.update_records, doc_id, table_id, rows)
         return {"doc_id": doc_id, "table_id": table_id, "updated_ids": [rec_id for rec_id, _ in rows]}
+
+    async def _create_table(self, doc_id: str, table_id: str, columns: str) -> Any:
+        try:
+            validate_doc_id(doc_id)
+            validate_identifier(table_id, "table")
+        except GristClientError as exc:
+            raise ValueError(str(exc)) from exc
+        cols = _parse_columns(columns)
+
+        doc = await self._doc_info(doc_id)
+        tables = await self._fetch(self._client.list_tables, doc_id)
+        if any(t.id == table_id for t in tables):
+            raise ValueError(
+                f"Table {table_id} already exists in this document. "
+                "Use grist_add_columns to add columns to it."
+            )
+        table, details = _column_preview(cols)
+        await gated_call(
+            connector=self.name,
+            tool="grist_create_table",
+            tool_name="Create Grist Table",
+            summary=f"Create table {table_id} in {doc.name}",
+            sender=doc.name,
+            raw_data={"doc_id": doc_id, "table_id": table_id, "columns": cols},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Server": self._client.host,
+                "Document": doc.name,
+                "New table": table_id,
+                "Columns": str(len(cols)),
+            },
+            preview_tables=table,
+            details_text=details,
+            my_email="",
+            args={"doc_id": doc_id, "table_id": table_id},
+        )
+        created = await self._fetch(self._client.add_table, doc_id, table_id, cols)
+        return {"doc_id": doc_id, "table_id": created, "column_ids": [c["id"] for c in cols]}
+
+    async def _add_columns(self, doc_id: str, table_id: str, columns: str) -> Any:
+        try:
+            validate_doc_id(doc_id)
+            validate_identifier(table_id, "table")
+        except GristClientError as exc:
+            raise ValueError(str(exc)) from exc
+        cols = _parse_columns(columns)
+
+        doc = await self._doc_info(doc_id)
+        tables = await self._fetch(self._client.list_tables, doc_id)
+        existing = next((t for t in tables if t.id == table_id), None)
+        if existing is None:
+            raise ValueError(
+                f"Table {table_id} does not exist in this document. "
+                "Use grist_create_table to create it."
+            )
+        dupes = {c["id"] for c in cols} & {c.id for c in existing.columns}
+        if dupes:
+            raise ValueError(
+                f"Column(s) {', '.join(sorted(dupes))} already exist in table {table_id}."
+            )
+        table, details = _column_preview(cols)
+        await gated_call(
+            connector=self.name,
+            tool="grist_add_columns",
+            tool_name="Add Grist Columns",
+            summary=f"Add {len(cols)} column(s) to {doc.name} / {table_id}",
+            sender=doc.name,
+            raw_data={"doc_id": doc_id, "table_id": table_id, "columns": cols},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Server": self._client.host,
+                "Document": doc.name,
+                "Table": table_id,
+                "New columns": str(len(cols)),
+            },
+            preview_tables=table,
+            details_text=details,
+            my_email="",
+            args={"doc_id": doc_id, "table_id": table_id},
+        )
+        created = await self._fetch(self._client.add_columns, doc_id, table_id, cols)
+        return {"doc_id": doc_id, "table_id": table_id, "column_ids": created}
 
     # ------------------------------------------------------------------ #
     # Helpers

@@ -195,7 +195,9 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 
 | Tool | Always allow buttons |
 |---|---|
+| `grist_add_columns` |  |
 | `grist_add_records` |  |
+| `grist_create_table` |  |
 | `grist_update_records` |  |
 
 ### Jira
