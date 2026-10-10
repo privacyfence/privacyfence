@@ -26,6 +26,12 @@ class TestScopeCatalogue:
         assert set(entry["verbs"]) == {"read", "update"}
         assert entry["connector"] == "apps_script"
 
+    def test_grist_document_entry_needs_a_value_and_offers_four_verbs(self):
+        entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "grist.document")
+        assert entry["needs_value"] is True
+        assert set(entry["verbs"]) == {"read", "create", "update", "restructure"}
+        assert entry["connector"] == "grist"
+
     def test_gmail_and_slack_unconditional_extras_need_no_value(self):
         by_id = {e["id"]: e for e in catalogue.scope_catalogue()}
         assert by_id["gmail.configure"]["needs_value"] is False
@@ -65,6 +71,16 @@ class TestRulesForCatalogueEntry:
         assert rule.operations == frozenset({
             "apps_script.read_content", "apps_script.write_content", "apps_script.read_execution_log",
         })
+
+    def test_grist_document_compiles_read_and_create_to_their_operations(self):
+        rules = catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [Verb.READ, Verb.CREATE])
+        assert len(rules) == 1
+        assert rules[0].predicate == "grist.document"
+        assert rules[0].value == ["DOC1"]
+        assert rules[0].operations == frozenset({"grist.read_records", "grist.add_records"})
+
+    def test_grist_document_with_no_value_yields_no_rules(self):
+        assert catalogue.rules_for_catalogue_entry("grist.document", None, [Verb.READ]) == []
 
     def test_unconditional_extra_ignores_a_submitted_value(self):
         rules = catalogue.rules_for_catalogue_entry("gmail.configure", None, [Verb.CONFIGURE])

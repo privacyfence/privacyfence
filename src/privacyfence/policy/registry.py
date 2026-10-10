@@ -11,7 +11,8 @@ asserts the join is exact). In particular:
   are the operation groups the old per-operation rule tables and the grant model had no way to
   configure at all. They get a verb and a scope subject here like every other governed tool, which
   is what makes them configurable: `policy/catalogue.py` offers `apps_script.project` (read),
-  `gmail.configure` (configure) and `slack.share_anything` (share), and the catalogue's write-time
+  `gmail.configure` (configure), `slack.share_anything` (share) and `grist.document` (read, create,
+  update, restructure), and the catalogue's write-time
   validation keeps a rule naming a verb its scope cannot govern from being stored under any of them.
 - Three operation keys are shared by tools that perform two different verbs:
   `calendar.create_modify_event` (create vs. update), `slack.read_messages` and
