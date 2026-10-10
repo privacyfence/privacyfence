@@ -495,6 +495,240 @@ class TestUpdateRecords:
         client.update_records.assert_not_called()
 
 
+class TestCreateTable:
+    ARGS = {"doc_id": DOC_ID, "table_id": "Orders"}
+    COLUMNS = '[{"id": "Title", "label": "Order title", "type": "Text"}, {"id": "Qty", "type": "Int"}]'
+
+    async def test_card_and_write(self, gated_call_spy):
+        connector, client = write_connector()
+        client.list_tables.return_value = [GristTable("Contacts", [])]
+        client.add_table.return_value = "Orders2"
+
+        result = await connector.call("grist_create_table", {**self.ARGS, "columns": self.COLUMNS})
+
+        call = gated_call_spy[0]
+        assert call["tool"] == "grist_create_table"
+        assert call["gate"] == "popup"
+        assert call["filtered_data"] is None
+        assert list(call["preview"]) == ["Server", "Document", "New table", "Columns"]
+        assert call["preview"]["New table"] == "Orders"
+        assert call["preview"]["Columns"] == "2"
+        assert call["preview_tables"] == [{
+            "headers": ["Column", "Label", "Type"],
+            "rows": [["Title", "Order title", "Text"], ["Qty", "Qty", "Int"]],
+        }]
+        assert call["details_text"] == "Title (Text) Order title\nQty (Int) Qty"
+        assert call["summary"] == "Create table Orders in Budget"
+        assert call["args"] == self.ARGS
+        cols = [
+            {"id": "Title", "label": "Order title", "type": "Text"},
+            {"id": "Qty", "label": "Qty", "type": "Int"},
+        ]
+        client.add_table.assert_called_once_with(DOC_ID, "Orders", cols)
+        assert result == {"doc_id": DOC_ID, "table_id": "Orders2", "column_ids": ["Title", "Qty"]}
+
+    async def test_default_type_is_text(self, gated_call_spy):
+        connector, client = write_connector()
+        client.list_tables.return_value = []
+        client.add_table.return_value = "Orders"
+
+        await connector.call("grist_create_table", {**self.ARGS, "columns": '[{"id": "Title"}]'})
+
+        assert gated_call_spy[0]["preview_tables"][0]["rows"] == [["Title", "Title", "Text"]]
+
+    @pytest.mark.parametrize("col_type", [
+        "Text", "Numeric", "Int", "Bool", "Date", "Choice", "ChoiceList", "Any",
+        "Ref:Contacts", "RefList:Contacts",
+    ])
+    async def test_every_allowed_type_is_accepted(self, gated_call_spy, col_type):
+        connector, client = write_connector()
+        client.list_tables.return_value = []
+        client.add_table.return_value = "Orders"
+
+        await connector.call(
+            "grist_create_table",
+            {**self.ARGS, "columns": json.dumps([{"id": "C", "type": col_type}])},
+        )
+
+        assert gated_call_spy[0]["preview_tables"][0]["rows"] == [["C", "C", col_type]]
+
+    @pytest.mark.parametrize("col_type", ["Ref:Bad-Id", "DateTime", "Ref:", "Ref", 5])
+    async def test_unsupported_type_is_refused(self, gated_call_spy, col_type):
+        connector, client = write_connector()
+
+        with pytest.raises(ValueError) as exc_info:
+            await connector.call(
+                "grist_create_table",
+                {**self.ARGS, "columns": json.dumps([{"id": "C", "type": col_type}])},
+            )
+        assert str(exc_info.value) == (
+            f"Unsupported column type {col_type!r}. Use one of Text, Numeric, Int, Bool, Date, "
+            "Choice, ChoiceList, Any, Ref:<TableId>, RefList:<TableId>."
+        )
+        assert gated_call_spy == []
+        client.add_table.assert_not_called()
+
+    @pytest.mark.parametrize("columns", [
+        "not json", "{}", "[]", '["a"]', '[{"id": "bad id"}]', '[{}]',
+        '[{"id": "A", "label": 5}]', json.dumps([{"id": "A", "label": "x" * 101}]),
+        '[{"id": "A"}, {"id": "A"}]',
+        json.dumps([{"id": f"C{i}"} for i in range(51)]),
+    ])
+    async def test_bad_columns_are_refused(self, gated_call_spy, columns):
+        connector, client = write_connector()
+
+        with pytest.raises(ValueError, match="columns must be a JSON array of 1 to 50"):
+            await connector.call("grist_create_table", {**self.ARGS, "columns": columns})
+        assert gated_call_spy == []
+        client.add_table.assert_not_called()
+
+    async def test_existing_table_is_refused(self, gated_call_spy):
+        connector, client = write_connector()
+        client.list_tables.return_value = [GristTable("Orders", [])]
+
+        with pytest.raises(ValueError) as exc_info:
+            await connector.call("grist_create_table", {**self.ARGS, "columns": self.COLUMNS})
+        assert str(exc_info.value) == (
+            "Table Orders already exists in this document. "
+            "Use grist_add_columns to add columns to it."
+        )
+        assert gated_call_spy == []
+        client.add_table.assert_not_called()
+
+    async def test_denial_means_no_write(self, raising_gated_call):
+        connector, client = write_connector()
+        client.list_tables.return_value = []
+
+        with pytest.raises(RuntimeError, match="denied"):
+            await connector.call("grist_create_table", {**self.ARGS, "columns": self.COLUMNS})
+        client.add_table.assert_not_called()
+
+    async def test_bad_ids_are_refused(self, gated_call_spy):
+        connector, _ = write_connector()
+
+        with pytest.raises(ValueError, match="Not a Grist table id"):
+            await connector.call(
+                "grist_create_table", {"doc_id": DOC_ID, "table_id": "a/b", "columns": self.COLUMNS},
+            )
+        assert gated_call_spy == []
+
+
+class TestAddColumns:
+    ARGS = {"doc_id": DOC_ID, "table_id": "Contacts"}
+    COLUMNS = '[{"id": "Count", "type": "Int"}, {"id": "Note"}]'
+
+    def connector_with_table(self):
+        connector, client = write_connector()
+        client.list_tables.return_value = [
+            GristTable("Contacts", [GristColumn("Name", "Name", "Text", False)]),
+        ]
+        return connector, client
+
+    async def test_card_and_write(self, gated_call_spy):
+        connector, client = self.connector_with_table()
+        client.add_columns.return_value = ["Count", "Note"]
+
+        result = await connector.call("grist_add_columns", {**self.ARGS, "columns": self.COLUMNS})
+
+        call = gated_call_spy[0]
+        assert call["tool"] == "grist_add_columns"
+        assert call["gate"] == "popup"
+        assert call["filtered_data"] is None
+        assert list(call["preview"]) == ["Server", "Document", "Table", "New columns"]
+        assert call["preview"]["New columns"] == "2"
+        assert call["preview_tables"] == [{
+            "headers": ["Column", "Label", "Type"],
+            "rows": [["Count", "Count", "Int"], ["Note", "Note", "Text"]],
+        }]
+        assert call["details_text"] == "Count (Int) Count\nNote (Text) Note"
+        assert call["summary"] == "Add 2 column(s) to Budget / Contacts"
+        assert call["args"] == self.ARGS
+        client.add_columns.assert_called_once_with(DOC_ID, "Contacts", [
+            {"id": "Count", "label": "Count", "type": "Int"},
+            {"id": "Note", "label": "Note", "type": "Text"},
+        ])
+        assert result == {"doc_id": DOC_ID, "table_id": "Contacts", "column_ids": ["Count", "Note"]}
+
+    async def test_missing_table_is_refused(self, gated_call_spy):
+        connector, client = write_connector()
+        client.list_tables.return_value = []
+
+        with pytest.raises(ValueError) as exc_info:
+            await connector.call("grist_add_columns", {**self.ARGS, "columns": self.COLUMNS})
+        assert str(exc_info.value) == (
+            "Table Contacts does not exist in this document. Use grist_create_table to create it."
+        )
+        assert gated_call_spy == []
+        client.add_columns.assert_not_called()
+
+    async def test_existing_column_is_refused(self, gated_call_spy):
+        connector, client = self.connector_with_table()
+
+        with pytest.raises(ValueError) as exc_info:
+            await connector.call(
+                "grist_add_columns", {**self.ARGS, "columns": '[{"id": "Name"}, {"id": "Count"}]'},
+            )
+        assert str(exc_info.value) == "Column(s) Name already exist in table Contacts."
+        assert gated_call_spy == []
+        client.add_columns.assert_not_called()
+
+    async def test_bad_columns_are_refused(self, gated_call_spy):
+        connector, client = self.connector_with_table()
+
+        with pytest.raises(ValueError, match="columns must be a JSON array of 1 to 50"):
+            await connector.call("grist_add_columns", {**self.ARGS, "columns": "[]"})
+        assert gated_call_spy == []
+        client.add_columns.assert_not_called()
+
+    async def test_denial_means_no_write(self, raising_gated_call):
+        connector, client = self.connector_with_table()
+
+        with pytest.raises(RuntimeError, match="denied"):
+            await connector.call("grist_add_columns", {**self.ARGS, "columns": self.COLUMNS})
+        client.add_columns.assert_not_called()
+
+    async def test_bad_ids_are_refused(self, gated_call_spy):
+        connector, _ = write_connector()
+
+        with pytest.raises(ValueError, match="Not a Grist table id"):
+            await connector.call(
+                "grist_add_columns", {"doc_id": DOC_ID, "table_id": "a/b", "columns": self.COLUMNS},
+            )
+        assert gated_call_spy == []
+
+
+class TestCoverageGaps:
+    def test_client_property(self):
+        connector, client = make_connector()
+        assert connector.client is client
+
+    async def test_update_records_bad_ids_are_refused(self, gated_call_spy):
+        connector, _ = write_connector()
+        with pytest.raises(ValueError, match="Not a Grist table id"):
+            await connector.call(
+                "grist_update_records",
+                {"doc_id": DOC_ID, "table_id": "a/b", "records": '[{"id": 1, "fields": {"Name": "x"}}]'},
+            )
+        assert gated_call_spy == []
+
+    async def test_other_document_errors_are_not_swallowed(self, gated_call_spy):
+        connector, client = write_connector()
+        client.get_document.side_effect = GristClientError("boom")
+        with pytest.raises(RuntimeError, match="boom"):
+            await connector.call("grist_create_table", {
+                "doc_id": DOC_ID, "table_id": "Orders", "columns": '[{"id": "A"}]',
+            })
+
+    def test_audit_failure_is_logged_not_raised(self, monkeypatch):
+        connector, _ = make_connector()
+
+        def broken():
+            raise OSError("disk")
+
+        monkeypatch.setattr(grist_module, "get_audit_logger", broken)
+        connector._auto_audit("grist_list_tables", "List Grist Tables", "s", "x", 0.0)
+
+
 class TestFieldCompleteness:
     """A real GristClient with a faked HTTP layer, so the raw response -> dataclass -> card
     path is exercised end to end."""
@@ -522,6 +756,8 @@ GRIST_SIBLINGS: dict[str, list[str]] = {
     "grist_get_records": ["grist_list_tables"],
     "grist_add_records": ["grist_update_records"],
     "grist_update_records": ["grist_add_records"],
+    "grist_create_table": ["grist_add_columns"],
+    "grist_add_columns": ["grist_create_table"],
 }
 
 
@@ -545,6 +781,8 @@ class TestEveryToolIsAudited:
         client.list_tables.return_value = [GristTable("Table1", [GristColumn("Name", "Name", "Text", False)])]
         client.get_records_by_id.return_value = [GristRecord(1, {"Name": "old"})]
         client.add_records.return_value = [2]
+        client.add_table.return_value = "NewTable"
+        client.add_columns.return_value = ["Count"]
 
         await assert_all_tools_leave_an_audit_trail(
             connector, grist_module, monkeypatch, tmp_path,
@@ -557,6 +795,13 @@ class TestEveryToolIsAudited:
                 "grist_update_records": {
                     "doc_id": "DOC1", "table_id": "Table1",
                     "records": '[{"id": 1, "fields": {"Name": "b"}}]',
+                },
+                "grist_create_table": {
+                    "doc_id": "DOC1", "table_id": "NewTable", "columns": '[{"id": "Title"}]',
+                },
+                "grist_add_columns": {
+                    "doc_id": "DOC1", "table_id": "Table1",
+                    "columns": '[{"id": "Count", "type": "Int"}]',
                 },
             },
         )
