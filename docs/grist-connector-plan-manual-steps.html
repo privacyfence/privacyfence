@@ -1,0 +1,200 @@
+<title>Grist Connector Manual Steps</title>
+<style>
+/* Layout: one reading column; two parts (before / after implementation), each a stack of numbered task cards with a checklist. */
+:root {
+  --bg: #f4f7f8;
+  --surface: #ffffff;
+  --ink: #14212b;
+  --ink-soft: #4a5a66;
+  --line: #d6e0e3;
+  --accent: #167a70;
+  --accent-soft: #e1f2ef;
+  --warn-bg: #fff4e0;
+  --warn-ink: #7a4b00;
+  --code-bg: #eef3f4;
+  --font-body: "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f171c; --surface: #172229; --ink: #e4ecef; --ink-soft: #a3b3bc; --line: #2a3a43;
+    --accent: #4cc2b4; --accent-soft: #163a36; --warn-bg: #3a2b10; --warn-ink: #f3c977; --code-bg: #1d2b33;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f171c; --surface: #172229; --ink: #e4ecef; --ink-soft: #a3b3bc; --line: #2a3a43;
+  --accent: #4cc2b4; --accent-soft: #163a36; --warn-bg: #3a2b10; --warn-ink: #f3c977; --code-bg: #1d2b33;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55; padding-inline: 16px; padding-block: 32px 64px; }
+.wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+h1 { font-size: 1.75rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-size: 1.2rem; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.05rem; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--ink-soft); max-width: 65ch; }
+.eyebrow { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 600; }
+.part { display: flex; flex-direction: column; gap: 16px; }
+.part-head { display: flex; flex-direction: column; gap: 4px; border-bottom: 2px solid var(--accent); padding-bottom: 8px; }
+.task { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.task-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: .8rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pill { background: var(--accent-soft); color: var(--ink); border-radius: 999px; padding: 2px 10px; }
+.why { color: var(--ink-soft); font-size: .92rem; }
+ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+ol.steps > li { counter-increment: step; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+ol.steps > li > label { display: contents; cursor: pointer; }
+ol.steps input[type="checkbox"] { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.step-body { min-width: 0; }
+.step-body::before { content: counter(step) ". "; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+li.done .step-body { color: var(--ink-soft); text-decoration: line-through; text-decoration-color: var(--line); }
+.see { display: block; color: var(--ink-soft); font-size: .88rem; margin-top: 2px; }
+code { font-family: var(--font-mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--font-mono); font-size: .84rem; background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.done-when, .report { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); border-radius: 0 6px 6px 0; font-size: .92rem; }
+.secret { background: var(--warn-bg); color: var(--warn-ink); border-radius: 6px; padding: 10px 12px; font-size: .9rem; }
+.progress { font-size: .85rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+button.reset { font: inherit; font-size: .85rem; background: none; border: 1px solid var(--line); color: var(--ink-soft); border-radius: 6px; padding: 4px 10px; cursor: pointer; align-self: flex-start; }
+</style>
+
+<div class="wrap">
+  <header class="part-head" style="border:0;padding:0;gap:8px">
+    <p class="eyebrow">PrivacyFence · plan/grist-connector</p>
+    <h1>Grist connector: the steps only you can do</h1>
+    <p class="lede">Do the two <strong>Before implementation</strong> tasks before you run <code>/implement</code>; the QA-recording phase needs them. Do the <strong>After implementation</strong> checks once the feature PR is up, and tick them in the PR. Your ticks here are saved in this browser only.</p>
+    <p class="progress" id="progress"></p>
+    <button class="reset" type="button" id="reset">Clear all ticks</button>
+  </header>
+
+  <section class="part" aria-labelledby="before">
+    <div class="part-head">
+      <p class="eyebrow">Part 1</p>
+      <h2 id="before">Before implementation</h2>
+    </div>
+
+    <article class="task" data-task="mb1">
+      <div class="task-head">
+        <h3>1. Create a Grist QA account, seed document and API key</h3>
+        <div class="meta"><span class="pill">mb1-grist-qa-account</span><span>about 15 min</span></div>
+      </div>
+      <p class="why">Phase p9 records live fixtures from this document. Use an account that holds nothing real.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="mb1-1"><span class="step-body">Sign up for a free Grist account with a dedicated QA e-mail address at <a href="https://docs.getgrist.com/signin" target="_blank" rel="noopener">docs.getgrist.com/signin</a>.<span class="see">You land on your personal site's home page with an empty document list.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-2"><span class="step-body">Click <strong>Add New → Add Empty Document</strong>, then rename the document (click its name at the top) to <code>PrivacyFence QA [QATEST]</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-3"><span class="step-body">Rename the table <code>Table1</code> to <code>QaSeed</code> (widget title menu → <strong>Rename</strong>, or <strong>Raw Data</strong> in the left panel). Check that the table id shown under <strong>Raw Data</strong> is exactly <code>QaSeed</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-4"><span class="step-body">Rename column <code>A</code> to <code>Name</code> and <code>B</code> to <code>Note</code>; delete column <code>C</code>. Both must be data columns (no formula).<span class="see">Column ids follow the labels, so the ids are <code>Name</code> and <code>Note</code>.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-5"><span class="step-body">Add two rows:
+          <pre>Name: PrivacyFence QA seed [QATEST]        Note: Synthetic PrivacyFence QA row. No real information.
+Name: PrivacyFence QA second row [QATEST]  Note: Synthetic PrivacyFence QA row. No real information.</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb1-6"><span class="step-body">Create a second empty document named <code>PrivacyFence QA contrast</code>. It is the "another document" case for auto-accept rules.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-7"><span class="step-body">Note the seed document's id: open it and copy the part of the URL after <code>docs.getgrist.com/</code> and before the next <code>/</code>, or read <strong>Document ID</strong> under <strong>Settings</strong> (gear icon, left panel).<span class="see">It looks like <code>8CAN8gKdxY7zSw4dX9fJ2a</code>. It is not a secret.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-8"><span class="step-body">Create the API key: profile picture (top right) → <strong>Profile Settings</strong> (<a href="https://docs.getgrist.com/account" target="_blank" rel="noopener">docs.getgrist.com/account</a>) → <strong>API</strong> → <strong>Create</strong>.<span class="see">A long key appears with a copy button.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-9"><span class="step-body">Copy the key straight into your password manager, under a name like "Grist QA API key".</span></label></li>
+      </ol>
+      <p class="secret">The key acts as this account with access to every document it can open. Never paste it into a chat, the plan, a PR, an issue or a GitHub secret. Its only other copy is the runner file in task 2 (<a href="https://github.com/privacyfence/privacyfence/blob/plan/grist-connector/docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md" target="_blank" rel="noopener">ADR 0019</a>).</p>
+      <p class="done-when"><strong>Done when:</strong> a Grist document named "PrivacyFence QA [QATEST]" has a table QaSeed (columns Name, Note) with two [QATEST] rows, a second document exists as a contrast case, and an API key for this account exists (kept only in your password manager).</p>
+    </article>
+
+    <article class="task" data-task="mb2">
+      <div class="task-head">
+        <h3>2. Put the Grist key and seed ids on the self-hosted QA runner</h3>
+        <div class="meta"><span class="pill">mb2-runner-qa-state</span><span>about 10 min</span></div>
+      </div>
+      <p class="why">Phase p9 dispatches <code>qa-record-fixture.yml</code>, which copies <code>~/privacyfence/</code> from the runner (labelled <code>privacyfence-test</code>) into its checkout. See <a href="https://github.com/privacyfence/privacyfence/blob/plan/grist-connector/docs/connector-qa.md#persistent-qa-state" target="_blank" rel="noopener">connector-qa.md, Persistent QA state</a>.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="mb2-1"><span class="step-body">SSH into the runner host and switch to the runner user (the account whose home holds <code>~/privacyfence/</code>).</span></label></li>
+        <li><label><input type="checkbox" id="mb2-2"><span class="step-body">Create the credential file with owner-only permissions before anything goes into it:
+          <pre>install -m 600 /dev/null ~/privacyfence/credentials/grist_token.json
+${EDITOR:-nano} ~/privacyfence/credentials/grist_token.json</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb2-3"><span class="step-body">In the editor, type this, pasting the key from your password manager in place of <code>KEY</code>, then save:
+          <pre>{"server_url": "https://docs.getgrist.com", "api_key": "KEY"}</pre>
+          <span class="see">Use your team site's address instead (for example <code>https://acme.getgrist.com</code>) if the QA documents live there.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb2-4"><span class="step-body">Check it: <code>ls -l ~/privacyfence/credentials/grist_token.json</code> shows <code>-rw-------</code> and the runner user as owner, and <code>python3 -m json.tool ~/privacyfence/credentials/grist_token.json &gt;/dev/null &amp;&amp; echo ok</code> prints <code>ok</code>.</span></label></li>
+        <li><label><input type="checkbox" id="mb2-5"><span class="step-body">Append the seed ids to <code>~/privacyfence/tests/fixtures/qa_environment.yaml</code> (use the document id from task 1, step 7):
+          <pre>grist:
+  doc_id: "8CAN8gKdxY7zSw4dX9fJ2a"
+  table_id: QaSeed
+  seed_record_name: "PrivacyFence QA seed [QATEST]"</pre></span></label></li>
+        <li><label><input type="checkbox" id="mb2-6"><span class="step-body">Check the YAML still parses: <code>python3 -c "import yaml,os;print(yaml.safe_load(open(os.path.expanduser('~/privacyfence/tests/fixtures/qa_environment.yaml')))['grist'])"</code> prints the three keys.<span class="see">If the runner's system Python has no <code>yaml</code>, open the file and check the indentation by eye instead.</span></span></label></li>
+      </ol>
+      <p class="done-when"><strong>Done when:</strong> on the runner, <code>~/privacyfence/credentials/grist_token.json</code> exists with mode 600 and the keys <code>server_url</code> and <code>api_key</code>, and <code>~/privacyfence/tests/fixtures/qa_environment.yaml</code> has a <code>grist</code> section with <code>doc_id</code>, <code>table_id</code> and <code>seed_record_name</code>. Then tell the <code>/implement</code> session that both before-steps are done.</p>
+    </article>
+  </section>
+
+  <section class="part" aria-labelledby="after">
+    <div class="part-head">
+      <p class="eyebrow">Part 2</p>
+      <h2 id="after">After implementation</h2>
+    </div>
+
+    <article class="task" data-task="ma1">
+      <div class="task-head">
+        <h3>3. Connect Grist in Settings and drive every Grist tool from an AI client</h3>
+        <div class="meta"><span class="pill">ma1-local-mode-check</span><span>about 30 min</span></div>
+      </div>
+      <p class="why">Proves the Settings form, what the approval cards show and that real writes land, which unit tests and the recorder cannot show.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="ma1-1"><span class="step-body">On a machine without a packaged PrivacyFence install, check out <code>feature/grist-connector</code> and start it from source with <code>./scripts/dev_start.sh</code> (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/dev-vs-live-setup.md" target="_blank" rel="noopener">dev-vs-live-setup.md</a>).</span></label></li>
+        <li><label><input type="checkbox" id="ma1-2"><span class="step-body">Open <strong>Settings → Connectors</strong>. Grist shows <strong>Not connected</strong>. Click <strong>Authenticate…</strong> on its row.<span class="see">A dialog asks for the server address (prefilled <code>https://docs.getgrist.com</code>) and an API key.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-3"><span class="step-body">Enter a wrong key first (any text) and click <strong>Connect</strong>.<span class="see">The dialog shows "Grist refused the request (HTTP 401)…" and stays open.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-4"><span class="step-body">Paste the QA key from your password manager and click <strong>Connect</strong>.<span class="see">The dialog closes and Grist shows <strong>Connected</strong>.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-5"><span class="step-body">Connect an AI client to this daemon (<a href="https://github.com/privacyfence/privacyfence/blob/main/docs/connect-claude-code.md" target="_blank" rel="noopener">Claude Code</a> is quickest) and ask it to list your Grist documents, then the tables of the QA document.<span class="see">Both answer without an approval card.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-6"><span class="step-body">Ask it to read the QaSeed records.<span class="see">A review card shows Document, Team, Table, Filter and Sort, and a table of the two rows. Release it.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-7"><span class="step-body">Ask it to add a record with Name <code>Manual check [QATEST]</code>.<span class="see">An approval card shows the values in a table and "New records are added to that table." Approve, and see the row in Grist.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-8"><span class="step-body">Ask it to change that record's Note to <code>changed</code>.<span class="see">The card shows a Record / Column / Current / New table. Approve, and check Grist.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-9"><span class="step-body">Ask it to create a table <code>PfQaScratch</code> with a Text column <code>Title</code>, then to add an Int column <code>Count</code> to it. Approve both and check Grist. Deny one more request and see the client report the denial.</span></label></li>
+        <li><label><input type="checkbox" id="ma1-10"><span class="step-body">In <strong>Settings → Auto-accept</strong>, add a <strong>Grist — document</strong> rule for the QA document id with the verb <strong>read</strong>. Read QaSeed again.<span class="see">No card this time. A read of the contrast document still shows a card, and no approval card ever offered "Always allow" for Grist.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma1-11"><span class="step-body">Delete the <code>Manual check [QATEST]</code> row and the <code>PfQaScratch</code> table by hand in Grist. The connector cannot delete anything.</span></label></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste one line, for example <code>ma1 local mode: PASS (wrong-key error, review card, 4 write cards, rule auto-accepts read)</code>, or <code>FAIL at step N: what you saw</code>.</p>
+    </article>
+
+    <article class="task" data-task="ma2">
+      <div class="task-head">
+        <h3>4. Connect Grist on /connect in an org-mode test deployment</h3>
+        <div class="meta"><span class="pill">ma2-org-mode-check</span><span>about 20 min · only if you run one</span></div>
+      </div>
+      <p class="why">Proves the bundle's <code>grist</code> section, the per-person key form and that the pinned server is used. No CI job runs an org deployment against Grist.</p>
+      <ol class="steps">
+        <li><label><input type="checkbox" id="ma2-1"><span class="step-body">Add Grist to your test bundle and sign it, as in <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/configuration-reference.md#organization-config-bundle-org_configjson" target="_blank" rel="noopener">configuration-reference.md</a>:
+          <pre>python3 scripts/build_org_bundle.py --merge -o org_config.json \
+  --grist-server-url https://docs.getgrist.com --sign-key &lt;your signing key&gt;</pre></span></label></li>
+        <li><label><input type="checkbox" id="ma2-2"><span class="step-body">Install it on the test server (copy to the organization config directory as <code>org_config.json</code>) and restart the daemon, per <a href="https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md" target="_blank" rel="noopener">org-mode-setup-guide.md</a>.</span></label></li>
+        <li><label><input type="checkbox" id="ma2-3"><span class="step-body">Sign in as a test person and open <code>/connect</code>.<span class="see">A Grist box names <code>https://docs.getgrist.com</code> and asks only for an API key.</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-4"><span class="step-body">Paste the QA key and click <strong>Connect</strong>.<span class="see">The box shows "Connected to https://docs.getgrist.com".</span></span></label></li>
+        <li><label><input type="checkbox" id="ma2-5"><span class="step-body">From an AI client connected to that deployment as the same person, list Grist documents, then read QaSeed (approve the card).</span></label></li>
+      </ol>
+      <p class="report"><strong>Report back:</strong> tick the item in the PR and paste <code>ma2 org mode: PASS</code>, <code>FAIL at step N: what you saw</code>, or <code>ma2: skipped, no org-mode test deployment</code>.</p>
+    </article>
+  </section>
+</div>
+
+<script>
+(function () {
+  var KEY = 'pf-grist-manual-steps';
+  function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+  var state = load();
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  function paint() {
+    var done = 0;
+    boxes.forEach(function (b) {
+      b.closest('li').classList.toggle('done', b.checked);
+      if (b.checked) done++;
+    });
+    document.getElementById('progress').textContent = done + ' of ' + boxes.length + ' steps ticked';
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!state[b.id];
+    b.addEventListener('change', function () { state[b.id] = b.checked; save(state); paint(); });
+  });
+  document.getElementById('reset').addEventListener('click', function () {
+    state = {}; save(state); boxes.forEach(function (b) { b.checked = false; }); paint();
+  });
+  paint();
+})();
+</script>
