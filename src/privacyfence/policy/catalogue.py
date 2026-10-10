@@ -41,6 +41,8 @@ class PolicyExtraScope:
     label: str
     needs_value: bool
     value_hint: str
+    # Display text for a verb chip whose bare name doesn't say what it unblocks.
+    verb_labels: dict[str, str] | None = None
 
 
 EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
@@ -53,6 +55,7 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         predicate="grist.document", connector="grist",
         verbs=(Verb.READ, Verb.CREATE, Verb.UPDATE, Verb.RESTRUCTURE),
         label="Grist — document", needs_value=True, value_hint="8CAN8gKdxY7z…document-id",
+        verb_labels={"create": "create (add records)"},
     ),
     "gmail.configure": PolicyExtraScope(
         predicate="gmail.anything", connector="gmail",
@@ -139,6 +142,7 @@ def scope_catalogue() -> list[dict[str, Any]]:
             "needs_value": extra.needs_value,
             "value_hint": extra.value_hint,
             "verbs": [v.value for v in extra.verbs],
+            **({"verb_labels": extra.verb_labels} if extra.verb_labels else {}),
         })
     entries.sort(key=lambda e: (e["connector"], e["label"]))
     return entries
