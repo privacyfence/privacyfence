@@ -955,7 +955,7 @@ class TestStop:
                 time.sleep(0.05)
         raise TimeoutError(f"{host}:{port} never became connectable")
 
-    def test_an_open_event_stream_does_not_keep_the_server_running(self, tmp_path, monkeypatch):
+    def test_an_open_event_stream_does_not_keep_the_server_running(self, tmp_path, monkeypatch, caplog):
         import socket
         import time
 
@@ -975,14 +975,42 @@ class TestStop:
             assert stream.recv(64).startswith(b"HTTP/1.1 200")
 
             started = time.monotonic()
-            server.stop()
+            with caplog.at_level("WARNING", logger="privacyfence.web.server"):
+                server.stop()
 
             assert server.stopped
-            assert time.monotonic() - started < SHUTDOWN_GRACE_SECONDS + 3
+            assert time.monotonic() - started < SHUTDOWN_GRACE_SECONDS
+            assert "The web server took" not in caplog.text
             # The server closed the stream rather than leaving the client waiting on it.
             stream.settimeout(5)
             while stream.recv(4096):
                 pass
+
+    def test_a_slow_stop_is_logged_with_the_open_connection_count(self, tmp_path, monkeypatch, caplog):
+        import socket
+
+        from privacyfence import paths
+        from privacyfence.web import server as server_module
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(server_module, "SHUTDOWN_GRACE_SECONDS", 0)
+        port = self._free_port()
+        server = WebServer(WebApprovalUI(), host="localhost", port=port)
+        server.start()
+        self._wait_until_connectable("localhost", port)
+        session = server.sessions.create(provenance=PROVENANCE_HUMAN)
+        with socket.create_connection(("localhost", port)) as stream:
+            stream.sendall((
+                f"GET /api/state/stream HTTP/1.1\r\nHost: localhost:{port}\r\n"
+                f"Cookie: {SESSION_COOKIE}={session}\r\n\r\n"
+            ).encode())
+            assert stream.recv(64).startswith(b"HTTP/1.1 200")
+
+            with caplog.at_level("WARNING", logger="privacyfence.web.server"):
+                server.stop()
+
+            assert "The web server took" in caplog.text
+            assert "1 connection(s) were open" in caplog.text
 
     def test_a_server_never_started_counts_as_stopped(self):
         assert WebServer(WebApprovalUI(), host="localhost", port=0).stopped
