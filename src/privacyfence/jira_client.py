@@ -155,13 +155,15 @@ class JiraIssue:
     created: str = ""
     updated: str = ""
     url: str = ""
-    # Not a dataclass field, so asdict() (what the agent receives) never carries it: the
-    # description as the approval preview shows it, mentions as @Name and every other
-    # character as written. None when the description has no ADF form.
-    display_description = None
-    # Not a dataclass field either: the requested extra fields, {key: simplified value}, set only by a
-    # search or get_issue that asked for them (keys from JiraClient.extra_field_keys). None otherwise.
-    extra_fields = None
+
+    def __post_init__(self) -> None:
+        # Not a dataclass field, so asdict() (what the agent receives) never carries it: the
+        # description as the approval preview shows it, mentions as @Name and every other
+        # character as written. None when the description has no ADF form.
+        self.display_description: str | None = None
+        # Not a dataclass field either: the requested extra fields, {key: simplified value}, set only by a
+        # search or get_issue that asked for them (keys from JiraClient.extra_field_keys). None otherwise.
+        self.extra_fields: dict[str, Any] | None = None
 
     def short_summary(self) -> str:
         snippet = self.summary[:60] + "…" if len(self.summary) > 60 else self.summary
@@ -175,7 +177,10 @@ class JiraComment:
     body: str
     created: str = ""
     updated: str = ""
-    display_body = None  # as ``JiraIssue.display_description``: not a field, preview-only
+
+    def __post_init__(self) -> None:
+        # as ``JiraIssue.display_description``: not a field, preview-only
+        self.display_body: str | None = None
 
 
 @dataclass

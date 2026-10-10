@@ -19,7 +19,7 @@ import os
 
 def telegram_app_credentials() -> tuple[int, str] | None:
     try:
-        from . import _telegram_credentials  # generated at build time; git-ignored
+        from . import _telegram_credentials  # type: ignore[attr-defined]  # generated at build time; absent in a source checkout
     except ImportError:
         pass
     else:

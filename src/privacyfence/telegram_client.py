@@ -118,7 +118,7 @@ class TelegramPrivacyFenceClient:
         self._api_id = api_id
         self._api_hash = api_hash
         self._session_file = session_file
-        self._client = None  # telethon.TelegramClient, built lazily
+        self._client: Any = None  # telethon.TelegramClient, built lazily
         self._connected = False
         # Small cache so repeated messages from/about the same chat don't
         # trigger a fresh lookup each time within a single fetch. Also
@@ -194,7 +194,7 @@ class TelegramPrivacyFenceClient:
         """Connect and return 'Firstname Lastname (@username)'."""
         await self._ensure_connected()
         try:
-            me = await self._client.get_me()  # type: ignore[union-attr]
+            me = await self._client.get_me()
         except Exception as exc:
             raise TelegramClientError(f"get_me() failed: {exc}") from exc
         name = f"{me.first_name or ''} {me.last_name or ''}".strip()
@@ -212,7 +212,7 @@ class TelegramPrivacyFenceClient:
         await self._ensure_connected()
         limit = max(1, min(int(limit), 200))
         try:
-            dialogs = await self._client.get_dialogs(limit=limit)  # type: ignore[union-attr]
+            dialogs = await self._client.get_dialogs(limit=limit)
         except Exception as exc:
             raise TelegramClientError(f"get_dialogs() failed: {exc}") from exc
 
@@ -231,7 +231,7 @@ class TelegramPrivacyFenceClient:
         await self._ensure_connected()
         limit = max(1, min(int(limit), 200))
         try:
-            messages = await self._client.get_messages(chat_id, limit=limit)  # type: ignore[union-attr]
+            messages = await self._client.get_messages(chat_id, limit=limit)
         except Exception as exc:
             raise TelegramClientError(
                 f"get_messages(chat_id={chat_id}) failed: {exc}"
@@ -251,7 +251,7 @@ class TelegramPrivacyFenceClient:
         await self._ensure_connected()
         limit = max(1, min(int(limit), 100))
         try:
-            messages = await self._client.get_messages(  # type: ignore[union-attr]
+            messages = await self._client.get_messages(
                 None, search=query, limit=limit
             )
         except Exception as exc:
@@ -286,7 +286,7 @@ class TelegramPrivacyFenceClient:
             from telethon import utils as telethon_utils  # type: ignore[import-untyped]
 
             await self._ensure_connected()
-            entity = await self._client.get_entity(chat_id)  # type: ignore[union-attr]
+            entity = await self._client.get_entity(chat_id)
             name = telethon_utils.get_display_name(entity) or ""
         except Exception as exc:
             logger.debug("Could not resolve chat name for %s: %s", chat_id, exc)
@@ -336,7 +336,7 @@ class TelegramPrivacyFenceClient:
         """
         await self._ensure_connected()
         try:
-            dialogs = await self._client.get_dialogs(limit=None)  # type: ignore[union-attr]
+            dialogs = await self._client.get_dialogs(limit=None)
         except Exception as exc:
             raise TelegramClientError(f"refresh_chat_directory failed: {exc}") from exc
         names: dict[int, str] = {}
@@ -421,7 +421,7 @@ class TelegramPrivacyFenceClient:
         if not text:
             raise TelegramClientError("send_message requires non-empty text")
         try:
-            msg = await self._client.send_message(chat_id, text)  # type: ignore[union-attr]
+            msg = await self._client.send_message(chat_id, text)
         except Exception as exc:
             raise TelegramClientError(
                 f"send_message(chat_id={chat_id}) failed: {exc}"

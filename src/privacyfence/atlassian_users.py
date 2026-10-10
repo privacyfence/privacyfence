@@ -104,9 +104,10 @@ def fetch_users_bulk(
 def search_users(
     session: requests.Session, cloud_id: str, query: str, max_results: int
 ) -> list[AtlassianUser]:
+    params: dict[str, str | int] = {"query": query, "maxResults": max_results}
     response = session.get(
         f"{jira_api_base(cloud_id)}/rest/api/3/user/search",
-        params={"query": query, "maxResults": max_results},
+        params=params,
         timeout=_HTTP_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
@@ -144,8 +145,8 @@ class _StorageScan(HTMLParser):
     inside a quoted attribute, either quote style and entity-encoded values all behave as they do
     for Confluence's own XML parser."""
 
-    CDATA_CONTENT_ELEMENTS = ()  # <script>/<style> are ordinary elements in storage format
-    RCDATA_CONTENT_ELEMENTS = ()
+    CDATA_CONTENT_ELEMENTS = ()  # type: ignore[misc]  # HTMLParser declares these Final; storage format has no CDATA elements
+    RCDATA_CONTENT_ELEMENTS = ()  # type: ignore[misc]  # HTMLParser declares these Final; storage format has no CDATA elements
 
     def set_cdata_mode(self, *args: object, **kwargs: object) -> None:
         """Never enter raw-text mode. Some patch releases switch ``<plaintext>`` (and other
