@@ -94,6 +94,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -492,6 +493,7 @@ def _build_route_list(
     per_item_message: str,
     unenrolled_batch_message: str | None,
     human_session_guard: Callable[[Request, str], Response | None],
+    stopping: threading.Event | None = None,
 ) -> list[Route]:
     """The route list shared by both modes -- see module docstring for what
     each keyword argument covers and why it has to be mode-specific.
@@ -613,6 +615,8 @@ def _build_route_list(
         async def event_source():
             last_ids: tuple[str, ...] | None = None
             while True:
+                if stopping is not None and stopping.is_set():
+                    break
                 if await request.is_disconnected():
                     break
                 current = resolve_principal(request)
@@ -816,6 +820,7 @@ def create_app(
     step_up_origin: str = "",
     any_connector_authenticated: Callable[[], bool] | None = None,
     require_human_session: bool = False,
+    stopping: threading.Event | None = None,
 ) -> Starlette:
     """Build the Starlette app serving local mode's approval surface.
     ``sessions`` (see session_auth.py's own module docstring) is the
@@ -844,6 +849,9 @@ def create_app(
     still evadable by not enrolling). Both default to "off" so every
     existing caller of this function is unaffected; web/server.py's
     ``build_app`` is the one real (non-test) caller that passes them.
+
+    ``stopping``, when set, ends ``/api/approvals/stream`` on its next tick, so a server that is
+    shutting down is not held for its graceful-shutdown period.
 
     ``require_human_session`` refuses an
     approving decision -- the same two results ``_STEP_UP_RESULTS``/
@@ -891,8 +899,8 @@ def create_app(
             step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(principal)),
             webauthn_stepup.step_up_disabled_notice(principal),
         ]
-        parts = [p for p in parts if p]
-        return " ".join(parts) if parts else None
+        present = [p for p in parts if p]
+        return " ".join(present) if present else None
 
     def _off_notice_html() -> str | None:
         # Unlike _banner_html above (a live
@@ -943,6 +951,7 @@ def create_app(
         ),
         unenrolled_batch_message=None,
         human_session_guard=_human_session_guard,
+        stopping=stopping,
     )
     all_routes: list[BaseRoute] = list(routes)
     all_routes.extend(extra_routes or [])
@@ -951,7 +960,7 @@ def create_app(
 
 def build_routes(
     *, web_ui: WebApprovalUI, sessions: org_session.OrgSessionStore, step_up: StepUpConfig, issuer_url: str,
-    push_public_key: str = "",
+    push_public_key: str = "", stopping: threading.Event | None = None,
 ) -> list[Route]:
     """Build org mode's own ``/approvals`` route list -- extended into
     ``_build_org_app``'s larger app the same way web/routes_security.py's
@@ -972,7 +981,10 @@ def build_routes(
     they have no local-mode analogue to share code with at all.
 
     ``push_public_key`` is the server's VAPID public key when the org has web
-    push on (ADR 0081), else empty; see ``_render_org_list_page``."""
+    push on (ADR 0081), else empty; see ``_render_org_list_page``.
+
+    ``stopping``, when set, ends ``/api/approvals/stream`` on its next tick, so a server that is
+    shutting down is not held for its graceful-shutdown period."""
 
     def _resolve_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
@@ -1011,6 +1023,7 @@ def build_routes(
             "or approve each request from its card, where you can verify by signing in again."
         ),
         human_session_guard=_no_human_session_guard,
+        stopping=stopping,
     )
 
 

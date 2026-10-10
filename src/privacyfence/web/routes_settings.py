@@ -771,8 +771,8 @@ def build_routes(
             step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL)),
             webauthn_stepup.step_up_disabled_notice(LOCAL_PRINCIPAL),
         ]
-        parts = [p for p in parts if p]
-        return " ".join(parts) if parts else None
+        present = [p for p in parts if p]
+        return " ".join(present) if present else None
 
     async def _render_settings_page(request: Request, *, initial_section: str | None) -> Response:
         if not _authenticated(request):
@@ -925,7 +925,8 @@ def build_routes(
         if not _authenticated(request):
             return _unauthorized_response(request)
         form = await request.form()
-        if not _csrf_matches(request, form.get("csrf")):
+        csrf = form.get("csrf")
+        if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _origin_ok(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)

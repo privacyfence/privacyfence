@@ -72,13 +72,9 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 
 # Every job in tests.yml that runs on every PR (no job- or step-level `if:` restricts any of
 # these to a schedule or a path) and is meant to gate correctness. Requiring a job by name
-# requires its overall conclusion -- static-analysis's whole-tree mypy step still uses
-# `continue-on-error: true` and so never turns the job red (a required check sees only the job's
-# conclusion, never an individual step's), but its `ruff check .`, `bandit` and
-# `scripts/mypy_strict_modules.py` steps are all blocking, so requiring the job means "require
-# ruff, bandit, and mypy over every module the ratchet has promoted" (the rest of the tree stays
-# informational until it gets the same per-module treatment -- see [tool.mypy] and its
-# [[tool.mypy.overrides]] blocks in pyproject.toml).
+# requires its overall conclusion -- all of static-analysis's steps (ruff, the
+# whole-tree mypy run, the promoted-module mypy run, bandit) block, so requiring the job requires
+# all four (a required check sees only the job's conclusion, never an individual step's).
 #
 # test-python-compat's matrix (.github/workflows/tests.yml's `python-version: ['3.11', '3.12']`)
 # reports one check per leg, named from that job's own `name:` template -- both legs are listed

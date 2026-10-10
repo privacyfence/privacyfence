@@ -47,10 +47,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Clearer Grist rule verb.** On Settings → Auto-accept, the Grist document rule's `create` chip now reads "create (add records)", so it is clear that it covers adding records.
 
+### Added
+
+- **Grist bulk import and update from CSV.** grist_import_csv adds a CSV file's rows to a table and grist_update_csv updates records matched by a key column, up to 20000 rows in one approval.
+
 ### Fixed
 
 - The Auto-accept page now shows the title of a Salesforce report or a Grist document instead of its raw ID. Salesforce reports are looked up by ID, so a 15-character ID and reports beyond the first 200 resolve too.
 - The PII check no longer flags the digits of a decimal number as a credit card number or a Hungarian tax ID. Long converted amounts in a Grist, Salesforce or spreadsheet read (such as 14908.8288798133) used to raise the PII confirmation on every read.
+- Stopping PrivacyFence with a settings or approvals tab open no longer waits two seconds for
+  the tab's live-update connection: the connection now ends as soon as the web server is asked
+  to stop.
 
 ## [5.7.0] — 2026-10-10
 

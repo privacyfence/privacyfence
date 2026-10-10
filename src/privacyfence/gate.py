@@ -149,7 +149,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from .agent_identity import agent_scope
 from .approval_ui import get_approval_ui
@@ -257,6 +257,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "confluence_download_attachment": WIDE,
     "salesforce_get_record": WIDE, "salesforce_search": WIDE, "salesforce_run_report": WIDE,
     "grist_get_records": WIDE, "grist_add_records": WIDE, "grist_update_records": WIDE,
+    "grist_import_csv": WIDE, "grist_update_csv": WIDE,
     "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "drive_sheets_get_values": WIDE, "slack_get_channel_history": WIDE,
@@ -1147,7 +1148,10 @@ async def gated_call(
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring
                 audit(decision="approval_pending", auto_accept_rule="", pii_detected=bool(pii_categories))
-                raise ApprovalPending(_pending_result(registry, pending_approval))
+                raise ApprovalPending(_pending_result(
+                    cast(PendingApprovalRegistry, registry),  # _resolve_decision returns _PENDING only when registry is not None (gate.py:481)
+                    pending_approval,
+                ))
 
             if decision == "auto_accepted":
                 audit(
@@ -1273,7 +1277,10 @@ async def gated_call(
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring
                 audit(decision="approval_pending", auto_accept_rule="", pii_detected=bool(upload_pii_categories))
-                raise ApprovalPending(_pending_result(registry, pending_approval))
+                raise ApprovalPending(_pending_result(
+                    cast(PendingApprovalRegistry, registry),  # _resolve_decision returns _PENDING only when registry is not None (gate.py:481)
+                    pending_approval,
+                ))
 
             if decision == "auto_accepted":
                 audit(

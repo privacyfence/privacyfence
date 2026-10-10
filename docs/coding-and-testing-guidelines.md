@@ -150,17 +150,22 @@ Run Ruff on changed Python code:
 
 ```bash
 ruff check .
+mypy src/privacyfence
 python3 scripts/mypy_strict_modules.py
 ```
 
 `pyproject.toml` is authoritative for Ruff, mypy, Bandit, pytest, and coverage configuration. Ruff
-and Bandit are blocking CI checks. mypy runs twice in the same job: `mypy src/privacyfence` over
-the whole tree is a visible informational check (`continue-on-error`), and
-`scripts/mypy_strict_modules.py` re-runs it, blocking, over just the modules the ratchet has
-promoted (`[tool.mypy]`'s `[[tool.mypy.overrides]]` entries — the script reads that list out of
-`pyproject.toml`, so promoting a module needs no workflow change). Promoting the next module means
-adding an overrides block once the module is clean; from then on a regression in it fails the
+(`ruff check .`), Bandit, the whole-tree mypy run and the promoted-module mypy run are all blocking
+CI checks. The whole tree is checked at `[tool.mypy]`'s settings ([ADR 0149](adr/0149-the-whole-tree-mypy-run-is-blocking.md));
+`scripts/mypy_strict_modules.py` re-runs mypy with strict flags over just the modules the ratchet
+has promoted (`[tool.mypy]`'s `[[tool.mypy.overrides]]` entries — the script reads that list out of
+`pyproject.toml`, so promoting a module needs no workflow change). Promoting a module to the strict
+flags is still a one-block edit in `pyproject.toml`; from then on a regression in it fails the
 merge.
+
+`ruff format` is not enforced and is not run in CI: it would rewrite most of the tree and
+conflict with every open branch. Match the surrounding code's style instead
+(`CONTRIBUTING.md`, "Code Style"). See [ADR 0150](adr/0150-ruff-format-is-not-enforced.md).
 
 For Node/TypeScript changes under `mcpb/shim/`, run:
 
@@ -345,10 +350,11 @@ checklist for the PR description.
 - [ ] `pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing
       --cov-report=json:coverage.json` passes at 100%, and `python3 scripts/check_coverage_floor.py
       coverage.json` passes (the coverage ratchet — see `testing-policy.md`).
-- [ ] `ruff check .`, `bandit -c pyproject.toml -r src` and `python3 scripts/mypy_strict_modules.py`
-      all pass (CI's `static-analysis` job blocks on all three; the whole-tree `mypy src/privacyfence`
-      run in that same job is informational only, while the modules with a
-      `[[tool.mypy.overrides]]` entry are what the third command checks and CI blocks on — see
+- [ ] `ruff check .`, `bandit -c pyproject.toml -r src`, `mypy src/privacyfence` and
+      `python3 scripts/mypy_strict_modules.py` all pass (CI's `static-analysis` job blocks on all
+      four; `mypy src/privacyfence` checks the whole tree at the default settings, and the modules
+      with a `[[tool.mypy.overrides]]` entry are what `scripts/mypy_strict_modules.py` checks with
+      strict flags — see
       `[tool.ruff.lint]`/`[tool.mypy]`/`[tool.bandit]` in `pyproject.toml`). A new Bandit finding
       that's a genuine false positive gets a `# nosec BXXX  # <reason>` comment at its call site,
       not a suppression in `pyproject.toml`.

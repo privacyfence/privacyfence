@@ -4,12 +4,12 @@
 mypy is meant to go "non-blocking -> blocking per module": `[tool.mypy]` in pyproject.toml says
 per-module `[[tool.mypy.overrides]]` blocks "should be added below as modules get cleaned up and
 promoted to blocking". The whole-tree mypy step in `.github/workflows/tests.yml`'s
-`static-analysis` job is `continue-on-error: true`, so on its own a promoted module's strict flags
+`static-analysis` job checks only the default settings, so on its own a promoted module's strict flags
 would change which errors mypy *prints* and nothing else.
 
-This script is what makes promotion blocking. CI runs it as an ordinary, non-`continue-on-error` step beside the
-informational whole-tree run, so the ratchet's promoted modules genuinely gate the merge while the
-~87 pre-existing errors in the rest of the tree stay visible-but-advisory, exactly as before.
+This script is what makes promotion blocking. CI runs it as an ordinary step beside the
+whole-tree run (also blocking, ADR 0149), so the promoted modules are held to the strict flags on top
+of the defaults the whole tree must meet.
 
 pyproject.toml stays the single source of truth for *which* modules those are: the list is read
 back out of `[[tool.mypy.overrides]]` rather than repeated in the workflow, so promoting the next
@@ -20,8 +20,7 @@ that leaves the override behind fails here instead of quietly shrinking the gate
 
 Why `--follow-imports=silent`: mypy is handed only the promoted files, but it still has to analyze
 everything they import to type them correctly, and would otherwise report *those* modules' errors
-too -- dragging the whole tree's pre-existing findings into a blocking step and making promotion
-impossible. `silent` keeps the imported modules' types and drops their errors, which is precisely
+too -- reporting strict-flag findings for modules that are not promoted. `silent` keeps the imported modules' types and drops their errors, which is precisely
 the per-module semantics the ratchet is after.
 
 Stdlib only (tomllib is 3.11+, this repo's `requires-python` floor), so it runs before/without any

@@ -36,7 +36,8 @@ deliberately, from the Settings page or the bridge's ``privacyfence_propose_poli
 
 * ``apps_script.read_content``/``write_content``/``read_execution_log`` are governed by
   ``apps_script.project``, a scope with no entry here.
-* ``grist.read_records``/``add_records``/``update_records``/``create_table``/``add_columns`` are
+* ``grist.read_records``/``add_records``/``update_records``/``create_table``/``add_columns``/
+  ``import_csv``/``update_csv`` are
   governed by ``grist.document``, a scope with no entry here.
 * ``slack.create_group_chat``'s subject is an audience, and no scope type measures one.
 * ``gmail.create_filter``/``update_filter`` could only be scoped by "anything in Gmail", and an
@@ -56,6 +57,7 @@ bridge share.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
 from ..auto_accept import ReviewContext, _domain_of, _file_from
@@ -572,7 +574,7 @@ def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
 
 
 def _rules_from_pairs(
-    pairs: Iterable[tuple[str, str]], value: Any, conditions_of: dict[str, tuple[tuple[str, Any], ...]],
+    pairs: Iterable[tuple[str, str]], value: Any, conditions_of: Mapping[str, tuple[tuple[str, Any], ...]],
 ) -> list[PolicyRule]:
     """Turn ``(predicate, operation_key)`` pairs into merged ``PolicyRule``s with stable ids.
 

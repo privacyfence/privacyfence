@@ -78,8 +78,11 @@ def classify_http_error(exc: BaseException) -> str | None:
     http_error = _find_http_error(exc)
     if http_error is None:
         return None
+    raw = getattr(getattr(http_error, "resp", None), "status", None)
+    if raw is None:
+        return None
     try:
-        status = int(getattr(getattr(http_error, "resp", None), "status", None))
+        status = int(raw)
     except (TypeError, ValueError):
         return None
     body = _error_body(http_error)

@@ -12,7 +12,7 @@ import json
 import pytest
 
 from privacyfence.web import state_stream as ss
-from privacyfence.web.state_stream import StateStream, call_soon_threadsafe, set_loop
+from privacyfence.web.state_stream import StateStream, call_soon_threadsafe, clear_loop, get_loop, set_loop
 
 
 @pytest.fixture(autouse=True)
@@ -182,6 +182,20 @@ class TestPushDebouncing:
 
 
 class TestCallOnMainDispatcher:
+    def test_clear_loop_leaves_a_different_loop_alone(self):
+        loop = asyncio.new_event_loop()
+        other = asyncio.new_event_loop()
+        try:
+            set_loop(loop)
+            clear_loop(other)
+            assert get_loop() is loop
+            clear_loop(loop)
+            assert get_loop() is None
+        finally:
+            set_loop(None)
+            loop.close()
+            other.close()
+
     def test_runs_inline_with_no_loop_captured(self):
         set_loop(None)
         calls = []
@@ -204,3 +218,27 @@ class TestCallOnMainDispatcher:
             assert calls == ["hi"]
         finally:
             set_loop(None)
+
+
+class TestClose:
+    @staticmethod
+    def _stream() -> StateStream:
+        return StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
+
+    async def test_close_ends_an_open_subscription(self):
+        stream = self._stream()
+        gen = stream.subscribe(_Disconnector(after=10**6))
+        await gen.__anext__()
+        await gen.__anext__()
+        stream.close()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(gen.__anext__(), 0.5)
+
+    async def test_a_subscription_opened_after_close_ends_after_its_initial_events(self):
+        stream = self._stream()
+        stream.close()
+        gen = stream.subscribe(_Disconnector(after=10**6))
+        await gen.__anext__()
+        await gen.__anext__()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(gen.__anext__(), 0.5)

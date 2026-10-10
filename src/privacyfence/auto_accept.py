@@ -133,6 +133,8 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "grist_update_records":           "grist.update_records",
     "grist_create_table":             "grist.create_table",
     "grist_add_columns":              "grist.add_columns",
+    "grist_import_csv":               "grist.import_csv",
+    "grist_update_csv":               "grist.update_csv",
     "contacts_update":                "contacts.edit",
     "contacts_create":                "contacts.create",
     "contacts_add_label":             "contacts.add_label",
@@ -318,6 +320,8 @@ TOOL_TO_GATE: dict[str, str] = {
     "grist_update_records":            "popup",
     "grist_create_table":              "popup",
     "grist_add_columns":               "popup",
+    "grist_import_csv":                "popup",
+    "grist_update_csv":                "popup",
 }
 
 @dataclass

@@ -273,7 +273,7 @@ class TestProposalsAgainstTheV1Tables:
                 (tool, make_ctx(connector="grist", args={"doc_id": "DOC1", "table_id": "Table1"}))
                 for tool in (
                     "grist_get_records", "grist_add_records", "grist_update_records",
-                    "grist_create_table", "grist_add_columns",
+                    "grist_create_table", "grist_add_columns", "grist_import_csv", "grist_update_csv",
                 )
             ),
         ):

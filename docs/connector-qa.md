@@ -634,6 +634,8 @@ For each representative read, list, search, create, update, send or upload tool:
 - **Connect.** Connecting with an API key and signing in with the OAuth app both succeed, and the
   popup cards for the four writes (`grist_add_records`, `grist_update_records`,
   `grist_create_table`, `grist_add_columns`) name the server.
+- **CSV cards.** The popup cards of `grist_import_csv` and `grist_update_csv` name the server and
+  show the counts and the sample.
 - **Review card.** `grist_get_records` on the `QaSeed` table prompts for review.
 - **Paging.** `--check`'s `get_records_paged` row reads `QaSeed` one row per page with `after_id`
   and compares it with one read, so it needs the two seed rows. It records nothing.
