@@ -53,6 +53,9 @@ ol.steps input[type="checkbox"] { width: 18px; height: 18px; margin-top: 3px; ac
 li.done .step-body { color: var(--ink-soft); text-decoration: line-through; text-decoration-color: var(--line); }
 .see { display: block; color: var(--ink-soft); font-size: .88rem; margin-top: 2px; }
 code { font-family: var(--font-mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+#mb1-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.codehead { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: .8rem; color: var(--ink-soft); }
+button.copy { font: inherit; font-size: .8rem; background: var(--accent); color: var(--surface); border: 0; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
 pre { font-family: var(--font-mono); font-size: .82rem; line-height: 1.45; background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
 a { color: var(--accent); }
 a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -80,88 +83,43 @@ button.reset { font: inherit; font-size: .85rem; background: none; border: 1px s
     <article class="task" data-task="mb1">
       <div class="task-head">
         <h3>1. Add the account comment endpoint to your Peek fork</h3>
-        <div class="meta"><span class="pill">mb1-fork-comment-endpoint</span><span>about 45 min</span></div>
+        <div class="meta"><span class="pill">mb1-fork-comment-endpoint</span><span>one Peek session, plus deploy</span></div>
       </div>
-      <p class="why">Peek's comment API takes no token today: it posts as whatever name the browser sends, and on a public page as "anonymous". PrivacyFence posts only through a separate route that takes the token and signs the comment with your account name. The browser route stays as it is. The exact contract is in <a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-connector/docs/peek-connector-plan.md#31-the-fork-change-privacyfence-needs-done-by-the-maintainer-mb1" target="_blank" rel="noopener">plan §3.1</a>.</p>
+      <p class="why">Peek's comment API takes no token today: it posts as whatever name the browser sends, and on a public page as "anonymous". PrivacyFence posts only through a separate route that takes the token and signs the comment with your account name. The browser route stays as it is. The contract is <a href="https://github.com/privacyfence/privacyfence/blob/plan/peek-connector/docs/peek-connector-plan.md#31-the-fork-change-privacyfence-needs-done-by-the-maintainer-mb1" target="_blank" rel="noopener">plan §3.1</a>; the prompt below carries all of it.</p>
       <ol class="steps">
-        <li><label><input type="checkbox" id="mb1-1"><span class="step-body">In a checkout of <a href="https://github.com/andras-tkcs/peek" target="_blank" rel="noopener">andras-tkcs/peek</a>, create a branch and run <code>mise install</code>.</span></label></li>
-        <li><label><input type="checkbox" id="mb1-2"><span class="step-body">In <a href="https://github.com/andras-tkcs/peek/blob/main/internal/server/routes.go" target="_blank" rel="noopener">internal/server/routes.go</a>, add this line to the token-gated block, after the <code>/stats</code> route:
-          <pre>mux.HandleFunc("POST /api/uploads/{slug}/account-comments", s.authToken(s.handleAddAccountComment))</pre></span></label></li>
-        <li><label><input type="checkbox" id="mb1-3"><span class="step-body">In <a href="https://github.com/andras-tkcs/peek/blob/main/internal/server/comments.go" target="_blank" rel="noopener">internal/server/comments.go</a>, add the handler. This sketch reuses <code>handleAddComment</code>'s validation; check names and types against your fork before you commit it:
-          <pre>func (s *Server) handleAddAccountComment(w http.ResponseWriter, r *http.Request) {
-	owner, ok := requireAPIToken(w, r)
-	if !ok {
-		return
-	}
-	if !s.commentLimiter.allow(s.clientIP(r)) {
-		jsonError(w, http.StatusTooManyRequests, "too many comments, slow down")
-		return
-	}
-	slug := r.PathValue("slug")
-	u, err := s.store.GetUpload(r.Context(), slug)
-	if err != nil {
-		jsonError(w, http.StatusNotFound, "not found")
-		return
-	}
-	if u.OwnerAccountID != owner.AccountID &amp;&amp; !owner.IsAdmin {
-		jsonError(w, http.StatusForbidden, "not owner")
-		return
-	}
-	var in commentIn
-	if err := decodeJSON(w, r, &amp;in, defaultJSONBodyLimit); err != nil {
-		jsonError(w, http.StatusBadRequest, "bad json")
-		return
-	}
-	in.Selector = strings.TrimSpace(in.Selector)
-	in.Body = strings.TrimSpace(in.Body)
-	in.Text = strings.TrimSpace(in.Text)
-	anchorKind, ok := normalizeCommentAnchorKind(in.Selector, in.Text, strings.TrimSpace(in.AnchorKind))
-	if !ok {
-		jsonError(w, http.StatusBadRequest, "invalid anchor kind")
-		return
-	}
-	if in.Body == "" {
-		jsonError(w, http.StatusBadRequest, "comment body required")
-		return
-	}
-	if len(in.Body) &gt; 4000 || len(in.Selector) &gt; 500 || len(in.Text) &gt; 200 {
-		jsonError(w, http.StatusRequestEntityTooLarge, "field too long")
-		return
-	}
-	h := sha256.Sum256([]byte(s.secret + "|account:" + strconv.FormatInt(owner.AccountID, 10)))
-	vidHash := hex.EncodeToString(h[:])[:16]
-	if err := s.store.AddComment(r.Context(), u.ID, in.Selector, in.Text, anchorKind, owner.Name, vidHash, in.Body); err != nil {
-		jsonError(w, http.StatusInternalServerError, "db error")
-		return
-	}
-	list, err := s.store.ListComments(r.Context(), u.ID)
-	if err != nil || len(list) == 0 {
-		jsonError(w, http.StatusInternalServerError, "db error")
-		return
-	}
-	c := list[0]
-	for _, x := range list {
-		if x.ID &gt; c.ID {
-			c = x
-		}
-	}
-	s.auditRequest(r, owner.Name, "comment.create", "slug="+slug)
-	jsonOK(w, commentOut{
-		ID: c.ID, Selector: c.ElementSelector, Text: c.ElementText,
-		AnchorKind: commentAnchorKind(c.ElementSelector, c.ElementText, c.AnchorKind),
-		Author: c.AuthorName, Body: c.Body, CreatedAt: c.CreatedAt.Unix(),
-	})
-}</pre>
-          <span class="see">Any <code>name</code> in the request body is ignored: the author is always the token's account. If <code>AccountID</code> is not an <code>int64</code> in your fork, adjust the hash line.</span></span></label></li>
-        <li><label><input type="checkbox" id="mb1-4"><span class="step-body">Add Go tests next to <code>comments_test.go</code>: 401 without a token, 403 for another account's page, 200 with the account name as author (a <code>name</code> in the body is ignored), 400 for an empty body, and the browser route still answering as before.</span></label></li>
-        <li><label><input type="checkbox" id="mb1-5"><span class="step-body">Run <code>mise run check-full</code>; it must pass. Merge to your fork's main and deploy that build wherever you run Peek (the QA server in task 2 needs it too).</span></label></li>
-        <li><label><input type="checkbox" id="mb1-6"><span class="step-body">Try it against a page you own, with your token in an environment variable (never in a file you share):
+        <li><label><input type="checkbox" id="mb1-1"><span class="step-body">Open a Claude Code session on <a href="https://github.com/andras-tkcs/peek" target="_blank" rel="noopener">andras-tkcs/peek</a> (it already has a devflow profile in <code>.claude/toolkit.yaml</code>) and run <code>/devflow:make-plan</code> with the prompt in the box below.<span class="see">For a change this size it should hand back a single-session prompt, not a plan branch.</span></span></label></li>
+        <li><label><input type="checkbox" id="mb1-2"><span class="step-body">Start a new session with the prompt it hands back (on the model it names), and let that session open the PR.</span></label></li>
+        <li><label><input type="checkbox" id="mb1-3"><span class="step-body">Review and merge the PR, then deploy that build wherever you run Peek (the QA server in task 2 needs it too).</span></label></li>
+        <li><label><input type="checkbox" id="mb1-4"><span class="step-body">Try it against a page you own, with your token in an environment variable (never in a file you share):
           <pre>curl -sS -X POST -H "Authorization: Bearer $PEEK_TOKEN" -H 'Content-Type: application/json' \
   -d '{"body":"[QATEST] probe"}' https://&lt;your peek&gt;/api/uploads/&lt;slug&gt;/account-comments
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
   -d '{"body":"x"}' https://&lt;your peek&gt;/api/uploads/&lt;slug&gt;/account-comments</pre>
-          <span class="see">The first prints JSON with <code>"author"</code> set to your account name; the second prints <code>401</code>. Delete the probe page or leave the comment; it is harmless.</span></span></label></li>
+          <span class="see">The first prints JSON with <code>"author"</code> set to your account name; the second prints <code>401</code>.</span></span></label></li>
       </ol>
+      <div class="codehead"><span>/devflow:make-plan prompt</span><button class="copy" type="button" data-copy="mb1-prompt">Copy</button></div>
+      <pre id="mb1-prompt">Add a token-authenticated comment endpoint, so an API client can post a comment under its own account name.
+
+Why: PrivacyFence (an approval gateway between AI assistants and services) is adding a Peek connector. Its agent reads comments with GET /api/uploads/{slug}/comments and a bearer token, but cannot post one: POST /api/uploads/{slug}/comments has no token path. It ignores the Authorization header, checks only the browser's page access (viewerCanAccessUpload), and takes the author name from the request body, so on a public page an API call would post as "anonymous". PrivacyFence must never post an unsigned comment the user approved.
+
+What to build:
+- A new route, registered with the other token-gated API routes in internal/server/routes.go:
+  POST /api/uploads/{slug}/account-comments, wrapped in s.authToken(...).
+- A new route on purpose, not a token branch inside the existing handler: on a server without it, the client's call fails (404/405) instead of silently posting as "anonymous". The browser route POST /api/uploads/{slug}/comments and its behaviour stay exactly as they are.
+- Who may post: the token's account must own the upload or be an admin, the same rule as the token path of handleListComments. Otherwise 403 {"error":"not owner"}. Unknown slug: 404 {"error":"not found"}. Missing, invalid or disabled token: whatever authToken already answers (401/403).
+- Request body JSON: {"body", "selector", "element_text", "anchor_kind"}. Any "name" field is ignored. Same trimming, normalizeCommentAnchorKind handling, required body and length limits (body 4000, selector 500, element_text 200) and error answers as handleAddComment; share that validation rather than copying it.
+- The author is the token's account name. The per-comment visitor hash is derived from the account id (with the server secret), not from a visitor cookie; no cookies are set.
+- The same comment rate limiter as the browser route.
+- An audit entry "comment.create" with the slug, like the other token routes' auditRequest calls.
+- Answer 200 with the new comment only, as a single commentOut object: {"id","selector","element_text","anchor_kind","author","body","created_at"} (created_at Unix seconds). Not the whole list.
+
+Tests (internal/server, next to comments_test.go): no token → 401; a token for another account's upload → 403; an admin token on someone else's upload → 200; success → 200, author is the account name even when the body carries "name"; empty body → 400; an over-long field → 413; an invalid anchor kind → 400; the comment then appears in GET .../comments; the browser route still behaves as before (an existing test covering it keeps passing).
+
+Docs: add the route to the API reference in docs/src/content/docs/reference.md (and wherever else the token API routes are listed), and a line in the skills/peek SKILL.md only if it documents API routes.
+
+Out of scope: no CLI command, no change to the browser comment route, the page UI, the GET comments endpoint or anything else. View restrictions are a separate change.
+
+This is one small change: hand back a single-session prompt, not a plan.</pre>
       <p class="done-when"><strong>Done when:</strong> a POST to <code>/api/uploads/&lt;a page you own&gt;/account-comments</code> with your token and <code>{"body":"[QATEST] probe"}</code> answers 200 with your account name as <code>author</code>, and the same request without the <code>Authorization</code> header answers 401.</p>
     </article>
 
@@ -277,6 +235,14 @@ ${EDITOR:-nano} ~/privacyfence/credentials/peek_token.json</pre></span></label><
   });
   document.getElementById('reset').addEventListener('click', function () {
     state = {}; save(state); boxes.forEach(function (b) { b.checked = false; }); paint();
+  });
+  document.querySelectorAll('button.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var el = document.getElementById(btn.getAttribute('data-copy'));
+      var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); };
+      var select = function () { var r = document.createRange(); r.selectNodeContents(el); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); btn.textContent = 'Selected, press Ctrl+C'; };
+      try { navigator.clipboard.writeText(el.textContent).then(done, select); } catch (e) { select(); }
+    });
   });
   paint();
 })();

@@ -646,7 +646,7 @@ manual_steps_artifact: https://claude.ai/artifact/EuE4FosPLnDACgsotL89h7
 manual_steps_source: docs/peek-connector-plan-manual-steps.html
 manual_before:
   - id: mb1-fork-comment-endpoint
-    title: Add the account comment endpoint (POST /api/uploads/{slug}/account-comments) to the Peek fork and deploy it
+    title: Add the account comment endpoint (POST /api/uploads/{slug}/account-comments) to the Peek fork, through /devflow:make-plan with the prompt on the manual-steps page, and deploy it
     why: p9-qa-recorder's live check and lifecycle post a comment through it; without it peek_add_comment can only report that the server lacks it.
     done_when: A POST to https://<your Peek>/api/uploads/<a page you own>/account-comments with your token and {"body":"[QATEST] probe"} answers 200 with JSON whose "author" is your account name, and the same request without the Authorization header answers 401.
   - id: mb2-peek-qa-server
