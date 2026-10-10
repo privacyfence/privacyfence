@@ -9,6 +9,7 @@ validated before any request, and no token reaches a message or a repr.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -30,6 +31,7 @@ from privacyfence.grist_client import (
 pytestmark = pytest.mark.unit
 
 SERVER = "https://grist.example.com:8484"
+LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "grist"
 
 
 class RefreshingCredential:
@@ -481,3 +483,43 @@ class TestAddColumns:
         with pytest.raises(GristClientError, match="column"):
             client.add_columns("doc1", "T", [{"id": "1x"}])
         assert net.calls == []
+
+
+class TestLiveFixtureParsing:
+    """Replays fixtures recorded from the [QATEST]-tagged QA document by
+    scripts/qa_fixture_recorder.py --record grist through the real parsers,
+    with only ``_request`` faked. Skipped (not failed) until each fixture
+    exists; see tests/fixtures/live/README.md and docs/testing-policy.md.
+    """
+
+    DOC = "qaDocId123"
+
+    def _load(self, name: str) -> Any:
+        path = LIVE_FIXTURES_DIR / name
+        if not path.exists():
+            pytest.skip(
+                f"{path} not recorded yet -- run "
+                "`python3 scripts/qa_fixture_recorder.py --record grist` locally first"
+            )
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _client_returning(self, raw: Any) -> GristClient:
+        client = GristClient(SERVER, GristApiKey("key"))
+        client._request = lambda *args, **kwargs: raw  # type: ignore[method-assign]
+        return client
+
+    def test_list_columns_fixture_still_parses(self):
+        raw = self._load("list_columns.json")
+
+        columns = self._client_returning(raw).list_columns(self.DOC, "QaSeed")
+
+        assert [c.id for c in columns] == ["Name", "Note"]
+        assert all(c.label and c.type == "Text" and not c.is_formula for c in columns)
+
+    def test_get_records_fixture_still_parses(self):
+        raw = self._load("get_records.json")
+
+        page = self._client_returning(raw).get_records(self.DOC, "QaSeed")
+
+        assert page.records and not page.truncated
+        assert all("[QATEST]" in r.fields["Name"] and r.id for r in page.records)
