@@ -155,7 +155,8 @@ issued for; redirects are never followed; nothing logs a token or the client sec
   `http://localhost:53685/callback`), `GRIST_SCOPES = "doc:read doc:write doc.schema:write offline_access"`,
   `DEFAULT_SERVER_URL = "https://docs.getgrist.com"`.
 - `normalize_server_url(url: str) -> str`: strip whitespace and trailing `/`; `urllib.parse.urlsplit`.
-  Messages (exact): empty → `"Enter the Grist server address, such as https://docs.getgrist.com."`;
+  Every rejection raises `GristClientError` (never `ValueError`), so a bad bundle URL is caught by
+  every `except GristClientError` in §3.5 and §3.6. Messages (exact): empty → `"Enter the Grist server address, such as https://docs.getgrist.com."`;
   a scheme other than `https`, except `http` with host `localhost`/`127.0.0.1`/`::1` →
   `"The Grist server address must start with https:// (http:// is allowed only for localhost)."`;
   userinfo, query or fragment → `"The Grist server address must not contain a user name, password, query or fragment."`;
@@ -167,13 +168,26 @@ issued for; redirects are never followed; nothing logs a token or the client sec
   `server_url`); a missing `server_url`, `client_id` or `client_secret` →
   `GristClientError("Grist organization config not installed")`.
 - `@dataclass(frozen=True) class GristOAuthEndpoints(authorization_endpoint: str, token_endpoint: str, client_secret_basic: bool)`.
-- `discover(auth_server_url: str) -> GristOAuthEndpoints`: `GET {auth_server_url}/.well-known/oauth-authorization-server`
-  (`timeout=30`, `allow_redirects=False`). Both endpoints must be present and pass the same scheme
-  rule as `normalize_server_url`, else `GristClientError(f"Grist's sign-in settings at {host} are not usable. Check the Grist server address (and, for getgrist.com, the sign-in server) in the organization config.")`.
+- `discover(auth_server_url: str, server_url: str) -> GristOAuthEndpoints`: `GET {auth_server_url}/.well-known/oauth-authorization-server`
+  (`timeout=30`, `allow_redirects=False`). The document's `issuer`, with a trailing `/` stripped,
+  must equal `auth_server_url` (RFC 8414 §3.3); both endpoints must be present, pass the same
+  scheme rule as `normalize_server_url`, and have a host equal to `auth_server_url`'s or
+  `server_url`'s host (the token endpoint receives the client secret and the refresh token).
+  Otherwise `GristClientError(f"Grist's sign-in settings at {host} are not usable. Check the Grist server address (and, for getgrist.com, the sign-in server) in the organization config.")`.
   `client_secret_basic` is `True` when `token_endpoint_auth_methods_supported` is absent (the
   RFC 8414 default) or contains `"client_secret_basic"`; otherwise the secret is sent in the form
   (`client_secret_post`). Results are cached per `auth_server_url` in a module dict (add its reset
   to `tests/conftest.py` `_reset()`).
+- Client authentication at the token endpoint: with `client_secret_basic`, an `Authorization:
+  Basic` header of `quote(client_id, safe="") + ":" + quote(client_secret, safe="")`
+  (`urllib.parse.quote`, RFC 6749 §2.3.1), built by hand rather than with `requests`' `auth=`;
+  otherwise `client_id` and `client_secret` in the form.
+- Failures of the three sign-in requests (`discover`, `exchange_code`, `refresh`) all raise
+  `GristClientError`, with these exact messages unless a bullet below gives a more specific one:
+  `requests.RequestException` → `f"Could not reach Grist's sign-in server at {host}: {type(exc).__name__}"`;
+  3xx → `f"Grist's sign-in server answered with a redirect (HTTP {status}). Check the sign-in server in the organization config."`;
+  5xx → `f"Grist's sign-in server answered with an error (HTTP {status})."`;
+  a 2xx body that is not a JSON object → `f"Grist's sign-in server answered with something other than JSON (HTTP {status})."`.
 - `build_authorize_url(endpoints, client_id, redirect_uri, state, code_challenge) -> str`: params
   `response_type=code`, `client_id`, `redirect_uri`, `state`, `scope=GRIST_SCOPES`,
   `prompt=consent`, `code_challenge`, `code_challenge_method=S256`.
@@ -191,12 +205,16 @@ issued for; redirects are never followed; nothing logs a token or the client sec
   `check_server_matches(record, config)`: `normalize_server_url(record["server_url"]) != config.server_url` →
   `GristClientError("Grist was signed in to a different server than your organization uses. Use Authenticate… in PrivacyFence Settings to sign in again.")`.
 - `refresh(config, endpoints, record) -> dict[str, Any]`: POST `grant_type=refresh_token`,
-  `refresh_token`; keeps the old `refresh_token` when none comes back. `invalid_grant` (or 400/401
-  with no body) → `GristClientError("Your Grist sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again.")`.
+  `refresh_token`; returns `{**record, "access_token": …, "expires_at": …}` plus the new
+  `refresh_token` when one comes back (so `server_url` and an unrotated `refresh_token` carry
+  over). `invalid_grant` (or 400/401 with no JSON body) →
+  `GristClientError("Your Grist sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again.")`;
+  any other 4xx → `GristClientError(f"Grist sign-in refresh failed: {error}: {error_description}")` (each cut to 200 characters).
 - `class GristTokenProvider(config: GristOAuthConfig, token_file: str)`: `access_token(*, force_refresh: bool = False) -> str`,
   thread-safe (`threading.Lock`); loads the record on first use, refreshes when `force_refresh` or
-  `expires_at - 60 <= time.time()`, saves the new record with `save_token_file`.
-- `authorize_interactive(config, token_file) -> dict[str, Any]`: `discover`, then
+  `expires_at - 60 <= time.time()` (calling `discover(config.auth_server_url, config.server_url)`
+  at the first refresh, then the cache), and saves the new record with `save_token_file`.
+- `authorize_interactive(config, token_file) -> dict[str, Any]`: `discover(config.auth_server_url, config.server_url)`, then
   `oauth_loopback.run_browser_oauth(_build, _exchange, port=GRIST_OAUTH_PORT, path=GRIST_REDIRECT_PATH, redirect_host="localhost")`
   (the `salesforce_client.authorize_interactive` shape), maps `OAuthLoopbackError` to
   `GristClientError(f"Grist sign-in failed: {exc}")`, saves and returns the record.
@@ -443,14 +461,16 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   `--grist-server-url` (default `https://docs.getgrist.com`), `--grist-client-id`,
   `--grist-client-secret` (both or neither, as Salesforce's pair) and `--grist-auth-server-url`
   (optional; written only when given). The script stays standard-library only: it strips a
-  trailing `/` from both URLs and rejects (`SystemExit("--grist-server-url and --grist-auth-server-url must be https:// addresses.")`)
-  a URL whose `urlsplit` scheme is not `https` or whose host is empty. `"grist"` joins the
+  trailing `/` from both URLs and rejects (`SystemExit("--grist-server-url and --grist-auth-server-url must be https:// addresses (http:// only for localhost).")`)
+  a URL with an empty host, or a scheme other than `https` except `http` with host `localhost`,
+  `127.0.0.1` or `::1` (the same rule as `normalize_server_url`). `"grist"` joins the
   `services` tuple at `:692`, and `_CONNECTOR_CALLBACKS["grist"] = ("grist",)` so the org-mode
   summary prints `{issuer}/oauth/callback/grist`.
 - `web/routes_connect.py`: `"grist"` in `OAUTH_SERVICES`, `_GRANT_KEY`, `SERVICE_LABELS`
   (`"Grist"`), `_ORG_CONFIG_SECTION`; `_is_configured` is true when `oauth_config` accepts the
   section; `_build_authorize_url` and `_exchange_and_save` get a `grist` branch in the Salesforce
-  shape (`org_identity.generate_pkce_pair()`, `grist_oauth.discover(cfg.auth_server_url)`,
+  shape (`org_identity.generate_pkce_pair()`, `grist_oauth.discover(cfg.auth_server_url, cfg.server_url)`
+  — called synchronously like the other branches' provider calls; it is cached per URL after the first sign-in,
   `build_authorize_url`, `exchange_code`, `save_token_file`); the rows tuple in
   `_render_connect_page` becomes `("slack", "salesforce", "jira", "confluence", "grist")`.
   `tests/unit/web/test_routes_connect.py:170` asserts the row count, which becomes 12.
@@ -501,8 +521,10 @@ on the card); `## Troubleshooting` (the exact error texts from §3.2.1 and §3.2
   becomes a reserved plugin name, so a plugin already called `grist` is refused.
 - **0143** — The Grist server and its sign-in server come only from the bundle, never from a
   person; a token is used only with the server it was issued for (a mismatch asks to sign in
-  again); only `https` (or `http` to loopback); redirects are never followed; every Grist approval
-  card names the server. Rejected: a user-entered server address in local mode (an OAuth app is
+  again); only `https` (or `http` to loopback); redirects are never followed; the discovery
+  document's `issuer` must equal the configured sign-in server and its endpoints must sit on that
+  host or the Grist server's host, so a tampered discovery answer cannot send the client secret or a
+  refresh token elsewhere; every Grist approval card names the server. Rejected: a user-entered server address in local mode (an OAuth app is
   registered per server anyway, and a free address lets data go to any server).
 - **0144** — Grist auto-accept rules are scoped per document (`grist.document`) and made on
   Settings or through the bridge tool, never from the approval card's "Always allow". Rejected:
@@ -517,7 +539,8 @@ on the card); `## Troubleshooting` (the exact error texts from §3.2.1 and §3.2
 
 Step-by-step page: see `manual_steps_artifact` in the manifest.
 
-- **Before implementation**: create a Grist QA account and seed document, register the
+- **Before implementation**: create a Grist QA account, a seed document (tables `QaSeed` and
+  `QaLifecycle`), register the
   PrivacyFence QA app in Grist and note where its discovery document is served
   (`mb1-grist-qa-account`); on the self-hosted runner, add the app to the QA bundle, the seed ids
   to `qa_environment.yaml`, and create the token file with the bootstrap script on the page
@@ -572,11 +595,11 @@ manual_before:
   - id: mb1-grist-qa-account
     title: Create a Grist QA account and seed document, and register the PrivacyFence QA OAuth app in Grist
     why: p10-qa-recorder records live fixtures from this document through this app; without them the recording has nothing to read and no way to sign in.
-    done_when: A Grist document "PrivacyFence QA [QATEST]" has a table QaSeed (columns Name, Note) with two [QATEST] rows, a contrast document exists, an OAuth app "PrivacyFence QA" with redirect URI http://localhost:53685/callback and the scopes doc:read, doc:write, doc.schema:write and offline_access exists, its client id and secret are in your password manager, and you know which address serves /.well-known/oauth-authorization-server.
+    done_when: A Grist document "PrivacyFence QA [QATEST]" has a table QaSeed (columns Name, Note) with two [QATEST] rows and an empty table QaLifecycle (columns Name, Note), a contrast document exists, an OAuth app "PrivacyFence QA" with redirect URI http://localhost:53685/callback and the scopes doc:read, doc:write, doc.schema:write and offline_access exists, its client id and secret are in your password manager, and you know which address serves /.well-known/oauth-authorization-server.
   - id: mb2-runner-qa-state
     title: Add the Grist app to the runner's QA bundle, the seed ids to qa_environment.yaml, and create the runner's Grist token with the bootstrap script
     why: p10-qa-recorder dispatches qa-record-fixture.yml, which reads the bundle's grist section, ~/privacyfence/credentials/grist_token.json and the grist section of qa_environment.yaml on the runner. The bootstrap script also proves discovery, the authorize URL and the code exchange against the real Grist before any phase starts.
-    done_when: On the runner, ~/privacyfence/org/org_config.json has a grist section (server_url, client_id, client_secret, and auth_server_url if discovery is not served by the server itself), ~/privacyfence/credentials/grist_token.json exists with mode 600 and the keys server_url, access_token, refresh_token and expires_at, and ~/privacyfence/tests/fixtures/qa_environment.yaml has a grist section with doc_id and table_id. If the bootstrap script failed, report its error instead and do not start /implement.
+    done_when: On the runner, ~/privacyfence/org/org_config.json has a grist section (server_url, client_id, client_secret, and auth_server_url if discovery is not served by the server itself), ~/privacyfence/credentials/grist_token.json exists with mode 600 and the keys server_url, access_token, refresh_token and expires_at, and ~/privacyfence/tests/fixtures/qa_environment.yaml has a grist section with doc_id, table_id and lifecycle_table_id. If the bootstrap script failed, report its error instead and do not start /implement.
 manual_after:
   - id: ma1-local-mode-check
     title: Sign in to Grist from Settings and drive every Grist tool from an AI client
@@ -1081,18 +1104,22 @@ phases:
            with note "server does not let OAuth apps list documents"); list_columns ("list_columns.json": the raw
            columns response for table_id, through RawCapture); get_records ("get_records.json": the raw records
            response, ok only when every returned row's Name contains [QATEST], refusing to record otherwise).
-         - lifecycle_grist(manifest): add one record {"Name": f"{LIFECYCLE_TAG} grist row {suffix}", "Note": "created by
-           qa_fixture_recorder.py --lifecycle"}, read it back by id, update Note to "updated", read back; no delete (the
+         - lifecycle_grist(manifest): in the table cfg.get("lifecycle_table_id", "QaLifecycle") — never QaSeed, whose
+           rows check_grist requires to be [QATEST] — add one record {"Name": f"{LIFECYCLE_TAG} grist row {suffix}", "Note":
+           "created by qa_fixture_recorder.py --lifecycle"}, read it back by id, update Note to "updated", read back; no delete (the
            client has none, plan §3.7) — docstring says rows accumulate and are cleaned by hand, like
            lifecycle_confluence. LifecycleResult("grist", ok, note, cleanup_ok=None).
          - Register "grist" in CONNECTOR_CHECKS, EXPECTED_FIXTURES ("list_columns.json", "get_records.json") and
            LIFECYCLE_CHECKS.
-      2. tests/fixtures/qa_environment.yaml.example: a grist section (doc_id: "", table_id: QaSeed) with comments in the
-         file's style.
+      2. tests/fixtures/qa_environment.yaml.example: a grist section (doc_id: "", table_id: QaSeed,
+         lifecycle_table_id: QaLifecycle) with comments in the file's style. Update the comment above LIFECYCLE_CHECKS in the
+         recorder to name Grist.
       3. docs/connector-qa.md: a Grist row in the QA accounts table (a getgrist.com account holding nothing real; the
          PrivacyFence QA app registered under Account settings → Developer, merged into the QA bundle with
          build_org_bundle.py's --grist-* options); "### Seed: Grist" (document "PrivacyFence QA [QATEST]", table QaSeed
-         with Name and Note, two [QATEST] rows, a contrast document; set grist.doc_id); the Manifest reference row;
+         with Name and Note and two [QATEST] rows, an empty table QaLifecycle with the same columns, a contrast document;
+         set grist.doc_id); the Manifest reference row (lifecycle: adds and updates one row in lifecycle_table_id, never
+         deletes it); the sentence near l.352 that lists which connectors --lifecycle covers gains Grist;
          Grist in the "Authenticating connectors" list (qa_authenticate_connectors.py --only grist); "### Grist checks"
          in the exploratory section (sign-in, review card for get_records, popup cards for the four writes naming the
          server, the grist.document rule from Settings auto-accepts a read, list_documents' refusal message where the
@@ -1127,6 +1154,8 @@ phases:
       - docs/configuration-reference.md
       - docs/README.md
       - docs/approvals-and-policy.md
+      - docs/connecting-a-service.md
+      - docs/org-mode-setup-guide.md
       - CHANGELOG.md
       - docs/adr/0142-grist-signs-in-with-oauth-registered-in-the-organization-bundle.md
       - docs/adr/0143-the-grist-server-comes-only-from-the-organization-bundle.md
@@ -1147,6 +1176,11 @@ phases:
          table next to `--salesforce-oauth`. docs/approvals-and-policy.md: in the scope table with the "Apps Script
          project" row (l.386), add "| Grist document | identity | document ids | `grist.document` | the document is one
          of these |" after it.
+         docs/connecting-a-service.md: add Grist to the provider lists (l.4, l.134, l.181) and the row
+         "| Grist | 53685 |" to the loopback-port table (l.72-77). docs/org-mode-setup-guide.md: add the row
+         "| Grist | `https://pf.acme.example.com/oauth/callback/grist` | `--grist-client-id`, `--grist-client-secret`, `--grist-server-url`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |"
+         before the Telegram row of the per-connector table (l.191), and the four --grist-* options to the build-options table (l.271-272)
+         matching configuration-reference.md's rows.
       3. CHANGELOG.md under "## [Unreleased]" (never a version heading): one Added line — "Grist connector: list tables
          and columns, read records after review, and add or update records and add tables and columns with approval,
          on getgrist.com or a self-hosted Grist with OAuth apps. Your organization registers one Grist OAuth app; each
