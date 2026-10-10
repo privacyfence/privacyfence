@@ -79,6 +79,7 @@ from ..connector_registry import ConnectorRegistry
 from ..contacts_client import SCOPES as _CONTACTS_SCOPES
 from ..drive_client import SCOPES as _DRIVE_SCOPES
 from ..gmail_client import SCOPES as _GMAIL_SCOPES
+from ..grist_client import GristClient
 from ..principal import Principal, principal_scope
 from ..tasks_client import SCOPES as _TASKS_SCOPES
 from . import org_session
@@ -384,6 +385,7 @@ def build_routes(
 ) -> list[Route]:
     attempts = _PendingAuthStore()
     telegram_states = _TelegramAuthStore()
+    grist_errors: dict[str, str] = {}  # principal id -> the last API-key form error, cleared on success
     base_url = issuer_url.rstrip("/")
 
     def _current_principal(request: Request) -> Principal | None:
@@ -462,6 +464,7 @@ def build_routes(
             principal=principal, org_config=org_config, telegram_state=telegram_state,
             flash_connected=request.query_params.get("connected", ""),
             flash_error=request.query_params.get("error", ""),
+            grist_error=grist_errors.get(principal.id, ""),
             csrf=session_id, nonce=_csp_nonce_for(request),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
@@ -472,7 +475,7 @@ def build_routes(
         # submission to reach (web/csp.py, ADR 0082). The signed-out page links to /login.
         return RedirectResponse(SIGNED_OUT_PATH, status_code=303, headers={"Cache-Control": "no-store"})
 
-    def _check_telegram_post(request: Request, form) -> Response | None:
+    def _check_form_post(request: Request, form) -> Response | None:
         if not org_session.check_csrf(request, form.get("csrf")):
             return PlainTextResponse("Unauthorized.", status_code=401)
         if not org_session.check_origin(request):
@@ -484,7 +487,7 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
 
@@ -512,7 +515,7 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
 
@@ -547,7 +550,7 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
 
@@ -579,10 +582,44 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
         telegram_states.clear(principal.id)
+        return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
+
+    async def grist_connect(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return _signed_out_redirect()
+        form = await request.form()
+        rejected = _check_form_post(request, form)
+        if rejected is not None:
+            return rejected
+
+        bundle = _grist_bundle(org_config)
+        api_key = str(form.get("api_key", "")).strip()
+        error = ""
+        if bundle is None:
+            error = "Grist is not set up by your organization."
+        elif bundle.oauth is not None:
+            error = "Your organization connects to Grist with OAuth. Use Connect."
+        elif not api_key:
+            error = "Enter your Grist API key."
+        else:
+            try:
+                await asyncio.to_thread(GristClient(bundle.server_url, grist_auth.GristApiKey(api_key)).check_connection)
+                grist_auth.save_api_key(
+                    str(paths.user_dir(principal) / _token_files()["grist"]), bundle.server_url, api_key,
+                )
+            except grist_auth.GristClientError as exc:
+                error = str(exc)
+            else:
+                connector_registry.evict(principal.id)
+        if error:
+            grist_errors[principal.id] = error
+        else:
+            grist_errors.pop(principal.id, None)
         return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
 
     return [
@@ -593,6 +630,7 @@ def build_routes(
         Route("/connect/telegram/code", telegram_code, methods=["POST"]),
         Route("/connect/telegram/2fa", telegram_2fa, methods=["POST"]),
         Route("/connect/telegram/cancel", telegram_cancel, methods=["POST"]),
+        Route("/connect/grist", grist_connect, methods=["POST"]),
     ]
 
 
@@ -722,32 +760,45 @@ def _telegram_box_html(principal: Principal, org_config: dict[str, Any], telegra
     )
 
 
-def _grist_box_html(principal: Principal, org_config: dict[str, Any]) -> str:
+def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str = "", error: str = "") -> str:
     bundle = _grist_bundle(org_config)
+    error_html = f'<p class="card card-danger" role="alert">{_esc(error)}</p>' if error else ""
     if bundle is None:
-        return _service_row_html(principal, org_config, "grist")
+        # A POST can arrive for a bundle that never offered the form; its error sits under the row.
+        row = _service_row_html(principal, org_config, "grist")
+        return row.replace("</li>", f"{error_html}</li>") if error else row
     connected = _is_connected(principal, "grist", org_config)
     badge = _CONNECTED_BADGE if connected else '<span class="badge">Not connected</span>'
     head = f'<span class="pf-service-head cluster"><span class="pf-service-chip">Grist</span>{badge}</span>'
     if bundle.oauth is not None:
         label, kind = ("Reconnect", "secondary") if connected else ("Connect", "primary")
         action = f'<a class="button {kind}" href="/oauth/start/grist">{label}</a>'
-        return f'<li class="service card cluster">{head}{action}</li>'
-    # The API-key form is the next phase's.
+        return f'<li class="service card cluster">{head}{action}{error_html}</li>'
+    server = _esc(bundle.server_url)
+    status = f"Connected to {server}." if connected else f"Your organization uses {server}."
     return (
-        f'<li class="service card cluster">{head}'
-        f'<span class="field-help">Your organization uses {_esc(bundle.server_url)}.</span></li>'
+        f'<li class="service grist card stack"><div class="pf-service-head cluster">'
+        f'<span class="pf-service-chip">Grist</span>{badge}</div>{error_html}'
+        '<form class="pf-grist-form stack" method="post" action="/connect/grist">'
+        f'<input type="hidden" name="csrf" value="{_esc(csrf)}">'
+        f'<div class="field-help">{status}</div>'
+        '<label><span class="field-label">API key</span>'
+        '<input class="field" type="password" name="api_key" autocomplete="off" autocapitalize="off" '
+        'spellcheck="false" required></label>'
+        '<div class="field-help">Find it in Grist under Account settings &gt; Developer &gt; API Key.</div>'
+        f'<div class="cluster"><button type="submit" class="button primary">{"Reconnect" if connected else "Connect"}</button></div>'
+        "</form></li>"
     )
 
 
 def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
-    flash_connected: str, flash_error: str, csrf: str, nonce: str,
+    flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
 ) -> str:
     google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"))
     other_rows = "".join(_service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence"))
     telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf)
-    grist_row = _grist_box_html(principal, org_config)
+    grist_row = _grist_box_html(principal, org_config, csrf, grist_error)
     who = principal.email or principal.display_name or principal.id
 
     body = (
