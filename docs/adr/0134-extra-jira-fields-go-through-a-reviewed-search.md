@@ -20,9 +20,13 @@ the gate invariant tests rely on that.
 - `jira_search_issues_with_fields` is a separate tool with gate `review`. It runs a JQL search and
   adds the requested fields to each issue; the approval card shows every issue and every requested
   value before anything is released.
-- Its operation is `jira.search_issues_with_fields` with `Verb.SEARCH` and no scope. The Jira scope
-  catalogue covers `READ`, `CREATE`, `COMMENT`, `UPDATE` and `TRANSITION`, and a JQL query names no
-  single project, so no standing rule can auto-accept it: every call shows a card.
+- Its operation is `jira.read_issue` with `Verb.SEARCH`, shared with `jira_get_issue` as Slack's
+  search shares `slack.read_messages`. A JQL query names no single project, so the project rule for
+  a search is `approved_project_keys_all_results`: it matches only when every returned issue's key
+  prefix is an approved project, evaluated on the results as the Slack and Telegram searches are.
+  Any result outside the approved projects shows the card for the whole call. (First written with
+  no scope and a separate `jira.search_issues_with_fields` operation, so no rule could ever
+  auto-accept it; the "Read auto-accept" grant on a project did nothing for it.)
 - `jira_get_issue` takes the same optional `fields` parameter and keeps operation
   `jira.read_issue`, with or without it. Its project, reporter and assignee rules still auto-accept
   it, because asking for more fields of the same issue does not change whose issue it is.
@@ -40,13 +44,13 @@ the gate invariant tests rely on that.
 
 ## Consequences
 
-Every extra-field search costs a review card, and a user cannot write a standing rule to waive it.
+An extra-field search costs a review card unless every result is in a project with a read rule.
 The agent can still read extra fields of one issue without a card where an existing `jira.read_issue`
 rule already covers that issue. Agents need `jira_list_fields` (ADR 0135) to find field ids.
 
 ## Verification
 
-`TestSearchIssuesWithFields` and `TestGetIssue` in `tests/unit/connectors/test_jira_connector.py`,
+`TestSearchIssuesWithFields`, `TestJiraSearchAllResults` and `TestGetIssue` in `tests/unit/connectors/test_jira_connector.py`,
 and the `jira_get_issue`, `jira_search_issues_with_fields` rows in `TOOL_TO_OPERATION` and
 `TOOL_TO_GATE` in `src/privacyfence/auto_accept.py`.
 

@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A "Read auto-accept" grant on a Jira project now also covers `jira_search_issues_with_fields` when every returned issue is in an approved project. Before, that search always showed a review card.
+
 ## [5.6.0] — 2026-10-10
 
 ### Added
