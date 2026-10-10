@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Stopping PrivacyFence with a settings or approvals tab open no longer waits two seconds for
+  the tab's live-update connection: the connection now ends as soon as the web server is asked
+  to stop.
+
 ## [5.7.0] — 2026-10-10
 
 ### Added
