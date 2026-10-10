@@ -88,7 +88,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .agent_identity import UNKNOWN_AGENT, AgentIdentity, current_agent
 from .agent_label import label_for
@@ -971,7 +971,10 @@ class PendingApprovalRegistry:
             ]
         for approval in candidates:
             try:
-                auto_ok, matched_rule = should_auto_accept(approval.operation_key, approval.review_ctx)
+                auto_ok, matched_rule = should_auto_accept(
+                    cast(str, approval.operation_key),  # filtered to operation_key is not None just above (approvals.py:968)
+                    approval.review_ctx,
+                )
             except Exception:
                 logger.exception("should_auto_accept raised during rules-changed re-evaluation")
                 continue
