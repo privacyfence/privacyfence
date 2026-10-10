@@ -45,6 +45,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 # Each bundle section's org-mode connector callbacks
 # (<issuer-url>/oauth/callback/<name>); Jira and Confluence share one
@@ -54,7 +55,30 @@ _CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
     "slack": ("slack",),
     "salesforce": ("salesforce",),
     "atlassian": ("atlassian",),
+    "grist": ("grist",),
 }
+
+
+def _grist_url(value: str) -> str:
+    """Validate one Grist address and strip its trailing ``/`` (mirrors ``grist_auth.normalize_server_url``;
+    this script stays standard-library only)."""
+    url = value.strip().rstrip("/")
+    parts = urlsplit(url)
+    if not parts.hostname or parts.scheme not in ("https", "http") or (
+        parts.scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1")
+    ):
+        raise SystemExit(
+            "--grist-server-url and --grist-auth-server-url must be https:// addresses (http:// only for localhost)."
+        )
+    if (
+        parts.username is not None or parts.password is not None or parts.query or parts.fragment
+        or "api" in parts.path.split("/")
+    ):
+        raise SystemExit(
+            "--grist-server-url and --grist-auth-server-url must not contain a user name, password, query, "
+            "fragment or /api."
+        )
+    return url
 
 
 def _canonical_payload_bytes(bundle: dict[str, Any]) -> bytes:
@@ -196,6 +220,20 @@ def build_parser() -> argparse.ArgumentParser:
     atlassian = parser.add_argument_group("Atlassian (Jira + Confluence)")
     atlassian.add_argument("--atlassian-client-id")
     atlassian.add_argument("--atlassian-client-secret")
+
+    grist = parser.add_argument_group("Grist")
+    grist.add_argument(
+        "--grist-server-url", metavar="URL",
+        help="The Grist server people connect to (for example https://docs.getgrist.com). Needed for every "
+             "Grist section; org mode offers Grist only with it.",
+    )
+    grist.add_argument("--grist-client-id", help="A Grist OAuth app; give the client id and secret together.")
+    grist.add_argument("--grist-client-secret")
+    grist.add_argument(
+        "--grist-auth-server-url", metavar="URL",
+        help="Where Grist's sign-in discovery document is served, when the server itself does not serve it "
+             "(only with the client id and secret). Default: the server URL.",
+    )
 
     mode = parser.add_argument_group(
         "Deployment mode",
@@ -516,6 +554,25 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("--atlassian-client-id and --atlassian-client-secret must be given together.")
         bundle["atlassian"] = {"client_id": args.atlassian_client_id, "client_secret": args.atlassian_client_secret}
 
+    if (
+        args.grist_server_url or args.grist_client_id or args.grist_client_secret or args.grist_auth_server_url
+    ):
+        if bool(args.grist_client_id) != bool(args.grist_client_secret):
+            raise SystemExit("--grist-client-id and --grist-client-secret must be given together.")
+        if not args.grist_server_url:
+            raise SystemExit(
+                "--grist-client-id, --grist-client-secret and --grist-auth-server-url need --grist-server-url."
+            )
+        grist_section: dict[str, Any] = {"server_url": _grist_url(args.grist_server_url)}
+        if args.grist_client_id:
+            grist_section["client_id"] = args.grist_client_id
+            grist_section["client_secret"] = args.grist_client_secret
+            if args.grist_auth_server_url:
+                grist_section["auth_server_url"] = _grist_url(args.grist_auth_server_url)
+        elif args.grist_auth_server_url:
+            raise SystemExit("--grist-auth-server-url needs --grist-client-id and --grist-client-secret.")
+        bundle["grist"] = grist_section
+
     if args.enable_unattended_sessions:
         bundle["unattended_sessions"] = {"enabled": True}
     elif args.disable_unattended_sessions:
@@ -689,7 +746,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         bundle["audit_forwarding"] = forwarding_section
 
-    services = [k for k in ("google", "slack", "salesforce", "atlassian") if k in bundle]
+    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist") if k in bundle]
     if not services and "unattended_sessions" not in bundle and "mode" not in bundle:
         raise SystemExit(
             "No service, --mode, or --enable/disable-unattended-sessions flags given — nothing to write."
