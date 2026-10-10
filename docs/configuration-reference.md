@@ -100,7 +100,7 @@ and the other is not, the daemon logs a warning at start.
 | `calendar.free_busy_full_event_details` | bool | `true` | `true` | `calendar_get_free_busy` returns event titles, times and status for a colleague when your account can already see them (busy/free only otherwise). `false` always returns busy/free only. **Settings > Privacy Filter**. |
 | `gmail.append_signature_to_drafts` | bool | `false` | `false` | Append your Gmail signature (the one Gmail stores for the sending address) to drafts. Each draft tool's `include_signature` argument overrides it per call. The signature is shown on the card. **Settings > Privacy Filter**. |
 | `salesforce.report_max_pages` | int | `50` | `50` | Most report runs one paged `salesforce_run_report` read may use (each page is one run and counts against the org's report-run limits). A read that needs more fails. |
-| `connectors.<name>.enabled` | bool | `true` | not set | `false` turns a connector off. `<name>` is one of `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`, `telegram`. Written by **Disable**/**Enable** on **Settings > Connectors**. A connector also needs its organization config and a sign-in before it runs. |
+| `connectors.<name>.enabled` | bool | `true` | not set | `false` turns a connector off. `<name>` is one of `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`, `telegram`, `grist`. Written by **Disable**/**Enable** on **Settings > Connectors**. A connector also needs its organization config and a sign-in before it runs. |
 
 ### PII detection
 
@@ -217,7 +217,8 @@ and `--generate-signing-key` also need the `cryptography` package). Pass only th
 services you have registered: a connector is offered only if its section is in the bundle. Install
 it from **Settings > General > Organization Configuration**. Per-service registration steps are in
 [Google Cloud setup](google-cloud-setup.md), [Slack setup](slack-setup.md),
-[Salesforce setup](salesforce-setup.md) and [Atlassian setup](atlassian-setup.md); Telegram needs no
+[Salesforce setup](salesforce-setup.md), [Atlassian setup](atlassian-setup.md) and
+[Grist setup](grist-setup.md); Telegram needs no
 bundle entry ([Telegram setup](telegram-setup.md)). The server side of an organization deployment is
 in [Organization deployment](org-mode-setup-guide.md).
 
@@ -301,7 +302,7 @@ truthfully which tools read and which write, and the option to say otherwise was
 the bundle; `--merge` drops the key. See
 [ADR 0089](adr/0089-tool-annotations-are-always-truthful.md).
 
-The Google, Slack, Salesforce and Atlassian redirect URIs to register for an organization
+The Google, Slack, Salesforce, Atlassian and Grist redirect URIs to register for an organization
 deployment are listed in [Organization deployment](org-mode-setup-guide.md).
 
 ## Command-line options
@@ -316,6 +317,7 @@ options below are for running it by hand.
 | `--print-mcp-token` | Print this OS account's MCP token (creating it the first time) and exit. See [Connect Claude Code](connect-claude-code.md#local-mode). Local mode only. |
 | `--gmail-oauth`, `--drive-oauth`, `--calendar-oauth`, `--contacts-oauth`, `--tasks-oauth`, `--apps-script-oauth` | Sign in to that Google service in the browser from the command line, save the token, and exit. |
 | `--slack-oauth`, `--salesforce-oauth`, `--atlassian-oauth` | The same for Slack, Salesforce, and Jira plus Confluence. |
+| `--grist-oauth` | The same for Grist, when the organization config carries a Grist OAuth app. With an API key, use **Settings > Connectors** instead. |
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
 
 The sign-in options are for an install that is not privilege-separated (a source checkout or a
