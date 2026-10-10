@@ -91,8 +91,8 @@ from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
-from starlette.routing import Route
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.routing import BaseRoute, Route
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
@@ -145,7 +145,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PORT = 8765
 # uvicorn otherwise waits for every in-flight response before it stops, and an open event stream
 # (an approvals tab, an MCP client's notification stream) never finishes on its own.
-SHUTDOWN_GRACE_SECONDS = 2.0
+SHUTDOWN_GRACE_SECONDS = 2
 _STOP_JOIN_SECONDS = 5.0
 MCP_URL_FILE_NAME = "mcp_url"
 
@@ -475,7 +475,7 @@ class _SecurityHeadersMiddleware:
         state = scope.setdefault("state", {})
         state.setdefault("csp_nonce", _new_csp_nonce())
 
-        async def send_with_headers(message: dict) -> None:
+        async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 nonce = scope.get("state", {}).get("csp_nonce") or _new_csp_nonce()
                 headers = MutableHeaders(raw=message.setdefault("headers", []))
@@ -945,7 +945,7 @@ def build_app(
     sessions = sessions or LocalSessionStore()
     bootstrap = bootstrap or BootstrapStore()
 
-    extra_routes: list[Route] = []
+    extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
         # ADR 0008: real local-mode traffic always passes mcp_verifier (a
@@ -1099,7 +1099,7 @@ def _build_org_app(
     from . import routes_approvals, routes_org_stepup, routes_push, routes_security
     from .routes_settings import build_org_routes
 
-    extra_routes: list[Route] = []
+    extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
         mcp_route, session_manager = mount_mcp(
@@ -1414,7 +1414,7 @@ class WebServer:
         if trusted_proxies:
             # Honored only when this explicit list is non-empty --
             # never by default, in either mode.
-            wrapped = ProxyHeadersMiddleware(wrapped, trusted_hosts=list(trusted_proxies))
+            wrapped = ProxyHeadersMiddleware(wrapped, trusted_hosts=list(trusted_proxies))  # type: ignore[arg-type,assignment]  # uvicorn's ASGI types are narrower than Starlette's
         # proxy_headers=False: uvicorn otherwise applies its own
         # ProxyHeadersMiddleware, trusting 127.0.0.1/::1 (or
         # $FORWARDED_ALLOW_IPS) whatever trusted_proxies says -- the wrap

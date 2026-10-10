@@ -221,19 +221,19 @@ class McpDispatcher:
         key = self._dedupe_key(principal_id, connector_name, tool, args)
         entry = self._inflight.get(key)
         if entry is not None:
-            fut, recorded_at = entry
+            existing, recorded_at = entry
             still_fresh = (now - recorded_at) < self._DEDUPE_TTL_SECONDS
             read_is_stale = self._is_read_only(connector, tool) and (
                 recorded_at <= self._last_write_at.get((principal_id, connector_name), 0.0)
             )
-            reusable = not fut.done() or (
+            reusable = not existing.done() or (
                 still_fresh and tool not in self._DEDUPE_EXEMPT_TOOLS and not read_is_stale
             )
             if reusable:
                 logger.info(
                     "Deduping repeat call to %s/%s: reusing in-flight/recent result", connector_name, tool,
                 )
-                return await fut
+                return await existing
 
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._inflight[key] = (fut, now)

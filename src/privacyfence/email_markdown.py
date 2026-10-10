@@ -99,9 +99,10 @@ def _parse_blocks(markdown: str) -> list[_Block]:
 
         bullet_match = _re.match(r"^[-*+]\s+(.*)", line)
         numbered_match = _re.match(r"^\d+\.\s+(.*)", line)
-        if bullet_match or numbered_match:
+        item_match = bullet_match or numbered_match
+        if item_match is not None:
             ordered = numbered_match is not None
-            item_text = (bullet_match or numbered_match).group(1)
+            item_text = item_match.group(1)
             top = blocks[-1] if blocks else None
             if top is not None and top.kind == "list" and top.ordered == ordered:
                 top.lines.append(item_text)
