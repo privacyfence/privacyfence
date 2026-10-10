@@ -55,7 +55,7 @@ and on dispatch. A 100% pass rate is required to merge.
 | `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest` |
 | `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
-| `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, `scripts/mypy_strict_modules.py` (all blocking); whole-tree `mypy src/privacyfence` (`continue-on-error`, informational) |
+| `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, whole-tree `mypy src/privacyfence`, `scripts/mypy_strict_modules.py` (all blocking); `ruff format` is not run (ADR 0148) |
 
 `pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
 also runs `playwright install --with-deps chromium`. Browser tests skip when Playwright or Chromium
@@ -267,7 +267,7 @@ Manual release checks, and the rule for what may stay manual, are in
 
 - **`/dod`** (from the devflow toolkit; its rows are `verify` in `.claude/toolkit.yaml`) — runs the blocking gate of
   [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)
-  (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy_strict_modules.py`, the shim's
+  (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy src/privacyfence`/`mypy_strict_modules.py`, the shim's
   `npm test`/`typecheck`), then checks the diff for the conditional items (live `--check` report,
   contract tests, lock files, `CHANGELOG.md`) and reports a pass/fail table. Given a path, it narrows
   `pytest` and skips the coverage floor.
