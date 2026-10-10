@@ -100,8 +100,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
-| [Grist](#grist) | 7 | 2 | 1 | 4 |
-| **Total** | **127** | **49** | **23** | **55** |
+| [Grist](#grist) | 9 | 2 | 1 | 6 |
+| **Total** | **129** | **49** | **23** | **57** |
 
 ## Gmail
 
@@ -288,4 +288,6 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `grist_add_columns` | write | `popup` | Add new columns to an existing table of a Grist document. |
 | `grist_add_records` | write | `popup` | Add new records to one table of a Grist document. |
 | `grist_create_table` | write | `popup` | Create a new table, with its columns, in a Grist document. |
+| `grist_import_csv` | write | `popup` | Add every row of a CSV file as a new record in one table of a Grist document, in one approval. |
+| `grist_update_csv` | write | `popup` | Update records of one table of a Grist document from a CSV file, in one approval: each row is matched to the record whose key_column has the same value, and only cells that differ change. |
 | `grist_update_records` | write | `popup` | Change cells of existing records in one table of a Grist document. |

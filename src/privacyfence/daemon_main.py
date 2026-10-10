@@ -1580,7 +1580,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)
             client = GristClient(server_url, credential)
             client.check_connection()
-            connectors.append(GristConnector(client))
+            connector = GristConnector(client)
+            connector.download_mode = download_mode
+            connectors.append(connector)
         except GristClientError as exc:
             logger.warning("Grist connector disabled: %s", exc)
             failures["grist"] = _classify_connector_failure(exc)

@@ -1272,6 +1272,7 @@ class TestBuildConnectorsGrist:
         self._patch(monkeypatch, self.API_KEY)
         connectors, failures = daemon_main.build_connectors({}, {})
         assert [c.name for c in connectors] == ["grist"]
+        assert connectors[0].download_mode == "local"
         assert "grist" not in failures
 
     def test_oauth_file_builds_through_token_provider(self, monkeypatch):

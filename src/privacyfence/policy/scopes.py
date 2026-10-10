@@ -32,7 +32,7 @@ config-authoring work, not something this module's `matches()` needs to know.
 Scope types with no old predicate to be checked against live in `NEW_SCOPE_SELECTORS` rather than
 `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly: `drive.file` (no rule ever
 named one specific file by id rather than a folder), `apps_script.project` (Apps Script's tools had
-no scope at all), `grist.document` (Grist's five operation keys name one document by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
+no scope at all), `grist.document` (Grist's seven operation keys name one document by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
 make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
 Auto-accept Settings page; see their own comment below for why they are not simply more
 `always_allow` rules.
@@ -529,7 +529,7 @@ def scope_type_to_predicates() -> dict[str, tuple[str, ...]]:
 #
 # drive.file names one specific file by id, which no other rule does (every Drive rule scopes by
 # folder or by attribute); apps_script.project is what makes the three Apps Script operation keys
-# configurable at all, and grist.document does the same for Grist's five. There is no old predicate to check either against, so they live here rather
+# configurable at all, and grist.document does the same for Grist's seven. There is no old predicate to check either against, so they live here rather
 # than in `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly instead of an
 # equivalence check.
 
