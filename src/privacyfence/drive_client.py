@@ -16,6 +16,7 @@ independently.
 from __future__ import annotations
 
 import base64
+import binascii
 import io
 import logging
 import mimetypes
@@ -1694,7 +1695,7 @@ class DriveClient:
                 raise DriveClientError("upload_file: name is required with content_base64")
             try:
                 data = base64.b64decode(content_base64, validate=True)
-            except (base64.binascii.Error, ValueError) as exc:
+            except (binascii.Error, ValueError) as exc:
                 raise DriveClientError(f"upload_file: invalid content_base64: {exc}") from exc
             mime_type = mimetypes.guess_type(resolved_name)[0] or "application/octet-stream"
             media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
