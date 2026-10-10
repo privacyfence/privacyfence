@@ -202,6 +202,9 @@ RULE_NAME_TO_RESOURCE_TYPE: dict[str, GrantResourceType] = {
 _drive_folder_rt = grant_resource_type("drive", "folders")
 assert _drive_folder_rt is not None  # nosec B101  # invariant narrowing, not input validation; "drive"/"folders" is a literal above
 RULE_NAME_TO_RESOURCE_TYPE["parent_folder_allowlist"] = _drive_folder_rt
+_grist_document_rt = grant_resource_type("grist", "documents")
+assert _grist_document_rt is not None  # nosec B101  # invariant narrowing; "grist"/"documents" is a literal above
+RULE_NAME_TO_RESOURCE_TYPE["grist.document"] = _grist_document_rt
 
 # Drive/Sheets URLs paste-able into a grant's ID field, so the user can copy
 # the browser address bar instead of hand-extracting the ID segment. Order

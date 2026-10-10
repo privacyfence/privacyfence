@@ -664,6 +664,18 @@ class SalesforceClient:
         logger.info("Connected to Salesforce org: %s", org_name)
         return org_name
 
+    def get_report_name(self, report_id: str) -> str | None:
+        """The name of one report by ID (15- or 18-character), or None if it isn't visible."""
+        report_id = report_id.strip()
+        if not _SALESFORCE_ID_RE.match(report_id):
+            return None
+
+        def _run(sf):
+            return sf.query(f"SELECT Name FROM Report WHERE Id = '{report_id}' LIMIT 1")
+
+        records = self._call(_run).get("records", [])
+        return (records[0].get("Name") or None) if records else None
+
     def list_reports(self) -> list[SalesforceReport]:
         """List reports accessible to the authenticated user."""
         def _run(sf):

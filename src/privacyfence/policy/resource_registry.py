@@ -94,8 +94,33 @@ def _resolve_calendar(client: Any, resource_id: str) -> str | None:
 
 
 def _resolve_salesforce_report(client: Any, resource_id: str) -> str | None:
+    # A rule may hold the 15-character form of an ID while Salesforce returns the 18-character one
+    # (same 15-character prefix), and the report list is capped, so look the report up by ID first.
+    getter = getattr(client, "get_report_name", None)
+    if getter is not None:
+        try:
+            name = getter(resource_id)
+            if name:
+                return name
+        except Exception:
+            pass
     try:
-        return _find_by(client.list_reports(), "id", resource_id)
+        for report in client.list_reports() or []:
+            rid = str(report.id)
+            if rid == resource_id or (len(resource_id) >= 15 and rid[:15] == resource_id[:15]):
+                return report.name or None
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_grist_document(client: Any, resource_id: str) -> str | None:
+    try:
+        return client.get_document(resource_id).name or None
+    except Exception:
+        pass
+    try:
+        return _find_by(client.list_documents(), "id", resource_id)
     except Exception:
         return None
 
@@ -235,6 +260,14 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
         connector="salesforce", config_key="reports",
         capabilities={"run": GrantCapability("Read auto-accept", (("salesforce.run_report", "approved_report_ids"),))},
         resolver=_resolve_salesforce_report,
+    ),
+    GrantResourceType(
+        connector="grist", config_key="documents",
+        # Name resolution only: grist.document is governed through the policy engine's own scope,
+        # not a grant capability, so the Auto-accept page maps its predicate here by hand
+        # (settings_controller.RULE_NAME_TO_RESOURCE_TYPE).
+        capabilities={},
+        resolver=_resolve_grist_document,
     ),
 )
 
