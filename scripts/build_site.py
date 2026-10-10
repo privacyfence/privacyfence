@@ -105,6 +105,7 @@ PAGES: dict[str, str] = {
     "/connectors/salesforce/": "connectors/salesforce/index.html",
     "/connectors/jira-confluence/": "connectors/jira-confluence/index.html",
     "/connectors/telegram/": "connectors/telegram/index.html",
+    "/connectors/grist/": "connectors/grist/index.html",
     "/ai-agents/": "ai-agents/index.html",
     "/ai-agents/claude-desktop/": "ai-agents/claude-desktop/index.html",
     "/ai-agents/claude-code/": "ai-agents/claude-code/index.html",
@@ -191,7 +192,7 @@ PUBLISHED_SET_MARKER = "docs/how-it-works.md"
 # guides and AI agent setup pages (connect-*) are counted apart from the rest of the docs.
 # Everything else is "docs".
 CONNECTOR_GUIDES = frozenset(
-    {"google-cloud-setup", "slack-setup", "salesforce-setup", "atlassian-setup", "telegram-setup"}
+    {"google-cloud-setup", "slack-setup", "salesforce-setup", "atlassian-setup", "telegram-setup", "grist-setup"}
 )
 
 # Display names per release-manifest artifact id. Mirrors the PLATFORMS maps in

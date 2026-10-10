@@ -36,7 +36,7 @@ An organization deployment has five parts:
 | The bundle | `org_config.json`: the organization's settings (server URL, identity provider, connector apps, step-up, downloads, audit forwarding), built and signed with `build_org_bundle.py`. |
 | A reverse proxy | Caddy or nginx on the same host. It terminates HTTPS on your public hostname and forwards to the daemon. |
 | Your identity provider | Any OpenID Connect (OIDC) provider your staff already sign in to. It decides who a person is. |
-| Connector apps | One OAuth app per service you offer (Google, Slack, Salesforce, Atlassian). Each person authorizes their own account against it. No credentials are shared between people. |
+| Connector apps | One OAuth app per service you offer (Google, Slack, Salesforce, Atlassian, and Grist if you want OAuth rather than personal API keys). Each person authorizes their own account against it. No credentials are shared between people. |
 
 What people see, all at `https://<your-hostname>`:
 
@@ -44,7 +44,7 @@ What people see, all at `https://<your-hostname>`:
 |---|---|
 | `/login` | Sign in through the identity provider. |
 | `/signed-out` | Where **Sign out** lands, with a link to sign in again. |
-| `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence and Telegram. |
+| `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence, Grist and Telegram. |
 | `/approvals` | Pending AI requests to approve or deny. |
 | `/security` | Enroll and remove passkeys. |
 | `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy and the **AI systems** page. |
@@ -190,6 +190,7 @@ the connector's console must list it exactly.
 | Slack | `https://pf.acme.example.com/oauth/callback/slack` | `--slack-client-id`, `--slack-client-secret` | [Slack setup](slack-setup.md) |
 | Salesforce | `https://pf.acme.example.com/oauth/callback/salesforce` | `--salesforce-consumer-key`, `--salesforce-consumer-secret`, `--salesforce-login-url` | [Salesforce setup](salesforce-setup.md) |
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `--atlassian-client-id`, `--atlassian-client-secret` | [Atlassian setup](atlassian-setup.md) |
+| Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |
 | Telegram | none | none | [Telegram setup](telegram-setup.md) |
 
 Notes:
@@ -271,6 +272,9 @@ The script writes `org_config.json` with mode `0600` and prints what it contains
 | `--salesforce-consumer-key`, `--salesforce-consumer-secret` | none | The Salesforce Connected App. |
 | `--salesforce-login-url URL` | `https://login.salesforce.com` | Use `https://test.salesforce.com` for sandboxes. |
 | `--atlassian-client-id`, `--atlassian-client-secret` | none | The Atlassian app for Jira and Confluence. |
+| `--grist-server-url URL` | none | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
+| `--grist-client-id`, `--grist-client-secret` | none | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
+| `--grist-auth-server-url URL` | the server URL | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
 | `--step-up-enabled` / `--step-up-disabled` | off | Require a fresh passkey or sign-in before an approval is released ([section 12](#12-approvals-and-step-up)). |
 | `--step-up-scope SCOPE` | `writes_and_pii_reads` | Which approvals need step-up: `writes`, `writes_and_pii_reads` or `writes_and_reads`. |
 | `--step-up-require-passkey` / `--step-up-no-require-passkey` | off | Accept only a passkey for step-up, never a fresh sign-in. |

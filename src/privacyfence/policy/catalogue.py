@@ -9,9 +9,9 @@ old rule model drifted.
 callers and tests are unaffected; this module is the one definition both it and ``gate.py``'s
 bridge writer call.
 
-``EXTRA_SCOPES`` covers the three operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
+``EXTRA_SCOPES`` covers the operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
-tools, which had no predicate at all, and Gmail's two filter tools and Slack's group-chat tool,
+tools, which had no predicate at all, Grist's five operation keys (scoped by document), and Gmail's two filter tools and Slack's group-chat tool,
 which have no resource identity to scope to. The Settings page and the bridge tool configure them
 the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing
 -- rather than reactively, off one gated call's own popup.
@@ -28,7 +28,7 @@ from .registry import Verb
 
 @dataclass(frozen=True)
 class PolicyExtraScope:
-    """One of the three operation groups with no ``policy.propose.PROPOSABLE_SCOPES`` entry of
+    """One of the operation groups with no ``policy.propose.PROPOSABLE_SCOPES`` entry of
     its own. Keys are this catalogue's own ids, distinct from any ``policy.propose.SCOPES_BY_GROUP``
     key (that module already uses ``"gmail.anything"`` for its own, unrelated unconditional-drafting
     entry) -- see ``policy.scopes.NEW_SCOPE_SELECTORS``' own comment on why the predicates themselves
@@ -48,6 +48,11 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         predicate="apps_script.project", connector="apps_script",
         verbs=(Verb.READ, Verb.UPDATE),
         label="Apps Script — project", needs_value=True, value_hint="1A2b3C…script-id",
+    ),
+    "grist.document": PolicyExtraScope(
+        predicate="grist.document", connector="grist",
+        verbs=(Verb.READ, Verb.CREATE, Verb.UPDATE, Verb.RESTRUCTURE),
+        label="Grist — document", needs_value=True, value_hint="8CAN8gKdxY7z…document-id",
     ),
     "gmail.configure": PolicyExtraScope(
         predicate="gmail.anything", connector="gmail",

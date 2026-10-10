@@ -57,6 +57,7 @@ Worth flagging in review, not hidden in a comment only.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import secrets
@@ -70,7 +71,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, google_oauth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
+from .. import atlassian_oauth, google_oauth, grist_auth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
 from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
 from ..calendar_client import SCOPES as _CALENDAR_SCOPES
@@ -78,6 +79,7 @@ from ..connector_registry import ConnectorRegistry
 from ..contacts_client import SCOPES as _CONTACTS_SCOPES
 from ..drive_client import SCOPES as _DRIVE_SCOPES
 from ..gmail_client import SCOPES as _GMAIL_SCOPES
+from ..grist_client import GristClient
 from ..principal import Principal, principal_scope
 from ..tasks_client import SCOPES as _TASKS_SCOPES
 from . import org_session
@@ -97,7 +99,7 @@ GOOGLE_SCOPES: dict[str, list[str]] = {
 }
 GOOGLE_SERVICES = frozenset(GOOGLE_SCOPES)
 ATLASSIAN_SERVICES = frozenset({"jira", "confluence"})
-OAUTH_SERVICES = GOOGLE_SERVICES | ATLASSIAN_SERVICES | frozenset({"slack", "salesforce"})
+OAUTH_SERVICES = GOOGLE_SERVICES | ATLASSIAN_SERVICES | frozenset({"slack", "salesforce", "grist"})
 
 # service -> the shared-OAuth-grant identity jira/confluence collapse into
 # (one Atlassian app, one token). Doubles as both the daemon_main.TOKEN_FILES
@@ -106,17 +108,17 @@ OAUTH_SERVICES = GOOGLE_SERVICES | ATLASSIAN_SERVICES | frozenset({"slack", "sal
 # since Atlassian's OAuth 2.0 (3LO) apps accept only one registered callback
 # URL, unlike Slack/Salesforce/Google (docs/atlassian-setup.md).
 _GRANT_KEY: dict[str, str] = {s: s for s in GOOGLE_SERVICES}
-_GRANT_KEY.update({"slack": "slack", "salesforce": "salesforce", "jira": "atlassian", "confluence": "atlassian"})
+_GRANT_KEY.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "jira": "atlassian", "confluence": "atlassian"})
 
 SERVICE_LABELS: dict[str, str] = {
     "gmail": "Gmail", "drive": "Drive", "calendar": "Calendar", "contacts": "Contacts", "tasks": "Tasks",
     "apps_script": "Apps Script",
-    "slack": "Slack", "salesforce": "Salesforce", "jira": "Jira", "confluence": "Confluence", "telegram": "Telegram",
+    "slack": "Slack", "salesforce": "Salesforce", "grist": "Grist", "jira": "Jira", "confluence": "Confluence", "telegram": "Telegram",
 }
 
 # service -> org_config.json section name.
 _ORG_CONFIG_SECTION: dict[str, str] = {s: "google" for s in GOOGLE_SERVICES}
-_ORG_CONFIG_SECTION.update({"slack": "slack", "salesforce": "salesforce", "jira": "atlassian", "confluence": "atlassian"})
+_ORG_CONFIG_SECTION.update({"slack": "slack", "salesforce": "salesforce", "grist": "grist", "jira": "atlassian", "confluence": "atlassian"})
 
 
 def _token_files() -> dict[str, str]:
@@ -128,7 +130,34 @@ def _token_file_path(principal: Principal, service: str) -> str:
     return str(paths.user_dir(principal) / _token_files()[_GRANT_KEY[service]])
 
 
-def _is_connected(principal: Principal, service: str) -> bool:
+def _grist_bundle(org_config: dict[str, Any]) -> grist_auth.GristBundle | None:
+    """The bundle's Grist section when org mode can offer it, else ``None``."""
+    try:
+        return grist_auth.bundle_settings(org_config.get("grist") or {}, org_mode=True)
+    except grist_auth.GristClientError:
+        return None
+
+
+def _grist_connected(principal: Principal, org_config: dict[str, Any] | None) -> bool:
+    """True when the saved Grist credential is usable with this bundle (an API key left over from before
+    the bundle switched to OAuth, or one for another server, is not)."""
+    token_file = _token_file_path(principal, "grist")
+    try:
+        record = grist_auth.load_token_file(token_file)
+        if org_config is None:  # the local status payload has no bundle to check against
+            return True
+        bundle = _grist_bundle(org_config)
+        if bundle is None:
+            return False
+        grist_auth.resolve_credential(bundle, record, token_file)
+    except grist_auth.GristClientError:
+        return False
+    return True
+
+
+def _is_connected(principal: Principal, service: str, org_config: dict[str, Any] | None = None) -> bool:
+    if service == "grist":
+        return _grist_connected(principal, org_config)
     if service == "telegram":
         session_file = str(paths.user_dir(principal) / _token_files()["telegram"])
         return os.path.exists(session_file) or os.path.exists(session_file + ".session")
@@ -145,6 +174,9 @@ def _is_configured(org_config: dict[str, Any], service: str) -> bool:
         return bool(section.get("client_id"))
     if service == "salesforce":
         return bool(section.get("consumer_key"))
+    if service == "grist":
+        bundle = _grist_bundle(org_config)
+        return bundle is not None and bundle.oauth is not None
     return bool(section.get("client_id"))  # jira/confluence -> atlassian
 
 
@@ -272,6 +304,15 @@ def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri:
         )
         return url, verifier
 
+    if service == "grist":
+        bundle = _grist_bundle(org_config)
+        if bundle is None or bundle.oauth is None:
+            raise _NotConfigured(service)
+        verifier, challenge = org_identity.generate_pkce_pair()
+        endpoints = grist_auth.discover(bundle.oauth.auth_server_url, bundle.oauth.server_url)
+        url = grist_auth.build_authorize_url(endpoints, bundle.oauth.client_id, redirect_uri, state, challenge)
+        return url, verifier
+
     if service in ATLASSIAN_SERVICES:
         atlassian_org = org_config.get("atlassian") or {}
         if not atlassian_org.get("client_id"):
@@ -313,6 +354,15 @@ def _exchange_and_save(
         salesforce_client.save_token_file(token_file, token_record)
         return
 
+    if service == "grist":
+        bundle = _grist_bundle(org_config)
+        if bundle is None or bundle.oauth is None:
+            raise _NotConfigured(service)
+        endpoints = grist_auth.discover(bundle.oauth.auth_server_url, bundle.oauth.server_url)
+        record = grist_auth.exchange_code(bundle.oauth, endpoints, code, redirect_uri, code_verifier)
+        grist_auth.save_token_file(token_file, record)
+        return
+
     if service in ATLASSIAN_SERVICES:
         atlassian_org = org_config.get("atlassian") or {}
         response = atlassian_oauth.exchange_code(
@@ -335,6 +385,7 @@ def build_routes(
 ) -> list[Route]:
     attempts = _PendingAuthStore()
     telegram_states = _TelegramAuthStore()
+    grist_errors: dict[str, str] = {}  # principal id -> the last API-key form error, cleared on success
     base_url = issuer_url.rstrip("/")
 
     def _current_principal(request: Request) -> Principal | None:
@@ -358,8 +409,13 @@ def build_routes(
         redirect_uri = f"{base_url}/oauth/callback/{_GRANT_KEY[service]}"
         state = secrets.token_urlsafe(32)
         try:
-            authorize_url, code_verifier = _build_authorize_url(service, org_config, redirect_uri, state)
-        except _NotConfigured:
+            if service == "grist":  # discovery makes network calls
+                authorize_url, code_verifier = await asyncio.to_thread(
+                    _build_authorize_url, service, org_config, redirect_uri, state,
+                )
+            else:
+                authorize_url, code_verifier = _build_authorize_url(service, org_config, redirect_uri, state)
+        except (_NotConfigured, grist_auth.GristClientError):
             return RedirectResponse(f"/connect?error={service}", status_code=302, headers={"Cache-Control": "no-store"})
         attempts.put(state=state, principal_id=principal.id, service=service, code_verifier=code_verifier)
         return RedirectResponse(authorize_url, status_code=302, headers={"Cache-Control": "no-store"})
@@ -408,6 +464,7 @@ def build_routes(
             principal=principal, org_config=org_config, telegram_state=telegram_state,
             flash_connected=request.query_params.get("connected", ""),
             flash_error=request.query_params.get("error", ""),
+            grist_error=grist_errors.get(principal.id, ""),
             csrf=session_id, nonce=_csp_nonce_for(request),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
@@ -418,7 +475,7 @@ def build_routes(
         # submission to reach (web/csp.py, ADR 0082). The signed-out page links to /login.
         return RedirectResponse(SIGNED_OUT_PATH, status_code=303, headers={"Cache-Control": "no-store"})
 
-    def _check_telegram_post(request: Request, form) -> Response | None:
+    def _check_form_post(request: Request, form) -> Response | None:
         if not org_session.check_csrf(request, form.get("csrf")):
             return PlainTextResponse("Unauthorized.", status_code=401)
         if not org_session.check_origin(request):
@@ -430,7 +487,7 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
 
@@ -458,7 +515,7 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
 
@@ -493,7 +550,7 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
 
@@ -525,10 +582,44 @@ def build_routes(
         if principal is None:
             return _signed_out_redirect()
         form = await request.form()
-        rejected = _check_telegram_post(request, form)
+        rejected = _check_form_post(request, form)
         if rejected is not None:
             return rejected
         telegram_states.clear(principal.id)
+        return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
+
+    async def grist_connect(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return _signed_out_redirect()
+        form = await request.form()
+        rejected = _check_form_post(request, form)
+        if rejected is not None:
+            return rejected
+
+        bundle = _grist_bundle(org_config)
+        api_key = str(form.get("api_key", "")).strip()
+        error = ""
+        if bundle is None:
+            error = "Grist is not set up by your organization."
+        elif bundle.oauth is not None:
+            error = "Your organization connects to Grist with OAuth. Use Connect."
+        elif not api_key:
+            error = "Enter your Grist API key."
+        else:
+            try:
+                await asyncio.to_thread(GristClient(bundle.server_url, grist_auth.GristApiKey(api_key)).check_connection)
+                grist_auth.save_api_key(
+                    str(paths.user_dir(principal) / _token_files()["grist"]), bundle.server_url, api_key,
+                )
+            except grist_auth.GristClientError as exc:
+                error = str(exc)
+            else:
+                connector_registry.evict(principal.id)
+        if error:
+            grist_errors[principal.id] = error
+        else:
+            grist_errors.pop(principal.id, None)
         return RedirectResponse("/connect", status_code=303, headers={"Cache-Control": "no-store"})
 
     return [
@@ -539,6 +630,7 @@ def build_routes(
         Route("/connect/telegram/code", telegram_code, methods=["POST"]),
         Route("/connect/telegram/2fa", telegram_2fa, methods=["POST"]),
         Route("/connect/telegram/cancel", telegram_cancel, methods=["POST"]),
+        Route("/connect/grist", grist_connect, methods=["POST"]),
     ]
 
 
@@ -668,13 +760,45 @@ def _telegram_box_html(principal: Principal, org_config: dict[str, Any], telegra
     )
 
 
+def _grist_box_html(principal: Principal, org_config: dict[str, Any], csrf: str = "", error: str = "") -> str:
+    bundle = _grist_bundle(org_config)
+    error_html = f'<p class="card card-danger" role="alert">{_esc(error)}</p>' if error else ""
+    if bundle is None:
+        # A POST can arrive for a bundle that never offered the form; its error sits under the row.
+        row = _service_row_html(principal, org_config, "grist")
+        return row.replace("</li>", f"{error_html}</li>") if error else row
+    connected = _is_connected(principal, "grist", org_config)
+    badge = _CONNECTED_BADGE if connected else '<span class="badge">Not connected</span>'
+    head = f'<span class="pf-service-head cluster"><span class="pf-service-chip">Grist</span>{badge}</span>'
+    if bundle.oauth is not None:
+        label, kind = ("Reconnect", "secondary") if connected else ("Connect", "primary")
+        action = f'<a class="button {kind}" href="/oauth/start/grist">{label}</a>'
+        return f'<li class="service card cluster">{head}{action}{error_html}</li>'
+    server = _esc(bundle.server_url)
+    status = f"Connected to {server}." if connected else f"Your organization uses {server}."
+    return (
+        f'<li class="service grist card stack"><div class="pf-service-head cluster">'
+        f'<span class="pf-service-chip">Grist</span>{badge}</div>{error_html}'
+        '<form class="pf-grist-form stack" method="post" action="/connect/grist">'
+        f'<input type="hidden" name="csrf" value="{_esc(csrf)}">'
+        f'<div class="field-help">{status}</div>'
+        '<label><span class="field-label">API key</span>'
+        '<input class="field" type="password" name="api_key" autocomplete="off" autocapitalize="off" '
+        'spellcheck="false" required></label>'
+        '<div class="field-help">Find it in Grist under Account settings &gt; Developer &gt; API Key.</div>'
+        f'<div class="cluster"><button type="submit" class="button primary">{"Reconnect" if connected else "Connect"}</button></div>'
+        "</form></li>"
+    )
+
+
 def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
-    flash_connected: str, flash_error: str, csrf: str, nonce: str,
+    flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
 ) -> str:
     google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"))
     other_rows = "".join(_service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence"))
     telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf)
+    grist_row = _grist_box_html(principal, org_config, csrf, grist_error)
     who = principal.email or principal.display_name or principal.id
 
     body = (
@@ -684,7 +808,7 @@ def _render_connect_page(
         f'<p class="lead">Signed in as {_esc(who)}. Connecting a service lets PrivacyFence act on it for you, still gated by '
         "the same approval rules as everything else.</p>"
         f"{_flash_html(flash_connected, flash_error)}"
-        f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}</ul>'
+        f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}{grist_row}</ul>'
         '<form class="cluster" method="post" action="/logout">'
         '<button type="submit" class="button secondary">Sign out</button></form>'
         "</div>"

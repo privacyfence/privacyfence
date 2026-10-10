@@ -366,6 +366,36 @@ class TestActionDispatch:
         assert recorded == []
 
 
+class TestGristApiKeyActions:
+    def test_both_actions_are_allowed_and_non_sensitive(self):
+        for action in ("grist_connect", "grist_cancel_auth"):
+            assert action in _ALLOWED_ACTIONS
+            assert action in _NON_SENSITIVE_ACTIONS
+            assert action not in _SENSITIVE_ACTIONS
+
+    def test_post_to_grist_connect_reaches_the_controller(self, client, controller, sessions, monkeypatch):
+        seen = {}
+
+        def fake(api_key, server_url=""):
+            seen["args"] = (api_key, server_url)
+            return controller.snapshot()
+
+        monkeypatch.setattr(controller, "grist_connect", fake)
+        csrf = _authed(client, sessions)
+        r = client.post(
+            "/api/settings/grist_connect",
+            json={"api_key": "k", "server_url": "https://docs.getgrist.com", "csrf": csrf},
+        )
+        assert r.status_code == 200
+        assert seen["args"] == ("k", "https://docs.getgrist.com")
+
+    def test_post_without_server_url_works(self, client, controller, sessions):
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/grist_connect", json={"api_key": "", "csrf": csrf})
+        assert r.status_code == 200
+        assert r.json()["grist_auth"]["error"] == "Enter your Grist API key."
+
+
 class TestSensitiveActionsCoverAllAllowedActions:
     """The allowlist-within-the-allowlist (ADR 0034) -- see module
     docstring on why _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS are both

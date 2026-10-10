@@ -75,6 +75,12 @@ the request on the card, once.
 | `gmail_get_message` | if I'm sender, this sender domain |
 | `gmail_get_thread` | if I'm sender, this sender domain |
 
+### Grist
+
+| Tool | Always allow buttons |
+|---|---|
+| `grist_get_records` |  |
+
 ### Jira
 
 | Tool | Always allow buttons |
@@ -185,6 +191,15 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `gmail_reply_draft_with_attachments` | unconditional |
 | `gmail_update_filter` |  |
 
+### Grist
+
+| Tool | Always allow buttons |
+|---|---|
+| `grist_add_columns` |  |
+| `grist_add_records` |  |
+| `grist_create_table` |  |
+| `grist_update_records` |  |
+
 ### Jira
 
 | Tool | Always allow buttons |
@@ -219,8 +234,9 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 
 ## Rules you can't create from a card
 
-Some operations never offer an **Always allow** button because nothing on the card names a
-resource to scope the rule to: Apps Script projects, Gmail filters, and creating a Slack group
-chat. You can still allow them from **Settings → Auto-accept → Add a rule**, or by letting the AI
+Some operations never offer an **Always allow** button, either because nothing on the card names a
+resource to scope the rule to (Apps Script projects, Gmail filters, and creating a Slack group
+chat) or because the card only proposes the fixed set of scopes it has always had, which does not
+include Grist documents. You can still allow them from **Settings → Auto-accept → Add a rule**, or by letting the AI
 system propose a rule with `privacyfence_propose_policy_change`. Either way the rule is written
 only after you confirm it. See [Approvals and policy](approvals-and-policy.md#always-allow-and-policy-rules).

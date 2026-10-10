@@ -100,7 +100,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
-| **Total** | **120** | **47** | **22** | **51** |
+| [Grist](#grist) | 7 | 2 | 1 | 4 |
+| **Total** | **127** | **49** | **23** | **55** |
 
 ## Gmail
 
@@ -276,3 +277,15 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `confluence_get_page_by_title` | read | `review` | Fetch a Confluence page by space key and exact title. |
 | `confluence_create_page` | write | `popup` | Create a new Confluence page in the given space. |
 | `confluence_update_page` | write | `popup` | Update the title and/or body of an existing Confluence page. |
+
+## Grist
+
+| Tool | Direction | Gate | What it does |
+|---|---|---|---|
+| `grist_list_documents` | read | `auto` | List the Grist documents this account can open, with their workspace and team. |
+| `grist_list_tables` | read | `auto` | List the tables of one Grist document and each table's columns (id, label and type). |
+| `grist_get_records` | read | `review` | Read records from one table of a Grist document, optionally filtered and sorted. |
+| `grist_add_columns` | write | `popup` | Add new columns to an existing table of a Grist document. |
+| `grist_add_records` | write | `popup` | Add new records to one table of a Grist document. |
+| `grist_create_table` | write | `popup` | Create a new table, with its columns, in a Grist document. |
+| `grist_update_records` | write | `popup` | Change cells of existing records in one table of a Grist document. |

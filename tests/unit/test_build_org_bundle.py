@@ -734,3 +734,71 @@ class TestRemovedToolAnnotations:
         }))
         assert build_org_bundle.main(["-o", str(self._out(tmp_path)), "--merge"]) == 0
         assert json.loads(self._out(tmp_path).read_text())["mcp"] == {"other": 1}
+
+
+class TestGristFlags:
+    def _build(self, tmp_path, *args):
+        out_path = tmp_path / "org_config.json"
+        rc = build_org_bundle.main(["-o", str(out_path), *args])
+        assert rc == 0
+        return json.loads(out_path.read_text())
+
+    def _exit_message(self, tmp_path, *args):
+        with pytest.raises(SystemExit) as exc:
+            build_org_bundle.main(["-o", str(tmp_path / "org_config.json"), *args])
+        return str(exc.value)
+
+    def test_server_url_alone_writes_just_the_server_with_the_trailing_slash_stripped(self, tmp_path):
+        bundle = self._build(tmp_path, "--grist-server-url", "https://grist.example.com/")
+        assert bundle["grist"] == {"server_url": "https://grist.example.com"}
+
+    def test_client_pair_and_auth_server_write_all_four_keys(self, tmp_path):
+        bundle = self._build(
+            tmp_path, "--grist-server-url", "https://docs.example.com", "--grist-client-id", "gid",
+            "--grist-client-secret", "gsecret", "--grist-auth-server-url", "https://login.example.com/",
+        )
+        assert bundle["grist"] == {
+            "server_url": "https://docs.example.com", "client_id": "gid", "client_secret": "gsecret",
+            "auth_server_url": "https://login.example.com",
+        }
+
+    def test_id_without_secret_exits(self, tmp_path):
+        message = self._exit_message(
+            tmp_path, "--grist-server-url", "https://grist.example.com", "--grist-client-id", "gid",
+        )
+        assert message == "--grist-client-id and --grist-client-secret must be given together."
+
+    def test_client_pair_without_server_url_exits(self, tmp_path):
+        message = self._exit_message(tmp_path, "--grist-client-id", "gid", "--grist-client-secret", "gsecret")
+        assert message == "--grist-client-id, --grist-client-secret and --grist-auth-server-url need --grist-server-url."
+
+    def test_http_url_exits(self, tmp_path):
+        message = self._exit_message(tmp_path, "--grist-server-url", "http://grist.example.com")
+        assert message == (
+            "--grist-server-url and --grist-auth-server-url must be https:// addresses (http:// only for localhost)."
+        )
+
+    def test_http_localhost_is_allowed(self, tmp_path):
+        bundle = self._build(tmp_path, "--grist-server-url", "http://localhost:8484")
+        assert bundle["grist"]["server_url"] == "http://localhost:8484"
+
+    @pytest.mark.parametrize("url", [
+        "https://grist.example.com/api", "https://grist.example.com/o/acme/api", "https://grist.example.com?x=1",
+        "https://grist.example.com/#top", "https://user:pw@grist.example.com",
+    ])
+    def test_api_path_query_fragment_and_userinfo_exit(self, tmp_path, url):
+        message = self._exit_message(tmp_path, "--grist-server-url", url)
+        assert message == (
+            "--grist-server-url and --grist-auth-server-url must not contain a user name, password, query, "
+            "fragment or /api."
+        )
+
+    def test_org_mode_build_with_grist_prints_the_callback(self, tmp_path, capsys):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        self._build(
+            tmp_path, "--mode", "org", "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com", "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path), "--grist-server-url", "https://grist.example.com",
+        )
+        assert "https://pf.example.com/oauth/callback/grist" in capsys.readouterr().out

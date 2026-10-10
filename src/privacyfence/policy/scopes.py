@@ -32,7 +32,7 @@ config-authoring work, not something this module's `matches()` needs to know.
 Scope types with no old predicate to be checked against live in `NEW_SCOPE_SELECTORS` rather than
 `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly: `drive.file` (no rule ever
 named one specific file by id rather than a folder), `apps_script.project` (Apps Script's tools had
-no scope at all), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
+no scope at all), `grist.document` (Grist's five operation keys name one document by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
 make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
 Auto-accept Settings page; see their own comment below for why they are not simply more
 `always_allow` rules.
@@ -529,7 +529,7 @@ def scope_type_to_predicates() -> dict[str, tuple[str, ...]]:
 #
 # drive.file names one specific file by id, which no other rule does (every Drive rule scopes by
 # folder or by attribute); apps_script.project is what makes the three Apps Script operation keys
-# configurable at all. There is no old predicate to check either against, so they live here rather
+# configurable at all, and grist.document does the same for Grist's five. There is no old predicate to check either against, so they live here rather
 # than in `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly instead of an
 # equivalence check.
 
@@ -547,6 +547,13 @@ def _apps_script_project_matches(value: Any, ctx: ReviewContext) -> bool:
         return False
     allowed = set(_values_of(value))
     return ctx.args.get("script_id", "") in allowed
+
+
+def _grist_document_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    allowed = set(_values_of(value))
+    return ctx.args.get("doc_id", "") in allowed
 
 
 # `gmail.create_filter`/`update_filter` and `slack.create_group_chat` have no resource identity to
@@ -573,6 +580,10 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "apps_script.project": ScopeSelector(
         predicate="apps_script.project", scope_type="apps_script.project", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.ARGS, matches=_apps_script_project_matches,
+    ),
+    "grist.document": ScopeSelector(
+        predicate="grist.document", scope_type="grist.document", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.ARGS, matches=_grist_document_matches,
     ),
     "gmail.anything": ScopeSelector(
         predicate="gmail.anything", scope_type="gmail.anything", kind=ScopeKind.ATTRIBUTE,

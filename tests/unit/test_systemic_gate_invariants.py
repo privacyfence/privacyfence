@@ -182,6 +182,7 @@ TOKEN_WRITE_SITES: tuple[tuple[str, str | None, str], ...] = (
     ("drive_client", "DriveClient", "_save_token"),
     ("gmail_client", "GmailClient", "_save_token"),
     ("google_oauth", None, "save_credentials"),
+    ("grist_auth", None, "save_token_file"),
     ("salesforce_client", None, "_save_token_file"),
     ("slack_client", None, "save_token_record"),
     ("tasks_client", "TasksClient", "_save_token"),
@@ -245,12 +246,12 @@ class TestPiiScanTextOnEveryReviewGatedTool:
 
 
 class TestTokenSitesUseTheSharedSecureWriteHelper:
-    def test_ten_token_write_sites_are_listed(self):
+    def test_eleven_token_write_sites_are_listed(self):
         # A token writer added or removed without updating TOKEN_WRITE_SITES
         # above is itself worth catching, not just silently checking
         # whatever's currently listed -- see that tuple's own comment for
-        # why this is ten, not the review's original eleven.
-        assert len(TOKEN_WRITE_SITES) == 10
+        # why the count is pinned.
+        assert len(TOKEN_WRITE_SITES) == 11
 
     @pytest.mark.parametrize(
         "module_name, class_name, func_name", TOKEN_WRITE_SITES,

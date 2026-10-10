@@ -417,3 +417,11 @@ class TestNewScopeSelectors:
         assert selector.matches(["abc123"], ctx) is True
         assert selector.matches(["other"], ctx) is False
         assert selector.matches([], ctx) is False
+
+    def test_grist_document_matches_doc_id_from_args(self):
+        selector = NEW_SCOPE_SELECTORS["grist.document"]
+        ctx = make_ctx(connector="grist", args={"doc_id": "DOC1"})
+        assert selector.matches(["DOC1"], ctx) is True
+        assert selector.matches(["DOC2"], ctx) is False
+        assert selector.matches([], ctx) is False
+        assert selector.matches("", ctx) is False

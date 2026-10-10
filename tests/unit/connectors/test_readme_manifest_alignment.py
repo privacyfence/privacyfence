@@ -27,6 +27,7 @@ from privacyfence.connectors.confluence import ConfluenceConnector
 from privacyfence.connectors.contacts import ContactsConnector
 from privacyfence.connectors.drive import DriveConnector
 from privacyfence.connectors.gmail import GmailConnector
+from privacyfence.connectors.grist import GristConnector
 from privacyfence.connectors.jira import JiraConnector
 from privacyfence.connectors.salesforce import SalesforceConnector
 from privacyfence.connectors.slack import SlackConnector
@@ -36,7 +37,7 @@ from privacyfence.connectors.telegram import TelegramConnector
 CONNECTOR_CLASSES = [
     GmailConnector, DriveConnector, SlackConnector, CalendarConnector,
     ContactsConnector, SalesforceConnector, JiraConnector, ConfluenceConnector,
-    TasksConnector, TelegramConnector, AppsScriptConnector,
+    TasksConnector, TelegramConnector, AppsScriptConnector, GristConnector,
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

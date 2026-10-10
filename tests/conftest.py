@@ -30,6 +30,7 @@ from privacyfence import (
     daemon_main,
     download_staging,
     gate,
+    grist_auth,
     local_files,
     pii_detector,
     privacy_filter,
@@ -53,6 +54,7 @@ def _reset() -> None:
     resource_names._REGISTRY.reset()
     web_approval_ui._INSTANCE = None
     download_staging._INSTANCE = None
+    grist_auth._DISCOVERY_CACHE.clear()
     # ADR 0007: upload_staging is the upload-side mirror of download_staging
     # above, reset the same way for the same reason. local_files'
     # configure_file_bridge() is gate.configure_popup_executor()'s own
