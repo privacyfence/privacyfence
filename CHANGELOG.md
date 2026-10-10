@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The Auto-accept page now shows the title of a Salesforce report or a Grist document instead of its raw ID. Salesforce reports are looked up by ID, so a 15-character ID and reports beyond the first 200 resolve too.
+
 ## [5.7.0] — 2026-10-10
 
 ### Added
