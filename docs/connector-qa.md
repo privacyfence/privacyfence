@@ -256,6 +256,9 @@ after seeding is expected.
 - [ ] In it, a table `QaSeed` with the text columns `Name` and `Note` and two rows whose `Name`
       carries `[QATEST]`.
 - [ ] Add an empty table `QaLifecycle` with the same two columns. `--lifecycle` writes only there.
+- [ ] Check the table **ids**, not the page names: open **Raw Data** and, if a table is still called
+      `Table1` or `Table2`, rename it there to `QaSeed` or `QaLifecycle`. Renaming a page does not
+      rename its table, and the recorder addresses tables by id (a wrong id answers HTTP 404).
 - [ ] Create a second document with a different name, as the contrast case.
 - [ ] Set `grist.doc_id` (the id in the document's URL after `/doc/`; required),
       `grist.table_id` (default `QaSeed`) and `grist.lifecycle_table_id` (default `QaLifecycle`).
