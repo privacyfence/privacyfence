@@ -30,12 +30,14 @@ pairs it adds. Taking every write-family widening on a ``drive.folder`` proposal
 sandbox-folder grant's thirteen operation keys exactly -- which is the point: the width a grant
 always had is something the user is shown and chooses, rather than something one boolean hides.
 
-**What the popup deliberately does not propose.** Three operation groups are configurable only
+**What the popup deliberately does not propose.** Several operation groups are configurable only
 deliberately, from the Settings page or the bridge's ``privacyfence_propose_policy_change`` (see
 ``policy/catalogue.EXTRA_SCOPES``), never reactively off one gated call (ADR 0077):
 
 * ``apps_script.read_content``/``write_content``/``read_execution_log`` are governed by
   ``apps_script.project``, a scope with no entry here.
+* ``grist.read_records``/``add_records``/``update_records``/``create_table``/``add_columns`` are
+  governed by ``grist.document``, a scope with no entry here.
 * ``slack.create_group_chat``'s subject is an audience, and no scope type measures one.
 * ``gmail.create_filter``/``update_filter`` could only be scoped by "anything in Gmail", and an
   unconditional rule for an operation that can silently archive or forward mail indefinitely must be
