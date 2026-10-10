@@ -1033,7 +1033,35 @@ def check_grist(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except GristClientError as exc:
         results.append(CheckResult("grist", "get_records", table_id, False, str(exc)))
 
+    results.append(_check_grist_paging(client, doc_id, table_id))
     return results
+
+
+def _check_grist_paging(client: GristClient, doc_id: str, table_id: str) -> CheckResult:
+    """Reads the seed table one row per page with after_id (ADR 0146) and compares it with a
+    single read: proves Grist accepts sort=id and cuts at limit after sorting. Needs two rows;
+    nothing is recorded."""
+    try:
+        whole = client.get_records(doc_id, table_id, limit=500)
+        expected = [r.id for r in whole.records]
+        if len(expected) < 2:
+            return CheckResult("grist", "get_records_paged", table_id, False,
+                               f"table {table_id!r} needs at least 2 rows to check paging")
+        ids: list[int] = []
+        after_id = pages = 0
+        while pages <= len(expected):
+            page = client.get_records(doc_id, table_id, limit=1, after_id=after_id)
+            pages += 1
+            ids += [r.id for r in page.records]
+            if not page.truncated:
+                break
+            after_id = page.next_after_id or 0
+        ok = ids == expected == sorted(expected)
+        note = (f"{len(ids)} row(s) over {pages} page(s), in record-id order" if ok
+                else f"paged ids {ids} differ from one read's {expected}")
+        return CheckResult("grist", "get_records_paged", table_id, ok, note)
+    except GristClientError as exc:
+        return CheckResult("grist", "get_records_paged", table_id, False, str(exc))
 
 
 def _build_salesforce_client() -> SalesforceClient:

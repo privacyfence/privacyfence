@@ -83,13 +83,19 @@ each one.
 |---|---|---|
 | `grist_list_documents` | Without a card | Lists the documents you can open, with workspace and team |
 | `grist_list_tables` | Without a card | Lists a document's tables and each table's columns |
-| `grist_get_records` | Reviewed before release | Reads records from a table, optionally filtered and sorted |
+| `grist_get_records` | Reviewed before release | Reads records from a table, optionally filtered and sorted, up to 500 per call; a whole table is read page by page |
 | `grist_add_records` | Needs your approval | Adds records to a table |
 | `grist_update_records` | Needs your approval | Changes cells of existing records; the card shows old and new values |
 | `grist_create_table` | Needs your approval | Creates a table with its columns |
 | `grist_add_columns` | Needs your approval | Adds columns to an existing table |
 
 Each card names the Grist server the data comes from or goes to.
+
+A table larger than one call is read in pages, in record-id order: each page continues after the
+last record id of the one before, so rows added in between are neither repeated nor skipped. Every
+page is its own review card, and its **Page** line shows where the page starts, which record ids it
+holds and whether more follow. The card does not show the table's total row count.
+[ADR 0146](adr/0146-grist-records-page-by-record-id.md) records why.
 
 Under OAuth, some servers do not let apps list documents. The assistant then asks you for the
 Document ID, shown in Grist under the document's Settings (the gear icon). One id form is used

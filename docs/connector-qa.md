@@ -635,6 +635,8 @@ For each representative read, list, search, create, update, send or upload tool:
   popup cards for the four writes (`grist_add_records`, `grist_update_records`,
   `grist_create_table`, `grist_add_columns`) name the server.
 - **Review card.** `grist_get_records` on the `QaSeed` table prompts for review.
+- **Paging.** `--check`'s `get_records_paged` row reads `QaSeed` one row per page with `after_id`
+  and compares it with one read, so it needs the two seed rows. It records nothing.
 - **Approved document.** With the `grist.document` rule from Settings (see
   [Seed: Grist](#seed-grist)), a read of that document passes without a card; another document
   prompts.

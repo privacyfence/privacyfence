@@ -84,6 +84,7 @@ class GristRecord:
 class GristRecordPage:
     records: list[GristRecord]
     truncated: bool
+    next_after_id: int | None = None
 
 
 def validate_doc_id(value: str) -> str:
@@ -275,19 +276,29 @@ class GristClient:
         filters: dict[str, list[Any]] | None = None,
         sort: str = "",
         limit: int = 100,
+        after_id: int = 0,
     ) -> GristRecordPage:
+        """One page of records. Without ``sort`` the page is in record-id order and, when more
+        follow, ``next_after_id`` is the ``after_id`` of the next page (ADR 0146)."""
         validate_doc_id(doc_id)
         validate_identifier(table_id, "table")
-        params: dict[str, str] = {"limit": str(limit + 1)}
+        if after_id and sort:
+            raise GristClientError("after_id pages in record-id order and cannot be combined with sort.")
+        # The records endpoint has no offset. At most after_id records have an id <= after_id,
+        # so this many rows in id order always reach limit + 1 rows past it.
+        params: dict[str, str] = {"limit": str(after_id + limit + 1), "sort": sort or "id"}
         if filters:
             params["filter"] = json.dumps(filters, ensure_ascii=False)
-        if sort:
-            params["sort"] = sort
-        records = self._records(self._request(
-            "GET", f"/api/docs/{doc_id}/tables/{table_id}/records", params=params,
-        ))
+        records = [
+            r for r in self._records(self._request(
+                "GET", f"/api/docs/{doc_id}/tables/{table_id}/records", params=params,
+            ))
+            if r.id > after_id
+        ]
         truncated = len(records) > limit
-        return GristRecordPage(records=records[:limit], truncated=truncated)
+        records = records[:limit]
+        next_after_id = records[-1].id if truncated and not sort else None
+        return GristRecordPage(records=records, truncated=truncated, next_after_id=next_after_id)
 
     def get_records_by_id(self, doc_id: str, table_id: str, ids: list[int]) -> list[GristRecord]:
         validate_doc_id(doc_id)

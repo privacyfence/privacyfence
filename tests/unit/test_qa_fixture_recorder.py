@@ -42,7 +42,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import qa_fixture_recorder as recorder  # noqa: E402
 
 from privacyfence.confluence_client import ConfluenceClient  # noqa: E402
-from privacyfence.grist_client import GristAccessDenied, GristClient  # noqa: E402
+from privacyfence.grist_client import GristAccessDenied, GristClient, GristClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient  # noqa: E402
 from privacyfence.salesforce_client import SalesforceClient  # noqa: E402
 from privacyfence.gmail_client import GmailClient  # noqa: E402
@@ -2954,9 +2954,12 @@ class _FakeGristApi:
 
     DOC = "qaDocId123"
 
-    def __init__(self, *, names=("[QATEST] one", "[QATEST] two"), docs_status=None):
+    def __init__(self, *, names=("[QATEST] one", "[QATEST] two"), docs_status=None, records_status=None,
+                 ignore_sort=False):
         self.rows: dict[int, dict] = {i + 1: {"Name": n, "Note": ""} for i, n in enumerate(names)}
         self.docs_status = docs_status
+        self.records_status = records_status
+        self.ignore_sort = ignore_sort
         self.updates = 0
 
     def __call__(self, method, path, *, params=None, json_body=None):
@@ -2976,7 +2979,13 @@ class _FakeGristApi:
             ]}
         records = path.endswith("/records")
         if records and method == "GET":
-            ids = json.loads(params["filter"])["id"] if params and "filter" in params else list(self.rows)
+            if self.records_status and "filter" not in params:
+                raise self.records_status
+            ids = json.loads(params["filter"])["id"] if "filter" in params else list(self.rows)
+            if params.get("sort") == "id":
+                ids = sorted(ids, reverse=self.ignore_sort)
+            if params.get("limit"):
+                ids = ids[:int(params["limit"])]
             return {"records": [{"id": i, "fields": self.rows[i]} for i in ids if i in self.rows]}
         if records and method == "POST":
             new = max(self.rows, default=0) + 1
@@ -3017,8 +3026,26 @@ class TestCheckGrist:
             ("list_documents", True, "list_documents.json"),
             ("list_columns", True, "list_columns.json"),
             ("get_records", True, "get_records.json"),
+            ("get_records_paged", True, ""),
         ]
-        assert all(r.raw is not None for r in results)
+        assert all(r.raw is not None for r in results[:3])
+        assert results[3].raw is None
+        assert results[3].note == "2 row(s) over 2 page(s), in record-id order"
+
+    def test_paging_needs_two_rows(self, monkeypatch):
+        paged = self._run(monkeypatch, _FakeGristApi(names=("[QATEST] one",)))[3]
+
+        assert not paged.ok and "needs at least 2 rows" in paged.note
+
+    def test_paging_that_loses_rows_fails(self, monkeypatch):
+        paged = self._run(monkeypatch, _FakeGristApi(ignore_sort=True))[3]
+
+        assert not paged.ok and paged.note == "paged ids [2] differ from one read's [2, 1]"
+
+    def test_paging_client_error_is_reported(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeGristApi(records_status=GristClientError("HTTP 500")))
+
+        assert not results[3].ok and results[3].note == "HTTP 500"
 
     def test_list_documents_fixture_keeps_only_the_qa_document(self, monkeypatch):
         raw = self._run(monkeypatch, _FakeGristApi())[0].raw
