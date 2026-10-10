@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.7.0] — 2026-10-10
+
 ### Added
 
 - **Grist connector.** List tables and columns, read records after review (a large table page by page), and add or update records and add tables and columns with approval, on getgrist.com or a self-hosted Grist. Connect with your own Grist API key, or, when your organization registered a Grist OAuth app, sign in with Authenticate… in Settings or on the connections page. Nothing is deleted.
@@ -3214,7 +3216,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.6.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.7.0...HEAD
+[5.7.0]: https://github.com/privacyfence/privacyfence/compare/v5.6.1...v5.7.0
 [5.6.1]: https://github.com/privacyfence/privacyfence/compare/v5.6.0...v5.6.1
 [5.6.0]: https://github.com/privacyfence/privacyfence/compare/v5.5.0...v5.6.0
 [5.5.0]: https://github.com/privacyfence/privacyfence/compare/v5.4.0...v5.5.0
