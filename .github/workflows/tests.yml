@@ -403,19 +403,15 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
-      # Non-blocking for now (see [tool.mypy] in pyproject.toml) --
-      # `continue-on-error` keeps the finding visible as a failed step in
-      # the Actions UI without failing the job. The whole tree still carries
-      # ~87 pre-existing errors; the per-module ratchet that promotes files
-      # out of that state is enforced by the *next* step, not this one.
-      - name: Type-check (mypy, informational)
-        continue-on-error: true
+      # Blocking: the whole tree at [tool.mypy]'s default settings (ADR 0147). The strict
+      # flags for promoted modules are the next step's job.
+      - name: Type-check (mypy, whole tree, blocking)
         run: mypy src/privacyfence
 
       # Blocking: the per-module strictness ratchet. Every module with a
       # `[[tool.mypy.overrides]]` block in pyproject.toml is described there as
-      # "promoted to blocking" -- without this step that was only ever true of
-      # which errors mypy printed, since the step above cannot fail the job.
+      # "promoted to blocking" -- the whole-tree step above checks only the default
+      # settings, so on its own it would not hold a promoted module to its strict flags.
       # The module list is read back out of pyproject.toml by the script (see
       # its docstring, including why it passes `--follow-imports=silent`), so
       # promoting the next module stays a one-block edit in pyproject.toml with

@@ -11,12 +11,9 @@ of the checks in `release-testing.md`'s "What stays manual".
 Run from the repo root (with `mcpb/shim/` node_modules already installed via
 `npm install`), the same as CI. Exits non-zero if any check fails.
 
-`ruff check .`, `bandit` and `scripts/mypy_strict_modules.py` are included below because they're
-CI's *blocking* static-analysis steps (`.github/workflows/tests.yml`'s `static-analysis` job -- see
-`[tool.ruff.lint]`/`[tool.bandit]`/`[[tool.mypy.overrides]]` in pyproject.toml). The whole-tree
-`mypy src/privacyfence` run stays out of this gate for the same reason it's still
-`continue-on-error` in that job -- see `[tool.mypy]` in pyproject.toml; only the modules the
-per-module ratchet has promoted are checked here, which is exactly what CI blocks on.
+`ruff check .`, `bandit`, `mypy src/privacyfence` and `scripts/mypy_strict_modules.py` are all
+included below because all four block in CI (`.github/workflows/tests.yml`'s `static-analysis` job --
+see `[tool.ruff.lint]`/`[tool.bandit]`/`[tool.mypy]`/`[[tool.mypy.overrides]]` in pyproject.toml).
 """
 from __future__ import annotations
 
@@ -72,6 +69,11 @@ def main() -> int:
     results["mypy (promoted modules)"] = run(
         "mypy (promoted modules)",
         ["python3", "scripts/mypy_strict_modules.py"],
+        cwd=REPO_ROOT,
+    )
+    results["mypy (whole tree)"] = run(
+        "mypy (whole tree)",
+        ["python3", "-m", "mypy", "src/privacyfence"],
         cwd=REPO_ROOT,
     )
     results["bandit"] = run(

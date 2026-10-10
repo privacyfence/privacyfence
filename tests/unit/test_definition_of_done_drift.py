@@ -59,14 +59,8 @@ def test_every_section_2_7_command_appears_in_each_copy(command, copy):
     )
 
 
-# §2.7 calls `mypy src/privacyfence` informational and the profile does not carry it.
-_NOT_IN_PROFILE = {"mypy src/privacyfence"}
-
-
 @pytest.mark.parametrize("command", _commands(_section_2_7()))
 def test_every_section_2_7_command_appears_in_the_toolkit_profile(command):
-    if command in _NOT_IN_PROFILE:
-        pytest.skip("informational in §2.7; not in the profile")
     profile = REPO_ROOT / ".claude" / "toolkit.yaml"
     assert command in _normalize(profile.read_text(encoding="utf-8")), (
         f"§2.7 of {GUIDELINES.name} names `{command}`, but .claude/toolkit.yaml does not"

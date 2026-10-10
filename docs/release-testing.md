@@ -33,7 +33,7 @@ OS × connector combination. Do not rerun the automated suite by hand because a 
 2. **`scripts/pre_release_check.py`**, locally from the repo root with `mcpb/shim/` dependencies
    installed. It runs CI's blocking commands — `pytest` with branch coverage,
    `check_coverage_floor.py`, the shim's `npm test` and `npm run typecheck`, `ruff check .`,
-   `mypy_strict_modules.py`, `bandit` — reports PASS/FAIL for each, and exits non-zero on any
+   `mypy src/privacyfence`, `mypy_strict_modules.py`, `bandit` — reports PASS/FAIL for each, and exits non-zero on any
    failure. It checks no packaged artifact.
 3. **Graphical-session coverage.** The latest completed runs of `linux-graphical-session.yml`,
    `windows-graphical-session.yml` and `macos-graphical-session.yml` on the release branch are green
