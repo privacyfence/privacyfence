@@ -8,8 +8,8 @@ it. Through PrivacyFence an AI client can:
 
 - list the Peek pages the connected account manages, straight away;
 - read a page's comments (of its latest version or an earlier one) and its visit counts after review;
-- publish an HTML page or a new version of one (same link), change who can open a page, post a
-  comment, and delete a page, each after approval on a card.
+- publish an HTML page or a new version of one (same link), change who can open a page, rename a
+  page, post a comment, and delete a page, each after approval on a card.
 
 People connect with **Peek's own device sign-in** (the flow `peek login` uses): PrivacyFence asks
 the Peek server for a sign-in code, the person approves it in Peek in a browser, and PrivacyFence
@@ -28,7 +28,7 @@ privacyfence.eu test instance that hosts the self-hosted runner, reached there a
 
 ## 2. Current state
 
-- **Peek's API** (fork `andras-tkcs/peek` at `81d039d`, `internal/server/routes.go:9-34`). Every token call sends
+- **Peek's API** (fork `andras-tkcs/peek` at `697f74a`, `internal/server/routes.go:9-35`). Every token call sends
   `Authorization: Bearer <token>`; errors are JSON `{"error": "<text>"}`
   (`internal/server/api_response.go`). A non-admin token sees and changes only its own pages; an
   admin token sees all (`api_uploads.go:143-157`).
@@ -39,6 +39,7 @@ privacyfence.eu test instance that hosts the self-hosted runner, reached there a
   | upload | `POST /api/upload`, multipart: `file` (with filename), `visibility`, `password`, optional `slug` | `{"slug","url","visibility","version","version_url"}`. With `slug` it adds a new version to that page (owner or admin; `visibility` and `password` must be empty, else 400) and the link stays the same (`api_uploads.go:94-148`). Above the server's `max_upload` (2 MiB default) usually 400 `file too large or invalid form`, sometimes 413 `file too large`; passwords are `TrimSpace`d by the server |
   | set visibility | `POST /api/uploads/{slug}/visibility`, JSON `{"visibility","password"}` | `{"visibility"}`; values `public`, `password`, `private`, `restricted` (viewers by grant; `api_uploads.go:257`); password ≤ 72 bytes |
   | delete | `DELETE /api/uploads/{slug}` | `{"deleted": slug}` |
+  | rename | `POST /api/uploads/{slug}/name`, JSON `{"name"}` (owner or admin; name trimmed, 1-200 characters) | `{"slug","url","name"}`; the slug changes to match the new name unless the new name's slug form is empty or equals the current one (`internal/uploads/rename.go`). The old slug becomes an alias: `/p/<old>` redirects (302) in browsers, but every token API call with the old slug answers 404 `not found`, except a new-version upload, which answers 404 `page was renamed; use slug <new>` (`api_uploads.go:125-128`, `api_rename.go`) |
   | stats | `GET /api/uploads/{slug}/stats` | `{"slug","name","total_visits","unique_visitors","recent":[{"name","ip","user_agent","visited_at"}]}` |
   | comments | `GET /api/uploads/{slug}/comments[?v=<n>]` (owner or admin with a token) | `[{"id","selector","element_text","anchor_kind","author","body","created_at","version"}]`; no `v` means the latest version; an unknown version → 404 `version not found` (`comments.go:30-90`) |
   | post a comment | `POST /api/uploads/{slug}/account-comments[?v=<n>]`, JSON `{"body","selector","element_text","anchor_kind"}` (owner or admin) | the new comment `{"id","selector","element_text","anchor_kind","author","body","created_at"}`, author = the token's account (`comments.go:194-246`) |
@@ -190,7 +191,10 @@ does the request and the error mapping for every call (sign-in and client alike)
 - 3xx → `f"Peek answered with a redirect (HTTP {status}). Check the Peek server address."`
 - 401 → `"Peek refused the saved sign-in (HTTP 401). Use Authenticate… in PrivacyFence Settings to connect again."`
 - 403 → `f"Peek refused the request (HTTP 403): {detail}"`
-- 404 → `"Peek found no such page (HTTP 404). Call peek_list_pages to see the pages you can manage."`
+- 404 whose `detail` starts with `"page was renamed; use slug "` →
+  `f"Peek says this page was renamed; its slug is now {new_slug}. Use that slug."` (`new_slug` is the
+  rest of `detail`, checked with `validate_slug`; a value that fails it falls through to the next line)
+- other 404 → `"Peek found no such page (HTTP 404). It may have been renamed or deleted: call peek_list_pages to see the current slugs."`
 - other non-2xx → `f"Peek API error (HTTP {status}): {detail}"`
 - a 2xx whose body is not JSON → `f"Peek answered with something other than JSON (HTTP {status}). Check the Peek server address."`
 
@@ -246,6 +250,7 @@ Peek's Unix seconds):
   user agent; they are deliberately never carried (ADR 0149).
 - `PeekStats(slug, name, total_visits: int, unique_visitors: int, recent: list[PeekVisit] = field(default_factory=list))`.
 - `PeekUploadResult(slug, url, visibility, version: int, version_url)`.
+- `PeekRenameResult(slug, url, name)`.
 
 Missing optional string keys parse as `""` and missing numbers as `0`.
 
@@ -258,12 +263,13 @@ Methods:
 |---|---|---|
 | `check_connection() -> str` | `GET /api/uploads` | returns `host` |
 | `list_pages() -> list[PeekPage]` | `GET /api/uploads` | sorted newest `created_at` first |
-| `get_page(slug) -> PeekPage` | via `list_pages` | not listed → `PeekClientError(f"No Peek page {slug!r} among the pages this account can manage. Call peek_list_pages to see them.")` |
+| `get_page(slug) -> PeekPage` | via `list_pages` | not listed → `PeekClientError(f"No Peek page {slug!r} among the pages this account can manage. It may have been renamed or deleted: call peek_list_pages to see the current slugs.")` |
 | `get_comments(slug, version: int = 0) -> list[PeekComment]` | `GET /api/uploads/{slug}/comments`, with `params={"v": str(version)}` when `version > 0` | sorted by `(created_at, id)`; a 404 with `version > 0` → `PeekClientError(f"Peek has no version {version} of this page (HTTP 404). Retention may have removed it.", status=404)` |
 | `get_stats(slug) -> PeekStats` | `GET /api/uploads/{slug}/stats` | drops `ip` and `user_agent` |
 | `upload_page(data: bytes, name: str, visibility: str, password: str, slug: str = "") -> PeekUploadResult` | `POST /api/upload` multipart: `files={"file": (name, data, "text/html")}`; for a new page `data={"visibility": visibility, "password": password}` (`password` only for `password` visibility); for a new version (`slug` given, validated) `data={"slug": slug}` only | a new version requires `visibility == ""` and `password == ""`, else `PeekClientError("A new version keeps the page's visibility; change it with set_visibility.")` |
 | `set_visibility(slug, visibility, password) -> str` | `POST /api/uploads/{slug}/visibility` JSON | returns the new visibility |
 | `delete_page(slug) -> None` | `DELETE /api/uploads/{slug}` | |
+| `rename_page(slug, name) -> PeekRenameResult` | `POST /api/uploads/{slug}/name` JSON `{"name": name}` | `name.strip()` empty or over 200 characters → `PeekClientError("A Peek page name is 1 to 200 characters.")` before any request |
 | `add_comment(slug, body, selector, element_text) -> PeekComment` | `POST /api/uploads/{slug}/account-comments` JSON `{"body","selector","element_text"}` | a 404 or 405 → `PeekClientError("This Peek server does not accept comments from PrivacyFence: it has no account comment endpoint. See the Peek setup guide.")` |
 
 `upload_page` (for a new page) and `set_visibility` check, before any request: visibility in
@@ -297,6 +303,7 @@ Tools (each ends with `ToolParam("reason", "str", required=True, description="On
 | `peek_set_visibility` | popup | False | False | `slug`, `visibility`, `password` (default `""`) | `{"slug","visibility"}` |
 | `peek_add_comment` | popup | False | False | `slug`, `body`, `selector` (default `""`), `element_text` (default `""`) | `{"slug","version","comment":{"id","author","body","anchor_kind","selector","element_text","created_at"}}` (always the latest version) |
 | `peek_delete_page` | popup | False | True | `slug` | `{"deleted": slug}` |
+| `peek_rename_page` | popup | False | False | `slug`, `name` | `{"old_slug","slug","url","name"}` |
 
 Descriptions follow ADR 0115 (`assert_tool_definitions_complete`): this first sentence, then a
 `Returns` sentence for the shape above, the sibling tools named, and `"Auto-approved."` or
@@ -306,9 +313,10 @@ Descriptions follow ADR 0115 (`assert_tool_definitions_complete`): this first se
 - `peek_get_comments`: "Read the reviewers' comments on one Peek page, with what each comment is anchored to." (add: "Comments belong to one version of the page: the latest unless you give version.")
 - `peek_get_stats`: "Read how often one Peek page was opened, and the names visitors gave." (add: "IP addresses and browsers are never returned.")
 - `peek_upload_page`: "Publish an HTML page on Peek, or a new version of one of your pages, and get its share link." (add: "Give the page as html, local_path or upload_id. Give slug to replace what an existing page's link shows with this new version; its visibility stays as it is. A new page is private unless you choose otherwise.")
-- `peek_set_visibility`: "Change who can open a Peek page: anyone with the link, anyone with the link and a password, or signed-in Peek accounts only." (add: "Pages restricted to named people are managed in Peek itself.")
+- `peek_set_visibility`: "Change who can open a Peek page: anyone with the link, anyone with the link and a password, or signed-in Peek accounts only." (add: "Pages restricted to named people are managed in Peek's dashboard.")
 - `peek_add_comment`: "Post a comment on a Peek page under your own Peek account name." (add: "It goes on the page's latest version. Copy selector and element_text from a comment returned by peek_get_comments to reply at the same spot.")
 - `peek_delete_page`: "Delete a Peek page, with its comments and visit history."
+- `peek_rename_page`: "Rename a Peek page; its link may change to match the new name, and old links keep redirecting to it in browsers." (add: "Use the slug it returns from then on; the old slug no longer works in the other Peek tools. Get the current slug from peek_list_pages.")
 
 Parameter descriptions (exact):
 
@@ -323,6 +331,7 @@ Parameter descriptions (exact):
 - `version`: "Version number of the page to read comments of, from peek_list_pages' version field (the latest) or an earlier one. 0, the default, means the latest."
 - `password`: "The page password, 1 to 72 bytes. Required with password visibility and empty otherwise (always empty with slug). It goes to Peek and is never shown on the approval card."
 - `body`: "The comment text, 1 to 4000 characters."
+- `name` on `peek_rename_page` (its own text, not `peek_upload_page`'s): "The page's new name, 1 to 200 characters, such as Q3 report.html. Peek derives the page's link from it."
 - `selector`: "CSS selector of the element to pin the comment to, copied from a comment's selector in peek_get_comments. Empty comments on the whole page."
 - `element_text`: "Quoted text to anchor the comment to, up to 200 characters, copied from a comment's element_text. Needs selector. Empty anchors to the element, or the page."
 
@@ -330,7 +339,7 @@ Siblings map `PEEK_SIBLINGS` for `TestToolDefinitions` (each description names t
 `peek_list_pages`→(`peek_get_comments`, `peek_get_stats`); `peek_get_comments`→(`peek_add_comment`,);
 `peek_get_stats`→(`peek_get_comments`,); `peek_upload_page`→(`peek_set_visibility`,);
 `peek_set_visibility`→(`peek_upload_page`,); `peek_add_comment`→(`peek_get_comments`,);
-`peek_delete_page`→(`peek_list_pages`,).
+`peek_delete_page`→(`peek_list_pages`,); `peek_rename_page`→(`peek_list_pages`,).
 
 Validation (`ValueError`, exact, before any fetch or gate):
 
@@ -351,7 +360,8 @@ Validation (`ValueError`, exact, before any fetch or gate):
   `"password must not start or end with a space."`.
 - `peek_set_visibility` on a page whose current visibility is `restricted` (checked after
   `get_page`, before the gate) →
-  `"This page is restricted to people granted access in Peek. Change who can open it in Peek itself."`.
+  `"This page is restricted to people granted access in Peek. Change who can open it in Peek's dashboard (Access)."`.
+- `peek_rename_page`: `name.strip()` empty or over 200 characters → `"name must be 1 to 200 characters."`.
 - `peek_add_comment`: stripped `body` empty or over 4000 characters → `"body must be 1 to 4000 characters."`;
   `selector` over 500 → `"selector must be 500 characters or fewer."`; `element_text` over 200 →
   `"element_text must be 200 characters or fewer."`; `element_text` without `selector` →
@@ -419,6 +429,12 @@ Each tool first fetches what it shows (through `_fetch`), then gates, then (for 
   (kind: `"text"` with element_text, `"element"` with only a selector, else `"page"`),
   `details_text=body`, `args={"slug": slug}`. Its preview also carries `"Version": str(page.version)`.
 
+- `peek_rename_page` (fetch `get_page`): `tool_name="Rename Peek Page"`,
+  `summary=f"Rename {page.name} → {name}"`, `sender=page.name`,
+  `raw_data={"slug": slug, "name": name}`, `filtered_data=None`, `gate="popup"`,
+  `preview={"Page": page.name, "New name": name, "Link": page.url}`,
+  `details_text=f"{page.name} is renamed to {name}. Its link may change to match the new name; the old link {page.url} keeps redirecting to the page in browsers, but tools must use the new slug."`,
+  `args={"slug": slug}`. Returns `{"old_slug": slug, "slug": res.slug, "url": res.url, "name": res.name}`.
 - `peek_delete_page` (fetch `get_page`): `tool_name="Delete Peek Page"`, `summary=f"Delete {page.name}"`,
   `sender=page.name`, `raw_data={"slug": slug}`, `filtered_data=None`, `gate="popup"`,
   `preview={"Page": page.name, "Link": page.url, "Visibility": page.visibility, "Created": page.created_at}`,
@@ -439,6 +455,7 @@ Each tool first fetches what it shows (through `_fetch`), then gates, then (for 
 | `peek_set_visibility` | `popup` | `peek.set_visibility` | `SHARE` | `"Who can open the page changes. Its content and comments do not change."` | — |
 | `peek_add_comment` | `popup` | `peek.add_comment` | `COMMENT` | `"The comment is posted on the page under your Peek account name. PrivacyFence cannot delete it."` | `WIDE` |
 | `peek_delete_page` | `popup` | `peek.delete_page` | `DELETE` | `"The page, its comments and its visit history are deleted and cannot be restored."` | — |
+| `peek_rename_page` | `popup` | `peek.rename_page` | `UPDATE` | `"The page's name changes, and its link may change to match. Old links keep redirecting to it."` | — |
 
 No Peek-specific rule scope: Peek gets no entry in `policy/scopes.py`, `policy/propose.py`,
 `policy/catalogue.py` or `policy/resource_registry.py`; rules use only what every connector already
@@ -628,8 +645,8 @@ address (or the organization's), approve the code in the browser that opens, **D
 alternative `privacyfence-app --peek-login`; organization mode: the connections page, **Connect
 Peek**, **Open Peek**, approve, **Done**); `## Values` (table: the Peek server address, its
 `build_org_bundle.py` option); `## Build and distribute the bundle` (`--peek-base-url` pins the server
-in local mode; organization mode needs it); `## What the assistant can do` (the seven tools and their
-gates; link the tools reference `#peek`; a new version keeps the page's link and visibility, and comments are read per version; pages restricted to named people are listed and commented on, but who can open them is changed in Peek itself); `## Privacy` (stats carry visitor names and times only,
+in local mode; organization mode needs it); `## What the assistant can do` (the eight tools and their
+gates; link the tools reference `#peek`; a new version keeps the page's link and visibility, and comments are read per version; pages restricted to named people are listed and commented on, but who can open them is changed in Peek's dashboard; a rename can change a page's slug, and old links keep redirecting); `## Privacy` (stats carry visitor names and times only,
 never IP addresses or browsers; a page password is sent to Peek and never shown on the card or kept
 by PrivacyFence; a token is only sent to the server it was issued for); `## Troubleshooting` (the
 exact error texts from §3.2 and §3.5, each with what to do; including "sign-in address on another
@@ -798,7 +815,9 @@ phases:
          for password visibility; with slug the form carries only file and slug, a non-empty visibility or password
          with slug raises before any request; version and version_url parsed; the visibility (including
          "restricted"), password and leading/trailing-space checks raise before any request), TestSetVisibility,
-         TestDeletePage, TestAddComment (path account-comments; 404 and 405 → the "no account comment endpoint"
+         TestDeletePage, TestRenamePage (JSON body {"name"}; result parsed; an empty or 201-character name raises
+         before any request), TestSendErrors gains a 404 "page was renamed; use slug new-1" case giving the renamed
+         message, and a malformed slug in it giving the plain 404 message, TestAddComment (path account-comments; 404 and 405 → the "no account comment endpoint"
          message). Every slug-taking method rejects a bad slug before any request. Assert no token, device code or
          password appears in any raised message or repr.
       3. tests/unit/test_systemic_gate_invariants.py: add ("peek_client", None, "save_token_file") to TOKEN_WRITE_SITES
@@ -856,7 +875,8 @@ phases:
          a. A minimal setup guide peek-setup.md in docs/: the §3.8 headings, each with one or two sentences (§3.8's
             last paragraph); p10 writes the full content.
          b. README.md "## Connectors" table: the last row "| Peek | List your shared HTML pages; read comments and
-            visit counts after review; publish pages, change who can open them, comment on and delete them |".
+            visit counts after review; publish pages and new versions, change who can open them, rename, comment on
+            and delete them |".
          c. website/connectors/peek/index.html, modelled on website/connectors/telegram/index.html (same head, meta
             pf-content-group connector, canonical/og URLs for /connectors/peek/, the other-connectors include with
             current="peek"). Copy: Peek is a self-hosted server for sharing HTML pages and collecting comments;
@@ -1010,7 +1030,7 @@ phases:
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
   - id: p5-page-writes
-    title: peek_set_visibility, peek_add_comment and peek_delete_page, popup-gated
+    title: peek_set_visibility, peek_add_comment, peek_rename_page and peek_delete_page, popup-gated
     depends_on: [p4-upload]
     complexity: M
     touches:
@@ -1026,32 +1046,36 @@ phases:
       - website/connectors/index.html
       - website/how-it-works/index.html
     brief: |
-      Read first: plan §3.3 (the three tools' rows, validation and gated_call arguments) and §3.4;
+      Read first: plan §3.3 (the four tools' rows, validation and gated_call arguments) and §3.4;
       src/privacyfence/connectors/telegram.py _send_message (l.303-325) as the popup pattern.
-      1. connectors/peek.py: add peek_set_visibility, peek_add_comment and peek_delete_page (specs, params, siblings
+      1. connectors/peek.py: add peek_set_visibility, peek_add_comment, peek_rename_page and peek_delete_page (specs, params, siblings
          from §3.3; peek_delete_page has destructive=True). Order inside each: validate (ValueError) → _fetch get_page →
          gated_call(gate="popup", §3.3 arguments) → the client write through _fetch → return the §3.3 dict. The write
          must not run if gated_call raises. Update peek_get_comments' description to name peek_add_comment.
-      2. Tables: TOOL_TO_GATE popup ×3; TOOL_TO_OPERATION peek.set_visibility / peek.add_comment / peek.delete_page;
-         TOOL_TO_VERB SHARE / COMMENT / DELETE; write_effects.EFFECT_BY_TOOL with the three exact §3.4 strings;
+      2. Tables: TOOL_TO_GATE popup ×4; TOOL_TO_OPERATION peek.set_visibility / peek.add_comment / peek.rename_page /
+         peek.delete_page; TOOL_TO_VERB SHARE / COMMENT / UPDATE / DELETE; write_effects.EFFECT_BY_TOOL with the four
+         exact §3.4 strings;
          gate._TOOL_LAYOUT WIDE for peek_add_comment only. tests/unit/test_connector_tool_annotations.py:
          add "peek_delete_page" to DESTRUCTIVE_TOOLS and update the comment above it to name it.
-      3. Regenerate docs/tools-reference.md and docs/always-allow-rules-reference.md; website card → "7 tools: 1 without
-         a card · 2 reviewed · 4 need approval" with data-tools="7" data-auto="1" data-review="2" data-popup="4"; h1
-         total and how-it-works total +3.
+      3. Regenerate docs/tools-reference.md and docs/always-allow-rules-reference.md; website card → "8 tools: 1 without
+         a card · 2 reviewed · 5 need approval" with data-tools="8" data-auto="1" data-review="2" data-popup="5"; h1
+         total and how-it-works total +4.
       4. Tests: TestSetVisibility (preview Server, Page, Link, Visibility "old → new", Password "Set (not shown)" only
          for password visibility; no password anywhere in the gate kwargs; validation messages), TestAddComment (the
          three anchor texts; details_text is the body; body/selector/element_text messages; element_text without a
-         selector; returns {"slug", "comment"}), TestDeletePage (preview keys; destructive spec; returns {"deleted"}).
+         selector; returns {"slug", "version", "comment"}), TestRenamePage (preview keys exactly Server, Page, New name,
+         Link; details_text says old links keep redirecting; the name message for "" and 201 characters; returns
+         old_slug and the new slug from the client), TestDeletePage (preview keys; destructive spec; returns {"deleted"}).
          For each: the client write is called only after the spy returns and not at all when gated_call raises; a bad
          slug and a get_page PeekClientError stop before the gate. Complete PEEK_SIBLINGS from §3.3. Extend
-         TestEveryToolIsAudited (set_visibility returns "public"; add_comment returns a PeekComment; arg_overrides
-         {"slug": "slug1", "visibility": "public"} and {"slug": "slug1", "body": "hi"}).
+         TestEveryToolIsAudited (set_visibility returns "public"; add_comment returns a PeekComment; rename_page returns
+         PeekRenameResult("renamed", "https://peek.example.com/p/renamed", "Renamed"); arg_overrides
+         {"slug": "slug1", "visibility": "public"}, {"slug": "slug1", "body": "hi"} and {"slug": "slug1", "name": "Renamed"}).
       5. ruff check . and python3 -m pytest tests/unit -q.
     acceptance:
       - python3 -m pytest tests/unit/connectors/test_peek_connector.py -q passes
       - python3 -m pytest tests/unit/test_write_effects.py tests/unit/policy tests/unit/test_docs_tools_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py tests/unit/test_generate_always_allow_reference.py -q passes
-      - grep -n "| \[Peek\](#peek) | 7 | 1 | 2 | 4 |" docs/tools-reference.md matches
+      - grep -n "| \[Peek\](#peek) | 8 | 1 | 2 | 5 |" docs/tools-reference.md matches
       - python3 -m pytest tests/unit/connectors/test_peek_connector.py -q --cov=privacyfence.connectors.peek --cov-branch --cov-report=term-missing reports 100% for src/privacyfence/connectors/peek.py
       - python3 -m pytest tests/unit -q passes
       - ruff check . passes
@@ -1214,9 +1238,10 @@ phases:
            least one comment and every body contains [QATEST], refusing to record otherwise). Stats are never recorded
            (they carry IP addresses).
          - lifecycle_peek(manifest): using LIFECYCLE_TAG (l.1858) like the other lifecycles, upload a private page
-           f"{LIFECYCLE_TAG} peek {suffix}.html" with a body carrying the tag, set it to public, add_comment
+           f"{LIFECYCLE_TAG} peek {suffix}.html" with a body carrying the tag, set it to public, rename it to
+           f"{LIFECYCLE_TAG} peek {suffix} renamed.html" and use the slug the rename returns from then on, add_comment
            f"{LIFECYCLE_TAG} comment", get_comments and confirm it with the QA account's name as
-           author, delete_page, then list_pages and confirm it is gone. LifecycleResult("peek", ok, note, cleanup_ok=<the
+           author, delete_page, then list_pages and confirm it is gone (a failure after the rename deletes by the new slug). LifecycleResult("peek", ok, note, cleanup_ok=<the
            delete was confirmed>); a failure after the upload still tries the delete.
          - Register "peek" in CONNECTOR_CHECKS (the line must read exactly `    "peek": check_peek,`: qa-record-fixture.yml
            greps `^    "${CONNECTOR}": check_`), EXPECTED_FIXTURES ("list_pages.json", "get_comments.json") and
@@ -1291,8 +1316,9 @@ phases:
          guide "[Peek setup](peek-setup.md)") and the option in its build-options table, matching
          configuration-reference.md.
       3. CHANGELOG.md under "## [Unreleased]" (never a version heading): one Added line — "Peek connector: list your
-         Peek pages, read their comments and visit counts after review, and publish pages, change who can open them,
-         comment on them and delete them with approval. Connect with Peek's own sign-in from Settings, the connections
+         Peek pages, read their comments and visit counts after review, and publish pages and new versions, change who
+         can open them, rename, comment on and delete them with approval.
+         Connect with Peek's own sign-in from Settings, the connections
          page in organization mode, or `privacyfence-app --peek-login`; an organization bundle can pin the Peek server
          with `--peek-base-url`. Posting comments needs a Peek server with the account comment endpoint."
       4. Write ADRs from plan §4 with the next free numbers (0146-0149 unless taken; if taken, the next free ones, named
