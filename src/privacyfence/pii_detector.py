@@ -130,13 +130,26 @@ def _p(category: str, regex: str, *, validator=None, flags=re.IGNORECASE) -> _PI
 # Ordered by specificity within each language group; order doesn't affect
 # correctness (every pattern is tried against the full text), only the
 # order categories are reported in.
+# A digit run glued to a decimal point is one side of a number such as
+# "14908.8288798133", not an ID: without these, \b lets either side match
+# on its own. A zero fraction ("8123456789.0", how Grist and json.dumps
+# render a whole float) still matches, so an ID kept in a numeric column
+# is caught. "." only, not ",": comma-joined CSV cells
+# ("Name,4111111111111111,...") must keep matching.
+_NOT_AFTER_DECIMAL_POINT = r"(?<!\d\.)"
+_NOT_BEFORE_DECIMAL_FRACTION = r"(?!\.0*[1-9])"
+
 _PATTERNS: list[_PIIPattern] = [
     # -- Language-agnostic ---------------------------------------------------
     # Deliberately no "Email address" or "Phone number" patterns here -- see
     # the module docstring for why (email signatures make them near-universal
     # false positives on this gate's typical input).
     _p("IBAN (bank account number)", r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b", validator=_iban_valid),
-    _p("Credit card number", r"\b(?:\d[ -]?){13,19}\b", validator=_credit_card_valid),
+    _p(
+        "Credit card number",
+        _NOT_AFTER_DECIMAL_POINT + r"\b(?:\d[ -]?){13,19}\b" + _NOT_BEFORE_DECIMAL_FRACTION,
+        validator=_credit_card_valid,
+    ),
     _p(
         "IP address",
         r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b",
@@ -160,7 +173,10 @@ _PATTERNS: list[_PIIPattern] = [
         "Hungarian TAJ number (social security)",
         r"\bTAJ[ \-:]{0,5}(?:sz[aá]m[aá]?)?[ \-:]{0,5}\d{3}[ -]?\d{3}[ -]?\d{3}\b",
     ),
-    _p("Hungarian tax ID (adóazonosító jel)", r"\b8\d{9}\b"),
+    _p(
+        "Hungarian tax ID (adóazonosító jel)",
+        _NOT_AFTER_DECIMAL_POINT + r"\b8\d{9}\b" + _NOT_BEFORE_DECIMAL_FRACTION,
+    ),
     _p("Hungarian ID card number", r"\b\d{6}[A-Z]{2}\b", flags=0),
     _p(
         # Base forms with a trailing \w* rather than a closing \b: Hungarian
