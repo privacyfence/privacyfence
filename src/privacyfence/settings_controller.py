@@ -66,7 +66,7 @@ from .policy.resource_registry import (
 from .resource_names import ResourceNameResolver, get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
 from .step_up_config import LiveStepUpConfig, StepUpConfig, set_personal_scope, step_up_scope_fields
-from . import telegram_auth
+from . import grist_auth, telegram_auth
 from .tasks_client import TasksClient
 from .update_checker import (
     UpdateCheckResult,
@@ -88,7 +88,7 @@ LICENSE_NAME = "Apache-2.0"
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
     "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
-    "slack", "jira", "confluence", "salesforce", "telegram",
+    "slack", "jira", "confluence", "salesforce", "telegram", "grist",
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
@@ -1210,6 +1210,8 @@ class SettingsController:
             self._authenticate_salesforce(org_config)
         elif connector in ("jira", "confluence"):
             self._authenticate_atlassian(org_config)
+        elif connector == "grist":
+            self._authenticate_grist(org_config)
         return self.snapshot()
 
     def _authenticate_google(self, cname: str, org_config: dict[str, Any]) -> None:
@@ -1290,6 +1292,34 @@ class SettingsController:
                 self.refresh_connectors()
             else:
                 self.error = f"Salesforce authentication failed: {result}"
+                self._push_snapshot()
+
+        _run_async(work, done)
+
+    def _authenticate_grist(self, org_config: dict[str, Any]) -> None:
+        try:
+            bundle = grist_auth.bundle_settings(org_config.get("grist") or {}, org_mode=False)
+        except grist_auth.GristClientError as exc:
+            self.error = f"Grist organization config is not usable: {exc}"
+            return
+        if bundle.oauth is None:
+            self.error = "Grist uses an API key on this install. Use Authenticate… on the Grist row."
+            return
+        from .daemon_main import TOKEN_FILES
+        oauth = bundle.oauth
+        token_file = str(data_dir() / TOKEN_FILES["grist"])
+        self._busy_connectors.add("grist")
+
+        def work() -> dict[str, Any]:
+            return grist_auth.authorize_interactive(oauth, token_file)
+
+        def done(ok: bool, result: Any) -> None:
+            self._busy_connectors.discard("grist")
+            if ok:
+                self.error = ""
+                self.refresh_connectors()
+            else:
+                self.error = f"Grist authentication failed: {result}"
                 self._push_snapshot()
 
         _run_async(work, done)
@@ -1741,6 +1771,8 @@ class SettingsController:
             busy = cname in self._busy_connectors
             if cname == "telegram":
                 has_org = telegram_app_credentials() is not None
+            elif cname == "grist":
+                has_org = True  # an API key needs no bundle in local mode
             else:
                 has_org = bool(org_config.get(ORG_CONFIG_SERVICE[cname]))
 
