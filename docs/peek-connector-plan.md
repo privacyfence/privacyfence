@@ -7,9 +7,9 @@ sharing HTML pages inside a company and collecting comments on them; the maintai
 it. Through PrivacyFence an AI client can:
 
 - list the Peek pages the connected account manages, straight away;
-- read a page's comments and its visit counts after review;
-- publish an HTML page, change who can open a page, post a comment, and delete a page, each after
-  approval on a card.
+- read a page's comments (of its latest version or an earlier one) and its visit counts after review;
+- publish an HTML page or a new version of one (same link), change who can open a page, post a
+  comment, and delete a page, each after approval on a card.
 
 People connect with **Peek's own device sign-in** (the flow `peek login` uses): PrivacyFence asks
 the Peek server for a sign-in code, the person approves it in Peek in a browser, and PrivacyFence
@@ -18,31 +18,37 @@ organization mode from **/connect**. An organization bundle can pin the Peek ser
 (`--peek-base-url`); organization mode offers Peek only when it does.
 
 Scope confirmed with the maintainer while planning: read **and** write tools; comments are read and
-posted (posting needs one new endpoint in the fork, `manual_before` item `mb1`); Peek's upcoming
-view restrictions are **not** part of this plan (a follow-up once the fork's API for them exists);
-local and organization mode.
+posted (through the fork's account comment endpoint, landed in `andras-tkcs/peek` commit
+`28aa8a7`); page versions are used (a new version keeps the link; comments are per version); Peek's
+view restrictions (the `restricted` visibility and per-page grants) are **not** part of this plan:
+the connector shows `restricted` and refuses to change a page into or out of it, and grants are a
+follow-up plan; local and organization mode. The QA Peek server is a Docker container on the
+privacyfence.eu test instance that hosts the self-hosted runner, reached there as
+`http://localhost:7700`.
 
 ## 2. Current state
 
-- **Peek's API** (fork `andras-tkcs/peek`, `internal/server/routes.go:9-29`). Every token call sends
+- **Peek's API** (fork `andras-tkcs/peek` at `81d039d`, `internal/server/routes.go:9-34`). Every token call sends
   `Authorization: Bearer <token>`; errors are JSON `{"error": "<text>"}`
   (`internal/server/api_response.go`). A non-admin token sees and changes only its own pages; an
   admin token sees all (`api_uploads.go:143-157`).
 
   | Call | Request | Answer |
   |---|---|---|
-  | list pages | `GET /api/uploads` | `[{"slug","name","owner","size","visibility","url","created_at"}]` (`created_at` Unix seconds) |
-  | upload | `POST /api/upload`, multipart: `file` (with filename), `visibility`, `password` | `{"slug","url","visibility"}`; above the server's `max_upload` (2 MiB default) usually 400 `file too large or invalid form`, sometimes 413 `file too large`; passwords are `TrimSpace`d by the server |
-  | set visibility | `POST /api/uploads/{slug}/visibility`, JSON `{"visibility","password"}` | `{"visibility"}`; values `public`, `password`, `private`; password ≤ 72 bytes |
+  | list pages | `GET /api/uploads` | `[{"slug","name","owner","size","visibility","url","created_at","version"}]` (`created_at` Unix seconds; `version` the latest) |
+  | upload | `POST /api/upload`, multipart: `file` (with filename), `visibility`, `password`, optional `slug` | `{"slug","url","visibility","version","version_url"}`. With `slug` it adds a new version to that page (owner or admin; `visibility` and `password` must be empty, else 400) and the link stays the same (`api_uploads.go:94-148`). Above the server's `max_upload` (2 MiB default) usually 400 `file too large or invalid form`, sometimes 413 `file too large`; passwords are `TrimSpace`d by the server |
+  | set visibility | `POST /api/uploads/{slug}/visibility`, JSON `{"visibility","password"}` | `{"visibility"}`; values `public`, `password`, `private`, `restricted` (viewers by grant; `api_uploads.go:257`); password ≤ 72 bytes |
   | delete | `DELETE /api/uploads/{slug}` | `{"deleted": slug}` |
   | stats | `GET /api/uploads/{slug}/stats` | `{"slug","name","total_visits","unique_visitors","recent":[{"name","ip","user_agent","visited_at"}]}` |
-  | comments | `GET /api/uploads/{slug}/comments` (owner or admin with a token) | `[{"id","selector","element_text","anchor_kind","author","body","created_at"}]` |
+  | comments | `GET /api/uploads/{slug}/comments[?v=<n>]` (owner or admin with a token) | `[{"id","selector","element_text","anchor_kind","author","body","created_at","version"}]`; no `v` means the latest version; an unknown version → 404 `version not found` (`comments.go:30-90`) |
+  | post a comment | `POST /api/uploads/{slug}/account-comments[?v=<n>]`, JSON `{"body","selector","element_text","anchor_kind"}` (owner or admin) | the new comment `{"id","selector","element_text","anchor_kind","author","body","created_at"}`, author = the token's account (`comments.go:194-246`) |
   | device sign-in start | `POST /api/cli/login/start` (no auth) | `{"device_code","user_code","verification_url","interval","expires_in"}` (`cli_login.go:17-48`; 15 minutes, interval 2 s) |
   | device sign-in poll | `POST /api/cli/login/poll`, JSON `{"device_code"}` | `{"status": "pending"\|"approved"\|"denied"\|"expired"\|"consumed", "token"?}`; the token comes once, then `consumed` |
 
-  Posting a comment today (`POST /api/uploads/{slug}/comments`, `comments.go:76-150`) has **no token
-  path**: it checks only the browser's page access, takes the author name from the body, and on a
-  public page accepts anyone as `"anonymous"`. A token sent there is ignored. Slugs are
+  The browser's `POST /api/uploads/{slug}/comments` has **no token path**: it checks only the
+  browser's page access, takes the author name from the body, and on a public page accepts anyone
+  as `"anonymous"`; PrivacyFence never calls it (ADR 0148). Grants (`/api/uploads/{slug}/grants`) and
+  `GET /api/uploads/{slug}/versions` exist and are not used by this plan. Slugs are
   `[A-Za-z0-9_-]+` (`internal/objectstore/slug.go`), up to 67 characters (`internal/uploads/slug.go`:
   60, a dash, and a 6-character suffix on a clash). Peek builds `verification_url` and each page's
   `url` from its own configured `--base-url`, not from the address the request came in on. The raw page HTML is served only to browsers
@@ -118,9 +124,12 @@ local and organization mode.
   code, a page password, page content or a comment body. Log the host and counts only.
 - Every phase ends with `ruff check .` and `python3 -m pytest tests/unit -q` passing in full.
 
-### 3.1 The fork change PrivacyFence needs (done by the maintainer, `mb1`)
+### 3.1 The fork change PrivacyFence needs (landed)
 
-One new route in `andras-tkcs/peek`, `internal/server/routes.go`:
+Landed in `andras-tkcs/peek` (merge `28aa8a7`, route at `internal/server/routes.go:14`, handler
+`comments.go:194-246`, tests `account_comments_route_test.go` and `comments_test.go`) as specified
+below, plus an optional `?v=` (default: the latest version). Kept here as the contract the client
+codes against. One new route in `andras-tkcs/peek`, `internal/server/routes.go`:
 
 ```go
 mux.HandleFunc("POST /api/uploads/{slug}/account-comments", s.authToken(s.handleAddAccountComment))
@@ -230,12 +239,13 @@ need their own wording for a status catch `PeekClientError`, look at `exc.status
 **Dataclasses** (all fields typed; times are ISO 8601 UTC strings, `"2026-10-10T11:07:00Z"`, from
 Peek's Unix seconds):
 
-- `PeekPage(slug, name, owner, size_bytes: int, visibility, url, created_at)`.
-- `PeekComment(id: int, author, body, anchor_kind, selector, element_text, created_at)`.
+- `PeekPage(slug, name, owner, size_bytes: int, visibility, url, created_at, version: int)`
+  (`version` is the latest version; `visibility` may also be `"restricted"`).
+- `PeekComment(id: int, author, body, anchor_kind, selector, element_text, created_at, version: int)`.
 - `PeekVisit(visitor_name, visited_at)`. Docstring: Peek also returns each visit's IP address and
   user agent; they are deliberately never carried (ADR 0149).
 - `PeekStats(slug, name, total_visits: int, unique_visitors: int, recent: list[PeekVisit] = field(default_factory=list))`.
-- `PeekUploadResult(slug, url, visibility)`.
+- `PeekUploadResult(slug, url, visibility, version: int, version_url)`.
 
 Missing optional string keys parse as `""` and missing numbers as `0`.
 
@@ -249,14 +259,15 @@ Methods:
 | `check_connection() -> str` | `GET /api/uploads` | returns `host` |
 | `list_pages() -> list[PeekPage]` | `GET /api/uploads` | sorted newest `created_at` first |
 | `get_page(slug) -> PeekPage` | via `list_pages` | not listed → `PeekClientError(f"No Peek page {slug!r} among the pages this account can manage. Call peek_list_pages to see them.")` |
-| `get_comments(slug) -> list[PeekComment]` | `GET /api/uploads/{slug}/comments` | sorted by `(created_at, id)` |
+| `get_comments(slug, version: int = 0) -> list[PeekComment]` | `GET /api/uploads/{slug}/comments`, with `params={"v": str(version)}` when `version > 0` | sorted by `(created_at, id)`; a 404 with `version > 0` → `PeekClientError(f"Peek has no version {version} of this page (HTTP 404). Retention may have removed it.", status=404)` |
 | `get_stats(slug) -> PeekStats` | `GET /api/uploads/{slug}/stats` | drops `ip` and `user_agent` |
-| `upload_page(data: bytes, name: str, visibility: str, password: str) -> PeekUploadResult` | `POST /api/upload` multipart: `files={"file": (name, data, "text/html")}`, `data={"visibility": visibility, "password": password}` (`password` only for `password` visibility) | |
+| `upload_page(data: bytes, name: str, visibility: str, password: str, slug: str = "") -> PeekUploadResult` | `POST /api/upload` multipart: `files={"file": (name, data, "text/html")}`; for a new page `data={"visibility": visibility, "password": password}` (`password` only for `password` visibility); for a new version (`slug` given, validated) `data={"slug": slug}` only | a new version requires `visibility == ""` and `password == ""`, else `PeekClientError("A new version keeps the page's visibility; change it with set_visibility.")` |
 | `set_visibility(slug, visibility, password) -> str` | `POST /api/uploads/{slug}/visibility` JSON | returns the new visibility |
 | `delete_page(slug) -> None` | `DELETE /api/uploads/{slug}` | |
 | `add_comment(slug, body, selector, element_text) -> PeekComment` | `POST /api/uploads/{slug}/account-comments` JSON `{"body","selector","element_text"}` | a 404 or 405 → `PeekClientError("This Peek server does not accept comments from PrivacyFence: it has no account comment endpoint. See the Peek setup guide.")` |
 
-`upload_page` and `set_visibility` check, before any request: visibility in `VISIBILITIES`, else
+`upload_page` (for a new page) and `set_visibility` check, before any request: visibility in
+`VISIBILITIES` (which deliberately leaves out `restricted`), else
 `PeekClientError("visibility must be public, password or private.")`; a password for `password`
 visibility and none otherwise, and at most 72 UTF-8 bytes, else
 `PeekClientError("A password of 1 to 72 bytes goes with password visibility, and only with it.")`;
@@ -279,12 +290,12 @@ Tools (each ends with `ToolParam("reason", "str", required=True, description="On
 
 | Tool | Gate | `read_only` | `destructive` | Params (besides `reason`) | Returns |
 |---|---|---|---|---|---|
-| `peek_list_pages` | auto | True | False | `max_results` (int, default 50) | `[{"slug","name","owner","size_bytes","visibility","url","created_at"}]` |
-| `peek_get_comments` | review | True | False | `slug` | `{"slug","name","comments":[{"id","author","body","anchor_kind","selector","element_text","created_at"}]}` |
+| `peek_list_pages` | auto | True | False | `max_results` (int, default 50) | `[{"slug","name","owner","size_bytes","visibility","url","created_at","version"}]` |
+| `peek_get_comments` | review | True | False | `slug`, `version` (int, default 0) | `{"slug","name","version","comments":[{"id","author","body","anchor_kind","selector","element_text","created_at","version"}]}` (top-level `version`: the one read) |
 | `peek_get_stats` | review | True | False | `slug` | `{"slug","name","total_visits","unique_visitors","recent":[{"visitor_name","visited_at"}]}` |
-| `peek_upload_page` | popup | False | False | `html`, `local_path`, `upload_id`, `name` (str, all default `""`), `visibility` (default `"private"`), `password` (default `""`) | `{"slug","url","visibility"}` |
+| `peek_upload_page` | popup | False | False | `html`, `local_path`, `upload_id`, `name`, `slug`, `visibility`, `password` (str, all default `""`) | `{"slug","url","visibility","version","version_url"}` |
 | `peek_set_visibility` | popup | False | False | `slug`, `visibility`, `password` (default `""`) | `{"slug","visibility"}` |
-| `peek_add_comment` | popup | False | False | `slug`, `body`, `selector` (default `""`), `element_text` (default `""`) | `{"slug","comment":{"id","author","body","anchor_kind","selector","element_text","created_at"}}` |
+| `peek_add_comment` | popup | False | False | `slug`, `body`, `selector` (default `""`), `element_text` (default `""`) | `{"slug","version","comment":{"id","author","body","anchor_kind","selector","element_text","created_at"}}` (always the latest version) |
 | `peek_delete_page` | popup | False | True | `slug` | `{"deleted": slug}` |
 
 Descriptions follow ADR 0115 (`assert_tool_definitions_complete`): this first sentence, then a
@@ -292,11 +303,11 @@ Descriptions follow ADR 0115 (`assert_tool_definitions_complete`): this first se
 `"Requires user approval."` at the end:
 
 - `peek_list_pages`: "List the Peek pages this account can manage, newest first, with each page's link and who can open it." (an admin account sees every page)
-- `peek_get_comments`: "Read the reviewers' comments on one Peek page, with what each comment is anchored to."
+- `peek_get_comments`: "Read the reviewers' comments on one Peek page, with what each comment is anchored to." (add: "Comments belong to one version of the page: the latest unless you give version.")
 - `peek_get_stats`: "Read how often one Peek page was opened, and the names visitors gave." (add: "IP addresses and browsers are never returned.")
-- `peek_upload_page`: "Publish an HTML page on Peek and get its share link." (add: "Give the page as html, local_path or upload_id; a page is private unless you choose otherwise.")
-- `peek_set_visibility`: "Change who can open a Peek page: anyone with the link, anyone with the link and a password, or signed-in Peek accounts only."
-- `peek_add_comment`: "Post a comment on a Peek page under your own Peek account name." (add: "Copy selector and element_text from a comment returned by peek_get_comments to reply at the same spot.")
+- `peek_upload_page`: "Publish an HTML page on Peek, or a new version of one of your pages, and get its share link." (add: "Give the page as html, local_path or upload_id. Give slug to replace what an existing page's link shows with this new version; its visibility stays as it is. A new page is private unless you choose otherwise.")
+- `peek_set_visibility`: "Change who can open a Peek page: anyone with the link, anyone with the link and a password, or signed-in Peek accounts only." (add: "Pages restricted to named people are managed in Peek itself.")
+- `peek_add_comment`: "Post a comment on a Peek page under your own Peek account name." (add: "It goes on the page's latest version. Copy selector and element_text from a comment returned by peek_get_comments to reply at the same spot.")
 - `peek_delete_page`: "Delete a Peek page, with its comments and visit history."
 
 Parameter descriptions (exact):
@@ -307,8 +318,10 @@ Parameter descriptions (exact):
 - `local_path`: "Path of an HTML file on the user's computer, absolute or starting with ~/. Not available on an organization-managed install. Give exactly one of html, local_path and upload_id; empty otherwise."
 - `upload_id`: "Id returned by privacyfence_create_upload_slot after you PUT the file's bytes to its upload_url. Give exactly one of html, local_path and upload_id; empty otherwise."
 - `name`: "File name Peek shows for the page and builds its link from, such as report.html. Empty uses the local file's name, or page.html."
-- `visibility` (both tools): "Who can open the page: public (anyone with the link), password (anyone with the link and the password) or private (signed-in Peek accounts only)." plus " Default private." on `peek_upload_page`.
-- `password`: "The page password, 1 to 72 bytes. Required with password visibility and empty otherwise. It goes to Peek and is never shown on the approval card."
+- `visibility` (both tools): "Who can open the page: public (anyone with the link), password (anyone with the link and the password) or private (signed-in Peek accounts only)." plus, on `peek_upload_page` only, " Empty means private for a new page; leave it empty with slug."
+- `slug` on `peek_upload_page` (its own text, not the shared `slug` one): "Slug of one of your pages, from peek_list_pages, to publish this as its next version under the same link. Empty publishes a new page."
+- `version`: "Version number of the page to read comments of, from peek_list_pages' version field (the latest) or an earlier one. 0, the default, means the latest."
+- `password`: "The page password, 1 to 72 bytes. Required with password visibility and empty otherwise (always empty with slug). It goes to Peek and is never shown on the approval card."
 - `body`: "The comment text, 1 to 4000 characters."
 - `selector`: "CSS selector of the element to pin the comment to, copied from a comment's selector in peek_get_comments. Empty comments on the whole page."
 - `element_text`: "Quoted text to anchor the comment to, up to 200 characters, copied from a comment's element_text. Needs selector. Empty anchors to the element, or the page."
@@ -322,16 +335,23 @@ Siblings map `PEEK_SIBLINGS` for `TestToolDefinitions` (each description names t
 Validation (`ValueError`, exact, before any fetch or gate):
 
 - `max_results` outside 1-200 → `"max_results must be between 1 and 200."`
+- `version` below 0 → `"version must be 0 (the latest) or a version number."`
 - a bad slug → `f"Not a Peek page slug: {slug!r}"` (call `peek_client.validate_slug`, turn its error into `ValueError`).
 - `peek_upload_page`: not exactly one non-empty source → `"peek_upload_page: give exactly one of html, local_path and upload_id."`;
   `local_path` when `self.download_mode == "org"` → `"local_path is not available on an organization-managed install. Pass html or upload_id instead."`;
   content bytes empty → `"peek_upload_page: the page is empty."`; not valid UTF-8 →
-  `"peek_upload_page: the page is not UTF-8 text. Peek publishes HTML pages only."`.
-- visibility (both tools) → `"visibility must be public, password or private."`; password missing
+  `"peek_upload_page: the page is not UTF-8 text. Peek publishes HTML pages only."`; `slug` given
+  with a non-empty `visibility` or `password` →
+  `"A new version keeps the page's visibility. Leave visibility and password empty, or change them with peek_set_visibility."`.
+  For a new page an empty `visibility` means `"private"`.
+- visibility (both tools; `restricted` gets the same message) → `"visibility must be public, password or private."`; password missing
   with `password` → `"A password is required when visibility is password."`; given otherwise →
   `"password must be empty unless visibility is password."`; over 72 UTF-8 bytes →
   `"password must be 72 bytes or fewer."`; differs from its `.strip()` →
   `"password must not start or end with a space."`.
+- `peek_set_visibility` on a page whose current visibility is `restricted` (checked after
+  `get_page`, before the gate) →
+  `"This page is restricted to people granted access in Peek. Change who can open it in Peek itself."`.
 - `peek_add_comment`: stripped `body` empty or over 4000 characters → `"body must be 1 to 4000 characters."`;
   `selector` over 500 → `"selector must be 500 characters or fewer."`; `element_text` over 200 →
   `"element_text must be 200 characters or fewer."`; `element_text` without `selector` →
@@ -342,7 +362,8 @@ Validation (`ValueError`, exact, before any fetch or gate):
 then `local_files.read_local_file(...)`; `upload_id` becomes `f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}"`.
 `html` is `html.encode("utf-8")`, over `UPLOAD_MAX_BYTES` → `"peek_upload_page: the page is larger than 10 MB."`.
 `name` = `os.path.basename(name.strip())`, else `os.path.basename(local_path)` when given, else
-`"page.html"`. After `gated_call` returns: `local_files.commit_uploads()` (ADR 0102), then the upload.
+`"page.html"`. With `slug`, the connector first fetches `get_page(slug)` (a page this account
+cannot manage stops there); Peek keeps the page's own name and link. After `gated_call` returns: `local_files.commit_uploads()` (ADR 0102), then the upload.
 
 Anchor text helper `_anchor_text(anchor_kind, selector, element_text) -> str`: `"page"` →
 `"Whole page"`; `"element"` → `f"Element {selector}"`; `"text"` → `f"Text “{element_text}”"`.
@@ -351,15 +372,16 @@ Anchor text helper `_anchor_text(anchor_kind, selector, element_text) -> str`: `
 `"Server": self._client.host`, so the card names the server (ADR 0147); the dicts are listed without it.
 Each tool first fetches what it shows (through `_fetch`), then gates, then (for writes) writes.
 
-- `peek_get_comments` (fetch `get_page`, `get_comments`): `tool_name="Read Peek Comments"`,
-  `summary=f"{n} comment(s) on {page.name}"`, `sender=page.name`, `raw_data=comments`,
+- `peek_get_comments` (fetch `get_page`, `get_comments(slug, version)`; `shown = version or page.version`):
+  `tool_name="Read Peek Comments"`,
+  `summary=f"{n} comment(s) on {page.name}, version {shown}"`, `sender=page.name`, `raw_data=comments`,
   `filtered_data=<the return dict>`, `gate="review"`,
-  `preview={"Page": page.name, "Link": page.url}`,
+  `preview={"Page": page.name, "Link": page.url, "Version": f"{shown} of {page.version}"}`,
   `new_info={"Comments": str(n), "Comment text": "Author, text and anchor of every comment"}`,
   `details_text` one line per comment `f"[{c.created_at}] {c.author} ({_anchor_text(...)}): {c.body}"` or `"(no comments)"`,
   `pii_scan_text` = every body and element_text joined by newlines,
   `preview_tables=[{"headers": ["Author", "Date", "Anchored to", "Comment"], "rows": [...]}]` (omitted when there are none; dates through `preview_dates.format_preview_datetime`),
-  `table_only=True`, `args={"slug": slug}`.
+  `table_only=True`, `args={"slug": slug, "version": version}`.
 - `peek_get_stats` (fetch `get_page`, `get_stats`): `tool_name="Read Peek Visits"`,
   `summary=f"{stats.total_visits} visit(s) to {page.name}"`, `sender=page.name`, `raw_data=stats`,
   `filtered_data=<the return dict>`, `gate="review"`, `preview={"Page": page.name, "Link": page.url}`,
@@ -368,17 +390,20 @@ Each tool first fetches what it shows (through `_fetch`), then gates, then (for 
   `pii_scan_text` = visitor names joined by newlines,
   `preview_tables=[{"headers": ["Visitor", "Time"], "rows": [...]}]` (omitted when empty), `table_only=True`,
   `args={"slug": slug}`.
-- `peek_upload_page`: `tool_name="Publish Peek Page"`, `summary=f"Publish {name} ({visibility})"`,
-  `sender=name`, `raw_data={"name": name, "visibility": visibility, "size_bytes": len(data)}`,
-  `filtered_data=None`, `gate="popup"`,
+- `peek_upload_page`: `tool_name="Publish Peek Page"`, `filtered_data=None`, `gate="popup"`,
+  `raw_data={"name": name, "slug": slug, "visibility": visibility, "size_bytes": len(data)}`. For a
+  new page: `summary=f"Publish {name} ({visibility})"`, `sender=name`,
   `preview={"Name": name, "Visibility": visibility, "Size": f"{len(data):,} bytes"}` plus
-  `"Password": "Set (not shown)"` for password visibility,
+  `"Password": "Set (not shown)"` for password visibility. For a new version (after `get_page`):
+  `summary=f"New version of {page.name}"`, `sender=page.name`,
+  `preview={"Page": page.name, "Link": page.url, "New version": str(page.version + 1), "Visibility": f"{page.visibility} (unchanged)", "Size": f"{len(data):,} bytes"}`.
+  Both:
   `details_text = (html_to_text.html_to_text(text) or "(the page has no visible text)") + "\n\n--- HTML source (everything that is published) ---\n" + text`,
   where `text = data.decode("utf-8")`: the approver sees the visible text first and then the whole
   source, because scripts, comments, hidden elements, attributes and image URLs are published too
   and would otherwise never be seen;
   `upload_pii_scan_text=text` (the whole source gets the real PII scan, as `drive_upload_file`
-  does), `args={"name": name, "visibility": visibility}`. Never the password or the HTML in `args`
+  does), `args={"name": name, "slug": slug, "visibility": visibility}`. Never the password or the HTML in `args`
   or `raw_data`.
 - `peek_set_visibility` (fetch `get_page`): `tool_name="Change Peek Page Visibility"`,
   `summary=f"{page.name}: {page.visibility} → {visibility}"`, `sender=page.name`,
@@ -392,7 +417,8 @@ Each tool first fetches what it shows (through `_fetch`), then gates, then (for 
   `raw_data={"slug": slug, "body": body}`, `filtered_data=None`, `gate="popup"`,
   `preview={"Page": page.name, "Link": page.url, "Anchored to": _anchor_text(kind, selector, element_text)}`
   (kind: `"text"` with element_text, `"element"` with only a selector, else `"page"`),
-  `details_text=body`, `args={"slug": slug}`.
+  `details_text=body`, `args={"slug": slug}`. Its preview also carries `"Version": str(page.version)`.
+
 - `peek_delete_page` (fetch `get_page`): `tool_name="Delete Peek Page"`, `summary=f"Delete {page.name}"`,
   `sender=page.name`, `raw_data={"slug": slug}`, `filtered_data=None`, `gate="popup"`,
   `preview={"Page": page.name, "Link": page.url, "Visibility": page.visibility, "Created": page.created_at}`,
@@ -409,7 +435,7 @@ Each tool first fetches what it shows (through `_fetch`), then gates, then (for 
 | `peek_list_pages` | `auto` | — | — | — | — |
 | `peek_get_comments` | `review` | `peek.read_comments` | `READ` | — | `WIDE` |
 | `peek_get_stats` | `review` | `peek.read_stats` | `READ` | — | `WIDE` |
-| `peek_upload_page` | `popup` | `peek.upload_page` | `CREATE` | `"The page is published at a new link. Who can open it follows the visibility shown."` | `WIDE` |
+| `peek_upload_page` | `popup` | `peek.upload_page` | `CREATE` | `"A new page is published at a new link, open to whoever its visibility allows. A new version replaces what the page's link shows; earlier versions keep their own links."` | `WIDE` |
 | `peek_set_visibility` | `popup` | `peek.set_visibility` | `SHARE` | `"Who can open the page changes. Its content and comments do not change."` | — |
 | `peek_add_comment` | `popup` | `peek.add_comment` | `COMMENT` | `"The comment is posted on the page under your Peek account name. PrivacyFence cannot delete it."` | `WIDE` |
 | `peek_delete_page` | `popup` | `peek.delete_page` | `DELETE` | `"The page, its comments and its visit history are deleted and cannot be restored."` | — |
@@ -573,7 +599,12 @@ has. A per-page scope is a follow-up (§3.7).
 
 ### 3.7 What is deliberately not built
 
-- View restrictions (the fork will add them; a follow-up plan adds them to `peek_set_visibility`).
+- View restrictions: the `restricted` visibility and per-page grants (`/api/uploads/{slug}/grants`,
+  by email or Google group) exist in the fork but are a follow-up plan. Until then the connector
+  lists `restricted` pages, reads and comments on them, and refuses to set or leave `restricted`.
+- No tool lists a page's versions (`GET /api/uploads/{slug}/versions`): `peek_list_pages` gives the
+  latest version number, and every earlier number up to it can be passed to `peek_get_comments`.
+  Stats are not per version.
 - No "delete all my pages" and no export tool; no tool reads a page's HTML back (Peek's API has none).
 - No visitor IP address or user agent reaches the AI client (ADR 0149).
 - No pasted token and no CLI-config import as a sign-in path (ADR 0146).
@@ -598,7 +629,7 @@ alternative `privacyfence-app --peek-login`; organization mode: the connections 
 Peek**, **Open Peek**, approve, **Done**); `## Values` (table: the Peek server address, its
 `build_org_bundle.py` option); `## Build and distribute the bundle` (`--peek-base-url` pins the server
 in local mode; organization mode needs it); `## What the assistant can do` (the seven tools and their
-gates; link the tools reference `#peek`); `## Privacy` (stats carry visitor names and times only,
+gates; link the tools reference `#peek`; a new version keeps the page's link and visibility, and comments are read per version; pages restricted to named people are listed and commented on, but who can open them is changed in Peek itself); `## Privacy` (stats carry visitor names and times only,
 never IP addresses or browsers; a page password is sent to Peek and never shown on the card or kept
 by PrivacyFence; a token is only sent to the server it was issued for); `## Troubleshooting` (the
 exact error texts from §3.2 and §3.5, each with what to do; including "sign-in address on another
@@ -641,11 +672,14 @@ once every error text exists in code.
 
 Step-by-step page: see `manual_steps_artifact` in the manifest.
 
-- **Before implementation**: add the account comment endpoint (§3.1) to the fork and deploy it
-  (`mb1`); a QA Peek server running it, reachable from the self-hosted runner, with a QA account and a
-  seed page with one comment (`mb2`); on the runner, the Peek token file and the seed slug in
-  `qa_environment.yaml` (`mb3`). `p9-qa-recorder` dispatches `qa-record-fixture.yml`, which fails
-  without them.
+- **Before implementation**: the fork's account comment endpoint (§3.1) has landed, so what remains
+  is a QA Peek server: the fork's Docker image on the privacyfence.eu test instance that hosts the
+  self-hosted runner, listening on `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`, a QA
+  account and a seed page with one comment (`mb1`); and on the runner, the Peek token file (with
+  `base_url` `http://localhost:7700`) and the seed slug in `qa_environment.yaml` (`mb2`).
+  `p9-qa-recorder` dispatches `qa-record-fixture.yml`, which fails without them. `http://localhost`
+  is allowed by `normalize_base_url` (loopback), and Peek's `verification_url` and page links use the
+  same `http://localhost:7700`, so no TLS is needed for QA.
 - **After implementation**: connect Peek in local mode and drive every tool from a real AI client
   (`ma1`); if an organization-mode test deployment exists, the bundle option and `/connect` (`ma2`).
 
@@ -662,8 +696,11 @@ Step-by-step page: see `manual_steps_artifact` in the manifest.
   recorded shape makes a §3.3 behaviour impossible, stop with `status=blocked`.
 - **The fork endpoint.** Only `lifecycle_peek` posts a comment, and `--lifecycle` runs only in
   `connector-live-check.yml` (`:134`), which `p10` dispatches. If Peek's lifecycle row there fails
-  with the "no account comment endpoint" message, `mb1` is not done: stop with `status=blocked` and
-  say so.
+  with the "no account comment endpoint" message, the QA container runs an image older than the
+  fork's `28aa8a7` (`mb1` not done): stop with `status=blocked` and say so.
+- **Peek keeps moving.** The fork changed after this plan was first written (versions, grants). If a
+  phase finds a route or shape in the fork's current `internal/server/` that contradicts §2's table,
+  stop with `status=blocked` and name it; do not adapt silently.
 - **Tests that enumerate connectors.** `tests/unit/test_daemon_main.py`,
   `test_settings_controller.py` (`TestSnapshotStructure` pins the snapshot keys,
   `test_connectors_cover_all_connectors`), `test_settings_window_html.py`, `web/test_routes_settings.py`,
@@ -677,8 +714,10 @@ Step-by-step page: see `manual_steps_artifact` in the manifest.
   is public once the feature PR merges, before a release carries the connector, and it describes a
   connector whose comment posting needs the fork's endpoint. Holding the page back would be a change
   to `p2-connector-listing` only (the page test requires the page today).
-- **The runner credential.** If the dispatched `qa-record-fixture.yml` fails at its "copy QA state"
-  step or with "Peek is not authenticated", `mb3` is not done: stop with `status=blocked`.
+- **The runner credential and the QA container.** If the dispatched `qa-record-fixture.yml` fails at
+  its "copy QA state" step or with "Peek is not authenticated", `mb2` is not done; if it fails with
+  "Could not reach Peek at localhost:7700", the container from `mb1` is not running on the runner
+  host. Either way stop with `status=blocked`.
 
 ## Implementation manifest
 
@@ -689,18 +728,14 @@ max_parallel: 2
 manual_steps_artifact: https://claude.ai/artifact/EuE4FosPLnDACgsotL89h7
 manual_steps_source: docs/peek-connector-plan-manual-steps.html
 manual_before:
-  - id: mb1-fork-comment-endpoint
-    title: Add the account comment endpoint (POST /api/uploads/{slug}/account-comments) to the Peek fork, through /devflow:make-plan with the prompt on the manual-steps page, and deploy it
-    why: p10-docs-adrs-retire's connector-live-check.yml run includes lifecycle_peek, which posts a comment through it; without it peek_add_comment can only report that the server lacks it.
-    done_when: A POST to https://<your Peek>/api/uploads/<a page you own>/account-comments with your token and {"body":"[QATEST] probe"} answers 200 with JSON whose "author" is your account name, and the same request without the Authorization header answers 401.
-  - id: mb2-peek-qa-server
-    title: A QA Peek server running the fork, a QA account on it, and a seed page with one comment
-    why: p9-qa-recorder records live fixtures from this page; without it the recording has nothing to read.
-    done_when: The QA server is reachable over https from the self-hosted runner, the QA account owns a private page named "PrivacyFence QA [QATEST].html" with one comment whose text contains [QATEST], and you have its slug.
-  - id: mb3-runner-qa-state
+  - id: mb1-peek-qa-docker
+    title: Run the fork's Peek Docker image on the privacyfence.eu test instance (the runner host) at http://localhost:7700, with a QA account and a seed page with one comment
+    why: p9-qa-recorder records live fixtures from this page, and p10's connector-live-check.yml run publishes, comments on and deletes a scratch page with this account (through the fork's account comment endpoint); both run on the self-hosted runner and reach Peek as http://localhost:7700.
+    done_when: On the runner host, curl -fsS http://localhost:7700/healthz succeeds, the container runs ghcr.io/andras-tkcs/peek:main from fork commit 28aa8a7 or later with PEEK_BASE_URL=http://localhost:7700, and the QA account owns a private page "PrivacyFence QA [QATEST].html" with one comment containing [QATEST]; a POST to http://localhost:7700/api/uploads/<that slug>/account-comments with the QA token answers 200 with the QA account as author.
+  - id: mb2-runner-qa-state
     title: Put the QA account's Peek token and the seed slug on the self-hosted QA runner
     why: p9-qa-recorder dispatches qa-record-fixture.yml, which reads ~/privacyfence/credentials/peek_token.json and the peek section of ~/privacyfence/tests/fixtures/qa_environment.yaml on the runner; without them the run fails.
-    done_when: On the runner, ~/privacyfence/credentials/peek_token.json exists with mode 600 and holds {"base_url", "token"}, ~/privacyfence/tests/fixtures/qa_environment.yaml has "peek:" with "page_slug:", and the runner's ~/privacyfence/org/org_config.json has no peek section or one whose base_url equals the token file's.
+    done_when: On the runner, ~/privacyfence/credentials/peek_token.json exists with mode 600 and holds a JSON object whose base_url is http://localhost:7700 and whose token is the QA token, ~/privacyfence/tests/fixtures/qa_environment.yaml has "peek:" with "page_slug:", and the runner's ~/privacyfence/org/org_config.json has no peek section or one whose base_url is http://localhost:7700.
 manual_after:
   - id: ma1-local-mode-check
     title: Connect Peek from Settings with the device sign-in and drive every Peek tool from an AI client
@@ -755,10 +790,14 @@ phases:
          read"; trailing slash normalized on load), TestResolveServer (no pin → the record's URL; equal pin → it;
          different pin → the "different server" message), and one class per PeekClient method asserting method,
          path, Authorization header, body or multipart fields and parsing: TestListPages (newest first, created_at
-         as ISO 8601 UTC, missing keys give "" and 0), TestGetPage (found; missing → its message, no extra request),
-         TestGetComments (sorted by created_at then id), TestGetStats (ip and user_agent dropped: the PeekVisit has
+         as ISO 8601 UTC, version parsed, "restricted" visibility kept as is, missing keys give "" and 0), TestGetPage
+         (found; missing → its message, no extra request), TestGetComments (sorted by created_at then id; version 0
+         sends no v parameter, version 3 sends v=3; each comment's version parsed; a 404 with version 3 → the "no
+         version 3" message), TestGetStats (ip and user_agent dropped: the PeekVisit has
          only visitor_name and visited_at), TestUploadPage (multipart file name and "text/html"; password sent only
-         for password visibility; the visibility, password and leading/trailing-space checks raise before any request), TestSetVisibility,
+         for password visibility; with slug the form carries only file and slug, a non-empty visibility or password
+         with slug raises before any request; version and version_url parsed; the visibility (including
+         "restricted"), password and leading/trailing-space checks raise before any request), TestSetVisibility,
          TestDeletePage, TestAddComment (path account-comments; 404 and 405 → the "no account comment endpoint"
          message). Every slug-taking method rejects a bad slug before any request. Assert no token, device code or
          password appears in any raised message or repr.
@@ -893,9 +932,11 @@ phases:
          line "3 tools: 1 without a card · 2 reviewed · 0 need approval", h1 total +2; website/how-it-works/index.html
          total +2 (both equal to the regenerated summary's total).
       4. Tests in tests/unit/connectors/test_peek_connector.py: TestGetComments — preview has exactly the keys Server
-         (first, equal to client.host), Page, Link, and no comment text (data minimization); details_text carries
-         each body with its author and anchor; pii_scan_text holds bodies and element_text; the table's headers; args
-         == {"slug": slug}; no comments → "(no comments)" and no table; each anchor kind's text. TestGetStats — same
+         (first, equal to client.host), Page, Link, Version ("2 of 2" for the latest, "1 of 2" for version=1), and no
+         comment text (data minimization); details_text carries each body with its author and anchor; pii_scan_text
+         holds bodies and element_text; the table's headers; args == {"slug": slug, "version": version}; the returned
+         dict's top-level version is the one read; version=-1 → its ValueError with gated_call_spy empty; no comments
+         → "(no comments)" and no table; each anchor kind's text. TestGetStats — same
          preview rule; new_info's three keys; the returned dict's recent entries have exactly visitor_name and
          visited_at; "(no visits)"; a visitor with no name shows "(no name given)". For both: a bad slug raises
          ValueError with gated_call_spy empty; a PeekClientError becomes RuntimeError. TestFieldCompleteness — a real
@@ -903,7 +944,7 @@ phases:
          answer, run through peek_get_comments, checked with assert_no_placeholder_fields(gated_call_spy[0]["preview"])
          (pattern: tests/unit/connectors/test_confluence_connector.py TestFieldCompleteness). Extend PEEK_SIBLINGS and
          TestEveryToolIsAudited (a MagicMock client whose get_page returns PeekPage("slug1", "QA page", "qa", 10,
-         "private", "https://peek.example.com/p/slug1", "2026-10-10T11:07:00Z"), with host "peek.example.com";
+         "private", "https://peek.example.com/p/slug1", "2026-10-10T11:07:00Z", 2), with host "peek.example.com";
          arg_overrides {"slug": "slug1"} for both tools).
       5. ruff check . and python3 -m pytest tests/unit -q.
       Stop condition: plan §6 "No Peek rule scope".
@@ -947,14 +988,19 @@ phases:
       4. Tests: TestUploadPage — html source: preview keys exactly Server, Name, Visibility, Size (plus Password "Set
          (not shown)" for password visibility), no HTML and no password in preview, args or raw_data; details_text is
          the page's visible text, then the "--- HTML source" line and the whole source (a <script> body appears only
-         after that line); upload_pii_scan_text is the whole source; default visibility private; name defaults
+         after that line); upload_pii_scan_text is the whole source; empty visibility means private for a new page;
+         a new version (slug given): get_page is fetched first, preview keys exactly Server, Page, Link, New version
+         (page.version + 1), Visibility ("<current> (unchanged)"), Size, the client gets slug and empty visibility and
+         password, args carry the slug, and visibility or password with slug raise the §3.3 message before anything is
+         fetched; "restricted" as visibility raises the visibility message; name defaults
          (page.html; local file's basename; a name with a directory keeps only its basename); local_path with
          local_files monkeypatched (require_local_files, read_local_file) reads the bytes; upload_id becomes the
          upload: reference; local_path in org mode → its message and nothing read; commit_uploads is called after the
          gate and not at all when the gate raises (monkeypatch gated_call to raise RuntimeError); the client upload is
          called only after the gate; every §3.3 validation message (no source, two sources, empty, non-UTF-8, over 10
          MB, visibility, each password rule) with gated_call_spy empty. Extend TestEveryToolIsAudited
-         (upload_page returns PeekUploadResult("new1", "https://peek.example.com/p/new1", "private"); arg_overrides
+         (upload_page returns PeekUploadResult("new1", "https://peek.example.com/p/new1", "private", 1,
+         "https://peek.example.com/p/new1/v/1"); arg_overrides
          {"html": "<p>hi</p>"}).
       5. ruff check . and python3 -m pytest tests/unit -q.
     acceptance:
@@ -1176,9 +1222,13 @@ phases:
            greps `^    "${CONNECTOR}": check_`), EXPECTED_FIXTURES ("list_pages.json", "get_comments.json") and
            LIFECYCLE_CHECKS; update the comment above LIFECYCLE_CHECKS to name Peek.
       2. tests/fixtures/qa_environment.yaml.example: a peek section (page_slug: "") with comments in the file's style.
-      3. docs/connector-qa.md: a Peek row in the QA accounts table (a QA account on a QA Peek server running the fork
-         with the account comment endpoint; the runner's token in credentials/peek_token.json written by hand as
-         {"base_url", "token"} with mode 600, the token from `peek login` on any machine); "### Seed: Peek" (a private
+      3. docs/connector-qa.md: a Peek row in the QA accounts table (a QA account on a QA Peek server: the fork's Docker
+         image, ghcr.io/andras-tkcs/peek:main, running on the self-hosted runner's host, bound to 127.0.0.1:7700 with
+         PEEK_BASE_URL=http://localhost:7700, so the recorder reaches it as http://localhost:7700 and no TLS is
+         involved; the runner's token in credentials/peek_token.json written by hand as {"base_url":
+         "http://localhost:7700", "token"} with mode 600, the token from `peek login --host http://localhost:7700` through
+         an SSH tunnel); a short "Runner requirements" addition naming that container; "### Seed: Peek" (a private
+
          page "PrivacyFence QA [QATEST].html" with one [QATEST] comment; set peek.page_slug); the Manifest reference row;
          the sentence that lists which connectors --lifecycle covers gains Peek; a sentence in "Authenticating
          connectors" that Peek has no step there because its QA credential is a token file written by hand;
