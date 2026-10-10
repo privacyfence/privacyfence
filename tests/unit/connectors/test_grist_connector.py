@@ -1329,6 +1329,12 @@ class TestUpdateCsv:
             await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
         assert gated_call_spy == []
 
+    async def test_a_repeated_key_inside_the_page_is_refused(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(tmp_path, "Name\nAda\nGrace\n")
+        table_server(client, {1: {"Name": "Ada"}, 2: {"Name": "Ada"}, 3: {"Name": "Grace"}})
+        with pytest.raises(ValueError, match="matches more than one record in Contacts"):
+            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+
     async def test_a_duplicate_hidden_by_the_page_limit_is_still_refused(self, tmp_path, gated_call_spy):
         # ids order a, b, a: the page cut at two records shows no repeated key, only truncated
         connector, client, path = csv_connector(tmp_path, "Name\nAda\nGrace\n")
