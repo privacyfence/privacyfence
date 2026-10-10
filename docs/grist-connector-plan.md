@@ -14,7 +14,7 @@ People connect in one of two ways, decided by the organization bundle:
   apps**, available in Grist's paid editions). Each person clicks **Authenticate…** in local mode,
   or **Connect** on `/connect` in org mode, the same way as Salesforce or Atlassian. The app
   requests `doc:read`, `doc:write`, `doc.schema:write` and `offline_access`, and nothing more.
-- **A personal API key** otherwise, which every Grist edition has (profile → **API key**). In
+- **A personal API key** otherwise, which every Grist edition has (**Account settings → Developer → API Key**). In
   local mode with no Grist section in the bundle, the person types the server address and the key
   into a form on **Settings > Connectors**. When the bundle names a server (and in org mode it
   must), only the key is asked for, on Settings or on `/connect`.
@@ -118,7 +118,7 @@ only in Grist's paid editions); any Grist server; keep the schema tools, knowing
 
 ### 3.1 Grist API, API keys and OAuth used
 
-**API keys**: every Grist edition lets a person create one personal key (profile → API key); it
+**API keys**: every Grist edition lets a person create one personal key (**Account settings → Developer → API Key**); it
 is sent as `Authorization: Bearer <key>` and carries that person's full access, with no scopes.
 
 **OAuth** (Grist help, "OAuth apps"; in Grist's paid editions): confidential clients only (every app has a client secret;
@@ -194,7 +194,8 @@ every key optional.
   - `oauth` is set when both `client_id` and `client_secret` are non-empty; exactly one of them →
     `GristClientError("Grist organization config is incomplete: client_id and client_secret go together.")`.
   - `server_url` is `normalize_server_url(section["server_url"])` when present; with `oauth` and no
-    `server_url` it is `DEFAULT_SERVER_URL`; otherwise `""`.
+    `server_url` it is `DEFAULT_SERVER_URL` (only a hand-written bundle can lack it: `build_org_bundle.py`
+    requires `--grist-server-url` for a client pair); otherwise `""`.
   - `oauth.auth_server_url` is the normalized `auth_server_url`, defaulting to `server_url`.
   - `org_mode` and an empty `server_url` → `GristClientError("Grist organization config not installed")`
     (org mode offers Grist only when the bundle names its server).
@@ -209,11 +210,13 @@ every key optional.
 - `load_token_file(path) -> dict[str, Any]`: missing file, an unknown or missing `auth`, or a
   missing required key for its kind → `GristClientError("Grist is not authenticated. Use Authenticate… in PrivacyFence Settings.")`;
   not valid JSON or not an object → `GristClientError("Grist's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again.")`.
+  The record's `server_url` is passed through `normalize_server_url` on load (a hand-written file
+  with a trailing `/` still matches, and a non-loopback `http://` address is refused).
 - `resolve_credential(bundle: GristBundle, record: dict[str, Any], token_file: str) -> tuple[str, GristCredential]`
   returns `(server_url, credential)`:
   - With `bundle.oauth`: the record must be `"oauth"`, else
     `GristClientError("Your organization connects to Grist with OAuth. Use Authenticate… in PrivacyFence Settings.")`;
-    its server must equal `bundle.oauth.server_url`; credential `GristTokenProvider(bundle.oauth, token_file)`.
+    its server must equal `bundle.oauth.server_url`; credential `GristTokenProvider(bundle.oauth, token_file, record)`.
   - Without: the record must be `"api_key"`, else the "not authenticated" message above (an OAuth
     token cannot be refreshed without the app); when `bundle.server_url` is set the record's server
     must equal it; credential `GristApiKey(record["api_key"])`; server is the record's.
@@ -263,9 +266,10 @@ every key optional.
   `refresh_token` when one comes back. `invalid_grant` (or 400/401 with no JSON body) →
   `GristClientError("Your Grist sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again.")`;
   any other 4xx → `GristClientError(f"Grist sign-in refresh failed: {error}: {error_description}")` (each cut to 200 characters).
-- `class GristTokenProvider(config: GristOAuthConfig, token_file: str)`: `can_refresh = True`;
-  `access_token(*, force_refresh: bool = False) -> str`, thread-safe (`threading.Lock`); loads the
-  record on first use, refreshes when `force_refresh` or `expires_at - 60 <= time.time()` (calling
+- `class GristTokenProvider(config: GristOAuthConfig, token_file: str, record: dict[str, Any])`:
+  `can_refresh = True`; starts from the record `resolve_credential` already checked (it never
+  re-reads the file); `access_token(*, force_refresh: bool = False) -> str`, thread-safe
+  (`threading.Lock`), refreshes when `force_refresh` or `expires_at - 60 <= time.time()` (calling
   `discover(config.auth_server_url, config.server_url)` at the first refresh, then the cache), and
   saves the new record with `save_token_file`.
 - `authorize_interactive(config, token_file) -> dict[str, Any]`: `discover(config.auth_server_url, config.server_url)`, then
@@ -334,10 +338,10 @@ column and record endpoints list OAuth scopes. The connector therefore never dep
   raises `GristAccessDenied` (§3.2.1), returns `GristDocument(id=doc_id, name=doc_id, workspace="", team="")`.
   Every gated tool uses `_doc_info` for the card; `"Team"` shows `doc.team or "(not shown by Grist)"`.
 - `grist_list_documents` lets `GristAccessDenied` become
-  `RuntimeError("This Grist server does not let PrivacyFence list your documents. Open the document in Grist and use the document id from its address (the part after the server address, before the next /).")`;
+  `RuntimeError("This Grist server does not let PrivacyFence list your documents. Open the document in Grist, then Settings (the gear icon) → Document ID, and use that id.")`;
   any other `GristClientError` becomes `RuntimeError(str(exc))` as usual. Its description says so in
   one sentence ("Some Grist servers do not allow apps to list documents; then ask the user for the
-  document id from its address."). JSON-string parameters
+  Document ID shown under the document's Settings."). JSON-string parameters
 (`ToolParam` has no list type, as in Salesforce's `filters`) are parsed with `json.loads`; a parse
 failure or wrong shape raises `ValueError` with the message given below.
 
@@ -367,8 +371,8 @@ tools-reference rows):
 - `grist_create_table`: "Create a new table, with its columns, in a Grist document."
 - `grist_add_columns`: "Add new columns to an existing table of a Grist document."
 
-Parameter descriptions: `doc_id` "The document id from grist_list_documents (the part of a Grist
-URL after /doc/ or the docs.getgrist.com/ host, such as 8CAN8gKdxY7z)."; `table_id` "The table id
+Parameter descriptions: `doc_id` "The document's id from grist_list_documents, or the Document ID
+under the document's Settings (gear icon) in Grist. Not the shorter id in the document's address."; `table_id` "The table id
 from grist_list_tables, such as Contacts (not the label shown in Grist)."; `filter` "A JSON object
 mapping column ids to lists of allowed values, such as {\"Status\": [\"Open\", \"Waiting\"]}. Rows
 match when every listed column has one of its values. Empty means no filter."; `sort` "Column ids
@@ -508,13 +512,22 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   `ORG_CONFIG_SERVICE` entry and is not added to `ORG_BUNDLE_SERVICES`; `authenticate_connector`
   gains `elif connector == "grist": self._authenticate_grist(org_config)`; `_authenticate_grist` is
   `_authenticate_salesforce` (`:1331-1357`) with `grist_auth.bundle_settings(..., org_mode=False)`
-  (no OAuth app, or a `GristClientError` → `self.error = "Grist uses an API key on this install. Use Authenticate… on the Grist row."`)
+  (no OAuth app → `self.error = "Grist uses an API key on this install. Use Authenticate… on the Grist row."`;
+  a `GristClientError` from a malformed section → `self.error = f"Grist organization config is not usable: {exc}"`)
   and `grist_auth.authorize_interactive`, error text `f"Grist authentication failed: {result}"`.
   `connector_label("grist")` is already `"Grist"`.
-- `settings_controller.py`, API-key path: `snapshot()` gains `"grist_signin": "oauth"` when the
-  bundle carries a Grist OAuth app, else `"api_key"`; `"grist_server_url_pinned"` (the bundle's
-  `server_url`, or `""`); and `"grist_auth": {"error": <str>}` (`""` for none). New action
-  `grist_connect(self, server_url: str, api_key: str) -> dict[str, Any]`:
+- `settings_controller.py`, API-key path: a helper `_grist_bundle(self) -> tuple[GristBundle | None, str]`
+  calls `bundle_settings(self._org_config_or_empty().get("grist") or {}, org_mode=False)` and returns
+  `(None, f"Grist organization config is not usable: {exc}")` on `GristClientError`, so a malformed
+  section never breaks `snapshot()`. `snapshot()` gains `"grist_signin"`: `"oauth"` when the bundle
+  carries a Grist OAuth app, `"unavailable"` when the helper returned an error, else `"api_key"`;
+  `"grist_server_url_pinned"` (the bundle's `server_url`, or `""`); and
+  `"grist_auth": {"error": <str>}` (the pending form error, else the helper's error, else `""`).
+  The org-mode settings snapshot in `web/routes_settings.py` (`:1331-1350`, which stubs
+  `"telegram_auth"`) gets the same three keys as stubs (`"unavailable"`, `""`, `{"error": ""}`).
+  New action `grist_connect(self, api_key: str, server_url: str = "") -> dict[str, Any]` (the page
+  sends `server_url: ""` when the address is pinned):
+  0. When the helper returned an error → `_grist_auth = {"error": <that error>}`, return the snapshot.
   1. When the bundle carries an OAuth app → `_grist_auth = {"error": "Your organization connects to Grist with OAuth. Use Authenticate…."}`, return the snapshot.
   2. `api_key = api_key.strip()`; empty → `_grist_auth = {"error": "Enter your Grist API key."}`, return.
   3. The URL is the pinned one when set, else `normalize_server_url(server_url)`; a
@@ -532,13 +545,15 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   says connector auth stays ungated, alongside `authenticate_connector` and
   `telegram_submit_2fa`; ADR 0070 makes *enabling* a connector sensitive, and that still applies.
   The approval card naming the server on every Grist call answers the arbitrary-server risk (ADR 0143).
-- `settings_window_html.py`: when `grist_signin == "oauth"` the Grist row keeps the generic
-  Authenticate… (`authenticate_connector`). When it is `"api_key"` the row gets
+- `settings_window_html.py`: reads the new keys defensively (`state.grist_auth || {error: ''}`, as
+  Telegram's at `:1376`). When `grist_signin == "oauth"` the Grist row keeps the generic
+  Authenticate… (`authenticate_connector`); when it is `"unavailable"` the row's auth link is
+  `aria-disabled` and `grist_auth.error` shows under the row. When it is `"api_key"` the row gets
   `data-grist-auth="1"` (as Telegram's `data-telegram-auth`), opening a modal with **Server
   address** (`type="url"`, prefilled `https://docs.getgrist.com`; hidden and replaced by "Your
   organization uses <pinned>" when `grist_server_url_pinned` is set) and **API key**
-  (`type="password"`, `autocomplete="off"`), the line "Create a key in Grist under your profile →
-  API key.", and **Connect** / **Cancel**. Connect posts `grist_connect` with
+  (`type="password"`, `autocomplete="off"`), the line "Create a key in Grist under Account settings →
+  Developer → API Key.", and **Connect** / **Cancel**. Connect posts `grist_connect` with
   `{server_url, api_key}` and sets `ui.gristSubmitted = true`. The result arrives by snapshot push
   (`_run_async`), so on each render: while the row is `busy`, show "Connecting…"; once
   `ui.gristSubmitted` is true, the row is no longer `busy` and `grist_auth.error` is `""`, close
@@ -555,7 +570,8 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   it strips a trailing `/` from both URLs and rejects
   (`SystemExit("--grist-server-url and --grist-auth-server-url must be https:// addresses (http:// only for localhost).")`)
   a URL with an empty host, or a scheme other than `https` except `http` with host `localhost`,
-  `127.0.0.1` or `::1`. A client pair or auth server without `--grist-server-url` →
+  `127.0.0.1` or `::1`; and rejects (`SystemExit("--grist-server-url and --grist-auth-server-url must not contain a user name, password, query, fragment or /api.")`)
+  userinfo, a query, a fragment or a path segment `api`, mirroring `normalize_server_url`. A client pair or auth server without `--grist-server-url` →
   `SystemExit("--grist-client-id, --grist-client-secret and --grist-auth-server-url need --grist-server-url.")`.
   `"grist"` joins the `services` tuple at `:692`, and `_CONNECTOR_CALLBACKS["grist"] = ("grist",)`
   so the org-mode summary prints `{issuer}/oauth/callback/grist` (needed only with OAuth; the line
@@ -564,11 +580,17 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   (`"Grist"`), `_ORG_CONFIG_SECTION`; `_is_configured("grist")` is true when `bundle_settings`
   accepts the section with `org_mode=True`; `_build_authorize_url` and `_exchange_and_save` get a
   `grist` branch in the Salesforce shape (`org_identity.generate_pkce_pair()`,
-  `grist_auth.discover(cfg.auth_server_url, cfg.server_url)` — synchronous like the other branches'
-  provider calls, cached per URL —, `build_authorize_url`, `exchange_code`, `save_token_file`) and
-  raise `_NotConfigured` when the bundle carries no OAuth app. Org redirect URI:
+  `grist_auth.discover(cfg.auth_server_url, cfg.server_url)`, `build_authorize_url`, `exchange_code`,
+  `save_token_file`) and raise `_NotConfigured` when the bundle carries no OAuth app. Unlike the
+  other branches of `_build_authorize_url`, Grist's makes network calls (discovery, up to two),
+  so the `/oauth/start` handler calls `_build_authorize_url` through `await asyncio.to_thread(...)`
+  when `service == "grist"` and directly otherwise. Org redirect URI:
   `https://<server>/oauth/callback/grist`; one Grist app can carry it and the local
   `http://localhost:53685/callback` as two redirect URIs.
+- `web/routes_connect.py`, connected state: `_is_connected` gets a Grist branch that loads the
+  credential file and runs `resolve_credential` against the bundle (`org_mode=True`); any
+  `GristClientError` means not connected, so a key left over from before the bundle switched to OAuth
+  or to another server is not shown as Connected.
 - `web/routes_connect.py`, rendering: Grist is not in the generic rows tuple of
   `_render_connect_page`; a `_grist_box_html(...)` placed after the Telegram box renders an
   `<li class="service card cluster">` (so `tests/unit/web/test_routes_connect.py:170`'s row count
@@ -579,7 +601,8 @@ allow" for a Grist operation; rules are made on **Settings > Auto-accept** or th
   **Reconnect** when connected, with "Connected to <server>").
 - `web/routes_connect.py`, API key: the `grist_connect` handler: signed-out →
   `_signed_out_redirect()`; CSRF and origin checked by the Telegram helper renamed from
-  `_check_telegram_post` to `_check_form_post` (used by both); a bundle with an OAuth app → error
+  `_check_telegram_post` to `_check_form_post` (used by both); a section `bundle_settings(..., org_mode=True)`
+  rejects → error "Grist is not set up by your organization.", nothing written; a bundle with an OAuth app → error
   "Your organization connects to Grist with OAuth. Use Connect."; empty key → "Enter your Grist API
   key."; otherwise `GristClient(server, GristApiKey(key)).check_connection()` in
   `asyncio.to_thread`, `save_api_key(str(paths.user_dir(principal) / TOKEN_FILES["grist"]), server, key)`,
@@ -607,7 +630,7 @@ See §4.
 
 Modelled on `docs/salesforce-setup.md`. Sections: `# Grist setup`; `## Two ways to connect` (OAuth
 when the organization registered an app, available in Grist's paid editions; otherwise a personal
-API key, on any edition); `## Connect with an API key` (Grist → profile → **API key** → create and
+API key, on any edition); `## Connect with an API key` (**Account settings → Developer → API Key** → create and
 copy; local mode: Settings > Connectors > Grist > Authenticate…, server address and key; org
 mode: the connections page asks only for the key; the key acts as you, with your access to every
 document); `## Register an OAuth app` (for administrators: **Account settings** → **Developer** →
@@ -621,7 +644,8 @@ server that serves `/.well-known/oauth-authorization-server` itself); `## Build 
 bundle` (a bundle with only `--grist-server-url` pins the server for API keys; org mode needs at
 least that); `## What the assistant can do` (the seven tools and their gates; link to the tools
 reference `#grist`; under OAuth some servers do not let apps list documents, and then the
-assistant asks for the document id from its address); `## Auto-accept rules` (`grist.document`,
+assistant asks for the Document ID from the document's Settings; one id form is used everywhere, so
+an auto-accept rule names that full Document ID, not the shorter id in the address); `## Auto-accept rules` (`grist.document`,
 set on Settings > Auto-accept; no Always allow on the card); `## Troubleshooting` (the exact error
 texts from §3.2.1 and §3.2.2 with what to do).
 
@@ -716,11 +740,11 @@ manual_before:
   - id: mb1-grist-qa-account
     title: Create a Grist QA account, its seed document (tables QaSeed and QaLifecycle) and a personal API key
     why: p12-qa-recorder records live fixtures from this document with this key; without them the recording has nothing to read.
-    done_when: A Grist document "PrivacyFence QA [QATEST]" has a table QaSeed (columns Name, Note) with two [QATEST] rows and an empty table QaLifecycle (columns Name, Note), a contrast document exists, and the QA account has an API key, kept only in your password manager.
+    done_when: A Grist document "PrivacyFence QA [QATEST]" has a table QaSeed (columns Name, Note) with two [QATEST] rows and an empty table QaLifecycle (columns Name, Note), a contrast document exists, and the QA account has an API key, kept only in your password manager. doc_id is the full Document ID from the document's Settings, not the shorter id in its address.
   - id: mb2-runner-qa-state
     title: Put the Grist API key and the seed ids on the self-hosted QA runner
     why: p12-qa-recorder dispatches qa-record-fixture.yml, which reads ~/privacyfence/credentials/grist_token.json and the grist section of ~/privacyfence/tests/fixtures/qa_environment.yaml on the runner; without them the run fails.
-    done_when: On the runner, ~/privacyfence/credentials/grist_token.json exists with mode 600 and holds {"auth", "server_url", "api_key"} with auth "api_key", and ~/privacyfence/tests/fixtures/qa_environment.yaml has a grist section with doc_id, table_id and lifecycle_table_id.
+    done_when: On the runner, ~/privacyfence/credentials/grist_token.json exists with mode 600 and holds {"auth", "server_url", "api_key"} with auth "api_key", ~/privacyfence/tests/fixtures/qa_environment.yaml has a grist section with doc_id, table_id and lifecycle_table_id, and the runner's bundle carries no Grist OAuth app (no grist client_id/client_secret).
 manual_after:
   - id: ma1-local-mode-check
     title: Connect Grist with an API key in Settings and drive every Grist tool from an AI client, then sign in with the OAuth app
@@ -808,7 +832,9 @@ phases:
          (OAuth bundle + oauth record → GristTokenProvider; OAuth bundle + api_key record → the "connects with OAuth"
          message; no OAuth + api_key record → GristApiKey with the record's server; no OAuth + oauth record → "not
          authenticated"; a pinned server different from the record's → the "different server" message, for both
-         kinds), TestGristApiKey (returns the key, can_refresh False, repr hides it), TestGristTokenProvider (no refresh while valid; refresh 60 s before expiry and on
+         kinds), TestGristApiKey (returns the key, can_refresh False, repr hides it); load_token_file normalizes server_url
+         (trailing slash accepted, http:// non-loopback refused); GristTokenProvider starts from the passed record and
+         never reads the file before its first refresh, TestGristTokenProvider (no refresh while valid; refresh 60 s before expiry and on
          force_refresh; the refreshed record is saved), TestAuthorizeInteractive (run_browser_oauth monkeypatched;
          port 53685, path /callback, redirect_host localhost; OAuthLoopbackError → "Grist sign-in failed: …").
          Assert no token, key or secret appears in any raised message or repr.
@@ -1190,16 +1216,19 @@ phases:
       Read first: plan §3.5 ("API-key path", org_settings_scope/routes_settings and settings_window_html bullets) and
       §3.2.1 (save_api_key, GristApiKey); the Telegram flow this copies: settings_controller.py:1420-1535,
       settings_window_html.py:1355-1440 and 1499-1573, web/org_settings_scope.py:134-137, web/routes_settings.py:254-261.
-      1. settings_controller.py: snapshot keys grist_signin, grist_server_url_pinned and grist_auth; self._grist_auth
-         initialised next to _telegram_auth; grist_connect and grist_cancel_auth exactly as §3.5. The key is never stored
+      1. settings_controller.py: the _grist_bundle helper; snapshot keys grist_signin, grist_server_url_pinned and
+         grist_auth; self._grist_auth initialised next to _telegram_auth; grist_connect (api_key first, server_url
+         defaulting to "") and grist_cancel_auth exactly as §3.5. The key is never stored
          on self, put in the snapshot or logged.
-      2. web/org_settings_scope.py and web/routes_settings.py: the two actions as §3.5 (LOCAL_MODE, non-sensitive).
+      2. web/org_settings_scope.py and web/routes_settings.py: the two actions as §3.5 (LOCAL_MODE, non-sensitive), and the
+         three stub keys in the org-mode settings snapshot (web/routes_settings.py:1331-1350).
       3. settings_window_html.py: the Grist row and modal as §3.5, reusing the Telegram modal's CSS classes and helpers.
       4. Tests: test_settings_controller.py — grist_connect with an OAuth app in the bundle sets the "connects with OAuth"
          error; empty key and bad URL set their errors; success (GristClient.check_connection monkeypatched, _run_async
          driven synchronously) writes data_dir()/credentials/grist_token.json as {"auth": "api_key", "server_url", "api_key"}
          and refreshes connectors; a check_connection failure sets the error and writes nothing; a pinned bundle URL wins
-         over the submitted one; grist_signin is "oauth" with an app and "api_key" without; the key is not in
+         over the submitted one and a request without server_url works; a malformed grist section gives
+         grist_signin "unavailable" and its error without breaking snapshot(); grist_signin is "oauth" with an app and "api_key" without; the key is not in
          json.dumps(snapshot). web/test_routes_settings.py — both actions allowed and classified
          (TestSensitiveActionsCoverAllAllowedActions passes); a POST to grist_connect reaches the controller.
          test_settings_window_html.py — the script carries data-grist-auth, a password input for the key, and keeps
@@ -1232,7 +1261,8 @@ phases:
          "| `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |",
          "| `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |"
          (tests/unit/test_docs_configuration_reference.py requires every option documented).
-      3. web/routes_connect.py: the "OAuth" and "rendering" bullets of §3.6. The rendering bullet's API-key form is the
+      3. web/routes_connect.py: the "OAuth", "connected state" and "rendering" bullets of §3.6 (including the
+         asyncio.to_thread call for grist in /oauth/start). The rendering bullet's API-key form is the
          next phase: here the box shows the OAuth link when the bundle has an app, "Not set up by your organization"
          without a usable section, and, for a section without an app, the text "Your organization uses <server>." with
          no form yet.
@@ -1244,7 +1274,8 @@ phases:
          /oauth/start/grist redirects to the discovered authorization endpoint with PKCE, prompt=consent and the scopes
          (discover monkeypatched) and is not configured without an app; /oauth/callback/grist exchanges the code
          (exchange_code monkeypatched) and saves user_dir(principal)/credentials/grist_token.json; the service-row count
-         assertion (l.170) becomes 12.
+         assertion (l.170) becomes 12; an api_key credential file with an OAuth bundle, and one for another server,
+         both show as not connected; build_org_bundle rejects a --grist-server-url with /api or a query.
       5. ruff check . and python3 -m pytest tests/unit -q.
     acceptance:
       - python3 -m pytest tests/unit/test_build_org_bundle.py tests/unit/web/test_routes_connect.py tests/unit/test_docs_configuration_reference.py -q passes
@@ -1266,7 +1297,7 @@ phases:
       2. Add the form to _grist_box_html for a section without an OAuth app, the grist_errors store, the grist_connect
          handler and Route("/connect/grist", grist_connect, methods=["POST"]) exactly as §3.6.
       3. Tests in web/test_routes_connect.py: POST without CSRF → 401, cross-origin → 403, signed out → the signed-out
-         redirect; with an OAuth app in the bundle → the "connects with OAuth" error; empty key → its error on the next
+         redirect; no usable grist section → "Grist is not set up by your organization." and nothing written; with an OAuth app in the bundle → the "connects with OAuth" error; empty key → its error on the next
          GET; success (check_connection monkeypatched) writes user_dir(principal)/credentials/grist_token.json as an
          api_key record with the bundle's server, evicts the principal's connectors and shows "Connected to <server>";
          a check_connection failure writes nothing and shows the error; the key appears in no response body.
