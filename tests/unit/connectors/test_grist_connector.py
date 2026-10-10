@@ -279,6 +279,222 @@ class TestGetRecords:
         assert gated_call_spy == []
 
 
+NAME_COLUMNS = [
+    GristColumn("Name", "Name", "Text", False),
+    GristColumn("Score", "Score", "Int", False),
+    GristColumn("Total", "Total", "Numeric", True),
+]
+
+
+def write_connector():
+    connector, client = make_connector()
+    client.host = "docs.getgrist.com"
+    client.get_document.return_value = make_doc()
+    client.list_columns.return_value = NAME_COLUMNS
+    return connector, client
+
+
+@pytest.fixture
+def raising_gated_call(monkeypatch):
+    async def deny(**kwargs):
+        raise RuntimeError("denied")
+
+    monkeypatch.setattr(grist_module, "gated_call", deny, raising=False)
+
+
+class TestAddRecords:
+    ARGS = {"doc_id": DOC_ID, "table_id": "Contacts"}
+
+    async def test_card_and_write(self, gated_call_spy):
+        connector, client = write_connector()
+        client.add_records.return_value = [7, 8]
+        rows = [{"Name": "Ada", "Score": 3}, {"Name": "Grace"}]
+
+        result = await connector.call(
+            "grist_add_records", {**self.ARGS, "records": json.dumps(rows)},
+        )
+
+        call = gated_call_spy[0]
+        assert call["tool"] == "grist_add_records"
+        assert call["gate"] == "popup"
+        assert call["filtered_data"] is None
+        assert list(call["preview"]) == ["Server", "Document", "Table", "Records"]
+        assert call["preview"] == {
+            "Server": "docs.getgrist.com", "Document": "Budget", "Table": "Contacts", "Records": "2",
+        }
+        assert call["preview_tables"] == [{
+            "headers": ["Name", "Score"], "rows": [["Ada", "3"], ["Grace", ""]],
+        }]
+        assert json.loads(call["details_text"]) == rows
+        assert call["raw_data"] == {"doc_id": DOC_ID, "table_id": "Contacts", "records": rows}
+        assert call["args"] == self.ARGS
+        assert call["summary"] == "Add 2 record(s) to Budget / Contacts"
+        client.add_records.assert_called_once_with(DOC_ID, "Contacts", rows)
+        assert result == {"doc_id": DOC_ID, "table_id": "Contacts", "added_ids": [7, 8]}
+
+    async def test_write_runs_only_after_the_gate_returns(self, monkeypatch):
+        connector, client = write_connector()
+        order = []
+
+        async def fake_gated_call(**kwargs):
+            order.append("gate")
+
+        client.add_records.side_effect = lambda *a: order.append("write") or [1]
+        monkeypatch.setattr(grist_module, "gated_call", fake_gated_call, raising=False)
+
+        await connector.call("grist_add_records", {**self.ARGS, "records": '[{"Name": "a"}]'})
+
+        assert order == ["gate", "write"]
+
+    async def test_denial_means_no_write(self, raising_gated_call):
+        connector, client = write_connector()
+
+        with pytest.raises(RuntimeError, match="denied"):
+            await connector.call("grist_add_records", {**self.ARGS, "records": '[{"Name": "a"}]'})
+        client.add_records.assert_not_called()
+
+    @pytest.mark.parametrize("records", [
+        "not json", "{}", "[]", '["a"]', '[{"Name": [1]}]', '[{"bad key": 1}]',
+        json.dumps([{"Name": "x"}] * 101),
+    ])
+    async def test_bad_records_are_refused(self, gated_call_spy, records):
+        connector, client = write_connector()
+
+        with pytest.raises(ValueError, match="records must be a JSON array of 1 to 100 objects"):
+            await connector.call("grist_add_records", {**self.ARGS, "records": records})
+        assert gated_call_spy == []
+        client.add_records.assert_not_called()
+
+    async def test_unknown_column_is_refused(self, gated_call_spy):
+        connector, client = write_connector()
+
+        with pytest.raises(ValueError, match=r"Unknown column\(s\) in table Contacts: Nope, Zed\. Call grist_list_tables"):
+            await connector.call("grist_add_records", {**self.ARGS, "records": '[{"Zed": 1, "Nope": 2, "Name": "a"}]'})
+        assert gated_call_spy == []
+        client.add_records.assert_not_called()
+
+    async def test_formula_column_is_refused(self, gated_call_spy):
+        connector, client = write_connector()
+
+        with pytest.raises(ValueError, match=r"Column\(s\) Total in table Contacts are formula columns and cannot be written\."):
+            await connector.call("grist_add_records", {**self.ARGS, "records": '[{"Total": 1}]'})
+        assert gated_call_spy == []
+        client.add_records.assert_not_called()
+
+    async def test_bad_ids_are_refused(self, gated_call_spy):
+        connector, client = write_connector()
+
+        with pytest.raises(ValueError, match="Not a Grist table id"):
+            await connector.call("grist_add_records", {"doc_id": DOC_ID, "table_id": "a/b", "records": "[{}]"})
+        assert gated_call_spy == []
+
+
+class TestUpdateRecords:
+    ARGS = {"doc_id": DOC_ID, "table_id": "Contacts"}
+
+    def update_connector(self):
+        connector, client = write_connector()
+        client.get_records_by_id.return_value = [
+            GristRecord(5, {"Name": "old", "Score": 1}), GristRecord(6, {"Name": "x"}),
+        ]
+        return connector, client
+
+    async def test_card_and_write(self, gated_call_spy):
+        connector, client = self.update_connector()
+        records = [{"id": 5, "fields": {"Name": "new", "Score": 2}}, {"id": 6, "fields": {"Score": 9}}]
+
+        result = await connector.call(
+            "grist_update_records", {**self.ARGS, "records": json.dumps(records)},
+        )
+
+        call = gated_call_spy[0]
+        assert call["tool"] == "grist_update_records"
+        assert call["gate"] == "popup"
+        assert call["filtered_data"] is None
+        assert call["preview"] == {
+            "Server": "docs.getgrist.com", "Document": "Budget", "Table": "Contacts",
+            "Records": "2", "Cells changed": "3",
+        }
+        assert call["preview_tables"] == [{
+            "headers": ["Record", "Column", "Current", "New"],
+            "rows": [
+                ["#5", "Name", "old", "new"],
+                ["#5", "Score", "1", "2"],
+                ["#6", "Score", "", "9"],
+            ],
+        }]
+        assert call["details_text"] == "#5 Name: old → new\n#5 Score: 1 → 2\n#6 Score:  → 9"
+        assert call["raw_data"] == {"doc_id": DOC_ID, "table_id": "Contacts", "records": records}
+        assert call["args"] == self.ARGS
+        assert call["summary"] == "Update 2 record(s) in Budget / Contacts"
+        client.get_records_by_id.assert_called_once_with(DOC_ID, "Contacts", [5, 6])
+        client.update_records.assert_called_once_with(
+            DOC_ID, "Contacts", [(5, {"Name": "new", "Score": 2}), (6, {"Score": 9})],
+        )
+        assert result == {"doc_id": DOC_ID, "table_id": "Contacts", "updated_ids": [5, 6]}
+
+    async def test_write_runs_only_after_the_gate_returns(self, monkeypatch):
+        connector, client = self.update_connector()
+        order = []
+
+        async def fake_gated_call(**kwargs):
+            order.append("gate")
+
+        client.update_records.side_effect = lambda *a: order.append("write")
+        monkeypatch.setattr(grist_module, "gated_call", fake_gated_call, raising=False)
+
+        await connector.call("grist_update_records", {**self.ARGS, "records": '[{"id": 5, "fields": {"Name": "n"}}]'})
+
+        assert order == ["gate", "write"]
+
+    async def test_denial_means_no_write(self, raising_gated_call):
+        connector, client = self.update_connector()
+
+        with pytest.raises(RuntimeError, match="denied"):
+            await connector.call("grist_update_records", {**self.ARGS, "records": '[{"id": 5, "fields": {"Name": "n"}}]'})
+        client.update_records.assert_not_called()
+
+    @pytest.mark.parametrize("records", [
+        "not json", "{}", "[]", '[1]', '[{"id": 0, "fields": {"Name": "a"}}]',
+        '[{"id": true, "fields": {"Name": "a"}}]', '[{"id": "5", "fields": {"Name": "a"}}]',
+        '[{"id": 5, "fields": {}}]', '[{"id": 5}]', '[{"id": 5, "fields": {"Name": [1]}}]',
+        '[{"id": 5, "fields": {"Name": "a"}}, {"id": 5, "fields": {"Name": "b"}}]',
+        json.dumps([{"id": i + 1, "fields": {"Name": "x"}} for i in range(101)]),
+    ])
+    async def test_bad_records_are_refused(self, gated_call_spy, records):
+        connector, client = self.update_connector()
+
+        with pytest.raises(ValueError, match=r'records must be a JSON array of 1 to 100 \{"id": <record id>'):
+            await connector.call("grist_update_records", {**self.ARGS, "records": records})
+        assert gated_call_spy == []
+        client.update_records.assert_not_called()
+
+    async def test_unknown_column_is_refused(self, gated_call_spy):
+        connector, client = self.update_connector()
+
+        with pytest.raises(ValueError, match=r"Unknown column\(s\) in table Contacts: Nope\."):
+            await connector.call("grist_update_records", {**self.ARGS, "records": '[{"id": 5, "fields": {"Nope": 1}}]'})
+        assert gated_call_spy == []
+        client.update_records.assert_not_called()
+
+    async def test_formula_column_is_refused(self, gated_call_spy):
+        connector, client = self.update_connector()
+
+        with pytest.raises(ValueError, match=r"Column\(s\) Total in table Contacts are formula columns"):
+            await connector.call("grist_update_records", {**self.ARGS, "records": '[{"id": 5, "fields": {"Total": 1}}]'})
+        assert gated_call_spy == []
+        client.update_records.assert_not_called()
+
+    async def test_missing_ids_are_refused(self, gated_call_spy):
+        connector, client = self.update_connector()
+        records = '[{"id": 99, "fields": {"Name": "a"}}, {"id": 5, "fields": {"Name": "a"}}, {"id": 42, "fields": {"Name": "a"}}]'
+
+        with pytest.raises(ValueError, match=r"Record id\(s\) not found in table Contacts: 42, 99\."):
+            await connector.call("grist_update_records", {**self.ARGS, "records": records})
+        assert gated_call_spy == []
+        client.update_records.assert_not_called()
+
+
 class TestFieldCompleteness:
     """A real GristClient with a faked HTTP layer, so the raw response -> dataclass -> card
     path is exercised end to end."""
@@ -304,6 +520,8 @@ GRIST_SIBLINGS: dict[str, list[str]] = {
     "grist_list_documents": ["grist_list_tables"],
     "grist_list_tables": ["grist_list_documents", "grist_get_records"],
     "grist_get_records": ["grist_list_tables"],
+    "grist_add_records": ["grist_update_records"],
+    "grist_update_records": ["grist_add_records"],
 }
 
 
@@ -321,11 +539,24 @@ class TestEveryToolIsAudited:
         client.list_tables.return_value = []
         client.get_document.return_value = GristDocument(id=DOC_ID, name="Budget", workspace="Home", team="Acme")
         client.get_records.return_value = GristRecordPage(records=[], truncated=False)
+        client.host = "docs.getgrist.com"
+        client.get_document.return_value = GristDocument("DOC1", "QA doc", "Home", "Personal")
+        client.list_columns.return_value = [GristColumn("Name", "Name", "Text", False)]
+        client.list_tables.return_value = [GristTable("Table1", [GristColumn("Name", "Name", "Text", False)])]
+        client.get_records_by_id.return_value = [GristRecord(1, {"Name": "old"})]
+        client.add_records.return_value = [2]
 
         await assert_all_tools_leave_an_audit_trail(
             connector, grist_module, monkeypatch, tmp_path,
             arg_overrides={
-                "grist_list_tables": {"doc_id": DOC_ID},
-                "grist_get_records": {"doc_id": DOC_ID, "table_id": "Contacts"},
+                "grist_list_tables": {"doc_id": "DOC1"},
+                "grist_get_records": {"doc_id": "DOC1", "table_id": "Table1"},
+                "grist_add_records": {
+                    "doc_id": "DOC1", "table_id": "Table1", "records": '[{"Name": "a"}]',
+                },
+                "grist_update_records": {
+                    "doc_id": "DOC1", "table_id": "Table1",
+                    "records": '[{"id": 1, "fields": {"Name": "b"}}]',
+                },
             },
         )

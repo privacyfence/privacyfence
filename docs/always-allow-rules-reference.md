@@ -191,6 +191,13 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `gmail_reply_draft_with_attachments` | unconditional |
 | `gmail_update_filter` |  |
 
+### Grist
+
+| Tool | Always allow buttons |
+|---|---|
+| `grist_add_records` |  |
+| `grist_update_records` |  |
+
 ### Jira
 
 | Tool | Always allow buttons |

@@ -146,6 +146,12 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "apps_script_write_content":
         "The project's source is replaced. The previous source is recoverable only if it was "
         "already saved as a version.",
+
+    # ── Grist ────────────────────────────────────────────────────────────
+    "grist_add_records":
+        "New records are added to that table.",
+    "grist_update_records":
+        "The cells shown change to their new values. Other cells and records are not touched.",
 }
 
 # The card's own label for this row -- see card_builder.build_card_html.
