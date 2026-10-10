@@ -988,7 +988,12 @@ def check_grist(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         note = "found" if ok else f"document {doc_id!r} not in list_documents() result"
         raw = None
         if record and ok:
-            raw = deidentify_structural_fields(redact(_grist_doc_workspaces(cap.calls, doc_id)))
+            workspaces = deidentify_structural_fields(redact(_grist_doc_workspaces(cap.calls, doc_id)))
+            # orgDomain is the team's site name, which identifies the account.
+            raw = [
+                {k: ("qa-placeholder-team" if k.lower() == "orgdomain" else v) for k, v in w.items()}
+                for w in workspaces
+            ]
         results.append(CheckResult("grist", "list_documents", doc_id, ok, note, raw, "list_documents.json"))
     except GristAccessDenied:
         if is_oauth:

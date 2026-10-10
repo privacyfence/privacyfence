@@ -2966,7 +2966,7 @@ class _FakeGristApi:
             return [{"id": 7, "name": "QA Team", "owner": {"name": "Real Person", "email": "real@example.org"}}]
         if path == "/api/orgs/7/workspaces":
             return [
-                {"id": 1, "name": "Home", "docs": [{"id": self.DOC, "name": "PrivacyFence QA [QATEST]"}]},
+                {"id": 1, "name": "Home", "orgDomain": "docs-123456", "docs": [{"id": self.DOC, "name": "PrivacyFence QA [QATEST]"}]},
                 {"id": 2, "name": "Other", "docs": [{"id": "otherDoc", "name": "Contrast"}]},
             ]
         if path.endswith("/columns"):
@@ -3026,6 +3026,7 @@ class TestCheckGrist:
         assert len(raw) == 1 and len(raw[0]["docs"]) == 1
         assert "otherDoc" not in json.dumps(raw)
         assert _FakeGristApi.DOC not in json.dumps(raw)
+        assert "docs-123456" not in json.dumps(raw)
 
     def test_check_mode_records_nothing(self, monkeypatch):
         results = self._run(monkeypatch, _FakeGristApi(), record=False)
