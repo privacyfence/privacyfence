@@ -91,8 +91,7 @@ session, it refreshes once and retries the call.
 ## Reading large reports
 
 Salesforce returns at most 2,000 detail rows for one run of a report. To read more, pass `page_by`
-to `salesforce_run_report` (or the plugin operation `salesforce.report_run`). PrivacyFence then
-runs the saved report once per page, sorted by that column and starting after the last value of the
+to `salesforce_run_report`. PrivacyFence then runs the saved report once per page, sorted by that column and starting after the last value of the
 previous page, and returns a `next_cursor` until the report is done. The saved report is not
 changed.
 

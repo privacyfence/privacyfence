@@ -618,11 +618,6 @@ class McpDispatcher:
             self._fire_unattended_changed()
         return {"unattended": False}
 
-    def any_unattended_session(self) -> bool:
-        """Whether any MCP session has begun an unattended session -- the plugin host's
-        provider for refusing a confirmation request nobody is there to answer."""
-        return bool(self._unattended_sessions)
-
     def end_session(self, session_key: Hashable) -> None:
         """Called once, when the MCP session this key identifies ends (see
         module docstring) -- whatever unattended-session state it carried

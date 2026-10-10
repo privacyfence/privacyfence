@@ -12,7 +12,7 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
-from ..plugins import cursors
+from .. import cursors
 from ..salesforce_client import (
     ReportFilter,
     SalesforceClient,

@@ -6,8 +6,7 @@ import json
 
 import pytest
 
-from privacyfence.plugins import constants as c
-from privacyfence.plugins import cursors
+from privacyfence import cursors
 
 pytestmark = pytest.mark.unit
 
@@ -74,8 +73,8 @@ class TestRefusal:
             cursors.decode(_raw(obj), "jira.search", BOUND)
 
     def test_overlong(self):
-        cursor = cursors.encode("jira.search", BOUND, {"t": "x" * c.CURSOR_MAX_CHARS})
-        assert len(cursor) > c.CURSOR_MAX_CHARS
+        cursor = cursors.encode("jira.search", BOUND, {"t": "x" * cursors.CURSOR_MAX_CHARS})
+        assert len(cursor) > cursors.CURSOR_MAX_CHARS
         with pytest.raises(cursors.CursorError, match="cursor is not valid"):
             cursors.decode(cursor, "jira.search", BOUND)
 

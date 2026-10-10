@@ -79,27 +79,6 @@ body {
 .pf-shell-nav-item:hover { color: var(--accent-dark); }
 /* The current page: ink, weight and a soft surface, not the colour alone. */
 .pf-shell-nav-item.active { color: var(--ink); font-weight: 650; background: var(--surface-soft); }
-/* The Plugins dropdown: shown only when a running plugin has a page (see _plugins_html). */
-.pf-shell-plugins { position: relative; }
-.pf-shell-plugins[hidden] { display: none; }
-.pf-shell-plugins > summary {
-  display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 0 11px;
-  border-radius: var(--radius-s); color: var(--ink-soft); cursor: pointer; list-style: none;
-}
-.pf-shell-plugins > summary::-webkit-details-marker { display: none; }
-.pf-shell-plugins > summary::after {
-  content: ""; width: 6px; height: 6px; border: solid currentColor; border-width: 0 2px 2px 0;
-  transform: rotate(45deg) translateY(-2px);
-}
-.pf-shell-plugins > summary:hover, .pf-shell-plugins[open] > summary { color: var(--accent-dark); }
-.pf-shell-plugins-panel {
-  position: absolute; left: 0; top: calc(100% + 8px); z-index: 30; min-width: 200px; max-width: 320px;
-  display: grid; padding: 8px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 14px; box-shadow: var(--shadow);
-}
-.pf-shell-plugins-panel .pf-shell-nav-item { color: var(--ink); overflow-wrap: anywhere; }
-.pf-shell-menu-panel .pf-shell-plugins-panel { position: static; box-shadow: none; border: 0; padding: 0 0 0 12px; max-width: none; }
-.pf-shell-menu-panel .pf-shell-plugins > summary { font-size: 16px; color: var(--ink); padding: 0 12px; border-top: 1px solid var(--surface-soft); }
 .pf-shell-menu { display: none; }
 .pf-shell-menu summary {
   display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); min-width: var(--tap);
@@ -512,54 +491,8 @@ _STREAM_JS = """
       setState('reconnecting', 'reconnecting…');
     }
   };
-  // The Plugins menu follows the plugin rows of every settings event: the plugins with a page,
-  // by display name. Built with textContent, so a name is never markup.
-  function updatePluginsMenu(plugins) {
-    var pages = (plugins || []).filter(function (p) { return p && p.page_url; });
-    pages.sort(function (a, b) {
-      // The same order as the server's: case-insensitive, then exact, so names that differ only
-      // in case keep their places when the menu is rebuilt.
-      var x = String(a.display_name).toLowerCase(), y = String(b.display_name).toLowerCase();
-      if (x === y) { x = String(a.display_name); y = String(b.display_name); }
-      return x < y ? -1 : (x > y ? 1 : 0);
-    });
-    document.querySelectorAll('[data-pf-plugins]').forEach(function (menu) {
-      var panel = menu.querySelector('.pf-shell-plugins-panel');
-      panel.textContent = '';
-      if (pages.length > 0) {
-        var all = document.createElement('a');
-        all.className = 'pf-shell-nav-item';
-        all.href = '/plugin-pages';
-        all.textContent = 'All plugin pages';
-        panel.appendChild(all);
-      }
-      pages.forEach(function (p) {
-        var a = document.createElement('a');
-        a.className = 'pf-shell-nav-item';
-        a.href = p.page_url;
-        a.textContent = p.display_name;
-        panel.appendChild(a);
-      });
-      menu.hidden = pages.length === 0;
-      if (pages.length === 0) { menu.open = false; }
-    });
-  }
-  document.addEventListener('click', function (e) {
-    // Close the menus when a plugin link is picked: the link navigates, and a page restored from
-    // the back/forward cache would otherwise show them open.
-    var picked = e.target.closest && e.target.closest('.pf-shell-plugins-panel a');
-    document.querySelectorAll('details.pf-shell-plugins[open], details.pf-shell-menu[open]').forEach(function (menu) {
-      if (picked || (menu.classList.contains('pf-shell-plugins') && !menu.contains(e.target))) { menu.open = false; }
-    });
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') { return; }
-    document.querySelectorAll('details.pf-shell-plugins[open]').forEach(function (menu) { menu.open = false; });
-  });
   es.addEventListener('settings', function (e) {
-    var state = JSON.parse(e.data);
-    if (state && state.plugins) { updatePluginsMenu(state.plugins); }
-    if (window.__pfRender) { window.__pfRender(state); }
+    if (window.__pfRender) { window.__pfRender(JSON.parse(e.data)); }
   });
   es.addEventListener('approvals', function (e) {
     var rows = JSON.parse(e.data);
@@ -615,32 +548,9 @@ _ORG_SIGN_OUT_JS = """
 """
 
 
-def _plugins_html(plugin_pages: tuple[tuple[str, str], ...]) -> str:
-    """The Plugins dropdown: "All plugin pages" first, then one link per ``(display name, href)``,
-    alphabetical, each in this tab like every other menu item. Hidden while there are none; the
-    stream script (``_STREAM_JS``) fills it in and out as plugins come and go."""
-    plugin_links = "".join(
-        f'<a class="pf-shell-nav-item" href="{_html_escape(href)}">{_html_escape(name)}</a>'
-        for name, href in sorted(plugin_pages, key=lambda page: (page[0].casefold(), page[0]))
-    )
-    all_link = '<a class="pf-shell-nav-item" href="/plugin-pages">All plugin pages</a>' if plugin_pages else ""
-    hidden = "" if plugin_pages else " hidden"
-    return (
-        f'<details class="pf-shell-plugins" data-pf-plugins{hidden}><summary>Plugins</summary>'
-        f'<div class="pf-shell-plugins-panel">{all_link}{plugin_links}</div></details>'
-    )
-
-
-def _nav_html(
-    active: str, nav_items: tuple[tuple[str, str, str], ...],
-    plugin_pages: tuple[tuple[str, str], ...] | None = None,
-) -> str:
-    """``plugin_pages`` is ``None`` where there are no plugins at all (org mode); otherwise the
-    Plugins menu goes in just before Settings."""
+def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
     items = []
     for key, label, href in nav_items:
-        if key == "settings" and plugin_pages is not None:
-            items.append(_plugins_html(plugin_pages))
         cls = "pf-shell-nav-item active" if key == active else "pf-shell-nav-item"
         current = ' aria-current="page"' if key == active else ""
         items.append(f'<a class="{cls}" href="{href}"{current}>{_html_escape(label)}</a>')
@@ -650,14 +560,13 @@ def _nav_html(
 def header_html(
     active: str, nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS, *,
     live_html: str = "", principal_label: str = "",
-    plugin_pages: tuple[tuple[str, str], ...] | None = None,
 ) -> str:
     """The shell's header, in the website's markup pattern (website/_partials/header.html): the
     brand mark, the links inline, and the same links again in a ``<details>`` menu that replaces
     them when the header is narrow (``_SHELL_CSS``'s container queries). Keep the two lists
     equal; both come from ``nav_items``. The signed-in principal, when there is one, is shown in
     the header when there is room and at the top of the menu when there is not."""
-    links = _nav_html(active, nav_items, plugin_pages)
+    links = _nav_html(active, nav_items)
     home = nav_items[0][2] if nav_items else "/"
     principal_html = principal_menu_html = ""
     if principal_label:
@@ -685,7 +594,6 @@ def wrap(
     dismissible_notice_html: str | None = None, dismissible_notice_key: str = "",
     nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS,
     principal_label: str = "",
-    plugin_pages: tuple[tuple[str, str], ...] | None = None,
     live_updates: bool = True,
     stream_url: str = "/api/state/stream",
     push_public_key: str = "",
@@ -761,10 +669,6 @@ def wrap(
     Empty (the default) renders nothing, which is right for local mode,
     where there is only ever one.
 
-    ``plugin_pages`` is local mode's Plugins menu: ``(display name, href)`` of each running plugin
-    with a page, shown between Approvals and Settings only while there is at least one (the
-    stream script keeps it current). ``None`` (org mode, which runs no plugins) renders no menu.
-
     ``live_updates=False`` omits both the live indicator and the
     ``EventSource`` script. The indicator is not decoration -- it tells a
     reviewer whether the queue in front of them is current -- so it must
@@ -838,7 +742,7 @@ def wrap(
 <style nonce="{nonce}">{DOCUMENT_CSS}{_SHELL_CSS}</style>
 </head>
 <body>
-{header_html(active, nav_items, live_html=live_html, principal_label=principal_label, plugin_pages=plugin_pages)}
+{header_html(active, nav_items, live_html=live_html, principal_label=principal_label)}
 {banner}
 {notice}
 <main class="pf-shell-main">{body_html}</main>

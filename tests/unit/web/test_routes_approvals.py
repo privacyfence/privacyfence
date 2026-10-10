@@ -29,7 +29,6 @@ from privacyfence import webauthn_stepup as wa
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import routes_approvals
 from privacyfence.web.routes_approvals import _inject_shim, create_app
-from privacyfence.web.server import build_app
 from privacyfence.web.session_auth import (
     PROVENANCE_HUMAN,
     PROVENANCE_UNATTESTED,
@@ -435,42 +434,6 @@ class TestShowApproval:
         # web_shell.plain_page: laid out at a phone's width, and still reloading itself.
         assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in r.text
         assert '<meta http-equiv="refresh" content="2">' in r.text.split("</head>", 1)[0]
-
-
-class TestPluginApprovalCardFrame:
-    """A card that frames a plugin page gets frame-src data: 'self' for its own response; every
-    other card keeps frame-src data:. Mounted through build_app, so the security-header middleware
-    is the one writing the header."""
-
-    @staticmethod
-    def _frame_src(web_ui, sessions, *, frame_src: str) -> str:
-        card = web_ui.deferred_registry.register_confirm()
-        card.frame_src = frame_src
-        web_ui.deferred_registry.set_html(card.id, "<!doctype html><html><head></head><body>CARD</body></html>")
-        client = TestClient(build_app(web_ui, sessions=sessions), base_url="http://localhost")
-        _signed_in(client, sessions)
-        r = client.get(f"/approvals/{card.id}")
-        assert r.status_code == 200
-        assert "CARD" in r.text
-        web_ui.deferred_registry.finalize(card.id, "deny")
-        directives = dict(p.strip().split(" ", 1) for p in r.headers["content-security-policy"].split(";") if p.strip())
-        assert directives["frame-ancestors"] == "'none'"
-        return directives["frame-src"]
-
-    def test_card_with_a_frame_gets_self(self, web_ui, sessions):
-        assert self._frame_src(web_ui, sessions, frame_src="/plugins/echo/approval?pf_approval=x") == "data: 'self'"
-
-    def test_card_without_a_frame_keeps_data_only(self, web_ui, sessions):
-        assert self._frame_src(web_ui, sessions, frame_src="") == "data:"
-
-    def test_the_list_page_keeps_data_only(self, web_ui, sessions):
-        card = web_ui.deferred_registry.register_confirm()
-        card.frame_src = "/plugins/echo/approval?pf_approval=x"
-        client = TestClient(build_app(web_ui, sessions=sessions), base_url="http://localhost")
-        _signed_in(client, sessions)
-        r = client.get("/approvals")
-        web_ui.deferred_registry.finalize(card.id, "deny")
-        assert "frame-src data:;" in r.headers["content-security-policy"]
 
 
 class TestDecide:

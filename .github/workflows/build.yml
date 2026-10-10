@@ -231,16 +231,6 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: bash scripts/build_dmg.sh
 
-      # Builds the `today` example plugin for this OS and runs it once: the plugin's own check that
-      # it freezes and starts, nothing uploaded and nothing shipped in an installer.
-      - name: Build the today example plugin
-        shell: bash
-        run: python scripts/build_example_plugin.py today --out dist/plugins
-
-      - name: Self-test the today example plugin
-        shell: bash
-        run: dist/plugins/today/today-plugin --self-test
-
       # The one place the actual packaged artifact -- not a source checkout, not a dev
       # install -- gets exercised at all. Mounts the DMG just built above, unpacks the app
       # bundle out of the .pkg it carries (the only form the app ships in now -- see
@@ -518,16 +508,6 @@ jobs:
         shell: pwsh
         run: ./scripts/build_installer.ps1
 
-      # Builds the `today` example plugin for this OS and runs it once: the plugin's own check that
-      # it freezes and starts, nothing uploaded and nothing shipped in an installer.
-      - name: Build the today example plugin
-        shell: pwsh
-        run: python scripts/build_example_plugin.py today --out dist/plugins
-
-      - name: Self-test the today example plugin
-        shell: pwsh
-        run: dist\plugins\today\today-plugin.exe --self-test
-
       # docs/testing-policy.md's layer 6 (packaged artifact): the one place the actual packaged
       # artifact -- not a source checkout, not a dev install -- gets exercised at all on Windows.
       # A real silent install (schtasks-registered autostart task included), the real installed
@@ -668,16 +648,6 @@ jobs:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: bash scripts/build_deb.sh
-
-      # Builds the `today` example plugin for this OS and runs it once: the plugin's own check that
-      # it freezes and starts, nothing uploaded and nothing shipped in an installer.
-      - name: Build the today example plugin
-        shell: bash
-        run: python scripts/build_example_plugin.py today --out dist/plugins
-
-      - name: Self-test the today example plugin
-        shell: bash
-        run: dist/plugins/today/today-plugin --self-test
 
       # The one place the actual packaged artifact -- not a source checkout,
       # not the --target install the org-mode smoke test above uses -- gets exercised at all.

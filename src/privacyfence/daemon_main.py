@@ -257,8 +257,6 @@ def _wait_for_shutdown() -> None:
 # _run_update_check_timer (started as its own daemon thread by
 # run_app(), below) is now what fires it.
 UPDATE_CHECK_TIMER_INTERVAL_SECONDS = 6 * 60 * 60
-# Worst case of stop_all is about 21 s (lock wait, shutdown notices, grace, terminate, log drain, services).
-PLUGIN_STOP_ALL_TIMEOUT_SECONDS = 25.0
 
 
 def _run_update_check_timer(controller: Any) -> None:
@@ -663,7 +661,6 @@ def _maybe_start_web_server(
     controller: Any = None,
     org_config: dict[str, Any] | None = None,
     config_path: str = "",
-    plugin_host: Any = None,
 ) -> Any:
     """Returns the started WebServer -- always, in local mode, since the
     web approval UI is the only one there is (see this section's own
@@ -806,10 +803,6 @@ def _maybe_start_web_server(
             # exactly as before this ADR.
             principal = current_principal()
             if principal.id == LOCAL_PRINCIPAL_ID:
-                if plugin_host is not None:
-                    # Running plugins' connectors are the owner's alone, like the built-in ones. A
-                    # built-in connector wins a name clash, so no plugin can stand in for one.
-                    return {**plugin_host.connectors(), **connector_host.connectors}
                 return connector_host.connectors
             return connector_registry.get(principal).connectors
 
@@ -817,10 +810,6 @@ def _maybe_start_web_server(
             _connectors, unattended_sessions_enabled=unattended_sessions_enabled,
             registry=registry,
         )
-        if plugin_host is not None:
-            plugin_host.set_tools_changed_listener(mcp_dispatcher.notify_tools_changed)
-            # A plugin's confirmation request has no MCP call to read the unattended scope from.
-            plugin_host.set_unattended_provider(mcp_dispatcher.any_unattended_session)
         if controller is not None:
             # The direct successor of ipc_server.py's own constructor-time
             # ``ipc_server.set_unattended_changed_listener(self._on_
@@ -887,7 +876,6 @@ def _maybe_start_web_server(
         step_up=local_step_up,
         # ADR 0006 option D / ADR 0037: a relabel only, never an attested source.
         agent_overrides=agent_overrides.from_config(config),
-        plugin_host=plugin_host,
     )
     server.start()
     # The pending-result URL gate.py hands back to Claude is
@@ -1628,59 +1616,6 @@ def _log_cache_warm_failure(future: "asyncio.Future[None]") -> None:
         logger.warning("Background Telegram cache warm failed: %s", exc)
 
 
-def _plugin_connector_state(controller: Any, name: str) -> tuple[bool, str | None]:
-    """``(enabled, blocked_by)`` of the built-in connector ``name``, from the controller's rows."""
-    for row in controller.status_connectors():
-        if row["name"] == name:
-            return bool(row["enabled"]), row["blocked_by"]
-    return False, None
-
-
-def _plugins_feature_enabled(config: dict[str, Any]) -> bool:
-    """``plugins.enabled``: only a real boolean counts; a missing value or anything else is the
-    default (true), and a value of the wrong shape is logged."""
-    plugins_config = config.get("plugins")
-    if plugins_config is None:
-        return True
-    if not isinstance(plugins_config, dict):
-        logger.warning("Ignoring plugins: in settings.yaml: expected a mapping, got %s", type(plugins_config).__name__)
-        return True
-    enabled = plugins_config.get("enabled", True)
-    if not isinstance(enabled, bool):
-        logger.warning(
-            "Ignoring plugins.enabled in settings.yaml: expected true or false, got %s; plugins stay enabled",
-            type(enabled).__name__,
-        )
-        return True
-    return enabled
-
-
-def _build_plugin_host(config: dict[str, Any], connector_host: ConnectorHost, connector_state: Any) -> Any:
-    """The local-mode PluginHost. ``plugins.enabled`` (default true) off leaves every plugin
-    showing why it is not running."""
-    from . import gate
-    from .plugins.host import PluginHost
-
-    def registry_provider() -> Any:
-        registry = gate._deferred_registry()
-        if registry is None:
-            raise RuntimeError("No approvals registry is available.")
-        return registry
-
-    return PluginHost(
-        connectors_provider=lambda: connector_host.connectors,
-        connector_state=connector_state,
-        registry_provider=registry_provider,
-        feature_enabled=_plugins_feature_enabled(config),
-    )
-
-
-def _log_plugin_start_failure(future: "asyncio.Future[None]") -> None:
-    exc = future.exception()
-    if exc is not None:
-        logger.warning("Starting the plugins failed: %s", exc)
-
-
 # ---------------------------------------------------------------------------- #
 # OAuth / interactive-auth setup commands (headless/dev use — the primary UX
 # path is now "Authenticate…" in PrivacyFence Settings)
@@ -1976,18 +1911,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     from .settings_controller import SettingsController
 
     connector_names = [c.name for c in connectors]
-    local_mode = org_mode.resolve_mode(org_config) == "local"
-    # connector_state reads the controller built just below; it is only called once the host runs.
-    plugin_host = (
-        _build_plugin_host(
-            config, connector_host, lambda name: _plugin_connector_state(settings_controller, name),
-        )
-        if local_mode else None
-    )
     settings_controller = SettingsController(
         config_path=config_path, connectors=connector_names, connector_host=connector_host,
         connector_objs=connectors, connector_failures=connector_failures,
-        plugin_host=plugin_host,
     )
 
     # Built after connector_host so the MCP dispatcher (if web.mcp.enabled)
@@ -1996,7 +1922,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     server = _maybe_start_web_server(
         config, connector_host, unattended_sessions_enabled=unattended_enabled, controller=settings_controller,
         org_config=org_config,
-        plugin_host=plugin_host,
         # Resolved, not the raw --config argument -- org mode's
         # admin privacy page writes this file back, and it must land on the
         # same path run_app() read `config` from. Local mode ignores it;
@@ -2022,15 +1947,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     elif server is not None:
         logger.warning("Web server event loop not ready in time; skipping background cache warm")
 
-    plugins_loop = None
-    if plugin_host is not None:
-        if web_loop is not None:
-            future = asyncio.run_coroutine_threadsafe(plugin_host.start(), web_loop)
-            future.add_done_callback(_log_plugin_start_failure)
-            plugins_loop = web_loop
-        else:
-            logger.warning("Web server event loop not ready in time; plugins were not started")
-
     threading.Thread(
         target=_run_update_check_timer, args=(settings_controller,),
         name="update-check-timer", daemon=True,
@@ -2041,14 +1957,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     except KeyboardInterrupt:
         logger.info("Interrupted; shutting down")
     finally:
-        if plugins_loop is not None:
-            # Before the audit log closes: stopping a plugin writes lifecycle entries.
-            try:
-                asyncio.run_coroutine_threadsafe(plugin_host.stop_all(), plugins_loop).result(
-                    timeout=PLUGIN_STOP_ALL_TIMEOUT_SECONDS
-                )
-            except Exception as exc:
-                logger.warning("Stopping the plugins failed: %s", exc)
         audit_logger.close()
         _release_instance_lock()
     return 0

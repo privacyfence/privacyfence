@@ -231,12 +231,6 @@ that isn't claimed yet, and claim it on the first successful publish. Do this on
    - **Environment name**: `testpypi` (on TestPyPI) / `pypi` (on PyPI) — matches the `environment:`
      each job in `publish-pypi.yml` declares. Scoping the publisher to an environment means the
      minted OIDC token is only ever valid for that job, not any other job in this repo.
-3. Repeat step 2 for the plugin SDK with **PyPI Project Name** `privacyfence-plugin-sdk` and the same
-   owner, repository, workflow and environment names, on both services.
-
-The same workflow builds the plugin SDK (`plugin-sdk/`) from the same tag, so it carries the same
-version, and publishes it to TestPyPI and then PyPI under the same stable-only gate. The SDK is not
-uploaded to R2.
 
 Optionally, also create matching GitHub Environments (repo **Settings → Environments**) named
 `testpypi` and `pypi`. This isn't required for the OIDC exchange itself, but it's where you'd add a

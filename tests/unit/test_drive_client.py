@@ -2383,13 +2383,11 @@ class TestResolveDownloadDestination:
 # ---------------------------------------------------------------------------- #
 
 class _FakeStreamResponse:
-    def __init__(self, chunks: list[bytes], headers: dict | None = None, status_code: int = 200):
+    def __init__(self, chunks: list[bytes], headers: dict | None = None):
         self._chunks = chunks
         self.headers = headers or {}
-        self.status_code = status_code
     def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+        pass
     def iter_content(self, chunk_size):
         yield from self._chunks
     def __enter__(self):
@@ -2511,75 +2509,6 @@ class TestDownloadFile:
 
         with pytest.raises(DriveClientError, match="could not write"):
             client.download_file("f1", destination_dir=str(tmp_path))
-
-
-class TestDownloadRange:
-    def _client(self, monkeypatch, response=None, error=None):
-        client = make_client(MagicMock())
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
-        fake_session = MagicMock()
-        if error is not None:
-            fake_session.get.side_effect = error
-        else:
-            fake_session.get.return_value = response
-        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
-        return client, fake_session
-
-    def test_returns_the_206_body_and_sends_the_exact_range(self, monkeypatch):
-        client, session = self._client(monkeypatch, _FakeStreamResponse([b"ab", b"cd"], status_code=206))
-
-        assert client.download_range("f1", 10, 4) == b"abcd"
-
-        url = session.get.call_args.args[0]
-        assert url == "https://www.googleapis.com/drive/v3/files/f1?alt=media&supportsAllDrives=true"
-        assert session.get.call_args.kwargs["headers"] == {"Range": "bytes=10-13"}
-        assert session.get.call_args.kwargs["stream"] is True
-
-    def test_offset_past_the_end_is_empty(self, monkeypatch):
-        client, _ = self._client(monkeypatch, _FakeStreamResponse([], status_code=416))
-        assert client.download_range("f1", 999, 4) == b""
-
-    def test_a_200_means_the_range_was_ignored(self, monkeypatch):
-        client, _ = self._client(monkeypatch, _FakeStreamResponse([b"whole file"], status_code=200))
-        with pytest.raises(DriveClientError, match="ignored the Range header"):
-            client.download_range("f1", 0, 4)
-
-    def test_http_error_becomes_drive_client_error(self, monkeypatch):
-        client, _ = self._client(monkeypatch, _FakeStreamResponse([], status_code=500))
-        with pytest.raises(DriveClientError, match=r"download_range\(f1\) failed"):
-            client.download_range("f1", 0, 4)
-
-    def test_transport_failure_becomes_drive_client_error(self, monkeypatch):
-        client, _ = self._client(monkeypatch, error=RuntimeError("connection reset"))
-        with pytest.raises(DriveClientError, match=r"download_range\(f1\) failed"):
-            client.download_range("f1", 0, 4)
-
-    def test_a_body_longer_than_the_range_is_refused_without_reading_on(self, monkeypatch):
-        length = 8
-        yielded = []
-
-        def chunks():
-            for _ in range((length + 10) // 4 + 1):
-                yielded.append(1)
-                yield b"abcd"
-
-        response = _FakeStreamResponse([], status_code=206)
-        response.iter_content = lambda chunk_size: chunks()
-        client, _ = self._client(monkeypatch, response)
-
-        with pytest.raises(DriveClientError, match="more than the requested range"):
-            client.download_range("f1", 0, length)
-        assert len(yielded) == 3  # the third 4-byte chunk crossed 8 bytes
-
-    def test_a_body_of_exactly_the_range_is_returned_whole(self, monkeypatch):
-        client, _ = self._client(monkeypatch, _FakeStreamResponse([b"abcd", b"efgh"], status_code=206))
-        assert client.download_range("f1", 0, 8) == b"abcdefgh"
-
-    @pytest.mark.parametrize("args", [("", 0, 4), ("f1", -1, 4), ("f1", 0, 0)])
-    def test_bad_arguments_raise(self, args):
-        client = make_client(MagicMock())
-        with pytest.raises(DriveClientError):
-            client.download_range(*args)
 
 
 class TestDownloadFileBytes:

@@ -42,12 +42,7 @@ import pytest
 import yaml
 
 from privacyfence import approval_ui, auto_accept, gate
-from privacyfence.approvals import (
-    ApprovalPending,
-    IdenticalWriteAwaitingApprovalError,
-    PendingApprovalRegistry,
-    canonical_key,
-)
+from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from privacyfence.pii_detector import init_pii_detection
@@ -2666,32 +2661,6 @@ class TestDeferredApprovalProtocol:
         # The release entry's decided_at is the human's real click, distinct
         # from this entry's own (later) write time.
         assert entries[1]["decided_at"]
-
-    async def test_dedupe_extra_keeps_an_approval_to_its_own_key(self, monkeypatch, audit_dir):
-        # ADR 0122: a plugin call passes its prepared call's id, so a fresh prepare with the same
-        # args never collects an approval made for another one.
-        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
-        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
-        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
-        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
-
-        first = await gated_call_or_pending(**base_kwargs(gate="review"), dedupe_extra="call-1")
-        approval = registry.get(first["approval_id"])
-        assert approval.dedupe_key == canonical_key("gmail", "gmail_get_message", {}) + ":call-1"
-        registry.answer(approval.id, "accept")
-        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
-
-        other = await gated_call_or_pending(**base_kwargs(gate="review"), dedupe_extra="call-2")
-        plain = await gated_call_or_pending(**base_kwargs(gate="review"))
-        same = await gated_call_or_pending(**base_kwargs(gate="review"), dedupe_extra="call-1")
-
-        assert other["status"] == plain["status"] == "approval_pending"
-        assert len({first["approval_id"], other["approval_id"], plain["approval_id"]}) == 3
-        assert registry.get(plain["approval_id"]).dedupe_key == canonical_key("gmail", "gmail_get_message", {})
-        assert same is FILTERED
-        for result in (other, plain):
-            registry.answer(registry.get(result["approval_id"]).id, "deny")
-        await asyncio.sleep(0.02)
 
     async def test_reissued_call_after_a_binder_decision_audits_with_the_batch_id(self, monkeypatch, audit_dir):
         # A decision released through

@@ -54,8 +54,6 @@ PUBLISHED_DOCS = (
     "docs/connect-claude-ai.md",
     "docs/connect-chatgpt.md",
     "docs/connect-gemini-enterprise.md",
-    "docs/plugins.md",
-    "docs/plugin-protocol.md",
 )
 
 CONTRIBUTOR_DOCS = (

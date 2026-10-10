@@ -416,30 +416,3 @@ class TestAfillCapability:
         store.fill(token, ALICE.id, _chunks(b"first"))
         with pytest.raises(UploadAlreadyFilledError):
             await store.afill_capability(token, _achunks(b"second"))
-
-
-class TestDeclaredPath:
-    def test_returns_the_slots_filename_for_its_principal(self):
-        store = UploadStagingStore()
-        token = store.create_slot(ALICE, "C:\\x\\page.html", max_bytes=1000)
-        store.fill(token, ALICE.id, _chunks(b"data"))
-        assert store.declared_path(token, ALICE.id) == "C:\\x\\page.html"
-        assert store.peek(token, ALICE.id) == b"data"
-
-    def test_a_wrong_principal_unknown_token_or_unfilled_slot_is_none(self):
-        store = UploadStagingStore()
-        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000)
-        assert store.declared_path(token, ALICE.id) is None
-        store.fill(token, ALICE.id, _chunks(b"data"))
-        assert store.declared_path(token, BOB.id) is None
-        assert store.declared_path(b"\x00" * 32, ALICE.id) is None
-
-    def test_does_not_change_the_expiry(self, monkeypatch):
-        now = [1000.0]
-        monkeypatch.setattr(upload_staging.time, "time", lambda: now[0])
-        store = UploadStagingStore()
-        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000, ttl_seconds=10)
-        store.fill(token, ALICE.id, _chunks(b"data"))
-        assert store.declared_path(token, ALICE.id) == "~/f.txt"
-        now[0] += 11
-        assert store.declared_path(token, ALICE.id) is None

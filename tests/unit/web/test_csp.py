@@ -4,21 +4,9 @@ this module covers the small pure helpers in isolation.
 """
 from __future__ import annotations
 
-import pytest
 from starlette.requests import Request
 
-from privacyfence.web.csp import (
-    build_csp,
-    frame_self_for,
-    new_nonce,
-    nonce_for,
-    plugin_embed_for,
-    plugin_new_tabs_for,
-    set_frame_self,
-    set_nonce,
-    set_plugin_embed,
-    set_plugin_new_tabs,
-)
+from privacyfence.web.csp import new_nonce, nonce_for, set_nonce
 
 
 def _request(state: dict | None = None) -> Request:
@@ -62,80 +50,3 @@ class TestSetNonce:
         request = Request(scope)
         set_nonce(request, "overridden")
         assert scope["state"]["csp_nonce"] == "overridden"
-
-
-def _directives(csp: str) -> dict[str, str]:
-    return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
-
-
-class TestFrameSelf:
-    def test_unset_by_default(self):
-        assert frame_self_for(_request({})) is False
-        assert frame_self_for({"type": "http"}) is False
-
-    def test_set_is_visible_on_the_request_and_the_raw_scope(self):
-        scope = {"type": "http", "headers": [], "state": {}}
-        set_frame_self(Request(scope))
-        assert frame_self_for(Request(scope)) is True
-        assert frame_self_for(scope) is True
-
-    def test_does_not_set_the_plugin_embed_flag(self):
-        scope = {"type": "http", "headers": [], "state": {}}
-        set_frame_self(Request(scope))
-        assert plugin_embed_for(scope) is False
-
-
-class TestPluginEmbed:
-    def test_unset_by_default(self):
-        assert plugin_embed_for(_request({})) is False
-        assert plugin_embed_for({"type": "http"}) is False
-
-    def test_set_is_visible_on_the_request_and_the_raw_scope(self):
-        scope = {"type": "http", "headers": [], "state": {}}
-        set_plugin_embed(Request(scope))
-        assert plugin_embed_for(Request(scope)) is True
-        assert plugin_embed_for(scope) is True
-
-    def test_does_not_set_the_frame_self_flag(self):
-        scope = {"type": "http", "headers": [], "state": {}}
-        set_plugin_embed(Request(scope))
-        assert frame_self_for(scope) is False
-
-
-class TestPluginNewTabs:
-    def test_unset_by_default(self):
-        assert plugin_new_tabs_for(_request({})) is False
-        assert plugin_new_tabs_for({"type": "http"}) is False
-
-    def test_set_is_visible_on_the_request_and_the_raw_scope(self):
-        scope = {"type": "http", "headers": [], "state": {}}
-        set_plugin_new_tabs(Request(scope))
-        assert plugin_new_tabs_for(Request(scope)) is True
-        assert plugin_new_tabs_for(scope) is True
-
-    def test_does_not_set_the_other_flags(self):
-        scope = {"type": "http", "headers": [], "state": {}}
-        set_plugin_new_tabs(Request(scope))
-        assert frame_self_for(scope) is False
-        assert plugin_embed_for(scope) is False
-
-    def test_the_embed_flag_does_not_set_it(self):
-        scope = {"type": "http", "headers": [], "state": {}}
-        set_plugin_embed(Request(scope))
-        assert plugin_new_tabs_for(scope) is False
-
-
-class TestBuildCspFrameSelf:
-    def test_default_frame_src_is_data_only(self):
-        assert _directives(build_csp("n"))["frame-src"] == "data:"
-        assert build_csp("n") == build_csp("n", frame_self=False)
-
-    @pytest.mark.parametrize("app_origin", ["", "https://org.example.com"])
-    def test_frame_self_adds_self_to_frame_src_only(self, app_origin):
-        plain = _directives(build_csp("n", app_origin=app_origin))
-        framed = _directives(build_csp("n", app_origin=app_origin, frame_self=True))
-        assert framed["frame-src"] == "data: 'self'"
-        assert {k: v for k, v in framed.items() if k != "frame-src"} == {
-            k: v for k, v in plain.items() if k != "frame-src"
-        }
-        assert framed["frame-ancestors"] == "'none'"

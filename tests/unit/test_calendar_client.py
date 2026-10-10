@@ -613,41 +613,6 @@ class TestGetCalendar:
             client.get_calendar("c1")
 
 
-class TestListEventsPage:
-    def test_one_request_with_page_token_and_next_token(self):
-        service = MagicMock()
-        service.events.return_value.list.return_value.execute.return_value = {
-            "items": [], "nextPageToken": "next",
-        }
-        client = make_client(service)
-        events, token = client.list_events_page(
-            "primary", 5, "a", "b", page_token="cur", query="standup"
-        )
-        assert events == []
-        assert token == "next"
-        service.events.return_value.list.assert_called_once_with(
-            calendarId="primary", singleEvents=True, orderBy="startTime",
-            maxResults=5, timeMin="a", timeMax="b", q="standup", pageToken="cur",
-        )
-
-    def test_last_page_has_no_token(self):
-        service = MagicMock()
-        service.events.return_value.list.return_value.execute.return_value = {"items": []}
-        client = make_client(service)
-        _, token = client.list_events_page("primary")
-        assert token is None
-        kwargs = service.events.return_value.list.call_args.kwargs
-        assert "pageToken" not in kwargs
-        assert "q" not in kwargs
-
-    def test_http_error_becomes_calendar_client_error(self):
-        service = MagicMock()
-        service.events.return_value.list.return_value.execute.side_effect = http_error()
-        client = make_client(service)
-        with pytest.raises(CalendarClientError, match="list_events_page"):
-            client.list_events_page("primary")
-
-
 class TestListEvents:
     def test_clamps_max_results_into_1_to_250(self):
         service = MagicMock()
