@@ -177,6 +177,11 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "ai-client-qa.md",
         "downloads-and-release-kpi.md",
         "releasing.md",
+        # Plugin framework plans, not yet carried out.
+        "pf-pages-plan.md",
+        "plugin-framework-hardening-3-plan.md",
+        "plugin-page-browser-plan.md",
+        "plugin-protocol-hardening-2-plan.md",
     }
 )
 

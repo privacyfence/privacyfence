@@ -107,6 +107,12 @@ privacyfence.eu.
 
 CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tests/` and `scripts/`.
 
+- Plugin framework plans, not yet carried out:
+  [`plugin-protocol-hardening-2-plan.md`](plugin-protocol-hardening-2-plan.md),
+  [`plugin-framework-hardening-3-plan.md`](plugin-framework-hardening-3-plan.md),
+  [`plugin-page-browser-plan.md`](plugin-page-browser-plan.md) (already implemented) and
+  [`pf-pages-plan.md`](pf-pages-plan.md) (a pages plugin, planned for its own repository).
+
 ## Documentation principles
 
 Every doc in this directory except the ADRs follows these rules.
