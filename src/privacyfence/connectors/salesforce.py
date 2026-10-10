@@ -188,7 +188,7 @@ def _decode_page_cursor(cursor: str, bound: dict) -> tuple[int, int, str | None,
         state = cursors.decode(cursor, "salesforce_run_report", bound)
     except cursors.CursorError as exc:
         raise ValueError(f"salesforce_run_report: {exc}") from exc
-    counts = [state.get(key) for key in ("n", "a", "r")]
+    counts: list[Any] = [state.get(key) for key in ("n", "a", "r")]
     last = state.get("l")
     if (
         set(state) != {"n", "a", "l", "r"}
