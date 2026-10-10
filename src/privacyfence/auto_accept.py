@@ -133,7 +133,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "contacts_add_label":             "contacts.add_label",
     "contacts_remove_label":          "contacts.remove_label",
     "jira_get_issue":                 "jira.read_issue",
-    "jira_search_issues_with_fields": "jira.search_issues_with_fields",
+    "jira_search_issues_with_fields": "jira.read_issue",
     "jira_create_issue":              "jira.create_issue",
     "jira_add_comment":               "jira.add_comment",
     "jira_update_issue":              "jira.update_issue",

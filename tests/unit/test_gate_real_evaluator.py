@@ -866,3 +866,39 @@ class TestAcceptAllPersistsARealRuleForWrites:
     # serialization point to assert a fixed outcome against.
     # test_gate.py's TestCoalescing covers the case that is guaranteed: two
     # concurrent calls for the *same* args share one card and one decision.
+
+
+class TestJiraSearchAllResults:
+    """jira_search_issues_with_fields carries no issue_key, so approved_project_keys can never fire
+    for it; approved_project_keys_all_results is checked against every returned issue instead."""
+
+    RULES = {"jira.read_issue": [{"predicate": "approved_project_keys_all_results", "value": ["ENG", "OPS"]}]}
+
+    async def test_all_results_in_approved_projects_auto_accepts(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        fail_if_popup_shown(monkeypatch)
+
+        result = await gate.gated_call(**make_kwargs(
+            connector="jira", tool="jira_search_issues_with_fields", gate="review",
+            raw_data=[SimpleNamespace(key="ENG-1"), SimpleNamespace(key="OPS-2")],
+            args={"jql": "project = ENG", "fields": '["Story Points"]'},
+        ))
+
+        assert result is FILTERED
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["auto_accept_rule"] == rule_id("approved_project_keys_all_results", ["ENG", "OPS"])
+
+    async def test_one_unapproved_result_gates_the_whole_call(self, monkeypatch, audit_dir):
+        install_rules(self.RULES)
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
+
+        await gate.gated_call(**make_kwargs(
+            connector="jira", tool="jira_search_issues_with_fields", gate="review",
+            raw_data=[SimpleNamespace(key="ENG-1"), SimpleNamespace(key="HR-9")],
+            args={"jql": "x", "fields": '["Story Points"]'},
+        ))
+
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "approved"
+        assert entries[0]["auto_accept_rule"] == ""

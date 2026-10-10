@@ -104,6 +104,7 @@ DATA_DEPENDENT_RULES: frozenset[str] = frozenset({
     "no_media_attachments",
     "approved_channel_all_results",
     "approved_chats_all_results",
+    "approved_project_keys_all_results",
     "non_private_event",
 })
 
@@ -408,6 +409,14 @@ class V1Reference:
             issue_key = ctx.args.get("issue_key", "") or ""
             project_key = issue_key.split("-")[0] if "-" in issue_key else ""
         return bool(project_key) and project_key.upper() in allowed
+
+    def _rule_approved_project_keys_all_results(self, value, ctx):
+        if not value:
+            return False
+        allowed = {v.upper() for v in (value if isinstance(value, list) else [value])}
+        items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+        keys = [getattr(i, "key", "") or "" for i in items]
+        return bool(keys) and all("-" in k and k.rsplit("-", 1)[0].upper() in allowed for k in keys)
 
     def _rule_i_am_reporter(self, _v, ctx):
         raw = ctx.raw_data

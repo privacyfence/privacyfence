@@ -376,7 +376,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 | Calendar | identity | calendar ids | `personal_calendar` | the call's calendar is one of these |
 | Calendar events I organize | attribute | — | `i_am_organizer` | you are the event's organizer |
 | Tasks list | identity | task list ids | `approved_task_list` | the list is one of these; for a move, both lists are |
-| Jira project | identity | project keys | `approved_project_keys` | the project (or the issue key's project) is one of these |
+| Jira project | identity | project keys | `approved_project_keys`, `approved_project_keys_all_results` | the project (or the issue key's project) is one of these; for a search, every result is in one of them |
 | Jira issues I report / am assigned | attribute | — | `i_am_reporter`, `i_am_assignee` | you are the reporter; you are the assignee |
 | Confluence space | identity | space keys | `approved_space_keys` | the page's space is one of these |
 | Confluence pages I wrote | attribute | — | `i_am_author` | you are the page's author |

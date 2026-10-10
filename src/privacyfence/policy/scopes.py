@@ -284,6 +284,15 @@ def _approved_project_keys_matches(value: Any, ctx: ReviewContext) -> bool:
     return bool(project_key) and project_key.upper() in allowed
 
 
+def _approved_project_keys_all_results_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    allowed = {v.upper() for v in _values_of(value)}
+    items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
+    keys = [getattr(i, "key", "") or "" for i in items]
+    return bool(keys) and all("-" in k and k.rsplit("-", 1)[0].upper() in allowed for k in keys)
+
+
 def _i_am_reporter_matches(_value: Any, ctx: ReviewContext) -> bool:
     raw = ctx.raw_data
     reporter = (raw.get("reporter") if isinstance(raw, dict) else getattr(raw, "reporter", "")) or ""
@@ -463,6 +472,10 @@ SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "approved_project_keys": ScopeSelector(
         predicate="approved_project_keys", scope_type="jira.project", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.ARGS, matches=_approved_project_keys_matches,
+    ),
+    "approved_project_keys_all_results": ScopeSelector(
+        predicate="approved_project_keys_all_results", scope_type="jira.project", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_approved_project_keys_all_results_matches,
     ),
     "i_am_reporter": ScopeSelector(
         predicate="i_am_reporter", scope_type="jira.my_issues", kind=ScopeKind.ATTRIBUTE,
