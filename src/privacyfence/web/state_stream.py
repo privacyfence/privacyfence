@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 # approvals.
 _APPROVALS_POLL_SECONDS = 1.0
 
+# Broadcast by StateStream.close() to wake every open subscription; never a real event name.
+_CLOSED_EVENT = "__closed__"
+
 # The web server's own asyncio event loop, captured once at startup (see
 # server.py's lifespan wiring) -- settings_controller.call_on_main's
 # fallback dispatcher for a process with no AppKit run loop hosting
@@ -119,6 +122,7 @@ class StateStream:
         self._settings_snapshot = settings_snapshot
         self._list_pending = list_pending
         self._subscribers: set[asyncio.Queue] = set()
+        self._closed = False
 
     # ------------------------------------------------------------------ #
     # Push side -- settings_controller.SettingsController.add_change_
@@ -131,6 +135,13 @@ class StateStream:
         server.py's wiring of set_main_dispatcher(call_soon_threadsafe))
         -- never directly from a background thread."""
         self._broadcast("settings", state)
+
+    def close(self) -> None:
+        """End every open subscription and refuse new ones. Called on this stream's own loop by
+        WebServer.stop() before uvicorn's graceful shutdown starts: an open SSE response would
+        otherwise hold that shutdown for its whole grace period."""
+        self._closed = True
+        self._broadcast(_CLOSED_EVENT, None)
 
     def _broadcast(self, event: str, data: Any) -> None:
         for queue in list(self._subscribers):
@@ -175,12 +186,16 @@ class StateStream:
             yield _sse("approvals", self._approvals_payload())
 
             while True:
+                if self._closed:
+                    break
                 if await is_disconnected():
                     break
                 if touch is not None and not touch():
                     break
                 try:
                     event, data = await asyncio.wait_for(queue.get(), timeout=_APPROVALS_POLL_SECONDS)
+                    if event == _CLOSED_EVENT:
+                        break
                     yield _sse(event, data)
                 except asyncio.TimeoutError:
                     pass

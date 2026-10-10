@@ -8,6 +8,7 @@ fallback, which has no local-mode analogue at all).
 from __future__ import annotations
 
 import json
+import threading
 import urllib.parse as up
 from unittest.mock import patch
 
@@ -37,11 +38,13 @@ def _idp(**overrides) -> oi.IdpConfig:
     return oi.IdpConfig(**defaults)
 
 
-def _app(*, step_up: StepUpConfig | None = None, sessions=None, idp=None, web_ui=None):
+def _app(*, step_up: StepUpConfig | None = None, sessions=None, idp=None, web_ui=None, stopping=None):
     sessions = sessions or org_session.OrgSessionStore()
     web_ui = web_ui or WebApprovalUI(registry=PendingApprovalRegistry())
     step_up = step_up or StepUpConfig()
-    routes = routes_approvals.build_routes(web_ui=web_ui, sessions=sessions, step_up=step_up, issuer_url=ISSUER)
+    routes = routes_approvals.build_routes(
+        web_ui=web_ui, sessions=sessions, step_up=step_up, issuer_url=ISSUER, stopping=stopping,
+    )
     routes += routes_org_stepup.build_routes(
         web_ui=web_ui, sessions=sessions, step_up=step_up, idp=idp or _idp(), issuer_url=ISSUER,
     )
@@ -1251,6 +1254,15 @@ class TestApprovalsStream:
         sessions.destroy(session_id)
         with pytest.raises(StopAsyncIteration):
             await it.__anext__()
+
+    async def test_stream_ends_once_the_server_is_stopping(self):
+        stopping = threading.Event()
+        stopping.set()
+        app, sessions, web_ui = _app(stopping=stopping)
+        endpoint, request = self._stream(app, sessions.create(ALICE))
+        response = await endpoint(request)
+        with pytest.raises(StopAsyncIteration):
+            await response.body_iterator.__anext__()
 
 
 class TestDenyWithFeedback:
