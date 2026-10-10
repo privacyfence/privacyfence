@@ -156,7 +156,7 @@ python3 scripts/mypy_strict_modules.py
 
 `pyproject.toml` is authoritative for Ruff, mypy, Bandit, pytest, and coverage configuration. Ruff
 (`ruff check .`), Bandit, the whole-tree mypy run and the promoted-module mypy run are all blocking
-CI checks. The whole tree is checked at `[tool.mypy]`'s settings (ADR 0147);
+CI checks. The whole tree is checked at `[tool.mypy]`'s settings ([ADR 0149](adr/0149-the-whole-tree-mypy-run-is-blocking.md));
 `scripts/mypy_strict_modules.py` re-runs mypy with strict flags over just the modules the ratchet
 has promoted (`[tool.mypy]`'s `[[tool.mypy.overrides]]` entries — the script reads that list out of
 `pyproject.toml`, so promoting a module needs no workflow change). Promoting a module to the strict
@@ -165,7 +165,7 @@ merge.
 
 `ruff format` is not enforced and is not run in CI: it would rewrite most of the tree and
 conflict with every open branch. Match the surrounding code's style instead
-(`CONTRIBUTING.md`, "Code Style"). See ADR 0148.
+(`CONTRIBUTING.md`, "Code Style"). See [ADR 0150](adr/0150-ruff-format-is-not-enforced.md).
 
 For Node/TypeScript changes under `mcpb/shim/`, run:
 

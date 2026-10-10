@@ -104,9 +104,6 @@ privacyfence.eu.
 
 CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tests/` and `scripts/`.
 
-- Open plan, deleted by its own last phase:
-  [`shutdown-and-type-check-cleanup-plan.md`](shutdown-and-type-check-cleanup-plan.md).
-
 ## Documentation principles
 
 Every doc in this directory except the ADRs follows these rules.
