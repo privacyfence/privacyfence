@@ -6,12 +6,15 @@ import hashlib
 import json
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import TextContent
+
+if TYPE_CHECKING:
+    from .auth import FileTokenStorage
 
 _TRANSFER_TIMEOUT = 120.0
 _DENIED_PREFIX = "Request denied"
@@ -106,3 +109,17 @@ class SyncClient:
 
 def connect_token(server_url: str, token: str) -> SyncClient:
     return SyncClient(server_url, None, {"Authorization": f"Bearer {token}"})
+
+
+def connect_oauth(
+    server_url: str, storage: FileTokenStorage, *, interactive: bool = False, callback_port: int | None = None
+) -> SyncClient:
+    from .auth import DEFAULT_CALLBACK_PORT, oauth_provider  # auth.py imports this module's errors
+
+    provider = oauth_provider(
+        server_url,
+        storage,
+        interactive=interactive,
+        callback_port=DEFAULT_CALLBACK_PORT if callback_port is None else callback_port,
+    )
+    return SyncClient(server_url, provider, {})

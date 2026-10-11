@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import runpy
 import sys
 from pathlib import Path
@@ -9,8 +10,11 @@ import httpx2
 import pytest
 from conftest import RecipeWriter
 
+from mcp.shared.auth import OAuthToken
+
 from privacyfence_sync import cli
-from privacyfence_sync.client import SignInError, ToolDenied, ToolFailed
+from privacyfence_sync.auth import FileTokenStorage, storage_path
+from privacyfence_sync.client import SignInError, SyncError, ToolDenied, ToolFailed
 
 
 class FakeSession:
@@ -82,13 +86,59 @@ def test_check_bad_recipe_exits_1(write_recipe: RecipeWriter, capsys: pytest.Cap
 
 
 def test_run_without_token_exits_4(
-    write_recipe: RecipeWriter, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    write_recipe: RecipeWriter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.delenv("PRIVACYFENCE_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
     assert cli.main(["run", simple(write_recipe)]) == 4
     assert capsys.readouterr().err == (
-        "privacyfence-sync: set PRIVACYFENCE_TOKEN (or --token-env), or sign in with privacyfence-sync login\n"
+        "privacyfence-sync: Not signed in to http://127.0.0.1:8765/mcp, or the sign-in expired. "
+        "Run: privacyfence-sync login --server http://127.0.0.1:8765/mcp\n"
     )
+
+
+def test_run_without_token_uses_oauth(
+    write_recipe: RecipeWriter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("PRIVACYFENCE_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    server = "http://127.0.0.1:8765/mcp"
+    asyncio.run(FileTokenStorage(storage_path(server)).set_tokens(OAuthToken(access_token="a", token_type="Bearer")))
+    session = FakeSession()
+    seen: list[tuple[str, FileTokenStorage]] = []
+
+    def connect(url: str, storage: FileTokenStorage) -> FakeSession:
+        seen.append((url, storage))
+        return session
+
+    monkeypatch.setattr(cli, "connect_oauth", connect)
+    assert cli.main(["run", simple(write_recipe)]) == 0
+    assert [url for url, _ in seen] == [server]
+    assert "drive_list_files" in session.calls
+
+
+def test_login_runs_status_and_prints_signed_in(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    session = FakeSession({"privacyfence_status": {"ok": True}})
+    seen: dict[str, Any] = {}
+
+    def connect(url: str, storage: FileTokenStorage, *, interactive: bool, callback_port: int) -> FakeSession:
+        seen.update(url=url, interactive=interactive, port=callback_port)
+        return session
+
+    monkeypatch.setattr(cli, "connect_oauth", connect)
+    assert cli.main(["login", "--server", "https://pf.example/mcp", "--callback-port", "4000"]) == 0
+    assert capsys.readouterr().out == "Signed in to https://pf.example/mcp.\n"
+    assert seen == {"url": "https://pf.example/mcp", "interactive": True, "port": 4000}
+    assert session.calls == ["privacyfence_status"]
+
+
+def test_login_unwraps_task_group_errors(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    group = ExceptionGroup("unhandled errors in a TaskGroup", [SyncError("No sign-in arrived within 5 minutes.")])
+    monkeypatch.setattr(cli, "connect_oauth", lambda *a, **k: FakeSession(enter_error=group))
+    assert cli.main(["login", "--server", "http://x/mcp"]) == 2
+    assert capsys.readouterr().err == "privacyfence-sync: No sign-in arrived within 5 minutes.\n"
 
 
 def test_token_env_names_another_variable(

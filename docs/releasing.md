@@ -239,6 +239,15 @@ TestPyPI publish succeeding and the real PyPI publish running — the "test firs
 already enforces via job ordering, made into an explicit approval gate rather than just a rerun-only
 safety net.
 
+**`privacyfence-sync` is published by the same release.** The `build` job also builds the client in
+`sync/` (`python -m build --sdist --wheel sync`), with the same version as the root tag, and uploads it
+as the `pypi-dist-sync` artifact. Two further jobs publish it after the main uploads:
+`publish-testpypi-sync` (after `publish-testpypi`) and `publish-pypi-sync` (after `publish-pypi` and
+`publish-testpypi-sync`), with the same stable-channel gate. Register its trusted publisher the same
+way as above, on both services, with **PyPI Project Name** `privacyfence-sync` and the same
+workflow (`publish-pypi.yml`) and environments (`testpypi` / `pypi`). Until that is registered only
+the two `-sync` jobs fail; the `privacyfence` upload is unaffected.
+
 `workflow_dispatch` exists for rerunning by hand (e.g. after a transient failure) — point it at a
 tagged commit. Run from an untagged commit and `setuptools_scm` produces a dev version with a local
 segment (`+g<sha>`), which both indexes reject as an upload.
