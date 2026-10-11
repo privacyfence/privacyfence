@@ -52,6 +52,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`grist_update_csv` can clear values.** With `clear_empty: true`, an empty CSV cell clears the value in Grist instead of leaving it unchanged. The approval card counts the cells to clear.
 - **`privacyfence-sync` runs a data-sync recipe with no AI model.** A separate package (`pip install privacyfence-sync`) that calls the export tools, runs your own scripts on the files, writes back to Grist and publishes a dashboard on Peek, unattended, against a local daemon or an organization server. See [`docs/privacyfence-sync.md`](docs/privacyfence-sync.md).
 - **A `privacyfence-sync` Claude plugin with a recipe-writing skill.** Listed in the repository's plugin marketplace and attached to each stable release as `privacyfence-sync-plugin.zip`, it lets Claude write the recipe, its scripts and the list of rules you need.
+- **Scoped tokens for AI clients, in both modes.** Settings → Scoped tokens creates a named bearer token for `/mcp` that expires (90 days by default) and is limited to chosen auto-accept rules and tools. A call outside its scope is denied at once and never raises an approval card, and the audit log names the token. In organization mode the administrator turns it on with `--enable-scoped-tokens` and caps the lifetime with `--scoped-token-max-days`.
+- **`privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`** revokes every scoped token of one person, for the administrator who offboards them.
 
 ### Changed
 

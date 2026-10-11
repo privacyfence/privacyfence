@@ -30,6 +30,7 @@ from ..policy import describe as policy_describe
 from ..policy import propose as policy_propose
 from ..policy import registry as policy_registry
 from ..principal import current_principal
+from ..scoped_tokens import current_token_scope
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +217,14 @@ class McpDispatcher:
         # ever the one principal), but this dispatcher is shared process-
         # wide, so it has to be correct once a second principal exists.
         principal_id = current_principal().id
+        # The scoped token's id, "" for an unscoped call: a scoped call must never be handed a
+        # full-token call's result or pending approval without passing the gate itself, nor a
+        # full-token call a scoped call's denial (ADR 0164).
+        scope = current_token_scope()
+        scope_id = scope.id if scope is not None else ""
         now = time.time()
         self._prune_stale(now)
-        key = self._dedupe_key(principal_id, connector_name, tool, args)
+        key = self._dedupe_key(principal_id, scope_id, connector_name, tool, args)
         entry = self._inflight.get(key)
         if entry is not None:
             existing, recorded_at = entry
@@ -295,8 +301,8 @@ class McpDispatcher:
             del self._inflight[key]
 
     @staticmethod
-    def _dedupe_key(principal_id: str, connector_name: str, tool: str, args: dict) -> str:
-        return f"{principal_id}:{connector_name}:{tool}:{json.dumps(args, sort_keys=True, default=str)}"
+    def _dedupe_key(principal_id: str, scope_id: str, connector_name: str, tool: str, args: dict) -> str:
+        return f"{principal_id}:{scope_id}:{connector_name}:{tool}:{json.dumps(args, sort_keys=True, default=str)}"
 
     @staticmethod
     def _is_read_only(connector: Connector, tool: str) -> bool:

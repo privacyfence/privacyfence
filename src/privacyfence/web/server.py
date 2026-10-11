@@ -83,7 +83,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -95,12 +95,17 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
+from .. import __version__, auto_accept, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
+from ..policy import describe
+from ..policy import propose as policy_propose
+from ..policy.engine import PolicyRule
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
-from ..settings_controller import SettingsController, set_main_dispatcher
+from ..scoped_tokens import ScopedToken
+from ..resource_names import get_resolver
+from ..settings_controller import SettingsController, cached_rule_value, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from ..web_push import PushNotifier, PushSubscriptionStore
@@ -121,13 +126,19 @@ from .control_channel import (
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from . import mcp_auth
-from .mcp_auth import PerUserTokenVerifier, load_or_create_mcp_token
+from .mcp_auth import (
+    CompositeTokenVerifier,
+    PerUserTokenVerifier,
+    ScopedTokenVerifier,
+    load_or_create_mcp_token,
+    single_token_verifier,
+)
 from .mcp_dispatch import McpDispatcher
 from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
-from .routes_settings import AiClientConnect
+from .routes_settings import AiClientConnect, ScopedTokenWiring
 from .routes_settings import build_routes as build_settings_routes
 from .routes_settings import settings_page_state
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
@@ -272,6 +283,111 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     return False, (
         f"The token was rotated, but the new one could not be copied: {reason} Use the "
         "companion's Copy AI Client Token menu item to copy it."
+    )
+
+
+def _scoped_rule_entry(rule: PolicyRule, value_display: str) -> dict[str, Any]:
+    """One rule as the scoped token form shows it: ``title`` says which resource it covers,
+    ``verbs`` what it allows there, ``tools`` which tools those verbs govern."""
+    connectors = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    connector = describe.connector_label(connectors[0]) if connectors else ""
+    scope_type = describe.scope_type_of(rule)
+    subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip() if scope_type else rule.predicate
+    return {
+        "id": rule.id,
+        "title": f"{connector} — {subject}" if connector else subject,
+        "verbs": [verb.value for verb in describe.rule_verbs(rule)],
+        "sentence": describe.rule_sentence(rule, value_display=value_display or None),
+        "tools": list(describe.covered_tools(rule)),
+    }
+
+
+def scoped_token_page_data(
+    principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
+) -> dict[str, Any]:
+    """What ``window.__pfScopedTokens`` carries for ``principal``: their
+    tokens, the rules they may carry and the tools of their enabled
+    connectors. ``delivery`` is how a new secret reaches the person:
+    ``"companion"`` (local mode, ADR 0164) or ``"once"`` (organization mode,
+    ADR 0165). Must not be called under another principal's scope.
+
+    Each rule's resource ids are shown by the names the Auto-accept page has
+    cached (``cached_rule_value``), so the two pages name a rule alike. A
+    rule's ``title`` names what it covers without its verbs, which the form
+    shows separately; ``auto_tools`` are the tools that need no rule at all.
+    """
+    now = time.time()
+    with principal_scope(principal):
+        resolver = get_resolver()
+        rules = {rule.id: _scoped_rule_entry(rule, cached_rule_value(rule, resolver))
+                 for rule in auto_accept.get_policy_v2_store_rules()}
+    by_connector: dict[str, list[str]] = {}
+    for name in sorted(auto_accept.TOOL_TO_GATE):
+        connector = name.split("_", 1)[0]
+        if connector in connector_names:
+            by_connector.setdefault(connector, []).append(name)
+    tokens = []
+    for token in scoped_tokens.get_store().tokens_for(principal):
+        expired = token.expired(now)
+        days_left = token.days_left(now)
+        tokens.append({
+            "id": token.id, "label": token.label, "created_at": token.created_at,
+            "expires_at": token.expires_at, "days_left": days_left,
+            "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
+            "rules": [
+                {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
+                if rule_id in rules
+                else {"id": rule_id, "missing": True}
+                for rule_id in sorted(token.rule_ids)
+            ],
+            "tools": sorted(token.tools),
+        })
+    return {
+        "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
+        "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": list(rules.values()),
+        "auto_tools": sorted(
+            name for name, gate in auto_accept.TOOL_TO_GATE.items()
+            if gate == "auto" and name.split("_", 1)[0] in connector_names
+        ),
+        "tools": [{"connector": connector, "tools": names} for connector, names in sorted(by_connector.items())],
+    }
+
+
+def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWiring:
+    """What the Settings page's Scoped tokens section runs on in local mode
+    (ADR 0164): the process-wide store, for the owner, under the owner's
+    own ``principal_scope`` -- settings is owner-only, and the owner's rules
+    are the ones a token may carry, as with ``copy_local_mcp_token``. The
+    secret goes to the owner's companion and never back to the route.
+    """
+    policy = scoped_tokens.policy_from_org_config({}, org_mode=False)
+
+    def _create(label: str, days: int, rule_ids: list[str], tools: list[str]) -> tuple[ScopedToken, str]:
+        with principal_scope(LOCAL_PRINCIPAL):
+            return scoped_tokens.get_store().create(
+                LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=tools, policy=policy,
+            )
+
+    def _revoke(token_id: str) -> ScopedToken | None:
+        store = scoped_tokens.get_store()
+        token = store.get(LOCAL_PRINCIPAL.id, token_id)
+        return token if token is not None and store.revoke(LOCAL_PRINCIPAL, token_id) else None
+
+    def _revoke_all() -> int:
+        return scoped_tokens.get_store().revoke_all(LOCAL_PRINCIPAL.id)
+
+    def _send(secret: str) -> tuple[bool, str]:
+        with principal_scope(LOCAL_PRINCIPAL):
+            return send_mcp_token(secret)
+
+    def _page_data() -> dict[str, Any]:
+        return scoped_token_page_data(
+            LOCAL_PRINCIPAL, policy=policy, delivery="companion", connector_names=set(mcp_dispatcher.connectors),
+        )
+
+    return ScopedTokenWiring(
+        store_create=_create, store_revoke=_revoke, store_revoke_all=_revoke_all, send_secret=_send,
+        page_data=_page_data,
     )
 
 
@@ -956,8 +1072,12 @@ def build_app(
         # rest, exactly as it already does for org mode's OrgOAuthProvider.
         if not mcp_token and mcp_verifier is None:
             raise ValueError("mcp_token or mcp_verifier is required when mcp_dispatcher is given")
+        # ADR 0164: /mcp (and only /mcp) also accepts scoped tokens; the
+        # composite sends each token to exactly one of the two verifiers.
+        local_verifier = mcp_verifier if mcp_verifier is not None else single_token_verifier(mcp_token or "")
         mcp_route, session_manager = mount_mcp(
-            mcp_dispatcher, token=mcp_token, verifier=mcp_verifier, overrides=agent_overrides,
+            mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), local_verifier),
+            overrides=agent_overrides,
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
@@ -971,6 +1091,8 @@ def build_app(
         # shim -- and possibly no way to set a custom header at all -- can
         # still use) -- combined into this same Mount rather than a second
         # one at the same prefix, see mount_file_bridge's own docstring.
+        # The plain local verifier, never the scoped-token composite: only
+        # the shim uses these routes, and it holds the main token (ADR 0164).
         extra_routes.extend(mount_file_bridge(token=mcp_token, verifier=mcp_verifier))
 
     # One answer, read once here, for
@@ -996,6 +1118,7 @@ def build_app(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
             require_human_session=require_human_session, ai_client=ai_client,
+            scoped_tokens=build_scoped_token_wiring(mcp_dispatcher) if mcp_dispatcher is not None else None,
         )))
 
     # The /security enrollment surface: mounted whenever step_up.rp_id is
@@ -1103,7 +1226,7 @@ def _build_org_app(
     lifespans = []
     if mcp_dispatcher is not None:
         mcp_route, session_manager = mount_mcp(
-            mcp_dispatcher, verifier=org.provider,
+            mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
             client_names=org.provider.client_name, pinned_agents=org.provider.pinned_agent_id,
         )
@@ -1179,6 +1302,17 @@ def _build_org_app(
             # own module docstring on ``nav_items``.
             nav_items=web_shell.ORG_NAV_ITEMS,
         ))
+    scoped_token_policy = scoped_tokens.policy_from_org_config(org.org_config, org_mode=True)
+    org_scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None
+    if mcp_dispatcher is not None:
+        dispatcher = mcp_dispatcher
+
+        def org_scoped_token_page_data(principal: Principal) -> dict[str, Any]:
+            # The dispatcher's connector set is the principal's own while scoped to them.
+            return scoped_token_page_data(
+                principal, policy=scoped_token_policy, delivery="once", connector_names=set(dispatcher.connectors),
+            )
+
     # Mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
     # already required parameters of this function either way.
@@ -1196,6 +1330,10 @@ def _build_org_app(
         oauth_provider=org.provider,
         # Auto-accept rule values resolve to names through the viewing principal's own connectors.
         connector_registry=org.connector_registry,
+        # ADR 0165: the administrator's opt-in and cap from the org config bundle; the section
+        # needs /mcp, so without a dispatcher the page offers none.
+        scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
+        scoped_token_page_data=org_scoped_token_page_data,
     ))
 
     lifespan = None
@@ -1331,6 +1469,13 @@ class WebServer:
             # very first start, before anyone has ever called MINT MCP.
             mcp_auth.preload_verifier(self.mcp_verifier)
             self.mcp_verifier.register(self.mcp_token or load_or_create_mcp_token(), LOCAL_PRINCIPAL.id)
+        if mcp_dispatcher is not None:
+            # ADR 0164/0165: the scoped tokens /mcp accepts in either mode,
+            # loaded for every principal with a folder, so tokens created by
+            # a previous run verify again on this one.
+            store = scoped_tokens.ScopedTokenStore(mcp_auth.scoped_token_principals)
+            store.load()
+            scoped_tokens.set_store(store)
         self.controller = controller
         self.allow_quit = allow_quit
         self.notifications_enabled = notifications_enabled
