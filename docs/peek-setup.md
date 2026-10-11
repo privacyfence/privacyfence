@@ -66,6 +66,13 @@ entry: there is no callback URL and no client secret.
 
 See the [tools reference](tools-reference.md#peek) for every parameter and return value.
 
+- **Rules.** A **Peek — page** rule in **Settings → Auto-accept** names page slugs. *Read* lets
+  `peek_get_comments` and `peek_get_stats` run without a card for those pages, and *update* does
+  the same for `peek_upload_page` with one of those slugs, which publishes a new version. A rule
+  never covers a new page, a visibility change, a rename or a delete, and the card has no "Always
+  allow" button for Peek. Ticking **New versions may include personal data** lets a version with
+  personal data in it go through without a card, which a dashboard refreshed on a schedule needs
+  ([ADR 0158](adr/0158-peek-rules-name-pages-and-cover-only-new-versions.md)).
 - A new version keeps the page's link and its visibility. Comments belong to one version, and are
   read per version; `peek_add_comment` always posts on the latest.
 - Pages restricted to named people (`restricted`) are listed, read and commented on, but who can

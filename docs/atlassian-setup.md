@@ -79,7 +79,7 @@ as "unknown user", and it cannot use mention markup.
 names you see in Jira. `jira_search_issues` returns a fixed set of fields without asking. To read
 other fields, custom fields included, the agent uses `jira_search_issues_with_fields` or the
 `fields` parameter of `jira_get_issue`, and you review the values on the approval card first. No
-extra scope is needed.
+extra scope is needed. `jira_export_issues` writes a whole search, up to 10,000 issues, to a CSV or JSON file in one approval, and the same "this project" rule covers it.
 
 ## Build and distribute the bundle
 
