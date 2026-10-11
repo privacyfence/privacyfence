@@ -639,6 +639,9 @@ For each representative read, list, search, create, update, send or upload tool:
 - **Review card.** `grist_get_records` on the `QaSeed` table prompts for review.
 - **Paging.** `--check`'s `get_records_paged` row reads `QaSeed` one row per page with `after_id`
   and compares it with one read, so it needs the two seed rows. It records nothing.
+- **SQL.** `--check`'s `run_sql` row runs `SELECT id FROM QaSeed ORDER BY id` through Grist's SQL
+  endpoint and compares the ids with one records read. It runs with the QA API key, so it does not
+  show whether an OAuth sign-in may use `/sql`. It records nothing.
 - **Approved document.** With the `grist.document` rule from Settings (see
   [Seed: Grist](#seed-grist)), a read of that document passes without a card; another document
   prompts.

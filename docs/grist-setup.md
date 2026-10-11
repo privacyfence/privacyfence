@@ -84,6 +84,8 @@ each one.
 | `grist_list_documents` | Without a card | Lists the documents you can open, with workspace and team |
 | `grist_list_tables` | Without a card | Lists a document's tables and each table's columns |
 | `grist_get_records` | Reviewed before release | Reads records from a table, optionally filtered and sorted, up to 500 per call; a whole table is read page by page |
+| `grist_export_records` | Reviewed before release | Writes a whole table, optionally filtered, to a CSV or JSON file on your computer, in one approval |
+| `grist_export_sql` | Reviewed before release | Writes the result of one read-only SQL query over the document to a CSV or JSON file, in one approval |
 | `grist_add_records` | Needs your approval | Adds records to a table |
 | `grist_update_records` | Needs your approval | Changes cells of existing records; the card shows old and new values |
 | `grist_create_table` | Needs your approval | Creates a table with its columns |
@@ -135,6 +137,27 @@ a larger table, the assistant hands PrivacyFence a CSV file instead, and you app
 
 [ADR 0148](adr/0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md)
 records why.
+
+## Exporting to a file
+
+`grist_export_records` writes a whole table, and `grist_export_sql` the result of one read-only
+SQL query, to a CSV or JSON file on your computer. You approve it once, and the assistant gets back
+only the row count, the column names and the file's SHA-256, not the rows.
+
+- **Limit.** At most 50,000 rows. A larger table or result is refused; narrow it with a filter or
+  the query.
+- **Organization installs.** Refused: the file would land on the server, not on your computer.
+- **Rules.** A `grist.document` read rule for the document covers both tools, so a scheduled run
+  can export without a card. The PII gate still applies: an export whose content trips the scan
+  gets a card, and an unattended session is denied.
+- **SQL.** `grist_export_sql` needs full copy access to the document, because that is what Grist
+  requires for SQL, and it cannot read the `_grist` tables. Cells are written as Grist stores them:
+  dates as seconds since 1970, true/false as 1/0.
+- **Round trip.** To write an export back with `grist_update_csv`, keep only `id` and the data
+  columns you change; `id` is the key column.
+
+[ADR 0151](adr/0151-exports-write-a-file-and-return-only-counts-and-a-hash.md) and
+[ADR 0152](adr/0152-grist-export-sql-reads-through-the-sql-endpoint.md) record why.
 
 ## Auto-accept rules
 
