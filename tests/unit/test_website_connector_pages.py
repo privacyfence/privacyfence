@@ -38,6 +38,7 @@ CONNECTORS: dict[str, tuple[str, str, str]] = {
     "jira": ("/connectors/jira-confluence/", "atlassian-setup", "Jira"),
     "confluence": ("/connectors/jira-confluence/", "atlassian-setup", "Confluence"),
     "grist": ("/connectors/grist/", "grist-setup", "Grist"),
+    "peek": ("/connectors/peek/", "peek-setup", "Peek"),
 }
 PAGE_GUIDES = {page: guide for page, guide, _ in CONNECTORS.values()}
 CONNECTOR_PAGE = re.compile(r"^/connectors/[a-z0-9-]+/$")

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Peek for AI assistants, over MCP — PrivacyFence</title>
+  <meta name="description" content="Let AI assistants list your shared Peek pages, read comments and visit counts after your review, and publish, change visibility, comment or delete only with your approval.">
+  <meta name="pf-content-group" content="connector">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/connectors/peek/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/connectors/peek/">
+  <meta property="og:title" content="PrivacyFence for Peek">
+  <meta property="og:description" content="Peek for AI assistants: pages listed straight away, comments and visit counts read after review, publishing and deleting only with approval.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">Connector · Peek</p>
+      <h1>Your shared HTML pages for your AI assistant, changed only with your approval.</h1>
+      <p class="lede">Peek is a self-hosted server for sharing HTML pages and collecting comments. PrivacyFence connects an AI assistant to your Peek account: it lists your pages straight away, reads comments and visit counts after you have reviewed them, and publishes, changes who can open a page, comments or deletes only with your approval.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="can-do-heading">
+      <div class="section-heading">
+        <p class="kicker">What the assistant can do</p>
+        <h2 id="can-do-heading">List, read after review, change after approval.</h2>
+        <p>Every Peek tool has a gate fixed in code. The <a href="/docs/tools-reference/#peek">Tools reference</a> lists each one.</p>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Without a card</h3>
+          <p>Your page list: each page's name, link, size and who can open it. The call is still audited.</p>
+        </article>
+        <article class="card stack">
+          <h3>Reviewed before release</h3>
+          <p>The comments reviewers left on a page, and how often it was opened. Visit counts never include IP addresses.</p>
+        </article>
+        <article class="card stack">
+          <h3>Needs your approval</h3>
+          <p>Publishing a page or a new version, changing who can open a page, commenting on a page, renaming it and deleting it.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section shell" id="set-it-up" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <p class="kicker">Set it up</p>
+        <h2 id="setup-heading">Sign in with Peek.</h2>
+      </div>
+      <ol class="steps page-copy">
+        <li>Have a Peek server you can sign in to.</li>
+        <li>In PrivacyFence's Settings page, choose Peek, enter the server address and approve the code in the browser that opens. You connect with Peek's own sign-in.</li>
+        <li>The Peek tools appear to the assistant.</li>
+      </ol>
+      <p class="actions cluster">
+        <a class="button primary" href="https://github.com/privacyfence/privacyfence/blob/main/docs/peek-setup.md">Set it up</a>
+        <a class="button secondary" href="/docs/connecting-a-service/">Connecting a service</a>
+      </p>
+    </section>
+
+    <!-- include: other-connectors current="peek" -->
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Try it on your own computer.</h2>
+          <p>Install PrivacyFence on macOS, Windows or Linux and connect Peek with your own sign-in.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/download/">Download PrivacyFence</a>
+          <a class="button secondary" href="/connectors/">All connectors</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>
