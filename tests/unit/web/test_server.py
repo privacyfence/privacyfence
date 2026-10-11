@@ -1873,3 +1873,94 @@ class TestAiClientTokenDelivery:
         server = WebServer(WebApprovalUI(), host="127.0.0.1", port=8765, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t" * 64)
         assert passed["mcp_url"] == "http://127.0.0.1:8765/mcp" == server.mcp_url
         assert passed["mint_mcp_token"] == server._mint_mcp_token
+
+
+from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
+
+
+class TestScopedTokenWiring:
+    """The Settings page's Scoped tokens section in local mode (ADR 0164)."""
+
+    @staticmethod
+    def _store(tmp_path, monkeypatch):
+        from privacyfence import paths, scoped_tokens
+        from privacyfence.web import mcp_auth
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        store = scoped_tokens.ScopedTokenStore(mcp_auth.scoped_token_principals)
+        store.load()
+        scoped_tokens.set_store(store)
+        return store
+
+    @staticmethod
+    def _rules(monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.policy.engine import PolicyRule
+
+        rule = PolicyRule(
+            id="r-sender", predicate="i_am_sender", value=None, operations=frozenset({"gmail.read_message"}),
+        )
+        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+        return rule
+
+    def test_the_scoped_token_wiring_is_built_only_with_an_mcp_endpoint(self, tmp_path, monkeypatch):
+        controller = _controller(tmp_path, monkeypatch)
+        body = {"csrf": "x", "confirmed": True, "token_id": "st-1"}
+
+        def _status(**kwargs):
+            sessions = LocalSessionStore()
+            app = build_app(WebApprovalUI(), sessions=sessions, controller=controller, **kwargs)
+            client = TestClient(app, base_url="http://localhost")
+            session_id = _signed_in(client, sessions)
+            return client.post(
+                "/api/settings/scoped_tokens/revoke", json={**body, "csrf": session_id},
+            ).text
+
+        assert "No such token." not in _status()
+        self._store(tmp_path, monkeypatch)
+        assert _status(mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok").count("No such token.") == 1
+
+    def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
+        import time
+
+        from privacyfence import scoped_tokens
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        store = self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+        now = time.time()
+
+        def _make(label, days_ago, days, rule_ids):
+            token, _ = store.create(
+                LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=["gmail_list_messages"],
+                policy=policy, now=now - days_ago * 86400,
+            )
+            return token
+
+        fresh = _make("fresh", 0, 90, [rule.id])
+        soon = _make("soon", 80, 90, [rule.id])
+        gone = _make("gone", 100, 90, [rule.id])
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object(), "drive": object()}))
+        data = wiring.page_data()
+
+        assert (data["delivery"], data["max_days"], data["default_days"], data["warn_days"]) == (
+            "companion", 365, 90, 14,
+        )
+        tokens = {t["label"]: t for t in data["tokens"]}
+        assert tokens["fresh"]["id"] == fresh.id
+        assert (tokens["fresh"]["expiring_soon"], tokens["fresh"]["expired"]) == (False, False)
+        assert (tokens["soon"]["expiring_soon"], tokens["soon"]["expired"]) == (True, False)
+        assert tokens["soon"]["days_left"] <= 10
+        assert (tokens["gone"]["expiring_soon"], tokens["gone"]["expired"]) == (False, True)
+        assert {tokens["gone"]["id"], tokens["soon"]["id"]} == {gone.id, soon.id}
+        assert tokens["fresh"]["rules"][0]["id"] == rule.id and "sentence" in tokens["fresh"]["rules"][0]
+        assert tokens["fresh"]["tools"] == ["gmail_list_messages"]
+        assert data["rules"][0]["id"] == rule.id
+        assert "gmail_get_message" in data["rules"][0]["tools"]
+        assert [group["connector"] for group in data["tools"]] == ["drive", "gmail"]
+        assert "gmail_list_messages" in data["tools"][1]["tools"]
+
+        monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
+        assert wiring.page_data()["tokens"][0]["rules"] == [{"id": rule.id, "missing": True}]

@@ -83,7 +83,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -95,11 +95,13 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import __version__, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
+from .. import __version__, auto_accept, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
+from ..policy import describe
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
+from ..scoped_tokens import ScopedToken
 from ..settings_controller import SettingsController, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
@@ -133,7 +135,7 @@ from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
 from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
-from .routes_settings import AiClientConnect
+from .routes_settings import AiClientConnect, ScopedTokenWiring
 from .routes_settings import build_routes as build_settings_routes
 from .routes_settings import settings_page_state
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
@@ -278,6 +280,75 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     return False, (
         f"The token was rotated, but the new one could not be copied: {reason} Use the "
         "companion's Copy AI Client Token menu item to copy it."
+    )
+
+
+def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWiring:
+    """What the Settings page's Scoped tokens section runs on in local mode
+    (ADR 0164): the process-wide store, for the owner, under the owner's
+    own ``principal_scope`` -- settings is owner-only, and the owner's rules
+    are the ones a token may carry, as with ``copy_local_mcp_token``. The
+    secret goes to the owner's companion and never back to the route.
+    """
+    policy = scoped_tokens.policy_from_org_config({}, org_mode=False)
+
+    def _create(label: str, days: int, rule_ids: list[str], tools: list[str]) -> tuple[ScopedToken, str]:
+        with principal_scope(LOCAL_PRINCIPAL):
+            return scoped_tokens.get_store().create(
+                LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=tools, policy=policy,
+            )
+
+    def _revoke(token_id: str) -> ScopedToken | None:
+        store = scoped_tokens.get_store()
+        token = store.get(LOCAL_PRINCIPAL.id, token_id)
+        return token if token is not None and store.revoke(LOCAL_PRINCIPAL, token_id) else None
+
+    def _revoke_all() -> int:
+        return scoped_tokens.get_store().revoke_all(LOCAL_PRINCIPAL.id)
+
+    def _send(secret: str) -> tuple[bool, str]:
+        with principal_scope(LOCAL_PRINCIPAL):
+            return send_mcp_token(secret)
+
+    def _page_data() -> dict[str, Any]:
+        now = time.time()
+        with principal_scope(LOCAL_PRINCIPAL):
+            rules = {
+                rule.id: {
+                    "id": rule.id, "sentence": describe.rule_sentence(rule), "tools": list(describe.covered_tools(rule)),
+                }
+                for rule in auto_accept.get_policy_v2_store_rules()
+            }
+        enabled = set(mcp_dispatcher.connectors)
+        by_connector: dict[str, list[str]] = {}
+        for name in sorted(auto_accept.TOOL_TO_GATE):
+            connector = name.split("_", 1)[0]
+            if connector in enabled:
+                by_connector.setdefault(connector, []).append(name)
+        tokens = []
+        for token in scoped_tokens.get_store().tokens_for(LOCAL_PRINCIPAL):
+            expired = token.expired(now)
+            days_left = token.days_left(now)
+            tokens.append({
+                "id": token.id, "label": token.label, "created_at": token.created_at,
+                "expires_at": token.expires_at, "days_left": days_left,
+                "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
+                "rules": [
+                    {"id": rule_id, "sentence": rules[rule_id]["sentence"]} if rule_id in rules
+                    else {"id": rule_id, "missing": True}
+                    for rule_id in sorted(token.rule_ids)
+                ],
+                "tools": sorted(token.tools),
+            })
+        return {
+            "delivery": "companion", "max_days": policy.max_days, "default_days": scoped_tokens.DEFAULT_DAYS,
+            "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": list(rules.values()),
+            "tools": [{"connector": connector, "tools": names} for connector, names in sorted(by_connector.items())],
+        }
+
+    return ScopedTokenWiring(
+        store_create=_create, store_revoke=_revoke, store_revoke_all=_revoke_all, send_secret=_send,
+        page_data=_page_data,
     )
 
 
@@ -1008,6 +1079,7 @@ def build_app(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
             require_human_session=require_human_session, ai_client=ai_client,
+            scoped_tokens=build_scoped_token_wiring(mcp_dispatcher) if mcp_dispatcher is not None else None,
         )))
 
     # The /security enrollment surface: mounted whenever step_up.rp_id is
