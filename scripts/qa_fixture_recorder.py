@@ -30,7 +30,7 @@ this imports the same ``privacyfence`` package and third-party clients
 
     .venv/bin/python scripts/qa_fixture_recorder.py --lifecycle [connector ...]
         For each write-capable connector that supports it (calendar,
-        confluence, grist, jira, tasks -- see the comment above LIFECYCLE_CHECKS
+        confluence, grist, jira, peek, tasks -- see the comment above LIFECYCLE_CHECKS
         below for why the other connectors aren't included), creates a
         fresh, uniquely-tagged QA object, reads it back, updates it, reads
         it back again, then deletes it and confirms the deletion actually
@@ -78,6 +78,8 @@ from privacyfence import grist_auth  # noqa: E402
 from privacyfence.confluence_client import ConfluenceClient, ConfluenceClientError  # noqa: E402
 from privacyfence.grist_client import GristAccessDenied, GristClient, GristClientError  # noqa: E402
 from privacyfence.jira_client import JiraClient, JiraClientError  # noqa: E402
+from privacyfence import peek_client  # noqa: E402
+from privacyfence.peek_client import PeekClient, PeekClientError  # noqa: E402
 from privacyfence.salesforce_client import (  # noqa: E402
     ReportFilter,
     ReportPagingError,
@@ -864,6 +866,86 @@ def check_confluence(record: bool, manifest: dict[str, Any]) -> list[CheckResult
         results.append(CheckResult("confluence", "get_page", seed_page_title, False, str(exc)))
 
     return results
+
+
+def _build_peek_client() -> PeekClient:
+    pinned = peek_client.bundle_base_url(daemon_main.load_org_config().get("peek") or {}, org_mode=False)
+    record = peek_client.load_token_file(daemon_main._resolve_path(daemon_main.TOKEN_FILES["peek"]))
+    return PeekClient(peek_client.resolve_server(pinned, record), record["token"])
+
+
+def check_peek(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
+    cfg = manifest.get("peek") or {}
+    page_slug = cfg.get("page_slug", "")
+    if not page_slug:
+        return [CheckResult("peek", "list_pages", "", False, "peek.page_slug missing from qa_environment.yaml")]
+
+    results: list[CheckResult] = []
+    client = _build_peek_client()
+
+    # list_pages -- only ever recorded filtered to the one seed page, never the
+    # QA account's full list.
+    try:
+        with RawCapture(client) as cap:
+            pages = client.list_pages()
+        match = next((p for p in pages if p.slug == page_slug), None)
+        if match is None:
+            ok, note = False, f"slug {page_slug!r} not in list_pages() result"
+        elif QATEST_TAG not in match.name:
+            ok, note = False, f"seed page name {match.name!r} does not carry {QATEST_TAG} -- refusing to record"
+        else:
+            ok, note = True, "found"
+        raw = None
+        if record and ok and isinstance(cap.captured, list):
+            entries = [e for e in cap.captured if isinstance(e, dict) and e.get("slug") == page_slug]
+            raw = deidentify_structural_fields(redact(_redact_peek_pages(entries)))
+        results.append(CheckResult("peek", "list_pages", page_slug, ok, note, raw, "list_pages.json"))
+    except PeekClientError as exc:
+        results.append(CheckResult("peek", "list_pages", page_slug, False, str(exc)))
+
+    # get_comments -- the raw answer with the authors redacted. Stats are never
+    # recorded: they carry visitor IP addresses.
+    try:
+        with RawCapture(client) as cap:
+            comments = client.get_comments(page_slug)
+        untagged = [c for c in comments if QATEST_TAG not in c.body]
+        if not comments:
+            ok, note = False, "the seed page has no comment -- refusing to record"
+        elif untagged:
+            ok, note = False, f"{len(untagged)} comment(s) do not carry {QATEST_TAG} -- refusing to record"
+        else:
+            ok, note = True, f"{len(comments)} comment(s), all tagged"
+        raw = None
+        if record and ok and isinstance(cap.captured, list):
+            raw = deidentify_structural_fields(redact(_redact_peek_authors(cap.captured)))
+        results.append(CheckResult("peek", "get_comments", page_slug, ok, note, raw, "get_comments.json"))
+    except PeekClientError as exc:
+        results.append(CheckResult("peek", "get_comments", page_slug, False, str(exc)))
+
+    return results
+
+
+def _redact_peek_pages(pages: list[Any]) -> list[Any]:
+    """A page's ``owner`` is a bare account name and its ``slug`` names the QA
+    server's page; neither is in the generic key lists."""
+    return [
+        {
+            **p,
+            **({"owner": _REDACTED_NAME} if "owner" in p else {}),
+            **({"slug": "qa-placeholder-slug"} if "slug" in p else {}),
+        }
+        if isinstance(p, dict) else p
+        for p in pages
+    ]
+
+
+def _redact_peek_authors(comments: list[Any]) -> list[Any]:
+    """Peek's comment ``author`` is a bare account name, which the generic key
+    lists in redact() deliberately do not cover."""
+    return [
+        {**c, "author": _REDACTED_NAME} if isinstance(c, dict) and "author" in c else c
+        for c in comments
+    ]
 
 
 def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
@@ -1868,6 +1950,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
     "apps_script": check_apps_script,
     "slack": check_slack,
     "telegram": check_telegram,
+    "peek": check_peek,
 }
 
 # Static manifest of the tests/fixtures/live/<connector>/*.json file(s) each
@@ -1895,6 +1978,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "apps_script": ("get_content.json",),
     "slack": ("get_thread_replies.json",),
     "telegram": ("get_messages.json",),
+    "peek": ("list_pages.json", "get_comments.json"),
 }
 
 # In-module consistency check, not just the deferred one in
@@ -1922,7 +2006,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #
 # Scoped to only the connectors whose PrivacyFence client exposes a full
 # create/get/update triple:
-#   - calendar, confluence, grist, jira, tasks
+#   - calendar, confluence, grist, jira, peek, tasks
 # Deliberately excludes the rest of CONNECTOR_CHECKS's connectors, checked
 # against each *_client.py before writing this rather than assumed:
 #   - contacts -- ContactsClient.create_contact()'s own docstring says
@@ -2406,6 +2490,65 @@ def lifecycle_jira(manifest: dict[str, Any]) -> LifecycleResult:
     return LifecycleResult("jira", ok, note, cleanup_ok)
 
 
+def lifecycle_peek(manifest: dict[str, Any]) -> LifecycleResult:
+    client = _build_peek_client()
+    suffix = uuid.uuid4().hex[:8]
+    name = f"{LIFECYCLE_TAG} peek {suffix}.html"
+    renamed = f"{LIFECYCLE_TAG} peek {suffix} renamed.html"
+    comment_body = f"{LIFECYCLE_TAG} comment"
+
+    slug = ""
+    ok, note, cleanup_ok = False, "", None
+    try:
+        body = f"<!doctype html><html><body><p id=\"qa\">{LIFECYCLE_TAG} created by qa_fixture_recorder.py --lifecycle</p></body></html>"
+        uploaded = client.upload_page(body.encode("utf-8"), name, "private", "")
+        slug = uploaded.slug
+        if not slug:
+            raise PeekClientError("upload_page returned no slug")
+        if uploaded.visibility != "private":
+            raise PeekClientError(f"upload_page returned visibility {uploaded.visibility!r}, expected 'private'")
+        if client.set_visibility(slug, "public", "") != "public":
+            raise PeekClientError("set_visibility did not report public")
+        page = client.get_page(slug)
+        if page.visibility != "public":
+            raise PeekClientError(f"list_pages after set_visibility shows {page.visibility!r}, expected 'public'")
+        renamed_result = client.rename_page(slug, renamed)
+        if renamed_result.name != renamed:
+            raise PeekClientError(f"rename_page did not persist the new name (got {renamed_result.name!r})")
+        if renamed_result.slug:
+            slug = renamed_result.slug
+        page = client.get_page(slug)
+        if page.name != renamed:
+            raise PeekClientError("list_pages after rename did not reflect the new name")
+        posted = client.add_comment(slug, comment_body, "#qa", "")
+        comments = client.get_comments(slug)
+        match = next((c for c in comments if c.body == comment_body), None)
+        if match is None:
+            raise PeekClientError("get_comments did not return the posted comment")
+        if not match.author or match.author != page.owner:
+            raise PeekClientError(
+                f"comment author {match.author!r} is not the QA account's name {page.owner!r} (posted id {posted.id})"
+            )
+        ok, note = True, "upload, set_visibility, rename, add_comment, get_comments all verified"
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
+        ok, note = False, str(exc)
+    finally:
+        if slug:
+            delete_note = _attempt_delete(lambda: client.delete_page(slug), request_desc=f"slug={slug!r}")
+            if delete_note:
+                cleanup_ok, note = False, f"{note}; {delete_note}" if note else delete_note
+            else:
+                try:
+                    gone = all(p.slug != slug for p in client.list_pages())
+                    confirm_note = "" if gone else "cleanup call succeeded but the page is still listed afterward"
+                except Exception as exc:  # noqa: BLE001 - reported as the cleanup finding
+                    gone, confirm_note = False, f"unexpected error confirming deletion: {exc}"
+                cleanup_ok = gone
+                if confirm_note:
+                    note = f"{note}; {confirm_note}" if note else confirm_note
+    return LifecycleResult("peek", ok, note, cleanup_ok)
+
+
 def lifecycle_tasks(manifest: dict[str, Any]) -> LifecycleResult:
     cfg = manifest.get("tasks") or {}
     task_list_id = cfg.get("task_list_id", "")
@@ -2477,6 +2620,7 @@ LIFECYCLE_CHECKS: dict[str, Callable[[dict[str, Any]], LifecycleResult]] = {
     "confluence": lifecycle_confluence,
     "grist": lifecycle_grist,
     "jira": lifecycle_jira,
+    "peek": lifecycle_peek,
     "tasks": lifecycle_tasks,
 }
 
