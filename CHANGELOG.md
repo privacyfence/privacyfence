@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Grist rule verbs name the CSV and export tools.** On Settings → Auto-accept, the Grist document rule's chips now read "read (records, export, SQL)", "create (add records, import CSV)" and "update (records, CSV)". The rules already covered `grist_export_records`, `grist_export_sql`, `grist_import_csv` and `grist_update_csv`; the old labels did not say so.
+
 ## [5.9.0] — 2026-10-11
 
 ### Added
