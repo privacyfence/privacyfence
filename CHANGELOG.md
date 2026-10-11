@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`grist_update_csv` with rows that change different columns.** Grist refuses a bulk update whose records change different sets of columns, so every such batch failed with nothing written. Updates are now sent one set of columns at a time, which also fixes `grist_update_records`. When nothing was written, the error no longer says a rerun finishes the rest.
+
 ## [5.9.0] — 2026-10-11
 
 ### Added
