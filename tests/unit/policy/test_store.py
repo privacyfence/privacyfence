@@ -48,6 +48,17 @@ class TestRuleIdFor:
         assert rule_id.startswith("r-")
         assert len(rule_id) == len("r-") + 10
 
+    def test_flag_off_keeps_the_existing_id(self):
+        import hashlib
+        digest = hashlib.sha256(repr(("approved_folder", ("'f1'",), ())).encode()).hexdigest()[:10]
+        assert store.rule_id_for("approved_folder", ["f1"], ()) == f"r-{digest}"
+        assert store.rule_id_for("approved_folder", ["f1"], (), allow_personal_data=False) == f"r-{digest}"
+
+    def test_flag_on_gives_a_different_id(self):
+        plain = store.rule_id_for("approved_folder", ["f1"], ())
+        flagged = store.rule_id_for("approved_folder", ["f1"], (), allow_personal_data=True)
+        assert flagged != plain
+
 
 class TestRuleIdForRule:
     """``rule_id_for_rule`` derives a compiled rule's canonical id from its content
@@ -127,6 +138,14 @@ class TestMergeRules:
     def test_empty_list(self):
         assert store.merge_rules([]) == []
 
+    def test_flagged_and_plain_rules_on_one_scope_stay_two_rows(self):
+        plain = _rule(id_="a", predicate="grist.document", value=["d1"], operations=("grist.read_records",))
+        flagged = PolicyRule(id="b", predicate="grist.document", value=["d1"],
+                             operations=frozenset({"grist.read_records"}), allow_personal_data=True)
+        merged = store.merge_rules([plain, flagged])
+        assert [rule.allow_personal_data for rule in merged] == [False, True]
+        assert merged[0].id != merged[1].id
+
 
 class TestRuleDictRoundTrip:
     def test_rule_to_dict_then_from_dict_is_lossless(self):
@@ -139,6 +158,16 @@ class TestRuleDictRoundTrip:
         rule = _rule(operations=("z.op", "a.op"))
         data = store.rule_to_dict(rule)
         assert data["operations"] == ["a.op", "z.op"]
+
+    def test_flag_round_trips(self):
+        rule = PolicyRule(id="r-abc123", predicate="grist.document", value=["d1"],
+                          operations=frozenset({"grist.read_records"}), allow_personal_data=True)
+        data = store.rule_to_dict(rule)
+        assert data["allow_personal_data"] is True
+        assert store.rule_from_dict(data) == rule
+
+    def test_plain_rule_has_no_flag_key(self):
+        assert "allow_personal_data" not in store.rule_to_dict(_rule())
 
 
 class TestRuleFromDictFailsClosed:
@@ -171,6 +200,11 @@ class TestRuleFromDictFailsClosed:
     def test_absent_conditions_defaults_to_empty_tuple(self):
         rule = store.rule_from_dict({"id": "r1", "predicate": "always_allow", "operations": ["op.a"]})
         assert rule.conditions == ()
+
+    @pytest.mark.parametrize("flag", ["yes", 1, None])
+    def test_non_bool_flag_drops_the_rule(self, flag):
+        data = {"id": "r1", "predicate": "always_allow", "operations": ["op.a"], "allow_personal_data": flag}
+        assert store.rule_from_dict(data) is None
 
 
 class TestCompileRulesFromConfig:

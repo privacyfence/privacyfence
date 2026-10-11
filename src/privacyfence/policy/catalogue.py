@@ -18,6 +18,7 @@ the same deliberate way -- pick a connector and a verb, see "what this unblocks"
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
@@ -99,6 +100,14 @@ VALUE_HINTS: dict[str, str] = {
 }
 
 
+# The groups whose "Add a rule" form offers the personal-data checkbox, and its label (ADR 0157).
+PERSONAL_DATA_GROUPS: dict[str, str] = {
+    "grist.document": "Exports may include personal data",
+    "salesforce.report": "Exports may include personal data",
+    "jira.project": "Exports may include personal data",
+}
+
+
 def extra_operations_for(connector: str, verb: Verb) -> frozenset[str]:
     """Every operation key one of ``EXTRA_SCOPES``' verbs governs, for ``connector`` -- derived from
     the tool registry the same way ``policy.propose.operations_for`` derives a
@@ -148,6 +157,9 @@ def scope_catalogue() -> list[dict[str, Any]]:
             "verbs": [v.value for v in extra.verbs],
             **({"verb_labels": extra.verb_labels} if extra.verb_labels else {}),
         })
+    for entry in entries:
+        if entry["id"] in PERSONAL_DATA_GROUPS:
+            entry["personal_data_label"] = PERSONAL_DATA_GROUPS[entry["id"]]
     entries.sort(key=lambda e: (e["connector"], e["label"]))
     return entries
 
@@ -168,7 +180,9 @@ def parse_verbs(verbs: Any) -> list[Verb]:
     return parsed
 
 
-def rules_for_catalogue_entry(group: str, value: list[str] | None, verbs: list[Verb]) -> list[PolicyRule]:
+def rules_for_catalogue_entry(
+    group: str, value: list[str] | None, verbs: list[Verb], *, personal_data: bool = False,
+) -> list[PolicyRule]:
     """The ``PolicyRule``s an "add a rule" submission (``group``/``value``/``verbs``) compiles to,
     or ``[]`` for an unrecognized group, a group none of the requested verbs govern, or (for the one
     valued extra, ``apps_script.project``) a value-needing scope submitted with none.
@@ -181,7 +195,19 @@ def rules_for_catalogue_entry(group: str, value: list[str] | None, verbs: list[V
     into a clear ``ValueError`` before any popup is shown, rather than silently doing nothing the way
     a Settings form (which can't offer a checkbox for a verb the group doesn't list in the first
     place) safely can.
+
+    ``personal_data`` sets ``allow_personal_data`` on every compiled rule (ADR 0157); it is only
+    meaningful for the groups in ``PERSONAL_DATA_GROUPS`` and yields ``[]`` for any other.
     """
+    if personal_data and group not in PERSONAL_DATA_GROUPS:
+        return []
+    rules = _compile_catalogue_rules(group, value, verbs)
+    if personal_data:
+        return store.merge_rules([dataclasses.replace(rule, allow_personal_data=True) for rule in rules])
+    return rules
+
+
+def _compile_catalogue_rules(group: str, value: list[str] | None, verbs: list[Verb]) -> list[PolicyRule]:
     extra = EXTRA_SCOPES.get(group)
     if extra is not None:
         allowed_verbs = [v for v in verbs if v in extra.verbs]
@@ -202,6 +228,7 @@ def rules_for_catalogue_entry(group: str, value: list[str] | None, verbs: list[V
 
 __all__ = [
     "EXTRA_SCOPES",
+    "PERSONAL_DATA_GROUPS",
     "VALUE_HINTS",
     "PolicyExtraScope",
     "extra_operations_for",

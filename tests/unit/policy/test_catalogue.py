@@ -101,6 +101,32 @@ class TestRulesForCatalogueEntry:
         # back -- proving this is a real, persistable PolicyRule, not just a plain construction.
         assert rules == store.merge_rules(rules)
 
+    def test_personal_data_label_only_on_the_three_groups(self):
+        labelled = {e["id"] for e in catalogue.scope_catalogue() if "personal_data_label" in e}
+        assert labelled == set(catalogue.PERSONAL_DATA_GROUPS) == {"grist.document", "salesforce.report", "jira.project"}
+
+    @pytest.mark.parametrize("group", ["grist.document", "jira.project"])
+    def test_personal_data_sets_the_flag_on_every_compiled_rule(self, group):
+        verbs = [Verb.READ, Verb.SEARCH] if group == "jira.project" else [Verb.READ]
+        rules = catalogue.rules_for_catalogue_entry(group, ["x1"], verbs, personal_data=True)
+        assert rules
+        assert all(rule.allow_personal_data for rule in rules)
+        if group == "jira.project":
+            assert {rule.predicate for rule in rules} == {
+                "approved_project_keys", "approved_project_keys_all_results",
+            }
+
+    def test_personal_data_on_another_group_compiles_nothing(self):
+        assert catalogue.rules_for_catalogue_entry(
+            "apps_script.project", ["script1"], [Verb.READ], personal_data=True,
+        ) == []
+
+    def test_flagged_rule_ids_differ_from_plain_ones(self):
+        plain = catalogue.rules_for_catalogue_entry("grist.document", ["d1"], [Verb.READ])
+        flagged = catalogue.rules_for_catalogue_entry("grist.document", ["d1"], [Verb.READ], personal_data=True)
+        assert plain[0].id != flagged[0].id
+        assert flagged[0].id == store.rule_id_for_rule(flagged[0])
+
 
 def test_grist_chips_name_the_csv_and_export_tools_they_cover():
     entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "grist.document")

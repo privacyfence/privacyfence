@@ -90,12 +90,21 @@ def reject_v1_sections(cfg: dict[str, Any], source: str) -> None:
     )
 
 
-def rule_id_for(predicate: str, value: Any, conditions: tuple[tuple[str, Any], ...]) -> str:
+def rule_id_for(
+    predicate: str, value: Any, conditions: tuple[tuple[str, Any], ...], allow_personal_data: bool = False,
+) -> str:
     """A stable id for a rule's *meaning* -- what it trusts and under what conditions -- never for
     which operations carry it. Two compiled rules that agree on ``(predicate, value, conditions)``
     always get the same id, which is what lets ``merge_rules`` below union their operations into one
-    on-disk row without minting a fresh id for the merge."""
-    key = repr((predicate, _sortable(value), conditions))
+    on-disk row without minting a fresh id for the merge.
+
+    A rule with ``allow_personal_data`` hashes a longer key, so it never shares an id with the same
+    scope without the flag, while every id minted without the flag stays what it always was (ADR 0157).
+    """
+    if allow_personal_data:
+        key = repr((predicate, _sortable(value), conditions, "allow_personal_data"))
+    else:
+        key = repr((predicate, _sortable(value), conditions))
     digest = hashlib.sha256(key.encode()).hexdigest()[:10]
     return f"r-{digest}"
 
@@ -112,7 +121,7 @@ def rule_id_for_rule(rule: PolicyRule) -> str:
     """The canonical, content-derived id (ADR 0074) for an already-compiled ``PolicyRule``,
     recomputed from its own ``(predicate, value, conditions)`` rather than read from ``rule.id``.
     For a rule read back from disk the two agree; this is the check that they do."""
-    return rule_id_for(rule.predicate, rule.value, rule.conditions)
+    return rule_id_for(rule.predicate, rule.value, rule.conditions, rule.allow_personal_data)
 
 
 def merge_rules(rules: list[PolicyRule]) -> list[PolicyRule]:
@@ -122,22 +131,24 @@ def merge_rules(rules: list[PolicyRule]) -> list[PolicyRule]:
     set membership test -- it only makes the on-disk config read as one sentence per intent ("allow
     read, update and format on the folder") instead of one row per operation key.
     """
-    merged: dict[tuple[str, Any, tuple[tuple[str, Any], ...]], PolicyRule] = {}
-    order: list[tuple[str, Any, tuple[tuple[str, Any], ...]]] = []
+    merged: dict[tuple[str, Any, tuple[tuple[str, Any], ...], bool], PolicyRule] = {}
+    order: list[tuple[str, Any, tuple[tuple[str, Any], ...], bool]] = []
     for rule in rules:
-        key = (rule.predicate, _sortable(rule.value), rule.conditions)
+        key = (rule.predicate, _sortable(rule.value), rule.conditions, rule.allow_personal_data)
         existing = merged.get(key)
         if existing is None:
             merged[key] = PolicyRule(
-                id=rule_id_for(rule.predicate, rule.value, rule.conditions),
+                id=rule_id_for(rule.predicate, rule.value, rule.conditions, rule.allow_personal_data),
                 predicate=rule.predicate, value=rule.value,
                 operations=rule.operations, conditions=rule.conditions,
+                allow_personal_data=rule.allow_personal_data,
             )
             order.append(key)
         else:
             merged[key] = PolicyRule(
                 id=existing.id, predicate=existing.predicate, value=existing.value,
                 operations=existing.operations | rule.operations, conditions=existing.conditions,
+                allow_personal_data=existing.allow_personal_data,
             )
     return [merged[key] for key in order]
 
@@ -145,13 +156,16 @@ def merge_rules(rules: list[PolicyRule]) -> list[PolicyRule]:
 def rule_to_dict(rule: PolicyRule) -> dict[str, Any]:
     """Serialize one ``PolicyRule`` into the on-disk shape. ``operations`` is sorted for a stable,
     diffable YAML rendering -- ``frozenset`` iteration order is not guaranteed."""
-    return {
+    data: dict[str, Any] = {
         "id": rule.id,
         "predicate": rule.predicate,
         "value": rule.value,
         "operations": sorted(rule.operations),
         "conditions": [[name, value] for name, value in rule.conditions],
     }
+    if rule.allow_personal_data:
+        data["allow_personal_data"] = True
+    return data
 
 
 def rule_from_dict(data: Any) -> PolicyRule | None:
@@ -177,9 +191,13 @@ def rule_from_dict(data: Any) -> PolicyRule | None:
         if not isinstance(entry, (list, tuple)) or len(entry) != 2 or not isinstance(entry[0], str):
             return None
         parsed_conditions.append((entry[0], entry[1]))
+    allow_personal_data = data.get("allow_personal_data", False)
+    if not isinstance(allow_personal_data, bool):
+        return None
     return PolicyRule(
         id=rule_id, predicate=predicate, value=data.get("value"),
         operations=frozenset(operations), conditions=tuple(parsed_conditions),
+        allow_personal_data=allow_personal_data,
     )
 
 

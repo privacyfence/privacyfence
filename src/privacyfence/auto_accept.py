@@ -346,6 +346,16 @@ TOOL_TO_GATE: dict[str, str] = {
     "peek_delete_page":                "popup",
 }
 
+# The tools a rule's allow_personal_data flag applies to (ADR 0157): each one's result carries no
+# row (the data goes to a file or to a page the user's own rule names), so the PII scan, which
+# guards the model's context, is not what protects their data.
+PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
+    "grist_export_records",
+    "grist_export_sql",
+    "salesforce_export_report",
+    "peek_upload_page",
+})
+
 @dataclass
 class ReviewContext:
     connector: str
@@ -626,6 +636,7 @@ def notify_rules_changed() -> None:
 
 
 __all__ = [
+    "PERSONAL_DATA_RULE_TOOLS",
     "ReviewContext",
     "TEMP_ACCEPT_ELIGIBLE_OPERATIONS",
     "TEMP_ACCEPT_TTL_SECONDS",
