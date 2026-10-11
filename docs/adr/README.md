@@ -235,7 +235,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0145](0145-the-grist-connector-only-adds.md) | The Grist connector only adds | Accepted |
 | [0146](0146-grist-records-page-by-record-id.md) | Grist records page by record id | Accepted |
 | [0147](0147-pii-number-patterns-ignore-decimal-digits.md) | PII number patterns ignore digits glued to a decimal point | Accepted |
-| [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted; amended by 0162 |
+| [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted; amended by 0162, 0166 |
 | [0149](0149-the-whole-tree-mypy-run-is-blocking.md) | The whole-tree mypy run is blocking | Accepted |
 | [0150](0150-ruff-format-is-not-enforced.md) | `ruff format` is not enforced | Accepted |
 | [0151](0151-peek-sign-in-uses-peeks-own-device-flow-and-keeps-the-token-per-principal.md) | PrivacyFence signs in to Peek with Peek's own device sign-in and keeps the token per principal | Accepted |
@@ -253,3 +253,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
 | [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037 |
 | [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072 |
+| [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148 |
