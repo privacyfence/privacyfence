@@ -52,7 +52,7 @@ import yaml
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import auto_accept, paths, privacy_filter
+from privacyfence import auto_accept, paths, privacy_filter, scoped_tokens
 from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
@@ -100,6 +100,7 @@ def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
 def _app(
     *, install_wide_settings=None, sessions=None, install_wide_settings_path="",
     step_up: StepUpConfig | None = None, connector_registry=None,
+    scoped_token_policy=None, scoped_token_store=None, scoped_token_page_data=None,
 ):
     sessions = sessions or org_session.OrgSessionStore()
     routes = ros.build_org_routes(
@@ -107,6 +108,8 @@ def _app(
         install_wide_settings_path=install_wide_settings_path,
         step_up=step_up or StepUpConfig(), step_up_origin=BASE_URL,
         connector_registry=connector_registry,
+        scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_token_store,
+        scoped_token_page_data=scoped_token_page_data,
     )
     return Starlette(routes=routes), sessions
 
@@ -1175,3 +1178,194 @@ class TestV1PerUserSettings:
         r = _post_action(client, "toggle_pii_detection", {}, csrf)
         assert r.status_code == 500
         assert "auto_accept_rules" in r.json()["error"]
+
+
+class TestScopedTokenRoutes:
+    """The three scoped token routes of org mode (ADR 0165): the administrator's opt-in, the
+    org gates, the one-time secret and the token working on /mcp as its owner."""
+
+    ENABLED = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=30)
+    BODY = {"label": "sales-sync", "days": 7, "rule_ids": [], "tools": ["gmail_get_message"]}
+
+    @staticmethod
+    def _store(*principals: Principal) -> scoped_tokens.ScopedTokenStore:
+        return scoped_tokens.ScopedTokenStore(lambda: list(principals))
+
+    def _setup(self, tmp_path, monkeypatch, *, policy=None, step_up=None, rules=None):
+        _seed(tmp_path, monkeypatch, "alice", rules=rules)
+        _seed(tmp_path, monkeypatch, "bob")
+        store = self._store(ALICE, BOB)
+        app, sessions = _app(
+            scoped_token_policy=self.ENABLED if policy is None else policy, scoped_token_store=store,
+            step_up=step_up,
+        )
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        return client, csrf, store
+
+    @staticmethod
+    def _post(client, action: str, payload: dict, csrf: str, **kwargs):
+        return client.post(f"/api/settings/scoped_tokens/{action}", json={**payload, "csrf": csrf}, **kwargs)
+
+    def test_scoped_tokens_are_refused_when_the_admin_has_not_enabled_them(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(
+            tmp_path, monkeypatch, policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90),
+        )
+        for action, payload in (
+            ("create", {**self.BODY, "confirmed": True}),
+            ("revoke", {"token_id": "st-x", "confirmed": True}),
+            ("revoke_all", {"confirmed": True}),
+        ):
+            r = self._post(client, action, payload, csrf)
+            assert r.status_code == 403, action
+            assert r.json() == {"error": ros._SCOPED_TOKENS_DISABLED}
+        assert store.tokens_for(ALICE) == []
+        # The route's text is the store's own.
+        with pytest.raises(scoped_tokens.ScopedTokenError) as excinfo:
+            store.create(ALICE, label="x", days=1, rule_ids=[], tools=["gmail_get_message"],
+                         policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90))
+        assert str(excinfo.value) == ros._SCOPED_TOKENS_DISABLED
+        # Not signed in: 401, whatever the policy.
+        anonymous = _client(_app()[0])
+        assert anonymous.post("/api/settings/scoped_tokens/create", json=self.BODY).status_code == 401
+
+    def test_the_gates_run_before_anything_is_created(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        assert self._post(client, "create", {**self.BODY, "confirmed": True}, "wrong").status_code == 401
+        assert self._post(client, "create", self.BODY, csrf).json() == {"error": "confirmation required"}
+        assert self._post(client, "create", {"confirmed": True, "label": 3}, csrf).status_code == 400
+        assert store.tokens_for(ALICE) == []
+
+    def test_create_returns_the_secret_once_with_no_store(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-store"
+        body = r.json()
+        secret = body["secret"]
+        assert secret.startswith(scoped_tokens.TOKEN_PREFIX)
+        assert body["created"]["label"] == "sales-sync"
+        # Neither the list, nor the page, nor the file, nor the audit log ever has it again.
+        [token] = store.tokens_for(ALICE)
+        assert token.digest != secret
+        page = client.get("/settings")
+        assert secret not in page.text
+        assert secret not in (tmp_path / "users" / "alice" / "authority" / "scoped_tokens.json").read_text()
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            assert secret not in json.dumps([e.summary for e in get_audit_logger().recent_entries(20)])
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        assert any(f"Created scoped token 'sales-sync' ({token.id})" in text for text in summaries)
+        # Errors answer 400 with the store's own text and no secret.
+        again = self._post(client, "create", {**self.BODY, "confirmed": True}, csrf)
+        assert again.status_code == 400
+        assert again.json() == {"error": "You already have a token with that name."}
+
+    def test_create_takes_the_org_step_up(self, tmp_path, monkeypatch):
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True)
+        client, csrf, store = self._setup(tmp_path, monkeypatch, step_up=step_up)
+
+        for action, payload in (
+            ("create", {**self.BODY, "confirmed": True}),
+            ("revoke", {"token_id": "st-x", "confirmed": True}),
+            ("revoke_all", {"confirmed": True}),
+        ):
+            r = self._post(client, action, payload, csrf)
+            assert r.status_code == 403, action
+            assert r.json() == {"error": "passkey_enrollment_required", "enroll_url": "/security"}
+        assert store.tokens_for(ALICE) == []
+
+    def test_the_step_up_is_not_asked_for_when_the_org_does_not_require_a_passkey(self, tmp_path, monkeypatch):
+        step_up = StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=False)
+        client, csrf, store = self._setup(tmp_path, monkeypatch, step_up=step_up)
+        assert self._post(client, "create", {**self.BODY, "confirmed": True}, csrf).status_code == 200
+
+    def test_the_created_token_verifies_on_mcp_as_its_owner(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from privacyfence.web import mcp_auth
+
+        rule = _catalogue_rules("gmail.sender", "read")[0]
+        client, csrf, store = self._setup(tmp_path, monkeypatch, rules=[rule])
+        scoped_tokens.set_store(store)
+
+        body = {**self.BODY, "rule_ids": [rule.id], "confirmed": True}
+        secret = self._post(client, "create", body, csrf).json()["secret"]
+
+        access = asyncio.run(mcp_auth.ScopedTokenVerifier().verify_token(secret))
+        assert access is not None
+        principal = mcp_auth.principal_from_access_token(access)
+        assert (principal.id, principal.email, principal.display_name) == ("alice", "alice@example.com", "Alice")
+        assert principal.is_admin is False
+        scope = mcp_auth.scope_from_access_token(access)
+        assert scope is not None and scope.rule_ids == {rule.id} and scope.tools == {"gmail_get_message"}
+        # A rule the person does not have is refused, not silently dropped.
+        bad = self._post(client, "create", {**self.BODY, "label": "other", "rule_ids": ["nope"], "confirmed": True}, csrf)
+        assert bad.status_code == 400
+
+    def test_days_over_the_admin_cap_are_refused(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", {**self.BODY, "days": 31, "confirmed": True}, csrf)
+
+        assert r.status_code == 400
+        assert r.json() == {"error": "A token lasts 1 to 30 days."}
+        assert store.tokens_for(ALICE) == []
+        assert self._post(client, "create", {**self.BODY, "days": 30, "confirmed": True}, csrf).status_code == 200
+
+    def test_revoke_and_revoke_all(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        for label in ("one", "two", "three"):
+            assert self._post(client, "create", {**self.BODY, "label": label, "confirmed": True}, csrf).status_code == 200
+        bob_token, _secret = store.create(
+            BOB, label="bobs", days=5, rule_ids=[], tools=["gmail_get_message"], policy=self.ENABLED,
+        )
+        one = next(t for t in store.tokens_for(ALICE) if t.label == "one")
+
+        gone = self._post(client, "revoke", {"token_id": one.id, "confirmed": True}, csrf)
+        assert gone.status_code == 200 and gone.json() == {"revoked": {"id": one.id}}
+        assert sorted(t.label for t in store.tokens_for(ALICE)) == ["three", "two"]
+        # Someone else's token, or none at all: 404, and nothing changes.
+        for token_id in (bob_token.id, "st-missing"):
+            miss = self._post(client, "revoke", {"token_id": token_id, "confirmed": True}, csrf)
+            assert (miss.status_code, miss.json()) == (404, {"error": "No such token."})
+        assert store.get("bob", bob_token.id) is not None
+
+        everything = self._post(client, "revoke_all", {"confirmed": True}, csrf)
+        assert everything.json() == {"revoked": 2}
+        assert store.tokens_for(ALICE) == []
+        assert store.get("bob", bob_token.id) is not None
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            summaries = [e.summary for e in get_audit_logger().recent_entries(20)]
+        assert any("Revoked all scoped tokens (2)" in text for text in summaries)
+
+    def test_the_page_offers_the_section_only_once_enabled(self, tmp_path, monkeypatch):
+        data = {"delivery": "once", "max_days": 30, "default_days": 30, "warn_days": 14,
+                "tokens": [], "rules": [], "tools": []}
+        _seed(tmp_path, monkeypatch, "alice")
+        for policy, expected in ((self.ENABLED, True), (scoped_tokens.ScopedTokenPolicy(False, 90), False)):
+            app, sessions = _app(scoped_token_policy=policy, scoped_token_page_data=lambda _principal: data)
+            client = _client(app)
+            _signed_in(client, sessions, ALICE)
+            body = client.get("/settings").text
+            assert _capabilities(body)["sections"]["scoped_tokens"] is expected
+            assert ("window.__pfScopedTokens = " in body) is expected
+        # No page-data builder (no /mcp endpoint): no section, even when enabled.
+        app, sessions = _app(scoped_token_policy=self.ENABLED)
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        assert _capabilities(client.get("/settings").text)["sections"]["scoped_tokens"] is False
+
+    def test_the_bridge_shim_uses_the_org_confirm_text_and_the_dialog(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        body = client.get("/settings").text
+        assert "Create this token? It is shown once and cannot be shown again." in body
+        assert "window.__pfShowScopedSecret(res.state.secret" in body

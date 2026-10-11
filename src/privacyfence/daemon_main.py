@@ -102,7 +102,7 @@ from .policy import store as policy_store
 
 if TYPE_CHECKING:
     from .approvals import PendingApprovalRegistry
-from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
+from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, safe_principal_id, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, current_principal
 from .webauthn_stepup import StepUpRequirementChange, has_credentials as has_webauthn_credentials
@@ -2176,6 +2176,37 @@ def run_print_mcp_token() -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --revoke-scoped-tokens
+# ---------------------------------------------------------------------------- #
+
+def run_revoke_scoped_tokens(principal_id: str) -> int:
+    """The administrator's way to take back every scoped token one person
+    holds (ADR 0165), for when their access is revoked for good. Runs as the
+    account that owns the data (``main`` dispatches it after the runtime
+    identity check) and writes the person's ``scoped_tokens.json`` directly;
+    a running daemon notices the change the next time a token is presented.
+
+    ``principal_id`` must be ``local`` or name an existing ``users/<id>``
+    directory: ``paths.authority_dir()`` creates the folder it is asked for,
+    so an unknown account is refused before it is ever called.
+    """
+    from . import scoped_tokens
+    from .web.mcp_auth import scoped_token_principals
+
+    known = (
+        safe_principal_id(principal_id) == principal_id
+        and (principal_id == LOCAL_PRINCIPAL_ID or (data_dir() / "users" / principal_id).is_dir())
+    )
+    if not known:
+        print("No such account.", file=sys.stderr)
+        return 1
+    store = scoped_tokens.ScopedTokenStore(scoped_token_principals)
+    revoked = store.revoke_all(principal_id)
+    print(f"Revoked {revoked} scoped token(s) for {principal_id}.")
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # Argument parsing
 # ---------------------------------------------------------------------------- #
 
@@ -2225,6 +2256,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Print this OS account's own MCP bearer token (minting one on first use) and exit. "
             "For a direct HTTP MCP client with no PrivacyFence extension of its own."
+        ),
+    )
+    # ADR 0165: an administrator takes back all of one person's scoped tokens.
+    parser.add_argument(
+        "--revoke-scoped-tokens", metavar="PRINCIPAL_ID", default=None,
+        help=(
+            "Revoke every scoped token the account PRINCIPAL_ID holds ('local' in local mode, or the "
+            "principal id the audit log and the org Settings page show) and exit. Run it as the "
+            "account the daemon runs as."
         ),
     )
     # How the Windows Service Control Manager starts the
@@ -2308,6 +2348,12 @@ def main(argv: list[str] | None = None) -> int:
         privilege_separation.check_runtime_identity()
     except privilege_separation.PrivilegeSeparationError as exc:
         return _refuse_to_start(f"Configuration error: {exc}")
+
+    # After the identity check, unlike --print-mcp-token above: this one reads
+    # and writes the authority directory itself, so on a separated install it
+    # must run as the account that owns it.
+    if args.revoke_scoped_tokens is not None:
+        return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
 
     oauth_flag = (
         args.gmail_oauth or args.drive_oauth or args.contacts_oauth

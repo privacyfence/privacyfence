@@ -1257,6 +1257,77 @@ _JS = r"""
     render(pyState);
   }
 
+  // The one-time delivery dialog (ADR 0165): the secret lives only in this
+  // read-only field, built with the DOM rather than markup, and is wiped
+  // when the dialog closes. Nothing here keeps it, so closing it is final.
+  window.__pfShowScopedSecret = function (secret, onClose) {
+    var overlay = document.createElement('div');
+    overlay.className = 'pf-modal-overlay';
+    overlay.setAttribute('role', 'presentation');
+    var box = document.createElement('div');
+    box.className = 'pf-modal';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'New scoped token');
+    var title = document.createElement('div');
+    title.className = 'pf-modal-title';
+    title.textContent = 'Your new token';
+    var desc = document.createElement('div');
+    desc.className = 'pf-modal-desc';
+    desc.textContent = 'Copy this token now. It is not stored and cannot be shown again.';
+    var field = document.createElement('input');
+    field.type = 'text';
+    field.readOnly = true;
+    field.className = 'field';
+    field.setAttribute('aria-label', 'Token');
+    field.setAttribute('autocomplete', 'off');
+    field.value = secret;
+    var buttons = document.createElement('div');
+    buttons.className = 'pf-modal-buttons';
+    var copy = document.createElement('div');
+    copy.className = 'button';
+    copy.setAttribute('role', 'button');
+    copy.setAttribute('tabindex', '0');
+    copy.setAttribute('aria-label', 'Copy');
+    copy.textContent = 'Copy';
+    var done = document.createElement('div');
+    done.className = 'button primary';
+    done.setAttribute('role', 'button');
+    done.setAttribute('tabindex', '0');
+    done.setAttribute('aria-label', 'Done');
+    done.textContent = 'Done';
+    function doCopy() {
+      field.focus();
+      field.select();
+      var ok = navigator.clipboard && navigator.clipboard.writeText
+        ? navigator.clipboard.writeText(field.value).then(function () { return true; }, function () { return false; })
+        : Promise.resolve(false);
+      ok.then(function (copied) { copy.textContent = copied ? 'Copied' : 'Press Ctrl+C or Cmd+C to copy'; });
+    }
+    function close() {
+      field.value = '';
+      overlay.remove();
+      if (onClose) { onClose(); }
+    }
+    copy.addEventListener('click', doCopy);
+    done.addEventListener('click', close);
+    [copy, done].forEach(function (b) {
+      b.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); b.click(); }
+      });
+    });
+    buttons.appendChild(copy);
+    buttons.appendChild(done);
+    box.appendChild(title);
+    box.appendChild(desc);
+    box.appendChild(field);
+    box.appendChild(buttons);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    field.focus();
+    field.select();
+  };
+
   function submitScopedToken() {
     var ids = Object.keys(ui.stRules).filter(function (k) { return ui.stRules[k]; });
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
@@ -1962,13 +2033,15 @@ def build_html(
     touches ``state``.
 
     ``scoped_tokens`` (the page data of ``web/server.py``'s scoped-token
-    wiring) turns on the "Scoped tokens" section the same way, local mode only.
+    wiring, or the org page's own for the signed-in principal once the
+    administrator has enabled the feature, ADR 0165) turns on the "Scoped
+    tokens" section the same way.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json.dumps(state)
     capabilities = _capabilities_for(mode, is_admin=is_admin)
     capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
-    capabilities["sections"]["scoped_tokens"] = mode != ORG_MODE and scoped_tokens is not None
+    capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
     caps_json = json.dumps(capabilities)
     ai_client_script = ""
     if capabilities["sections"]["ai_client"]:

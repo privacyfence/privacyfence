@@ -150,7 +150,9 @@ from ..policy import store as policy_store
 from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
-from ..scoped_tokens import ScopedToken, ScopedTokenError
+from ..scoped_tokens import (
+    DEFAULT_DAYS, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore, get_store,
+)
 from ..agent_identity import REGISTRY, entry_for_id, sanitize_client_string
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rules,
@@ -361,6 +363,25 @@ class ScopedTokenWiring:
     page_data: Callable[[], dict[str, Any]]
 
 
+def _scoped_create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """What a create-token step-up ceremony is bound to, or ``None`` for a
+    malformed body. Shared by both modes' routes (ADR 0164, ADR 0165)."""
+    label, days = payload.get("label"), payload.get("days")
+    rule_ids, tools = payload.get("rule_ids"), payload.get("tools")
+    if not isinstance(label, str) or isinstance(days, bool) or not isinstance(days, int):
+        return None
+    if not isinstance(rule_ids, list) or not isinstance(tools, list):
+        return None
+    if not all(isinstance(name, str) for name in (*rule_ids, *tools)):
+        return None
+    return {"label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools)}
+
+
+def _scoped_revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+    token_id = payload.get("token_id")
+    return {"token_id": token_id} if isinstance(token_id, str) else None
+
+
 class _BadAction(Exception):
     """Raised by _call_action for a wrong-typed/missing argument -- mapped
     to a 400 at the route, never a 500: a wrong-typed argument returns 400
@@ -540,7 +561,9 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "  }"
         # The scoped token actions (ADR 0164) have routes of their own and
         # answer with no page state: the page is rebuilt from the server.
-        "  var scopedRoutes = {create_scoped_token: ['create', 'Create this token? It is copied to your "
+        "  var orgPage = !!(window.__pfCapabilities && window.__pfCapabilities.mode === 'org');"
+        "  var scopedRoutes = {create_scoped_token: ['create', orgPage ? 'Create this token? It is shown once "
+        "and cannot be shown again.' : 'Create this token? It is copied to your "
         "clipboard once and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
         "Clients using it stop working at once.'], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
         "scoped tokens?']};"
@@ -584,7 +607,11 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "    return r.json().then(function(state){ return {ok: r.ok, state: state}; });"
         "  }).then(function(res){"
         "    if (!res) { return; }"
-        "    if (res.ok && scopedAction) { window.location.reload(); } "
+        # An org page's create answers with the secret, once (ADR 0165): the dialog shows it
+        # and the page reloads only when the dialog closes.
+        "    if (res.ok && scopedAction && res.state && typeof res.state.secret === 'string' && window.__pfShowScopedSecret) {"
+        "      window.__pfShowScopedSecret(res.state.secret, function(){ window.location.reload(); }); "
+        "    } else if (res.ok && scopedAction) { window.location.reload(); } "
         "else if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
         "else if (!res.ok && (tokenAction || scopedAction) && res.state && res.state.error) { window.alert(res.state.error); } "
         "else if (!res.ok) { console.error('PrivacyFence action failed:', action, res.state); } });"
@@ -1157,21 +1184,10 @@ def build_routes(
                 return response
         return payload, bound
 
-    def _create_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
-        label, days = payload.get("label"), payload.get("days")
-        rule_ids, tools = payload.get("rule_ids"), payload.get("tools")
-        if not isinstance(label, str) or isinstance(days, bool) or not isinstance(days, int):
-            return None
-        if not isinstance(rule_ids, list) or not isinstance(tools, list):
-            return None
-        if not all(isinstance(name, str) for name in (*rule_ids, *tools)):
-            return None
-        return {"label": label, "days": days, "rule_ids": sorted(rule_ids), "tools": sorted(tools)}
-
     async def scoped_token_create(request: Request) -> Response:
         assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
         gated = await _scoped_token_request(
-            request, "create_scoped_token", "create a scoped token", _create_fingerprint_body,
+            request, "create_scoped_token", "create a scoped token", _scoped_create_fingerprint_body,
         )
         if isinstance(gated, Response):
             return gated
@@ -1204,12 +1220,8 @@ def build_routes(
     async def scoped_token_revoke(request: Request) -> Response:
         assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
 
-        def _revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
-            token_id = payload.get("token_id")
-            return {"token_id": token_id} if isinstance(token_id, str) else None
-
         gated = await _scoped_token_request(
-            request, "revoke_scoped_token", "revoke a scoped token", _revoke_fingerprint_body,
+            request, "revoke_scoped_token", "revoke a scoped token", _scoped_revoke_fingerprint_body,
         )
         if isinstance(gated, Response):
             return gated
@@ -1313,6 +1325,13 @@ def create_app(
 # read per unresolved id, normally well under this; anything slower finishes in the background.
 _RULE_NAME_WAIT_SECONDS = 3.0
 
+# What a person is told when the administrator has not turned scoped tokens on (ADR 0165); the
+# store raises the same text from ``create``.
+_SCOPED_TOKENS_DISABLED = (
+    "Scoped tokens are not enabled on this install. "
+    "Your administrator turns them on in the organization config bundle."
+)
+
 _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule",
     "toggle_pii_detection", "toggle_pii_category",
@@ -1331,6 +1350,9 @@ def build_org_routes(
     step_up_origin: str,
     oauth_provider: OrgOAuthProvider | None = None,
     connector_registry: ConnectorRegistry | None = None,
+    scoped_token_policy: ScopedTokenPolicy | None = None,
+    scoped_token_store: ScopedTokenStore | None = None,
+    scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
 ) -> list[Route]:
     """Org mode's own settings route list (ADR 0032, ADR 0033) -- both
     ``GET /settings`` and ``GET /settings/privacy`` serve the exact same
@@ -1391,8 +1413,15 @@ def build_org_routes(
     into this principal's own ``resource_names.py`` cache -- see ``_await_rule_names`` below.
     ``None`` (a hand-built ``OrgAuth`` with no registry, this module's own older tests) shows
     whatever names are already cached and a shortened id otherwise, never a lookup.
+
+    ``scoped_token_policy`` is what the administrator's org config bundle says about scoped
+    tokens (ADR 0165); ``None`` is "not enabled". The three scoped token routes are always
+    mounted and answer 403 until it is enabled. ``scoped_token_store`` is the process-wide
+    store unless a test passes its own; ``scoped_token_page_data`` builds the Settings
+    section's data for the signed-in principal (``None``: the section is not drawn).
     """
     challenges = StepUpChallengeStore()
+    token_policy = scoped_token_policy or ScopedTokenPolicy(enabled=False, max_days=DEFAULT_DAYS)
     # Principals with a name lookup already running, so a reload while one is in flight doesn't
     # start a second thread doing the same lookups.
     resolving: set[str] = set()
@@ -1621,6 +1650,114 @@ def build_org_routes(
             "An administrator needs to update it; the server log names the file."
         )
 
+    def _org_scoped_token_data(principal: Principal) -> dict[str, Any] | None:
+        if not token_policy.enabled or scoped_token_page_data is None:
+            return None
+        with principal_scope(principal):
+            return scoped_token_page_data(principal)
+
+    async def _org_scoped_token_request(
+        request: Request, action: str, fingerprint_body: Callable[[dict[str, Any]], dict[str, Any] | None],
+    ) -> tuple[Principal, dict[str, Any]] | Response:
+        """The gates the three org scoped token routes share (ADR 0165), in
+        ``settings_action``'s order: session, CSRF, origin, the administrator's
+        opt-in, confirmation, then the passkey step-up when the org requires
+        one. Returns the principal and the step-up fingerprint body, or the
+        response that refuses the request."""
+        principal = _current_principal(request)
+        if principal is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(payload, dict) or not org_session.check_csrf(request, payload.get("csrf")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        if not token_policy.enabled:
+            return JSONResponse({"error": _SCOPED_TOKENS_DISABLED}, status_code=403)
+        if payload.get("confirmed") is not True:
+            return JSONResponse({"error": "confirmation required"}, status_code=400)
+        bound = fingerprint_body(payload)
+        if bound is None:
+            return JSONResponse({"error": "invalid request"}, status_code=400)
+        if step_up is not None and step_up.enabled and step_up.require_passkey:
+            confirmed_step_up: StepUpConfig = step_up
+            response = _verify_or_challenge(
+                principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+                subject_key=action, fingerprint=_action_fingerprint(action, bound),
+                assertion=payload.get("webauthn_assertion"), challenges=challenges,
+                step_up_response=lambda: _settings_step_up_response(
+                    principal, action, bound, step_up=confirmed_step_up, challenges=challenges,
+                ),
+            )
+            if response is not None:
+                with principal_scope(principal):
+                    _record_settings_audit(
+                        principal, f"Step-up required for {action!r}, refused (principal={principal.id})",
+                    )
+                return response
+        return principal, bound
+
+    async def scoped_token_create(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "create_scoped_token", _scoped_create_fingerprint_body)
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        store = scoped_token_store or get_store()
+        with principal_scope(principal):
+            try:
+                _ensure_principal_settings_loaded()
+            except policy_store.V1PolicyConfigError as exc:
+                return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
+            try:
+                token, secret = await run_in_threadpool(
+                    lambda: store.create(
+                        principal, label=bound["label"], days=bound["days"], rule_ids=bound["rule_ids"],
+                        tools=bound["tools"], policy=token_policy,
+                    ),
+                )
+            except ScopedTokenError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            # The summary names the token, never the secret (ADR 0165).
+            _record_settings_audit(
+                principal,
+                f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
+                f"{len(token.rule_ids)} rule(s), {len(token.tools)} tool(s) (principal={principal.id})",
+            )
+        # The only place the secret ever leaves the server: this one answer.
+        return JSONResponse(
+            {"created": {"id": token.id, "label": token.label, "expires_at": token.expires_at}, "secret": secret},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def scoped_token_revoke(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "revoke_scoped_token", _scoped_revoke_fingerprint_body)
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        store = scoped_token_store or get_store()
+        token = store.get(principal.id, bound["token_id"])
+        if token is None or not await run_in_threadpool(store.revoke, principal, bound["token_id"]):
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        with principal_scope(principal):
+            _record_settings_audit(
+                principal, f"Revoked scoped token '{token.label}' ({token.id}) (principal={principal.id})",
+            )
+        return JSONResponse({"revoked": {"id": token.id}})
+
+    async def scoped_token_revoke_all(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "revoke_all_scoped_tokens", lambda payload: {})
+        if isinstance(gated, Response):
+            return gated
+        principal, _bound = gated
+        store = scoped_token_store or get_store()
+        count = await run_in_threadpool(store.revoke_all, principal.id)
+        with principal_scope(principal):
+            _record_settings_audit(principal, f"Revoked all scoped tokens ({count}) (principal={principal.id})")
+        return JSONResponse({"revoked": count})
+
     async def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
         nonce = _csp_nonce_for(request)
         with principal_scope(principal):
@@ -1644,6 +1781,7 @@ def build_org_routes(
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
             mode=ORG_MODE, is_admin=principal.is_admin,
+            scoped_tokens=_org_scoped_token_data(principal),
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
@@ -1834,5 +1972,8 @@ def build_org_routes(
     return [
         Route("/settings", settings_page),
         Route("/settings/privacy", privacy_page),
+        Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
+        Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
+        Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]
