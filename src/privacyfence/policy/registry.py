@@ -188,6 +188,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "calendar_delete_event": Verb.DELETE,
     "salesforce_get_record": Verb.READ,
     "salesforce_run_report": Verb.READ,
+    "salesforce_export_report": Verb.READ,
     "salesforce_search": Verb.SEARCH,
     "grist_get_records": Verb.READ,
     "grist_export_records": Verb.READ,

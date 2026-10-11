@@ -127,6 +127,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "calendar_set_event_color":       "calendar.set_color",
     "salesforce_get_record":          "salesforce.read_record",
     "salesforce_run_report":          "salesforce.run_report",
+    "salesforce_export_report":       "salesforce.run_report",
     "salesforce_search":              "salesforce.search",
     "grist_get_records":              "grist.read_records",
     "grist_export_records":           "grist.read_records",
@@ -272,6 +273,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "salesforce_list_reports":         "auto",
     "salesforce_get_record":           "review",
     "salesforce_run_report":           "review",
+    "salesforce_export_report":        "review",
     "salesforce_search":               "review",
     # Jira
     "jira_list_projects":              "auto",
