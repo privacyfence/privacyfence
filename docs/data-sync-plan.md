@@ -33,8 +33,17 @@ a regular, deterministic job that should cost no model tokens. After this change
    unattended session, so anything no rule covers fails fast. It works against a local daemon
    (bearer token) and an org server (OAuth sign-in).
 
-Grist stays add-only (ADR 0145). A row deleted at the source is handled in the data model, with an
-`is_active` column the user's transform script maintains. That is recipe content, not code here.
+6. **The pieces the user's existing datalake skill needs** (checked against the skill's scripts):
+   `salesforce_export_report` gains `cell_format: "both"` (raw value, shown label and currency per
+   column), `grist_update_csv` gains `clear_empty` (an empty cell clears the value), and a Drive
+   folder rule can carry the personal-data flag for `drive_download_file` when the file is
+   delivered as a file. `privacyfence-sync` script steps take arguments with file placeholders,
+   declare several outputs, can save their stdout, and can stop a run successfully with exit 10;
+   any tool step can save its result, upload steps can skip an empty file, and arguments can take
+   values from an earlier step's JSON (`${step.output:path}`).
+
+Grist stays add-only (ADR 0145). A row deleted at the source keeps its values and gets a flag
+column set to false; the user's scripts compute that. That is recipe content, not code here.
 
 There is no issue; the request came from the user in a brainstorming session.
 
@@ -244,8 +253,8 @@ PERSONAL_DATA_RULE_TOOLS: frozenset[str] = frozenset({
 })
 ```
 
-`jira_export_issues` joins the set in its own phase (§3.5), so the set never names a tool that does
-not exist yet. Add it to `__all__` (`auto_accept.py:628`).
+`jira_export_issues` (§3.5) and `drive_download_file` (§3.9) join the set in their own phases, so
+the set never names a tool before its rules are in place. Add it to `__all__` (`auto_accept.py:628`).
 
 `policy/catalogue.py`:
 
@@ -271,7 +280,7 @@ PERSONAL_DATA_GROUPS: dict[str, str] = {
   propose the flag. It is set only by a person in Settings, behind passkey step-up.
 
 `policy/describe.py` `rule_sentence`: after the conditions suffix, when `rule.allow_personal_data`
-append `" - personal data allowed in exports and page uploads"`.
+append `" - personal data allowed in exports, file downloads and page uploads"`.
 
 `src/privacyfence/gate.py`, a new helper next to `_evaluate_auto_accept`:
 
@@ -325,8 +334,9 @@ Rejected:
   as ADR 0144 keeps Grist rules.
 - **A new audit field.** `decision="auto_accepted"` with `pii_detected=True` and a `rule_id` already
   says it. The only other path that produces that combination is `pii_already_reviewed`, which only
-  Drive's read tools pass (`connectors/drive.py:1051, 1108, 1289`); for the tools in
-  `PERSONAL_DATA_RULE_TOOLS` it is unambiguous.
+  Drive's tools pass (`connectors/drive.py:1051, 1108, 1289`), `drive_download_file` among them.
+  Both mean a person already decided about this personal data (by the rule, or by confirming the
+  same file earlier), so the audit entry needs no field to tell them apart.
 
 ### 3.2 The checkbox in Settings
 
@@ -623,8 +633,9 @@ sync/pyproject.toml
 sync/README.md                            already written: the user-facing spec, see below
 sync/src/privacyfence_sync/__init__.py
 sync/src/privacyfence_sync/recipe.py      pure: load and validate a recipe
+sync/src/privacyfence_sync/refs.py        pure: file and value references
 sync/src/privacyfence_sync/template.py    pure: put JSON data into an HTML template
-sync/src/privacyfence_sync/transform.py   run one transform script
+sync/src/privacyfence_sync/transform.py   run one script step
 sync/src/privacyfence_sync/client.py      MCP session, tool calls, file transfer
 sync/src/privacyfence_sync/auth.py        OAuth token storage and sign-in
 sync/src/privacyfence_sync/runner.py      execute a recipe's steps
@@ -681,66 +692,90 @@ It carries the same version as PrivacyFence (the root tag), so a release publish
 
 #### Recipe format (`recipe.py`)
 
-YAML, loaded with `yaml.safe_load`:
+YAML, loaded with `yaml.safe_load`. The README's "Recipe format", "Files and references" and
+"Step types" sections are the user-facing statement of these rules; the examples there must load.
 
-```yaml
-version: 1
-name: sales-dashboard            # required, matches ^[a-z0-9][a-z0-9-]{0,62}$
-server: http://127.0.0.1:8765/mcp  # optional
-work_dir: work                   # optional, relative to the recipe file; default "work"
-steps:                           # 1 to 50 entries
-  - id: deals                    # required, ^[a-z0-9_-]{1,40}$, unique
-    tool: salesforce_export_report
-    args: {report_id: 00O000000000001, file_name: deals.csv}
-  - id: current
-    tool: grist_export_records
-    args: {doc_id: 8CAN8gKdxY7z, table_id: Deals, file_name: current.csv}
-  - id: merged
-    run: transforms/deals.py     # relative to the recipe file
-    inputs: [deals, current]     # earlier steps that produced a file
-    output: merged.csv           # plain file name
-  - id: load
-    tool: grist_update_csv
-    file: merged                 # an earlier step's file, uploaded
-    args: {doc_id: 8CAN8gKdxY7z, table_id: Deals, key_column: Id, create_missing: true}
-  - id: data
-    tool: grist_export_sql
-    args: {doc_id: 8CAN8gKdxY7z, sql: "SELECT ...", file_name: data.json}
-  - id: page
-    template: templates/dashboard.html
-    data: data                   # an earlier step whose file ends in .json
-    output: dashboard.html
-  - id: publish
-    tool: peek_upload_page
-    file: page
-    args: {slug: sales-dashboard}
-```
+Top level: `version` (must be `1`), `name` (`^[a-z0-9][a-z0-9-]{0,62}$`), optional `server` (str),
+optional `work_dir` (str, default `"work"`, relative to the recipe file), `steps` (a list of 1-50
+mappings). Any other top-level key is an error.
 
-Dataclasses (frozen): `Recipe(name, server, work_dir: Path, steps: tuple[Step, ...], base_dir: Path)`;
-`ToolStep(id, tool, args: dict, file: str | None, reason: str | None)`; `RunStep(id, script: Path,
-inputs: tuple[str, ...], output: str, timeout_seconds: int)` (optional key `timeout_seconds`,
-1-3600, default 600); `TemplateStep(id, template: Path, data: str, output: str)`.
+Every step has `id` (`^[a-z0-9_-]{1,40}$`, unique) and exactly one of `tool`, `run`, `template`.
+Allowed keys per kind (anything else is `step <id>: unknown key <k>`):
 
-`load_recipe(path: Path) -> Recipe` raises `RecipeError(f"{path}: {message}")` (a `ValueError`
-subclass) for: a top level that is not a mapping; `version` not `1`; a bad `name`; `steps` not a
-list of 1-50 mappings; a step with zero or more than one of `tool`, `run`, `template`; a bad or
-duplicate `id`; unknown keys in a step (`step <id>: unknown key <k>`); `args` not a mapping; `file`,
-`inputs` or `data` naming a step that is not earlier or produces no file; `output` or an export's
-`args.file_name` that is not a plain name (no `/`, `\`, NUL, leading `.`); an export tool without
-`args.file_name`, or one whose `args` already has `destination_dir`; an upload tool without `file`,
-or one whose `args` has `local_path`, `upload_id` or `html`; `file` on a tool not in
-`UPLOAD_TOOLS`; a `run` or `template` path that resolves outside the recipe's directory; a
-`template` step whose `data` step's file does not end in `.json`.
+| Kind | Keys |
+|---|---|
+| tool | `id`, `tool`, `args` (mapping, default `{}`), `file`, `save_as`, `save_result`, `skip_if_empty` (bool), `reason` (str) |
+| run | `id`, `run`, `args` (list of strings, default `[]`), `outputs` (mapping name → relative path, 0-20 entries, each name matching `^[a-z0-9_-]{1,40}$` and not `stdout` when `stdout` is set), `stdout` (plain file name), `timeout_seconds` (int 1-3600, default 600) |
+| template | `id`, `template`, `data`, `output` |
 
-Constants in `recipe.py`:
+Constants:
 
 ```python
 EXPORT_TOOLS = frozenset({"grist_export_records", "grist_export_sql", "salesforce_export_report", "jira_export_issues"})
+DOWNLOAD_TOOLS = frozenset({"drive_download_file"})
 UPLOAD_TOOLS = frozenset({"grist_import_csv", "grist_update_csv", "peek_upload_page"})
+STOP_EXIT_CODE = 10
 ```
 
-A step produces a file when it is an export (`args.file_name`), a `run` step or a `template` step.
-Any other tool step is called with its `args` as given and produces no file.
+Dataclasses (frozen): `Recipe(name, server, work_dir: Path, base_dir: Path, steps: tuple[Step, ...])`;
+`ToolStep(id, tool, args: dict, file: str | None, save_as: str | None, save_result: str | None,
+skip_if_empty: bool, reason: str | None)`; `RunStep(id, script: Path, args: tuple[str, ...],
+outputs: dict[str, str], stdout: str | None, timeout_seconds: int)`; `TemplateStep(id, template:
+Path, data: str, output: str)`.
+
+**The files a step produces** (`produced_files(step) -> dict[str, str]`, ref → path relative to
+the work folder):
+
+- export tool: `{id: args["file_name"]}`;
+- download tool: `{id: save_as}`;
+- any tool step with `save_result`: `{id: save_result}` (an export or download step may not also
+  have `save_result`);
+- run step: `{f"{id}.{name}": path for each output}`, plus `{f"{id}.stdout": stdout}` when set;
+- template step: `{id: output}`.
+
+`load_recipe(path: Path) -> Recipe` raises `RecipeError(f"{path}: {message}")` (a `ValueError`
+subclass) for every rule below; each message names the step id:
+
+- the top-level and per-kind key rules above, and the types given there;
+- an export tool without `args.file_name`, or whose `args` has `destination_dir`; a download tool
+  without `save_as`, or whose `args` has `destination_dir`; `save_as` on any other tool;
+- an upload tool without `file`, or whose `args` has `local_path`, `upload_id` or `html`; `file`
+  on a tool not in `UPLOAD_TOOLS`; `skip_if_empty` on a tool not in `UPLOAD_TOOLS`;
+- `file_name`, `save_as`, `save_result`, `stdout` and template `output` must be plain names (no
+  `/`, `\`, NUL, no leading `.`); an export's `file_name` must end in `.csv` or `.json`, and
+  `save_result` in `.json`; an output path in `outputs` may contain `/` but no `..` part, no
+  leading `/`, and no `\` or NUL; two steps may not produce the same path;
+- a `run` or `template` path that resolves outside the recipe's directory;
+- every file reference (`file`, `data`, and each `{file:<ref>}` in a run step's args) must name a
+  ref produced by an earlier step; `data` must name a file ending in `.json`;
+- every value reference `${<ref>:<path>}` (in any string inside a tool step's `args`, at any
+  depth, and in a run step's args) must name a ref produced by an earlier step whose file ends in
+  `.json`; the path is checked only for syntax here (`^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$`);
+- in a run step's args, `{output:<name>}` must name one of that step's own `outputs`. A brace
+  group matching `(?<!\$)\{[a-z_]+(?::[^}]*)?\}` whose name is not `file`, `output`, `work_dir`
+  or `recipe_dir` is an error (a likely typo); any other text, JSON included, passes as written.
+
+#### References (`refs.py`, pure)
+
+```python
+VALUE_REF = re.compile(r"\$\{([a-z0-9_-]+(?:\.[a-z0-9_-]+)?):([A-Za-z0-9_.-]+)\}")
+FILE_PLACEHOLDER = re.compile(r"\{(file|output):([a-z0-9_.-]+)\}|\{(work_dir|recipe_dir)\}")
+
+def lookup(data: Any, path: str) -> Any: ...
+def substitute_value_refs(value: Any, read_json: Callable[[str], Any]) -> Any: ...
+def expand_run_arg(arg: str, *, files: dict[str, Path], outputs: dict[str, Path], work_dir: Path, recipe_dir: Path, read_json: Callable[[str], Any]) -> str: ...
+```
+
+- `lookup` walks the dotted path: a part indexes a list when the current value is a list and the
+  part is all digits, else it is a dict key. A missing key or index raises
+  `RefError(f"{path} not found")` (a `ValueError` subclass).
+- `substitute_value_refs` walks strings inside dicts and lists. A string that is exactly one value
+  reference is replaced by the looked-up value (any JSON type); a string with references inside
+  longer text gets each replaced by `str(value)` for scalars and `json.dumps(value)` for lists and
+  dicts. `read_json(ref)` returns the parsed JSON of that ref's file.
+- `expand_run_arg` replaces `{file:ref}` with the file's absolute path, `{output:name}` with this
+  step's output path, `{work_dir}` and `{recipe_dir}` with absolute paths, then value references as
+  text. The result is one argv element; nothing is ever passed to a shell.
 
 #### Template (`template.py`)
 
@@ -752,28 +787,38 @@ def render_template(template_text: str, data: Any) -> str:
 
 The template must contain `PLACEHOLDER` exactly once (`TemplateError("the template must contain
 /*PRIVACYFENCE_SYNC_DATA*/null exactly once")` otherwise). It is replaced by
-`json.dumps(data, ensure_ascii=False)` with `<`, `>` and `&` replaced by `<`, `>`,
-`&` and U+2028/U+2029 by ` `/` `, so the data cannot close a `<script>` element. A
-template uses it as `const DATA = /*PRIVACYFENCE_SYNC_DATA*/null;`.
-
-#### Transform (`transform.py`)
+`json.dumps(data, ensure_ascii=False)` with these replacements applied to the JSON text, each
+target being the literal six-character escape sequence:
 
 ```python
-def run_transform(step: RunStep, input_paths: list[Path], output_path: Path, work_dir: Path) -> None:
+_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026", "\u2028": "\\u2028", "\u2029": "\\u2029"}
 ```
 
-It runs `subprocess.run([sys.executable, "-I", str(step.script), *map(str, input_paths),
-str(output_path)], cwd=work_dir, env=transform_env(), capture_output=True, text=True,
-timeout=step.timeout_seconds, check=False)`. `transform_env()` is `os.environ` without any key
-starting with `PRIVACYFENCE_`, so the script never sees the token. A non-zero exit raises
-`TransformError(f"step {step.id}: {script name} exited with {code}: {last 2000 chars of stderr}")`,
-a timeout `TransformError(f"step {step.id}: {script name} ran longer than {n} seconds")`, and a
-missing `output_path` afterwards `TransformError(f"step {step.id}: {script name} did not write
-{output name}")`. The script's stdout and stderr are echoed to the runner's stderr.
+so the data cannot close a `<script>` element. `test_escapes_script_breakout` asserts that
+`render_template(t, {"x": "</script>"})` contains `\u003c/script\u003e` and not `</script>`.
 
-The contract a transform script follows, stated in `sync/README.md`: it gets the input files'
-paths, then the output path, as arguments; it reads CSV or JSON and writes the output; it has no
-PrivacyFence credential and should make no network call.
+#### Script steps (`transform.py`)
+
+```python
+class StopRun(Exception): ...        # the script asked to stop the run successfully
+
+def run_script(step: RunStep, argv: list[str], work_dir: Path) -> str:   # returns captured stdout
+```
+
+It creates the parent folder of every declared output, then runs `subprocess.run([sys.executable,
+str(step.script), *argv], cwd=work_dir, env=script_env(), capture_output=True, text=True,
+timeout=step.timeout_seconds, check=False)`. `script_env()` is `os.environ` without any key
+starting with `PRIVACYFENCE_`. There is no `-I`: since Python 3.11 it also drops the script's own
+folder from `sys.path`, and a user's engine script imports the modules next to it. Running a file
+(`python script.py`) never puts the current folder on `sys.path`, so a file planted in the work
+folder is not imported. Stdout and stderr are echoed to the runner's stderr. When `stdout`
+is set, the captured stdout is written to that file in the work folder.
+
+- exit 0: every declared output must exist, else `ScriptError(f"step {id}: {script} did not write
+  {output path}")`;
+- exit `STOP_EXIT_CODE` (10): raise `StopRun(step.id)`;
+- any other exit: `ScriptError(f"step {id}: {script} exited with {code}: {last 2000 chars of stderr}")`;
+- timeout: `ScriptError(f"step {id}: {script} ran longer than {n} seconds")`.
 
 #### Client (`client.py`)
 
@@ -787,9 +832,12 @@ class SyncClient:
     async def upload(self, path: Path, reason: str) -> str: ...   # returns upload_id
 ```
 
-- `call` runs `session.call_tool(tool, args)`. It joins the result's text content; when the result
-  `isError`, it raises `ToolDenied(text)` if the text starts with `"Request denied"`, else
-  `ToolFailed(text)`. Otherwise it returns `json.loads(text)`, or the text itself when that fails.
+- Error classes: `SyncError` (base), `ToolFailed`, `ToolDenied`, `SignInError` (not signed in,
+  sign-in expired, no token) and `RecipeRuntimeError` (a reference that fails at run time).
+- `call` runs `session.call_tool(tool, args)`. When `result.is_error` is true it joins the text
+  content and raises `ToolDenied(text)` if the text starts with `"Request denied"`, else
+  `ToolFailed(text)`. Otherwise it returns `result.structured_content` when that is
+  not `None`, else `json.loads` of the joined text content, else the text itself.
 - `download` GETs the URL with a separate `httpx2.AsyncClient()` that carries no
   `Authorization` header (the URL is the credential, ADR 0028), timeout 120 s, writes the bytes to
   `dest`, and raises `ToolFailed("downloaded file does not match the sha256 the tool reported")`
@@ -804,44 +852,65 @@ class SyncClient:
 #### Runner (`runner.py`)
 
 ```python
-async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out: TextIO) -> None:
+async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out: TextIO) -> bool:
+    """True when every step ran, False when a script step stopped the run (exit 10)."""
 ```
 
-1. `work_dir = recipe.work_dir` is created (`mkdir(parents=True, exist_ok=True)`).
+1. `work_dir = recipe.work_dir` is created (`mkdir(parents=True, exist_ok=True)`). `files: dict[str,
+   Path]` maps each produced ref to its absolute path once its step has run.
 2. Unless `attended`, call `privacyfence_begin_unattended_session` with `reason=f"privacyfence-sync
    {recipe.name}: scheduled run"`. A `ToolFailed` here is re-raised as `SyncError("This
    PrivacyFence does not allow unattended sessions (unattended_sessions.enabled in
    org_config.json). Ask your administrator, or run with --attended.")`.
-3. For each step in order, print `f"[{step.id}] ..."` progress lines to `out`, and keep
-   `files: dict[str, Path]` of produced files:
-   - **Export tool**: `args = {**step.args, "destination_dir": str(work_dir), "reason": reason}`.
-     The result's `delivery` decides: `"local_disk"` → the file is at `result["path"]`; copy it to
-     `work_dir / file_name` if it is elsewhere, and check its sha256 against `result["sha256"]`;
-     `"link"` → when the URL's path does not contain `/mcp-files/fetch/`, raise `SyncError(f"step
-     {id}: this server hands out browser-only download links (download_delivery.agent_links is
-     off), which privacyfence-sync cannot fetch. Ask your administrator to turn agent_links on.")`;
-     otherwise `client.download(result["download_url"], work_dir / file_name, result["sha256"])`;
-     `"none"` (an empty Jira export) → write a CSV with the header row `result["columns"]`, or `[]`
-     for a `.json` name. Any other `delivery` raises `SyncError(f"step {id}: unexpected delivery
-     {value!r}")`.
-   - **Upload tool**: `upload_id = await client.upload(files[step.file], reason)`, then
-     `client.call(step.tool, {**step.args, "upload_id": upload_id, "reason": reason})`.
-   - **Other tool**: `client.call(step.tool, {**step.args, "reason": reason})`.
-   - **Run step**: `run_transform(step, [files[i] for i in step.inputs], work_dir / step.output,
-     work_dir)` in `asyncio.to_thread`.
+3. For each step in order, print `f"[{step.id}] ..."` progress lines to `out`. For a tool step,
+   `reason` is `step.reason` or `f"privacyfence-sync {recipe.name}: step {step.id}"`, and the call
+   args are built as: `refs.substitute_value_refs(step.args, read_json)`, then every value that is
+   a `list` or `dict` is replaced by `json.dumps(value, ensure_ascii=False)`, then `reason` is set.
+   A `RefError` becomes `RecipeRuntimeError(f"step {id}: {message}")` before any call.
+   - **Export tool**: args gain `"destination_dir": str(work_dir)`. The result is handled by
+     `_receive_file(step, result, work_dir / file_name)` below.
+   - **Download tool**: args gain `"destination_dir": str(work_dir / f".download-{step.id}")` (the
+     folder is created first), so a file PrivacyFence writes in place under its Drive name can
+     never overwrite another step's file; `_receive_file(step, result, work_dir / step.save_as)`
+     moves it to `save_as` and removes the folder.
+   - **Upload tool**: when `skip_if_empty` and the file has no data rows (a `.csv` with no
+     row after the header that has a non-empty cell, matching how grist_update_csv counts rows;
+     or a `.json` that parses to `[]`), print `f"[{id}] skipped:
+     {file name} has no rows"`, write `{"skipped": true}` to `save_result` if set, and go on.
+     Otherwise `upload_id = await client.upload(files[step.file], reason)` and call with
+     `"upload_id": upload_id` added.
+   - **Other tool**: call with the args.
+   - For every tool step with `save_result`, write the call's result as JSON (`json.dumps(result,
+     ensure_ascii=False, indent=1)`) to `work_dir / save_result`.
+   - **Run step**: build argv with `refs.expand_run_arg` for each arg, then `run_script` in
+     `asyncio.to_thread`. `StopRun` prints `f"[{id}] nothing to do, run stopped"`, ends the
+     unattended session (step 5) and returns `False`.
    - **Template step**: read the template (UTF-8), `json.loads` the data file, write
      `render_template(...)` to `work_dir / step.output`.
-   `reason` is `step.reason` or `f"privacyfence-sync {recipe.name}: step {step.id}"`.
-   Before any tool call, every value in `step.args` that is a `list` or `dict` is replaced by
-   `json.dumps(value, ensure_ascii=False)`, because the tools take JSON as text (`filters`,
-   `filter`, `args`, `fields`); strings, numbers and booleans pass unchanged.
-4. In attended mode, a tool result that is a dict with `status == "approval_pending"` prints
+4. `_receive_file(step, result, dest)` handles the result's `delivery`:
+   - `"local_disk"`, or no `delivery` key but a `path` (a Drive download written in place by a
+     PrivacyFence that runs as the user returns `{path, name, size_bytes, truncated}`,
+     `drive_client.py:1552-1557`): the file is at `result["path"]`; move it to `dest` if it is elsewhere
+     (an export written into the work folder itself is already `dest`), then check its sha256
+     against `result["sha256"]` when the result carries one; a result with `truncated: true`
+     raises `SyncError(f"step {id}: the download was truncated")`;
+   - `"link"`: when the URL's path does not contain `/mcp-files/fetch/`, raise `SyncError(f"step
+     {id}: this server hands out browser-only download links (download_delivery.agent_links is
+     off), which privacyfence-sync cannot fetch. Ask your administrator to turn agent_links on.")`;
+     otherwise `client.download(result["download_url"], dest, result.get("sha256"))`;
+   - `"inline"` (a small Drive download on an organization server): write
+     `base64.b64decode(result["content_base64"])` to `dest`;
+   - `"none"` (an empty Jira export): write a CSV with the header row `result["columns"]`, or `[]`
+     for a `.json` name;
+   - anything else: `SyncError(f"step {id}: unexpected delivery {value!r}")`.
+5. In attended mode, a tool result that is a dict with `status == "approval_pending"` prints
    `f"[{id}] waiting for approval: {result['url']}"`, then calls `privacyfence_await_approval` with
-   `{"approval_ids": [result["approval_id"]], "timeout_seconds": 120}` until the status is not
-   `pending`, at most 8 times (16 minutes; a pending approval expires after 15). `approved` → repeat
+   `{"approval_ids": [result["approval_id"]], "timeout_seconds": 120}` until
+   `answer[approval_id]` (the tool answers `{approval_id: status, ...}`) is not `pending`, at most 8 times (16 minutes; a pending approval expires after 15). `approved` → repeat
    the original call with the same args; anything else raises `ToolDenied(f"step {id}: {status}")`.
-5. After the last step, unless `attended`, call `privacyfence_end_unattended_session` with the same
-   reason form. Errors from the end call are ignored.
+6. After the last step (or a `StopRun`), unless `attended`, call
+   `privacyfence_end_unattended_session` with the same reason form. Errors from the end call are
+   ignored.
 
 #### Sign-in (`auth.py`)
 
@@ -860,7 +929,7 @@ async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out:
     You can close this tab."`, and returns `AuthorizationCodeResult(code=<code>, state=<state or
     None>, iss=<iss or None>)` from the query string; it gives up after 300 s with
     `SyncError("No sign-in arrived within 5 minutes.")`.
-  - Non-interactive (`run`): both handlers raise `SyncError(f"Not signed in to {server_url}, or the
+  - Non-interactive (`run`): both handlers raise `SignInError(f"Not signed in to {server_url}, or the
     sign-in expired. Run: privacyfence-sync login --server {server_url}")`.
 - A refresh-token chain ends 30 days after the sign-in (`web/oauth_provider.py`), so a scheduled
   org-mode run needs `privacyfence-sync login` again once a month; the README says so.
@@ -883,10 +952,13 @@ privacyfence-sync check RECIPE
 - `login` runs an interactive OAuth sign-in, then calls `privacyfence_status` with
   `{"reason": "privacyfence-sync login check"}` and prints `"Signed in to <server>."`.
 - `check` loads and validates the recipe and prints `"<name>: <n> step(s), OK"` with no network
-  call.
-- Exit codes: `0` success; `1` a recipe, usage or template error; `2` a tool, transfer or transform
-  failure; `3` a step denied (`ToolDenied`); `4` a sign-in problem. Every error prints one line
-  `privacyfence-sync: <message>` to stderr, never a token.
+  call and no script run.
+- Exit codes: `0` success, including a run a script step stopped with exit 10 (`run_recipe`
+  returned `False`); `1` `RecipeError`, `TemplateError`, `RecipeRuntimeError` or a usage error; `3`
+  `ToolDenied`; `4` `SignInError`, or no token and no stored sign-in; `2` every other `SyncError`,
+  `ScriptError` and transfer failure. Every error prints one line `privacyfence-sync: <message>` to
+  stderr, never a token; for a `ScriptError` the script's own error output was already echoed
+  above it.
 
 #### CI and publishing
 
@@ -929,11 +1001,83 @@ Rejected:
   cannot read or write the user's files, and an org daemon is another machine; upload slots and
   download links work in every mode.
 
+### 3.7 `salesforce_export_report` `cell_format: "both"`
+
+The datalake's Salesforce parser reads, per cell, the raw value for ids, dates and amounts, the
+currency of money cells, and the shown label for lookups and picklists. `value` mode drops the
+currency and the label (`_export_cell`, `connectors/salesforce.py:271-279`); `label` mode drops the
+raw values.
+
+- `cell_format` accepts `"both"` in addition to `"value"` and `"label"`; the validation message at
+  the top of `_export_report` becomes `"cell_format must be value, label or both."`.
+- Columns for `"both"`: for each detail column `C` in order, `C`, then `f"{C}.label"`, then
+  `f"{C}.currency"` when `C` is a money column. A column is a money column when the report's
+  `reportExtendedMetadata.detailColumnInfo[C].dataType` is `"currency"` (the metadata
+  `_report_column_labels`, `salesforce.py:45-50`, already reads), so the column set is the same on
+  every run whatever the data. Stop condition: if the paged path (`run_report_page`) does not keep
+  `reportExtendedMetadata` from the first page, stop with status=blocked.
+- Cells: `C` is `_export_cell(cell, "value")` (unchanged), `C.label` is `cell.get("label", "")`,
+  and `C.currency` is `value.get("currency")` for a money dict, else `None`.
+- A new pure helper `_export_table(detail_columns: list[str], column_info: dict[str, dict],
+  rows: list[list[dict]], cell_format: str) -> tuple[list[str], list[list[Any]]]` builds the columns and rows for all three
+  formats, so the handler stays the same apart from calling it.
+- The `cell_format` parameter description gains: `"both writes each column twice, raw value as
+  the column name and the shown text as <column>.label, plus <column>.currency for money
+  columns."`.
+- The approval args already carry `cell_format`, so a `both` export needs its own approval. The
+  operation key, gate and PII scan are unchanged.
+
+### 3.8 `grist_update_csv` `clear_empty`
+
+Today an empty CSV cell leaves the value unchanged (ADR 0148), so a value that became empty at the
+source cannot be cleared without per-row `grist_update_records` calls, which a recipe cannot
+express.
+
+- `grist_csv.parse_csv(data, columns, table_id, *, keep_empty: bool = False)`. With `keep_empty`,
+  an empty cell is stored as `values[column_id] = None` instead of being left out. `key_index`
+  (`grist_csv.py:241-244`) checks `row.values.get(key_column) is None` instead of `key_column not
+  in row.values`, so an empty key is still refused with the same message either way.
+- `grist_update_csv` gains `clear_empty` (bool, default false), with the description: `"True to
+  clear a value when its CSV cell is empty. Default false: an empty cell leaves the value
+  unchanged. Columns not in the CSV are never touched."`. It is passed to `parse_csv` as
+  `keep_empty`. `grist_import_csv` does not get it.
+- Comparison: a `None` from the CSV differs from the current value only when the current value is
+  neither `None` nor `""`. Such a cell counts as a changed cell and is written as `None`.
+- Adds (`create_missing`): `None` values are dropped from the fields of a new record before both
+  the `_chunks(adds, ...)` size estimate and `add_records`, so a new row never gets explicit nulls.
+- The card: the changed-cell sample shows a cleared cell's new value as `(empty)`, and when
+  `clear_empty` is true the preview gains a row `"Cells to clear": f"{cleared:,}"` next to the
+  existing count rows (`grist.py:1419-1425`). The approval `args` carry `clear_empty`.
+- ADR 0145 still holds: clearing a cell is an update, not a delete.
+
+### 3.9 Drive downloads under a personal-data rule
+
+The cashflow source is an Excel workbook in a shared-drive folder, read with `drive_download_file`.
+The user decided that a Drive folder rule may carry the same personal-data flag, but only when the
+file is delivered as a file; on an organization server a small file comes back inline in the tool
+result (`"delivery": "inline"`, base64), where it would reach a model, and there the scan stays.
+
+- `gated_call` gains a keyword argument `content_reaches_result: bool = False`, documented as
+  "True when this call's result carries the content itself (an inline download), so a rule's
+  allow_personal_data flag does not apply (ADR 0157)". `_personal_data_rule(tool, operation_key,
+  ctx, content_reaches_result)` returns `None` when it is true. The §3.1 block passes it.
+- `auto_accept.PERSONAL_DATA_RULE_TOOLS` gains `"drive_download_file"`.
+- `connectors/drive.py` `_download_file` passes `content_reaches_result=(delivery ==
+  "inline_base64")` to its `gated_call` (the `delivery` it already computes before the gate from
+  the metadata size, `drive.py:1157-1161`). That estimate becomes binding: `_deliver_org_download`
+  gains `allow_inline: bool`, `_download_file` passes `allow_inline=(delivery ==
+  "inline_base64")`, and with `allow_inline` false it skips `cfg.inline_result` and stages a link
+  (or refuses with the existing staging-disabled message), so a file approved as "not inline" is
+  never returned inline because its real size turned out smaller.
+- `catalogue.PERSONAL_DATA_GROUPS` gains `"drive.folder": "Downloads may include personal data"`.
+- `privacyfence_check_policy` is not changed.
+
 ## ADRs
 
 - **0157** — A rule can let personal data through the tools whose result holds no row: a per-rule
-  `allow_personal_data` flag, set only in Settings, applies to the export tools and to Peek
-  new-version uploads; every other read still scans. Amends ADR 0155 (its "Exempting exports from
+  `allow_personal_data` flag, set only in Settings, applies to the export tools, to Peek
+  new-version uploads, and to Drive downloads delivered as a file (never an inline download);
+  every other read still scans. Amends ADR 0155 (its "Exempting exports from
   the PII gate" alternative); ADR 0155's Status gains "Amended by 0157".
 - **0158** — Peek rules name pages by slug and cover reading comments and stats and uploading new
   versions only; set from Settings, never from the card.
@@ -944,9 +1088,14 @@ Rejected:
   staged link, refused only when `download_delivery.allow_disk_staging` is off. Amends ADR 0155
   (its org refusal); ADR 0155's Status gains "Amended by 0160".
 - **0161** — `privacyfence-sync` is a separate distribution and a plain MCP client: no import from
-  `privacyfence`, transforms run on the user's side with no PrivacyFence credential in their
-  environment, files move only through upload slots and download links, and it is published by
-  its own jobs after the main package.
+  `privacyfence`, script steps run on the user's side with no PrivacyFence credential in their
+  environment and receive everything as files, files move only through upload slots and download
+  links, a recipe has no branching beyond a script stopping the run, and it is published by its
+  own jobs after the main package.
+
+- **0162** — `grist_update_csv` can clear a value from an empty cell when `clear_empty` is true.
+  Amends ADR 0148 (its consequence "An empty cell cannot clear a value"); ADR 0148's Status gains
+  "Amended by 0162".
 
 If a parallel branch takes these numbers first, renumber in order before merging (ADR README rule 6).
 
@@ -955,9 +1104,10 @@ If a parallel branch takes these numbers first, renumber in order before merging
 Nothing is needed before implementation. After the last merge, before the PR merges, the user does
 four things ([step-by-step page](https://claude.ai/artifact/DjbQqHGvLW3qAz4GivWvCX)):
 
-- **ma1** — Run one real recipe end to end against the local daemon: a Salesforce or Jira export,
-  a transform, `grist_update_csv`, a Peek page, unattended, with the rules (including the
-  personal-data checkbox) created in Settings.
+- **ma1** — Port the user's datalake skill to recipes (Salesforce mirror, Drive cashflow workbook,
+  dashboard) and run them end to end against the local daemon, unattended, with the rules
+  (including the personal-data checkboxes) created in Settings; run the cashflow recipe a second
+  time to see it stop with "nothing to do".
 - **ma2** — Sign in with `privacyfence-sync login` against a real organization-mode server and run
   the same recipe there, to prove the OAuth client, the org-mode export link and the upload slot.
 - **ma3** — Register the `privacyfence-sync` trusted publisher on TestPyPI and PyPI, so the next
@@ -997,8 +1147,8 @@ manual_steps_source: docs/data-sync-plan-manual-steps.html
 manual_before: []
 manual_after:
   - id: ma1-local-end-to-end
-    title: Run one real recipe end to end against the local daemon, unattended
-    why: CI fakes every connector and the daemon; only a real run shows the rules, the personal-data flag, the export files, grist_update_csv and the Peek upload working together with no card.
+    title: Run the datalake recipes (Salesforce mirror, Drive cashflow, dashboard) end to end against the local daemon, unattended
+    why: CI fakes every connector and the daemon; only a real run shows the rules, the personal-data flags, the export and download files, cell_format both, clear_empty, skip_if_empty, exit 10 and the Peek upload working together with no card.
   - id: ma2-org-mode-run
     title: Sign in with privacyfence-sync login against a real org-mode server and run the recipe there
     why: The OAuth client, the org-mode export link and the upload slot through a reverse proxy can only be proven against a real organization server and identity provider.
@@ -1010,14 +1160,14 @@ manual_after:
     why: The PR adds the two Sync client checks to REQUIRED_STATUS_CHECKS, but only a run of scripts/update_branch_protection.py apply with an admin token makes GitHub require them.
 verify_after_merge:
   - python3 -m pytest tests/unit/policy tests/unit/test_gate.py tests/unit/test_settings_controller.py tests/unit/web/test_routes_settings.py tests/unit/web/test_routes_org_settings.py tests/unit/test_settings_window_html.py -q
-  - python3 -m pytest tests/unit/test_export_files.py tests/unit/test_local_files.py tests/unit/connectors/test_grist_connector.py tests/unit/connectors/test_salesforce_connector.py tests/unit/connectors/test_jira_connector.py tests/unit/test_jira_client.py tests/unit/test_qa_fixture_recorder.py -q
+  - python3 -m pytest tests/unit/test_export_files.py tests/unit/test_local_files.py tests/unit/test_grist_csv.py tests/unit/connectors/test_grist_connector.py tests/unit/connectors/test_salesforce_connector.py tests/unit/connectors/test_jira_connector.py tests/unit/connectors/test_drive_connector.py tests/unit/test_jira_client.py tests/unit/test_qa_fixture_recorder.py -q
   - python3 -m pytest tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_code_no_history.py -q
   - sh -c 'if [ -d sync ]; then python3 -m pip install -q -e "./sync[test]" && python3 -m pytest sync/tests -q; fi'
 final_checks:
   - docs/data-sync-plan.md and docs/data-sync-plan-manual-steps.html are deleted and nothing links to them (git grep -n "data-sync-plan" prints nothing)
-  - ADRs 0157, 0158, 0159, 0160 and 0161 (or the renumbered set) exist in docs/adr/, have Status Accepted and are listed in docs/adr/README.md; ADR 0155's Status has the two "Amended by" lines
+  - ADRs 0157 to 0162 (or the renumbered set) exist in docs/adr/, have Status Accepted and are listed in docs/adr/README.md; ADR 0155's Status has the two "Amended by" lines and ADR 0148's has one
   - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
-  - The PR body links a connector-live-check.yml run whose jira export_issues row passed
+  - The PR body links the connector-live-check.yml runs from phases p4, p4b, p4c, p5 and p5b, the last of them on the feature branch's head with every row passing
   - git grep -nE "^\s*(from|import) privacyfence(\.|\s|$)" sync/src prints nothing
 phases:
   - id: p1-personal-data-rules
@@ -1168,7 +1318,9 @@ phases:
          - tests/unit/policy/test_scopes.py, next to test_grist_document_matches_doc_id_from_args:
            test_peek_page_matches_a_named_slug, test_peek_page_never_matches_a_call_without_a_slug,
            test_peek_page_does_not_match_another_slug.
-         - tests/unit/policy/test_catalogue.py: the existing assertion that only grist.document
+         - tests/unit/policy/test_catalogue.py: rename p1's test_personal_data_label_only_on_the_three_groups
+           to test_personal_data_label_only_on_the_listed_groups and make it expect grist.document,
+           salesforce.report, jira.project and peek.page. The existing assertion that only grist.document
            carries verb_labels (near line 112) must now allow grist.document and peek.page;
            change it to that set, nothing looser. Add test_peek_page_read_compiles_comments_and_stats
            (operations == {"peek.read_comments", "peek.read_stats"}),
@@ -1260,7 +1412,7 @@ phases:
 
   - id: p5-jira-export
     title: jira_export_issues, its registry entries, docs, website counts and live-check row
-    depends_on: [p1-personal-data-rules, p3-peek-page-rules, p4-org-export-delivery]
+    depends_on: [p1-personal-data-rules, p3-peek-page-rules, p4c-grist-clear-empty]
     complexity: M
     touches:
       - src/privacyfence/jira_client.py
@@ -1343,124 +1495,296 @@ phases:
       - The phase result names a connector-live-check.yml run whose jira export_issues row passed
       - python3 -m pytest tests/unit -q passes
 
+  - id: p4b-salesforce-cell-format-both
+    title: salesforce_export_report cell_format both (value, label and currency per column)
+    depends_on: [p4-org-export-delivery]
+    complexity: S
+    touches:
+      - src/privacyfence/connectors/salesforce.py
+      - tests/unit/connectors/test_salesforce_connector.py
+      - docs/tools-reference.md
+    brief: |
+      Read Design §3.7 of docs/data-sync-plan.md. No comment or docstring may cite the plan.
+      1. src/privacyfence/connectors/salesforce.py: add `_export_table` as §3.7, make
+         `_export_report` accept "both" (new validation message) and build columns and rows through
+         `_export_table` for all three formats, and extend the cell_format description.
+      2. Tests in tests/unit/connectors/test_salesforce_connector.py, class TestExportReport (use
+         the fake report data the class already builds; add a money cell
+         {"value": {"amount": 10.5, "currency": "EUR"}, "label": "EUR 10.50"} and a lookup cell
+         {"value": "001A", "label": "Acme"} where needed):
+         test_both_writes_value_label_and_currency_columns,
+         test_both_adds_currency_only_for_money_columns (detailColumnInfo dataType "currency"),
+         test_both_columns_do_not_depend_on_the_data (a money column whose cells are all empty
+         still gets its .currency column),
+         test_value_and_label_formats_are_unchanged (pins today's output for both),
+         test_unknown_cell_format_names_all_three, which replaces the existing
+         test_bad_cell_format_is_refused_before_any_request (its match="cell_format must be value
+         or label" no longer holds; keep its no-request assertions).
+      3. Regenerate docs/tools-reference.md (`python3 scripts/generate_tools_reference.py`).
+      4. The connector changed, so push the phase branch and dispatch connector-live-check.yml
+         against it (GitHub MCP actions_run_trigger, ref = the phase branch, no inputs; a queued
+         run is normal); confirm the salesforce rows passed and report the run URL. A red row is a
+         phase failure.
+      5. `ruff check .`, `python3 -m mypy src/privacyfence`, `python3 -m pytest tests/unit -q`.
+    acceptance:
+      - python3 -m pytest tests/unit/connectors/test_salesforce_connector.py tests/unit/test_docs_tools_reference.py -q passes
+      - python3 -m pytest tests/unit/connectors/test_salesforce_connector.py -q -k "both" passes and runs at least 2 tests
+      - The phase result names a connector-live-check.yml run whose salesforce rows passed
+      - python3 -m pytest tests/unit -q passes
+
+  - id: p4c-grist-clear-empty
+    title: grist_update_csv clear_empty (an empty cell clears the value)
+    depends_on: [p4b-salesforce-cell-format-both]
+    complexity: S
+    touches:
+      - src/privacyfence/grist_csv.py
+      - src/privacyfence/connectors/grist.py
+      - tests/unit/test_grist_csv.py
+      - tests/unit/connectors/test_grist_connector.py
+      - docs/tools-reference.md
+    brief: |
+      Read docs/adr/0145 and 0148 and Design §3.8 of docs/data-sync-plan.md. No comment or
+      docstring may cite the plan; comments may cite ADR 0162.
+      1. src/privacyfence/grist_csv.py: the keyword-only `keep_empty` parameter on parse_csv, and
+         key_index's `row.values.get(key_column) is None` check.
+      2. src/privacyfence/connectors/grist.py: the clear_empty ToolParam on grist_update_csv
+         (after create_missing), passed through _prepare_csv to parse_csv as keep_empty for
+         grist_update_csv only; the comparison rule, the add rule, the card sample "(empty)", the
+         "Cells to clear" preview row and clear_empty in the approval args, exactly as §3.8.
+         Stop condition: if _prepare_csv is shared with grist_import_csv in a way that would pass
+         keep_empty to it, add the parameter with default False and pass it only from
+         _update_csv; if that is not possible without changing grist_import_csv's behaviour, stop
+         with status=blocked.
+      3. Tests:
+         - tests/unit/test_grist_csv.py: test_keep_empty_stores_none_for_empty_cells,
+           test_default_still_leaves_empty_cells_out, test_keep_empty_still_refuses_an_empty_key
+           (through key_index).
+         - tests/unit/connectors/test_grist_connector.py, class TestUpdateCsv:
+           test_clear_empty_clears_a_value, test_clear_empty_leaves_already_empty_cells_alone
+           (current None and current "" both count as unchanged),
+           test_clear_empty_off_leaves_values (pins today's behaviour),
+           test_clear_empty_new_rows_get_no_nulls (create_missing), test_clear_empty_is_in_the_approval_args,
+           test_card_counts_cleared_cells.
+      4. Regenerate docs/tools-reference.md.
+      5. Push and dispatch connector-live-check.yml against the phase branch; confirm the grist
+         rows passed and report the run URL. A red row is a phase failure.
+      6. `ruff check .`, `python3 -m mypy src/privacyfence`, `python3 scripts/mypy_strict_modules.py`,
+         `python3 -m pytest tests/unit -q`.
+    acceptance:
+      - python3 -m pytest tests/unit/test_grist_csv.py tests/unit/connectors/test_grist_connector.py tests/unit/test_docs_tools_reference.py -q passes
+      - python3 -m pytest tests/unit/connectors/test_grist_connector.py -q -k "clear_empty" passes and runs at least 5 tests
+      - The phase result names a connector-live-check.yml run whose grist rows passed
+      - python3 -m pytest tests/unit -q passes
+
+  - id: p5b-drive-personal-data
+    title: The personal-data flag for Drive downloads delivered as a file
+    depends_on: [p5-jira-export]
+    complexity: S
+    touches:
+      - src/privacyfence/gate.py
+      - src/privacyfence/auto_accept.py
+      - src/privacyfence/policy/catalogue.py
+      - src/privacyfence/connectors/drive.py
+      - tests/unit/test_gate.py
+      - tests/unit/policy/test_catalogue.py
+      - tests/unit/connectors/test_drive_connector.py
+    brief: |
+      Read Design §3.1 and §3.9 of docs/data-sync-plan.md. No comment or docstring may cite the
+      plan; comments may cite ADR 0157.
+      1. src/privacyfence/gate.py: the `content_reaches_result` keyword on gated_call (document it
+         in the docstring's parameter list), passed to _personal_data_rule, which returns None
+         when it is true.
+      2. src/privacyfence/auto_accept.py: add "drive_download_file" to PERSONAL_DATA_RULE_TOOLS.
+      3. src/privacyfence/policy/catalogue.py: add the "drive.folder" PERSONAL_DATA_GROUPS entry.
+      4. src/privacyfence/connectors/drive.py: pass `content_reaches_result=(delivery ==
+         "inline_base64")` in _download_file's gated_call, and add the `allow_inline` parameter to
+         _deliver_org_download as §3.9 says.
+      5. Tests:
+         - tests/unit/test_gate.py TestPersonalDataRules:
+           test_flag_applies_to_drive_download_delivered_as_a_file,
+           test_flag_does_not_apply_when_content_reaches_the_result.
+         - tests/unit/policy/test_catalogue.py: test_personal_data_label_only_on_the_listed_groups
+           now expects exactly grist.document, salesforce.report, jira.project, peek.page and
+           drive.folder.
+         - tests/unit/connectors/test_drive_connector.py, next to
+           test_large_file_is_staged_behind_a_one_time_link: test_inline_download_tells_the_gate_content_reaches_the_result
+           and test_staged_download_does_not (capture gated_call's kwargs with the file's
+           gated_call_spy fixture), and test_download_approved_as_staged_is_never_returned_inline
+           (metadata size above inline_max_bytes, real bytes below it → a staged link).
+      6. Drive's connector changed: push and dispatch connector-live-check.yml against the phase
+         branch; confirm the drive rows passed and report the run URL.
+      7. `ruff check .`, `python3 -m mypy src/privacyfence`, `python3 -m pytest tests/unit -q`.
+    acceptance:
+      - python3 -m pytest tests/unit/test_gate.py tests/unit/policy tests/unit/connectors/test_drive_connector.py -q passes
+      - grep -n '"drive_download_file"' src/privacyfence/auto_accept.py matches at least three times
+      - The phase result names a connector-live-check.yml run whose drive rows passed
+      - python3 -m pytest tests/unit -q passes
+
   - id: p6-sync-recipe-core
-    title: privacyfence-sync package skeleton, recipe loading, template rendering and transforms
+    title: privacyfence-sync package skeleton, recipe loading and references
     depends_on: []
     complexity: M
     touches:
       - sync/pyproject.toml
       - sync/src/privacyfence_sync/__init__.py
       - sync/src/privacyfence_sync/recipe.py
-      - sync/src/privacyfence_sync/template.py
-      - sync/src/privacyfence_sync/transform.py
+      - sync/src/privacyfence_sync/refs.py
       - sync/tests/conftest.py
       - sync/tests/test_recipe.py
-      - sync/tests/test_template.py
-      - sync/tests/test_transform.py
+      - sync/tests/test_refs.py
       - sync/tests/test_no_daemon_imports.py
     brief: |
-      Read Design §3.6 of docs/data-sync-plan.md up to and including "Transform". This package
-      must import nothing from privacyfence. Python >= 3.11, type hints everywhere, stdlib plus
-      pyyaml only in these three modules.
+      Read sync/README.md (written before implementation as the user-facing spec; do not rewrite
+      it) and Design §3.6 of docs/data-sync-plan.md up to and including "References". This
+      package must import nothing from privacyfence. Python >= 3.11, type hints everywhere,
+      stdlib plus pyyaml only. If §3.6 and the README disagree, stop with status=blocked and quote
+      both.
       1. Create sync/pyproject.toml exactly as §3.6.
       2. sync/src/privacyfence_sync/__init__.py: a module docstring "Run a PrivacyFence data-sync
          recipe as a plain MCP client." and `__version__` read with
          `importlib.metadata.version("privacyfence-sync")`, falling back to "0.0.0.dev0" on
          PackageNotFoundError.
-      3. recipe.py: RecipeError, the constants, the four dataclasses and load_recipe with every
-         check listed in §3.6, each error text starting with the recipe path.
-      4. template.py: PLACEHOLDER, TemplateError, render_template.
-      5. transform.py: TransformError, transform_env, run_transform.
-      6. sync/README.md already exists (written before implementation as the user-facing spec).
-         Do not rewrite it. Read it, and make the recipe checks and error texts match what it
-         promises; if the code cannot match a sentence in it, stop with status=blocked and quote
-         the sentence.
-      7. Tests (pytest, tmp_path, no network):
-         - test_recipe.py: test_loads_the_example_recipe (the §3.6 example written to tmp_path),
-           and one test per check in §3.6, parametrized where the check is the same shape
-           (bad name, bad id, unknown key, step kind count, later-step reference, non-file
-           reference, unsafe file names, missing file_name on an export, destination_dir given,
-           upload without file, local_path/upload_id/html given, file on a non-upload tool, path
-           outside the recipe dir, template data not .json, more than 50 steps, version 2).
-         - test_template.py: test_replaces_the_placeholder, test_requires_exactly_one_placeholder
-           (zero and two), test_escapes_script_breakout ("</script>" in data never appears in the
-           output), test_escapes_line_separators.
-         - test_transform.py: test_runs_the_script_with_inputs_then_output (a script written to
-           tmp_path that concatenates inputs), test_env_has_no_privacyfence_keys
-           (monkeypatch.setenv("PRIVACYFENCE_TOKEN", "x"); the script writes os.environ keys),
-           test_nonzero_exit_raises_with_stderr, test_timeout_raises, test_missing_output_raises.
+      3. recipe.py: RecipeError, the constants, the dataclasses, produced_files and load_recipe
+         with every rule in "Recipe format".
+      4. refs.py: VALUE_REF, FILE_PLACEHOLDER, RefError, lookup, substitute_value_refs and
+         expand_run_arg as "References".
+      5. Tests (pytest, tmp_path, no network):
+         - test_recipe.py: test_loads_each_readme_example (extract every ```yaml block under the
+           README's "Examples" heading that starts with "version: 1", write it to tmp_path next to
+           empty stub files for its run and template paths, and load it), and one test per rule
+           in "Recipe format", parametrized where the shape repeats.
+         - test_refs.py: lookup over dict keys and list indexes and its error;
+           substitute_value_refs keeping the JSON type for a whole-string reference, inserting
+           text inside a longer string, walking nested lists and dicts; expand_run_arg for each
+           placeholder kind.
          - test_no_daemon_imports.py as §3.6 describes.
-      8. `python3 -m pip install -e "./sync[test]"`, then
-         `python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch
-         --cov-report=term-missing`, `python3 -m mypy sync/src`, `bandit -r sync/src`,
-         `ruff check .`. A bandit B404/B603 finding on the subprocess call is a genuine false
-         positive (fixed argv, no shell): suppress it at the call site with `# nosec B603  #
-         fixed argv, no shell; the script is the user's own reviewed file`.
+      6. `python3 -m pip install -e "./sync[test]"`, then `python3 -m pytest sync/tests -q
+         --cov=privacyfence_sync --cov-branch --cov-report=term-missing`, `python3 -m mypy
+         sync/src`, `bandit -r sync/src`, `ruff check .`.
     acceptance:
       - python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-fail-under=100 passes (after pip install -e "./sync[test]")
+      - python3 -m pytest sync/tests/test_recipe.py -q -k "readme_example" passes
       - python3 -m mypy sync/src passes
-      - ruff check . passes
       - git grep -nE "^\s*(from|import) privacyfence(\.|\s|$)" sync/src prints nothing
       - python3 -m pytest tests/unit -q passes (the root suite is unaffected)
 
-  - id: p7-sync-client-runner
-    title: privacyfence-sync MCP client, step runner and the run and check commands
+  - id: p6b-sync-scripts-templates
+    title: privacyfence-sync script steps and template rendering
     depends_on: [p6-sync-recipe-core]
-    complexity: M
+    complexity: S
+    touches:
+      - sync/src/privacyfence_sync/template.py
+      - sync/src/privacyfence_sync/transform.py
+      - sync/tests/test_template.py
+      - sync/tests/test_transform.py
+    brief: |
+      Read sync/README.md ("Script steps", "Dashboard templates") and Design §3.6 "Template" and
+      "Script steps" of docs/data-sync-plan.md. Import nothing from privacyfence.
+      1. template.py: PLACEHOLDER, TemplateError, render_template.
+      2. transform.py: StopRun, ScriptError, script_env, run_script.
+      3. Tests:
+         - test_template.py: test_replaces_the_placeholder, test_requires_exactly_one_placeholder
+           (zero and two), test_escapes_script_breakout ("</script>" in data never appears in the
+           output), test_escapes_line_separators.
+         - test_transform.py (scripts written to tmp_path): test_passes_argv_and_runs_in_work_dir,
+           test_env_has_no_privacyfence_keys (monkeypatch.setenv("PRIVACYFENCE_TOKEN", "x")),
+           test_creates_output_parent_folders, test_missing_output_raises,
+           test_stdout_is_saved_when_asked, test_exit_10_raises_stop_run,
+           test_nonzero_exit_raises_with_stderr_tail, test_timeout_raises.
+      4. `python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch` at 100%,
+         `python3 -m mypy sync/src`, `bandit -r sync/src`, `ruff check .`. A bandit B404/B603
+         finding on the subprocess call is a genuine false positive (fixed argv, no shell):
+         suppress it at the call site with `# nosec B603  # fixed argv, no shell; the script is
+         the user's own reviewed file`.
+    acceptance:
+      - python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-fail-under=100 passes
+      - python3 -m pytest sync/tests/test_transform.py -q -k "exit_10" passes
+      - python3 -m mypy sync/src and bandit -r sync/src pass
+
+  - id: p7-sync-client
+    title: privacyfence-sync MCP client (tool calls, downloads, uploads)
+    depends_on: [p6-sync-recipe-core]
+    complexity: S
     touches:
       - sync/src/privacyfence_sync/client.py
-      - sync/src/privacyfence_sync/runner.py
-      - sync/src/privacyfence_sync/cli.py
       - sync/tests/test_client.py
-      - sync/tests/test_runner.py
-      - sync/tests/test_cli.py
     brief: |
-      Read Design §3.6 of docs/data-sync-plan.md ("Client", "Runner", "CLI" — except `login`,
-      which phase p8 adds) and tests/integration/test_mcp_daemon_contract.py:132-153 for the SDK
-      client pattern. Import nothing from privacyfence.
-      1. client.py: ToolFailed, ToolDenied, SyncError (all Exception subclasses; SyncError the
-         base of the other two), SyncClient and connect_token as §3.6. connect_oauth is added by
-         p8; do not stub it.
-      2. runner.py: run_recipe as §3.6 steps 1-5.
-      3. cli.py: argparse with subcommands run and check (login comes in p8), the server and
-         token resolution rules, the exit codes, and `main(argv: list[str] | None = None) -> int`
-         with `raise SystemExit(main())` under `if __name__ == "__main__":`. In this phase, `run`
-         without a token prints "privacyfence-sync: set PRIVACYFENCE_TOKEN (or --token-env), or
-         sign in with privacyfence-sync login" and exits 4.
-      4. Tests, with no network: a FakeClient test double in sync/tests/test_runner.py exposing
-         call/download/upload with scripted results.
-         - test_client.py: test_call_parses_json (patch ClientSession.call_tool to return a
-           CallToolResult with text content), test_call_raises_tool_denied_on_request_denied,
-           test_call_raises_tool_failed_on_other_errors, test_download_sends_no_authorization
-           and test_download_checks_sha256 (httpx2.MockTransport), test_upload_puts_to_the_slot
-           (MockTransport plus a scripted privacyfence_create_upload_slot result).
-         - test_runner.py: test_begins_and_ends_an_unattended_session,
-           test_unattended_disabled_gives_the_admin_hint, test_export_via_link_downloads_into_work_dir,
-           test_export_on_local_disk_is_copied_and_checked, test_empty_jira_export_writes_a_header_only_csv,
-           test_unexpected_delivery_fails, test_upload_step_passes_the_upload_id,
-           test_transform_and_template_steps_chain (real files in tmp_path),
-           test_browser_only_link_gives_the_agent_links_hint,
-           test_list_and_mapping_args_are_sent_as_json_text,
-           test_attended_waits_then_repeats_the_call,
-           test_attended_denial_raises, test_default_reason_names_recipe_and_step.
-         - test_cli.py: test_check_prints_ok_without_network, test_check_bad_recipe_exits_1,
-           test_run_without_token_exits_4, test_server_resolution_order (flag, recipe, env,
-           default), test_token_is_never_an_argument (argparse has no --token option),
-           test_denied_step_exits_3, test_failed_step_exits_2.
-      5. `python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch
-         --cov-report=term-missing` at 100%, `python3 -m mypy sync/src`, `bandit -r sync/src`,
-         `ruff check .`.
+      Read Design §3.6 "Client" of docs/data-sync-plan.md and
+      tests/integration/test_mcp_daemon_contract.py:132-153 for the SDK client pattern. Import
+      nothing from privacyfence.
+      1. client.py: SyncError, ToolFailed, ToolDenied, SignInError and RecipeRuntimeError (SyncError
+         the base of the other four),
+         SyncClient and connect_token as "Client". connect_oauth is added by p8; do not stub it.
+      2. Tests, no network: test_call_prefers_structured_content, test_call_parses_json (patch ClientSession.call_tool to return a
+         CallToolResult with text content), test_call_returns_text_that_is_not_json,
+         test_call_raises_tool_denied_on_request_denied, test_call_raises_tool_failed_on_other_errors,
+         test_download_sends_no_authorization and test_download_checks_sha256
+         (httpx2.MockTransport), test_upload_puts_to_the_slot (MockTransport plus a scripted
+         privacyfence_create_upload_slot result).
+      3. `python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch` at 100%,
+         `python3 -m mypy sync/src`, `bandit -r sync/src`, `ruff check .`.
       Stop condition: if `streamable_http_client` in the installed mcp has no `http_client`
       parameter, stop with status=blocked quoting its signature.
     acceptance:
       - python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-fail-under=100 passes
       - python3 -m mypy sync/src and bandit -r sync/src pass
-      - python3 -m pytest sync/tests/test_cli.py -q -k "token_is_never_an_argument" passes
-      - ruff check . passes
+
+  - id: p7b-sync-runner-cli
+    title: privacyfence-sync step runner and the run and check commands
+    depends_on: [p6b-sync-scripts-templates, p7-sync-client]
+    complexity: M
+    touches:
+      - sync/src/privacyfence_sync/runner.py
+      - sync/src/privacyfence_sync/cli.py
+      - sync/tests/test_runner.py
+      - sync/tests/test_cli.py
+    brief: |
+      Read sync/README.md in full and Design §3.6 "Runner" and "CLI" of docs/data-sync-plan.md
+      (except `login`, which phase p8 adds). Import nothing from privacyfence. If the README and
+      §3.6 disagree, stop with status=blocked and quote both.
+      1. runner.py: run_recipe and _receive_file as "Runner" steps 1-6.
+      2. cli.py: argparse with subcommands run and check (login comes in p8), the server and token
+         resolution rules, the exit codes, and `main(argv: list[str] | None = None) -> int` with
+         `raise SystemExit(main())` under `if __name__ == "__main__":`. In this phase, `run`
+         without a token prints "privacyfence-sync: set PRIVACYFENCE_TOKEN (or --token-env), or
+         sign in with privacyfence-sync login" and exits 4.
+      3. Tests, with no network: a FakeClient test double in sync/tests/test_runner.py exposing
+         call/download/upload with scripted results, and real files and scripts in tmp_path.
+         - test_runner.py: test_begins_and_ends_an_unattended_session,
+           test_json_text_in_a_script_argument_passes_unchanged,
+           test_unattended_disabled_gives_the_admin_hint,
+           test_export_via_link_downloads_into_work_dir, test_export_on_local_disk_is_copied_and_checked,
+           test_inline_download_is_decoded,
+           test_drive_download_written_in_place_is_moved_to_save_as (a result with path and no
+           delivery, written into the .download-<id> folder),
+           test_truncated_download_fails, test_empty_jira_export_writes_a_header_only_csv,
+           test_unexpected_delivery_fails, test_browser_only_link_gives_the_agent_links_hint,
+           test_list_and_mapping_args_are_sent_as_json_text,
+           test_value_reference_keeps_json_type_in_tool_args,
+           test_missing_value_reference_fails_before_the_call,
+           test_save_result_writes_the_result, test_upload_step_passes_the_upload_id,
+           test_skip_if_empty_skips_a_header_only_csv_and_writes_skipped,
+           test_script_outputs_feed_a_later_upload, test_script_exit_10_stops_the_run_and_ends_the_session,
+           test_template_step_renders_from_a_json_file, test_attended_waits_then_repeats_the_call,
+           test_attended_denial_raises, test_default_reason_names_recipe_and_step,
+           test_readme_salesforce_example_runs_end_to_end (the README's first example with
+           FakeClient results and stub scripts that write their outputs).
+         - test_cli.py: test_check_prints_ok_without_network, test_check_bad_recipe_exits_1,
+           test_run_without_token_exits_4, test_server_resolution_order (flag, recipe, env,
+           default), test_token_is_never_an_argument (argparse has no --token option),
+           test_denied_step_exits_3, test_failed_step_exits_2, test_stopped_run_exits_0,
+           test_runtime_reference_error_exits_1, test_sign_in_error_exits_4.
+      4. `python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch` at 100%,
+         `python3 -m mypy sync/src`, `bandit -r sync/src`, `ruff check .`.
+    acceptance:
+      - python3 -m pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-fail-under=100 passes
+      - python3 -m pytest sync/tests/test_runner.py -q -k "readme_salesforce_example" passes
+      - python3 -m pytest sync/tests/test_cli.py -q -k "token_is_never_an_argument or stopped_run_exits_0" passes
+      - python3 -m mypy sync/src and bandit -r sync/src pass
 
   - id: p8-sync-oauth-ci-publish
     title: privacyfence-sync OAuth sign-in, its CI job and PyPI publishing
-    depends_on: [p7-sync-client-runner]
+    depends_on: [p7b-sync-runner-cli]
     complexity: M
     touches:
       - sync/src/privacyfence_sync/auth.py
@@ -1531,8 +1855,8 @@ phases:
       - grep -n '"Sync client (Python 3.11)"' scripts/update_branch_protection.py matches
 
   - id: p9-retire
-    title: ADRs 0157-0161, reference docs, changelog, and retire the plan
-    depends_on: [p2-personal-data-settings, p3-peek-page-rules, p5-jira-export, p8-sync-oauth-ci-publish]
+    title: ADRs 0157-0162, reference docs, changelog, and retire the plan
+    depends_on: [p2-personal-data-settings, p3-peek-page-rules, p4b-salesforce-cell-format-both, p4c-grist-clear-empty, p5b-drive-personal-data, p8-sync-oauth-ci-publish]
     complexity: M
     touches:
       - docs/adr/0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md
@@ -1540,7 +1864,11 @@ phases:
       - docs/adr/0159-jira-export-issues-is-covered-by-the-project-search-rule.md
       - docs/adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md
       - docs/adr/0161-privacyfence-sync-is-a-separate-plain-mcp-client.md
+      - docs/adr/0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md
       - docs/adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.md
+      - docs/adr/0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md
+      - docs/grist-setup.md
+      - docs/salesforce-setup.md
       - docs/adr/README.md
       - docs/approvals-and-policy.md
       - docs/how-it-works.md
@@ -1555,21 +1883,26 @@ phases:
       - tests/unit/test_docs_no_history.py
     brief: |
       Read docs/adr/README.md (template and rules) and docs/coding-and-testing-guidelines.md §5.
-      1. Write the five ADRs listed in the plan's ADRs section, each with Status "Accepted —
+      1. Write the six ADRs listed in the plan's ADRs section, each with Status "Accepted —
          <today>. Implemented.", Context, Decision, Alternatives considered (from the "Rejected"
-         lists in Design §3.1, §3.3, §3.4, §3.5 and §3.6), Consequences, Verification (the test
+         lists in Design §3.1, §3.3, §3.4, §3.5 and §3.6, and §3.8's reasoning for 0162), Consequences, Verification (the test
          classes the phases added) and Related (source files and ADRs; never this plan). 0157 and
          0160 say "Amends ADR 0155". 0157 states that an exported file lands where the user's own
          processes can read it, as before, and that the PII gate was never a data-loss control.
-         If 0157-0161 are taken on main, renumber in order and fix every comment that cites them
-         (git grep -n "ADR 015[7-9]\|ADR 016[01]" src sync scripts).
+         0162 says "Amends ADR 0148". If 0157-0162 are taken on main, renumber in order and fix every
+         comment that cites them (git grep -n "ADR 015[7-9]\|ADR 016[0-2]" src sync scripts).
       2. docs/adr/0155-...md: add two Status lines only, "Amended by [ADR 0157](0157-...md)." and
-         "Amended by [ADR 0160](0160-...md)." (rule 2: nothing else in its body changes).
-      3. docs/adr/README.md: index rows for the five ADRs.
+         "Amended by [ADR 0160](0160-...md).". docs/adr/0148-...md: add one Status line only,
+         "Amended by [ADR 0162](0162-...md).". (Rule 2: nothing else in their bodies changes.)
+      3. docs/adr/README.md: index rows for the six ADRs.
       4. Reference docs, describing today's behaviour only (§5):
          - docs/approvals-and-policy.md: the personal-data checkbox (which scopes offer it, what
-           it does, that only Settings sets it, how it shows in the audit log) and the Peek page
-           scope.
+           it does, that a Drive folder rule's box never applies to an inline download, that only
+           Settings sets it, how it shows in the audit log) and the Peek page scope.
+         - docs/grist-setup.md: clear_empty on grist_update_csv, next to where the file describes
+           the CSV tools.
+         - docs/salesforce-setup.md: cell_format both on salesforce_export_report, next to where
+           the file describes the export.
          - docs/how-it-works.md: in "Files", that exports on an organization-managed install
            return a one-time download link; in "Unattended sessions", a sentence pointing to
            the new privacyfence-sync.md in the docs folder.
@@ -1587,15 +1920,17 @@ phases:
            PrivacyFence" in the "User and operator docs" half (so it is published), and add it to
            PUBLISHED_DOCS in tests/unit/test_docs_no_history.py.
       5. CHANGELOG.md under "## [Unreleased]", never a version heading: one line each for the
-         personal-data checkbox, the Peek page rule, jira_export_issues, exports on
-         organization-managed installs, and privacyfence-sync.
+         personal-data checkbox (export, Drive folder and Peek page rules), the Peek page rule,
+         jira_export_issues, exports on organization-managed installs, cell_format both on
+         salesforce_export_report, clear_empty on grist_update_csv, and privacyfence-sync.
       6. Delete docs/data-sync-plan.md and docs/data-sync-plan-manual-steps.html; `git grep -n
          "data-sync-plan"` must print nothing.
       7. `python3 -m pytest tests/unit -q` (it includes test_docs_links.py,
          test_docs_references_exist.py, test_website_docs_allowlist.py and test_docs_no_history.py)
          and `ruff check .`.
     acceptance:
-      - ls docs/adr/0157-*.md docs/adr/0158-*.md docs/adr/0159-*.md docs/adr/0160-*.md docs/adr/0161-*.md succeeds (or the renumbered set)
+      - ls docs/adr/0157-*.md docs/adr/0158-*.md docs/adr/0159-*.md docs/adr/0160-*.md docs/adr/0161-*.md docs/adr/0162-*.md succeeds (or the renumbered set)
+      - grep -c "Amended by" docs/adr/0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md prints 1
       - grep -c "Amended by" docs/adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.md prints 2
       - git grep -n "data-sync-plan" prints nothing
       - sed -n '/## \[Unreleased\]/,/## \[[0-9]/p' CHANGELOG.md contains "privacyfence-sync" and "jira_export_issues"
