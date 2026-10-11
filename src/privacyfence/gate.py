@@ -157,6 +157,7 @@ from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, canonical_key
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
+    PERSONAL_DATA_RULE_TOOLS,
     TOOL_TO_OPERATION,
     ReviewContext,
     add_policy_v2_rules,
@@ -702,6 +703,22 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
     return False, "", ""
 
 
+def _personal_data_rule(tool: str, operation_key: str, ctx: ReviewContext) -> policy_engine.PolicyRule | None:
+    """The stored rule with ``allow_personal_data`` that covers this call, for a tool in
+    ``PERSONAL_DATA_RULE_TOOLS`` only (ADR 0157); ``None`` for every other tool or when no such
+    rule matches."""
+    if tool not in PERSONAL_DATA_RULE_TOOLS:
+        return None
+    rules = [rule for rule in get_policy_v2_store_rules() if rule.allow_personal_data]
+    if not rules:
+        return None
+    try:
+        return policy_engine.find_matching_rule(rules, operation_key, ctx)
+    except Exception:
+        logger.warning("Policy evaluation raised for op=%r", operation_key, exc_info=True)
+        return None
+
+
 def preflight_auto_accept(operation_key: str, args: dict, my_email: str = "") -> tuple[str, str, str, str]:
     """Preflight counterpart of ``_evaluate_auto_accept`` above, backing
     ``privacyfence_check_policy``'s own prediction. Returns ``(verdict, matched_rule,
@@ -1044,6 +1061,19 @@ async def gated_call(
         )
 
     try:
+        if pii_forces_confirmation or upload_pii_categories:
+            personal_data_rule = _personal_data_rule(tool, operation_key, ctx)
+            if personal_data_rule is not None:
+                audit(
+                    decision="auto_accepted", auto_accept_rule=personal_data_rule.id,
+                    rule_id=personal_data_rule.id, pii_detected=True,
+                )
+                logger.info(
+                    "Auto-accepted with personal data: %s/%s rule=%r",
+                    connector, tool, personal_data_rule.id,
+                )
+                return filtered_data
+
         auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:
