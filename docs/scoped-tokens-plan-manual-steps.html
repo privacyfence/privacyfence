@@ -1,0 +1,147 @@
+<title>Scoped tokens manual checks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+/* Layout: one reading column, a sticky progress strip, each manual item a section of checkable steps. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --fg: #1c2230;
+  --muted: #5b6475;
+  --line: #d8dce4;
+  --accent: #3a5a98;
+  --accent-soft: #e4eaf6;
+  --warn: #8a5a00;
+  --warn-soft: #fbf1dc;
+  --code-bg: #eceff4;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151c; --surface: #1a1f29; --fg: #e3e7ef; --muted: #98a1b3; --line: #2c3341;
+    --accent: #8fb0ef; --accent-soft: #1e2a42; --warn: #e3b55c; --warn-soft: #33290f; --code-bg: #222835;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151c; --surface: #1a1f29; --fg: #e3e7ef; --muted: #98a1b3; --line: #2c3341;
+  --accent: #8fb0ef; --accent-soft: #1e2a42; --warn: #e3b55c; --warn-soft: #33290f; --code-bg: #222835;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 64px; display: grid; gap: 28px; }
+h1 { font-family: var(--font-display); font-size: 2rem; line-height: 1.15; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-size: 1.35rem; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.05rem; margin: 0; font-weight: 600; text-wrap: balance; }
+p { margin: 0; max-width: 65ch; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code { font-family: var(--font-mono); font-size: 0.88em; background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--font-mono); font-size: 0.85rem; background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+.lede { color: var(--muted); display: grid; gap: 8px; }
+.eyebrow { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.progress { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; background: var(--bg); padding-block: 8px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.bar { flex: 1 1 200px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+.count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
+.part { display: grid; gap: 18px; }
+.note { background: var(--warn-soft); border-left: 3px solid var(--warn); padding: 10px 14px; border-radius: 4px; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.item-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+.time { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.why { color: var(--muted); }
+ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: grid; gap: 10px; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; min-width: 0; }
+ol.steps > li > input { margin-top: 0.3em; width: 18px; height: 18px; accent-color: var(--accent); }
+ol.steps > li > label { min-width: 0; display: grid; gap: 4px; }
+ol.steps > li > label::before { content: "Step " counter(s); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+ol.steps > li.done > label > .act { text-decoration: line-through; color: var(--muted); }
+.see { color: var(--muted); font-size: 0.9rem; }
+.end { background: var(--accent-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 4px; }
+.end strong { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; }
+@media (prefers-reduced-motion: reduce) { .bar > span { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="lede">
+    <span class="eyebrow">PrivacyFence · feature/scoped-tokens</span>
+    <h1>Scoped tokens manual checks</h1>
+    <p>Nothing has to be done before the implementation starts. These two checks come after the last phase merges into <code>feature/scoped-tokens</code>, while its pull request is open. Each one ends with a line to paste into the pull request.</p>
+  </header>
+
+  <div class="progress" aria-live="polite">
+    <div class="bar" aria-hidden="true"><span id="bar"></span></div>
+    <span class="count" id="count">0 of 0 steps done</span>
+  </div>
+
+  <section class="part">
+    <h2>Before implementation</h2>
+    <p>No steps. <code>/implement</code> can start right away.</p>
+  </section>
+
+  <section class="part">
+    <h2>After implementation</h2>
+
+    <article class="item" id="ma1">
+      <div class="item-head"><h3>1. Create, use and revoke a scoped token on a local install</h3><span class="time">about 30 min</span></div>
+      <p class="why">Only a real daemon, the companion's clipboard and a real MCP client show the whole flow; CI fakes the companion and the client.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><label for="ma1-1"><span class="act">Install the feature branch build of PrivacyFence and make sure the companion (menu-bar or tray icon) is running.</span><span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/plan/scoped-tokens/docs/dev-vs-live-setup.md">dev vs live setup</a>.</span></label></li>
+        <li><input type="checkbox" id="ma1-2"><label for="ma1-2"><span class="act">Open <b>Settings → Scoped tokens</b>. Create a token named <code>manual-check</code>, 30 days, with one existing rule (for example a Grist document read rule), then choose <b>Add the tools these rules cover</b>, and <b>Create token</b>.</span><span class="see">PrivacyFence asks for your passkey, then the companion says the token is on the clipboard. The list shows the token with "Expires … (in 30 days)".</span></label></li>
+        <li><input type="checkbox" id="ma1-3"><label for="ma1-3"><span class="act">Connect a client with it, keeping the token out of files: in a terminal, <code>export PF_SCOPED=…</code> (paste), then <code>claude mcp add --transport http --scope user pf-scoped http://127.0.0.1:8765/mcp --header "Authorization: Bearer $PF_SCOPED"</code>.</span><span class="see">In Claude Code, <code>/mcp</code> lists only the token's tools plus a few <code>privacyfence_*</code> tools (status, check policy, upload slot, unattended on/off).</span></label></li>
+        <li><input type="checkbox" id="ma1-4"><label for="ma1-4"><span class="act">Ask Claude to call <code>privacyfence_status</code>.</span><span class="see">The result has a <code>token</code> block with the label, expiry and <code>days_left</code> 30.</span></label></li>
+        <li><input type="checkbox" id="ma1-5"><label for="ma1-5"><span class="act">Ask Claude to run a call the rule covers, then one it doesn't (another document, or a write).</span><span class="see">The first returns data with no card. The second answers "Request denied: this call uses a scoped token…" at once, and no card appears on Approvals.</span></label></li>
+        <li><input type="checkbox" id="ma1-6"><label for="ma1-6"><span class="act">Open <b>Settings → Audit log</b>.</span><span class="see">Both calls are there with the agent named <code>manual-check</code>; the second has decision <i>denied scoped token</i>.</span></label></li>
+        <li><input type="checkbox" id="ma1-7"><label for="ma1-7"><span class="act">Create a second token with 3 days.</span><span class="see">The list flags it "Expires in 3 days".</span></label></li>
+        <li><input type="checkbox" id="ma1-8"><label for="ma1-8"><span class="act"><b>Revoke</b> <code>manual-check</code>, then ask Claude for any call again.</span><span class="see">The client is refused (authentication fails); your normal Claude connection with the main token still works.</span></label></li>
+        <li><input type="checkbox" id="ma1-9"><label for="ma1-9"><span class="act">Remove the test connection: <code>claude mcp remove pf-scoped</code>, <code>unset PF_SCOPED</code>, and <b>Revoke all</b> in Settings.</span></label></li>
+      </ol>
+      <div class="end"><strong>Paste into the PR</strong><span><code>ma1 local scoped token: PASS</code> (or FAIL with the step and what you saw).</span></div>
+    </article>
+
+    <article class="item" id="ma2">
+      <div class="item-head"><h3>2. Enable, use and revoke scoped tokens on an organization test server</h3><span class="time">about 40 min</span></div>
+      <p class="why">The bundle opt-in, the one-time reveal through a reverse proxy, the passkey with the org's relying-party id and the administrator's revoke command need a real org server.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma2-1"><label for="ma2-1"><span class="act">Install the feature branch on your organization test server with its current bundle (scoped tokens not enabled).</span><span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/plan/scoped-tokens/docs/org-mode-setup-guide.md">Organization deployment</a>. Settings shows no "Scoped tokens" section.</span></label></li>
+        <li><input type="checkbox" id="ma2-2"><label for="ma2-2"><span class="act">Rebuild the bundle with <code>--enable-scoped-tokens --scoped-token-max-days 30</code> and install it.</span><span class="see">After the restart, Settings shows <b>Scoped tokens</b>, with at most 30 days allowed.</span></label></li>
+        <li><input type="checkbox" id="ma2-3"><label for="ma2-3"><span class="act">Create a token with one rule and its tools.</span><span class="see">After the passkey, a dialog shows the token once with a Copy button and "Copy this token now. It is not stored and cannot be shown again." Copy it into a password manager or an environment variable, not a file.</span></label></li>
+        <li><input type="checkbox" id="ma2-4"><label for="ma2-4"><span class="act">Reload the page.</span><span class="see">The token is listed, and its secret is nowhere on the page.</span></label></li>
+        <li><input type="checkbox" id="ma2-5"><label for="ma2-5"><span class="act">From your computer, connect a client to <code>https://&lt;your-host&gt;/mcp</code> with <code>Authorization: Bearer &lt;the token&gt;</code> (the same <code>claude mcp add … --header</code> form as check 1).</span><span class="see">It lists only the token's tools; a covered call works with no card; an uncovered call is denied at once.</span></label></li>
+        <li><input type="checkbox" id="ma2-6"><label for="ma2-6"><span class="act">On the server, as the PrivacyFence service account, run <code>privacyfence-app --revoke-scoped-tokens &lt;your principal id&gt;</code> (the id the org Settings page and audit log show).</span><span class="see">It prints "Revoked 1 scoped token(s) for …". The client's next call is refused without restarting PrivacyFence.</span></label></li>
+      </ol>
+      <div class="end"><strong>Paste into the PR</strong><span><code>ma2 org scoped token: PASS</code> (or FAIL with the step and what you saw), plus the identity provider used.</span></div>
+    </article>
+  </section>
+</div>
+
+<script>
+(function () {
+  var KEY = "pf-scoped-tokens-manual-steps";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  function update() {
+    var done = 0;
+    boxes.forEach(function (b) {
+      b.parentElement.classList.toggle("done", b.checked);
+      if (b.checked) done++;
+    });
+    document.getElementById("count").textContent = done + " of " + boxes.length + " steps done";
+    document.getElementById("bar").style.width = (boxes.length ? (100 * done / boxes.length) : 0) + "%";
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!state[b.id];
+    b.addEventListener("change", function () {
+      state[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
+      update();
+    });
+  });
+  update();
+})();
+</script>
