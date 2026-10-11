@@ -36,6 +36,7 @@ from privacyfence import (
     privacy_filter,
     privilege_separation,
     resource_names,
+    scoped_tokens,
     settings_controller,
     upload_staging,
     web_approval_ui,
@@ -95,6 +96,8 @@ def _reset() -> None:
     # call by the dispatcher; a test that calls gate._audit directly sets
     # it outside any such scope, so it must not carry into the next test.
     audit_log.set_released_request_id("")
+    # The scoped-token store is a process-wide singleton over the data dir (ADR 0164).
+    scoped_tokens.set_store(None)
 
 
 @pytest.fixture(autouse=True)
