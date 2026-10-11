@@ -592,6 +592,64 @@ class TestAiClientSection:
         assert "connect-chatgpt/#chatgpt-desktop" in html
 
 
+class TestScopedTokensSection:
+    """The "Scoped tokens" section: drawn in local mode when the caller has
+    page data for it, never in org mode, and every value in it escaped."""
+
+    DATA = {
+        "delivery": "companion", "max_days": 365, "default_days": 90, "warn_days": 14,
+        "tokens": [
+            {"id": "st-1", "label": "sales-sync", "created_at": 0, "expires_at": 1798675200, "days_left": 5,
+             "expiring_soon": True, "expired": False,
+             "rules": [{"id": "r1", "sentence": "Allow reads </script><b>x</b>"}, {"id": "r2", "missing": True}],
+             "tools": ["gmail_get_message"]},
+            {"id": "st-2", "label": "old", "created_at": 0, "expires_at": 1, "days_left": 0,
+             "expiring_soon": False, "expired": True, "rules": [], "tools": []},
+        ],
+        "rules": [{"id": "r1", "sentence": "Allow reads", "tools": ["gmail_get_message", "gmail_list_messages"]}],
+        "tools": [{"connector": "gmail", "tools": ["gmail_get_message", "gmail_list_messages"]}],
+    }
+
+    def _caps(self, html: str) -> dict:
+        match = re.search(r"window\.__pfCapabilities = (\{.*?\});</script>", html, re.DOTALL)
+        assert match
+        return json.loads(match.group(1))
+
+    def test_local_mode_with_an_mcp_url_shows_the_section(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert self._caps(html)["sections"]["scoped_tokens"] is True
+        assert "window.__pfScopedTokens = " in html
+        assert "['scoped_tokens', 'Scoped tokens']" in html
+        assert "</script><b>" not in html
+        for mode_kwargs in ({}, {"mode": "org", "is_admin": True}):
+            hidden = build_html(_make_state(), **mode_kwargs) if not mode_kwargs else build_html(
+                _make_state(), scoped_tokens=self.DATA, **mode_kwargs)
+            assert self._caps(hidden)["sections"]["scoped_tokens"] is False
+            assert "window.__pfScopedTokens = " not in hidden
+
+    def test_expiring_and_expired_tokens_are_flagged(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "Expires in ' + esc(t.days_left)" in html
+        assert ">Expired</span>'" in html
+        assert "'Expires ' + day + ' (in '" in html
+        assert "dataAttr('revoke_scoped_token', { token_id: t.id })" in html
+        assert "dataAttr('revoke_all_scoped_tokens', {})" in html
+
+    def test_the_form_offers_rules_tools_and_the_add_covered_tools_button(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "data-st-label" in html
+        assert "data-st-rule" in html
+        assert "data-st-tool" in html
+        assert "Add the tools these rules cover" in html
+        assert "post('create_scoped_token'" in html
+        assert "max=\"' +\n      esc(SCOPED.max_days)" in html
+
+    def test_a_missing_rule_is_shown_as_no_longer_existing(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "a rule that no longer exists" in html
+        assert "r.missing ? 'a rule that no longer exists' : esc(r.sentence)" in html
+
+
 class TestOrgCapabilities:
     """window.__pfCapabilities is a separate embedded global from
     window.__pfInitialState -- state itself must stay exactly what the
@@ -613,7 +671,8 @@ class TestOrgCapabilities:
         # every other section stays.
         assert caps["sections"]["agents"] is False
         assert caps["sections"]["ai_client"] is False
-        assert all(v for k, v in caps["sections"].items() if k not in ("agents", "ai_client"))
+        assert caps["sections"]["scoped_tokens"] is False
+        assert all(v for k, v in caps["sections"].items() if k not in ("agents", "ai_client", "scoped_tokens"))
         assert caps["not_applicable_actions"] == []
 
     def test_local_state_is_unaffected_by_capabilities(self):
