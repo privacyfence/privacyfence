@@ -43,6 +43,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grist columns added by the assistant can be filled.** grist_add_columns and grist_create_table now create data columns. Before, Grist made them empty formula columns, and PrivacyFence refused every write to them.
+- **grist_update_csv can match rows by the Grist record id.** Use `id` as the key column to update a table that has no other unique column in one CSV call.
+
 ## [5.8.0] — 2026-10-11
 
 ### Changed

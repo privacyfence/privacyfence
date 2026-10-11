@@ -577,8 +577,8 @@ class TestAddTable:
         call = net.calls[0]
         assert (call["method"], call["url"]) == ("POST", f"{SERVER}/api/docs/doc1/tables")
         assert call["json"] == {"tables": [{"id": "Notes", "columns": [
-            {"id": "Title", "fields": {"label": "The title", "type": "Text"}},
-            {"id": "Count", "fields": {"label": "Count", "type": "Text"}},
+            {"id": "Title", "fields": {"label": "The title", "type": "Text", "isFormula": False}},
+            {"id": "Count", "fields": {"label": "Count", "type": "Text", "isFormula": False}},
         ]}]}
         assert table_id == "Notes2"
 
@@ -603,8 +603,8 @@ class TestAddColumns:
         call = net.calls[0]
         assert (call["method"], call["url"]) == ("POST", f"{SERVER}/api/docs/doc1/tables/T/columns")
         assert call["json"] == {"columns": [
-            {"id": "A", "fields": {"label": "A", "type": "Int"}},
-            {"id": "B", "fields": {"label": "Bee", "type": "Text"}},
+            {"id": "A", "fields": {"label": "A", "type": "Int", "isFormula": False}},
+            {"id": "B", "fields": {"label": "Bee", "type": "Text", "isFormula": False}},
         ]}
         assert ids == ["A", "B"]
 

@@ -359,6 +359,9 @@ class GristClient:
             out.append({"id": col_id, "fields": {
                 "label": col.get("label") or col_id,
                 "type": col.get("type") or "Text",
+                # Without this Grist makes an empty formula column, which only turns into a data
+                # column on its first write, and PrivacyFence refuses writes to formula columns.
+                "isFormula": False,
             }})
         return out
 
