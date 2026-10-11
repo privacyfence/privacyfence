@@ -596,9 +596,103 @@ failed, the script's own error output is shown just above it. No message ever co
 
 ## Scheduling
 
-Keep one recipe per source, so a failure in one source doesn't hold up the others, and schedule
-each. Run them as your own user, the same user PrivacyFence's token belongs to. Keep the token out
-of the crontab line itself, for example in a wrapper script only you can read:
+Run recipes as your own user, the same user PrivacyFence's token belongs to. Keep one recipe per
+source, so a failure in one source doesn't hold up the others, and run them from one wrapper
+script: adding a recipe then means adding a file, not another scheduler entry. Number the files
+for the order they run in, with the dashboard last:
+
+```
+~/datalake/recipes/daily/10-sf-opportunities.yaml
+~/datalake/recipes/daily/20-drive-cashflow.yaml
+~/datalake/recipes/daily/90-dashboard.yaml
+```
+
+A recipe that needs another schedule goes in another folder (`recipes/hourly/`) with its own
+scheduler entry. Keep the work folder out of `~/Documents`, `~/Desktop` and `~/Downloads` on
+macOS: a background job is not allowed to read them.
+
+### macOS: launchd and the Keychain
+
+Use a launchd agent, not cron. A launchd calendar job that was due while the Mac slept runs once
+when it wakes; cron skips it. (Neither runs a job that was due while the Mac was shut down.)
+
+Keep each recipe's token in your login Keychain, under the recipe's file name. `-U` replaces an
+existing item, so the same command renews an expired token; `-w` with no value asks for the token,
+so it stays out of your shell history:
+
+```sh
+security add-generic-password -U -s privacyfence-sync -a 10-sf-opportunities -T /usr/bin/security -w
+```
+
+`-T /usr/bin/security` lets the wrapper read the item without a prompt. One token for all recipes
+works too; store it under each name, or change the lookup below.
+
+The wrapper, `~/bin/pf-sync.sh` (`chmod 700`), runs every recipe in a folder with its own token,
+carries on after a failure, and shows a notification naming the recipes that failed:
+
+```zsh
+#!/bin/zsh
+set -u
+group="${1:-daily}"
+S="$HOME/.venvs/privacyfence-sync/bin/privacyfence-sync"
+cd "$HOME/datalake" || exit 1
+
+# Just after wake, give PrivacyFence up to two minutes to come up.
+for i in {1..24}; do /usr/bin/curl -s -o /dev/null http://127.0.0.1:8765/mcp && break; sleep 5; done
+
+failed=()
+for recipe in recipes/$group/*.yaml(N); do
+  name="${recipe:t:r}"
+  token="$(/usr/bin/security find-generic-password -s privacyfence-sync -a "$name" -w 2>/dev/null)" \
+    || { echo "$(date) $name: no token in the Keychain"; failed+="$name(no token)"; continue; }
+  echo "$(date) start $name"
+  PRIVACYFENCE_TOKEN="$token" "$S" run "$recipe"
+  rc=$?
+  echo "$(date) end $name rc=$rc"
+  [ $rc -ne 0 ] && failed+="$name($rc)"
+done
+
+if (( ${#failed} )); then
+  /usr/bin/osascript -e "display notification \"${failed[*]}\" with title \"privacyfence-sync: $group\""
+  exit 2
+fi
+```
+
+The agent, `~/Library/LaunchAgents/local.pf-sync.daily.plist`, runs it every day at 06:10. launchd
+does not expand `~` or `$HOME`, so write your home folder out, and create the log folder first:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.pf-sync.daily</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/you/bin/pf-sync.sh</string><string>daily</string></array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>10</integer></dict>
+  <key>StandardOutPath</key><string>/Users/you/datalake/logs/daily.log</string>
+  <key>StandardErrorPath</key><string>/Users/you/datalake/logs/daily.log</string>
+</dict>
+</plist>
+```
+
+For weekdays only, make `StartCalendarInterval` an array of five such dicts, each with a `Weekday`
+key (1 to 5). Load it, and run it once now to check it:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.pf-sync.daily.plist
+launchctl kickstart -p gui/$(id -u)/local.pf-sync.daily
+```
+
+`launchctl bootout gui/$(id -u)/local.pf-sync.daily` turns it off. The job runs only while you are
+logged in (a locked screen is fine), which is also when the Keychain and a local PrivacyFence are
+available.
+
+### Linux: cron
+
+cron does not catch up on a run that was due while the machine was off or asleep. Keep the token
+out of the crontab line, for example in a wrapper script only you can read:
 
 ```sh
 #!/bin/sh
@@ -606,8 +700,8 @@ of the crontab line itself, for example in a wrapper script only you can read:
 export PRIVACYFENCE_TOKEN='...'
 S=~/.venvs/privacyfence-sync/bin/privacyfence-sync
 status=0
-for r in cashflow sf-opportunities sf-milestones pipeline-dashboard; do
-  "$S" run ~/datalake/recipes/$r.yaml || status=1
+for r in ~/datalake/recipes/daily/*.yaml; do
+  "$S" run "$r" || status=1
 done
 exit $status
 ```
@@ -616,9 +710,6 @@ exit $status
 # crontab -e: every weekday at 06:10
 10 6 * * 1-5 ~/bin/datalake-sync.sh >> ~/datalake/last-run.log 2>&1
 ```
-
-On macOS, a launchd agent in `~/Library/LaunchAgents` running the same wrapper works the same way.
-A machine that is asleep at the scheduled time skips the run; cron does not catch up.
 
 The exit code tells your scheduler or monitoring what happened (see [Commands](#commands)). A run
 that exits 3 means a rule is missing, or a step's data changed so that a rule no longer covers it,
