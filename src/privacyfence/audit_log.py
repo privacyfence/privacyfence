@@ -137,7 +137,8 @@ class AuditEntry:
     summary: str
     sender: str
     decision: str           # "approved" | "rejected" | "auto_accepted" | "accepted_via_accept_all" |
-                            # "accepted_via_temp_session" | "denied_unattended" | "policy_check" |
+                            # "accepted_via_temp_session" | "denied_unattended" |
+                            # "denied_scoped_token" | "policy_check" |
                             # "rules_listed" | "policy_listed" | "cancelled" | "org_config_startup" |
                             # "unattended_session_started" | "unattended_session_ended" |
                             # "rule_changed_via_bridge_proposal" | "rule_removed_via_bridge_proposal" |
@@ -244,6 +245,10 @@ class AuditEntry:
                             #  because the connection was in an unattended session and no auto-accept
                             #  rule matched -- distinct from "rejected", which is a human's own Deny.
                             #  Also used by gate.py's propose_rule_change() for the same reason)
+                            # ("denied_scoped_token": the call came with a scoped token (ADR 0164)
+                            #  and was refused without prompting -- a tool outside the token's
+                            #  tools, no rule of the token's matched, a revoked token, or a
+                            #  policy-change proposal. The agent fields name the token.)
                             # ("policy_check": web/mcp_dispatch.py's McpDispatcher.check_policy --
                             #  a preflight question, not a real decision; recorded for
                             #  pattern-spotting only)
@@ -797,6 +802,7 @@ class AuditLogger:
             "accepted_via_temp_session": PatternFill("solid", fgColor="FFF3CD"),
             "rejected":              PatternFill("solid", fgColor="FFEBEE"),
             "denied_unattended":     PatternFill("solid", fgColor="FFD8A8"),
+            "denied_scoped_token":   PatternFill("solid", fgColor="FFD8A8"),
             "policy_check":          PatternFill("solid", fgColor="F1F3F5"),
             "rules_listed":          PatternFill("solid", fgColor="F1F3F5"),
             "policy_listed":         PatternFill("solid", fgColor="F1F3F5"),
@@ -862,6 +868,7 @@ class AuditLogger:
         ws2.append(["Accepted (also armed temp-accept grace window)", counts.get("accepted_via_temp_session", 0)])
         ws2.append(["Rejected", counts.get("rejected", 0)])
         ws2.append(["Denied unattended (no human asked)", counts.get("denied_unattended", 0)])
+        ws2.append(["Denied scoped token (outside its scope)", counts.get("denied_scoped_token", 0)])
         ws2.append(["Preflight checks (privacyfence_check_policy)", counts.get("policy_check", 0)])
         ws2.append(["PII flagged (any decision)", sum(1 for e in entries if e.pii_detected)])
         ws2.append([])
