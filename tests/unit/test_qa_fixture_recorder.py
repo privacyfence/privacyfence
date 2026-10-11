@@ -3210,6 +3210,7 @@ class TestCheckPeek:
         assert "Private thing" not in dumped
         assert len(results[0].raw) == 1
         assert results[1].raw[0]["body"] == "[QATEST] hello"
+        assert results[1].raw[0]["id"] == 1
 
     def test_seed_page_not_listed_fails(self, monkeypatch):
         results = self._run(monkeypatch, [_PEEK_OTHER_PAGE], [_PEEK_COMMENT])

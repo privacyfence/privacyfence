@@ -5,7 +5,7 @@
     "body": "[QATEST] seed comment",
     "created_at": 1791663445,
     "element_text": "information",
-    "id": "qa-placeholder-id-1",
+    "id": 1,
     "selector": "p",
     "version": 1
   }

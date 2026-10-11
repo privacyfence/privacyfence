@@ -917,7 +917,7 @@ def check_peek(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
             ok, note = True, f"{len(comments)} comment(s), all tagged"
         raw = None
         if record and ok and isinstance(cap.captured, list):
-            raw = deidentify_structural_fields(redact(_redact_peek_authors(cap.captured)))
+            raw = _numeric_peek_ids(deidentify_structural_fields(redact(_redact_peek_authors(cap.captured))))
         results.append(CheckResult("peek", "get_comments", page_slug, ok, note, raw, "get_comments.json"))
     except PeekClientError as exc:
         results.append(CheckResult("peek", "get_comments", page_slug, False, str(exc)))
@@ -937,6 +937,12 @@ def _redact_peek_pages(pages: list[Any]) -> list[Any]:
         if isinstance(p, dict) else p
         for p in pages
     ]
+
+
+def _numeric_peek_ids(comments: list[Any]) -> list[Any]:
+    """Peek's comment ids are integers and the client reads only integers, so
+    the placeholder strings the structural pass leaves in ``id`` become 1, 2, …"""
+    return [{**c, "id": i} if isinstance(c, dict) and "id" in c else c for i, c in enumerate(comments, 1)]
 
 
 def _redact_peek_authors(comments: list[Any]) -> list[Any]:
