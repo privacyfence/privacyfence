@@ -597,26 +597,45 @@ failed, the script's own error output is shown just above it. No message ever co
 ## Scheduling
 
 Run recipes as your own user, the same user PrivacyFence's token belongs to. Keep one recipe per
-source, so a failure in one source doesn't hold up the others, and run them from one wrapper
-script: adding a recipe then means adding a file, not another scheduler entry. Number the files
-for the order they run in, with the dashboard last:
+source, so a failure in one source doesn't hold up the others, and give each recipe its own folder
+with its scripts, templates and work folder. `run` and `template` paths must stay inside the
+recipe's folder, and the default `work_dir: work` then lands next to the recipe. Group the folders
+by schedule and number them for the order they run in, with the dashboard last:
 
 ```
-~/datalake/recipes/daily/10-sf-opportunities.yaml
-~/datalake/recipes/daily/20-drive-cashflow.yaml
-~/datalake/recipes/daily/90-dashboard.yaml
+~/datalake/                     a git repository
+  .gitignore                    work/  state/  logs/
+  daily/
+    10-sf-opportunities/
+      recipe.yaml
+      scripts/plan.py
+      work/                     this recipe's run files (not in git)
+    20-drive-cashflow/
+      recipe.yaml
+      scripts/...
+    90-dashboard/
+      recipe.yaml
+      templates/dashboard.html
+  hourly/
+    ...
+  state/                        your scripts' own state, e.g. state/sf-opportunities/
+  logs/
 ```
 
-A recipe that needs another schedule goes in another folder (`recipes/hourly/`) with its own
-scheduler entry. Keep the work folder out of `~/Documents`, `~/Desktop` and `~/Downloads` on
-macOS: a background job is not allowed to read them.
+One wrapper runs every recipe of a schedule, so adding a recipe means adding a folder, not another
+scheduler entry. Recipes hand data to each other through Grist, not through each other's work
+folders. Code several recipes share can't be linked in, since a symbolic link that points outside
+the recipe's folder is refused; make it a small package and install it into the same virtual
+environment (`pip install -e ~/datalake/lib`), and keep the scripts in each folder thin.
+Keep `~/datalake` out of `~/Documents`, `~/Desktop` and `~/Downloads` on macOS: a background job
+is not allowed to read them.
 
 ### macOS: launchd and the Keychain
 
 Use a launchd agent, not cron. A launchd calendar job that was due while the Mac slept runs once
 when it wakes; cron skips it. (Neither runs a job that was due while the Mac was shut down.)
 
-Keep each recipe's token in your login Keychain, under the recipe's file name. `-U` replaces an
+Keep each recipe's token in your login Keychain, under the recipe's folder name. `-U` replaces an
 existing item, so the same command renews an expired token; `-w` with no value asks for the token,
 so it stays out of your shell history:
 
@@ -627,7 +646,7 @@ security add-generic-password -U -s privacyfence-sync -a 10-sf-opportunities -T 
 `-T /usr/bin/security` lets the wrapper read the item without a prompt. One token for all recipes
 works too; store it under each name, or change the lookup below.
 
-The wrapper, `~/bin/pf-sync.sh` (`chmod 700`), runs every recipe in a folder with its own token,
+The wrapper, `~/bin/pf-sync.sh` (`chmod 700`), runs every recipe of a schedule with its own token,
 carries on after a failure, and shows a notification naming the recipes that failed:
 
 ```zsh
@@ -641,8 +660,8 @@ cd "$HOME/datalake" || exit 1
 for i in {1..24}; do /usr/bin/curl -s -o /dev/null http://127.0.0.1:8765/mcp && break; sleep 5; done
 
 failed=()
-for recipe in recipes/$group/*.yaml(N); do
-  name="${recipe:t:r}"
+for recipe in $group/*/recipe.yaml(N); do
+  name="${recipe:h:t}"
   token="$(/usr/bin/security find-generic-password -s privacyfence-sync -a "$name" -w 2>/dev/null)" \
     || { echo "$(date) $name: no token in the Keychain"; failed+="$name(no token)"; continue; }
   echo "$(date) start $name"
@@ -700,7 +719,7 @@ out of the crontab line, for example in a wrapper script only you can read:
 export PRIVACYFENCE_TOKEN='...'
 S=~/.venvs/privacyfence-sync/bin/privacyfence-sync
 status=0
-for r in ~/datalake/recipes/daily/*.yaml; do
+for r in ~/datalake/daily/*/recipe.yaml; do
   "$S" run "$r" || status=1
 done
 exit $status
