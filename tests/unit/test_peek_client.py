@@ -327,7 +327,8 @@ class TestTokenFile:
     def test_round_trip(self, tmp_path):
         path = str(tmp_path / "credentials" / "peek_token.json")
         save_token_file(path, BASE, TOKEN)
-        assert json.loads(open(path).read()) == {"base_url": BASE, "token": TOKEN}
+        saved = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert saved == {"base_url": BASE, "token": TOKEN}
         assert load_token_file(path) == {"base_url": BASE, "token": TOKEN}
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
