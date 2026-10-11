@@ -1795,6 +1795,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
     mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
+    scoped_tokens: dict[str, Any] | None = None,
 ) -> str:
     """Full self-contained HTML document for local mode's settings page
     (``mode="local"``) *and* for
