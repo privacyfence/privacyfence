@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Peek connector.** List your Peek pages, read their comments and visit counts after review, and publish pages and new versions, change who can open them, rename, comment on and delete them with approval. Connect with Peek's own sign-in from Settings, the connections page in organization mode, or `privacyfence-app --peek-login`; an organization bundle can pin the Peek server with `--peek-base-url`. Posting comments needs a Peek server with the account comment endpoint.
+
 ## [5.8.1] — 2026-10-11
 
 ### Fixed
@@ -58,7 +62,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Peek connector.** List your Peek pages, read their comments and visit counts after review, and publish pages and new versions, change who can open them, rename, comment on and delete them with approval. Connect with Peek's own sign-in from Settings, the connections page in organization mode, or `privacyfence-app --peek-login`; an organization bundle can pin the Peek server with `--peek-base-url`. Posting comments needs a Peek server with the account comment endpoint.
 - **Grist bulk import and update from CSV.** grist_import_csv adds a CSV file's rows to a table and grist_update_csv updates records matched by a key column, up to 20000 rows in one approval.
 
 ### Fixed
