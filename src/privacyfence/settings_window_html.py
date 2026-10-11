@@ -267,6 +267,7 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-modal-title { font-size: var(--step-h3); font-weight: 750; }
 .pf-modal-desc { font-size: var(--step-small); color: var(--ink-soft); line-height: 1.5; }
 .pf-modal-error { font-size: var(--step-small); color: var(--danger); font-weight: 600; }
+.pf-modal-code { font-family: var(--font-mono); font-size: var(--step-h3); font-weight: 750; letter-spacing: 0.12em; text-align: center; padding: var(--space-xs) 0; }
 .pf-modal-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-xs); margin-top: var(--space-xs); }
 """
 
@@ -321,6 +322,9 @@ _JS = r"""
     // null, and without this the auto-close-on-success check in render()
     // couldn't tell "flow just succeeded" apart from "flow never started".
     telegramAuthWasActive: false,
+    // The Peek sign-in modal, with the same was-active bookkeeping.
+    peekModalOpen: false,
+    peekAuthWasActive: false,
     // Grist API-key form: gristSubmitted is set when Connect is posted and
     // cleared once the result (success or error) has been seen in a snapshot.
     gristModalOpen: false,
@@ -740,6 +744,11 @@ _JS = r"""
         // opened client-side like Telegram's (data-grist-auth).
         html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Grist"' +
           (authDisabled ? ' aria-disabled="true"' : ' data-grist-auth="1"') + '>' + esc(c.auth_label) + '</div>';
+      } else if (c.key === 'peek') {
+        // Peek's device sign-in has its own two-step modal (renderPeekModal),
+        // opened client-side like Telegram's.
+        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Peek"' +
+          (authDisabled ? ' aria-disabled="true"' : ' data-peek-auth="1"') + '>' + esc(c.auth_label) + '</div>';
       } else if (c.key === 'telegram') {
         // Telegram's phone/code/2FA flow needs its own multi-step modal
         // (see renderTelegramModal below) instead of the generic single-
@@ -1250,6 +1259,43 @@ _JS = r"""
     return html;
   }
 
+  // Peek sign-in modal (see settings_controller.py's peek_start_login/
+  // peek_finish_login/peek_cancel_login).
+  function renderPeekModal(state) {
+    if (!ui.peekModalOpen) return '';
+    var auth = state.peek_auth || { step: null, error: '' };
+    var busy = (state.connectors.find(function (c) { return c.key === 'peek'; }) || {}).busy;
+    var approve = auth.step === 'approve';
+    var title = approve ? 'Approve in Peek' : 'Connect Peek';
+
+    var html = '<div class="pf-modal-overlay" role="presentation">';
+    html += '<div class="pf-modal" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">';
+    html += '<div class="pf-modal-title">' + esc(title) + '</div>';
+    if (approve) {
+      html += '<div class="pf-modal-desc">A browser window opened on the machine running PrivacyFence. ' +
+        'Sign in to Peek there and approve this code:</div>';
+      html += '<div class="pf-modal-code">' + esc(auth.user_code || '') + '</div>';
+      html += '<div class="pf-modal-desc">' + esc('Or open ' + (auth.verification_url || '')) + '</div>';
+    } else if (auth.pinned_base_url) {
+      html += '<div class="pf-modal-desc">' + esc('Your organization uses ' + auth.pinned_base_url + '.') + '</div>';
+    } else {
+      html += '<div class="pf-modal-desc">The address of your Peek server.</div>';
+    }
+    if (auth.error) html += '<div class="pf-modal-error">' + esc(auth.error) + '</div>';
+    if (!approve && !auth.pinned_base_url) {
+      html += '<input type="url" class="field pf-modal-input" data-peek-field="base_url" ' +
+        'placeholder="https://peek.example.com" aria-label="Peek server address"' + (busy ? ' disabled' : '') + '/>';
+    }
+    var submitLabel = approve ? 'Done' : 'Continue';
+    html += '<div class="pf-modal-buttons">';
+    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel Peek sign-in" data-peek-cancel="1">Cancel</div>';
+    html += '<div class="button primary" role="button" tabindex="0" aria-label="' + esc(submitLabel) +
+      '" data-peek-submit="' + (approve ? 'peek_finish_login' : 'peek_start_login') + '"' + (busy ? ' aria-disabled="true"' : '') + '>' +
+      (busy ? 'Working…' : esc(submitLabel)) + '</div>';
+    html += '</div></div></div>';
+    return html;
+  }
+
   // Grist API-key modal (see settings_controller.py's grist_connect/
   // grist_cancel_auth). Shown only when grist_signin === 'api_key'.
   var GRIST_DEFAULT_URL = 'https://docs.getgrist.com';
@@ -1332,6 +1378,12 @@ _JS = r"""
       ui.telegramModalOpen = false;
       ui.telegramAuthWasActive = false;
     }
+    var peekStep = state.peek_auth && state.peek_auth.step;
+    if (peekStep) ui.peekAuthWasActive = true;
+    if (ui.peekModalOpen && ui.peekAuthWasActive && !peekStep && !(state.peek_auth && state.peek_auth.error)) {
+      ui.peekModalOpen = false;
+      ui.peekAuthWasActive = false;
+    }
     // What is typed in the Grist form survives the rebuild below: capture it
     // (and which field has focus) before the DOM is replaced.
     var gristFocus = '', gristSel = null, gristWasOpen = false;
@@ -1369,12 +1421,17 @@ _JS = r"""
     }
     html += renderSection(state) + '</div></div>';
     html += renderTelegramModal(state);
+    html += renderPeekModal(state);
     html += renderGristModal(state);
     document.getElementById('app').innerHTML = html;
     revealSelectedTabs();
     if (ui.telegramModalOpen) {
       var input = document.querySelector('[data-telegram-field]');
       if (input) input.focus();
+    }
+    if (ui.peekModalOpen) {
+      var peekInput = document.querySelector('[data-peek-field]');
+      if (peekInput) peekInput.focus();
     }
     if (ui.gristModalOpen) {
       var gristKeyNew = document.querySelector('[data-grist-field="api_key"]');
@@ -1460,6 +1517,21 @@ _JS = r"""
     var telegramSubmitEl = e.target.closest('[data-telegram-submit]');
     if (telegramSubmitEl) { submitTelegramModal(telegramSubmitEl.getAttribute('data-telegram-submit')); return; }
 
+    var peekAuthEl = e.target.closest('[data-peek-auth]');
+    if (peekAuthEl) { ui.peekModalOpen = true; ui.peekAuthWasActive = false; render(pyState); return; }
+
+    var peekCancelEl = e.target.closest('[data-peek-cancel]');
+    if (peekCancelEl) {
+      ui.peekModalOpen = false;
+      ui.peekAuthWasActive = false;
+      post('peek_cancel_login', {});
+      render(pyState);
+      return;
+    }
+
+    var peekSubmitEl = e.target.closest('[data-peek-submit]');
+    if (peekSubmitEl) { submitPeekModal(peekSubmitEl.getAttribute('data-peek-submit')); return; }
+
     var gristAuthEl = e.target.closest('[data-grist-auth]');
     if (gristAuthEl) { ui.gristModalOpen = true; ui.gristSubmitted = false; render(pyState); return; }
 
@@ -1500,6 +1572,11 @@ _JS = r"""
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }
       post(action, payload);
     }
+  }
+
+  function submitPeekModal(action) {
+    var input = document.querySelector('[data-peek-field]');
+    post(action, action === 'peek_start_login' ? { base_url: input ? input.value : '' } : {});
   }
 
   function submitTelegramModal(action) {
@@ -1584,6 +1661,13 @@ _JS = r"""
       render(pyState);
       return;
     }
+    if (e.key === 'Escape' && ui.peekModalOpen) {
+      ui.peekModalOpen = false;
+      ui.peekAuthWasActive = false;
+      post('peek_cancel_login', {});
+      render(pyState);
+      return;
+    }
     if (e.key === 'Escape' && ui.telegramModalOpen) {
       ui.telegramModalOpen = false;
       ui.telegramAuthWasActive = false;
@@ -1614,6 +1698,7 @@ _JS = r"""
       return;
     }
     if (el.hasAttribute('data-grist-field')) { submitGristModal(); return; }
+    if (el.hasAttribute('data-peek-field')) { submitPeekModal('peek_start_login'); return; }
     if (el.hasAttribute('data-telegram-field')) {
       var state = pyState || {};
       var step = ((state.telegram_auth || {}).step) || 'phone';

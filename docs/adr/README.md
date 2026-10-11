@@ -238,5 +238,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted |
 | [0149](0149-the-whole-tree-mypy-run-is-blocking.md) | The whole-tree mypy run is blocking | Accepted |
 | [0150](0150-ruff-format-is-not-enforced.md) | `ruff format` is not enforced | Accepted |
-| [0151](0151-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted |
-| [0152](0152-grist-export-sql-reads-through-the-sql-endpoint.md) | `grist_export_sql` reads through Grist's SQL endpoint | Accepted; amends 0146 |
+| [0151](0151-peek-sign-in-uses-peeks-own-device-flow-and-keeps-the-token-per-principal.md) | PrivacyFence signs in to Peek with Peek's own device sign-in and keeps the token per principal | Accepted |
+| [0152](0152-which-peek-server-is-used-and-a-token-stays-with-it.md) | Which Peek server is used, and a Peek token stays with the server it was issued for | Accepted |
+| [0153](0153-peek-comments-are-posted-only-through-the-account-comment-endpoint.md) | Peek comments are posted only through the account comment endpoint | Accepted |
+| [0154](0154-peek-visit-stats-carry-names-and-times-never-ip-addresses.md) | Peek visit stats carry counts, visitor names and times, never IP addresses | Accepted |
+| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted |
+| [0156](0156-grist-export-sql-reads-through-the-sql-endpoint.md) | `grist_export_sql` reads through Grist's SQL endpoint | Accepted; amends 0146 |

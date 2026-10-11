@@ -3161,3 +3161,227 @@ class TestLifecycleGrist:
 
     def test_registered_for_lifecycle(self):
         assert recorder.LIFECYCLE_CHECKS["grist"] is recorder.lifecycle_grist
+
+
+# ---------------------------------------------------------------------------- #
+# Peek
+# ---------------------------------------------------------------------------- #
+
+def _peek_response(payload, status=200):
+    response = MagicMock()
+    response.status_code = status
+    response.json.return_value = payload
+    return response
+
+
+def _peek_client(pages, comments):
+    from privacyfence.peek_client import PeekClient
+
+    client = PeekClient("http://localhost:7700", "tok")
+
+    def request(method, url, **kwargs):
+        if url.endswith("/api/uploads"):
+            return _peek_response(pages)
+        if url.endswith("/comments"):
+            return _peek_response(comments)
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    client._session.request = request
+    return client
+
+
+_PEEK_PAGE = {
+    "slug": "real-slug", "name": "PrivacyFence QA [QATEST].html", "owner": "Real Person",
+    "size": 120, "visibility": "private", "url": "http://localhost:7700/real-slug",
+    "created_at": 1760000000, "version": 1,
+}
+_PEEK_OTHER_PAGE = {**_PEEK_PAGE, "slug": "other", "name": "Private thing", "owner": "Real Person"}
+_PEEK_COMMENT = {
+    "id": 7, "author": "Real Person", "body": "[QATEST] hello", "anchor_kind": "element",
+    "selector": "#a", "element_text": "x", "created_at": 1760000100, "version": 1,
+}
+
+
+class TestCheckPeek:
+    MANIFEST = {"peek": {"page_slug": "real-slug"}}
+
+    def _run(self, monkeypatch, pages, comments, manifest=None):
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: _peek_client(pages, comments))
+        return recorder.check_peek(record=True, manifest=manifest or self.MANIFEST)
+
+    def test_missing_slug_fails_without_a_client(self, monkeypatch):
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: pytest.fail("no client expected"))
+
+        results = recorder.check_peek(record=True, manifest={})
+
+        assert [(r.ok, r.note) for r in results] == [(False, "peek.page_slug missing from qa_environment.yaml")]
+
+    def test_records_both_fixtures_redacted(self, monkeypatch):
+        results = self._run(monkeypatch, [_PEEK_PAGE, _PEEK_OTHER_PAGE], [_PEEK_COMMENT])
+
+        assert [(r.method, r.ok, r.fixture_relpath) for r in results] == [
+            ("list_pages", True, "list_pages.json"),
+            ("get_comments", True, "get_comments.json"),
+        ]
+        dumped = json.dumps([r.raw for r in results])
+        assert "Real Person" not in dumped
+        assert "real-slug" not in dumped
+        assert "localhost" not in dumped
+        assert "Private thing" not in dumped
+        assert len(results[0].raw) == 1
+        assert results[1].raw[0]["body"] == "[QATEST] hello"
+        assert results[1].raw[0]["id"] == 1
+
+    def test_seed_page_not_listed_fails(self, monkeypatch):
+        results = self._run(monkeypatch, [_PEEK_OTHER_PAGE], [_PEEK_COMMENT])
+
+        assert not results[0].ok and "not in list_pages" in results[0].note
+        assert results[0].raw is None
+
+    def test_untagged_page_name_is_refused(self, monkeypatch):
+        page = {**_PEEK_PAGE, "name": "Real work.html"}
+
+        results = self._run(monkeypatch, [page], [_PEEK_COMMENT])
+
+        assert not results[0].ok and "refusing to record" in results[0].note
+        assert results[0].raw is None
+
+    def test_non_qatest_comment_is_refused(self, monkeypatch):
+        comments = [_PEEK_COMMENT, {**_PEEK_COMMENT, "id": 8, "body": "something private"}]
+
+        results = self._run(monkeypatch, [_PEEK_PAGE], comments)
+
+        assert not results[1].ok and "refusing to record" in results[1].note
+        assert results[1].raw is None
+
+    def test_no_comment_is_refused(self, monkeypatch):
+        results = self._run(monkeypatch, [_PEEK_PAGE], [])
+
+        assert not results[1].ok and "no comment" in results[1].note
+
+
+class _FakePeekClient:
+    OWNER = "QA Account"
+
+    def __init__(self):
+        self.pages: dict[str, dict] = {}
+        self.comments: dict[str, list[dict]] = {}
+        self.comment_should_fail = False
+        self.delete_should_fail = False
+        self.delete_leaves_it = False
+        self.upload_fails = False
+        self.deleted: list[str] = []
+
+    def upload_page(self, data, name, visibility, password, slug=""):
+        if self.upload_fails:
+            raise recorder.PeekClientError("simulated upload failure")
+        new = f"slug{len(self.pages) + 1}"
+        self.pages[new] = {"name": name, "visibility": visibility}
+        return SimpleNamespace(slug=new, visibility=visibility)
+
+    def set_visibility(self, slug, visibility, password):
+        self.pages[slug]["visibility"] = visibility
+        return visibility
+
+    def rename_page(self, slug, name):
+        page = self.pages.pop(slug)
+        page["name"] = name
+        new = f"{slug}-renamed"
+        self.pages[new] = page
+        return SimpleNamespace(slug=new, url="", name=name)
+
+    def get_page(self, slug):
+        if slug not in self.pages:
+            raise recorder.PeekClientError("no such page")
+        page = self.pages[slug]
+        return SimpleNamespace(slug=slug, name=page["name"], visibility=page["visibility"], owner=self.OWNER)
+
+    def list_pages(self):
+        return [SimpleNamespace(slug=s) for s in self.pages]
+
+    def add_comment(self, slug, body, selector, element_text):
+        if self.comment_should_fail:
+            raise recorder.PeekClientError("no account comment endpoint")
+        self.comments.setdefault(slug, []).append({"body": body})
+        return SimpleNamespace(id=1)
+
+    def get_comments(self, slug, version=0):
+        return [SimpleNamespace(body=c["body"], author=self.OWNER) for c in self.comments.get(slug, [])]
+
+    def delete_page(self, slug):
+        if self.delete_should_fail:
+            raise RuntimeError("simulated delete failure")
+        self.deleted.append(slug)
+        if not self.delete_leaves_it:
+            self.pages.pop(slug, None)
+
+
+class TestLifecyclePeek:
+    def test_happy_path_deletes_by_the_renamed_slug(self, monkeypatch):
+        fake = _FakePeekClient()
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert result.connector == "peek"
+        assert result.ok, result.note
+        assert result.cleanup_ok is True
+        assert fake.deleted == ["slug1-renamed"]
+        assert not fake.pages
+
+    def test_failing_add_comment_still_deletes(self, monkeypatch):
+        fake = _FakePeekClient()
+        fake.comment_should_fail = True
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert not result.ok
+        assert "no account comment endpoint" in result.note
+        assert result.cleanup_ok is True
+        assert not fake.pages
+
+    def test_comment_by_another_author_fails(self, monkeypatch):
+        fake = _FakePeekClient()
+        fake.get_comments = lambda slug, version=0: [
+            SimpleNamespace(body=c["body"], author="anonymous") for c in fake.comments.get(slug, [])
+        ]
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert not result.ok and "is not the QA account's name" in result.note
+        assert result.cleanup_ok is True
+
+    def test_cleanup_call_failure_is_reported(self, monkeypatch):
+        fake = _FakePeekClient()
+        fake.delete_should_fail = True
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert result.ok
+        assert result.cleanup_ok is False
+        assert "cleanup call failed" in result.note
+
+    def test_page_still_listed_after_delete_is_caught(self, monkeypatch):
+        fake = _FakePeekClient()
+        fake.delete_leaves_it = True
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert result.ok
+        assert result.cleanup_ok is False
+        assert "still listed" in result.note
+
+    def test_upload_failure_never_attempts_cleanup(self, monkeypatch):
+        fake = _FakePeekClient()
+        fake.upload_fails = True
+        monkeypatch.setattr(recorder, "_build_peek_client", lambda: fake)
+
+        result = recorder.lifecycle_peek(manifest={})
+
+        assert not result.ok
+        assert result.cleanup_ok is None
+        assert fake.deleted == []

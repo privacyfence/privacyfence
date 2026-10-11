@@ -49,6 +49,7 @@ def _make_state(**overrides):
              "authed": False, "enabled": True, "busy": False, "has_org": False, "auth_label": "Authenticate…"},
         ],
         "telegram_auth": {"step": None, "error": ""},
+        "peek_auth": {"step": None, "error": "", "user_code": "", "verification_url": "", "pinned_base_url": ""},
         "grist_signin": "api_key",
         "grist_server_url_pinned": "",
         "grist_auth": {"error": ""},
@@ -372,6 +373,25 @@ class TestTelegramModalTemplate:
         html = build_html(state)
         embedded = _extract_initial_state(html)
         assert embedded["telegram_auth"] == {"step": "code", "error": "bad code"}
+
+
+class TestPeekSignInModal:
+    def test_script_carries_the_two_step_modal(self):
+        html = build_html(_make_state())
+        assert "data-peek-auth" in html
+        assert 'data-peek-field="base_url"' in html or "data-peek-field=\"base_url\"" in html
+        assert "'peek_start_login'" in html
+        assert "'peek_finish_login'" in html
+        assert "'peek_cancel_login'" in html
+        assert "Approve in Peek" in html
+
+    def test_state_embeds_peek_auth_key(self):
+        state = _make_state(peek_auth={
+            "step": "approve", "error": "", "user_code": "ABCD-1234",
+            "verification_url": "https://peek.example.com/cli", "pinned_base_url": "",
+        })
+        embedded = _extract_initial_state(build_html(state))
+        assert embedded["peek_auth"]["user_code"] == "ABCD-1234"
 
 
 class TestGristApiKeyForm:

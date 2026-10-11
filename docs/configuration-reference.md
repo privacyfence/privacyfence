@@ -100,7 +100,7 @@ and the other is not, the daemon logs a warning at start.
 | `calendar.free_busy_full_event_details` | bool | `true` | `true` | `calendar_get_free_busy` returns event titles, times and status for a colleague when your account can already see them (busy/free only otherwise). `false` always returns busy/free only. **Settings > Privacy Filter**. |
 | `gmail.append_signature_to_drafts` | bool | `false` | `false` | Append your Gmail signature (the one Gmail stores for the sending address) to drafts. Each draft tool's `include_signature` argument overrides it per call. The signature is shown on the card. **Settings > Privacy Filter**. |
 | `salesforce.report_max_pages` | int | `50` | `50` | Most report runs one paged `salesforce_run_report` read or one `salesforce_export_report` export may use (each page is one run and counts against the org's report-run limits). A read that needs more fails. |
-| `connectors.<name>.enabled` | bool | `true` | not set | `false` turns a connector off. `<name>` is one of `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`, `telegram`, `grist`. Written by **Disable**/**Enable** on **Settings > Connectors**. A connector also needs its organization config and a sign-in before it runs. |
+| `connectors.<name>.enabled` | bool | `true` | not set | `false` turns a connector off. `<name>` is one of `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `apps_script`, `slack`, `salesforce`, `jira`, `confluence`, `telegram`, `grist`, `peek`. Written by **Disable**/**Enable** on **Settings > Connectors**. A connector also needs its organization config and a sign-in before it runs. |
 
 ### PII detection
 
@@ -218,7 +218,7 @@ services you have registered: a connector is offered only if its section is in t
 it from **Settings > General > Organization Configuration**. Per-service registration steps are in
 [Google Cloud setup](google-cloud-setup.md), [Slack setup](slack-setup.md),
 [Salesforce setup](salesforce-setup.md), [Atlassian setup](atlassian-setup.md) and
-[Grist setup](grist-setup.md); Telegram needs no
+[Grist setup](grist-setup.md) and [Peek setup](peek-setup.md); Telegram needs no
 bundle entry ([Telegram setup](telegram-setup.md)). The server side of an organization deployment is
 in [Organization deployment](org-mode-setup-guide.md).
 
@@ -245,6 +245,7 @@ How the daemon treats the file:
 | `--salesforce-consumer-key`, `--salesforce-consumer-secret` | none | `salesforce.consumer_key`, `salesforce.consumer_secret` | Give both or neither. |
 | `--salesforce-login-url URL` | `https://login.salesforce.com` | `salesforce.login_url` | `https://test.salesforce.com` for a sandbox. |
 | `--atlassian-client-id`, `--atlassian-client-secret` | none | `atlassian.client_id`, `atlassian.client_secret` | Jira and Confluence. Give both or neither. |
+| `--peek-base-url URL` | none | `peek.base_url` | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
 | `--grist-server-url URL` | none | `grist.server_url` | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
@@ -319,9 +320,10 @@ options below are for running it by hand.
 | `--slack-oauth`, `--salesforce-oauth`, `--atlassian-oauth` | The same for Slack, Salesforce, and Jira plus Confluence. |
 | `--grist-oauth` | The same for Grist, when the organization config carries a Grist OAuth app. With an API key, use **Settings > Connectors** instead. |
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
+| `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
 
 The sign-in options are for an install that is not privilege-separated (a source checkout or a
 `pip`/`pipx` install). On a packaged install the daemon refuses to run as your account, so they
 fail; connect services from **Settings > Connectors** instead (see
 [Connecting a service](connecting-a-service.md)). They need the organization config bundle
-installed first, except `--telegram-setup`.
+installed first, except `--telegram-setup` and `--peek-login` (the latter asks for the Peek server address when the bundle names none).

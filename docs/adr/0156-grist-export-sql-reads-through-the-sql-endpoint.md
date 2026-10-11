@@ -1,4 +1,4 @@
-# ADR 0152: grist_export_sql reads through Grist's SQL endpoint
+# ADR 0156: grist_export_sql reads through Grist's SQL endpoint
 
 ## Status
 
@@ -13,14 +13,14 @@ cells come back as SQLite stores them, and its OAuth scope is not documented. Th
 about paging records.
 
 A scheduled sync now needs a join across tables in one approval, which the records endpoint cannot
-do. ADR 0151 gives the export tools their shape: one review card, a file, and a result of counts and
+do. ADR 0155 gives the export tools their shape: one review card, a file, and a result of counts and
 a hash. A caller with full copy access can also read the document's internal tables (`_grist_*`,
 `_gristsys_*`), which hold the action history with old and deleted values.
 
 ## Decision
 
 `grist_export_sql` runs one read-only query through the SQL endpoint and writes the result as ADR
-0151 describes.
+0155 describes.
 
 - **`SELECT` only, checked in the connector.** The statement is stripped of one trailing `;` and
   must start with `SELECT` or `WITH`, be at most 10,000 characters, and contain no `;`, `--` or
@@ -78,4 +78,4 @@ a hash. A caller with full copy access can also read the document's internal tab
 ## Related
 
 - [`grist_client.py`](../../src/privacyfence/grist_client.py), [`connectors/grist.py`](../../src/privacyfence/connectors/grist.py), [`scripts/qa_fixture_recorder.py`](../../scripts/qa_fixture_recorder.py)
-- ADR [0144](0144-grist-rules-are-per-document-and-set-from-settings-not-the-card.md), ADR [0145](0145-the-grist-connector-only-adds.md), ADR [0146](0146-grist-records-page-by-record-id.md), ADR [0151](0151-exports-write-a-file-and-return-only-counts-and-a-hash.md)
+- ADR [0144](0144-grist-rules-are-per-document-and-set-from-settings-not-the-card.md), ADR [0145](0145-the-grist-connector-only-adds.md), ADR [0146](0146-grist-records-page-by-record-id.md), ADR [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md)

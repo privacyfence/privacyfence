@@ -1318,6 +1318,79 @@ class TestBuildConnectorsGrist:
         assert "grist" not in failures
 
 
+class TestBuildConnectorsPeek:
+    RECORD = {"base_url": "https://peek.example.com", "token": "tok"}
+
+    def _patch(self, monkeypatch, record, *, check_error=None):
+        from privacyfence.peek_client import PeekClient, PeekClientError
+
+        def load(path):
+            if record is None:
+                raise PeekClientError("Peek is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+            return record
+
+        def check(self):
+            if check_error is not None:
+                raise check_error
+            return "peek.example.com"
+
+        monkeypatch.setattr(daemon_main, "load_peek_token", load)
+        monkeypatch.setattr(PeekClient, "check_connection", check)
+
+    def test_token_file_builds_connector_without_a_bundle_section(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert [c.name for c in connectors] == ["peek"]
+        assert connectors[0].download_mode == "local"
+        assert "peek" not in failures
+
+    def test_pinned_url_equal_to_the_file_builds(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        org = {"peek": {"base_url": "https://peek.example.com/"}}
+        connectors, failures = daemon_main.build_connectors({}, org)
+        assert [c.name for c in connectors] == ["peek"]
+        assert "peek" not in failures
+
+    def test_pinned_url_differing_from_the_file_is_not_authenticated(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        org = {"peek": {"base_url": "https://other.example.com"}}
+        connectors, failures = daemon_main.build_connectors({}, org)
+        assert connectors == []
+        assert failures["peek"] == "not_authenticated"
+
+    def test_org_mode_without_peek_section_is_no_org_config(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        org = {"mode": "org", "server": {"issuer_url": "https://pf.example.com"}}
+        _connectors, failures = daemon_main.build_connectors({}, org)
+        assert failures["peek"] == "no_org_config"
+
+    def test_no_file_is_not_authenticated(self, monkeypatch):
+        self._patch(monkeypatch, None)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["peek"] == "not_authenticated"
+
+    def test_check_connection_401_is_not_authenticated(self, monkeypatch):
+        from privacyfence.peek_client import PeekClientError
+
+        err = PeekClientError(
+            "Peek refused the saved sign-in (HTTP 401). Use Authenticate… in PrivacyFence Settings "
+            "to connect again.",
+            status=401,
+        )
+        self._patch(monkeypatch, self.RECORD, check_error=err)
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
+        assert failures["peek"] == "not_authenticated"
+
+    def test_disabled_has_no_entry(self, monkeypatch):
+        self._patch(monkeypatch, self.RECORD)
+        config = {"connectors": {"peek": {"enabled": False}}}
+        connectors, failures = daemon_main.build_connectors(config, {})
+        assert connectors == []
+        assert "peek" not in failures
+
+
 # ---------------------------------------------------------------------------- #
 # build_connectors: per-connector failure reasons -- the data model the
 # privacyfence_status meta-tool needs to tell "never set up" /
@@ -2471,6 +2544,104 @@ class TestCliPickAtlassianResource:
         assert daemon_main._cli_pick_atlassian_resource(resources) is resources[0]
 
 
+class TestPeekLoginRunner:
+    BASE = "https://peek.example.com"
+
+    def _login(self, *, interval=1, expires_at=None):
+        from privacyfence.peek_client import PeekDeviceLogin
+
+        return PeekDeviceLogin(
+            device_code="dc", user_code="ABCD-1234",
+            verification_url=f"{self.BASE}/cli/verify",
+            interval=interval,
+            expires_at=time.time() + 600 if expires_at is None else expires_at,
+        )
+
+    def _patch(self, monkeypatch, polls, *, login=None, prompt=None, start_error=None):
+        from privacyfence.peek_client import PeekLoginPoll
+
+        seen = {"sleeps": [], "saved": None, "prompts": 0, "polled": []}
+        statuses = iter(polls)
+
+        def fake_input(message):
+            seen["prompts"] += 1
+            return prompt
+
+        def start(base):
+            seen["started"] = base
+            if start_error is not None:
+                raise start_error
+            return login or self._login()
+
+        def poll(base, device_code):
+            seen["polled"].append((base, device_code))
+            status = next(statuses)
+            if isinstance(status, Exception):
+                raise status
+            return PeekLoginPoll(status=status, token="newtok" if status == "approved" else "")
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        monkeypatch.setattr(daemon_main.time, "sleep", lambda n: seen["sleeps"].append(n))
+        monkeypatch.setattr(daemon_main, "peek_start_device_login", start)
+        monkeypatch.setattr(daemon_main, "peek_poll_device_login", poll)
+        monkeypatch.setattr(daemon_main, "save_peek_token", lambda path, base, token: seen.update(saved=(path, base, token)))
+        return seen
+
+    def test_success_after_a_pending_poll_saves_the_token(self, monkeypatch, capsys):
+        seen = self._patch(monkeypatch, ["pending", "approved"], prompt=self.BASE + "/")
+        assert daemon_main.run_peek_login({}) == 0
+        out = capsys.readouterr().out
+        assert "Open https://peek.example.com/cli/verify and approve the code ABCD-1234." in out
+        assert "Peek sign-in complete. Connected to peek.example.com." in out
+        path, base, token = seen["saved"]
+        assert path.endswith("peek_token.json")
+        assert (base, token) == (self.BASE, "newtok")
+        assert seen["sleeps"] == [1, 1]
+        assert seen["prompts"] == 1
+
+    def test_pinned_url_skips_the_prompt(self, monkeypatch):
+        seen = self._patch(monkeypatch, ["approved"])
+        assert daemon_main.run_peek_login({"peek": {"base_url": self.BASE}}) == 0
+        assert seen["prompts"] == 0
+        assert seen["started"] == self.BASE
+
+    def test_bad_pinned_url_returns_1(self, monkeypatch, capsys):
+        self._patch(monkeypatch, [])
+        assert daemon_main.run_peek_login({"peek": {"base_url": "ftp://x"}}) == 1
+        assert "Peek organization config is not usable" in capsys.readouterr().err
+
+    def test_denied_returns_1(self, monkeypatch, capsys):
+        self._patch(monkeypatch, ["denied"], prompt=self.BASE)
+        assert daemon_main.run_peek_login({}) == 1
+        assert "The Peek sign-in was denied." in capsys.readouterr().err
+
+    @pytest.mark.parametrize("status", ["expired", "consumed"])
+    def test_expired_and_consumed_return_1(self, monkeypatch, capsys, status):
+        self._patch(monkeypatch, [status], prompt=self.BASE)
+        assert daemon_main.run_peek_login({}) == 1
+        assert "The Peek sign-in code expired. Run --peek-login again." in capsys.readouterr().err
+
+    def test_time_past_expires_at_returns_1_without_polling(self, monkeypatch, capsys):
+        seen = self._patch(
+            monkeypatch, [], prompt=self.BASE, login=self._login(expires_at=time.time() - 1)
+        )
+        assert daemon_main.run_peek_login({}) == 1
+        assert "The Peek sign-in code expired. Run --peek-login again." in capsys.readouterr().err
+        assert seen["polled"] == []
+
+    def test_client_error_returns_1(self, monkeypatch, capsys):
+        from privacyfence.peek_client import PeekClientError
+
+        self._patch(monkeypatch, [PeekClientError("boom")], prompt=self.BASE)
+        assert daemon_main.run_peek_login({}) == 1
+        assert "Peek sign-in failed: boom" in capsys.readouterr().err
+
+    def test_bad_typed_address_returns_1(self, monkeypatch, capsys):
+        self._patch(monkeypatch, [], prompt="")
+        assert daemon_main.run_peek_login({}) == 1
+        assert "Peek sign-in failed: Enter the Peek server address" in capsys.readouterr().err
+
+
 class TestTelegramSetupRunner:
     def test_missing_app_credentials_prints_error_and_returns_1(self, monkeypatch, capsys):
         monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: None)
@@ -3179,6 +3350,14 @@ class TestMain:
         assert result == 0
         assert calls == [1]
 
+    def test_peek_login_flag_dispatches_with_the_org_config(self, monkeypatch):
+        self._patch_config(monkeypatch)
+        seen = []
+        monkeypatch.setattr(daemon_main, "run_peek_login", lambda org_config: seen.append(org_config) or 0)
+
+        assert daemon_main.main(["--peek-login"]) == 0
+        assert len(seen) == 1
+
     def test_no_oauth_flag_calls_run_app(self, monkeypatch):
         self._patch_config(monkeypatch)
         calls = []
@@ -3205,7 +3384,7 @@ class TestMain:
         assert result == 0
         assert calls == [1]
 
-    @pytest.mark.parametrize("flag", ["--gmail-oauth", "--telegram-setup"])
+    @pytest.mark.parametrize("flag", ["--gmail-oauth", "--telegram-setup", "--peek-login"])
     def test_oauth_and_telegram_flags_do_not_trigger_the_separation_gate(self, monkeypatch, flag):
         # A password-prompting admin/UAC/polkit dialog popping up during a
         # scripted, headless `--gmail-oauth` invocation would be a surprising
@@ -3214,6 +3393,7 @@ class TestMain:
         self._patch_config(monkeypatch)
         monkeypatch.setattr(daemon_main, "run_gmail_oauth", lambda org_config: 0)
         monkeypatch.setattr(daemon_main, "run_telegram_setup", lambda: 0)
+        monkeypatch.setattr(daemon_main, "run_peek_login", lambda org_config: 0)
         calls = []
         monkeypatch.setattr(
             daemon_main.privilege_separation, "enforce_separation", lambda: calls.append(1)

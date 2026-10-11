@@ -90,6 +90,13 @@ the request on the card, once.
 | `jira_get_issue` | this project, if I'm reporter, if I'm assignee |
 | `jira_search_issues_with_fields` | this project |
 
+### Peek
+
+| Tool | Always allow buttons |
+|---|---|
+| `peek_get_comments` |  |
+| `peek_get_stats` |  |
+
 ### Salesforce
 
 | Tool | Always allow buttons |
@@ -213,6 +220,16 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `jira_create_issue` | this project |
 | `jira_transition_issue` | this project |
 | `jira_update_issue` | this project |
+
+### Peek
+
+| Tool | Always allow buttons |
+|---|---|
+| `peek_add_comment` |  |
+| `peek_delete_page` |  |
+| `peek_rename_page` |  |
+| `peek_set_visibility` |  |
+| `peek_upload_page` |  |
 
 ### Slack
 

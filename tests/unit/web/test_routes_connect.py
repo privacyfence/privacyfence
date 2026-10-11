@@ -13,6 +13,7 @@ has to come from the flow that started, not from whoever is signed in.
 """
 from __future__ import annotations
 
+import time
 import urllib.parse as up
 
 import pytest
@@ -21,7 +22,7 @@ from starlette.testclient import TestClient
 
 import json
 
-from privacyfence import apps_script_client, grist_auth, paths, slack_client
+from privacyfence import apps_script_client, grist_auth, paths, peek_client, slack_client
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_connect as rc
@@ -168,8 +169,9 @@ class TestConnectPageLook:
 
     def test_rows_are_cards_and_nothing_is_styled_inline(self):
         html = self._page()
-        # Ten OAuth services, Telegram (no app credentials on this install) and Grist.
-        assert html.count('<li class="service card cluster">') == 12
+        # Ten OAuth services, Telegram (no app credentials on this install), Peek (no bundle section)
+        # and Grist.
+        assert html.count('<li class="service card cluster">') == 13
         body = html.split('<div class="pf-connect stack">', 1)[1]
         assert "style=" not in body
 
@@ -521,6 +523,231 @@ class TestTelegramFlow:
         )
 
         assert called == []
+
+
+# ---------------------------------------------------------------------------- #
+# Peek
+# ---------------------------------------------------------------------------- #
+
+_PEEK_SERVER = "https://peek.example.com"
+_PEEK_ORG = {**_ORG_CONFIG, "peek": {"base_url": _PEEK_SERVER}}
+_PEEK_SECRET_CODE = "device-code-secret"
+_PEEK_SECRET_TOKEN = "peek-token-secret"
+
+
+def _peek_token_path(principal: Principal):
+    return paths.user_dir(principal) / "credentials" / "peek_token.json"
+
+
+def _write_peek_token(principal: Principal, base_url: str = _PEEK_SERVER) -> None:
+    path = _peek_token_path(principal)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"base_url": base_url, "token": _PEEK_SECRET_TOKEN}))
+
+
+def _login(expires_in: float = 600.0) -> peek_client.PeekDeviceLogin:
+    return peek_client.PeekDeviceLogin(
+        device_code=_PEEK_SECRET_CODE, user_code="ABCD-1234",
+        verification_url=f"{_PEEK_SERVER}/cli/verify?code=ABCD-1234", interval=2, expires_at=time.time() + expires_in,
+    )
+
+
+class TestPeekBox:
+    def _page(self, principal, org_config) -> str:
+        return rc._render_connect_page(
+            principal=principal, org_config=org_config, telegram_state=rc._TelegramState(),
+            flash_connected="", flash_error="", csrf="c", nonce="n",
+        )
+
+    def _peek_row(self, html: str) -> str:
+        return html.split('<li class="service peek card stack">', 1)[1].split("</li>", 1)[0]
+
+    def test_no_section_is_a_not_set_up_row(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        html = self._page(principal, _ORG_CONFIG)
+        assert '<span class="pf-service-chip">Peek</span><span class="badge badge-dashed">' in html
+        assert "service peek" not in html
+
+    def test_section_without_a_token_is_not_connected(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        row = self._peek_row(self._page(principal, _PEEK_ORG))
+        assert "Not connected" in row
+        assert f"Your organization uses {_PEEK_SERVER}." in row
+        assert "Connect Peek" in row and "Reconnect Peek" not in row
+
+    def test_token_for_the_bundle_server_is_connected(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        _write_peek_token(principal)
+        row = self._peek_row(self._page(principal, _PEEK_ORG))
+        assert "Connected" in row and "Not connected" not in row
+        assert "Reconnect Peek" in row
+
+    def test_token_for_another_server_is_not_connected(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        _write_peek_token(principal, "https://other.example.com")
+        row = self._peek_row(self._page(principal, _PEEK_ORG))
+        assert "Not connected" in row
+
+    def test_is_connected_follows_the_token_file(self):
+        principal = Principal(id="alice", email="alice@example.com")
+        assert rc._is_connected(principal, "peek") is False
+        _write_peek_token(principal)
+        assert rc._is_connected(principal, "peek") is True
+
+    def test_is_configured_needs_a_usable_section(self):
+        assert rc._is_configured(_PEEK_ORG, "peek") is True
+        assert rc._is_configured(_ORG_CONFIG, "peek") is False
+        assert rc._is_configured({"peek": {"base_url": "ftp://x"}}, "peek") is False
+
+
+class TestPeekFlow:
+    @pytest.mark.parametrize("step", ["start", "finish", "cancel"])
+    def test_a_post_after_the_session_ended_lands_on_the_signed_out_page(self, step):
+        app, _sessions, _registry = _app(org_config=_PEEK_ORG)
+        r = _client(app).post(f"/connect/peek/{step}", data={"csrf": "stale"})
+        assert r.status_code == 303
+        assert r.headers["location"] == "/signed-out"
+
+    @pytest.mark.parametrize("step", ["start", "finish", "cancel"])
+    def test_without_csrf_is_rejected(self, step):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).post(f"/connect/peek/{step}", cookies={org_session.SESSION_COOKIE: session_id})
+        assert r.status_code == 401
+
+    @pytest.mark.parametrize("step", ["start", "finish", "cancel"])
+    def test_cross_origin_is_rejected(self, step):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).post(
+            f"/connect/peek/{step}", data={"csrf": session_id},
+            cookies={org_session.SESSION_COOKIE: session_id}, headers={"Origin": "https://evil.example.com"},
+        )
+        assert r.status_code == 403
+
+    def _post(self, client, session_id, step):
+        return client.post(
+            f"/connect/peek/{step}", data={"csrf": session_id}, cookies={org_session.SESSION_COOKIE: session_id},
+        )
+
+    def _page(self, client, session_id) -> str:
+        return client.get("/connect", cookies={org_session.SESSION_COOKIE: session_id}).text
+
+    def _start(self, monkeypatch, app, sessions):
+        session_id, principal = _signed_in(sessions)
+        client = _client(app)
+        monkeypatch.setattr(peek_client, "start_device_login", lambda base: _login())
+        r = self._post(client, session_id, "start")
+        assert r.status_code == 303 and r.headers["location"] == "/connect"
+        return client, session_id, principal
+
+    def test_not_configured_shows_its_error_without_calling_peek(self, monkeypatch):
+        app, sessions, _registry = _app()
+        session_id, _principal = _signed_in(sessions)
+        called = []
+        monkeypatch.setattr(peek_client, "start_device_login", lambda base: called.append(base))
+        client = _client(app)
+        self._post(client, session_id, "start")
+        assert called == []
+        assert "Not set up by your organization" in self._page(client, session_id)
+
+    def test_start_shows_the_code_and_the_open_link(self, monkeypatch):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        client, session_id, _principal = self._start(monkeypatch, app, sessions)
+        page = self._page(client, session_id)
+        assert "ABCD-1234" in page
+        assert f'href="{_PEEK_SERVER}/cli/verify?code=ABCD-1234" target="_blank" rel="noopener noreferrer">Open Peek</a>' in page
+        assert _PEEK_SECRET_CODE not in page
+
+    def test_start_failure_shows_the_error(self, monkeypatch):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        session_id, _principal = _signed_in(sessions)
+
+        def boom(base):
+            raise peek_client.PeekClientError("Could not reach Peek at peek.example.com: ConnectionError")
+
+        monkeypatch.setattr(peek_client, "start_device_login", boom)
+        client = _client(app)
+        self._post(client, session_id, "start")
+        assert "Could not reach Peek at peek.example.com" in self._page(client, session_id)
+
+    def test_finish_approved_saves_the_token_and_evicts(self, monkeypatch):
+        evicted = []
+        registry = _registry()
+        monkeypatch.setattr(registry, "evict", lambda principal_id: evicted.append(principal_id))
+        app, sessions, _unused = _app(org_config=_PEEK_ORG, registry=registry)
+        client, session_id, principal = self._start(monkeypatch, app, sessions)
+        seen = []
+
+        def poll(base, device_code):
+            seen.append((base, device_code))
+            return peek_client.PeekLoginPoll(status="approved", token=_PEEK_SECRET_TOKEN)
+
+        monkeypatch.setattr(peek_client, "poll_device_login", poll)
+        r = self._post(client, session_id, "finish")
+        assert r.status_code == 303
+        assert seen == [(_PEEK_SERVER, _PEEK_SECRET_CODE)]
+        saved = json.loads(_peek_token_path(principal).read_text())
+        assert saved == {"base_url": _PEEK_SERVER, "token": _PEEK_SECRET_TOKEN}
+        assert evicted == [principal.id]
+        page = self._page(client, session_id)
+        assert "Connected" in page.split('<li class="service peek card stack">', 1)[1]
+        assert _PEEK_SECRET_TOKEN not in page and _PEEK_SECRET_CODE not in page
+
+    @pytest.mark.parametrize("status,message", [
+        ("pending", "Peek has not recorded your approval yet."),
+        ("denied", "The sign-in was denied in Peek."),
+        ("expired", "The sign-in code expired. Start again."),
+        ("consumed", "The sign-in code expired. Start again."),
+    ])
+    def test_finish_not_approved_shows_its_message(self, monkeypatch, status, message):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        client, session_id, principal = self._start(monkeypatch, app, sessions)
+        monkeypatch.setattr(peek_client, "poll_device_login", lambda base, code: peek_client.PeekLoginPoll(status=status))
+        self._post(client, session_id, "finish")
+        page = self._page(client, session_id)
+        assert message in page
+        assert not _peek_token_path(principal).exists()
+        assert (_PEEK_SECRET_CODE in page) is False
+        # Pending keeps the approval step; the others start over.
+        assert ("ABCD-1234" in page) is (status == "pending")
+
+    def test_finish_poll_error_keeps_the_step(self, monkeypatch):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        client, session_id, _principal = self._start(monkeypatch, app, sessions)
+
+        def boom(base, code):
+            raise peek_client.PeekClientError("Peek answered with a redirect (HTTP 302). Check the Peek server address.")
+
+        monkeypatch.setattr(peek_client, "poll_device_login", boom)
+        self._post(client, session_id, "finish")
+        page = self._page(client, session_id)
+        assert "Peek answered with a redirect" in page and "ABCD-1234" in page
+
+    def test_finish_past_expiry_resets(self, monkeypatch):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        session_id, _principal = _signed_in(sessions)
+        client = _client(app)
+        monkeypatch.setattr(peek_client, "start_device_login", lambda base: _login(expires_in=-1))
+        polled = []
+        monkeypatch.setattr(peek_client, "poll_device_login", lambda *a: polled.append(a))
+        self._post(client, session_id, "start")
+        self._post(client, session_id, "finish")
+        assert polled == []
+        assert "The sign-in code expired. Start again." in self._page(client, session_id)
+
+    def test_finish_without_a_started_sign_in_just_redirects(self):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        session_id, _principal = _signed_in(sessions)
+        r = self._post(_client(app), session_id, "finish")
+        assert r.status_code == 303 and r.headers["location"] == "/connect"
+
+    def test_cancel_clears_the_sign_in(self, monkeypatch):
+        app, sessions, _registry = _app(org_config=_PEEK_ORG)
+        client, session_id, _principal = self._start(monkeypatch, app, sessions)
+        self._post(client, session_id, "cancel")
+        page = self._page(client, session_id)
+        assert "ABCD-1234" not in page and "Connect Peek" in page
 
 
 # ---------------------------------------------------------------------------- #

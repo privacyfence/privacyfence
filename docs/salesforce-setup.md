@@ -120,7 +120,7 @@ and `columns` is a comma-separated list of the report's own column API names, su
 `OPPORTUNITY_ID` for the IDs only (use the name `reportMetadata.detailColumns` shows for your
 report). An approved-report rule covers the export of that report, and the PII gate still
 applies. `salesforce.report_max_pages` caps the runs an export may use.
-See [ADR 0151](adr/0151-exports-write-a-file-and-return-only-counts-and-a-hash.md).
+See [ADR 0155](adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.md).
 
 ## Troubleshooting
 

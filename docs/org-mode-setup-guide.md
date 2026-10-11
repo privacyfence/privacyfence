@@ -44,7 +44,7 @@ What people see, all at `https://<your-hostname>`:
 |---|---|
 | `/login` | Sign in through the identity provider. |
 | `/signed-out` | Where **Sign out** lands, with a link to sign in again. |
-| `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence, Grist and Telegram. |
+| `/connect` | Connect or reconnect Gmail, Drive, Calendar, Contacts, Tasks, Apps Script, Slack, Salesforce, Jira, Confluence, Grist, Peek and Telegram. |
 | `/approvals` | Pending AI requests to approve or deny. |
 | `/security` | Enroll and remove passkeys. |
 | `/settings` | Each person's own always-allow rules and recent audit entries; for admins also the install-wide privacy policy and the **AI systems** page. |
@@ -191,6 +191,7 @@ the connector's console must list it exactly.
 | Salesforce | `https://pf.acme.example.com/oauth/callback/salesforce` | `--salesforce-consumer-key`, `--salesforce-consumer-secret`, `--salesforce-login-url` | [Salesforce setup](salesforce-setup.md) |
 | Jira and Confluence | `https://pf.acme.example.com/oauth/callback/atlassian` | `--atlassian-client-id`, `--atlassian-client-secret` | [Atlassian setup](atlassian-setup.md) |
 | Grist | `https://pf.acme.example.com/oauth/callback/grist` (OAuth only) | `--grist-server-url`, and for OAuth `--grist-client-id`, `--grist-client-secret`, `--grist-auth-server-url` | [Grist setup](grist-setup.md) |
+| Peek | none (device sign-in) | `--peek-base-url` | [Peek setup](peek-setup.md) |
 | Telegram | none | none | [Telegram setup](telegram-setup.md) |
 
 Notes:
@@ -205,6 +206,8 @@ Notes:
   scopes, which makes audit and revocation harder to read.
 - **Jira and Confluence** share one Atlassian app and one redirect URI, because an Atlassian OAuth
   app accepts only one callback URL.
+- **Peek** has no OAuth app and no callback URL: each person approves a code in Peek itself on
+  `/connect`. `--peek-base-url` names the Peek server; the connector is offered only with it.
 - **Telegram** needs nothing from you: its app credentials ship inside PrivacyFence. Each person
   signs in with their phone number on `/connect`.
 - A connector appears on `/connect` only if its section is in the bundle.
@@ -275,6 +278,7 @@ The script writes `org_config.json` with mode `0600` and prints what it contains
 | `--grist-server-url URL` | none | The Grist server people connect to. Needed for every Grist section; org mode offers Grist only with it. |
 | `--grist-client-id`, `--grist-client-secret` | none | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
+| `--peek-base-url URL` | none | The Peek server people connect to. Pins it in local mode; organization mode offers Peek only with it. |
 | `--step-up-enabled` / `--step-up-disabled` | off | Require a fresh passkey or sign-in before an approval is released ([section 12](#12-approvals-and-step-up)). |
 | `--step-up-scope SCOPE` | `writes_and_pii_reads` | Which approvals need step-up: `writes`, `writes_and_pii_reads` or `writes_and_reads`. |
 | `--step-up-require-passkey` / `--step-up-no-require-passkey` | off | Accept only a passkey for step-up, never a fresh sign-in. |

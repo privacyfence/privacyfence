@@ -35,6 +35,7 @@ Use dedicated accounts that share nothing with a personal or production identity
 | Atlassian | A free Jira + Confluence Cloud site | One OAuth app covers both products. |
 | Salesforce | A Developer Edition org | Use `--salesforce-login-url https://login.salesforce.com` when building the bundle. |
 | Grist | A getgrist.com account holding nothing real | The runner connects with that account's personal API key, in `credentials/grist_token.json` written by hand as `{"auth": "api_key", "server_url": "https://docs.getgrist.com", "api_key": "…"}` with mode 600. There is no bundle section. |
+| Peek | A QA account on a QA Peek server | The fork's Docker image, `ghcr.io/andras-tkcs/peek:main`, runs on the self-hosted runner's host, bound to `127.0.0.1:7700` with `PEEK_BASE_URL=http://localhost:7700`. The recorder reaches it as `http://localhost:7700`, so no TLS is involved. The runner's token is in `credentials/peek_token.json`, written by hand as `{"base_url": "http://localhost:7700", "token": "…"}` with mode 600; take the token from `peek login --host http://localhost:7700` through an SSH tunnel. There is no bundle section. |
 | Telegram | Your own account | No dedicated account; `privacyfence-app --telegram-setup` signs in with a phone number and code. |
 
 For each of Google, Slack, Atlassian and Salesforce, follow the "For IT admins" section of
@@ -226,6 +227,19 @@ if it reports `database is locked`.
 |---|---|---|---|
 | Approved chat | `approved_chats` and `approved_chats_all_results` | a chat id (Saved Messages or a low-stakes chat) | `telegram.read_chat_messages` |
 
+### Seed: Peek
+
+- [ ] On the QA Peek server, upload a private page named `PrivacyFence QA [QATEST].html` with the body
+      `Synthetic PrivacyFence QA test page. No real information.`
+- [ ] Add one comment to it whose text carries `[QATEST]`.
+- [ ] Set `peek.page_slug` to the page's slug (the last path segment of its address). The recorder
+      refuses to record unless the page's name and every comment on it carry `[QATEST]`.
+
+`--lifecycle` uploads a private `[QATEST-LIFECYCLE]` page, makes it public, renames it, posts a
+comment as the QA account (the fork's account comment endpoint), reads the comment back and deletes
+the page by the slug the rename returned, then checks that it is no longer listed. Visit stats are
+never recorded: they carry IP addresses.
+
 ### Seed: Salesforce
 
 - [ ] Create two or three Account records named like `PrivacyFence QA — Acme Test Co [QATEST]` and
@@ -324,6 +338,7 @@ fixture files `--record` writes under `tests/fixtures/live/<connector>/`:
 | `tasks` | **`task_list_id`**, **`seed_task_id`** | `get_task.json` | creates, updates and deletes one task in `task_list_id` |
 | `apps_script` | `seed_script_title`, `seed_script_id` | `get_content.json` | — |
 | `telegram` | `chat_id`, `history_limit` | `get_messages.json` | — |
+| `peek` | **`page_slug`** | `list_pages.json`, `get_comments.json` | uploads, publishes, renames, comments on and deletes one page |
 | `salesforce` | `report_name`, `report_id`, `object_type`, `page_by_label`, `summary_report_name`, `seed_record_name`, `seed_record_id` | `list_reports.json`, `run_report_page.json`, `get_record.json` | — |
 | `grist` | **`doc_id`**, `table_id`, `lifecycle_table_id` | `list_documents.json`, `list_columns.json`, `get_records.json` | adds and updates one row in `lifecycle_table_id`; never deletes it |
 | `jira` | `project_key`, `seed_issue_summary`, `seed_issue_key` | `list_projects.json`, `get_issue.json` | creates, updates and deletes one issue in `project_key` |
@@ -351,7 +366,7 @@ Confluence) and Salesforce, in that order. Each step opens a browser tab for con
 | `--continue-on-error` | Runs every requested step instead of stopping at the first failure. |
 | `--config PATH` | Settings file passed through to the daemon. Default: `config/settings.yaml`. |
 
-Grist has no step here: its QA credential is an API key file written by hand (see
+Grist and Peek have no step here: their QA credentials are token files written by hand (see
 [QA accounts and organization config](#qa-accounts-and-organization-config)).
 
 Telegram is not included; run `privacyfence-app --telegram-setup` by hand (see
@@ -375,7 +390,7 @@ Always use the project venv; the recorder imports the same third-party clients a
 - `--record` makes the same calls, redacts identity fields (`redact()` and the connector-specific
   passes), de-identifies structural ids and URLs (`deidentify_structural_fields()`), and writes
   `tests/fixtures/live/<connector>/<method>.json` for every result that passed.
-- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira` and `tasks` only (the comment above
+- `--lifecycle` runs for `calendar`, `confluence`, `grist`, `jira`, `peek` and `tasks` only (the comment above
   `LIFECYCLE_CHECKS` says why the others are excluded) and never writes a fixture. A cleanup that
   ran but left the object behind fails the run. Confluence and Grist have no cleanup step.
 
@@ -410,6 +425,8 @@ A dedicated Linux host or VM, not shared with other repositories or workloads:
   `pythonX.Y-venv` package matching `python3 --version`);
 - the build prerequisites of PrivacyFence's dependencies;
 - outbound HTTPS to GitHub and the provider APIs (no inbound ports are needed);
+- the QA Peek container (`ghcr.io/andras-tkcs/peek:main`, bound to `127.0.0.1:7700`, with
+  `PEEK_BASE_URL=http://localhost:7700`) running on the same host;
 - OS updates enabled and key-only SSH.
 
 If the repository restricts allowed actions, `peter-evans/create-pull-request` must be on the
@@ -647,6 +664,17 @@ For each representative read, list, search, create, update, send or upload tool:
   prompts.
 - **Listing.** `grist_list_documents` lists the QA documents. Where the server refuses it under
   OAuth, the tool answers with that refusal message.
+
+### Peek checks
+
+- **Connect.** Signing in with the device flow works in Settings and on `/connect`, and the
+  password is never shown.
+- **Review cards.** `peek_get_comments` and `peek_get_stats` prompt for review; the stats card shows
+  visitor names and times, with no IP address.
+- **Popup cards.** `peek_upload_page`, `peek_set_visibility`, `peek_rename_page` and
+  `peek_delete_page` each name the server.
+- **Comments.** `peek_add_comment` posts under the QA account's name, not as `anonymous`. Against a
+  stock Peek server without the fork's endpoint it answers "no account comment endpoint".
 
 ### Jira checks
 

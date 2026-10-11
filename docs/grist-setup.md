@@ -156,8 +156,8 @@ only the row count, the column names and the file's SHA-256, not the rows.
 - **Round trip.** To write an export back with `grist_update_csv`, keep only `id` and the data
   columns you change; `id` is the key column.
 
-[ADR 0151](adr/0151-exports-write-a-file-and-return-only-counts-and-a-hash.md) and
-[ADR 0152](adr/0152-grist-export-sql-reads-through-the-sql-endpoint.md) record why.
+[ADR 0155](adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) and
+[ADR 0156](adr/0156-grist-export-sql-reads-through-the-sql-endpoint.md) record why.
 
 ## Auto-accept rules
 

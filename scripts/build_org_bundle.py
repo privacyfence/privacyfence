@@ -81,6 +81,20 @@ def _grist_url(value: str) -> str:
     return url
 
 
+def _peek_url(value: str) -> str:
+    """Validate the Peek address and strip its trailing ``/`` (mirrors ``peek_client.normalize_base_url``;
+    this script stays standard-library only)."""
+    url = value.strip().rstrip("/")
+    parts = urlsplit(url)
+    if not parts.hostname or parts.scheme not in ("https", "http") or (
+        parts.scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1", "::1")
+    ):
+        raise SystemExit("--peek-base-url must be an https:// address (http:// only for localhost).")
+    if parts.username is not None or parts.password is not None or parts.query or parts.fragment:
+        raise SystemExit("--peek-base-url must not contain a user name, password, query or fragment.")
+    return url
+
+
 def _canonical_payload_bytes(bundle: dict[str, Any]) -> bytes:
     """Mirrors src/privacyfence/org_bundle_signing.py's own
     ``_canonical_payload_bytes`` exactly -- the two MUST stay byte-for-
@@ -233,6 +247,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--grist-auth-server-url", metavar="URL",
         help="Where Grist's sign-in discovery document is served, when the server itself does not serve it "
              "(only with the client id and secret). Default: the server URL.",
+    )
+
+    peek = parser.add_argument_group("Peek")
+    peek.add_argument(
+        "--peek-base-url", metavar="URL",
+        help="The Peek server people connect to (for example https://peek.example.com). Pins it in local mode; "
+             "organization mode offers Peek only with it.",
     )
 
     mode = parser.add_argument_group(
@@ -573,6 +594,9 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("--grist-auth-server-url needs --grist-client-id and --grist-client-secret.")
         bundle["grist"] = grist_section
 
+    if args.peek_base_url:
+        bundle["peek"] = {"base_url": _peek_url(args.peek_base_url)}
+
     if args.enable_unattended_sessions:
         bundle["unattended_sessions"] = {"enabled": True}
     elif args.disable_unattended_sessions:
@@ -746,7 +770,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         bundle["audit_forwarding"] = forwarding_section
 
-    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist") if k in bundle]
+    services = [k for k in ("google", "slack", "salesforce", "atlassian", "grist", "peek") if k in bundle]
     if not services and "unattended_sessions" not in bundle and "mode" not in bundle:
         raise SystemExit(
             "No service, --mode, or --enable/disable-unattended-sessions flags given — nothing to write."

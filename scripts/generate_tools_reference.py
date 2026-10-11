@@ -54,6 +54,7 @@ CONNECTOR_TITLES: dict[str, str] = {
     "jira": "Jira",
     "confluence": "Confluence",
     "grist": "Grist",
+    "peek": "Peek",
 }
 
 # Short names for the summary table, same keys.
@@ -70,6 +71,7 @@ CONNECTOR_SHORT: dict[str, str] = {
     "jira": "Jira",
     "confluence": "Confluence",
     "grist": "Grist",
+    "peek": "Peek",
 }
 
 GATE_ORDER: tuple[str, ...] = ("auto", "review", "popup")

@@ -256,6 +256,7 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # direction above.
     "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
+    "peek_start_login", "peek_finish_login", "peek_cancel_login",
     "grist_connect", "grist_cancel_auth",
     "set_log_level", "set_notifications_detail",
     # Changes what a draft *contains* (the user's own signature), never
@@ -1332,6 +1333,9 @@ def build_org_routes(
             },
             "connectors": [],
             "telegram_auth": {"step": None, "error": ""},
+            "peek_auth": {
+                "step": None, "error": "", "user_code": "", "verification_url": "", "pinned_base_url": "",
+            },
             "grist_signin": "unavailable",
             "grist_server_url_pinned": "",
             "grist_auth": {"error": ""},

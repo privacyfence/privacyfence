@@ -1,4 +1,4 @@
-# ADR 0151: Exports write a file and return only counts and a hash
+# ADR 0155: Exports write a file and return only counts and a hash
 
 ## Status
 
@@ -72,7 +72,7 @@ Two separate tools write a whole result to a file on the user's computer.
 
 - `tests/unit/connectors/test_grist_connector.py`: `TestExportRecords`.
 - `tests/unit/connectors/test_salesforce_connector.py`: `TestExportReport`.
-- `tests/unit/connectors/test_grist_connector.py`: `TestExportSql` (the same flow for ADR 0152).
+- `tests/unit/connectors/test_grist_connector.py`: `TestExportSql` (the same flow for ADR 0156).
 - `tests/unit/test_export_files.py` and `tests/unit/test_local_files.py`: rendering, the sample, and
   the delivery size check.
 - `tests/unit/policy` and `tests/unit/test_systemic_gate_invariants.py`: the operation keys, verbs
@@ -81,4 +81,4 @@ Two separate tools write a whole result to a file on the user's computer.
 ## Related
 
 - [`export_files.py`](../../src/privacyfence/export_files.py), [`connectors/grist.py`](../../src/privacyfence/connectors/grist.py), [`connectors/salesforce.py`](../../src/privacyfence/connectors/salesforce.py)
-- ADR [0007](0007-local-file-bridge.md), ADR [0015](0015-unattended-session-flag-is-advisory-only.md), ADR [0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md), ADR [0133](0133-salesforce-reports-page-by-a-unique-key-column.md), ADR [0144](0144-grist-rules-are-per-document-and-set-from-settings-not-the-card.md), ADR [0146](0146-grist-records-page-by-record-id.md), ADR [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md), ADR [0152](0152-grist-export-sql-reads-through-the-sql-endpoint.md)
+- ADR [0007](0007-local-file-bridge.md), ADR [0015](0015-unattended-session-flag-is-advisory-only.md), ADR [0073](0073-an-approved-write-is-single-use-and-an-approved-read-replays.md), ADR [0133](0133-salesforce-reports-page-by-a-unique-key-column.md), ADR [0144](0144-grist-rules-are-per-document-and-set-from-settings-not-the-card.md), ADR [0146](0146-grist-records-page-by-record-id.md), ADR [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md), ADR [0156](0156-grist-export-sql-reads-through-the-sql-endpoint.md)

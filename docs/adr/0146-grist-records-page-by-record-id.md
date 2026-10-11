@@ -3,7 +3,7 @@
 ## Status
 
 Accepted — 2026-10-10. Implemented.
-Amended by [ADR 0152](0152-grist-export-sql-reads-through-the-sql-endpoint.md): `grist_export_sql` uses the SQL endpoint for exports; paging `grist_get_records` is unchanged.
+Amended by [ADR 0156](0156-grist-export-sql-reads-through-the-sql-endpoint.md): `grist_export_sql` uses the SQL endpoint for exports; paging `grist_get_records` is unchanged.
 
 ## Context
 
