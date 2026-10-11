@@ -106,6 +106,22 @@ changed.
   one read may use; a read that needs more fails.
 - Totals and other aggregates on a later page cover only the rows from that page on.
 
+To write a whole report to a CSV or JSON file instead of reading it into the conversation, the
+assistant uses `salesforce_export_report`. It pages through the report itself with `page_by`, shows
+one review card, and returns only the row count, the column names and the file's SHA-256. It takes
+the same `columns` and `filters` as `salesforce_run_report`, so an incremental pull needs no new
+parameter. For example, these filters export only the rows changed since a date:
+
+```json
+[{"column": "LAST_UPDATE", "operator": "greaterOrEqual", "value": "2026-10-04"}]
+```
+
+and `columns` is a comma-separated list of the report's own column API names, such as
+`OPPORTUNITY_ID` for the IDs only (use the name `reportMetadata.detailColumns` shows for your
+report). An approved-report rule covers the export of that report, and the PII gate still
+applies. `salesforce.report_max_pages` caps the runs an export may use.
+See [ADR 0151](adr/0151-exports-write-a-file-and-return-only-counts-and-a-hash.md).
+
 ## Troubleshooting
 
 **`redirect_uri_mismatch`** — the Callback URL on the app must include

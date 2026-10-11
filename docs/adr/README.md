@@ -238,3 +238,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted |
 | [0149](0149-the-whole-tree-mypy-run-is-blocking.md) | The whole-tree mypy run is blocking | Accepted |
 | [0150](0150-ruff-format-is-not-enforced.md) | `ruff format` is not enforced | Accepted |
+| [0151](0151-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted |
+| [0152](0152-grist-export-sql-reads-through-the-sql-endpoint.md) | `grist_export_sql` reads through Grist's SQL endpoint | Accepted; amends 0146 |
