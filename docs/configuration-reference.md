@@ -250,6 +250,8 @@ How the daemon treats the file:
 | `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
 | `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
 | `--enable-unattended-sessions` / `--disable-unattended-sessions` | not written (off) | `unattended_sessions.enabled` | Allow `privacyfence_begin_unattended_session`. See [How PrivacyFence works](how-it-works.md#unattended-sessions). Applies in both modes. |
+| `--enable-scoped-tokens` / `--disable-scoped-tokens` | not written (off) | `scoped_tokens.enabled` | Let each person create scoped AI client tokens in Settings (organization mode). |
+| `--scoped-token-max-days N` | `90` | `scoped_tokens.max_days` | The longest a scoped token may last, 1-365 days. |
 | `--mode {local,org}` | not written (local) | `mode` | `org` needs `--server-issuer-url`, `--idp-issuer`, `--idp-client-id`, `--idp-client-secret` and `--sign-key`. `local` removes every organization-only section from a merged bundle. |
 | `--server-issuer-url URL` | none | `server.issuer_url` | The server's public origin, e.g. `https://pf.example.com`. Must be an absolute `http(s)` URL with a host name. Register `<issuer-url>/oauth/idp/callback` and `<issuer-url>/oauth/idp/login-callback` with your identity provider. |
 | `--server-bind-host HOST` | `127.0.0.1` | `server.bind_host` | Loopback only, for a reverse proxy on the same host. Change it only when the proxy runs elsewhere. |

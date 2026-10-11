@@ -283,6 +283,50 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     )
 
 
+def scoped_token_page_data(
+    principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
+) -> dict[str, Any]:
+    """What ``window.__pfScopedTokens`` carries for ``principal``: their
+    tokens, the rules they may carry and the tools of their enabled
+    connectors. ``delivery`` is how a new secret reaches the person:
+    ``"companion"`` (local mode, ADR 0164) or ``"once"`` (organization mode,
+    ADR 0165). Must not be called under another principal's scope.
+    """
+    now = time.time()
+    with principal_scope(principal):
+        rules = {
+            rule.id: {
+                "id": rule.id, "sentence": describe.rule_sentence(rule), "tools": list(describe.covered_tools(rule)),
+            }
+            for rule in auto_accept.get_policy_v2_store_rules()
+        }
+    by_connector: dict[str, list[str]] = {}
+    for name in sorted(auto_accept.TOOL_TO_GATE):
+        connector = name.split("_", 1)[0]
+        if connector in connector_names:
+            by_connector.setdefault(connector, []).append(name)
+    tokens = []
+    for token in scoped_tokens.get_store().tokens_for(principal):
+        expired = token.expired(now)
+        days_left = token.days_left(now)
+        tokens.append({
+            "id": token.id, "label": token.label, "created_at": token.created_at,
+            "expires_at": token.expires_at, "days_left": days_left,
+            "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
+            "rules": [
+                {"id": rule_id, "sentence": rules[rule_id]["sentence"]} if rule_id in rules
+                else {"id": rule_id, "missing": True}
+                for rule_id in sorted(token.rule_ids)
+            ],
+            "tools": sorted(token.tools),
+        })
+    return {
+        "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
+        "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": list(rules.values()),
+        "tools": [{"connector": connector, "tools": names} for connector, names in sorted(by_connector.items())],
+    }
+
+
 def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWiring:
     """What the Settings page's Scoped tokens section runs on in local mode
     (ADR 0164): the process-wide store, for the owner, under the owner's
@@ -311,40 +355,9 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
             return send_mcp_token(secret)
 
     def _page_data() -> dict[str, Any]:
-        now = time.time()
-        with principal_scope(LOCAL_PRINCIPAL):
-            rules = {
-                rule.id: {
-                    "id": rule.id, "sentence": describe.rule_sentence(rule), "tools": list(describe.covered_tools(rule)),
-                }
-                for rule in auto_accept.get_policy_v2_store_rules()
-            }
-        enabled = set(mcp_dispatcher.connectors)
-        by_connector: dict[str, list[str]] = {}
-        for name in sorted(auto_accept.TOOL_TO_GATE):
-            connector = name.split("_", 1)[0]
-            if connector in enabled:
-                by_connector.setdefault(connector, []).append(name)
-        tokens = []
-        for token in scoped_tokens.get_store().tokens_for(LOCAL_PRINCIPAL):
-            expired = token.expired(now)
-            days_left = token.days_left(now)
-            tokens.append({
-                "id": token.id, "label": token.label, "created_at": token.created_at,
-                "expires_at": token.expires_at, "days_left": days_left,
-                "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
-                "rules": [
-                    {"id": rule_id, "sentence": rules[rule_id]["sentence"]} if rule_id in rules
-                    else {"id": rule_id, "missing": True}
-                    for rule_id in sorted(token.rule_ids)
-                ],
-                "tools": sorted(token.tools),
-            })
-        return {
-            "delivery": "companion", "max_days": policy.max_days, "default_days": scoped_tokens.DEFAULT_DAYS,
-            "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": list(rules.values()),
-            "tools": [{"connector": connector, "tools": names} for connector, names in sorted(by_connector.items())],
-        }
+        return scoped_token_page_data(
+            LOCAL_PRINCIPAL, policy=policy, delivery="companion", connector_names=set(mcp_dispatcher.connectors),
+        )
 
     return ScopedTokenWiring(
         store_create=_create, store_revoke=_revoke, store_revoke_all=_revoke_all, send_secret=_send,
@@ -1263,6 +1276,17 @@ def _build_org_app(
             # own module docstring on ``nav_items``.
             nav_items=web_shell.ORG_NAV_ITEMS,
         ))
+    scoped_token_policy = scoped_tokens.policy_from_org_config(org.org_config, org_mode=True)
+    org_scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None
+    if mcp_dispatcher is not None:
+        dispatcher = mcp_dispatcher
+
+        def org_scoped_token_page_data(principal: Principal) -> dict[str, Any]:
+            # The dispatcher's connector set is the principal's own while scoped to them.
+            return scoped_token_page_data(
+                principal, policy=scoped_token_policy, delivery="once", connector_names=set(dispatcher.connectors),
+            )
+
     # Mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
     # already required parameters of this function either way.
@@ -1280,6 +1304,10 @@ def _build_org_app(
         oauth_provider=org.provider,
         # Auto-accept rule values resolve to names through the viewing principal's own connectors.
         connector_registry=org.connector_registry,
+        # ADR 0165: the administrator's opt-in and cap from the org config bundle; the section
+        # needs /mcp, so without a dispatcher the page offers none.
+        scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
+        scoped_token_page_data=org_scoped_token_page_data,
     ))
 
     lifespan = None

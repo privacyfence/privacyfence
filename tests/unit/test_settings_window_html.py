@@ -622,10 +622,34 @@ class TestScopedTokensSection:
         assert "['scoped_tokens', 'Scoped tokens']" in html
         assert "</script><b>" not in html
         for mode_kwargs in ({}, {"mode": "org", "is_admin": True}):
-            hidden = build_html(_make_state(), **mode_kwargs) if not mode_kwargs else build_html(
-                _make_state(), scoped_tokens=self.DATA, **mode_kwargs)
+            hidden = build_html(_make_state(), **mode_kwargs)
             assert self._caps(hidden)["sections"]["scoped_tokens"] is False
             assert "window.__pfScopedTokens = " not in hidden
+
+    def test_org_mode_shows_the_section_only_when_enabled(self):
+        # The org route passes page data only once the administrator has enabled the feature.
+        data = {**self.DATA, "delivery": "once", "max_days": 30}
+        for is_admin in (True, False):
+            shown = build_html(_make_state(), mode="org", is_admin=is_admin, scoped_tokens=data)
+            assert self._caps(shown)["sections"]["scoped_tokens"] is True
+            assert '"delivery": "once"' in shown
+            assert '"max_days": 30' in shown
+            assert "</script><b>" not in shown
+            hidden = build_html(_make_state(), mode="org", is_admin=is_admin)
+            assert self._caps(hidden)["sections"]["scoped_tokens"] is False
+            assert "window.__pfScopedTokens = " not in hidden
+
+    def test_org_mode_uses_the_one_time_dialog(self):
+        html = build_html(_make_state(), mode="org", scoped_tokens={**self.DATA, "delivery": "once"})
+        assert "window.__pfShowScopedSecret = function (secret, onClose)" in html
+        assert "Copy this token now. It is not stored and cannot be shown again." in html
+        assert "navigator.clipboard.writeText(field.value)" in html
+        assert "A new token is shown once and cannot be shown again." in html
+        # The secret goes into a read-only field's value, never into markup, and is wiped on close.
+        assert "field.readOnly = true;" in html
+        assert "field.value = secret;" in html
+        assert "field.value = '';" in html
+        assert "innerHTML = secret" not in html
 
     def test_expiring_and_expired_tokens_are_flagged(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
