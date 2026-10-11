@@ -192,6 +192,16 @@ jobs:
           name: pypi-dist
           path: dist/
 
+      # privacyfence-sync (sync/) is released with the same version, from the same tag. Its own
+      # artifact, so the Telegram check-dist step and the R2 upload below keep reading dist/ only.
+      - name: Build privacyfence-sync
+        run: python -m build --sdist --wheel sync --outdir sync-dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pypi-dist-sync
+          path: sync-dist/
+
       # Drives both the public-index gating below (see docs/releasing.md and
       # scripts/r2_release.py's module docstring: only a "stable" tag reaches PyPI/TestPyPI --
       # alpha/beta/rc stop at the private R2 mirror published by the publish-r2 job) and that
@@ -279,6 +289,46 @@ jobs:
       - name: Publish to PyPI
         # See the TestPyPI job's "Publish to TestPyPI" step above for why
         # this is pinned to release/v1's tip rather than a one-off tag.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2 (release/v1)
+        with:
+          skip-existing: true
+
+  # privacyfence-sync's own uploads, after the main ones, as separate jobs: a trusted publisher
+  # that is not registered yet for `privacyfence-sync` fails only these, never the `privacyfence`
+  # upload above. Same pinned action, `if:` and environments as their counterparts.
+  publish-testpypi-sync:
+    needs: [build, publish-testpypi]
+    if: needs.build.outputs.channel == 'stable'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pypi-dist-sync
+          path: dist/
+
+      - name: Publish privacyfence-sync to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2 (release/v1)
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi-sync:
+    needs: [build, publish-pypi, publish-testpypi-sync]
+    if: needs.build.outputs.channel == 'stable'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pypi-dist-sync
+          path: dist/
+
+      - name: Publish privacyfence-sync to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2 (release/v1)
         with:
           skip-existing: true

@@ -1069,6 +1069,18 @@ class TestPreflightAutoAccept:
         )
         assert verdict != "auto_accept"
 
+    def test_stored_peek_page_rule_covers_a_new_version_only(self):
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-peek", predicate="peek.page", value=["dash"],
+                operations=frozenset({"peek.upload_page"}),
+            ),
+        ])
+        verdict, matched_rule, _id, _reason = gate.preflight_auto_accept("peek.upload_page", {"slug": "dash"})
+        assert (verdict, matched_rule) == ("auto_accept", "r-peek")
+        verdict, _rule, _id, _reason = gate.preflight_auto_accept("peek.upload_page", {"slug": ""})
+        assert verdict != "auto_accept"
+
     @pytest.mark.parametrize("verb, operation", [
         (Verb.READ, "grist.read_records"),  # also what grist_export_records and grist_export_sql resolve to
         (Verb.CREATE, "grist.import_csv"),
@@ -2065,6 +2077,215 @@ class TestPIIGate:
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
         assert entries[0]["pii_detected"] is False
+
+
+class TestPersonalDataRules:
+    """A rule with ``allow_personal_data`` lets the tools in ``PERSONAL_DATA_RULE_TOOLS``
+    auto-accept despite a PII finding (ADR 0157) and nothing else."""
+
+    PII_TEXT = "Please wire the deposit to DE89370400440532013000, thanks."
+
+    @staticmethod
+    def _install(monkeypatch, *, allow_personal_data: bool) -> PolicyRule:
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate="grist.document", value=["doc1"],
+            operations=frozenset({"grist.read_records"}), allow_personal_data=allow_personal_data,
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return rule
+
+    @staticmethod
+    def _call(tool: str = "grist_export_records", **overrides):
+        return gate.gated_call(**base_kwargs(
+            connector="grist", tool=tool, gate="review", args={"doc_id": "doc1"}, **overrides,
+        ))
+
+    async def test_flagged_rule_auto_accepts_an_export_despite_pii(self, monkeypatch, audit_dir):
+        rule = self._install(monkeypatch, allow_personal_data=True)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        result = await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert result is FILTERED
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+        assert entry["pii_categories"] == ["IBAN (bank account number)"]
+
+    async def test_flagged_rule_auto_accepts_in_an_unattended_session(self, monkeypatch, audit_dir):
+        self._install(monkeypatch, allow_personal_data=True)
+
+        with gate.unattended_scope(True):
+            result = await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert result is FILTERED
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+    async def test_a_flagged_rule_outside_a_tokens_scope_does_not_let_personal_data_through(
+        self, monkeypatch, audit_dir,
+    ):
+        self._install(monkeypatch, allow_personal_data=True)
+
+        with scoped_tokens.token_scope(_scoped_token(rule_ids=("r-other",), tools=("grist_export_records",))):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_a_flagged_rule_inside_a_tokens_scope_still_lets_personal_data_through(
+        self, monkeypatch, audit_dir,
+    ):
+        rule = self._install(monkeypatch, allow_personal_data=True)
+
+        with scoped_tokens.token_scope(_scoped_token(rule_ids=(rule.id,), tools=("grist_export_records",))):
+            result = await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert result is FILTERED
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["decision"], entry["rule_id"], entry["pii_detected"]) == ("auto_accepted", rule.id, True)
+
+    async def test_unflagged_rule_still_shows_the_card_on_pii(self, monkeypatch, audit_dir):
+        self._install(monkeypatch, allow_personal_data=False)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert len(popups) == 1
+
+    async def test_flag_does_not_apply_to_grist_get_records(self, monkeypatch, audit_dir):
+        self._install(monkeypatch, allow_personal_data=True)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
+        assert len(popups) == 1
+
+        with gate.unattended_scope(True):
+            with pytest.raises(RuntimeError, match="unattended session"):
+                await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
+        assert read_audit_entries(audit_dir)[-1]["decision"] == "denied_unattended"
+
+    async def test_flag_applies_to_jira_export_issues(self, monkeypatch, audit_dir):
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate="approved_project_keys_all_results", value=["ENG"],
+            operations=frozenset({"jira.read_issue"}), allow_personal_data=True,
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        result = await gate.gated_call(**base_kwargs(
+            connector="jira", tool="jira_export_issues", gate="review",
+            raw_data=[SimpleNamespace(key="ENG-1")], args={"jql": "project = ENG"},
+            pii_scan_text=self.PII_TEXT,
+        ))
+
+        assert result is FILTERED
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+
+    @staticmethod
+    def _install_drive_folder(monkeypatch) -> PolicyRule:
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate="approved_folder", value=["fold1"],
+            operations=frozenset({"drive.download_file"}), allow_personal_data=True,
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return rule
+
+    @staticmethod
+    def _drive_download(**overrides):
+        return gate.gated_call(**base_kwargs(
+            connector="drive", tool="drive_download_file", gate="review",
+            raw_data=SimpleNamespace(parent_ids=["fold1"]), args={"file_id": "f1"},
+            pii_scan_text=TestPersonalDataRules.PII_TEXT, **overrides,
+        ))
+
+    async def test_flag_applies_to_drive_download_delivered_as_a_file(self, monkeypatch, audit_dir):
+        rule = self._install_drive_folder(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        result = await self._drive_download()
+
+        assert result is FILTERED
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+
+    async def test_flag_does_not_apply_when_content_reaches_the_result(self, monkeypatch, audit_dir):
+        self._install_drive_folder(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._drive_download(content_reaches_result=True)
+
+        assert len(popups) == 1
+
+    @staticmethod
+    def _install_peek(monkeypatch, *, allow_personal_data: bool) -> PolicyRule:
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate="peek.page", value=["dash"],
+            operations=frozenset({"peek.upload_page"}), allow_personal_data=allow_personal_data,
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return rule
+
+    @staticmethod
+    def _peek_call():
+        return gate.gated_call(**base_kwargs(
+            connector="peek", tool="peek_upload_page", gate="popup",
+            args={"slug": "dash", "title": "Dash"}, upload_pii_scan_text=TestPersonalDataRules.PII_TEXT,
+        ))
+
+    async def test_flagged_peek_page_rule_lets_an_upload_with_pii_through(self, monkeypatch, audit_dir):
+        rule = self._install_peek(monkeypatch, allow_personal_data=True)
+        popups = []
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        await self._peek_call()
+
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+
+    async def test_unflagged_peek_page_rule_shows_the_card_on_pii(self, monkeypatch, audit_dir):
+        self._install_peek(monkeypatch, allow_personal_data=False)
+        popups = []
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._peek_call()
+
+        assert len(popups) == 1
+
+    async def test_no_pii_takes_the_ordinary_path(self, monkeypatch, audit_dir):
+        self._install(monkeypatch, allow_personal_data=True)
+
+        result = await self._call(pii_scan_text="nothing sensitive here")
+
+        assert result is FILTERED
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["pii_detected"] is False
 
 
 class TestPiiCategoriesAndMatchDetailsInAuditLog:

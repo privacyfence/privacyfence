@@ -3,6 +3,8 @@
 ## Status
 
 Accepted — 2026-10-11. Implemented.
+Amended by [ADR 0157](0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md).
+Amended by [ADR 0160](0160-org-mode-exports-are-delivered-by-a-one-time-link.md).
 
 ## Context
 

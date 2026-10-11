@@ -157,6 +157,7 @@ from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, canonical_key
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
+    PERSONAL_DATA_RULE_TOOLS,
     TOOL_TO_OPERATION,
     ReviewContext,
     add_policy_v2_rules,
@@ -260,7 +261,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "salesforce_export_report": WIDE,
     "grist_get_records": WIDE, "grist_export_records": WIDE, "grist_export_sql": WIDE, "grist_add_records": WIDE, "grist_update_records": WIDE,
     "grist_import_csv": WIDE, "grist_update_csv": WIDE,
-    "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
+    "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "jira_export_issues": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "peek_get_comments": WIDE, "peek_get_stats": WIDE, "peek_upload_page": WIDE,
     "peek_add_comment": WIDE,
@@ -717,6 +718,25 @@ def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]
     return [rule for rule in rules if rule.id in scope.rule_ids]
 
 
+def _personal_data_rule(
+    tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
+) -> policy_engine.PolicyRule | None:
+    """The stored rule with ``allow_personal_data`` that covers this call, for a tool in
+    ``PERSONAL_DATA_RULE_TOOLS`` only (ADR 0157); ``None`` for every other tool, when the result
+    carries the content itself (``content_reaches_result``), or when no such rule matches."""
+    if tool not in PERSONAL_DATA_RULE_TOOLS or content_reaches_result:
+        return None
+    # Under a scoped token only the token's own rules count, flagged ones included (ADR 0164).
+    rules = [rule for rule in _rules_in_scope(current_token_scope()) if rule.allow_personal_data]
+    if not rules:
+        return None
+    try:
+        return policy_engine.find_matching_rule(rules, operation_key, ctx)
+    except Exception:
+        logger.warning("Policy evaluation raised for op=%r", operation_key, exc_info=True)
+        return None
+
+
 def preflight_auto_accept(operation_key: str, args: dict, my_email: str = "") -> tuple[str, str, str, str]:
     """Preflight counterpart of ``_evaluate_auto_accept`` above, backing
     ``privacyfence_check_policy``'s own prediction. Returns ``(verdict, matched_rule,
@@ -907,6 +927,9 @@ async def gated_call(
         # exception" paragraph). Set only when the caller can prove nothing has touched this exact
         # content since PrivacyFence's own last write to it. Anything else -- no matching auto-
         # accept rule, a popup-gate write, upload_pii_scan_text -- is unaffected.
+    content_reaches_result: bool = False,  # True when this call's result carries the content
+        # itself (an inline download), so a rule's allow_personal_data flag does not apply
+        # (ADR 0157).
     my_email: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
@@ -1061,6 +1084,19 @@ async def gated_call(
         )
 
     try:
+        if pii_forces_confirmation or upload_pii_categories:
+            personal_data_rule = _personal_data_rule(tool, operation_key, ctx, content_reaches_result)
+            if personal_data_rule is not None:
+                audit(
+                    decision="auto_accepted", auto_accept_rule=personal_data_rule.id,
+                    rule_id=personal_data_rule.id, pii_detected=True,
+                )
+                logger.info(
+                    "Auto-accepted with personal data: %s/%s rule=%r",
+                    connector, tool, personal_data_rule.id,
+                )
+                return filtered_data
+
         auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:

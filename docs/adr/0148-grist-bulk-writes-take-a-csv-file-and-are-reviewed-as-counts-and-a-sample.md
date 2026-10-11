@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-10-10. Implemented.
+Amended by [ADR 0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md).
 
 ## Context
 

@@ -360,3 +360,18 @@ def assert_error(rows, message, column="Name"):
     with pytest.raises(GristCsvError) as info:
         key_index(rows, column)
     assert str(info.value) == message
+
+
+def test_keep_empty_stores_none_for_empty_cells():
+    parsed = parse_csv(b"Name,Age\nAda,\n", COLUMNS, "People", keep_empty=True)
+    assert parsed.rows[0].values == {"Name": "Ada", "Age": None}
+
+
+def test_default_still_leaves_empty_cells_out():
+    assert parse("Name,Age\nAda,\n").rows[0].values == {"Name": "Ada"}
+
+
+def test_keep_empty_still_refuses_an_empty_key():
+    parsed = parse_csv(b"Name,Age\n,3\n", COLUMNS, "People", keep_empty=True)
+    with pytest.raises(GristCsvError, match="Line 2: the key column Name is empty."):
+        key_index(parsed.rows, "Name")

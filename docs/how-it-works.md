@@ -205,6 +205,8 @@ client ([ADR 0007](adr/0007-local-file-bridge.md),
   credential; up to 50 MB, valid for 10 minutes, single use), then passes the returned `upload_id`
   to the tool (`drive_upload_file`'s `upload_id`, or `"upload:<upload_id>"` in `attachments`). For
   a download, the tool returns a one-time link instead of writing to `destination_dir`.
+- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write a file to `destination_dir` and return only counts and a hash. On an organization-managed install nothing is saved: the result carries a one-time download link instead, unless the organization turned off `download_delivery.allow_disk_staging`
+  ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
 - **An install that is not privilege-separated** (a source checkout, a `pip`/`pipx` install): the
   daemon runs as you and reads and writes the file itself.
 
@@ -274,4 +276,4 @@ works only when the organization config bundle turns it on (`unattended_sessions
 `build_org_bundle.py --enable-unattended-sessions`); otherwise it returns an error. The flag is
 advisory: it changes what happens when nothing authorizes a call, never what is authorized
 ([ADR 0015](adr/0015-unattended-session-flag-is-advisory-only.md)). Pair it with
-`privacyfence_check_policy` to plan which steps can run unattended.
+`privacyfence_check_policy` to plan which steps can run unattended. A scheduled data sync that needs no AI model at all is run by [`privacyfence-sync`](privacyfence-sync.md).

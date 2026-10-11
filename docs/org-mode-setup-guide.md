@@ -899,7 +899,13 @@ nothing is written to disk. With `--downloads-inline-max-bytes 0`, every file go
 
 Staged files live under `users/<principal>/downloads/` in the data directory. Expired files are
 removed the next time that person stages or claims a download, and every staged file is removed
-when the daemon starts. The approval gate, not the delivery channel, is where the privacy decision
+when the daemon starts. The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`,
+`jira_export_issues`) use the same staged link: after the approval the file is staged and the tool
+result carries the link, with no `destination_dir`. They respect `allow_disk_staging` and are
+refused before any request when it is off
+([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
+
+The approval gate, not the delivery channel, is where the privacy decision
 is made; see [ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)
 and [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md).
 

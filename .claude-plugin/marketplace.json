@@ -1,0 +1,11 @@
+{
+  "name": "privacyfence",
+  "owner": {"name": "PrivacyFence"},
+  "plugins": [
+    {
+      "name": "privacyfence-sync",
+      "source": "./plugins/privacyfence-sync",
+      "description": "Write privacyfence-sync recipes, scripts and dashboard templates, and port an existing data-sync skill to a scheduled recipe."
+    }
+  ]
+}
