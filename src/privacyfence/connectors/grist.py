@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -61,6 +62,18 @@ _LIST_DENIED = (
 
 _FILTER_ERROR = (
     'filter must be a JSON object mapping column ids to lists of values, such as {"Status": ["Open"]}.'
+)
+_SQL_ERROR = (
+    "sql must be one SELECT (or WITH … SELECT) statement of up to 10000 characters, with no "
+    "comments and no semicolon except one at the end."
+)
+_SQL_INTERNAL_ERROR = (
+    "sql cannot read Grist's internal tables (names starting with _grist); query the "
+    "document's own tables."
+)
+_SQL_ARGS_ERROR = (
+    "args must be a JSON array of up to 100 text, number, true/false or null values for the ? "
+    "placeholders in sql."
 )
 _SORT_ERROR = "sort must be column ids separated by commas, each optionally prefixed with -."
 _LIMIT_ERROR = "limit must be between 1 and 500."
@@ -151,6 +164,35 @@ def _parse_filter(raw: str) -> dict[str, list[Any]]:
             or not all(isinstance(v, _SCALARS) for v in values)
         ):
             raise ValueError(_FILTER_ERROR)
+    return parsed
+
+
+def _validate_sql(raw: str) -> str:
+    sql = raw.strip()
+    sql = sql.removesuffix(";").strip()
+    if not sql or len(sql) > 10000 or any(token in sql for token in (";", "--", "/*")):
+        raise ValueError(_SQL_ERROR)
+    keyword = re.match(r"[A-Za-z]+", sql)
+    if keyword is None or keyword.group().lower() not in ("select", "with"):
+        raise ValueError(_SQL_ERROR)
+    if "_grist" in sql.lower():
+        raise ValueError(_SQL_INTERNAL_ERROR)
+    return sql
+
+
+def _parse_sql_args(raw: str) -> list[Any]:
+    if not raw.strip():
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(_SQL_ARGS_ERROR) from exc
+    if (
+        not isinstance(parsed, list)
+        or len(parsed) > 100
+        or not all(isinstance(v, _SCALARS) for v in parsed)
+    ):
+        raise ValueError(_SQL_ARGS_ERROR)
     return parsed
 
 
@@ -474,6 +516,45 @@ class GristConnector(Connector):
                 read_only=True,
             ),
             ToolSpec(
+                name="grist_export_sql",
+                description=(
+                    "Run one read-only SQL query over a Grist document and write the result to "
+                    "a CSV or JSON file on the user's computer, in one approval. Use it to join "
+                    "or filter across tables; use grist_export_records for one table. Cells are "
+                    "written as Grist stores them: dates as seconds since 1970, true/false as "
+                    "1/0. Grist runs SQL only for people who can copy the whole document. Up to "
+                    "50000 rows. Returns {rows, columns, sha256, path, name, size_bytes, "
+                    "delivery}, never the rows. Not available on an organization-managed "
+                    "install. Requires user approval."
+                ),
+                params=[
+                    ToolParam("doc_id", "str", description=_DOC_ID_DESCRIPTION),
+                    ToolParam(
+                        "sql", "str",
+                        description="One read-only SQLite SELECT (or WITH … SELECT) over the "
+                                    "document's tables, by table and column id, such as SELECT "
+                                    "c.id, c.Email, o.Stage FROM Contacts c JOIN Deals o ON "
+                                    "o.Contact = c.id. Use ? for values and pass them in args. "
+                                    "No comments, no semicolon except one at the end, and no "
+                                    "Grist internal tables (names starting with _grist); up to "
+                                    "10000 characters.",
+                    ),
+                    ToolParam(
+                        "args", "str", required=False, default="",
+                        description='A JSON array of values for the ? placeholders in sql, such '
+                                    'as ["CF", 2026]. Empty means none.',
+                    ),
+                    ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
+                    ToolParam(
+                        "file_name", "str", required=False, default="",
+                        description="File name ending in .csv or .json; the ending picks the "
+                                    "format. Empty means query.csv.",
+                    ),
+                    _REASON,
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
                 name="grist_add_records",
                 description=(
                     "Add new records to one table of a Grist document. Returns {doc_id, "
@@ -615,6 +696,8 @@ class GristConnector(Connector):
             return await self._get_records(**args)
         if tool == "grist_export_records":
             return await self._export_records(**args)
+        if tool == "grist_export_sql":
+            return await self._export_sql(**args)
         if tool == "grist_add_records":
             return await self._add_records(**args)
         if tool == "grist_update_records":
@@ -808,6 +891,89 @@ class GristConnector(Connector):
             args={
                 "doc_id": doc_id, "table_id": table_id, "filter": filter,
                 "destination_dir": destination_dir, "file_name": file_name, "sha256": sha256,
+            },
+        )
+        delivered = local_files.deliver_file(
+            destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
+            download_mode=self.download_mode,
+        )
+        return export_files.export_summary(names, rows, sha256, delivered)
+
+    async def _export_sql(
+        self, doc_id: str, sql: str, destination_dir: str, args: str = "",
+        file_name: str = "",
+    ) -> Any:
+        try:
+            validate_doc_id(doc_id)
+        except GristClientError as exc:
+            raise ValueError(str(exc)) from exc
+        sql = _validate_sql(sql)
+        values = _parse_sql_args(args)
+        destination_dir = export_files.check_destination(destination_dir)
+        file_name, fmt = export_files.export_file_name(file_name, "query")
+        export_files.refuse_org("grist_export_sql", self.download_mode, "grist_get_records")
+
+        doc = await self._doc_info(doc_id)
+        # Sent to Grist's own SQL endpoint, never to a local database; _validate_sql has
+        # already limited it to one SELECT.
+        statement = f"SELECT * FROM ({sql}) LIMIT {export_files.EXPORT_MAX_ROWS + 1}"  # nosec B608
+        try:
+            records = await self._fetch(self._client.run_sql, doc_id, statement, values)
+        except RuntimeError as exc:
+            if isinstance(exc.__cause__, GristAccessDenied):
+                raise RuntimeError(
+                    "Grist refused the SQL query (HTTP 403). Grist runs SQL only for people "
+                    "who can copy the whole document; use grist_export_records instead."
+                ) from exc.__cause__
+            raise
+        if len(records) > export_files.EXPORT_MAX_ROWS:
+            raise ValueError("The query returns more than 50,000 rows; narrow it.")
+        names = list(records[0]) if records else []
+        rows = [[r.get(c) for c in names] for r in records]
+        n = len(rows)
+        data = await asyncio.to_thread(export_files.render, names, rows, fmt)
+        sha256 = hashlib.sha256(data).hexdigest()
+        local_files.check_delivery_size(len(data))
+        saved_to = f"{destination_dir.rstrip('/')}/{file_name}"
+        preview = {
+            "Server": self._client.host,
+            "Document": doc.name,
+            "Team": doc.team or _NO_TEAM,
+            "Query": sql if len(sql) <= 200 else sql[:200] + "…",
+            "Arguments": str(len(values)),
+        }
+        await gated_call(
+            connector=self.name,
+            tool="grist_export_sql",
+            tool_name="Export Grist Query",
+            summary=f"Export {n} row(s) from a query on {doc.name} to {file_name}",
+            sender=doc.name,
+            raw_data={"doc_id": doc_id, "rows": n, "columns": names, "sha256": sha256},
+            filtered_data=None,
+            gate="review",
+            preview=preview,
+            preview_tables=[export_files.sample_table(names, rows)],
+            pii_scan_text=export_files.scan_text(data),
+            new_info={
+                "Rows": f"{n:,}",
+                "Columns": str(len(names)),
+                "Content returned to {agent}": (
+                    "None in the tool result: the rows are written to the file below, where "
+                    "{agent} can open it"
+                ),
+                "Saved to": saved_to,
+            },
+            details_text=(
+                export_files.card_details(preview, n, names, saved_to, sha256)
+                + "\n\nQuery:\n" + sql
+                + "\n\nArguments: " + json.dumps(values, ensure_ascii=False)
+            ),
+            delivery="local_disk"
+            if local_files.can_access_user_files(self.download_mode) else "client_bridge",
+            my_email="",
+            args={
+                "doc_id": doc_id, "sql": sql, "args": args, "destination_dir": destination_dir,
+                "file_name": file_name, "sha256": sha256,
             },
         )
         delivered = local_files.deliver_file(
