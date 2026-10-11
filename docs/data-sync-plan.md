@@ -620,7 +620,7 @@ Layout, outside `src/` so the root wheel never picks it up:
 
 ```
 sync/pyproject.toml
-sync/README.md
+sync/README.md                            already written: the user-facing spec, see below
 sync/src/privacyfence_sync/__init__.py
 sync/src/privacyfence_sync/recipe.py      pure: load and validate a recipe
 sync/src/privacyfence_sync/template.py    pure: put JSON data into an HTML template
@@ -631,6 +631,11 @@ sync/src/privacyfence_sync/runner.py      execute a recipe's steps
 sync/src/privacyfence_sync/cli.py         argparse entry point
 sync/tests/...
 ```
+
+`sync/README.md` was written before implementation, with the user, as the user-facing description
+of everything below, and is committed on the plan branch. It is the spec for behaviour a user sees
+(messages, exit codes, step semantics). Where this section and the README disagree, stop with
+`status=blocked` and quote both; never silently diverge from either.
 
 The rule for the whole package: **it imports nothing from `privacyfence`**, and it reaches the
 daemon only through `/mcp` tool calls, the capability URLs those calls return, and the OAuth
@@ -827,6 +832,9 @@ async def run_recipe(recipe: Recipe, client: SyncClient, *, attended: bool, out:
    - **Template step**: read the template (UTF-8), `json.loads` the data file, write
      `render_template(...)` to `work_dir / step.output`.
    `reason` is `step.reason` or `f"privacyfence-sync {recipe.name}: step {step.id}"`.
+   Before any tool call, every value in `step.args` that is a `list` or `dict` is replaced by
+   `json.dumps(value, ensure_ascii=False)`, because the tools take JSON as text (`filters`,
+   `filter`, `args`, `fields`); strings, numbers and booleans pass unchanged.
 4. In attended mode, a tool result that is a dict with `status == "approval_pending"` prints
    `f"[{id}] waiting for approval: {result['url']}"`, then calls `privacyfence_await_approval` with
    `{"approval_ids": [result["approval_id"]], "timeout_seconds": 120}` until the status is not
@@ -1341,7 +1349,6 @@ phases:
     complexity: M
     touches:
       - sync/pyproject.toml
-      - sync/README.md
       - sync/src/privacyfence_sync/__init__.py
       - sync/src/privacyfence_sync/recipe.py
       - sync/src/privacyfence_sync/template.py
@@ -1364,12 +1371,10 @@ phases:
          check listed in §3.6, each error text starting with the recipe path.
       4. template.py: PLACEHOLDER, TemplateError, render_template.
       5. transform.py: TransformError, transform_env, run_transform.
-      6. sync/README.md: what the package is (one paragraph), install (`pip install
-         privacyfence-sync`), the recipe format with the example from §3.6, the transform script
-         contract, the template placeholder, and a one-paragraph note that it is an ordinary MCP
-         client: every call goes through PrivacyFence's rules, and an unattended run fails fast
-         where a rule is missing. Commands (run/login/check) are documented by phase p8; leave a
-         "Commands" heading with "See `privacyfence-sync --help`." for now.
+      6. sync/README.md already exists (written before implementation as the user-facing spec).
+         Do not rewrite it. Read it, and make the recipe checks and error texts match what it
+         promises; if the code cannot match a sentence in it, stop with status=blocked and quote
+         the sentence.
       7. Tests (pytest, tmp_path, no network):
          - test_recipe.py: test_loads_the_example_recipe (the §3.6 example written to tmp_path),
            and one test per check in §3.6, parametrized where the check is the same shape
@@ -1435,6 +1440,7 @@ phases:
            test_unexpected_delivery_fails, test_upload_step_passes_the_upload_id,
            test_transform_and_template_steps_chain (real files in tmp_path),
            test_browser_only_link_gives_the_agent_links_hint,
+           test_list_and_mapping_args_are_sent_as_json_text,
            test_attended_waits_then_repeats_the_call,
            test_attended_denial_raises, test_default_reason_names_recipe_and_step.
          - test_cli.py: test_check_prints_ok_without_network, test_check_bad_recipe_exits_1,
@@ -1460,7 +1466,6 @@ phases:
       - sync/src/privacyfence_sync/auth.py
       - sync/src/privacyfence_sync/client.py
       - sync/src/privacyfence_sync/cli.py
-      - sync/README.md
       - sync/tests/test_auth.py
       - sync/tests/test_cli.py
       - .github/workflows/tests.yml
@@ -1481,11 +1486,10 @@ phases:
       4. cli.py: the login subcommand; run falls back to OAuth when no token env var is set
          (replacing p7's exit-4 message with the SyncError from the non-interactive handlers,
          still exit 4).
-      5. sync/README.md: the "Commands" section for run, login and check, the server and token
-         rules, the exit codes, that an org-mode sign-in lasts 30 days and then needs login again,
-         that a server with download_delivery.agent_links off cannot be used, and "Scheduling" with one cron line and one launchd note (run as
-         your own user; keep the token in the environment, not in the crontab line, for example
-         with a wrapper script readable only by you).
+      5. sync/README.md already documents the commands, sign-in, exit codes and scheduling.
+         Check every statement in its "Connecting to PrivacyFence" and "Commands" sections
+         against the code; fix the code where it differs, and stop with status=blocked if a
+         sentence cannot be made true.
       6. .github/workflows/tests.yml: the sync job as §3.6, with actions pinned to the same SHAs
          the file's other jobs use. scripts/update_branch_protection.py: add the two
          "Sync client (Python 3.x)" contexts to REQUIRED_STATUS_CHECKS, and update
