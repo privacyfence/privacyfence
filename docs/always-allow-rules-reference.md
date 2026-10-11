@@ -79,6 +79,7 @@ the request on the card, once.
 
 | Tool | Always allow buttons |
 |---|---|
+| `grist_export_records` |  |
 | `grist_get_records` |  |
 
 ### Jira

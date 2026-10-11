@@ -100,8 +100,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
-| [Grist](#grist) | 9 | 2 | 1 | 6 |
-| **Total** | **129** | **49** | **23** | **57** |
+| [Grist](#grist) | 10 | 2 | 2 | 6 |
+| **Total** | **130** | **49** | **24** | **57** |
 
 ## Gmail
 
@@ -284,6 +284,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 |---|---|---|---|
 | `grist_list_documents` | read | `auto` | List the Grist documents this account can open, with their workspace and team. |
 | `grist_list_tables` | read | `auto` | List the tables of one Grist document and each table's columns (id, label and type). |
+| `grist_export_records` | read | `review` | Write every record of one table of a Grist document, optionally filtered, to a CSV or JSON file on the user's computer, in one approval. |
 | `grist_get_records` | read | `review` | Read records from one table of a Grist document, optionally filtered and sorted. |
 | `grist_add_columns` | write | `popup` | Add new columns to an existing table of a Grist document. |
 | `grist_add_records` | write | `popup` | Add new records to one table of a Grist document. |

@@ -14,7 +14,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
-from .. import local_files
+from .. import export_files, local_files
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
@@ -44,6 +44,14 @@ _DOC_ID_DESCRIPTION = (
 
 _TABLE_ID_DESCRIPTION = (
     "The table id from grist_list_tables, such as Contacts (not the label shown in Grist)."
+)
+
+_FILTER_DESCRIPTION = (
+    'A JSON object mapping column ids to lists of allowed values, such as {"Status": ["Open", '
+    '"Waiting"]}. Rows match when every listed column has one of its values. Empty means no filter.'
+)
+_DESTINATION_DIR = (
+    "Folder on the user's computer to write the file to, absolute or starting with ~/."
 )
 
 _LIST_DENIED = (
@@ -297,6 +305,17 @@ def _csv_cell_text(value: Any, column_type: str) -> str:
     return _cell_text(value)
 
 
+def _export_value(value: Any, column_type: str) -> Any:
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if column_type == "Date" and is_number:
+        return (_EPOCH + timedelta(seconds=value)).date().isoformat()
+    if column_type.startswith("DateTime") and is_number:
+        return (_EPOCH + timedelta(seconds=value)).isoformat().replace("+00:00", "Z")
+    if isinstance(value, list) and value and value[0] == "L":
+        return value[1:]
+    return value
+
+
 def _chunks(
     items: list[Any], to_json: Callable[[Any], Any], *, max_items: int | None = None,
     max_chars: int | None = None, overhead: int = 0,
@@ -397,9 +416,7 @@ class GristConnector(Connector):
                     ),
                     ToolParam(
                         "filter", "str", required=False, default="",
-                        description='A JSON object mapping column ids to lists of allowed values, '
-                                    'such as {"Status": ["Open", "Waiting"]}. Rows match when every '
-                                    "listed column has one of its values. Empty means no filter.",
+                        description=_FILTER_DESCRIPTION,
                     ),
                     ToolParam(
                         "sort", "str", required=False, default="",
@@ -419,6 +436,38 @@ class GristConnector(Connector):
                                     "(the default) starts at the first record. Cannot be "
                                     "combined with sort. next_after_id is null on the last "
                                     "page and whenever sort is set.",
+                    ),
+                    _REASON,
+                ],
+                read_only=True,
+            ),
+            ToolSpec(
+                name="grist_export_records",
+                description=(
+                    "Write every record of one table of a Grist document, optionally filtered, "
+                    "to a CSV or JSON file on the user's computer, in one approval. The first "
+                    "column is the record id (id), then the table's columns by column id; dates "
+                    "are written as YYYY-MM-DD and choice lists as JSON arrays. To write changes "
+                    "back with grist_update_csv (key_column id, up to 20000 rows), keep only id "
+                    "and the data columns you change: formula and list columns cannot be written. "
+                    "Up to 50000 records. Returns {rows, columns, sha256, path, name, size_bytes, "
+                    "delivery}, never the records; read the file at path, which may be a numbered "
+                    "name if a file of that name exists. Use grist_get_records to look at a few "
+                    "records. Not available on an organization-managed install. "
+                    "Requires user approval."
+                ),
+                params=[
+                    ToolParam("doc_id", "str", description=_DOC_ID_DESCRIPTION),
+                    ToolParam("table_id", "str", description=_TABLE_ID_DESCRIPTION),
+                    ToolParam(
+                        "filter", "str", required=False, default="",
+                        description=_FILTER_DESCRIPTION,
+                    ),
+                    ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
+                    ToolParam(
+                        "file_name", "str", required=False, default="",
+                        description="File name ending in .csv or .json; the ending picks the "
+                                    "format. Empty means <table_id>.csv.",
                     ),
                     _REASON,
                 ],
@@ -564,6 +613,8 @@ class GristConnector(Connector):
             return await self._list_tables(**args)
         if tool == "grist_get_records":
             return await self._get_records(**args)
+        if tool == "grist_export_records":
+            return await self._export_records(**args)
         if tool == "grist_add_records":
             return await self._add_records(**args)
         if tool == "grist_update_records":
@@ -686,6 +737,84 @@ class GristConnector(Connector):
                 "filter": filter, "sort": sort, "limit": limit, "after_id": after_id,
             },
         )
+
+    async def _export_records(
+        self, doc_id: str, table_id: str, destination_dir: str, filter: str = "",
+        file_name: str = "",
+    ) -> Any:
+        try:
+            validate_doc_id(doc_id)
+            validate_identifier(table_id, "table")
+        except GristClientError as exc:
+            raise ValueError(str(exc)) from exc
+        filters = _parse_filter(filter)
+        destination_dir = export_files.check_destination(destination_dir)
+        file_name, fmt = export_files.export_file_name(file_name, table_id)
+        export_files.refuse_org("grist_export_records", self.download_mode, "grist_get_records")
+
+        doc = await self._doc_info(doc_id)
+        columns = await self._fetch(self._client.list_columns, doc_id, table_id)
+        page = await self._fetch(
+            self._client.get_records, doc_id, table_id,
+            filters=filters, limit=export_files.EXPORT_MAX_ROWS,
+        )
+        if page.truncated:
+            raise ValueError("More than 50,000 records match; narrow the export with filter.")
+        names = ["id", *[c.id for c in columns]]
+        rows = [
+            [r.id, *[_export_value(r.fields.get(c.id), c.type) for c in columns]]
+            for r in page.records
+        ]
+        n = len(rows)
+        data = await asyncio.to_thread(export_files.render, names, rows, fmt)
+        sha256 = hashlib.sha256(data).hexdigest()
+        local_files.check_delivery_size(len(data))
+        saved_to = f"{destination_dir.rstrip('/')}/{file_name}"
+        preview = {
+            "Server": self._client.host,
+            "Document": doc.name,
+            "Team": doc.team or _NO_TEAM,
+            "Table": table_id,
+            "Filter": filter or "(none)",
+        }
+        await gated_call(
+            connector=self.name,
+            tool="grist_export_records",
+            tool_name="Export Grist Records",
+            summary=f"Export {n} record(s) from {doc.name} / {table_id} to {file_name}",
+            sender=doc.name,
+            raw_data={
+                "doc_id": doc_id, "table_id": table_id, "rows": n, "columns": names,
+                "sha256": sha256,
+            },
+            filtered_data=None,
+            gate="review",
+            preview=preview,
+            preview_tables=[export_files.sample_table(names, rows)],
+            pii_scan_text=export_files.scan_text(data),
+            new_info={
+                "Rows": f"{n:,}",
+                "Columns": str(len(names)),
+                "Content returned to {agent}": (
+                    "None in the tool result: the rows are written to the file below, where "
+                    "{agent} can open it"
+                ),
+                "Saved to": saved_to,
+            },
+            details_text=export_files.card_details(preview, n, names, saved_to, sha256),
+            delivery="local_disk"
+            if local_files.can_access_user_files(self.download_mode) else "client_bridge",
+            my_email="",
+            args={
+                "doc_id": doc_id, "table_id": table_id, "filter": filter,
+                "destination_dir": destination_dir, "file_name": file_name, "sha256": sha256,
+            },
+        )
+        delivered = local_files.deliver_file(
+            destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
+            download_mode=self.download_mode,
+        )
+        return export_files.export_summary(names, rows, sha256, delivered)
 
     # ------------------------------------------------------------------ #
     # Popup gate (writes)
