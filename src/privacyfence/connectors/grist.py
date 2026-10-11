@@ -1452,7 +1452,16 @@ class GristConnector(Connector):
 
         u_done = a_done = 0
         try:
-            for update_chunk in _chunks(updates, lambda item: {"id": item[0], "fields": item[1]}):
+            # Grist takes one field set per PATCH, so chunk each field set on its own and the
+            # counts below stay exact.
+            by_fields: dict[frozenset[str], list[tuple[int, dict[str, Any]]]] = {}
+            for item in updates:
+                by_fields.setdefault(frozenset(item[1]), []).append(item)
+            update_chunks = [
+                chunk for group in by_fields.values()
+                for chunk in _chunks(group, lambda item: {"id": item[0], "fields": item[1]})
+            ]
+            for update_chunk in update_chunks:
                 await self._fetch(self._client.update_records, doc_id, table_id, update_chunk)
                 u_done += len(update_chunk)
             for add_chunk in _chunks(adds, lambda row: row.values):
@@ -1463,8 +1472,12 @@ class GristConnector(Connector):
         except RuntimeError as exc:
             raise GristCsvWriteError(
                 f"Grist refused a write after {u_done} of {u} update(s) and {a_done} of {a} "
-                "add(s); see the PrivacyFence log for Grist's reason. Running grist_update_csv "
-                "again with the same file finishes the rest."
+                "add(s); see the PrivacyFence log for Grist's reason. "
+                + (
+                    "Running grist_update_csv again with the same file finishes the rest."
+                    if u_done or a_done else
+                    "Nothing was written, so a rerun with the same file will fail the same way."
+                )
             ) from exc
         return {
             "doc_id": doc_id, "table_id": table_id, "updated": u, "added": a,

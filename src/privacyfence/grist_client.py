@@ -356,11 +356,19 @@ class GristClient:
     ) -> None:
         validate_doc_id(doc_id)
         validate_identifier(table_id, "table")
-        self._request(
-            "PATCH",
-            f"/api/docs/{doc_id}/tables/{table_id}/records",
-            json_body={"records": [{"id": rec_id, "fields": fields} for rec_id, fields in rows]},
-        )
+        # Grist rejects a PATCH whose records do not all carry the same set of fields, so send
+        # one request per field set.
+        groups: dict[frozenset[str], list[tuple[int, dict[str, Any]]]] = {}
+        for rec_id, fields in rows:
+            groups.setdefault(frozenset(fields), []).append((rec_id, fields))
+        for group in groups.values():
+            self._request(
+                "PATCH",
+                f"/api/docs/{doc_id}/tables/{table_id}/records",
+                json_body={
+                    "records": [{"id": rec_id, "fields": fields} for rec_id, fields in group]
+                },
+            )
 
     @staticmethod
     def _column_body(columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
