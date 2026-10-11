@@ -322,6 +322,8 @@ TOOL_TO_GATE: dict[str, str] = {
     "grist_add_columns":               "popup",
     "grist_import_csv":                "popup",
     "grist_update_csv":                "popup",
+    # Peek
+    "peek_list_pages":                 "auto",
 }
 
 @dataclass
