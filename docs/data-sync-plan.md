@@ -42,6 +42,11 @@ a regular, deterministic job that should cost no model tokens. After this change
    any tool step can save its result, upload steps can skip an empty file, and arguments can take
    values from an earlier step's JSON (`${step.output:path}`).
 
+7. **A Claude skill that writes recipes.** The `privacyfence-sync` plugin (in `plugins/`, listed
+   in the repository's Claude plugin marketplace and attached to each release as a zip) carries a
+   `privacyfence-sync-recipes` skill and a copy of the README, so the user asks Claude for a
+   recipe, its scripts and the list of rules instead of writing them by hand.
+
 Grist stays add-only (ADR 0145). A row deleted at the source keeps its values and gets a flag
 column set to false; the user's scripts compute that. That is recipe content, not code here.
 
@@ -1072,6 +1077,104 @@ result (`"delivery": "inline"`, base64), where it would reach a model, and there
 - `catalogue.PERSONAL_DATA_GROUPS` gains `"drive.folder": "Downloads may include personal data"`.
 - `privacyfence_check_policy` is not changed.
 
+### 3.10 The recipe-writing skill, shipped as a Claude plugin
+
+Porting a skill or writing a new sync by hand means reading the README every time. A Claude skill
+that knows the recipe format lets the user ask Claude for the recipe, the scripts and the rules
+list instead.
+
+Layout, in this repository:
+
+```
+.claude-plugin/marketplace.json
+plugins/privacyfence-sync/.claude-plugin/plugin.json
+plugins/privacyfence-sync/skills/privacyfence-sync-recipes/SKILL.md
+plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md   a byte-for-byte copy of sync/README.md
+scripts/build_sync_plugin.py
+```
+
+`.claude-plugin/marketplace.json`:
+
+```json
+{
+  "name": "privacyfence",
+  "owner": {"name": "PrivacyFence"},
+  "plugins": [
+    {
+      "name": "privacyfence-sync",
+      "source": "./plugins/privacyfence-sync",
+      "description": "Write privacyfence-sync recipes, scripts and dashboard templates, and port an existing data-sync skill to a scheduled recipe."
+    }
+  ]
+}
+```
+
+`plugins/privacyfence-sync/.claude-plugin/plugin.json`: `{"name": "privacyfence-sync",
+"description": <the same sentence>}`, with no `version` key in the repository; the release build
+stamps it.
+
+`SKILL.md` front matter:
+
+```yaml
+---
+name: privacyfence-sync-recipes
+description: Write and maintain privacyfence-sync recipes, the YAML files that run a data sync through PrivacyFence on a schedule with no AI model involved. Use when the user wants to schedule or automate a sync between Salesforce, Jira, Google Drive, Grist and Peek, refresh a dashboard without Claude, turn an existing data-sync skill or a manual Claude routine into a recipe, add a source or step to a recipe, or find out why a scheduled run was denied or failed.
+---
+```
+
+Body, these sections in this order, each stating the rules given here (the worker writes the
+prose; every rule it states must agree with `references/README.md`, which is the authority):
+
+1. **Read the reference first**: read `references/README.md` before writing anything; it is the
+   format this skill writes.
+2. **What belongs in a recipe and what stays with Claude**: creating Grist tables, the first load,
+   drift repair and new Peek pages are one-time design work Claude does interactively; a recipe
+   only repeats reads, scripts and writes into existing tables and pages.
+3. **Designing the sync**: one recipe per source; a stable key and a Bool flag column per Grist
+   table (rows are never deleted); scripts that plan (diff against the last committed load),
+   guard (exit non-zero on warnings or unexpected change), and commit only after the writes;
+   `clear_empty: true` and `skip_if_empty: true` on `grist_update_csv` steps; `cell_format: both`
+   for Salesforce when labels and currencies matter; a `summary_only` report run for totals.
+4. **Porting an existing skill**: map each fetch to an export or download step (never
+   `salesforce_run_report` rows or `grist_get_records` pages for bulk data), each local
+   computation to a script step whose inputs and outputs are files, each Grist write to an upload
+   step; replace per-row tool calls with `grist_update_csv` (`clear_empty` for cleared values);
+   make "nothing new" exit 10; keep the skill's state folder where it is and pass it as an
+   argument.
+5. **Rules the user must create**: after writing a recipe, give the user the exact list of
+   Settings rules (scope, value, verbs, which personal-data box) using the README's table, and
+   remind them only they can create rules.
+6. **Testing**: `privacyfence-sync check`, then `run --attended` once, then an unattended run;
+   what exit codes 1-4 mean and where to look.
+7. **Never**: put a token in a recipe, script, crontab line or chat; use `--token` (it does not
+   exist); write a script that calls PrivacyFence itself (scripts get files only).
+
+`scripts/build_sync_plugin.py --version VERSION --out PATH`: copies `plugins/privacyfence-sync/`
+into a temporary folder, refuses with exit 1 when `references/README.md` differs from
+`sync/README.md`, writes `"version": VERSION` into the copy's `plugin.json`, and zips the copy so
+the archive's root holds `.claude-plugin/` and `skills/` (the layout of a plugin zip a user
+uploads). Stdlib only (`argparse`, `json`, `shutil`, `tempfile`, `zipfile`, `pathlib`).
+
+Distribution:
+
+- **Claude Code**: `/plugin marketplace add privacyfence/privacyfence`, then `/plugin install
+  privacyfence-sync@privacyfence`. This tracks the repository's default branch, so it can be newer
+  than the installed `privacyfence-sync`; the docs say to prefer the release zip when they differ.
+- **Claude Cowork and claude.ai**: `build.yml`'s `finalize-release` job runs
+  `python3 scripts/build_sync_plugin.py --version "${{ steps.release.outputs.version }}" --out
+  release-assets/privacyfence-sync-plugin.zip` before "Attach release assets (stable only)", and
+  that step's `files:` list gains `release-assets/privacyfence-sync-plugin.zip`. The user uploads
+  the zip the way they add any plugin.
+- `MANIFEST.in` gains `prune plugins` (and keeps `prune sync`), so neither tree enters the
+  `privacyfence` sdist.
+
+Rejected:
+
+- **Generating `SKILL.md` from the README.** The skill is guidance on top of the format, not the
+  format; the README is bundled verbatim instead, and a test keeps the copy exact.
+- **Shipping the skill inside the `privacyfence-sync` wheel.** Plugins are installed by Claude
+  clients, not by pip; a wheel is the wrong place for them.
+
 ## ADRs
 
 - **0157** — A rule can let personal data through the tools whose result holds no row: a per-rule
@@ -1096,6 +1199,10 @@ result (`"delivery": "inline"`, base64), where it would reach a model, and there
 - **0162** — `grist_update_csv` can clear a value from an empty cell when `clear_empty` is true.
   Amends ADR 0148 (its consequence "An empty cell cannot clear a value"); ADR 0148's Status gains
   "Amended by 0162".
+
+- **0163** — The recipe-writing skill ships as a Claude plugin from this repository: listed in the
+  repository's plugin marketplace and attached to each stable release as a zip whose version is
+  stamped at release, with the README bundled verbatim and pinned by a test.
 
 If a parallel branch takes these numbers first, renumber in order before merging (ADR README rule 6).
 
@@ -1162,10 +1269,10 @@ verify_after_merge:
   - python3 -m pytest tests/unit/policy tests/unit/test_gate.py tests/unit/test_settings_controller.py tests/unit/web/test_routes_settings.py tests/unit/web/test_routes_org_settings.py tests/unit/test_settings_window_html.py -q
   - python3 -m pytest tests/unit/test_export_files.py tests/unit/test_local_files.py tests/unit/test_grist_csv.py tests/unit/connectors/test_grist_connector.py tests/unit/connectors/test_salesforce_connector.py tests/unit/connectors/test_jira_connector.py tests/unit/connectors/test_drive_connector.py tests/unit/test_jira_client.py tests/unit/test_qa_fixture_recorder.py -q
   - python3 -m pytest tests/unit/test_docs_tools_reference.py tests/unit/test_generate_always_allow_reference.py tests/unit/test_website_connectors_page.py tests/unit/test_connector_tool_annotations.py tests/unit/connectors/test_readme_manifest_alignment.py tests/unit/test_systemic_gate_invariants.py tests/unit/test_code_no_history.py -q
-  - sh -c 'if [ -d sync ]; then python3 -m pip install -q -e "./sync[test]" && python3 -m pytest sync/tests -q; fi'
+  - sh -c 'if [ -d sync/src ]; then python3 -m pip install -q -e "./sync[test]" && python3 -m pytest sync/tests -q; fi'
 final_checks:
   - docs/data-sync-plan.md and docs/data-sync-plan-manual-steps.html are deleted and nothing links to them (git grep -n "data-sync-plan" prints nothing)
-  - ADRs 0157 to 0162 (or the renumbered set) exist in docs/adr/, have Status Accepted and are listed in docs/adr/README.md; ADR 0155's Status has the two "Amended by" lines and ADR 0148's has one
+  - ADRs 0157 to 0163 (or the renumbered set) exist in docs/adr/, have Status Accepted and are listed in docs/adr/README.md; ADR 0155's Status has the two "Amended by" lines and ADR 0148's has one
   - CHANGELOG.md has the new entries under "## [Unreleased]" and no new version heading
   - The PR body links the connector-live-check.yml runs from phases p4, p4b, p4c, p5 and p5b, the last of them on the feature branch's head with every row passing
   - git grep -nE "^\s*(from|import) privacyfence(\.|\s|$)" sync/src prints nothing
@@ -1854,9 +1961,60 @@ phases:
       - The built sync wheel's version equals python3 -m setuptools_scm, and the root sdist lists no sync/ path
       - grep -n '"Sync client (Python 3.11)"' scripts/update_branch_protection.py matches
 
+  - id: p8b-sync-skill-plugin
+    title: The privacyfence-sync plugin with the recipe-writing skill, its build script and release asset
+    depends_on: [p8-sync-oauth-ci-publish]
+    complexity: S
+    touches:
+      - .claude-plugin/marketplace.json
+      - plugins/privacyfence-sync/**
+      - scripts/build_sync_plugin.py
+      - tests/unit/test_sync_plugin.py
+      - .github/workflows/build.yml
+      - MANIFEST.in
+      - docs/releasing.md
+    brief: |
+      Read Design §3.10 of docs/data-sync-plan.md and sync/README.md in full. No comment or
+      docstring may cite the plan; comments may cite ADR 0163.
+      1. Create .claude-plugin/marketplace.json and plugins/privacyfence-sync/.claude-plugin/plugin.json
+         exactly as §3.10.
+      2. Copy sync/README.md byte for byte to
+         plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md.
+      3. Write plugins/privacyfence-sync/skills/privacyfence-sync-recipes/SKILL.md: the front
+         matter from §3.10 verbatim, then the seven sections in order with the rules §3.10 lists.
+         Plain, direct sentences; no rule that contradicts references/README.md. Under 250 lines.
+      4. scripts/build_sync_plugin.py as §3.10.
+      5. .github/workflows/build.yml finalize-release: the build step before "Attach release
+         assets (stable only)" (with `if: steps.release.outputs.channel == 'stable'`, the same
+         condition as the attach step) and the new line in its files: list. Stop condition: if
+         finalize-release has no step with `id: release` exposing `outputs.version`, stop with
+         status=blocked.
+      6. MANIFEST.in: `prune plugins` with a one-line comment.
+      7. docs/releasing.md: in the section that lists what a stable release attaches, one line
+         for privacyfence-sync-plugin.zip and how it is built.
+      8. tests/unit/test_sync_plugin.py (plain pytest, tmp_path, no network):
+         test_reference_readme_matches_sync_readme (byte equality),
+         test_marketplace_lists_the_plugin_at_its_path, test_plugin_json_has_no_version_in_the_repo,
+         test_skill_front_matter_has_name_and_description (name equals the folder name),
+         test_build_script_stamps_the_version_and_zips_the_plugin_root (run main() with a tmp
+         --out; the zip has .claude-plugin/plugin.json with the version and the skill files at
+         skills/...), test_build_script_refuses_a_stale_readme_copy (a tmp copy of the tree with
+         an edited copy; point the script at it through a `--root` option defaulting to the
+         repository root).
+      9. `ruff check .`, `python3 -m pytest tests/unit -q`, and a YAML parse of build.yml.
+         Build the zip once locally and check `tar`/`unzip -l` output shows `.claude-plugin/` and
+         `skills/` at the root. If a `claude` CLI is on PATH, also run `claude plugin validate
+         plugins/privacyfence-sync` and report its output; a failure there is a phase failure.
+    acceptance:
+      - python3 -m pytest tests/unit/test_sync_plugin.py -q passes
+      - cmp sync/README.md plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md succeeds
+      - grep -n "privacyfence-sync-plugin.zip" .github/workflows/build.yml matches twice
+      - grep -n "^prune plugins" MANIFEST.in matches
+      - python3 -m pytest tests/unit -q passes
+
   - id: p9-retire
-    title: ADRs 0157-0162, reference docs, changelog, and retire the plan
-    depends_on: [p2-personal-data-settings, p3-peek-page-rules, p4b-salesforce-cell-format-both, p4c-grist-clear-empty, p5b-drive-personal-data, p8-sync-oauth-ci-publish]
+    title: ADRs 0157-0163, reference docs, changelog, and retire the plan
+    depends_on: [p2-personal-data-settings, p3-peek-page-rules, p4b-salesforce-cell-format-both, p4c-grist-clear-empty, p5b-drive-personal-data, p8b-sync-skill-plugin]
     complexity: M
     touches:
       - docs/adr/0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md
@@ -1865,6 +2023,7 @@ phases:
       - docs/adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md
       - docs/adr/0161-privacyfence-sync-is-a-separate-plain-mcp-client.md
       - docs/adr/0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md
+      - docs/adr/0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md
       - docs/adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.md
       - docs/adr/0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md
       - docs/grist-setup.md
@@ -1883,18 +2042,18 @@ phases:
       - tests/unit/test_docs_no_history.py
     brief: |
       Read docs/adr/README.md (template and rules) and docs/coding-and-testing-guidelines.md §5.
-      1. Write the six ADRs listed in the plan's ADRs section, each with Status "Accepted —
+      1. Write the seven ADRs listed in the plan's ADRs section, each with Status "Accepted —
          <today>. Implemented.", Context, Decision, Alternatives considered (from the "Rejected"
-         lists in Design §3.1, §3.3, §3.4, §3.5 and §3.6, and §3.8's reasoning for 0162), Consequences, Verification (the test
+         lists in Design §3.1, §3.3, §3.4, §3.5, §3.6 and §3.10, and §3.8's reasoning for 0162), Consequences, Verification (the test
          classes the phases added) and Related (source files and ADRs; never this plan). 0157 and
          0160 say "Amends ADR 0155". 0157 states that an exported file lands where the user's own
          processes can read it, as before, and that the PII gate was never a data-loss control.
-         0162 says "Amends ADR 0148". If 0157-0162 are taken on main, renumber in order and fix every
-         comment that cites them (git grep -n "ADR 015[7-9]\|ADR 016[0-2]" src sync scripts).
+         0162 says "Amends ADR 0148". If 0157-0163 are taken on main, renumber in order and fix every
+         comment that cites them (git grep -n "ADR 015[7-9]\|ADR 016[0-3]" src sync scripts plugins).
       2. docs/adr/0155-...md: add two Status lines only, "Amended by [ADR 0157](0157-...md)." and
          "Amended by [ADR 0160](0160-...md).". docs/adr/0148-...md: add one Status line only,
          "Amended by [ADR 0162](0162-...md).". (Rule 2: nothing else in their bodies changes.)
-      3. docs/adr/README.md: index rows for the six ADRs.
+      3. docs/adr/README.md: index rows for the seven ADRs.
       4. Reference docs, describing today's behaviour only (§5):
          - docs/approvals-and-policy.md: the personal-data checkbox (which scopes offer it, what
            it does, that a Drive folder rule's box never applies to an inline download, that only
@@ -1915,21 +2074,24 @@ phases:
          - privacyfence-sync.md (new, in the docs folder): who it is for, install, local mode (token from
            privacyfence-app --print-mcp-token in PRIVACYFENCE_TOKEN), org mode (login),
            unattended_sessions.enabled, the rules a recipe needs and how to find a missing one
-           (run --attended once), and a link to sync/README.md on GitHub for the recipe format.
+           (run --attended once), installing the recipe-writing plugin (Claude Code marketplace
+           commands, or the release zip for Cowork and claude.ai, preferred when the two differ),
+           and a link to sync/README.md on GitHub for the recipe format.
          - docs/README.md: link the new privacyfence-sync.md in the docs folder under "Using
            PrivacyFence" in the "User and operator docs" half (so it is published), and add it to
            PUBLISHED_DOCS in tests/unit/test_docs_no_history.py.
       5. CHANGELOG.md under "## [Unreleased]", never a version heading: one line each for the
          personal-data checkbox (export, Drive folder and Peek page rules), the Peek page rule,
          jira_export_issues, exports on organization-managed installs, cell_format both on
-         salesforce_export_report, clear_empty on grist_update_csv, and privacyfence-sync.
+         salesforce_export_report, clear_empty on grist_update_csv, privacyfence-sync, and the
+         privacyfence-sync plugin with its recipe-writing skill.
       6. Delete docs/data-sync-plan.md and docs/data-sync-plan-manual-steps.html; `git grep -n
          "data-sync-plan"` must print nothing.
       7. `python3 -m pytest tests/unit -q` (it includes test_docs_links.py,
          test_docs_references_exist.py, test_website_docs_allowlist.py and test_docs_no_history.py)
          and `ruff check .`.
     acceptance:
-      - ls docs/adr/0157-*.md docs/adr/0158-*.md docs/adr/0159-*.md docs/adr/0160-*.md docs/adr/0161-*.md docs/adr/0162-*.md succeeds (or the renumbered set)
+      - ls docs/adr/0157-*.md docs/adr/0158-*.md docs/adr/0159-*.md docs/adr/0160-*.md docs/adr/0161-*.md docs/adr/0162-*.md docs/adr/0163-*.md succeeds (or the renumbered set)
       - grep -c "Amended by" docs/adr/0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md prints 1
       - grep -c "Amended by" docs/adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.md prints 2
       - git grep -n "data-sync-plan" prints nothing
