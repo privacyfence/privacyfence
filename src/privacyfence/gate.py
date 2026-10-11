@@ -260,7 +260,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "salesforce_export_report": WIDE,
     "grist_get_records": WIDE, "grist_export_records": WIDE, "grist_export_sql": WIDE, "grist_add_records": WIDE, "grist_update_records": WIDE,
     "grist_import_csv": WIDE, "grist_update_csv": WIDE,
-    "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
+    "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "jira_export_issues": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "peek_get_comments": WIDE, "peek_get_stats": WIDE, "peek_upload_page": WIDE,
     "peek_add_comment": WIDE,

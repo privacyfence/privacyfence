@@ -1526,6 +1526,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Jira connector ready: %s", info)
             jira_connector = JiraConnector(jira_client)
             jira_connector.my_email = atlassian_token.get("account_email", "")
+            jira_connector.download_mode = download_mode
+            jira_connector.download_config = download_config
+            jira_connector.download_base_url = download_base_url
             connectors.append(jira_connector)
         except (JiraClientError, FileNotFoundError) as exc:
             logger.warning("Jira connector disabled: %s", exc)
