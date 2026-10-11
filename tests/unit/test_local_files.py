@@ -366,6 +366,21 @@ class TestDeliverFile:
             local_files.configure_file_bridge()
 
 
+    def test_check_delivery_size_raises_over_the_limit(self):
+        local_files.configure_file_bridge(max_download_bytes=5)
+        try:
+            with pytest.raises(local_files.LocalFileAccessError, match=r"This file is 6 bytes, over .* 5-byte"):
+                local_files.check_delivery_size(6)
+        finally:
+            local_files.configure_file_bridge()
+
+    def test_check_delivery_size_allows_the_limit(self):
+        local_files.configure_file_bridge(max_download_bytes=5)
+        try:
+            local_files.check_delivery_size(5)
+        finally:
+            local_files.configure_file_bridge()
+
 class TestCallProducedDeliveries:
     def test_false_with_no_call_context(self):
         assert local_files.call_produced_deliveries() is False
