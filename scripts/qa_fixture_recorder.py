@@ -2437,7 +2437,7 @@ def lifecycle_grist(manifest: dict[str, Any]) -> LifecycleResult:
     """Verifies add/get/update/get-after-update in the lifecycle table only.
 
     Never deletes: GristClient has no delete (records are never removed through
-    PrivacyFence), so the rows this adds accumulate in ``lifecycle_table_id`` and
+    PrivacyFence), so the rows and the one ``Qa<suffix>`` column this adds accumulate in ``lifecycle_table_id`` and
     need occasional manual cleanup there, like lifecycle_confluence's pages. It
     never writes to the seed table, whose rows check_grist requires to be
     ``[QATEST]``.
@@ -2465,7 +2465,20 @@ def lifecycle_grist(manifest: dict[str, Any]) -> LifecycleResult:
         refetched = client.get_records_by_id(doc_id, table_id, [row_id])
         if len(refetched) != 1 or refetched[0].fields.get("Note") != "updated":
             raise GristClientError("get after update did not reflect the new Note")
-        ok, note = True, "add, get, update, get-after-update all verified"
+        # add_columns on an existing table must give a data column, not an "empty column"
+        # (an empty formula column), which PrivacyFence cannot write to.
+        col_id = f"Qa{suffix}"
+        client.add_columns(doc_id, table_id, [{"id": col_id, "type": "Text"}])
+        added = next((c for c in client.list_columns(doc_id, table_id) if c.id == col_id), None)
+        if added is None:
+            raise GristClientError("list_columns did not return the added column")
+        if added.is_formula:
+            raise GristClientError("add_columns left an empty formula column, not a data column")
+        client.update_records(doc_id, table_id, [(row_id, {col_id: "written"})])
+        written = client.get_records_by_id(doc_id, table_id, [row_id])
+        if len(written) != 1 or written[0].fields.get(col_id) != "written":
+            raise GristClientError("write to the added column did not persist")
+        ok, note = True, "add, get, update, get-after-update, add_columns data column all verified"
     except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
         ok, note = False, str(exc)
     return LifecycleResult("grist", ok, note, cleanup_ok=None)

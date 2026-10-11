@@ -628,7 +628,7 @@ class TestAddTable:
 
 class TestAddColumns:
     def test_posts_columns_and_returns_ids(self, net: Net, client: GristClient) -> None:
-        net.reply(ok({"columns": [{"id": "A"}, {"id": "B"}]}))
+        net.reply(ok({"columns": [{"id": "A"}, {"id": "B"}]}), ok({}))
         ids = client.add_columns("doc1", "T", [{"id": "A", "type": "Int"}, {"id": "B", "label": "Bee"}])
         call = net.calls[0]
         assert (call["method"], call["url"]) == ("POST", f"{SERVER}/api/docs/doc1/tables/T/columns")
@@ -637,6 +637,10 @@ class TestAddColumns:
             {"id": "B", "fields": {"label": "Bee", "type": "Text", "isFormula": False}},
         ]}
         assert ids == ["A", "B"]
+        # A follow-up PATCH converts any "empty column" Grist created into a data column.
+        patch = net.calls[1]
+        assert (patch["method"], patch["url"]) == ("PATCH", f"{SERVER}/api/docs/doc1/tables/T/columns")
+        assert patch["json"] == call["json"]
 
     def test_bad_ids_before_request(self, net: Net, client: GristClient) -> None:
         with pytest.raises(GristClientError):

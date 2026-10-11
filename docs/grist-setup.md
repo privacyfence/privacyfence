@@ -165,6 +165,18 @@ A rule can name a document by its `grist.document` scope, set on **Settings > Au
 approval card never offers "Always allow" for a Grist operation. Every scope is in
 [the scope catalogue](approvals-and-policy.md#scope-catalogue).
 
+The rule's verbs cover these tools:
+
+| Verb | Tools |
+|---|---|
+| read | `grist_get_records`, `grist_export_records`, `grist_export_sql` |
+| create | `grist_add_records`, `grist_import_csv` |
+| update | `grist_update_records`, `grist_update_csv` |
+| restructure | `grist_create_table`, `grist_add_columns` |
+
+A CSV import or update rule lets the assistant load a file into that document without a card, so
+grant `create` and `update` only for a document you are happy to have bulk-written.
+
 ## Troubleshooting
 
 **`Grist is not authenticated. Use Authenticate… in PrivacyFence Settings.`** — no key or sign-in

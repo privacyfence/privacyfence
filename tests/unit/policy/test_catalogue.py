@@ -10,6 +10,8 @@ the real definitions directly.
 """
 from __future__ import annotations
 
+import pytest
+
 from privacyfence.policy import catalogue, propose, store
 from privacyfence.policy.registry import Verb
 
@@ -100,7 +102,22 @@ class TestRulesForCatalogueEntry:
         assert rules == store.merge_rules(rules)
 
 
-def test_grist_create_chip_is_labelled_add_records():
+def test_grist_chips_name_the_csv_and_export_tools_they_cover():
     entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "grist.document")
-    assert entry["verb_labels"] == {"create": "create (add records)"}
+    assert entry["verb_labels"] == {
+        "read": "read (records, export, SQL)",
+        "create": "create (add records, import CSV)",
+        "update": "update (records, CSV)",
+    }
     assert all("verb_labels" not in e for e in catalogue.scope_catalogue() if e["id"] != "grist.document")
+
+
+@pytest.mark.parametrize("verb, tools", [
+    (Verb.READ, {"grist.read_records"}),
+    (Verb.CREATE, {"grist.add_records", "grist.import_csv"}),
+    (Verb.UPDATE, {"grist.update_records", "grist.update_csv"}),
+    (Verb.RESTRUCTURE, {"grist.create_table", "grist.add_columns"}),
+])
+def test_grist_document_rule_governs_every_tool_of_its_verb(verb, tools):
+    rules = catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [verb])
+    assert rules[0].operations == frozenset(tools)

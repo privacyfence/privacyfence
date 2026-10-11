@@ -398,9 +398,19 @@ class GristClient:
     def add_columns(self, doc_id: str, table_id: str, columns: list[dict[str, Any]]) -> list[str]:
         validate_doc_id(doc_id)
         validate_identifier(table_id, "table")
+        cols = self._column_body(columns)
         body = self._request(
             "POST",
             f"/api/docs/{doc_id}/tables/{table_id}/columns",
-            json_body={"columns": self._column_body(columns)},
+            json_body={"columns": cols},
         )
-        return [str(_as_dict(c).get("id") or "") for c in _as_list(_as_dict(body).get("columns"))]
+        ids = [str(_as_dict(c).get("id") or "") for c in _as_list(_as_dict(body).get("columns"))]
+        # On an existing table Grist can still create an "empty column" (an empty formula column)
+        # despite isFormula=False in the POST, which only the web UI's "Convert to data column"
+        # could fix. Modifying the columns afterwards is the same user action as that conversion.
+        self._request(
+            "PATCH",
+            f"/api/docs/{doc_id}/tables/{table_id}/columns",
+            json_body={"columns": cols},
+        )
+        return ids
