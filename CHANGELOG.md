@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Exports work on an organization-managed install.** `grist_export_records`, `grist_export_sql` and `salesforce_export_report` no longer refuse there: after approval they return a one-time download link instead of saving a file, unless your organization turned off `download_delivery.allow_disk_staging`.
+
 ## [5.9.1] — 2026-10-11
 
 ### Changed

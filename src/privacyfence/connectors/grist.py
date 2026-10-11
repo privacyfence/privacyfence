@@ -19,6 +19,7 @@ from .. import export_files, local_files
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
+from ..org_mode import DownloadDeliveryConfig
 from ..grist_csv import KEY_TYPES, CsvRow, ParsedCsv, key_index, parse_csv, same_key
 from ..grist_client import (
     GristAccessDenied,
@@ -402,6 +403,8 @@ class GristConnector(Connector):
     def __init__(self, client: GristClient) -> None:
         self._client = client
         self.download_mode: str = "local"
+        self.download_config: DownloadDeliveryConfig | None = None
+        self.download_base_url: str = ""
 
     @property
     def client(self) -> GristClient:
@@ -495,7 +498,7 @@ class GristConnector(Connector):
                     "Up to 50000 records. Returns {rows, columns, sha256, path, name, size_bytes, "
                     "delivery}, never the records; read the file at path, which may be a numbered "
                     "name if a file of that name exists. Use grist_get_records to look at a few "
-                    "records. Not available on an organization-managed install. "
+                    "records. " + export_files.ORG_DELIVERY_SENTENCE + " "
                     "Requires user approval."
                 ),
                 params=[
@@ -524,8 +527,8 @@ class GristConnector(Connector):
                     "written as Grist stores them: dates as seconds since 1970, true/false as "
                     "1/0. Grist runs SQL only for people who can copy the whole document. Up to "
                     "50000 rows. Returns {rows, columns, sha256, path, name, size_bytes, "
-                    "delivery}, never the rows. Not available on an organization-managed "
-                    "install. Requires user approval."
+                    "delivery}, never the rows. " + export_files.ORG_DELIVERY_SENTENCE + " "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam("doc_id", "str", description=_DOC_ID_DESCRIPTION),
@@ -833,7 +836,11 @@ class GristConnector(Connector):
         filters = _parse_filter(filter)
         destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, table_id)
-        export_files.refuse_org("grist_export_records", self.download_mode, "grist_get_records")
+        export_files.refuse_org_without_staging(
+            "grist_export_records", self.download_mode,
+            (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
+            "grist_get_records",
+        )
 
         doc = await self._doc_info(doc_id)
         columns = await self._fetch(self._client.list_columns, doc_id, table_id)
@@ -852,7 +859,7 @@ class GristConnector(Connector):
         data = await asyncio.to_thread(export_files.render, names, rows, fmt)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = f"{destination_dir.rstrip('/')}/{file_name}"
+        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
         preview = {
             "Server": self._client.host,
             "Document": doc.name,
@@ -885,17 +892,19 @@ class GristConnector(Connector):
                 "Saved to": saved_to,
             },
             details_text=export_files.card_details(preview, n, names, saved_to, sha256),
-            delivery="local_disk"
-            if local_files.can_access_user_files(self.download_mode) else "client_bridge",
+            delivery="staged_link" if self.download_mode == "org"
+            else "local_disk" if local_files.can_access_user_files(self.download_mode)
+            else "client_bridge",
             my_email="",
             args={
                 "doc_id": doc_id, "table_id": table_id, "filter": filter,
                 "destination_dir": destination_dir, "file_name": file_name, "sha256": sha256,
             },
         )
-        delivered = local_files.deliver_file(
+        delivered = local_files.deliver_export(
             destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
-            download_mode=self.download_mode,
+            download_mode=self.download_mode, download_config=self.download_config,
+            download_base_url=self.download_base_url,
         )
         return export_files.export_summary(names, rows, sha256, delivered)
 
@@ -911,7 +920,11 @@ class GristConnector(Connector):
         values = _parse_sql_args(args)
         destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, "query")
-        export_files.refuse_org("grist_export_sql", self.download_mode, "grist_get_records")
+        export_files.refuse_org_without_staging(
+            "grist_export_sql", self.download_mode,
+            (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
+            "grist_get_records",
+        )
 
         doc = await self._doc_info(doc_id)
         # Sent to Grist's own SQL endpoint, never to a local database; _validate_sql has
@@ -934,7 +947,7 @@ class GristConnector(Connector):
         data = await asyncio.to_thread(export_files.render, names, rows, fmt)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = f"{destination_dir.rstrip('/')}/{file_name}"
+        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
         preview = {
             "Server": self._client.host,
             "Document": doc.name,
@@ -968,17 +981,19 @@ class GristConnector(Connector):
                 + "\n\nQuery:\n" + sql
                 + "\n\nArguments: " + json.dumps(values, ensure_ascii=False)
             ),
-            delivery="local_disk"
-            if local_files.can_access_user_files(self.download_mode) else "client_bridge",
+            delivery="staged_link" if self.download_mode == "org"
+            else "local_disk" if local_files.can_access_user_files(self.download_mode)
+            else "client_bridge",
             my_email="",
             args={
                 "doc_id": doc_id, "sql": sql, "args": args, "destination_dir": destination_dir,
                 "file_name": file_name, "sha256": sha256,
             },
         )
-        delivered = local_files.deliver_file(
+        delivered = local_files.deliver_export(
             destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
-            download_mode=self.download_mode,
+            download_mode=self.download_mode, download_config=self.download_config,
+            download_base_url=self.download_base_url,
         )
         return export_files.export_summary(names, rows, sha256, delivered)
 

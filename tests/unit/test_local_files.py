@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 from privacyfence import local_files
+from privacyfence.org_mode import LINK_RESULT_NOTE, DownloadDeliveryConfig
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from privacyfence.upload_staging import get_upload_staging_store
 
@@ -380,6 +381,70 @@ class TestDeliverFile:
             local_files.check_delivery_size(5)
         finally:
             local_files.configure_file_bridge()
+
+class TestDeliverExport:
+    @staticmethod
+    def _fake_store(monkeypatch):
+        calls = []
+
+        class FakeStore:
+            def stage(self, principal, data, name, mime_type, **kwargs):
+                calls.append({"data": data, "name": name, "mime_type": mime_type, **kwargs})
+                return b"\x01" * 32
+
+        monkeypatch.setattr(local_files, "get_download_staging_store", lambda: FakeStore())
+        return calls
+
+    def test_local_mode_calls_deliver_file(self, monkeypatch):
+        seen = {}
+
+        def fake(dest_dir, name, data, mime_type, *, download_mode):
+            seen.update(dest_dir=dest_dir, name=name, download_mode=download_mode)
+            return {"path": "/x"}
+
+        monkeypatch.setattr(local_files, "deliver_file", fake)
+        result = local_files.deliver_export(
+            "~/out", "a.csv", b"x", "text/csv",
+            download_mode="local", download_config=None, download_base_url="",
+        )
+        assert result == {"path": "/x"}
+        assert seen == {"dest_dir": "~/out", "name": "a.csv", "download_mode": "local"}
+
+    def test_org_mode_stages_and_returns_a_link(self, monkeypatch):
+        calls = self._fake_store(monkeypatch)
+        result = local_files.deliver_export(
+            "~/out", "a.csv", b"abc", "text/csv",
+            download_mode="org", download_config=None, download_base_url="https://pf.example",
+        )
+        assert result["delivery"] == "link"
+        assert result["download_url"].startswith("https://pf.example/mcp-files/fetch/")
+        assert isinstance(result["expires_at"], str)
+        assert result["note"] == LINK_RESULT_NOTE
+        assert result["size_bytes"] == 3
+        assert calls[0]["data"] == b"abc"
+
+    def test_org_mode_uses_the_config_ttl(self, monkeypatch):
+        calls = self._fake_store(monkeypatch)
+        local_files.deliver_export(
+            "~/out", "a.csv", b"abc", "text/csv", download_mode="org",
+            download_config=DownloadDeliveryConfig(link_ttl_seconds=77),
+            download_base_url="https://pf.example",
+        )
+        assert calls[0]["ttl_seconds"] == 77
+
+    def test_org_mode_checks_the_delivery_size(self, monkeypatch):
+        calls = self._fake_store(monkeypatch)
+        local_files.configure_file_bridge(max_download_bytes=2)
+        try:
+            with pytest.raises(local_files.LocalFileAccessError):
+                local_files.deliver_export(
+                    "~/out", "a.csv", b"abc", "text/csv",
+                    download_mode="org", download_config=None, download_base_url="",
+                )
+        finally:
+            local_files.configure_file_bridge()
+        assert calls == []
+
 
 class TestCallProducedDeliveries:
     def test_false_with_no_call_context(self):

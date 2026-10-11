@@ -34,11 +34,25 @@ class TestCheckDestination:
             export_files.check_destination("   ")
 
 
-class TestRefuseOrg:
-    def test_raises_only_in_org_mode(self):
-        export_files.refuse_org("tool_x", "local", "other_tool")
-        with pytest.raises(ValueError, match="tool_x writes a file.*Use other_tool instead"):
-            export_files.refuse_org("tool_x", "org", "other_tool")
+class TestRefuseOrgWithoutStaging:
+    def test_raises_only_in_org_mode_with_staging_off(self):
+        with pytest.raises(ValueError, match="tool_x delivers its file.*Use other_tool instead"):
+            export_files.refuse_org_without_staging("tool_x", "org", False, "other_tool")
+
+    def test_org_mode_with_staging_on_passes(self):
+        export_files.refuse_org_without_staging("tool_x", "org", True, "other_tool")
+
+    def test_local_mode_never_raises(self):
+        export_files.refuse_org_without_staging("tool_x", "local", False, "other_tool")
+        export_files.refuse_org_without_staging("tool_x", "local", True, "other_tool")
+
+
+class TestSavedTo:
+    def test_local_joins_the_path(self):
+        assert export_files.saved_to("~/out/", "a.csv", "local") == "~/out/a.csv"
+
+    def test_org_says_one_time_link(self):
+        assert export_files.saved_to("~/out", "a.csv", "org") == export_files.ORG_SAVED_TO
 
 
 class TestCsvCell:
