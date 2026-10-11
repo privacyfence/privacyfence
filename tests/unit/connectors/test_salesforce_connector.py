@@ -22,6 +22,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from privacyfence import export_files
+from privacyfence.org_mode import DownloadDeliveryConfig
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import salesforce as salesforce_module
 from privacyfence.connectors.salesforce import SalesforceConnector
@@ -935,7 +937,7 @@ class TestEveryToolIsAudited:
         client.search.return_value = [SalesforceRecord(object_type="Account", id="001", fields={})]
         client.run_report.return_value = export_run(make_rows(2))
         monkeypatch.setattr(
-            salesforce_module.local_files, "deliver_file",
+            salesforce_module.local_files, "deliver_export",
             lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
         )
 
@@ -960,15 +962,19 @@ EXPORT_ARGS = {"report_id": REPORT_ID, "destination_dir": "~/out"}
 def delivered(monkeypatch):
     calls = []
 
-    def fake_deliver(dest_dir, name, data, mime_type, *, download_mode):
+    def fake_deliver(
+        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        download_base_url="",
+    ):
         calls.append({
             "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
-            "download_mode": download_mode,
+            "download_mode": download_mode, "download_config": download_config,
+            "download_base_url": download_base_url,
         })
         return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
                 "delivery": "local_disk"}
 
-    monkeypatch.setattr(salesforce_module.local_files, "deliver_file", fake_deliver)
+    monkeypatch.setattr(salesforce_module.local_files, "deliver_export", fake_deliver)
     return calls
 
 
@@ -1126,16 +1132,33 @@ class TestExportReport:
 
         assert gated_call_spy[0]["delivery"] == "local_disk"
 
-    async def test_org_mode_is_refused_before_any_request(self, gated_call_spy, delivered):
+    async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+        cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
+        connector.download_mode = "org"
+        connector.download_config = cfg
+        connector.download_base_url = "https://pf.example"
+
+        await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert delivered[0]["download_mode"] == "org"
+        assert delivered[0]["download_config"] is cfg
+        assert delivered[0]["download_base_url"] == "https://pf.example"
+        assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_org_mode_without_staging_is_refused_before_any_request(self, gated_call_spy, delivered):
         connector, client = export_connector()
         connector.download_mode = "org"
+        connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
-        with pytest.raises(ValueError, match="organization-managed"):
+        with pytest.raises(ValueError, match="allow_disk_staging"):
             await connector.call("salesforce_export_report", EXPORT_ARGS)
 
         client.run_report.assert_not_called()
         client.run_report_page.assert_not_called()
         assert gated_call_spy == []
+        assert delivered == []
 
     async def test_deny_writes_nothing(self, monkeypatch, delivered):
         async def denied(**kwargs):
