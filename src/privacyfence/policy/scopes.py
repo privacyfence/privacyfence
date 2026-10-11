@@ -556,6 +556,15 @@ def _grist_document_matches(value: Any, ctx: ReviewContext) -> bool:
     return ctx.args.get("doc_id", "") in allowed
 
 
+def _peek_page_matches(value: Any, ctx: ReviewContext) -> bool:
+    """A Peek page rule names slugs. A call without a slug (peek_upload_page creating a new page)
+    never matches, so the rule covers new versions of the named pages only (ADR 0158)."""
+    if not value:
+        return False
+    slug = ctx.args.get("slug", "") or ""
+    return bool(slug) and slug in set(_values_of(value))
+
+
 # `gmail.create_filter`/`update_filter` and `slack.create_group_chat` have no resource identity to
 # scope to at all (propose.py's own module docstring explains why: a filter's/group chat's
 # *subject* is "the account"/"the audience", not an item any `ScopeSelector` here can name). They
@@ -584,6 +593,10 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "grist.document": ScopeSelector(
         predicate="grist.document", scope_type="grist.document", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.ARGS, matches=_grist_document_matches,
+    ),
+    "peek.page": ScopeSelector(
+        predicate="peek.page", scope_type="peek.page", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.ARGS, matches=_peek_page_matches,
     ),
     "gmail.anything": ScopeSelector(
         predicate="gmail.anything", scope_type="gmail.anything", kind=ScopeKind.ATTRIBUTE,
