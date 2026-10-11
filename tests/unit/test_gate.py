@@ -1068,6 +1068,18 @@ class TestPreflightAutoAccept:
         )
         assert verdict != "auto_accept"
 
+    def test_stored_peek_page_rule_covers_a_new_version_only(self):
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-peek", predicate="peek.page", value=["dash"],
+                operations=frozenset({"peek.upload_page"}),
+            ),
+        ])
+        verdict, matched_rule, _id, _reason = gate.preflight_auto_accept("peek.upload_page", {"slug": "dash"})
+        assert (verdict, matched_rule) == ("auto_accept", "r-peek")
+        verdict, _rule, _id, _reason = gate.preflight_auto_accept("peek.upload_page", {"slug": ""})
+        assert verdict != "auto_accept"
+
     @pytest.mark.parametrize("verb, operation", [
         (Verb.READ, "grist.read_records"),  # also what grist_export_records and grist_export_sql resolve to
         (Verb.CREATE, "grist.import_csv"),
@@ -2135,6 +2147,46 @@ class TestPersonalDataRules:
             with pytest.raises(RuntimeError, match="unattended session"):
                 await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
         assert read_audit_entries(audit_dir)[-1]["decision"] == "denied_unattended"
+
+    @staticmethod
+    def _install_peek(monkeypatch, *, allow_personal_data: bool) -> PolicyRule:
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate="peek.page", value=["dash"],
+            operations=frozenset({"peek.upload_page"}), allow_personal_data=allow_personal_data,
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return rule
+
+    @staticmethod
+    def _peek_call():
+        return gate.gated_call(**base_kwargs(
+            connector="peek", tool="peek_upload_page", gate="popup",
+            args={"slug": "dash", "title": "Dash"}, upload_pii_scan_text=TestPersonalDataRules.PII_TEXT,
+        ))
+
+    async def test_flagged_peek_page_rule_lets_an_upload_with_pii_through(self, monkeypatch, audit_dir):
+        rule = self._install_peek(monkeypatch, allow_personal_data=True)
+        popups = []
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        await self._peek_call()
+
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+
+    async def test_unflagged_peek_page_rule_shows_the_card_on_pii(self, monkeypatch, audit_dir):
+        self._install_peek(monkeypatch, allow_personal_data=False)
+        popups = []
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._peek_call()
+
+        assert len(popups) == 1
 
     async def test_no_pii_takes_the_ordinary_path(self, monkeypatch, audit_dir):
         self._install(monkeypatch, allow_personal_data=True)

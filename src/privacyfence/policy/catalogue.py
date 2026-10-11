@@ -62,6 +62,12 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
             "update": "update (records, CSV)",
         },
     ),
+    "peek.page": PolicyExtraScope(
+        predicate="peek.page", connector="peek",
+        verbs=(Verb.READ, Verb.CREATE),
+        label="Peek — page", needs_value=True, value_hint="team-dashboard…page-slug",
+        verb_labels={"read": "read (comments, stats)", "create": "update (new versions)"},
+    ),
     "gmail.configure": PolicyExtraScope(
         predicate="gmail.anything", connector="gmail",
         verbs=(Verb.CONFIGURE,),
@@ -105,6 +111,7 @@ PERSONAL_DATA_GROUPS: dict[str, str] = {
     "grist.document": "Exports may include personal data",
     "salesforce.report": "Exports may include personal data",
     "jira.project": "Exports may include personal data",
+    "peek.page": "New versions may include personal data",
 }
 
 
