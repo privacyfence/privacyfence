@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`salesforce_export_report` can write the shown text and currency too.** `cell_format: both` writes each column's raw value, its shown text as `<column>.label`, and `<column>.currency` for money columns.
+
 ### Changed
 
 - **Exports work on an organization-managed install.** `grist_export_records`, `grist_export_sql` and `salesforce_export_report` no longer refuse there: after approval they return a one-time download link instead of saving a file, unless your organization turned off `download_delivery.allow_disk_staging`.

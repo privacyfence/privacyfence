@@ -280,6 +280,33 @@ def _export_cell(cell: dict, cell_format: str) -> Any:
     return cell.get("label", "")
 
 
+def _export_table(
+    detail_columns: list[str], column_info: dict[str, dict], rows: list[list[dict]],
+    cell_format: str,
+) -> tuple[list[str], list[list[Any]]]:
+    """Columns and rows of an export. ``both`` writes each column's raw value, its shown text as
+    ``<column>.label`` and, for money columns, ``<column>.currency``; which columns are money
+    comes from the report metadata, so the column set does not depend on the data."""
+    if cell_format != "both":
+        return detail_columns, [[_export_cell(cell, cell_format) for cell in row] for row in rows]
+    money = [
+        (column_info.get(name) or {}).get("dataType") == "currency" for name in detail_columns
+    ]
+    names: list[str] = []
+    for name, is_money in zip(detail_columns, money, strict=True):
+        names += [name, f"{name}.label"] + ([f"{name}.currency"] if is_money else [])
+    table: list[list[Any]] = []
+    for row in rows:
+        out: list[Any] = []
+        for cell, is_money in zip(row, money, strict=False):
+            value = cell.get("value")
+            out += [_export_cell(cell, "value"), cell.get("label", "")]
+            if is_money:
+                out.append(value.get("currency") if isinstance(value, dict) else None)
+        table.append(out)
+    return names, table
+
+
 class SalesforceConnector(Connector):
     def __init__(self, client: SalesforceClient) -> None:
         self._sf = client
@@ -389,7 +416,9 @@ class SalesforceConnector(Connector):
                               description="value (default) writes Salesforce's raw value: dates as "
                                           "YYYY-MM-DD, amounts as numbers, record ids for name "
                                           "columns. label writes the text Salesforce shows, such "
-                                          "as $1,200.00."),
+                                          "as $1,200.00. both writes each column twice, raw value as "
+                                          "the column name and the shown text as <column>.label, "
+                                          "plus <column>.currency for money columns."),
                     ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
                     ToolParam("file_name", "str", required=False, default="",
                               description="File name ending in .csv or .json; the ending picks the "
@@ -644,8 +673,8 @@ class SalesforceConnector(Connector):
         filter_list = _parse_report_filters(filters)
         column_list = [c.strip() for c in columns.split(",") if c.strip()]
         page_by = page_by.strip()
-        if cell_format not in ("value", "label"):
-            raise ValueError("cell_format must be value or label.")
+        if cell_format not in ("value", "label", "both"):
+            raise ValueError("cell_format must be value, label or both.")
         destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, report_id)
         export_files.refuse_org_without_staging(
@@ -686,12 +715,16 @@ class SalesforceConnector(Connector):
         runs = len(results)
 
         first_metadata = results[0].get("reportMetadata") or {}
-        names = list(first_metadata.get("detailColumns") or [])
-        rows = [
-            [_export_cell(cell, cell_format) for cell in row.get("dataCells") or []]
-            for result in results
-            for row in ((result.get("factMap") or {}).get("T!T") or {}).get("rows") or []
-        ]
+        column_info = (results[0].get("reportExtendedMetadata") or {}).get("detailColumnInfo") or {}
+        names, rows = _export_table(
+            list(first_metadata.get("detailColumns") or []), column_info,
+            [
+                row.get("dataCells") or []
+                for result in results
+                for row in ((result.get("factMap") or {}).get("T!T") or {}).get("rows") or []
+            ],
+            cell_format,
+        )
         n = len(rows)
         report_name = first_metadata.get("name") or report_id
         data = await asyncio.to_thread(export_files.render, names, rows, fmt)
