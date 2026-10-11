@@ -1018,7 +1018,9 @@ def check_jira(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     # export_issues runs before search_issues_page: the unit test for that row reads the last
     # enhanced_jql call.
     page_jql = f'project = {project_key} AND summary ~ "{seed_issue_summary}"'
-    results.append(_check_jira_export(client, page_jql, project_key))
+    # A key lookup is exact; the summary text search can match nothing on a live site.
+    export_jql = f"key = {seed_issue_key}" if seed_issue_key else page_jql
+    results.append(_check_jira_export(client, export_jql, project_key))
 
     # search_issues_page -- the single-request page call the connector's paged
     # search will use; exercised live, nothing recorded.
