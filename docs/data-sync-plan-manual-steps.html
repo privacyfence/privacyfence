@@ -1,0 +1,173 @@
+<title>Data sync manual checks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+/* Layout: one reading column, a sticky progress strip, each manual item a section of checkable steps. */
+:root {
+  --bg: #f6f7f5;
+  --surface: #ffffff;
+  --fg: #1d2420;
+  --muted: #5d6862;
+  --line: #d9dfdb;
+  --accent: #2f6b4f;
+  --accent-soft: #e3efe8;
+  --warn: #8a5a00;
+  --warn-soft: #fbf1dc;
+  --code-bg: #eef1ef;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131815; --surface: #1b211e; --fg: #e4ebe6; --muted: #9aa69f; --line: #2e3833;
+    --accent: #7cc4a0; --accent-soft: #1f3329; --warn: #e3b55c; --warn-soft: #33290f; --code-bg: #232b27;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131815; --surface: #1b211e; --fg: #e4ebe6; --muted: #9aa69f; --line: #2e3833;
+  --accent: #7cc4a0; --accent-soft: #1f3329; --warn: #e3b55c; --warn-soft: #33290f; --code-bg: #232b27;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 64px; display: grid; gap: 28px; }
+h1 { font-family: var(--font-display); font-size: 2rem; line-height: 1.15; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-size: 1.35rem; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.05rem; margin: 0; font-weight: 600; text-wrap: balance; }
+p { margin: 0; max-width: 65ch; }
+a { color: var(--accent); }
+a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code { font-family: var(--font-mono); font-size: 0.88em; background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--font-mono); font-size: 0.85rem; background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; }
+.lede { color: var(--muted); display: grid; gap: 8px; }
+.eyebrow { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.progress { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; background: var(--bg); padding-block: 8px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.bar { flex: 1 1 200px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+.count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
+.part { display: grid; gap: 18px; }
+.note { background: var(--warn-soft); color: var(--fg); border-left: 3px solid var(--warn); padding: 10px 14px; border-radius: 4px; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.item-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+.time { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.why { color: var(--muted); }
+ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: grid; gap: 10px; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; min-width: 0; }
+ol.steps > li > input { margin-top: 0.3em; width: 18px; height: 18px; accent-color: var(--accent); }
+ol.steps > li > label { min-width: 0; display: grid; gap: 4px; }
+ol.steps > li > label::before { content: "Step " counter(s); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+ol.steps > li.done > label > .act { text-decoration: line-through; color: var(--muted); }
+.see { color: var(--muted); font-size: 0.9rem; }
+.end { background: var(--accent-soft); border-radius: 6px; padding: 10px 14px; display: grid; gap: 4px; }
+.end strong { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; }
+@media (prefers-reduced-motion: reduce) { .bar > span { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="lede">
+    <span class="eyebrow">PrivacyFence · feature/data-sync</span>
+    <h1>Data sync manual checks</h1>
+    <p>Nothing has to be done before the implementation starts. These four checks come after the last phase merges into <code>feature/data-sync</code>, while its pull request is open. Each one ends with a line to paste into the pull request.</p>
+  </header>
+
+  <div class="progress" aria-live="polite">
+    <div class="bar" aria-hidden="true"><span id="bar"></span></div>
+    <span class="count" id="count">0 of 0 steps done</span>
+  </div>
+
+  <section class="part">
+    <h2>Before implementation</h2>
+    <p>No steps. <code>/implement</code> can start right away.</p>
+  </section>
+
+  <section class="part">
+    <h2>After implementation</h2>
+
+    <article class="item" id="ma1">
+      <div class="item-head"><h3>1. Run one real recipe end to end, locally and unattended</h3><span class="time">about 45 min</span></div>
+      <p class="why">CI fakes every connector. Only a real run shows the rules, the personal-data checkbox, the export files, <code>grist_update_csv</code> and the Peek upload working together with no approval card.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma1-1"><label for="ma1-1"><span class="act">Install the feature branch build of PrivacyFence on your machine, as you would test any branch.</span><span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/plan/data-sync/docs/dev-vs-live-setup.md">dev vs live setup</a>. Settings should open and show your connectors as before.</span></label></li>
+        <li><input type="checkbox" id="ma1-2"><label for="ma1-2"><span class="act">Turn on unattended sessions in your config bundle: rebuild it with <code>--enable-unattended-sessions</code> and install it.</span><span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/plan/data-sync/docs/configuration-reference.md#build-options">Configuration reference, build options</a>. It applies in local mode too.</span></label></li>
+        <li><input type="checkbox" id="ma1-3"><label for="ma1-3"><span class="act">In a new virtualenv, install the sync client from the branch:</span><pre>pip install "git+https://github.com/privacyfence/privacyfence@feature/data-sync#subdirectory=sync"</pre><span class="see"><code>privacyfence-sync --help</code> lists run, login and check.</span></label></li>
+        <li><input type="checkbox" id="ma1-4"><label for="ma1-4"><span class="act">Put your AI client token in the environment of this shell only. Use the companion's <b>Copy AI Client Token</b>, or run <code>privacyfence-app --print-mcp-token</code>, then <code>export PRIVACYFENCE_TOKEN=…</code>.</span><span class="see">Don't write the token into the recipe, a crontab line or a shared file.</span></label></li>
+        <li><input type="checkbox" id="ma1-5"><label for="ma1-5"><span class="act">Publish a Peek page once by hand (in Peek or through Claude) and note its slug.</span><span class="see">A per-page rule can only name a page that already exists.</span></label></li>
+        <li><input type="checkbox" id="ma1-6"><label for="ma1-6"><span class="act">In <b>Settings → Auto-accept → Add a rule</b>, add these rules (each asks for your passkey):</span><span class="see"><b>Salesforce — report</b> (your report id, <i>read</i>) or <b>Jira — project</b> (your project key, <i>search</i>), with <b>Exports may include personal data</b> on. <b>Grist — document</b> (your document id, <i>read</i>, <i>update</i>, <i>create</i>), with the checkbox on. <b>Peek — page</b> (the slug, <i>read</i>, <i>update (new versions)</i>), with <b>New versions may include personal data</b> on. Each rule's sentence should end with "personal data allowed in exports and page uploads".</span></label></li>
+        <li><input type="checkbox" id="ma1-7"><label for="ma1-7"><span class="act">Write a small recipe from the example in <code>sync/README.md</code>: one export (Salesforce or Jira), one Grist export, a transform that merges them and sets <code>is_active</code>, <code>grist_update_csv</code>, a <code>grist_export_sql</code> to JSON, a template step and <code>peek_upload_page</code> with your slug.</span><span class="see">Pick a source with real names or email addresses in it, so the PII scan finds something.</span></label></li>
+        <li><input type="checkbox" id="ma1-8"><label for="ma1-8"><span class="act">Run <code>privacyfence-sync check recipe.yaml</code>.</span><span class="see">It prints "&lt;name&gt;: N step(s), OK".</span></label></li>
+        <li><input type="checkbox" id="ma1-9"><label for="ma1-9"><span class="act">Run <code>privacyfence-sync run recipe.yaml</code> and watch the Approvals page while it runs.</span><span class="see">Every step prints a line, the exit code (<code>echo $?</code>) is 0, no card appears, the Grist table changed and the Peek page has a new version.</span></label></li>
+        <li><input type="checkbox" id="ma1-10"><label for="ma1-10"><span class="act">Open <b>Settings → Audit log</b> and find the export entries of this run.</span><span class="see">Each is <i>auto accepted</i> with your rule's id, and PII detected is true for the exports that held personal data.</span></label></li>
+        <li><input type="checkbox" id="ma1-11"><label for="ma1-11"><span class="act">Remove the personal-data checkbox from one export rule (delete the rule and add it again without the box), then run the recipe again.</span><span class="see">That step fails with "Request denied: this connection is in an unattended session…" and the exit code is 3. Put the rule back afterwards.</span></label></li>
+      </ol>
+      <div class="end"><strong>Paste into the PR</strong><span><code>ma1 local end-to-end: PASS</code> (or FAIL with the step and the message), plus which source you exported from.</span></div>
+    </article>
+
+    <article class="item" id="ma2">
+      <div class="item-head"><h3>2. Sign in and run the recipe against an organization-mode server</h3><span class="time">about 45 min</span></div>
+      <p class="why">The OAuth sign-in, the one-time export link and the upload slot through a reverse proxy can only be proven against a real organization server and identity provider.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma2-1"><label for="ma2-1"><span class="act">Install the feature branch on your organization test server, with a bundle that has <code>--enable-unattended-sessions</code> and leaves <code>download_delivery.allow_disk_staging</code> on.</span><span class="see">See <a href="https://github.com/privacyfence/privacyfence/blob/plan/data-sync/docs/org-mode-setup-guide.md">Organization deployment</a>.</span></label></li>
+        <li><input type="checkbox" id="ma2-2"><label for="ma2-2"><span class="act">On your own computer, run <code>privacyfence-sync login --server https://&lt;your-host&gt;/mcp</code>.</span><span class="see">A browser opens on your identity provider. After you sign in, the tab says "Signed in to PrivacyFence" and the terminal prints "Signed in to …".</span></label></li>
+        <li><input type="checkbox" id="ma2-3"><label for="ma2-3"><span class="act">Create the same three rules on the server's Settings page as in check 1.</span></label></li>
+        <li><input type="checkbox" id="ma2-4"><label for="ma2-4"><span class="act">Make sure <code>PRIVACYFENCE_TOKEN</code> is not set in this shell (<code>unset PRIVACYFENCE_TOKEN</code>), then run <code>privacyfence-sync run recipe.yaml --server https://&lt;your-host&gt;/mcp</code>.</span><span class="see">Exit code 0. The export steps download their files into the recipe's work folder (the client checks each file's SHA-256), and the Grist and Peek writes land.</span></label></li>
+        <li><input type="checkbox" id="ma2-5"><label for="ma2-5"><span class="act">Optional: rebuild the bundle with <code>allow_disk_staging</code> off and run again.</span><span class="see">The first export step fails with a message naming <code>download_delivery.allow_disk_staging</code>, and the exit code is 2.</span></label></li>
+      </ol>
+      <div class="end"><strong>Paste into the PR</strong><span><code>ma2 org-mode run: PASS</code> (or FAIL with the step and the message), plus the identity provider you used.</span></div>
+    </article>
+
+    <article class="item" id="ma3">
+      <div class="item-head"><h3>3. Register the privacyfence-sync trusted publisher on TestPyPI and PyPI</h3><span class="time">about 10 min</span></div>
+      <p class="why">A trusted publisher belongs to one PyPI project. Without these two, the new publish jobs fail at the next stable release. The main <code>privacyfence</code> package still publishes, because the sync jobs run after it.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma3-1"><label for="ma3-1"><span class="act">Open <a href="https://test.pypi.org/manage/account/publishing/">TestPyPI → Publishing</a>, signed in as an owner of the <code>privacyfence</code> project.</span></label></li>
+        <li><input type="checkbox" id="ma3-2"><label for="ma3-2"><span class="act">Under <b>Add a new pending publisher → GitHub</b>, enter: PyPI Project Name <code>privacyfence-sync</code>, Owner <code>privacyfence</code>, Repository name <code>privacyfence</code>, Workflow name <code>publish-pypi.yml</code>, Environment name <code>testpypi</code>. Choose <b>Add</b>.</span><span class="see">The pending publisher appears in the list below the form.</span></label></li>
+        <li><input type="checkbox" id="ma3-3"><label for="ma3-3"><span class="act">Open <a href="https://pypi.org/manage/account/publishing/">PyPI → Publishing</a> and add the same pending publisher with Environment name <code>pypi</code>.</span></label></li>
+        <li><input type="checkbox" id="ma3-4"><label for="ma3-4"><span class="act">Compare with the existing <code>privacyfence</code> publisher described in <a href="https://github.com/privacyfence/privacyfence/blob/plan/data-sync/docs/releasing.md#publishing-to-pypi">Releasing, Publishing to PyPI</a>.</span><span class="see">Owner, repository, workflow and environment names match; only the project name differs.</span></label></li>
+      </ol>
+      <div class="end"><strong>Paste into the PR</strong><span><code>ma3 trusted publishers: TestPyPI done, PyPI done</code></span></div>
+    </article>
+
+    <article class="item" id="ma4">
+      <div class="item-head"><h3>4. Apply the new required checks to the main ruleset</h3><span class="time">about 5 min</span></div>
+      <p class="why">The PR adds the two "Sync client" checks to the script's list, but GitHub only requires them once the script applies the list to the ruleset.</p>
+      <p class="note">Do this right after the PR merges, not before. Applied earlier, it would block every other open PR, because their runs never report the new checks.</p>
+      <ol class="steps">
+        <li><input type="checkbox" id="ma4-1"><label for="ma4-1"><span class="act">On an up-to-date checkout of <code>main</code>, put a GitHub token with rulesets admin rights on this repository in <code>GITHUB_TOKEN</code> for this shell only.</span></label></li>
+        <li><input type="checkbox" id="ma4-2"><label for="ma4-2"><span class="act">Run <code>python scripts/update_branch_protection.py apply --dry-run</code>.</span><span class="see">The planned change adds exactly "Sync client (Python 3.11)" and "Sync client (Python 3.13)".</span></label></li>
+        <li><input type="checkbox" id="ma4-3"><label for="ma4-3"><span class="act">Run <code>python scripts/update_branch_protection.py apply</code>, then <code>show</code>.</span><span class="see"><code>show</code> lists both Sync client checks with the others.</span></label></li>
+        <li><input type="checkbox" id="ma4-4"><label for="ma4-4"><span class="act">If a <code>releases/*</code> branch exists, repeat with <code>--branch "releases/**"</code>.</span></label></li>
+      </ol>
+      <div class="end"><strong>Report</strong><span><code>ma4 required checks applied to main</code> (and releases/** if it exists), as a comment on the merged PR.</span></div>
+    </article>
+  </section>
+</div>
+
+<script>
+(function () {
+  var KEY = "pf-data-sync-manual-steps";
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ol.steps input[type="checkbox"]'));
+  function update() {
+    var done = 0;
+    boxes.forEach(function (b) {
+      b.parentElement.classList.toggle("done", b.checked);
+      if (b.checked) done++;
+    });
+    document.getElementById("count").textContent = done + " of " + boxes.length + " steps done";
+    document.getElementById("bar").style.width = (boxes.length ? (100 * done / boxes.length) : 0) + "%";
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!state[b.id];
+    b.addEventListener("change", function () {
+      state[b.id] = b.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
+      update();
+    });
+  });
+  update();
+})();
+</script>
