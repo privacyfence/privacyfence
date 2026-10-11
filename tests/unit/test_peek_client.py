@@ -12,6 +12,7 @@ import json
 import os
 import stat
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -38,6 +39,8 @@ BASE = "https://peek.example.com"
 TOKEN = "tok-SECRET-123"
 DEVICE = "dev-SECRET-456"
 PASSWORD = "pw-SECRET-789"
+
+LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "peek"
 
 
 class FakeResponse:
@@ -683,3 +686,41 @@ class TestSecretsStayOutOfErrors:
             client.set_visibility("p1", "password", PASSWORD)
         text = str(exc.value) + repr(exc.value) + repr(client)
         assert not any(secret in text for secret in (TOKEN, DEVICE, PASSWORD))
+
+
+class TestLiveFixtureParsing:
+    """Replays fixtures recorded from the QA Peek server's [QATEST]-tagged seed
+    page by scripts/qa_fixture_recorder.py --record peek -- real response
+    shape, not hand-authored, with identity fields already redacted. Skipped
+    (not failed) until each fixture exists; see tests/fixtures/live/README.md
+    and docs/testing-policy.md. Re-record via that script if this ever starts
+    failing after a genuine Peek API change."""
+
+    def _load(self, name: str) -> Any:
+        path = LIVE_FIXTURES_DIR / name
+        if not path.exists():
+            pytest.skip(
+                f"{path} not recorded yet -- run "
+                "`python3 scripts/qa_fixture_recorder.py --record peek` locally first"
+            )
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_list_pages_fixture_still_parses(self, monkeypatch, client):
+        raw = self._load("list_pages.json")
+        Recorder(monkeypatch, ok(raw))
+
+        pages = client.list_pages()
+
+        assert pages, "recorded list_pages.json has no pages"
+        assert all(p.slug and p.name and p.visibility and p.created_at and p.version for p in pages)
+        assert all(p.created_at.endswith("Z") for p in pages)
+
+    def test_get_comments_fixture_still_parses(self, monkeypatch, client):
+        raw = self._load("get_comments.json")
+        Recorder(monkeypatch, ok(raw))
+
+        comments = client.get_comments("p1")
+
+        assert comments, "recorded get_comments.json has no comments"
+        assert all(c.id and c.author and c.body and c.created_at for c in comments)
+        assert all("[QATEST]" in c.body for c in comments)

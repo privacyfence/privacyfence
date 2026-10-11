@@ -151,6 +151,14 @@ telegram:
   # How many recent Saved Messages to scan for the [QATEST] tag.
   history_limit: 100
 
+peek:
+  # docs/connector-qa.md, "Seed: Peek" -- the private "PrivacyFence QA [QATEST].html"
+  # page that section has you upload, with one [QATEST] comment. Its slug is
+  # the last path segment of the page's address (or the first column of
+  # `peek list`). The recorder refuses to record unless the page's name and
+  # every comment on it carry [QATEST].
+  page_slug: ""
+
 # Other connectors follow the same shape once
 # scripts/qa_fixture_recorder.py grows a check_<connector>() for them --
 # see that script's CONNECTOR_CHECKS registry.
