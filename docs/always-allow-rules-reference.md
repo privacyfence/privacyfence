@@ -88,6 +88,13 @@ the request on the card, once.
 | `jira_get_issue` | this project, if I'm reporter, if I'm assignee |
 | `jira_search_issues_with_fields` | this project |
 
+### Peek
+
+| Tool | Always allow buttons |
+|---|---|
+| `peek_get_comments` |  |
+| `peek_get_stats` |  |
+
 ### Salesforce
 
 | Tool | Always allow buttons |
