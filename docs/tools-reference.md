@@ -101,8 +101,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
 | [Grist](#grist) | 9 | 2 | 1 | 6 |
-| [Peek](#peek) | 3 | 1 | 2 | 0 |
-| **Total** | **132** | **50** | **25** | **57** |
+| [Peek](#peek) | 4 | 1 | 2 | 1 |
+| **Total** | **133** | **50** | **25** | **58** |
 
 ## Gmail
 
@@ -300,3 +300,4 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `peek_list_pages` | read | `auto` | List the Peek pages this account can manage, newest first, with each page's link and who can open it. |
 | `peek_get_comments` | read | `review` | Read the reviewers' comments on one Peek page, with what each comment is anchored to. |
 | `peek_get_stats` | read | `review` | Read how often one Peek page was opened, and the names visitors gave. |
+| `peek_upload_page` | write | `popup` | Publish an HTML page on Peek, or a new version of one of your pages, and get its share link. |

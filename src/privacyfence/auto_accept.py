@@ -137,6 +137,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "grist_update_csv":               "grist.update_csv",
     "peek_get_comments":              "peek.read_comments",
     "peek_get_stats":                 "peek.read_stats",
+    "peek_upload_page":               "peek.upload_page",
     "contacts_update":                "contacts.edit",
     "contacts_create":                "contacts.create",
     "contacts_add_label":             "contacts.add_label",
@@ -328,6 +329,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "peek_list_pages":                 "auto",
     "peek_get_comments":               "review",
     "peek_get_stats":                  "review",
+    "peek_upload_page":                "popup",
 }
 
 @dataclass

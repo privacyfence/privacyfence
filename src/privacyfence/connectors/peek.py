@@ -8,15 +8,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from .. import html_to_text, local_files
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
-from ..peek_client import PeekClient, PeekClientError, validate_slug
+from ..peek_client import (
+    PASSWORD_MAX_BYTES,
+    UPLOAD_MAX_BYTES,
+    VISIBILITIES,
+    PeekClient,
+    PeekClientError,
+    validate_slug,
+)
 from ..preview_dates import format_preview_datetime
 
 logger = logging.getLogger(__name__)
@@ -105,6 +114,76 @@ class PeekConnector(Connector):
                 params=[_SLUG, _REASON],
                 read_only=True,
             ),
+            ToolSpec(
+                name="peek_upload_page",
+                description=(
+                    "Publish an HTML page on Peek, or a new version of one of your pages, and "
+                    "get its share link. Give the page as html, local_path or upload_id. Give "
+                    "slug to replace what an existing page's link shows with this new version; "
+                    "its visibility stays as it is. A new page is private unless you choose "
+                    "otherwise. Returns {slug, url, visibility, version, version_url}. Use "
+                    "peek_set_visibility to change who can open a page later. Requires user "
+                    "approval."
+                ),
+                params=[
+                    ToolParam(
+                        "html", "str", required=False, default="",
+                        description=(
+                            "The page's full HTML source. Give exactly one of html, local_path "
+                            "and upload_id; empty otherwise."
+                        ),
+                    ),
+                    ToolParam(
+                        "local_path", "str", required=False, default="",
+                        description=(
+                            "Path of an HTML file on the user's computer, absolute or starting "
+                            "with ~/. Not available on an organization-managed install. Give "
+                            "exactly one of html, local_path and upload_id; empty otherwise."
+                        ),
+                    ),
+                    ToolParam(
+                        "upload_id", "str", required=False, default="",
+                        description=(
+                            "Id returned by privacyfence_create_upload_slot after you PUT the "
+                            "file's bytes to its upload_url. Give exactly one of html, "
+                            "local_path and upload_id; empty otherwise."
+                        ),
+                    ),
+                    ToolParam(
+                        "name", "str", required=False, default="",
+                        description=(
+                            "File name Peek shows for the page and builds its link from, such "
+                            "as report.html. Empty uses the local file's name, or page.html."
+                        ),
+                    ),
+                    ToolParam(
+                        "slug", "str", required=False, default="",
+                        description=(
+                            "Slug of one of your pages, from peek_list_pages, to publish this "
+                            "as its next version under the same link. Empty publishes a new page."
+                        ),
+                    ),
+                    ToolParam(
+                        "visibility", "str", required=False, default="",
+                        description=(
+                            "Who can open the page: public (anyone with the link), password "
+                            "(anyone with the link and the password) or private (signed-in Peek "
+                            "accounts only). Empty means private for a new page; leave it empty "
+                            "with slug."
+                        ),
+                    ),
+                    ToolParam(
+                        "password", "str", required=False, default="",
+                        description=(
+                            "The page password, 1 to 72 bytes. Required with password "
+                            "visibility and empty otherwise (always empty with slug). It goes "
+                            "to Peek and is never shown on the approval card."
+                        ),
+                    ),
+                    _REASON,
+                ],
+                read_only=False,
+            ),
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
@@ -114,6 +193,8 @@ class PeekConnector(Connector):
             return await self._get_comments(**args)
         if tool == "peek_get_stats":
             return await self._get_stats(**args)
+        if tool == "peek_upload_page":
+            return await self._upload_page(**args)
         raise ValueError(f"Unknown Peek tool: {tool!r}")
 
     # ------------------------------------------------------------------ #
@@ -244,6 +325,121 @@ class PeekConnector(Connector):
         )
 
     # ------------------------------------------------------------------ #
+    # Popup gate (writes)
+    # ------------------------------------------------------------------ #
+
+    async def _upload_page(
+        self,
+        html: str = "",
+        local_path: str = "",
+        upload_id: str = "",
+        name: str = "",
+        slug: str = "",
+        visibility: str = "",
+        password: str = "",
+    ) -> Any:
+        sources = (bool(html.strip()), bool(local_path.strip()), bool(upload_id.strip()))
+        if sum(sources) != 1:
+            raise ValueError("peek_upload_page: give exactly one of html, local_path and upload_id.")
+        if local_path.strip() and self.download_mode == "org":
+            raise ValueError(
+                "local_path is not available on an organization-managed install. "
+                "Pass html or upload_id instead."
+            )
+        if slug:
+            _check_slug(slug)
+            if visibility or password:
+                raise ValueError(
+                    "A new version keeps the page's visibility. Leave visibility and "
+                    "password empty, or change them with peek_set_visibility."
+                )
+        else:
+            visibility = visibility or "private"
+            _check_visibility(visibility, password)
+
+        if html.strip():
+            data = html.encode("utf-8")
+            if len(data) > UPLOAD_MAX_BYTES:
+                raise ValueError("peek_upload_page: the page is larger than 10 MB.")
+        else:
+            source = (
+                local_path
+                if local_path.strip()
+                else f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}"
+            )
+            local_files.require_local_files(
+                [source], max_total_bytes=UPLOAD_MAX_BYTES, download_mode=self.download_mode,
+            )
+            data = local_files.read_local_file(source, download_mode=self.download_mode)
+            if len(data) > UPLOAD_MAX_BYTES:
+                raise ValueError("peek_upload_page: the page is larger than 10 MB.")
+        if not data:
+            raise ValueError("peek_upload_page: the page is empty.")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                "peek_upload_page: the page is not UTF-8 text. Peek publishes HTML pages only."
+            ) from exc
+
+        name = (
+            os.path.basename(name.strip())
+            or (os.path.basename(local_path.strip()) if local_path.strip() else "")
+            or "page.html"
+        )
+        size = f"{len(data):,} bytes"
+        if slug:
+            page = await self._fetch(self._client.get_page, slug)
+            summary = f"New version of {page.name}"
+            sender = page.name
+            preview = {
+                "Server": self._client.host,
+                "Page": page.name,
+                "Link": page.url,
+                "New version": str(page.version + 1),
+                "Visibility": f"{page.visibility} (unchanged)",
+                "Size": size,
+            }
+        else:
+            summary = f"Publish {name} ({visibility})"
+            sender = name
+            preview = {
+                "Server": self._client.host,
+                "Name": name,
+                "Visibility": visibility,
+                "Size": size,
+            }
+            if visibility == "password":
+                preview["Password"] = "Set (not shown)"  # nosec B105  # card wording, not a credential
+        details = (
+            (html_to_text.html_to_text(text) or "(the page has no visible text)")
+            + "\n\n--- HTML source (everything that is published) ---\n"
+            + text
+        )
+        await gated_call(
+            connector=self.name,
+            tool="peek_upload_page",
+            tool_name="Publish Peek Page",
+            summary=summary,
+            sender=sender,
+            raw_data={
+                "name": name, "slug": slug, "visibility": visibility, "size_bytes": len(data),
+            },
+            filtered_data=None,
+            gate="popup",
+            preview=preview,
+            details_text=details,
+            upload_pii_scan_text=text,
+            args={"name": name, "slug": slug, "visibility": visibility},
+        )
+        # ADR 0102: the upload slot is consumed only now, once the gate has passed.
+        local_files.commit_uploads()
+        result = await self._fetch(
+            self._client.upload_page, data, name, visibility, password, slug=slug,
+        )
+        return asdict(result)
+
+    # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
 
@@ -281,6 +477,20 @@ def _check_slug(slug: str) -> None:
         validate_slug(slug)
     except PeekClientError as exc:
         raise ValueError(str(exc)) from exc
+
+
+def _check_visibility(visibility: str, password: str) -> None:
+    if visibility not in VISIBILITIES:
+        raise ValueError("visibility must be public, password or private.")
+    if visibility == "password":
+        if not password:
+            raise ValueError("A password is required when visibility is password.")
+        if len(password.encode("utf-8")) > PASSWORD_MAX_BYTES:
+            raise ValueError("password must be 72 bytes or fewer.")
+        if password != password.strip():
+            raise ValueError("password must not start or end with a space.")
+    elif password:
+        raise ValueError("password must be empty unless visibility is password.")
 
 
 def _anchor_text(anchor_kind: str, selector: str, element_text: str) -> str:

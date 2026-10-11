@@ -218,6 +218,12 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `jira_transition_issue` | this project |
 | `jira_update_issue` | this project |
 
+### Peek
+
+| Tool | Always allow buttons |
+|---|---|
+| `peek_upload_page` |  |
+
 ### Slack
 
 | Tool | Always allow buttons |
