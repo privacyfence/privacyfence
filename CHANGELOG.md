@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.9.0] — 2026-10-11
+
 ### Added
 
 - **A whole Grist table to a file in one approval.** `grist_export_records` writes every record of a table, optionally filtered, to a CSV or JSON file on your computer. The assistant gets back only the row count, the columns and the file's SHA-256.
@@ -3248,7 +3250,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.8.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.9.0...HEAD
+[5.9.0]: https://github.com/privacyfence/privacyfence/compare/v5.8.1...v5.9.0
 [5.8.1]: https://github.com/privacyfence/privacyfence/compare/v5.8.0...v5.8.1
 [5.8.0]: https://github.com/privacyfence/privacyfence/compare/v5.7.0...v5.8.0
 [5.7.0]: https://github.com/privacyfence/privacyfence/compare/v5.6.1...v5.7.0
