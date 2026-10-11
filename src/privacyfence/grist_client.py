@@ -326,6 +326,17 @@ class GristClient:
             params={"filter": json.dumps({"id": ids})},
         ))
 
+    def run_sql(self, doc_id: str, sql: str, args: list[Any]) -> list[dict[str, Any]]:
+        validate_doc_id(doc_id)
+        body = self._request(
+            "POST", f"/api/docs/{doc_id}/sql", json_body={"sql": sql, "args": args},
+        )
+        rows = [
+            _as_dict(_as_dict(r).get("fields")) for r in _as_list(_as_dict(body).get("records"))
+        ]
+        logger.debug("Grist SQL on %s returned %d row(s)", self.host, len(rows))
+        return rows
+
     # ------------------------------------------------------------------ #
     # Writes
     # ------------------------------------------------------------------ #

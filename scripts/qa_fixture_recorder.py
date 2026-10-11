@@ -1034,6 +1034,7 @@ def check_grist(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
         results.append(CheckResult("grist", "get_records", table_id, False, str(exc)))
 
     results.append(_check_grist_paging(client, doc_id, table_id))
+    results.append(_check_grist_sql(client, doc_id, table_id))
     return results
 
 
@@ -1062,6 +1063,25 @@ def _check_grist_paging(client: GristClient, doc_id: str, table_id: str) -> Chec
         return CheckResult("grist", "get_records_paged", table_id, ok, note)
     except GristClientError as exc:
         return CheckResult("grist", "get_records_paged", table_id, False, str(exc))
+
+
+def _check_grist_sql(client: GristClient, doc_id: str, table_id: str) -> CheckResult:
+    """Runs a plain SELECT through Grist's /sql endpoint and compares the ids with one records
+    read: proves the endpoint answers for this credential. It runs with the QA API key, so it
+    says nothing about an OAuth sign-in; nothing is recorded."""
+    try:
+        rows = client.run_sql(doc_id, f"SELECT id FROM {table_id} ORDER BY id", [])
+        sql_ids = [r.get("id") for r in rows]
+        expected = [r.id for r in client.get_records(doc_id, table_id, limit=500).records]
+        if sql_ids != expected:
+            return CheckResult("grist", "run_sql", table_id, False,
+                               f"sql ids {sql_ids} differ from one read's {expected}")
+        return CheckResult("grist", "run_sql", table_id, True,
+                           f"{len(sql_ids)} id(s) match one records read")
+    except GristAccessDenied:
+        return CheckResult("grist", "run_sql", table_id, False, "Grist refused /sql (HTTP 403)")
+    except GristClientError as exc:
+        return CheckResult("grist", "run_sql", table_id, False, str(exc))
 
 
 def _build_salesforce_client() -> SalesforceClient:
