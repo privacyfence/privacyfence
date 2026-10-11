@@ -1,12 +1,12 @@
 # Connecting a service
 
 A **connector** is PrivacyFence's link to one of your accounts: Gmail, Drive, Calendar, Contacts,
-Tasks, Apps Script, Slack, Jira, Confluence, Salesforce, Grist or Telegram. Connecting one takes two
+Tasks, Apps Script, Slack, Jira, Confluence, Salesforce, Grist, Peek or Telegram. Connecting one takes two
 steps, done by different people:
 
 1. **An administrator registers an app with the provider once** and packages its credentials into
    an organization config bundle (`org_config.json`). Each provider has its own guide — see
-   [Provider guides](#provider-guides) below. Telegram needs no registration.
+   [Provider guides](#provider-guides) below. Telegram and Peek need no registration.
 2. **Each user signs in once**, from PrivacyFence, with the provider's own sign-in page. Nobody
    copies or pastes a token.
 
@@ -98,6 +98,10 @@ sign-in already in progress?"*
 - **Telegram** opens a dialog in the Settings page instead of a browser tab: enter your phone
   number, then the code Telegram sends you, then your two-step verification password if your
   account has one. See [telegram-setup.md](telegram-setup.md).
+- **Peek** uses Peek's own device sign-in, so there is no OAuth app to register: PrivacyFence shows
+  a code, you approve it in Peek in your browser, then choose **Done**. Your organization pins the
+  Peek server in the bundle (`--peek-base-url`); without that you type the server's address, and
+  organization mode offers Peek only when it is pinned. See [peek-setup.md](peek-setup.md).
 
 ### Reconnect
 
@@ -182,4 +186,5 @@ provider-specific troubleshooting:
 | Salesforce | [salesforce-setup.md](salesforce-setup.md) |
 | Jira, Confluence | [atlassian-setup.md](atlassian-setup.md) |
 | Grist | [grist-setup.md](grist-setup.md) |
+| Peek | [peek-setup.md](peek-setup.md) |
 | Telegram | [telegram-setup.md](telegram-setup.md) |
