@@ -1586,7 +1586,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             failures["telegram"] = _classify_connector_failure(exc)
 
     # Peek — a bearer token from Peek's device sign-in, only ever sent to the
-    # server it was issued for (ADR 0147).
+    # server it was issued for (ADR 0152).
     if enabled("peek"):
         try:
             pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=download_mode == "org")

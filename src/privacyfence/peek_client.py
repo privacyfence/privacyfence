@@ -1,6 +1,6 @@
 """Peek REST client and Peek's device sign-in.
 
-A Peek token is only ever sent to the server it was issued for (ADR 0147):
+A Peek token is only ever sent to the server it was issued for (ADR 0152):
 the credential file records that server, every request goes to it, and
 redirects are never followed. Nothing here logs a token, a device code, a
 page password, page content or a comment body; log lines carry the host and
@@ -327,7 +327,7 @@ class PeekComment:
 @dataclass(frozen=True)
 class PeekVisit:
     """One visit. Peek also returns each visit's IP address and user agent;
-    they are deliberately never carried (ADR 0149)."""
+    they are deliberately never carried (ADR 0154)."""
 
     visitor_name: str
     visited_at: str

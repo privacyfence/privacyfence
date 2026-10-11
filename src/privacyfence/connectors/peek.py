@@ -1,6 +1,6 @@
 """Peek connector: the HTML pages an account shares through a Peek server.
 
-The connector holds a ``PeekClient`` bound to one server (ADR 0147). Nothing
+The connector holds a ``PeekClient`` bound to one server (ADR 0152). Nothing
 here logs, audits or previews a Peek token, a page password, page content or a
 comment body.
 """
