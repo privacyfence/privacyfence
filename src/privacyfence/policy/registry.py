@@ -214,6 +214,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "telegram_get_messages": Verb.READ,
     "peek_get_comments": Verb.READ,
     "peek_get_stats": Verb.READ,
+    "peek_upload_page": Verb.CREATE,
     "telegram_search_messages": Verb.SEARCH,
     "telegram_send_message": Verb.SEND,
     "tasks_create_task": Verb.CREATE,

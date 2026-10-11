@@ -15,6 +15,7 @@ from privacyfence.peek_client import (
     PeekComment,
     PeekPage,
     PeekStats,
+    PeekUploadResult,
     PeekVisit,
 )
 
@@ -63,6 +64,7 @@ PEEK_SIBLINGS: dict[str, tuple[str, ...]] = {
     "peek_list_pages": ("peek_get_comments", "peek_get_stats"),
     "peek_get_comments": ("peek_get_stats",),
     "peek_get_stats": ("peek_get_comments",),
+    "peek_upload_page": (),
 }
 
 
@@ -252,6 +254,222 @@ class TestGetStats:
         assert gated_call_spy == []
 
 
+def _upload_result() -> PeekUploadResult:
+    return PeekUploadResult(
+        "new1", "https://peek.example.com/p/new1", "private", 1,
+        "https://peek.example.com/p/new1/v/1",
+    )
+
+
+@pytest.fixture
+def fake_local_files(monkeypatch):
+    state = SimpleNamespace(required=[], read=[], committed=0, data=b"<p>file</p>")
+    lf = peek_module.local_files
+
+    def require(paths, *, max_total_bytes, download_mode):
+        state.required.append(list(paths))
+
+    def read(path, *, download_mode):
+        state.read.append(path)
+        return state.data
+
+    def commit():
+        state.committed += 1
+
+    monkeypatch.setattr(lf, "require_local_files", require)
+    monkeypatch.setattr(lf, "read_local_file", read)
+    monkeypatch.setattr(lf, "commit_uploads", commit)
+    return state
+
+
+class TestUploadPage:
+    async def test_html_new_page(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+        client.upload_page.return_value = _upload_result()
+        html = "<h1>Hello</h1><script>evil()</script>"
+
+        result = await connector.call("peek_upload_page", {"html": html, "name": "r.html"})
+
+        assert result == {
+            "slug": "new1", "url": "https://peek.example.com/p/new1",
+            "visibility": "private", "version": 1,
+            "version_url": "https://peek.example.com/p/new1/v/1",
+        }
+        call = gated_call_spy[0]
+        assert call["gate"] == "popup"
+        assert call["tool"] == "peek_upload_page"
+        assert call["preview"] == {
+            "Server": "peek.example.com", "Name": "r.html", "Visibility": "private",
+            "Size": f"{len(html):,} bytes",
+        }
+        head, _, source = call["details_text"].partition("--- HTML source")
+        assert "Hello" in head and "evil()" not in head
+        assert source.endswith(html)
+        assert call["upload_pii_scan_text"] == html
+        for field in ("preview", "args", "raw_data"):
+            assert "<h1>" not in repr(call[field])
+        client.upload_page.assert_called_once_with(
+            html.encode(), "r.html", "private", "", slug="",
+        )
+
+    async def test_password_visibility_hides_password(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+        client.upload_page.return_value = _upload_result()
+
+        await connector.call("peek_upload_page", {
+            "html": "<p>x</p>", "visibility": "password", "password": "s3cret",
+        })
+
+        call = gated_call_spy[0]
+        assert call["preview"]["Password"] == "Set (not shown)"
+        assert list(call["preview"]) == ["Server", "Name", "Visibility", "Size", "Password"]
+        for field in ("preview", "args", "raw_data", "details_text"):
+            assert "s3cret" not in repr(call[field])
+        assert client.upload_page.call_args.args[3] == "s3cret"
+
+    async def test_new_version(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+        client.get_page.return_value = make_page("slug1")
+        client.upload_page.return_value = _upload_result()
+
+        await connector.call("peek_upload_page", {"html": "<p>v3</p>", "slug": "slug1"})
+
+        call = gated_call_spy[0]
+        assert list(call["preview"]) == [
+            "Server", "Page", "Link", "New version", "Visibility", "Size",
+        ]
+        assert call["preview"]["New version"] == "3"
+        assert call["preview"]["Visibility"] == "private (unchanged)"
+        assert call["args"]["slug"] == "slug1"
+        assert client.upload_page.call_args.args[2:4] == ("", "")
+        assert client.upload_page.call_args.kwargs == {"slug": "slug1"}
+
+    @pytest.mark.parametrize("extra", [{"visibility": "public"}, {"password": "pw"}])
+    async def test_slug_with_visibility_or_password(self, gated_call_spy, extra):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match="A new version keeps the page's visibility"):
+            await connector.call(
+                "peek_upload_page", {"html": "<p>x</p>", "slug": "slug1", **extra},
+            )
+        client.get_page.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_name_defaults(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+        client.upload_page.return_value = _upload_result()
+
+        await connector.call("peek_upload_page", {"html": "<p>x</p>"})
+        await connector.call("peek_upload_page", {"html": "<p>x</p>", "name": "a/b/c.html"})
+        await connector.call("peek_upload_page", {"local_path": "/home/u/docs/r.html"})
+
+        assert [c["preview"]["Name"] for c in gated_call_spy] == ["page.html", "c.html", "r.html"]
+
+    async def test_local_path_reads_bytes(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+        client.upload_page.return_value = _upload_result()
+
+        await connector.call("peek_upload_page", {"local_path": "~/r.html"})
+
+        assert fake_local_files.required == [["~/r.html"]]
+        assert fake_local_files.read == ["~/r.html"]
+        assert client.upload_page.call_args.args[0] == b"<p>file</p>"
+
+    async def test_upload_id_becomes_upload_reference(self, gated_call_spy, fake_local_files):
+        connector, client = make_connector()
+        client.upload_page.return_value = _upload_result()
+
+        await connector.call("peek_upload_page", {"upload_id": " abc "})
+
+        assert fake_local_files.required == [["upload:abc"]]
+        assert fake_local_files.read == ["upload:abc"]
+
+    async def test_local_path_refused_in_org_mode(self, gated_call_spy, fake_local_files):
+        client = MagicMock()
+        connector = PeekConnector(client, download_mode="org")
+        with pytest.raises(ValueError, match="not available on an organization-managed"):
+            await connector.call("peek_upload_page", {"local_path": "/x/r.html"})
+        assert fake_local_files.read == [] and gated_call_spy == []
+
+    async def test_commit_after_gate_then_upload(self, monkeypatch, fake_local_files):
+        connector, client = make_connector()
+        order = []
+
+        async def fake_gated(**kwargs):
+            order.append("gate")
+
+        monkeypatch.setattr(peek_module, "gated_call", fake_gated)
+        fake_local_files_commit = peek_module.local_files.commit_uploads
+        monkeypatch.setattr(
+            peek_module.local_files, "commit_uploads",
+            lambda: (order.append("commit"), fake_local_files_commit())[0],
+        )
+        client.upload_page.side_effect = lambda *a, **k: (
+            order.append("upload"), _upload_result())[1]
+
+        await connector.call("peek_upload_page", {"upload_id": "abc"})
+
+        assert order == ["gate", "commit", "upload"]
+        assert fake_local_files.committed == 1
+
+    async def test_gate_refusal_stops_everything(self, monkeypatch, fake_local_files):
+        connector, client = make_connector()
+
+        async def refuse(**kwargs):
+            raise RuntimeError("denied")
+
+        monkeypatch.setattr(peek_module, "gated_call", refuse)
+
+        with pytest.raises(RuntimeError, match="denied"):
+            await connector.call("peek_upload_page", {"upload_id": "abc"})
+
+        assert fake_local_files.committed == 0
+        client.upload_page.assert_not_called()
+
+    @pytest.mark.parametrize("args, message", [
+        ({}, "give exactly one of html, local_path and upload_id"),
+        ({"html": "<p>x</p>", "upload_id": "a"}, "give exactly one of"),
+        ({"html": "<p>x</p>", "visibility": "restricted"}, "visibility must be public"),
+        ({"html": "<p>x</p>", "visibility": "secret"}, "visibility must be public"),
+        ({"html": "<p>x</p>", "visibility": "password"}, "A password is required"),
+        ({"html": "<p>x</p>", "visibility": "public", "password": "p"},
+         "password must be empty unless"),
+        ({"html": "<p>x</p>", "visibility": "password", "password": "p" * 73},
+         "72 bytes or fewer"),
+        ({"html": "<p>x</p>", "visibility": "password", "password": " p"},
+         "must not start or end with a space"),
+        ({"html": "x" * (10 * 1024 * 1024 + 1)}, "larger than 10 MB"),
+        ({"html": "<p>x</p>", "slug": "a b"}, "Not a Peek page slug"),
+    ])
+    async def test_validation(self, gated_call_spy, args, message):
+        connector, client = make_connector()
+        with pytest.raises(ValueError, match=message):
+            await connector.call("peek_upload_page", args)
+        assert gated_call_spy == []
+        client.get_page.assert_not_called()
+        client.upload_page.assert_not_called()
+
+    async def test_empty_file(self, gated_call_spy, fake_local_files):
+        connector, _ = make_connector()
+        fake_local_files.data = b""
+        with pytest.raises(ValueError, match="the page is empty"):
+            await connector.call("peek_upload_page", {"upload_id": "a"})
+        assert gated_call_spy == []
+
+    async def test_non_utf8(self, gated_call_spy, fake_local_files):
+        connector, _ = make_connector()
+        fake_local_files.data = b"\xff\xfe\x00"
+        with pytest.raises(ValueError, match="not UTF-8 text"):
+            await connector.call("peek_upload_page", {"upload_id": "a"})
+        assert gated_call_spy == []
+
+    async def test_oversized_file(self, gated_call_spy, fake_local_files):
+        connector, _ = make_connector()
+        fake_local_files.data = b"x" * (10 * 1024 * 1024 + 1)
+        with pytest.raises(ValueError, match="larger than 10 MB"):
+            await connector.call("peek_upload_page", {"upload_id": "a"})
+        assert gated_call_spy == []
+
+
 class TestFieldCompleteness:
     async def test_comments_preview_has_no_placeholder(self, monkeypatch, gated_call_spy):
         pages = [{
@@ -286,10 +504,15 @@ class TestEveryToolIsAudited:
         )
         client.get_comments.return_value = []
         client.get_stats.return_value = PeekStats("slug1", "QA page", 0, 0, [])
+        client.upload_page.return_value = PeekUploadResult(
+            "new1", "https://peek.example.com/p/new1", "private", 1,
+            "https://peek.example.com/p/new1/v/1",
+        )
         await assert_all_tools_leave_an_audit_trail(
             connector, peek_module, monkeypatch, tmp_path,
             arg_overrides={
                 "peek_get_comments": {"slug": "slug1"},
                 "peek_get_stats": {"slug": "slug1"},
+                "peek_upload_page": {"html": "<p>hi</p>"},
             },
         )

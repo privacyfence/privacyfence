@@ -161,6 +161,11 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "grist_update_csv":
         "The cells counted on the card change to the CSV's values. Other cells and records are "
         "not touched; rows with no match are added only if the card says so.",
+
+    # ── Peek ─────────────────────────────────────────────────────────────
+    "peek_upload_page":
+        "A new page is published at a new link, open to whoever its visibility allows. A new "
+        "version replaces what the page's link shows; earlier versions keep their own links.",
 }
 
 # The card's own label for this row -- see card_builder.build_card_html.
