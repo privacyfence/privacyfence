@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Grist rule verbs name the CSV and export tools.** On Settings → Auto-accept, the Grist document rule's chips now read "read (records, export, SQL)", "create (add records, import CSV)" and "update (records, CSV)". The rules already covered `grist_export_records`, `grist_export_sql`, `grist_import_csv` and `grist_update_csv`; the old labels did not say so.
+
 ### Fixed
 
 - **Grist columns added to an existing table are now data columns.** `grist_add_columns` could leave an "empty column" that PrivacyFence cannot write to until you chose "Convert to data column" in Grist's web interface. The columns now arrive as data columns.
