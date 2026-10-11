@@ -222,6 +222,10 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 
 | Tool | Always allow buttons |
 |---|---|
+| `peek_add_comment` |  |
+| `peek_delete_page` |  |
+| `peek_rename_page` |  |
+| `peek_set_visibility` |  |
 | `peek_upload_page` |  |
 
 ### Slack

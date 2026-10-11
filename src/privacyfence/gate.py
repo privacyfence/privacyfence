@@ -261,6 +261,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "jira_get_issue": WIDE, "jira_search_issues_with_fields": WIDE, "confluence_get_page": WIDE, "confluence_get_page_by_title": WIDE,
     "telegram_get_messages": WIDE, "telegram_search_messages": WIDE,
     "peek_get_comments": WIDE, "peek_get_stats": WIDE, "peek_upload_page": WIDE,
+    "peek_add_comment": WIDE,
     "drive_sheets_get_values": WIDE, "slack_get_channel_history": WIDE,
     "slack_get_thread_replies": WIDE, "slack_search_messages": WIDE,
     "drive_get_file_content": WIDE,
