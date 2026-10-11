@@ -12,6 +12,7 @@ doubles as the CSRF value every mutating request below sends.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import time
@@ -26,6 +27,7 @@ from starlette.testclient import TestClient
 from privacyfence import daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, update_checker
 from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
+from privacyfence.policy import store as policy_store
 from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
 from privacyfence.web import routes_settings as rs
@@ -596,6 +598,36 @@ class TestSensitiveActionStepUp:
         principal, summary = recorded[1]
         assert "Changed setting" in summary
         assert "toggle_pii_detection" in summary
+
+    def test_update_policy_rule_is_sensitive_and_needs_step_up(self, controller, sessions):
+        """Widening a stored rule changes what a future write auto-accepts, so it demands the same
+        fresh passkey assertion ``add_policy_rule`` does, and applies nothing without it."""
+        assert "update_policy_rule" in _SENSITIVE_ACTIONS
+        self._enroll()
+        controller.add_policy_rule("grist.document", "DOC1", ["read", "create", "update"])
+        cfg = controller._load_config()
+        (rule,) = policy_store.compile_rules_from_config(cfg)
+        stale = dataclasses.replace(rule, operations=rule.operations - {"grist.import_csv"})
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config([stale])
+        controller._save_and_reload_policy_v2(cfg)
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/update_policy_rule", json={"rule_id": stale.id, "csrf": csrf})
+
+        assert r.status_code == 428
+        (after,) = policy_store.compile_rules_from_config(controller._load_config())
+        assert after.operations == stale.operations
+
+    def test_update_policy_rule_with_an_unknown_id_is_harmless(self, client, sessions):
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/update_policy_rule", json={"rule_id": "r-does-not-exist", "csrf": csrf})
+
+        assert r.status_code == 200
+        assert r.json()["auto_accept"]["rules"] == []
 
     def test_with_a_credential_offers_webauthn_options(self, controller, sessions):
         self._enroll()
