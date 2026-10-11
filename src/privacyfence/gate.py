@@ -149,7 +149,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from .agent_identity import agent_scope
 from .approval_ui import get_approval_ui
@@ -1148,7 +1148,10 @@ async def gated_call(
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring
                 audit(decision="approval_pending", auto_accept_rule="", pii_detected=bool(pii_categories))
-                raise ApprovalPending(_pending_result(registry, pending_approval))
+                raise ApprovalPending(_pending_result(
+                    cast(PendingApprovalRegistry, registry),  # _resolve_decision returns _PENDING only when registry is not None (gate.py:481)
+                    pending_approval,
+                ))
 
             if decision == "auto_accepted":
                 audit(
@@ -1274,7 +1277,10 @@ async def gated_call(
             if decision is _PENDING:
                 pending_approval = rule_name  # see _resolve_decision's own docstring
                 audit(decision="approval_pending", auto_accept_rule="", pii_detected=bool(upload_pii_categories))
-                raise ApprovalPending(_pending_result(registry, pending_approval))
+                raise ApprovalPending(_pending_result(
+                    cast(PendingApprovalRegistry, registry),  # _resolve_decision returns _PENDING only when registry is not None (gate.py:481)
+                    pending_approval,
+                ))
 
             if decision == "auto_accepted":
                 audit(

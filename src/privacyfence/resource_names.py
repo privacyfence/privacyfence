@@ -101,7 +101,7 @@ class ResourceNameResolver:
         with self._lock:
             hit = self._memory.get(key)
             fresh = hit is not None and (time.monotonic() - hit[1]) < CACHE_TTL_SECONDS
-        if fresh:
+        if fresh and hit is not None:
             return hit[0]
 
         if client is not None:

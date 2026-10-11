@@ -38,6 +38,7 @@ verify:
       skip_when_narrowed: true
     - ruff check .
     - bandit -c pyproject.toml -r src
+    - python3 -m mypy src/privacyfence
     - python3 scripts/mypy_strict_modules.py
     - run: npm test
       cwd: mcpb/shim

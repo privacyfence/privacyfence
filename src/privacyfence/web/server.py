@@ -79,6 +79,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -90,8 +91,8 @@ from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
-from starlette.routing import Route
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.routing import BaseRoute, Route
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
@@ -144,7 +145,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PORT = 8765
 # uvicorn otherwise waits for every in-flight response before it stops, and an open event stream
 # (an approvals tab, an MCP client's notification stream) never finishes on its own.
-SHUTDOWN_GRACE_SECONDS = 2.0
+SHUTDOWN_GRACE_SECONDS = 2
 _STOP_JOIN_SECONDS = 5.0
 MCP_URL_FILE_NAME = "mcp_url"
 
@@ -474,7 +475,7 @@ class _SecurityHeadersMiddleware:
         state = scope.setdefault("state", {})
         state.setdefault("csp_nonce", _new_csp_nonce())
 
-        async def send_with_headers(message: dict) -> None:
+        async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 nonce = scope.get("state", {}).get("csp_nonce") or _new_csp_nonce()
                 headers = MutableHeaders(raw=message.setdefault("headers", []))
@@ -810,7 +811,10 @@ async def _combined_lifespan(managers: list) -> AsyncIterator[None]:
 
 
 @contextlib.asynccontextmanager
-async def _state_stream_loop_lifespan(ready_event: threading.Event | None = None) -> AsyncIterator[None]:
+async def _state_stream_loop_lifespan(
+    ready_event: threading.Event | None = None,
+    on_loop: Callable[[asyncio.AbstractEventLoop | None], None] | None = None,
+) -> AsyncIterator[None]:
     """Captures this ASGI app's own running event loop into
     web/state_stream.py's module-level ``_loop`` for the app's whole
     lifetime -- settings_controller.call_on_main's fallback dispatcher
@@ -825,12 +829,16 @@ async def _state_stream_loop_lifespan(ready_event: threading.Event | None = None
     loop, the one every connector call actually runs on."""
     loop = asyncio.get_running_loop()
     _state_stream.set_loop(loop)
+    if on_loop is not None:
+        on_loop(loop)
     if ready_event is not None:
         ready_event.set()
     try:
         yield
     finally:
-        _state_stream.set_loop(None)
+        if on_loop is not None:
+            on_loop(None)
+        _state_stream.clear_loop(loop)
 
 
 def build_app(
@@ -848,6 +856,8 @@ def build_app(
     notifications_enabled: bool = True,
     notifications_detail: str = "minimal",
     loop_ready: threading.Event | None = None,
+    on_loop: Callable[[asyncio.AbstractEventLoop | None], None] | None = None,
+    stopping: threading.Event | None = None,
     principal_resolver: Callable[[Request], Principal] | None = None,
     org: OrgAuth | None = None,
     step_up: StepUpConfig | None = None,
@@ -903,6 +913,9 @@ def build_app(
     optional surface's parameter defaults to ``None``, so a caller (a test,
     usually) that omits it simply does not get that surface.
 
+    ``on_loop`` is called with this app's loop once it is captured, and with
+    ``None`` on shutdown; WebServer keeps it as its own.
+
     ``mint_mcp_token``/``mcp_url`` (local mode, both or neither) add the
     settings page's "Connect an AI client" section (ADR 0104) --
     ``mint_mcp_token`` is ``WebServer._mint_mcp_token``, the callback its
@@ -926,13 +939,13 @@ def build_app(
     if org is not None:
         return _build_org_app(
             org, web_ui=web_ui, mcp_dispatcher=mcp_dispatcher, allowed_hosts=allowed_hosts,
-            principal_resolver=principal_resolver,
+            principal_resolver=principal_resolver, stopping=stopping,
         )
 
     sessions = sessions or LocalSessionStore()
     bootstrap = bootstrap or BootstrapStore()
 
-    extra_routes: list[Route] = []
+    extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
         # ADR 0008: real local-mode traffic always passes mcp_verifier (a
@@ -1035,7 +1048,7 @@ def build_app(
 
     if state_stream is not None:
         extra_routes.append(_state_stream_route(state_stream, sessions=sessions))
-        lifespans.append(_state_stream_loop_lifespan(loop_ready))
+        lifespans.append(_state_stream_loop_lifespan(loop_ready, on_loop))
         set_main_dispatcher(_state_stream.call_soon_threadsafe)
 
     lifespan = None
@@ -1056,6 +1069,7 @@ def build_app(
             controller.any_connector_authenticated if controller is not None else None
         ),
         require_human_session=require_human_session,
+        stopping=stopping,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(
@@ -1067,7 +1081,7 @@ def build_app(
 
 def _build_org_app(
     org: OrgAuth, *, web_ui: WebApprovalUI, mcp_dispatcher: McpDispatcher | None, allowed_hosts: frozenset[str],
-    principal_resolver: Callable[[Request], Principal] | None,
+    principal_resolver: Callable[[Request], Principal] | None, stopping: threading.Event | None = None,
 ) -> ASGIApp:
     """org mode's own route set -- see build_app()'s and this module's own
     docstrings for what's deliberately absent (the local-token settings
@@ -1085,7 +1099,7 @@ def _build_org_app(
     from . import routes_approvals, routes_org_stepup, routes_push, routes_security
     from .routes_settings import build_org_routes
 
-    extra_routes: list[Route] = []
+    extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
         mcp_route, session_manager = mount_mcp(
@@ -1145,7 +1159,7 @@ def _build_org_app(
     extra_routes.extend(routes_push.build_routes(sessions=org.sessions, store=push_store))
     extra_routes.extend(routes_approvals.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
-        push_public_key=push_public_key,
+        push_public_key=push_public_key, stopping=stopping,
     ))
     extra_routes.extend(routes_org_stepup.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
@@ -1355,6 +1369,9 @@ class WebServer:
         # the direct successor of the old IPCServerThread's own ``_ready``
         # Event) blocks on to learn that loop.
         self._loop_ready = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # Set first thing in stop(): ends the approvals event stream, which polls it once a second.
+        self._stopping = threading.Event()
         # "::1" (not the bracketed "[::1]" a Host header would spell it
         # as) -- _parse_host_header normalizes every incoming Host header
         # the same way urlsplit's own .hostname does below, brackets
@@ -1384,6 +1401,8 @@ class WebServer:
             notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail,
             loop_ready=self._loop_ready,
+            on_loop=self._set_loop,
+            stopping=self._stopping,
             principal_resolver=principal_resolver,
             org=org,
             step_up=step_up,
@@ -1395,7 +1414,7 @@ class WebServer:
         if trusted_proxies:
             # Honored only when this explicit list is non-empty --
             # never by default, in either mode.
-            wrapped = ProxyHeadersMiddleware(wrapped, trusted_hosts=list(trusted_proxies))
+            wrapped = ProxyHeadersMiddleware(wrapped, trusted_hosts=list(trusted_proxies))  # type: ignore[arg-type,assignment]  # uvicorn's ASGI types are narrower than Starlette's
         # proxy_headers=False: uvicorn otherwise applies its own
         # ProxyHeadersMiddleware, trusting 127.0.0.1/::1 (or
         # $FORWARDED_ALLOW_IPS) whatever trusted_proxies says -- the wrap
@@ -1447,11 +1466,14 @@ class WebServer:
         started". Returns ``None`` on a timeout, or if this server's own
         state_stream was never built (nothing to wait for -- see __init__:
         that only happens when ``web_ui`` is falsy, which no real caller
-        passes)."""
+        passes). It is this server's own loop, never another server's."""
         if self.state_stream is None:
             return None
         self._loop_ready.wait(timeout=timeout)
-        return _state_stream.get_loop()
+        return self._loop
+
+    def _set_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
+        self._loop = loop
 
     @property
     def stopped(self) -> bool:
@@ -1479,6 +1501,15 @@ class WebServer:
             _write_web_base_url_file(self.base_url)
 
     def stop(self) -> None:
+        self._stopping.set()
+        loop = self._loop
+        if loop is not None and self.state_stream is not None:
+            try:
+                loop.call_soon_threadsafe(self.state_stream.close)
+            except RuntimeError:
+                pass  # the loop is already closed
+        open_connections = len(self._server.server_state.connections)
+        started = time.monotonic()
         self._server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=SHUTDOWN_GRACE_SECONDS + _STOP_JOIN_SECONDS)
@@ -1487,6 +1518,12 @@ class WebServer:
                 self._thread.join(timeout=_STOP_JOIN_SECONDS)
             if self._thread.is_alive():
                 logger.warning("The web server thread is still running after stop()")
+        elapsed = time.monotonic() - started
+        if elapsed >= SHUTDOWN_GRACE_SECONDS:
+            logger.warning(
+                "The web server took %.1f s to stop; %d connection(s) were open when it was asked to",
+                elapsed, open_connections,
+            )
         if self.control_channel is not None:
             self.control_channel.stop()
             _clear_web_base_url_file()

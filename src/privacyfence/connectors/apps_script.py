@@ -71,10 +71,14 @@ def _format_files(files: list[ScriptFile] | list[dict]) -> str:
     shape) or plain dicts (write_content's parsed argument shape)."""
     parts = []
     for f in files:
-        is_dataclass = isinstance(f, ScriptFile)
-        name = f.name if is_dataclass else f.get("name", "")
-        file_type = f.type if is_dataclass else f.get("type", "")
-        source = f.source if is_dataclass else f.get("source", "")
+        if isinstance(f, ScriptFile):
+            name = f.name
+            file_type = f.type
+            source = f.source
+        else:
+            name = f.get("name", "")
+            file_type = f.get("type", "")
+            source = f.get("source", "")
         parts.append(f"=== {name} ({file_type}) ===\n{source}")
     return "\n\n".join(parts)
 

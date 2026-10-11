@@ -274,9 +274,9 @@ docs = [
     "zensical==0.0.67",
 ]
 # Static analysis gate. ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
-# [tool.bandit] below); mypy runs in CI twice -- non-blocking over the whole tree, and blocking
-# over the modules promoted by the [[tool.mypy.overrides]] ratchet below -- see the comments on
-# those tool sections for why.
+# [tool.bandit] below); mypy runs in CI twice, both blocking:
+# over the whole tree, and with strict flags over the modules promoted by the
+# [[tool.mypy.overrides]] ratchet below -- see the comments on those tool sections for why.
 lint = [
     "ruff>=0.6",
     "mypy>=1.10",
@@ -360,26 +360,17 @@ select = ["E4", "E7", "E9", "F", "B"]
 
 [tool.mypy]
 python_version = "3.11"
-# mypy is adopted incrementally: non-blocking over the whole tree, blocking per
-# promoted module. The existing code predates type-checking in CI and mypy's
-# default strictness currently finds ~87 pre-existing errors across ~20
-# files (mostly connector wiring in daemon_main.py and a few Starlette/ASGI
-# signature mismatches) -- none of them are new to this change, and fixing
-# them all is out of this PR's scope.
-# CI runs mypy over the whole tree non-blocking (informational only) so those
-# pre-existing errors are visible without failing every build; per-module
-# `[[tool.mypy.overrides]]` blocks should be added below as modules get cleaned up and
-# promoted to blocking -- see url_safety.py's override just below for the first one, and its
-# own comment for why that override spells out strict's component flags individually rather
-# than using the `strict = true` shorthand.
+# The whole tree is checked at these settings and blocks the merge (ADR 0149). The
+# `[[tool.mypy.overrides]]` blocks below add strict flags to promoted modules, which
+# `scripts/mypy_strict_modules.py` checks, also blocking, in the next CI step. See
+# url_safety.py's override just below for why the flags are spelled out.
 #
 # "Promoted to blocking" is literal, and is enforced by a *second* mypy step in
 # .github/workflows/tests.yml's `static-analysis` job: `scripts/mypy_strict_modules.py` reads the
 # module list straight out of the overrides below and runs mypy over just those files, without
 # `continue-on-error`. Adding a block below is therefore all it takes to put a module behind a
-# merge gate -- nothing in the workflow repeats the list. (Until that step existed, the only mypy
-# invocation in CI was the informational one, so an override changed which errors mypy printed and
-# gated nothing at all.)
+# merge gate -- nothing in the workflow repeats the list. (The whole-tree step checks only the
+# default settings, so an override on its own would gate nothing.)
 ignore_missing_imports = true
 
 # First per-module promotion named in the comment above: url_safety.py is small,
@@ -392,8 +383,8 @@ ignore_missing_imports = true
 # module and reintroduced hundreds of unrelated errors elsewhere when tried here. Listing only
 # the flags that *are* genuinely per-module avoids that; re-check this against the installed
 # mypy version before ever reaching for the `strict = true` shorthand in a future override.
-# Add the next module here once it's been cleaned up the same way, rather than waiting to
-# chase the whole-tree error count to zero.
+# Add the next module here once it's been cleaned up the same way; the whole tree is
+# already clean at the default settings.
 [[tool.mypy.overrides]]
 module = "privacyfence.url_safety"
 disallow_untyped_defs = true

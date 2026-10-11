@@ -14,9 +14,10 @@ reason rather than leaving it blank.
 - [ ] `pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json`
       passes at 100%, and `python3 scripts/check_coverage_floor.py coverage.json` passes (the
       coverage ratchet).
-- [ ] `ruff check .`, `bandit -c pyproject.toml -r src` and `python3 scripts/mypy_strict_modules.py`
-      all pass. The whole-tree `mypy src/privacyfence` run is informational only; the modules with a
-      `[[tool.mypy.overrides]]` entry are what the third command checks and CI blocks on. A genuine
+- [ ] `ruff check .`, `bandit -c pyproject.toml -r src`, `mypy src/privacyfence` and
+      `python3 scripts/mypy_strict_modules.py` all pass. `mypy src/privacyfence` checks the whole
+      tree at the default settings, and the modules with a `[[tool.mypy.overrides]]` entry are what
+      `scripts/mypy_strict_modules.py` checks with strict flags. A genuine
       Bandit false positive gets a `# nosec BXXX  # <reason>` at the call site, never a suppression
       in `pyproject.toml`.
 - [ ] In `mcpb/shim/`: `npm test` and `npm run typecheck` pass (CI blocks on both on every PR,

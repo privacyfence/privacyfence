@@ -20,6 +20,7 @@ instance of it -- gate.py's own call sites never change.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import NoReturn
 
 
 class ApprovalUI(ABC):
@@ -132,7 +133,7 @@ class _UnconfiguredApprovalUI(ApprovalUI):
     init_approval_ui() with a real, config-driven WebApprovalUI before any
     gated call could reach this."""
 
-    def _unconfigured(self) -> None:
+    def _unconfigured(self) -> NoReturn:
         raise RuntimeError(
             "No ApprovalUI configured -- call approval_ui.init_approval_ui() first "
             "(daemon_main.py always does this at startup)."
