@@ -95,7 +95,7 @@ from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
+from .. import __version__, paths, privilege_separation, scoped_tokens, web_shell, webauthn_stepup
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
@@ -121,7 +121,13 @@ from .control_channel import (
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from . import mcp_auth
-from .mcp_auth import PerUserTokenVerifier, load_or_create_mcp_token
+from .mcp_auth import (
+    CompositeTokenVerifier,
+    PerUserTokenVerifier,
+    ScopedTokenVerifier,
+    load_or_create_mcp_token,
+    single_token_verifier,
+)
 from .mcp_dispatch import McpDispatcher
 from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 from .org_session import OrgSessionStore
@@ -956,8 +962,12 @@ def build_app(
         # rest, exactly as it already does for org mode's OrgOAuthProvider.
         if not mcp_token and mcp_verifier is None:
             raise ValueError("mcp_token or mcp_verifier is required when mcp_dispatcher is given")
+        # ADR 0164: /mcp (and only /mcp) also accepts scoped tokens; the
+        # composite sends each token to exactly one of the two verifiers.
+        local_verifier = mcp_verifier if mcp_verifier is not None else single_token_verifier(mcp_token or "")
         mcp_route, session_manager = mount_mcp(
-            mcp_dispatcher, token=mcp_token, verifier=mcp_verifier, overrides=agent_overrides,
+            mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), local_verifier),
+            overrides=agent_overrides,
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
@@ -971,6 +981,8 @@ def build_app(
         # shim -- and possibly no way to set a custom header at all -- can
         # still use) -- combined into this same Mount rather than a second
         # one at the same prefix, see mount_file_bridge's own docstring.
+        # The plain local verifier, never the scoped-token composite: only
+        # the shim uses these routes, and it holds the main token (ADR 0164).
         extra_routes.extend(mount_file_bridge(token=mcp_token, verifier=mcp_verifier))
 
     # One answer, read once here, for
@@ -1103,7 +1115,7 @@ def _build_org_app(
     lifespans = []
     if mcp_dispatcher is not None:
         mcp_route, session_manager = mount_mcp(
-            mcp_dispatcher, verifier=org.provider,
+            mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
             client_names=org.provider.client_name, pinned_agents=org.provider.pinned_agent_id,
         )
@@ -1331,6 +1343,13 @@ class WebServer:
             # very first start, before anyone has ever called MINT MCP.
             mcp_auth.preload_verifier(self.mcp_verifier)
             self.mcp_verifier.register(self.mcp_token or load_or_create_mcp_token(), LOCAL_PRINCIPAL.id)
+        if mcp_dispatcher is not None:
+            # ADR 0164/0165: the scoped tokens /mcp accepts in either mode,
+            # loaded for every principal with a folder, so tokens created by
+            # a previous run verify again on this one.
+            store = scoped_tokens.ScopedTokenStore(mcp_auth.scoped_token_principals)
+            store.load()
+            scoped_tokens.set_store(store)
         self.controller = controller
         self.allow_quit = allow_quit
         self.notifications_enabled = notifications_enabled
