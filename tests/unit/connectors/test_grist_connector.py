@@ -1247,7 +1247,9 @@ class TestUpdateCsv:
             "unchanged": 1, "skipped": 1,
         }
         updates = [c.args[2] for c in client.update_records.call_args_list]
-        assert updates == [[(1, {"Score": 37, "Born": calendar_seconds("1815-12-10")}), (3, {"Score": 1})]]
+        assert updates == [
+            [(1, {"Score": 37, "Born": calendar_seconds("1815-12-10")})], [(3, {"Score": 1})],
+        ]
         client.add_records.assert_not_called()
 
     async def test_the_card_shows_counts_changes_and_unmatched_rows(self, tmp_path, gated_call_spy):
@@ -1491,6 +1493,34 @@ class TestUpdateCsv:
         table_server(client, {i: {"Name": f"n{i - 1}", "Score": 1} for i in range(1, 6)})
         await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
         assert [len(c.args[2]) for c in client.update_records.call_args_list] == [2, 2, 1]
+
+    async def test_updates_are_grouped_by_the_columns_they_change(self, tmp_path, gated_call_spy):
+        connector, client, path = csv_connector(
+            tmp_path, "Name,Score,Born\na,2,\nb,1,1815-12-10\nc,2,\nd,1,1815-12-11\n",
+        )
+        table_server(client, {
+            1: {"Name": "a", "Score": 1},
+            2: {"Name": "b", "Score": 5},
+            3: {"Name": "c", "Score": 1},
+            4: {"Name": "d", "Score": 1, "Born": 5},
+        })
+        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        batches = [c.args[2] for c in client.update_records.call_args_list]
+        assert len(batches) == 3
+        for batch in batches:
+            assert len({frozenset(fields) for _, fields in batch}) == 1
+        assert sorted(rec_id for batch in batches for rec_id, _ in batch) == [1, 2, 3, 4]
+
+    async def test_a_first_write_failure_does_not_promise_a_rerun_finishes(
+        self, tmp_path, gated_call_spy,
+    ):
+        connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,2\n")
+        table_server(client, {1: {"Name": "Ada", "Score": 1}})
+        client.update_records.side_effect = GristClientError("boom")
+        with pytest.raises(grist_module.GristCsvWriteError) as info:
+            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        assert "finishes the rest" not in str(info.value)
+        assert "Nothing was written" in str(info.value)
 
     async def test_a_failed_update_says_how_far_it_got(self, tmp_path, gated_call_spy, monkeypatch):
         from privacyfence import safe_errors

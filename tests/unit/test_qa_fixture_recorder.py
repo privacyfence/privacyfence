@@ -2963,6 +2963,10 @@ class _FakeGristApi:
         self.sql_status = sql_status
         self.sql_ids = sql_ids
         self.updates = 0
+        self.columns = [
+            {"id": "Name", "fields": {"label": "Name", "type": "Text", "isFormula": False}},
+            {"id": "Note", "fields": {"label": "Note", "type": "Text", "isFormula": False}},
+        ]
 
     def __call__(self, method, path, *, params=None, json_body=None):
         if path == "/api/orgs":
@@ -2975,10 +2979,12 @@ class _FakeGristApi:
                 {"id": 2, "name": "Other", "docs": [{"id": "otherDoc", "name": "Contrast"}]},
             ]
         if path.endswith("/columns"):
-            return {"columns": [
-                {"id": "Name", "fields": {"label": "Name", "type": "Text", "isFormula": False}},
-                {"id": "Note", "fields": {"label": "Note", "type": "Text", "isFormula": False}},
-            ]}
+            if method == "POST":
+                self.columns += json_body["columns"]
+                return {"columns": [{"id": c["id"]} for c in json_body["columns"]]}
+            if method == "PATCH":
+                return None
+            return {"columns": self.columns}
         if method == "POST" and path.endswith("/sql"):
             if self.sql_status:
                 raise self.sql_status
@@ -3124,10 +3130,14 @@ class TestLifecycleGrist:
         result = recorder.lifecycle_grist(self.MANIFEST)
 
         assert (result.connector, result.ok, result.cleanup_ok) == ("grist", True, None)
-        assert api.updates == 1
+        assert api.updates == 2
         assert api.rows[3]["Name"].startswith(recorder.LIFECYCLE_TAG)
         assert api.rows[3]["Note"] == "updated"
-        assert {p for _, p in calls} == {f"/api/docs/{_FakeGristApi.DOC}/tables/QaLifecycle/records"}
+        assert {p for _, p in calls} == {
+            f"/api/docs/{_FakeGristApi.DOC}/tables/QaLifecycle/records",
+            f"/api/docs/{_FakeGristApi.DOC}/tables/QaLifecycle/columns",
+        }
+        assert api.rows[3][api.columns[-1]["id"]] == "written"
 
     def test_never_writes_to_the_seed_table(self, monkeypatch):
         api = _FakeGristApi()

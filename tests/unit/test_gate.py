@@ -46,11 +46,12 @@ from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprov
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from privacyfence.pii_detector import init_pii_detection
+from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
-from privacyfence.policy.registry import TOOL_REGISTRY
+from privacyfence.policy.registry import TOOL_REGISTRY, Verb
 from privacyfence.web_approval_ui import WebApprovalUI
 
 from ..helpers import policy_rules
@@ -1066,6 +1067,29 @@ class TestPreflightAutoAccept:
             "grist.read_records", {"doc_id": "DOC2", "table_id": "T"},
         )
         assert verdict != "auto_accept"
+
+    @pytest.mark.parametrize("verb, operation", [
+        (Verb.READ, "grist.read_records"),  # also what grist_export_records and grist_export_sql resolve to
+        (Verb.CREATE, "grist.import_csv"),
+        (Verb.UPDATE, "grist.update_csv"),
+    ])
+    def test_grist_document_rule_auto_accepts_the_csv_and_export_operations(self, verb, operation):
+        auto_accept.set_policy_v2_store_rules(
+            policy_catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [verb])
+        )
+        verdict, _rule, _id, _reason = gate.preflight_auto_accept(operation, {"doc_id": "DOC1", "table_id": "T"})
+        assert verdict == "auto_accept"
+        verdict, _rule, _id, _reason = gate.preflight_auto_accept(operation, {"doc_id": "DOC2", "table_id": "T"})
+        assert verdict != "auto_accept"
+
+    @pytest.mark.parametrize("tool, operation", [
+        ("grist_export_records", "grist.read_records"),
+        ("grist_export_sql", "grist.read_records"),
+        ("grist_import_csv", "grist.import_csv"),
+        ("grist_update_csv", "grist.update_csv"),
+    ])
+    def test_grist_csv_and_export_tools_resolve_to_a_ruled_operation(self, tool, operation):
+        assert auto_accept.TOOL_TO_OPERATION[tool] == operation
 
     def test_store_layer_upgrades_requires_review_to_unknown_when_data_dependent(self):
         auto_accept.set_policy_v2_store_rules([

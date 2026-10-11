@@ -356,11 +356,19 @@ class GristClient:
     ) -> None:
         validate_doc_id(doc_id)
         validate_identifier(table_id, "table")
-        self._request(
-            "PATCH",
-            f"/api/docs/{doc_id}/tables/{table_id}/records",
-            json_body={"records": [{"id": rec_id, "fields": fields} for rec_id, fields in rows]},
-        )
+        # Grist rejects a PATCH whose records do not all carry the same set of fields, so send
+        # one request per field set.
+        groups: dict[frozenset[str], list[tuple[int, dict[str, Any]]]] = {}
+        for rec_id, fields in rows:
+            groups.setdefault(frozenset(fields), []).append((rec_id, fields))
+        for group in groups.values():
+            self._request(
+                "PATCH",
+                f"/api/docs/{doc_id}/tables/{table_id}/records",
+                json_body={
+                    "records": [{"id": rec_id, "fields": fields} for rec_id, fields in group]
+                },
+            )
 
     @staticmethod
     def _column_body(columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -390,9 +398,19 @@ class GristClient:
     def add_columns(self, doc_id: str, table_id: str, columns: list[dict[str, Any]]) -> list[str]:
         validate_doc_id(doc_id)
         validate_identifier(table_id, "table")
+        cols = self._column_body(columns)
         body = self._request(
             "POST",
             f"/api/docs/{doc_id}/tables/{table_id}/columns",
-            json_body={"columns": self._column_body(columns)},
+            json_body={"columns": cols},
         )
-        return [str(_as_dict(c).get("id") or "") for c in _as_list(_as_dict(body).get("columns"))]
+        ids = [str(_as_dict(c).get("id") or "") for c in _as_list(_as_dict(body).get("columns"))]
+        # On an existing table Grist can still create an "empty column" (an empty formula column)
+        # despite isFormula=False in the POST, which only the web UI's "Convert to data column"
+        # could fix. Modifying the columns afterwards is the same user action as that conversion.
+        self._request(
+            "PATCH",
+            f"/api/docs/{doc_id}/tables/{table_id}/columns",
+            json_body={"columns": cols},
+        )
+        return ids

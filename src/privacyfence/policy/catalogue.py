@@ -55,7 +55,11 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         predicate="grist.document", connector="grist",
         verbs=(Verb.READ, Verb.CREATE, Verb.UPDATE, Verb.RESTRUCTURE),
         label="Grist — document", needs_value=True, value_hint="8CAN8gKdxY7z…document-id",
-        verb_labels={"create": "create (add records)"},
+        verb_labels={
+            "read": "read (records, export, SQL)",
+            "create": "create (add records, import CSV)",
+            "update": "update (records, CSV)",
+        },
     ),
     "gmail.configure": PolicyExtraScope(
         predicate="gmail.anything", connector="gmail",

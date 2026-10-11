@@ -43,6 +43,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.9.1] — 2026-10-11
+
+### Changed
+
+- **Grist rule verbs name the CSV and export tools.** On Settings → Auto-accept, the Grist document rule's chips now read "read (records, export, SQL)", "create (add records, import CSV)" and "update (records, CSV)". The rules already covered `grist_export_records`, `grist_export_sql`, `grist_import_csv` and `grist_update_csv`; the old labels did not say so.
+
+### Fixed
+
+- **Grist columns added to an existing table are now data columns.** `grist_add_columns` could leave an "empty column" that PrivacyFence cannot write to until you chose "Convert to data column" in Grist's web interface. The columns now arrive as data columns.
+- **`grist_update_csv` with rows that change different columns.** Grist refuses a bulk update whose records change different sets of columns, so every such batch failed with nothing written. Updates are now sent one set of columns at a time, which also fixes `grist_update_records`. When nothing was written, the error no longer says a rerun finishes the rest.
+
 ## [5.9.0] — 2026-10-11
 
 ### Added
@@ -3250,7 +3261,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.9.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v5.9.1...HEAD
+[5.9.1]: https://github.com/privacyfence/privacyfence/compare/v5.9.0...v5.9.1
 [5.9.0]: https://github.com/privacyfence/privacyfence/compare/v5.8.1...v5.9.0
 [5.8.1]: https://github.com/privacyfence/privacyfence/compare/v5.8.0...v5.8.1
 [5.8.0]: https://github.com/privacyfence/privacyfence/compare/v5.7.0...v5.8.0
