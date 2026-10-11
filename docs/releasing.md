@@ -88,6 +88,11 @@ own, so releasing the DMG releases all three. The one exception is the MCP regis
 stable GitHub Release also carries that same `PrivacyFence.mcpb` on its own. How each artifact
 is built and signed is [`packaging.md`](packaging.md).
 
+A stable GitHub Release also attaches `privacyfence-sync-plugin.zip`, the recipe-writing skill as a Claude
+plugin: `finalize-release` runs `scripts/build_sync_plugin.py --version <version>`, which stamps the release
+version into the plugin's `plugin.json` and refuses a stale copy of `sync/README.md`
+(ADR 0163).
+
 **The official MCP registry lists every stable release.** `.github/workflows/publish-mcp-registry.yml`
 triggers on the same tag push, waits for `build.yml` to succeed on that commit (the same
 `wait_for_build` gate as PyPI), downloads `PrivacyFence.mcpb` back from the GitHub Release, renders
@@ -238,6 +243,15 @@ Optionally, also create matching GitHub Environments (repo **Settings → Enviro
 TestPyPI publish succeeding and the real PyPI publish running — the "test first" step the workflow
 already enforces via job ordering, made into an explicit approval gate rather than just a rerun-only
 safety net.
+
+**`privacyfence-sync` is published by the same release.** The `build` job also builds the client in
+`sync/` (`python -m build --sdist --wheel sync`), with the same version as the root tag, and uploads it
+as the `pypi-dist-sync` artifact. Two further jobs publish it after the main uploads:
+`publish-testpypi-sync` (after `publish-testpypi`) and `publish-pypi-sync` (after `publish-pypi` and
+`publish-testpypi-sync`), with the same stable-channel gate. Register its trusted publisher the same
+way as above, on both services, with **PyPI Project Name** `privacyfence-sync` and the same
+workflow (`publish-pypi.yml`) and environments (`testpypi` / `pypi`). Until that is registered only
+the two `-sync` jobs fail; the `privacyfence` upload is unaffected.
 
 `workflow_dispatch` exists for rerunning by hand (e.g. after a transient failure) — point it at a
 tagged commit. Run from an untagged commit and `setuptools_scm` produces a dev version with a local

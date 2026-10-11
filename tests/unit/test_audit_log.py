@@ -279,6 +279,29 @@ class TestExportWeekToExcel:
         assert summary_rows["PII flagged (any decision)"] == 1
         assert summary_rows["IBAN (bank account number)"] == 1
 
+    def test_a_scoped_token_denial_gets_the_unattended_fill_and_its_own_summary_row(self, tmp_path):
+        openpyxl = pytest.importorskip("openpyxl")
+
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="denied_unattended"))
+        logger.record(make_entry(decision="denied_scoped_token"))
+        logger.record(make_entry(decision="denied_scoped_token"))
+
+        wb = openpyxl.load_workbook(logger.export_week_to_excel("2026-W28"))
+        ws = wb["Decisions"]
+        fills = [ws.cell(row=r, column=8).fill.fgColor.rgb for r in range(2, 5)]
+        assert fills[1] == fills[2] == fills[0]
+        assert fills[0].endswith("FFD8A8")
+
+        summary = wb["Summary"]
+        labels = [row[0].value for row in summary.iter_rows(min_row=2)]
+        summary_rows = {row[0].value: row[1].value for row in summary.iter_rows(min_row=2) if row[0].value}
+        assert summary_rows["Denied scoped token (outside its scope)"] == 2
+        assert summary_rows["Denied unattended (no human asked)"] == 1
+        assert labels.index("Denied scoped token (outside its scope)") == (
+            labels.index("Denied unattended (no human asked)") + 1
+        )
+
     def test_export_omits_category_breakdown_when_no_entry_has_categories(self, tmp_path):
         pytest.importorskip("openpyxl")
         import openpyxl

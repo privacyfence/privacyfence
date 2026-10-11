@@ -118,6 +118,10 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ("calendar_set_event_visibility", make_ctx(connector="calendar", args={"calendar_id": "primary", "event_id": "e"})),
     ("calendar_set_event_color", make_ctx(connector="calendar", args={"calendar_id": "primary", "event_id": "e"})),
     ("calendar_delete_event", make_ctx(connector="calendar", args={"calendar_id": "primary", "event_id": "e"})),
+    (
+        "jira_export_issues",
+        make_ctx(connector="jira", args={"jql": "project = PROJ"}, raw_data=[SimpleNamespace(key="PROJ-1")]),
+    ),
     ("jira_create_issue", make_ctx(connector="jira", args={"project_key": "PROJ"})),
     ("jira_add_comment", make_ctx(connector="jira", args={"issue_key": "PROJ-1"})),
     ("jira_update_issue", make_ctx(connector="jira", args={"issue_key": "PROJ-1"})),

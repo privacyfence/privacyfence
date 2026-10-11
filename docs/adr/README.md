@@ -235,12 +235,21 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0145](0145-the-grist-connector-only-adds.md) | The Grist connector only adds | Accepted |
 | [0146](0146-grist-records-page-by-record-id.md) | Grist records page by record id | Accepted |
 | [0147](0147-pii-number-patterns-ignore-decimal-digits.md) | PII number patterns ignore digits glued to a decimal point | Accepted |
-| [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted |
+| [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md) | Grist bulk writes take a CSV file and are reviewed as counts and a sample | Accepted; amended by 0162 |
 | [0149](0149-the-whole-tree-mypy-run-is-blocking.md) | The whole-tree mypy run is blocking | Accepted |
 | [0150](0150-ruff-format-is-not-enforced.md) | `ruff format` is not enforced | Accepted |
 | [0151](0151-peek-sign-in-uses-peeks-own-device-flow-and-keeps-the-token-per-principal.md) | PrivacyFence signs in to Peek with Peek's own device sign-in and keeps the token per principal | Accepted |
 | [0152](0152-which-peek-server-is-used-and-a-token-stays-with-it.md) | Which Peek server is used, and a Peek token stays with the server it was issued for | Accepted |
 | [0153](0153-peek-comments-are-posted-only-through-the-account-comment-endpoint.md) | Peek comments are posted only through the account comment endpoint | Accepted |
 | [0154](0154-peek-visit-stats-carry-names-and-times-never-ip-addresses.md) | Peek visit stats carry counts, visitor names and times, never IP addresses | Accepted |
-| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted |
+| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted; amended by 0157, 0160 |
 | [0156](0156-grist-export-sql-reads-through-the-sql-endpoint.md) | `grist_export_sql` reads through Grist's SQL endpoint | Accepted; amends 0146 |
+| [0157](0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) | A rule can let personal data through the tools whose result holds no row | Accepted; amends 0155 |
+| [0158](0158-peek-rules-name-pages-and-cover-only-new-versions.md) | Peek rules name pages and cover only new versions | Accepted |
+| [0159](0159-jira-export-issues-is-covered-by-the-project-search-rule.md) | `jira_export_issues` is covered by the project search rule | Accepted |
+| [0160](0160-org-mode-exports-are-delivered-by-a-one-time-link.md) | Org-mode exports are delivered by a one-time link | Accepted; amends 0155 |
+| [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted |
+| [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
+| [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
+| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037 |
+| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072 |

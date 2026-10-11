@@ -845,6 +845,14 @@ class TestCopyMcpCommand:
         for _ in range(5):
             assert cc._MCP_TOKEN_PATTERN.match(mcp_auth.rotate_mcp_token(LOCAL_PRINCIPAL))
 
+    def test_the_pattern_accepts_a_scoped_token_secret(self):
+        from privacyfence import scoped_tokens
+
+        for _ in range(5):
+            secret = scoped_tokens.mint_secret()
+            assert len(secret) == 48
+            assert cc._MCP_TOKEN_PATTERN.match(secret)
+
     def test_a_well_formed_token_is_copied_and_announced_without_itself(self, tmp_path, monkeypatch, caplog):
         copied, shown = self._fake_clipboard(monkeypatch)
         server = self._server(tmp_path, monkeypatch)

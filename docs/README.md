@@ -28,6 +28,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   notifications.
 - [`configuration-reference.md`](configuration-reference.md) — every `settings.yaml` key and every
   organization-bundle option, with its default.
+- [`privacyfence-sync.md`](privacyfence-sync.md) — run a scheduled data sync as a recipe, with no AI
+  model involved: install, connecting, the rules it needs, and the recipe-writing plugin.
 
 ### Organization deployment and security
 

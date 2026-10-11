@@ -40,6 +40,7 @@ from . import privilege_separation
 from .download_staging import DEFAULT_TTL_SECONDS as _DOWNLOAD_TTL_SECONDS
 from .download_staging import get_download_staging_store
 from .approvals import DEFAULT_LEDGER_TTL_SECONDS, DEFAULT_PENDING_TTL_SECONDS
+from .org_mode import DownloadDeliveryConfig
 from .principal import current_principal
 from .upload_staging import DEFAULT_TTL_SECONDS as _UPLOAD_TTL_SECONDS
 from .upload_staging import get_upload_staging_store
@@ -467,6 +468,22 @@ def deliver_file(
     return _deliver_link(state, name, data, mime_type)
 
 
+def deliver_export(
+    dest_dir: str, name: str, data: bytes, mime_type: str, *,
+    download_mode: str, download_config: DownloadDeliveryConfig | None, download_base_url: str,
+) -> dict[str, Any]:
+    """Where an export's file goes after its approval (ADR 0160): ``deliver_file`` in local mode;
+    on an organization-managed install, a one-time staged link like a large Drive download's."""
+    if download_mode != "org":
+        return deliver_file(dest_dir, name, data, mime_type, download_mode=download_mode)
+    check_delivery_size(len(data))
+    cfg = download_config or DownloadDeliveryConfig()
+    token = get_download_staging_store().stage(
+        current_principal(), data, name, mime_type, ttl_seconds=cfg.link_ttl_seconds,
+    )
+    return cfg.link_result(name, len(data), f"{download_base_url}{cfg.staged_link_path(token)}")
+
+
 def build_need_uploads_files(principal: "Principal", needed: LocalFilesNeeded) -> list[dict[str, Any]]:
     """Creates one ``upload_staging`` slot per path in ``needed.paths`` and
     returns the wire-format ``files`` list for a ``need_uploads`` response
@@ -561,6 +578,7 @@ __all__ = [
     "can_access_user_files",
     "check_delivery_size",
     "configure_file_bridge",
+    "deliver_export",
     "deliver_file",
     "force_bridge_for_tests",
     "commit_uploads",

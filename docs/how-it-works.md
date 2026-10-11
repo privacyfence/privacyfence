@@ -97,6 +97,14 @@ Any other MCP client that supports Streamable HTTP connects the way Claude Code 
 same URL and bearer token in local mode, or with OAuth 2.1 and dynamic client registration in
 organization mode.
 
+### Scoped tokens
+
+Instead of its own credential, a client can hold a **scoped token** created in Settings: a named
+bearer token with an expiry and a list of the rules and tools it may use. It sees only those tools,
+and a call it makes is auto-accepted only through one of those rules; otherwise it is denied at
+once, with no approval card. Revoking it affects no other client. In organization mode the
+administrator must turn the feature on. See [Scoped tokens](security-and-compliance.md#scoped-tokens).
+
 ### What the AI system is told
 
 When a client connects, PrivacyFence's MCP `initialize` answer includes short instructions: what
@@ -197,6 +205,8 @@ client ([ADR 0007](adr/0007-local-file-bridge.md),
   credential; up to 50 MB, valid for 10 minutes, single use), then passes the returned `upload_id`
   to the tool (`drive_upload_file`'s `upload_id`, or `"upload:<upload_id>"` in `attachments`). For
   a download, the tool returns a one-time link instead of writing to `destination_dir`.
+- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write a file to `destination_dir` and return only counts and a hash. On an organization-managed install nothing is saved: the result carries a one-time download link instead, unless the organization turned off `download_delivery.allow_disk_staging`
+  ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
 - **An install that is not privilege-separated** (a source checkout, a `pip`/`pipx` install): the
   daemon runs as you and reads and writes the file itself.
 
@@ -229,7 +239,9 @@ The audit log records four fields: `agent_id`, `agent_name`, `agent_version` and
 | `client_info` | claimed | The name the client itself sent: the MCP handshake's `clientInfo.name`, an unpinned OAuth client's registered name, or a local `agent_overrides` relabel. |
 | `""` (empty) | unknown | No usable name. Recorded as unknown, never guessed. |
 
-Two further values, `endpoint` and `override`, are reserved and never recorded.
+A call made with a [scoped token](security-and-compliance.md#scoped-tokens) is recorded as the
+agent `scoped-token:<id>`, named after the token, with source `override` (attested). The value
+`endpoint` is reserved and never recorded.
 
 - On a local install every card, approvals-list row and Audit Log row shows the caller as
   **Undetected**, with no name and no badge, because nothing there can tell AI systems apart
@@ -264,4 +276,4 @@ works only when the organization config bundle turns it on (`unattended_sessions
 `build_org_bundle.py --enable-unattended-sessions`); otherwise it returns an error. The flag is
 advisory: it changes what happens when nothing authorizes a call, never what is authorized
 ([ADR 0015](adr/0015-unattended-session-flag-is-advisory-only.md)). Pair it with
-`privacyfence_check_policy` to plan which steps can run unattended.
+`privacyfence_check_policy` to plan which steps can run unattended. A scheduled data sync that needs no AI model at all is run by [`privacyfence-sync`](privacyfence-sync.md).

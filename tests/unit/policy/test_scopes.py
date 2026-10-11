@@ -425,3 +425,22 @@ class TestNewScopeSelectors:
         assert selector.matches(["DOC2"], ctx) is False
         assert selector.matches([], ctx) is False
         assert selector.matches("", ctx) is False
+
+    def test_peek_page_matches_a_named_slug(self):
+        selector = NEW_SCOPE_SELECTORS["peek.page"]
+        ctx = make_ctx(connector="peek", args={"slug": "dash"})
+        assert selector.matches(["dash", "other"], ctx) is True
+        assert selector.matches("dash", ctx) is True
+
+    def test_peek_page_never_matches_a_call_without_a_slug(self):
+        selector = NEW_SCOPE_SELECTORS["peek.page"]
+        assert selector.matches(["dash"], make_ctx(connector="peek", args={})) is False
+        assert selector.matches(["dash"], make_ctx(connector="peek", args={"slug": ""})) is False
+        assert selector.matches(["dash"], make_ctx(connector="peek", args={"slug": None})) is False
+        assert selector.matches([""], make_ctx(connector="peek", args={"slug": ""})) is False
+
+    def test_peek_page_does_not_match_another_slug(self):
+        selector = NEW_SCOPE_SELECTORS["peek.page"]
+        ctx = make_ctx(connector="peek", args={"slug": "dash"})
+        assert selector.matches(["other"], ctx) is False
+        assert selector.matches([], ctx) is False

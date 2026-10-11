@@ -1909,6 +1909,19 @@ class TestAddPolicyRule:
         assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
         assert "migrated_to_policy_v2" not in cfg
 
+    def test_add_policy_rule_with_personal_data_stores_the_flag(self, controller):
+        controller.add_policy_rule("grist.document", "DOC1", ["read"], personal_data=True)
+
+        rules = controller._load_config()[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"]
+        assert len(rules) == 1
+        assert rules[0]["allow_personal_data"] is True
+
+    def test_add_policy_rule_personal_data_on_an_unsupported_group_adds_nothing(self, controller):
+        state = controller.add_policy_rule("gmail.label", "Label_1", ["read"], personal_data=True)
+
+        assert state["auto_accept"]["rules"] == []
+        assert policy_store.AUTO_ACCEPT_CONFIG_KEY not in controller._load_config()
+
     def test_adding_more_verbs_for_the_same_value_widens_the_existing_row(self, controller):
         controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
         state = controller.add_policy_rule("drive.folder", "FOLDER1", ["download"])

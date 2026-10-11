@@ -1712,7 +1712,9 @@ class SettingsController:
     # _rules_for_catalogue_entry) these two actions build on.
     # ------------------------------------------------------------------ #
 
-    def add_policy_rule(self, group: str, value: str, verbs: list) -> dict[str, Any]:
+    def add_policy_rule(
+        self, group: str, value: str, verbs: list, personal_data: bool = False,
+    ) -> dict[str, Any]:
         """The Auto-accept page's "Add rule" form. ``group`` is one of ``_policy_scope_catalogue()``'s
         own ids; ``verbs`` is whichever of that group's own verb checkboxes were checked, as their
         v2 verb strings. Additive only, like every other rule here: a submission that names a
@@ -1722,11 +1724,16 @@ class SettingsController:
         needed. Silently does nothing for an unrecognized group, a group none of the requested verbs
         govern, or (for the one valued extra scope, ``apps_script.project``) a value-needing scope
         submitted with none -- see ``_rules_for_catalogue_entry``'s own docstring.
+        ``personal_data`` sets the rule's ``allow_personal_data`` flag (ADR 0157) and is accepted
+        only for a group in ``catalogue.PERSONAL_DATA_GROUPS``; for any other group the submission
+        adds nothing.
         """
         verb_enums = _parse_verbs(verbs)
         if not verb_enums:
             return self.snapshot()
-        new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value), verb_enums)
+        new_rules = _rules_for_catalogue_entry(
+            group, _parse_value_list(value), verb_enums, personal_data=personal_data,
+        )
         if not new_rules:
             return self.snapshot()
         cfg = self._load_config()
