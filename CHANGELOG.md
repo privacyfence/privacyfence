@@ -43,6 +43,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Scoped tokens for AI clients, in both modes.** Settings → Scoped tokens creates a named bearer token for `/mcp` that expires (90 days by default) and is limited to chosen auto-accept rules and tools. A call outside its scope is denied at once and never raises an approval card, and the audit log names the token. In organization mode the administrator turns it on with `--enable-scoped-tokens` and caps the lifetime with `--scoped-token-max-days`.
+- **`privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`** revokes every scoped token of one person, for the administrator who offboards them.
+
 ## [5.9.1] — 2026-10-11
 
 ### Changed
