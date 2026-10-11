@@ -171,6 +171,14 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-chip[aria-pressed="true"], .pf-chip[aria-checked="true"] { color: var(--accent-dark); background: var(--accent-soft); border-color: var(--accent-dark); }
 .pf-chip[aria-pressed="true"]::before, .pf-chip[aria-checked="true"]::before { content: "\\2713"; margin-right: 6px; }
 
+/* ---- Scoped tokens ---- */
+.pf-st-row .pf-row-desc { display: flex; flex-direction: column; gap: var(--space-2xs); }
+.pf-st-list { margin: 0 0 var(--space-xs); padding-left: var(--space-s); }
+.pf-st-form { display: flex; flex-direction: column; gap: var(--space-xs); }
+.pf-st-chip { cursor: default; }
+.pf-st-warn { color: var(--ink); border-color: var(--control-line); }
+.pf-st-expired { color: var(--muted); }
+
 /* ---- Connectors (local mode) ---- */
 .pf-connector-list { display: flex; flex-direction: column; gap: var(--space-xs); }
 .pf-connector-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-s); }
@@ -313,6 +321,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
+    stLabel: '', stDays: null, stRules: {}, stTools: {},
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -436,7 +445,7 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   var NAV_ITEMS = [
-    ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['auto_accept', 'Auto-accept'],
+    ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['scoped_tokens', 'Scoped tokens'], ['auto_accept', 'Auto-accept'],
     ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
   ];
 
@@ -1158,6 +1167,103 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
+  // Scoped tokens
+  // -------------------------------------------------------------------- //
+
+  // Like AI_CLIENT, static for the life of the page: a create or revoke
+  // reloads it, so the list is always rebuilt from the server.
+  var SCOPED = window.__pfScopedTokens || { delivery: 'companion', max_days: 365, default_days: 90, warn_days: 14, tokens: [], rules: [], tools: [] };
+
+  function scopedExpiryText(t) {
+    var day = new Date(t.expires_at * 1000).toISOString().slice(0, 10);
+    if (t.expired) { return 'Expired ' + day; }
+    return 'Expires ' + day + ' (in ' + t.days_left + (t.days_left === 1 ? ' day)' : ' days)');
+  }
+
+  function scopedTokenRow(t) {
+    var chips = '';
+    if (t.expired) {
+      chips = '<span class="pf-chip pf-st-chip pf-st-expired">Expired</span>';
+    } else if (t.expiring_soon) {
+      chips = '<span class="pf-chip pf-st-chip pf-st-warn">Expires in ' + esc(t.days_left) + (t.days_left === 1 ? ' day' : ' days') + '</span>';
+    }
+    var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
+    detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
+    if (t.rules.length === 0) { detail += '<li>None</li>'; }
+    t.rules.forEach(function (r) {
+      detail += '<li>' + (r.missing ? 'a rule that no longer exists' : esc(r.sentence)) + '</li>';
+    });
+    detail += '</ul><div class="pf-hint">Tools</div><ul class="pf-st-list">';
+    if (t.tools.length === 0) { detail += '<li>None</li>'; }
+    t.tools.forEach(function (name) { detail += '<li><code>' + esc(name) + '</code></li>'; });
+    detail += '</ul></details>';
+    var control = chips + '<div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
+      dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div>';
+    return rowHtml(t.label, esc(scopedExpiryText(t)) + detail, control, 'pf-st-row');
+  }
+
+  function renderScopedTokens() {
+    var html = '<div class="pf-page">';
+    html += '<h1 class="pf-page-title">Scoped tokens</h1>';
+    html += '<div class="pf-page-subtitle">A scoped token lets one AI client use only the tools and rules you pick, for a limited time. ' +
+      (SCOPED.delivery === 'once'
+        ? 'A new token is shown once and cannot be shown again.'
+        : 'A new token is copied to your clipboard once and cannot be shown again.') + '</div>';
+
+    html += '<h2 class="pf-group-title">Your tokens</h2><div class="card pf-card">';
+    if (SCOPED.tokens.length === 0) {
+      html += '<div class="pf-hint">No scoped tokens yet.</div>';
+    } else {
+      SCOPED.tokens.forEach(function (t) { html += scopedTokenRow(t); });
+      html += '<div><div class="button danger" role="button" tabindex="0" aria-label="Revoke all" ' +
+        dataAttr('revoke_all_scoped_tokens', {}) + '>Revoke all</div></div>';
+    }
+    html += '</div>';
+
+    if (ui.stDays === null) { ui.stDays = SCOPED.default_days; }
+    html += '<h2 class="pf-group-title">New token</h2><div class="card pf-card pf-st-form">';
+    html += '<label><span class="field-label">Name</span><input type="text" class="field" aria-label="Token name" data-st-label="1" value="' + esc(ui.stLabel) + '"/></label>';
+    html += '<label><span class="field-label">Days valid</span><input type="number" class="field" aria-label="Days valid" data-st-days="1" min="1" max="' +
+      esc(SCOPED.max_days) + '" value="' + esc(ui.stDays) + '"/></label>';
+    html += '<div class="pf-row-title">Rules</div>';
+    if (SCOPED.rules.length === 0) { html += '<div class="pf-hint">You have no Auto-accept rules.</div>'; }
+    html += '<div class="pf-chips">';
+    SCOPED.rules.forEach(function (r) {
+      var on = !!ui.stRules[r.id];
+      html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
+        esc(r.sentence) + '" data-st-rule="' + esc(r.id) + '">' + esc(r.sentence) + '</div>';
+    });
+    html += '</div>';
+    html += '<div class="pf-row-title">Tools</div>';
+    SCOPED.tools.forEach(function (g) {
+      html += '<div class="pf-hint">' + esc(g.connector) + '</div><div class="pf-chips">';
+      g.tools.forEach(function (name) {
+        var on = !!ui.stTools[name];
+        html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
+          esc(name) + '" data-st-tool="' + esc(name) + '">' + esc(name) + '</div>';
+      });
+      html += '</div>';
+    });
+    html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Add the tools these rules cover" data-st-add-covered="1">Add the tools these rules cover</div></div>';
+    html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function addCoveredScopedTools() {
+    SCOPED.rules.forEach(function (r) {
+      if (ui.stRules[r.id]) { r.tools.forEach(function (name) { ui.stTools[name] = true; }); }
+    });
+    render(pyState);
+  }
+
+  function submitScopedToken() {
+    var ids = Object.keys(ui.stRules).filter(function (k) { return ui.stRules[k]; });
+    var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rule_ids: ids, tools: tools });
+  }
+
+  // -------------------------------------------------------------------- //
   // About
   // -------------------------------------------------------------------- //
 
@@ -1207,6 +1313,7 @@ _JS = r"""
     switch (section) {
       case 'connectors': return renderConnectors(state);
       case 'ai_client': return renderAiClient();
+      case 'scoped_tokens': return renderScopedTokens();
       case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
@@ -1546,6 +1653,13 @@ _JS = r"""
     var gristSubmitEl = e.target.closest('[data-grist-submit]');
     if (gristSubmitEl) { if (gristSubmitEl.getAttribute('aria-disabled') !== 'true') submitGristModal(); return; }
 
+    var stRuleEl = e.target.closest('[data-st-rule]');
+    if (stRuleEl) { var rid = stRuleEl.getAttribute('data-st-rule'); ui.stRules[rid] = !ui.stRules[rid]; render(pyState); return; }
+    var stToolEl = e.target.closest('[data-st-tool]');
+    if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
+    if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
+    if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }
+
     var repoEl = e.target.closest('[data-action="open_repo"]');
     if (repoEl) { post('open_repo', {}); return; }
 
@@ -1634,6 +1748,8 @@ _JS = r"""
 
   function onInput(e) {
     var el = e.target;
+    if (el.hasAttribute('data-st-label')) { ui.stLabel = el.value; return; }
+    if (el.hasAttribute('data-st-days')) { ui.stDays = el.value; return; }
     if (el.hasAttribute('data-aa-search')) {
       ui.aaSearch = el.value;
       var pos = el.selectionStart;
@@ -1719,7 +1835,7 @@ _JS = r"""
 """
 
 
-_ALL_SECTIONS = ("general", "connectors", "ai_client", "auto_accept", "privacy", "audit", "agents", "about")
+_ALL_SECTIONS = ("general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "agents", "about")
 
 # The four actions web/routes_settings.py's own bridge shim intercepts
 # client-side rather than forwarding to the generic dispatcher (that
@@ -1785,7 +1901,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
         "sections": {
             # Org mode's clients connect with OAuth 2.1, not a local token
             # (ADR 0011), so the local "Connect an AI client" page is never shown.
-            "general": True, "connectors": False, "ai_client": False, "auto_accept": True,
+            "general": True, "connectors": False, "ai_client": False, "scoped_tokens": False, "auto_accept": True,
             "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
@@ -1844,15 +1960,24 @@ def build_html(
     section (ADR 0104); without it -- org mode, or a local install with no
     ``/mcp`` endpoint -- the section is not drawn. Like ``mode``, it never
     touches ``state``.
+
+    ``scoped_tokens`` (the page data of ``web/server.py``'s scoped-token
+    wiring) turns on the "Scoped tokens" section the same way, local mode only.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json.dumps(state)
     capabilities = _capabilities_for(mode, is_admin=is_admin)
     capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
+    capabilities["sections"]["scoped_tokens"] = mode != ORG_MODE and scoped_tokens is not None
     caps_json = json.dumps(capabilities)
     ai_client_script = ""
     if capabilities["sections"]["ai_client"]:
         ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json.dumps(ai_client)};</script>'
+    scoped_tokens_script = ""
+    if capabilities["sections"]["scoped_tokens"]:
+        # Rule sentences carry user-chosen values: no "</script>" may end the tag early.
+        scoped_json = json.dumps(scoped_tokens).replace("<", "\\u003c")
+        scoped_tokens_script = f'<script nonce="{nonce}">window.__pfScopedTokens = {scoped_json};</script>'
     section_script = ""
     if initial_section is not None:
         section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
@@ -1864,5 +1989,6 @@ def build_html(
         f'<script nonce="{nonce}">window.__pfCapabilities = {caps_json};</script>'
         f"{section_script}"
         f"{ai_client_script}"
+        f"{scoped_tokens_script}"
         f'<script nonce="{nonce}">{_JS}</script>'
     )
