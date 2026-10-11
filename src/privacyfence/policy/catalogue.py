@@ -11,7 +11,7 @@ bridge writer call.
 
 ``EXTRA_SCOPES`` covers the operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
-tools, which had no predicate at all, Grist's five operation keys (scoped by document), and Gmail's two filter tools and Slack's group-chat tool,
+tools, which had no predicate at all, Grist's seven operation keys (scoped by document), and Gmail's two filter tools and Slack's group-chat tool,
 which have no resource identity to scope to. The Settings page and the bridge tool configure them
 the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing
 -- rather than reactively, off one gated call's own popup.

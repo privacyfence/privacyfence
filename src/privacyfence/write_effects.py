@@ -156,6 +156,11 @@ EFFECT_BY_TOOL: dict[str, str] = {
         "A new table is added to the document. Nothing existing changes.",
     "grist_add_columns":
         "New, empty columns are added to that table. Existing columns and values do not change.",
+    "grist_import_csv":
+        "New records are added to that table, one per CSV row.",
+    "grist_update_csv":
+        "The cells counted on the card change to the CSV's values. Other cells and records are "
+        "not touched; rows with no match are added only if the card says so.",
 }
 
 # The card's own label for this row -- see card_builder.build_card_html.

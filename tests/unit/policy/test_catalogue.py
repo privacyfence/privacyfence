@@ -77,7 +77,7 @@ class TestRulesForCatalogueEntry:
         assert len(rules) == 1
         assert rules[0].predicate == "grist.document"
         assert rules[0].value == ["DOC1"]
-        assert rules[0].operations == frozenset({"grist.read_records", "grist.add_records"})
+        assert rules[0].operations == frozenset({"grist.read_records", "grist.add_records", "grist.import_csv"})
 
     def test_grist_document_with_no_value_yields_no_rules(self):
         assert catalogue.rules_for_catalogue_entry("grist.document", None, [Verb.READ]) == []
