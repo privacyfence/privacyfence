@@ -2148,6 +2148,29 @@ class TestPersonalDataRules:
                 await self._call("grist_get_records", pii_scan_text=self.PII_TEXT)
         assert read_audit_entries(audit_dir)[-1]["decision"] == "denied_unattended"
 
+    async def test_flag_applies_to_jira_export_issues(self, monkeypatch, audit_dir):
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate="approved_project_keys_all_results", value=["ENG"],
+            operations=frozenset({"jira.read_issue"}), allow_personal_data=True,
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        result = await gate.gated_call(**base_kwargs(
+            connector="jira", tool="jira_export_issues", gate="review",
+            raw_data=[SimpleNamespace(key="ENG-1")], args={"jql": "project = ENG"},
+            pii_scan_text=self.PII_TEXT,
+        ))
+
+        assert result is FILTERED
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+
     @staticmethod
     def _install_peek(monkeypatch, *, allow_personal_data: bool) -> PolicyRule:
         rule = policy_store.merge_rules([PolicyRule(

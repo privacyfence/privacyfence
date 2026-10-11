@@ -922,6 +922,32 @@ class TestCheckJira:
     def test_list_fields_not_ok_when_listing_raises(self, monkeypatch):
         assert not self._list_fields_row(monkeypatch, RuntimeError("boom")).ok
 
+    def _export_row(self, monkeypatch, export_keys, page_keys):
+        client = self._client()
+        client._client.projects.return_value = []
+        client._client.issue.return_value = {"key": "PFQA-1", "fields": {"summary": "x"}}
+        client._client.get_all_fields.return_value = [DUEDATE_FIELD]
+        pages = {"export": export_keys, "page": page_keys}
+
+        def enhanced_jql(jql, nextPageToken=None, limit=None, fields=None):
+            keys = pages["export"] if limit == 100 else pages["page"]
+            return {"issues": [{"key": k, "fields": {}} for k in keys], "isLast": True}
+
+        client._client.enhanced_jql.side_effect = enhanced_jql
+        monkeypatch.setattr(recorder, "_build_jira_client", lambda: client)
+        results = recorder.check_jira(record=True, manifest={"jira": {"seed_issue_key": "PFQA-1"}})
+        return next(r for r in results if r.method == "export_issues")
+
+    def test_export_issues_row_passes(self, monkeypatch):
+        row = self._export_row(monkeypatch, ["PFQA-1", "PFQA-2"], ["PFQA-2", "PFQA-1"])
+        assert row.ok
+        assert row.raw is None
+
+    def test_export_row_fails_on_a_key_mismatch(self, monkeypatch):
+        row = self._export_row(monkeypatch, ["PFQA-1"], ["PFQA-1", "PFQA-2"])
+        assert not row.ok
+        assert "differ" in row.note
+
     def test_search_issues_page_failure_reported(self, monkeypatch):
         client = self._client()
         client._client.projects.return_value = []

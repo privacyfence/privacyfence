@@ -9,12 +9,14 @@ expect -- no equivalent bug here.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from unittest.mock import MagicMock
 
 import pytest
 
 from privacyfence import atlassian_users as au
+from privacyfence import auto_accept, export_files
 from privacyfence.atlassian_users import AtlassianUser
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import jira as jira_module
@@ -28,6 +30,9 @@ from privacyfence.jira_client import (
     JiraProject,
     JiraTransition,
 )
+from privacyfence.org_mode import DownloadDeliveryConfig
+from privacyfence.policy.engine import PolicyRule
+from privacyfence.policy import store as policy_store
 
 from ...helpers import (
     assert_all_tools_leave_an_audit_trail,
@@ -1611,6 +1616,186 @@ class TestFieldCompleteness:
         assert_no_placeholder_fields(gated_call_spy[0]["preview"])
 
 
+EXPORT_ARGS = {"jql": "project = ENG", "destination_dir": "~/out"}
+
+
+@pytest.fixture
+def delivered(monkeypatch):
+    calls = []
+
+    def fake_deliver(
+        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        download_base_url="",
+    ):
+        calls.append({
+            "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
+            "download_mode": download_mode, "download_config": download_config,
+            "download_base_url": download_base_url,
+        })
+        return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
+                "delivery": "local_disk"}
+
+    monkeypatch.setattr(jira_module.local_files, "deliver_export", fake_deliver)
+    return calls
+
+
+class TestExportIssues:
+    @staticmethod
+    def _issue(key="ENG-1", **extra):
+        issue = make_issue(key=key, summary=f"Summary of {key}")
+        issue.extra_fields = extra
+        return issue
+
+    def _setup(self, issues=None):
+        connector, client = make_connector()
+        client.resolve_fields.return_value = [STORY_POINTS, SPRINT]
+        client.export_issues.return_value = (
+            [self._issue("ENG-1", **{"Story Points": 3, "Sprint": "S1"}),
+             self._issue("ENG-2", **{"Story Points": 5, "Sprint": "S2"})]
+            if issues is None else issues
+        )
+        return connector, client
+
+    async def test_result_is_summary_only(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+
+        result = await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        assert set(result) == {"rows", "columns", "sha256", "path", "name", "size_bytes", "delivery"}
+        assert result["rows"] == 2
+        assert "Summary of ENG-1" not in json.dumps(result)
+        assert delivered[0]["name"] == "jira-issues.csv"
+
+    async def test_columns_are_standard_then_extra_fields(self, gated_call_spy, delivered):
+        connector, client = self._setup()
+
+        result = await connector.call(
+            "jira_export_issues", {**EXPORT_ARGS, "fields": '["Story Points", "Sprint"]'},
+        )
+
+        client.export_issues.assert_called_once_with("project = ENG", ['Story Points', 'Sprint'])
+        expected = [*jira_module._EXPORT_COLUMNS, "Story Points", "Sprint"]
+        assert result["columns"] == expected
+        lines = delivered[0]["data"].decode("utf-8").splitlines()
+        assert lines[0] == ",".join(expected)
+        assert lines[1].startswith("ENG-1,Summary of ENG-1,In Progress,Bug,High,")
+        assert lines[1].endswith(",3,S1")
+        assert gated_call_spy[0]["preview"] == {"JQL": "project = ENG", "Fields": "Story Points, Sprint"}
+
+    async def test_approval_args_carry_sha256(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+
+        await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        call = gated_call_spy[0]
+        assert call["gate"] == "review"
+        assert call["tool"] == "jira_export_issues"
+        assert call["filtered_data"] is None
+        assert call["args"]["sha256"] == hashlib.sha256(delivered[0]["data"]).hexdigest()
+        assert call["new_info"]["Saved to"] == "~/out/jira-issues.csv"
+        assert call["new_info"]["Rows"] == "2"
+        assert call["delivery"] == "local_disk"
+        assert call["preview"]["Fields"] == "standard fields only"
+
+    async def test_raw_data_carries_keys_only(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+
+        await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        raw = gated_call_spy[0]["raw_data"]
+        assert [i.key for i in raw] == ["ENG-1", "ENG-2"]
+        assert all(vars(i) == {"key": i.key} for i in raw)
+
+    async def test_this_project_search_rule_auto_accepts(self, tmp_path, delivered):
+        init_audit_logger(str(tmp_path))
+        auto_accept.set_policy_v2_store_rules(policy_store.merge_rules([PolicyRule(
+            id="", predicate="approved_project_keys_all_results", value=["ENG"],
+            operations=frozenset({"jira.read_issue"}),
+        )]))
+        connector, _client = self._setup()
+
+        result = await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        assert result["rows"] == 2
+        assert len(delivered) == 1
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert json.loads(entries[0])["decision"] == "auto_accepted"
+
+    async def test_empty_result_writes_no_file_and_shows_no_card(
+        self, gated_call_spy, delivered, tmp_path,
+    ):
+        init_audit_logger(str(tmp_path))
+        connector, _client = self._setup(issues=[])
+
+        result = await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        assert result["rows"] == 0
+        assert result["sha256"] is None
+        assert result["delivery"] == "none"
+        assert result["columns"] == jira_module._EXPORT_COLUMNS
+        assert gated_call_spy == []
+        assert delivered == []
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"decision": "auto_accepted"' in entries[0]
+
+    async def test_over_the_delivery_limit_is_refused_before_the_card(
+        self, gated_call_spy, delivered, monkeypatch,
+    ):
+        def too_big(size):
+            raise ValueError("too large to deliver")
+
+        monkeypatch.setattr(jira_module.local_files, "check_delivery_size", too_big)
+        connector, _client = self._setup()
+
+        with pytest.raises(ValueError, match="too large"):
+            await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        assert gated_call_spy == []
+        assert delivered == []
+
+    async def test_deny_writes_nothing(self, monkeypatch, delivered):
+        async def denied(**kwargs):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(jira_module, "gated_call", denied)
+        connector, _client = self._setup()
+
+        with pytest.raises(PermissionError):
+            await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        assert delivered == []
+
+    async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
+        connector, _client = self._setup()
+        cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
+        connector.download_mode = "org"
+        connector.download_config = cfg
+        connector.download_base_url = "https://pf.example"
+
+        await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        assert delivered[0]["download_mode"] == "org"
+        assert delivered[0]["download_config"] is cfg
+        assert delivered[0]["download_base_url"] == "https://pf.example"
+        assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
+        assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_org_mode_without_staging_is_refused_before_any_request(
+        self, gated_call_spy, delivered,
+    ):
+        connector, client = self._setup()
+        connector.download_mode = "org"
+        connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
+
+        with pytest.raises(ValueError, match="allow_disk_staging"):
+            await connector.call("jira_export_issues", EXPORT_ARGS)
+
+        client.resolve_fields.assert_not_called()
+        client.export_issues.assert_not_called()
+        assert gated_call_spy == []
+        assert delivered == []
+
+
 class TestEveryToolIsAudited:
     async def test_every_declared_tool_leaves_an_audit_trail(self, monkeypatch, tmp_path):
         connector, client = make_connector()
@@ -1634,12 +1819,20 @@ class TestEveryToolIsAudited:
         with_fields = make_issue()
         with_fields.extra_fields = {"Story Points": 3}
         client.search_issues.return_value = [with_fields]
+        client.export_issues.return_value = [with_fields]
+        monkeypatch.setattr(
+            jira_module.local_files, "deliver_export",
+            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
+        )
 
         await assert_all_tools_leave_an_audit_trail(
             connector, jira_module, monkeypatch, tmp_path,
             arg_overrides={
                 "jira_update_issue": {"summary": "Updated summary"},
                 "jira_search_issues_with_fields": {"fields": '["Story Points"]'},
+                "jira_export_issues": {
+                    "jql": "project = ENG", "fields": "", "destination_dir": "/tmp/x", "file_name": "",
+                },
             },
         )
 
