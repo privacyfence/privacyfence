@@ -112,6 +112,7 @@ PERSONAL_DATA_GROUPS: dict[str, str] = {
     "salesforce.report": "Exports may include personal data",
     "jira.project": "Exports may include personal data",
     "peek.page": "New versions may include personal data",
+    "drive.folder": "Downloads may include personal data",
 }
 
 

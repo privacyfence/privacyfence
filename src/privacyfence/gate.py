@@ -703,11 +703,13 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
     return False, "", ""
 
 
-def _personal_data_rule(tool: str, operation_key: str, ctx: ReviewContext) -> policy_engine.PolicyRule | None:
+def _personal_data_rule(
+    tool: str, operation_key: str, ctx: ReviewContext, content_reaches_result: bool = False,
+) -> policy_engine.PolicyRule | None:
     """The stored rule with ``allow_personal_data`` that covers this call, for a tool in
-    ``PERSONAL_DATA_RULE_TOOLS`` only (ADR 0157); ``None`` for every other tool or when no such
-    rule matches."""
-    if tool not in PERSONAL_DATA_RULE_TOOLS:
+    ``PERSONAL_DATA_RULE_TOOLS`` only (ADR 0157); ``None`` for every other tool, when the result
+    carries the content itself (``content_reaches_result``), or when no such rule matches."""
+    if tool not in PERSONAL_DATA_RULE_TOOLS or content_reaches_result:
         return None
     rules = [rule for rule in get_policy_v2_store_rules() if rule.allow_personal_data]
     if not rules:
@@ -907,6 +909,9 @@ async def gated_call(
         # exception" paragraph). Set only when the caller can prove nothing has touched this exact
         # content since PrivacyFence's own last write to it. Anything else -- no matching auto-
         # accept rule, a popup-gate write, upload_pii_scan_text -- is unaffected.
+    content_reaches_result: bool = False,  # True when this call's result carries the content
+        # itself (an inline download), so a rule's allow_personal_data flag does not apply
+        # (ADR 0157).
     my_email: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
@@ -1062,7 +1067,7 @@ async def gated_call(
 
     try:
         if pii_forces_confirmation or upload_pii_categories:
-            personal_data_rule = _personal_data_rule(tool, operation_key, ctx)
+            personal_data_rule = _personal_data_rule(tool, operation_key, ctx, content_reaches_result)
             if personal_data_rule is not None:
                 audit(
                     decision="auto_accepted", auto_accept_rule=personal_data_rule.id,

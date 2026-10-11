@@ -2172,6 +2172,48 @@ class TestPersonalDataRules:
         assert entry["pii_detected"] is True
 
     @staticmethod
+    def _install_drive_folder(monkeypatch) -> PolicyRule:
+        rule = policy_store.merge_rules([PolicyRule(
+            id="", predicate="approved_folder", value=["fold1"],
+            operations=frozenset({"drive.download_file"}), allow_personal_data=True,
+        )])[0]
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: [rule])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return rule
+
+    @staticmethod
+    def _drive_download(**overrides):
+        return gate.gated_call(**base_kwargs(
+            connector="drive", tool="drive_download_file", gate="review",
+            raw_data=SimpleNamespace(parent_ids=["fold1"]), args={"file_id": "f1"},
+            pii_scan_text=TestPersonalDataRules.PII_TEXT, **overrides,
+        ))
+
+    async def test_flag_applies_to_drive_download_delivered_as_a_file(self, monkeypatch, audit_dir):
+        rule = self._install_drive_folder(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        result = await self._drive_download()
+
+        assert result is FILTERED
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["rule_id"] == rule.id
+        assert entry["pii_detected"] is True
+
+    async def test_flag_does_not_apply_when_content_reaches_the_result(self, monkeypatch, audit_dir):
+        self._install_drive_folder(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with pytest.raises(RuntimeError):
+            await self._drive_download(content_reaches_result=True)
+
+        assert len(popups) == 1
+
+    @staticmethod
     def _install_peek(monkeypatch, *, allow_personal_data: bool) -> PolicyRule:
         rule = policy_store.merge_rules([PolicyRule(
             id="", predicate="peek.page", value=["dash"],
