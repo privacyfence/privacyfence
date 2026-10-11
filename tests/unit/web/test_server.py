@@ -524,6 +524,30 @@ class TestWebServerConstruction:
 # stopped alongside the rest of WebServer's own lifecycle).
 # --------------------------------------------------------------------------- #
 
+def test_org_tokens_load_after_a_restart_on_an_unseparated_install(tmp_path, monkeypatch):
+    """An org server is not privilege-separated; its people's scoped tokens,
+    under data_dir()/users/<id>/authority, must still load at startup
+    (ADR 0165), unlike preload_verifier's local-token walk."""
+    from privacyfence import paths, privilege_separation, scoped_tokens
+    from privacyfence.web.mcp_dispatch import McpDispatcher
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+    alice = Principal(id="alice", email="alice@example.com")
+    previous_run = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    token, secret = previous_run.create(
+        alice, label="sales-sync", days=90, rule_ids=[], tools=["gmail_list_messages"],
+        policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
+    )
+    assert (tmp_path / "users" / "alice" / "authority" / scoped_tokens.STORE_FILE_NAME).is_file()
+    scoped_tokens.set_store(None)
+
+    WebServer(WebApprovalUI(), host="localhost", port=0, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t")
+
+    found = scoped_tokens.get_store().find(secret)
+    assert found is not None and found.id == token.id and found.principal_id == "alice"
+
+
 class TestWebServerControlChannel:
     def test_local_mode_builds_a_control_channel(self):
         server = WebServer(WebApprovalUI(), port=0)
@@ -1098,6 +1122,108 @@ class TestAudienceSeparation:
         # with no credential at all.
         assert client.put("/mcp-files/uploads/not-a-real-slot", content=b"data").status_code == 401
         assert client.get("/mcp-files/downloads/not-a-real-token").status_code == 401
+
+    # ADR 0164: a scoped token is an /mcp credential only. The helpers
+    # below give one owned by the local principal (local builds) or by
+    # "alice" (org builds), from a store over tmp_path.
+
+    @staticmethod
+    def _scoped_secret(tmp_path, monkeypatch, principal=None) -> str:
+        from privacyfence import paths, scoped_tokens
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web import mcp_auth
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        store = scoped_tokens.ScopedTokenStore(mcp_auth.scoped_token_principals)
+        store.load()
+        scoped_tokens.set_store(store)
+        _, secret = store.create(
+            principal or LOCAL_PRINCIPAL, label="sales-sync", days=90, rule_ids=[],
+            tools=["gmail_list_messages"], policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
+        )
+        return secret
+
+    @staticmethod
+    def _org_app(tmp_path, monkeypatch):
+        from privacyfence import org_identity as oi
+        from privacyfence.web.mcp_dispatch import McpDispatcher
+        from privacyfence.web.oauth_provider import OrgOAuthProvider
+        from privacyfence.web.org_session import OrgSessionStore
+        from privacyfence.web.server import OrgAuth
+
+        monkeypatch.setattr(
+            "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"),
+        )
+        monkeypatch.setattr(
+            "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"),
+        )
+        idp = oi.IdpConfig(
+            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
+            authorization_endpoint="https://idp.example.com/authorize",
+            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
+        )
+        issuer_url = "https://org.example.com"
+        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer_url}/oauth/idp/callback")
+        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer_url)
+        return build_app(
+            WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}),
+            allowed_hosts=frozenset({"org.example.com"}),
+        ), issuer_url
+
+    def test_a_scoped_token_is_refused_on_settings_and_approvals(self, tmp_path, monkeypatch):
+        from privacyfence.web.mcp_dispatch import McpDispatcher
+
+        controller = _controller(tmp_path, monkeypatch)
+        secret = self._scoped_secret(tmp_path, monkeypatch)
+        sessions = LocalSessionStore()
+        app = build_app(
+            WebApprovalUI(), sessions=sessions, controller=controller,
+            mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token=self.MCP_TOKEN,
+        )
+        client = TestClient(app, base_url="http://localhost")
+        bearer = {"Authorization": f"Bearer {secret}"}
+
+        settings = client.get("/settings", headers=bearer)
+        assert settings.status_code != 200
+        assert "PrivacyFence — Settings" not in settings.text
+        assert client.post("/api/settings/quit_app", json={"csrf": secret}, headers=bearer).status_code in (401, 403)
+        assert client.get("/api/approvals/some-id/preview", headers=bearer).status_code == 401
+        # Nor does it pass as the CSRF value next to a real session cookie.
+        _signed_in(client, sessions)
+        decide = client.post(
+            "/api/approvals/some-id/decide", json={"result": "deny", "csrf": secret}, headers=bearer,
+        )
+        assert decide.status_code == 401
+
+    def test_a_scoped_token_is_refused_on_the_bearer_file_bridge(self, tmp_path, monkeypatch):
+        secret = self._scoped_secret(tmp_path, monkeypatch)
+        client = TestClient(self._app(), base_url="http://localhost")
+        bearer = {"Authorization": f"Bearer {secret}"}
+
+        assert client.put("/mcp-files/uploads/not-a-real-slot", content=b"data", headers=bearer).status_code == 401
+        assert client.get("/mcp-files/downloads/not-a-real-token", headers=bearer).status_code == 401
+        # The main token is still accepted there (past auth, the slot is simply unknown).
+        main = {"Authorization": f"Bearer {self.MCP_TOKEN}"}
+        assert client.get("/mcp-files/downloads/not-a-real-token", headers=main).status_code != 401
+
+    @pytest.mark.parametrize("mode", ["local", "org"])
+    def test_a_scoped_token_is_accepted_on_mcp(self, mode, tmp_path, monkeypatch):
+        from privacyfence import scoped_tokens
+
+        initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        if mode == "local":
+            secret = self._scoped_secret(tmp_path, monkeypatch)
+            app, base_url = self._app(), "http://localhost"
+        else:
+            secret = self._scoped_secret(tmp_path, monkeypatch, Principal(id="alice", email="alice@example.com"))
+            app, base_url = self._org_app(tmp_path, monkeypatch)
+        with TestClient(app, base_url=base_url) as client:
+            accepted = client.post("/mcp", json=initialize, headers={"Authorization": f"Bearer {secret}"})
+            unknown = client.post(
+                "/mcp", json=initialize, headers={"Authorization": f"Bearer {scoped_tokens.mint_secret()}"},
+            )
+        assert accepted.status_code != 401
+        assert unknown.status_code == 401
 
     def test_approvals_decide_rejects_the_mcp_token_as_csrf(self):
         client = TestClient(self._app(), base_url="http://localhost")
@@ -1747,3 +1873,134 @@ class TestAiClientTokenDelivery:
         server = WebServer(WebApprovalUI(), host="127.0.0.1", port=8765, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t" * 64)
         assert passed["mcp_url"] == "http://127.0.0.1:8765/mcp" == server.mcp_url
         assert passed["mint_mcp_token"] == server._mint_mcp_token
+
+
+from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
+
+
+class TestScopedTokenWiring:
+    """The Settings page's Scoped tokens section in local mode (ADR 0164)."""
+
+    @staticmethod
+    def _store(tmp_path, monkeypatch):
+        from privacyfence import paths, scoped_tokens
+        from privacyfence.web import mcp_auth
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        store = scoped_tokens.ScopedTokenStore(mcp_auth.scoped_token_principals)
+        store.load()
+        scoped_tokens.set_store(store)
+        return store
+
+    @staticmethod
+    def _rules(monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.policy.engine import PolicyRule
+
+        rule = PolicyRule(
+            id="r-sender", predicate="i_am_sender", value=None, operations=frozenset({"gmail.read_message"}),
+        )
+        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+        return rule
+
+    def test_the_scoped_token_wiring_is_built_only_with_an_mcp_endpoint(self, tmp_path, monkeypatch):
+        controller = _controller(tmp_path, monkeypatch)
+        body = {"csrf": "x", "confirmed": True, "token_id": "st-1"}
+
+        def _status(**kwargs):
+            sessions = LocalSessionStore()
+            app = build_app(WebApprovalUI(), sessions=sessions, controller=controller, **kwargs)
+            client = TestClient(app, base_url="http://localhost")
+            session_id = _signed_in(client, sessions)
+            return client.post(
+                "/api/settings/scoped_tokens/revoke", json={**body, "csrf": session_id},
+            ).text
+
+        assert "No such token." not in _status()
+        self._store(tmp_path, monkeypatch)
+        assert _status(mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok").count("No such token.") == 1
+
+    def test_page_data_names_rules_by_their_cached_resource_names(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.policy.engine import PolicyRule
+        from privacyfence.web import server as server_module
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = PolicyRule(
+            id="r-doc", predicate="grist.document", value=["8CAN8gKdxY7z"],
+            operations=frozenset({"grist.read_records", "grist.update_csv"}),
+        )
+        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+
+        class _Names:
+            def cached_name(self, rt, resource_id):
+                return "Salesforce mirror" if resource_id == "8CAN8gKdxY7z" else None
+
+        monkeypatch.setattr(server_module, "get_resolver", lambda: _Names())
+        [entry] = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()["rules"]
+
+        assert entry["title"] == "Grist — document Salesforce mirror"
+        assert "8CAN8gKdxY7z" not in entry["title"] and "8CAN8gKdxY7z" not in entry["sentence"]
+        assert "allow" not in entry["title"]
+        assert entry["verbs"] == ["read", "update"]
+        assert "Salesforce mirror" in entry["sentence"]
+        assert "grist_update_csv" in entry["tools"]
+
+    def test_page_data_lists_the_tools_that_need_no_rule(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [])
+        data = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()
+
+        assert "grist_list_tables" in data["auto_tools"]
+        assert "grist_update_csv" not in data["auto_tools"]
+        assert all(name.startswith("grist_") for name in data["auto_tools"])
+        assert all(auto_accept.TOOL_TO_GATE[name] == "auto" for name in data["auto_tools"])
+
+    def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
+        import time
+
+        from privacyfence import scoped_tokens
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        store = self._store(tmp_path, monkeypatch)
+        rule = self._rules(monkeypatch)
+        policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+        now = time.time()
+
+        def _make(label, days_ago, days, rule_ids):
+            token, _ = store.create(
+                LOCAL_PRINCIPAL, label=label, days=days, rule_ids=rule_ids, tools=["gmail_list_messages"],
+                policy=policy, now=now - days_ago * 86400,
+            )
+            return token
+
+        fresh = _make("fresh", 0, 90, [rule.id])
+        soon = _make("soon", 80, 90, [rule.id])
+        gone = _make("gone", 100, 90, [rule.id])
+        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object(), "drive": object()}))
+        data = wiring.page_data()
+
+        assert (data["delivery"], data["max_days"], data["default_days"], data["warn_days"]) == (
+            "companion", 365, 90, 14,
+        )
+        tokens = {t["label"]: t for t in data["tokens"]}
+        assert tokens["fresh"]["id"] == fresh.id
+        assert (tokens["fresh"]["expiring_soon"], tokens["fresh"]["expired"]) == (False, False)
+        assert (tokens["soon"]["expiring_soon"], tokens["soon"]["expired"]) == (True, False)
+        assert tokens["soon"]["days_left"] <= 10
+        assert (tokens["gone"]["expiring_soon"], tokens["gone"]["expired"]) == (False, True)
+        assert {tokens["gone"]["id"], tokens["soon"]["id"]} == {gone.id, soon.id}
+        assert tokens["fresh"]["rules"][0]["id"] == rule.id and "sentence" in tokens["fresh"]["rules"][0]
+        assert tokens["fresh"]["tools"] == ["gmail_list_messages"]
+        assert data["rules"][0]["id"] == rule.id
+        assert "gmail_get_message" in data["rules"][0]["tools"]
+        assert [group["connector"] for group in data["tools"]] == ["drive", "gmail"]
+        assert "gmail_list_messages" in data["tools"][1]["tools"]
+
+        monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
+        assert wiring.page_data()["tokens"][0]["rules"] == [{"id": rule.id, "missing": True}]

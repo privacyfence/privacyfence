@@ -12,6 +12,7 @@ import contextlib
 import json
 import os
 import re
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -23,11 +24,12 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
-from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity
+from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity, scoped_tokens
 from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, current_agent
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.policy.engine import PolicyRule
+from privacyfence.scoped_tokens import ScopedToken, ScopedTokenStore
 from privacyfence.web import oauth_provider as op
 from privacyfence.web import routes_mcp as rm
 from privacyfence.web.mcp_dispatch import McpDispatcher
@@ -430,3 +432,57 @@ class TestClaimedIdentityNeverChangesAnOutcome:
         assert agents["claude-code"] == ("claude-code", "client_info")
         assert agents[""] == ("", "")
         assert outcomes["Claude"] == _EXPECTED[scenario]
+
+
+# --------------------------------------------------------------------------- #
+# A scoped token is the attested agent (ADR 0164)
+# --------------------------------------------------------------------------- #
+
+_SCOPED = ScopedToken(
+    id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
+    principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
+    rule_ids=frozenset({"r-gmail"}), tools=frozenset({"echo_say"}),
+)
+
+
+class _OneTokenStore(ScopedTokenStore):
+    def __init__(self, token: ScopedToken) -> None:
+        super().__init__(lambda: [])
+        self._token = token
+
+    def get(self, principal_id: str, token_id: str) -> ScopedToken | None:
+        token = self._token
+        return token if (principal_id, token_id) == (token.principal_id, token.id) else None
+
+
+class _ScopedVerifier(TokenVerifier):
+    """Stands in for mcp_auth.ScopedTokenVerifier: the AccessToken it mints for ``_SCOPED``."""
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if token != TOKEN:
+            return None
+        return AccessToken(
+            token=token, client_id=f"scoped:{_SCOPED.id}", scopes=["scoped"], expires_at=int(_SCOPED.expires_at),
+            subject=_SCOPED.principal_id,
+            claims={"email": "", "display_name": "", "is_admin": False, "scoped_token_id": _SCOPED.id},
+        )
+
+
+class TestScopedTokenIdentity:
+    async def test_a_scoped_call_is_attested_as_the_token(self, monkeypatch, audit_dir):
+        scoped_tokens.set_store(_OneTokenStore(_SCOPED))
+        _install_rule(monkeypatch)
+
+        # The token outranks whatever the client claims, and an org admin's pin too.
+        async with _session(
+            _dispatcher(GatedConnector()), client_name="Claude", verifier=_ScopedVerifier(),
+            pinned_agents=lambda client_id: "claude-code",
+        ) as session:
+            result = await session.call_tool("echo_say", {"message": "hi"})
+
+        assert result.is_error is False
+        entry = _audit_entries(audit_dir)[-1]
+        assert entry["decision"] == "auto_accepted"
+        assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
+            f"scoped-token:{_SCOPED.id}", "sales-sync", "", "override",
+        )

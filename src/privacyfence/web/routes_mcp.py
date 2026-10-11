@@ -23,7 +23,9 @@ import binascii
 import contextlib
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote
 
@@ -47,14 +49,15 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .. import __version__ as PRIVACYFENCE_VERSION
-from .. import local_files
+from .. import local_files, scoped_tokens
 from ..agent_identity import UNKNOWN_AGENT, UNKNOWN_ID_PREFIX, AgentIdentity, AgentSource, agent_scope, identify, identify_registry_id
 from ..agent_overrides import AgentOverrides
 from ..connector import Connector
+from ..gate import audit_scoped_refusal, reason_scope
 from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
-from .mcp_auth import principal_from_access_token, single_token_verifier
+from .mcp_auth import principal_from_access_token, scope_from_access_token, single_token_verifier
 from .mcp_dispatch import McpDispatcher
 from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 
@@ -92,6 +95,42 @@ SERVER_INSTRUCTIONS = (
     "Most conversations have nothing to do with PrivacyFence and should not call any "
     "privacyfence_* tool at all."
 )
+
+
+# The meta-tools a scoped token sees and may call (ADR 0164). Never privacyfence_list_policy (it
+# would show the person's other rules), privacyfence_await_approval (nothing of a scoped token's
+# can be pending) or privacyfence_propose_policy_change.
+SCOPED_META_TOOLS = frozenset({
+    "privacyfence_status", "privacyfence_check_policy", "privacyfence_create_upload_slot",
+    "privacyfence_begin_unattended_session", "privacyfence_end_unattended_session",
+})
+
+
+def _scoped_agent(scope: scoped_tokens.ScopedToken) -> AgentIdentity:
+    """The attested agent for every call made with a scoped token, meta-tools included: a
+    credential the person created, so ``override`` (ADR 0006, ADR 0037, ADR 0164). It replaces
+    whatever the client claims and any org admin pin."""
+    return AgentIdentity(id=f"scoped-token:{scope.id}", name=scope.label, version="", source=AgentSource.OVERRIDE)
+
+
+def _scoped_token_allows(scope: scoped_tokens.ScopedToken, name: str, *, is_meta_tool: bool) -> bool:
+    if scope is scoped_tokens.REVOKED_SCOPE:
+        return False
+    return name in SCOPED_META_TOOLS if is_meta_tool else name in scope.tools
+
+
+def _refuse_scoped_call(
+    dispatcher: McpDispatcher, scope: scoped_tokens.ScopedToken, name: str, *, is_meta_tool: bool,
+) -> types.CallToolResult:
+    """Audits (``"denied_scoped_token"``, through ``gate.audit_scoped_refusal``) and refuses a
+    scoped-token call before it reaches any gate (ADR 0164): every call of a revoked token, or a
+    tool outside the token's scope."""
+    connector = "mcp" if is_meta_tool else (_connector_for_tool(dispatcher.connectors, name) or "mcp")
+    if scope is scoped_tokens.REVOKED_SCOPE:
+        audit_scoped_refusal(connector, name, scope, "Scoped token no longer valid")
+        return mcp_tools.error_result("Request denied: this token is no longer valid.")
+    audit_scoped_refusal(connector, name, scope, f"Tool not in scoped token {scope.label!r}")
+    return mcp_tools.error_result(f"Request denied: this token may not call {name}.")
 
 
 # The header a Streamable HTTP client stamps on every request that belongs
@@ -390,14 +429,23 @@ def build_mcp_server(
         # connectors perfectly well -- a client simply had no way to learn
         # the tools existed to call them.
         _track_session(ctx, _session_key(ctx))
-        principal = principal_from_access_token(get_access_token())
+        access_token = get_access_token()
+        principal = principal_from_access_token(access_token)
+        # A scoped token sees only its own tools and SCOPED_META_TOOLS; a revoked one sees
+        # nothing (ADR 0164).
+        scope = scope_from_access_token(access_token)
+        if scope is scoped_tokens.REVOKED_SCOPE:
+            return types.ListToolsResult(tools=[])
         with principal_scope(principal):
             tools = [
                 mcp_tools.to_mcp_tool(spec)
                 for connector in dispatcher.connectors.values()
                 for spec in connector.tool_specs()
+                if scope is None or spec.name in scope.tools
             ]
-        tools.extend(mcp_tools.META_TOOLS)
+        tools.extend(
+            tool for tool in mcp_tools.META_TOOLS if scope is None or tool.name in SCOPED_META_TOOLS
+        )
         return types.ListToolsResult(tools=tools)
 
     async def handle_call_tool(
@@ -426,18 +474,32 @@ def build_mcp_server(
         # gated calls. Never read from the request body -- see
         # _is_initialize for why that line is drawn.
         is_meta_tool = name in mcp_tools.META_TOOL_NAMES
-        agent = UNKNOWN_AGENT if is_meta_tool else _resolve_agent(
-            ctx, access_token, client_names, pinned_agents=pinned_agents, overrides=overrides,
-        )
+        # A scoped token's call, meta-tools included, is attributed to the token itself
+        # (ADR 0164), whatever the client claims.
+        scope = scope_from_access_token(access_token)
+        if scope is not None:
+            agent = _scoped_agent(scope)
+        else:
+            agent = UNKNOWN_AGENT if is_meta_tool else _resolve_agent(
+                ctx, access_token, client_names, pinned_agents=pinned_agents, overrides=overrides,
+            )
         bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
         uploads = _file_bridge_uploads(params)
         base_url = str(ctx.request.base_url) if ctx.request is not None else ""
-        with principal_scope(principal), agent_scope(agent), local_files.call_context(
-            bridge_available=bridge_available, uploads=uploads, base_url=base_url,
-        ) as call_state:
+        with (
+            principal_scope(principal), agent_scope(agent), scoped_tokens.token_scope(scope),
+            local_files.call_context(
+                bridge_available=bridge_available, uploads=uploads, base_url=base_url,
+            ) as call_state,
+        ):
+            if scope is not None and not _scoped_token_allows(scope, name, is_meta_tool=is_meta_tool):
+                with reason_scope(str(arguments.get("reason", ""))):
+                    return _refuse_scoped_call(dispatcher, scope, name, is_meta_tool=is_meta_tool)
             try:
                 if is_meta_tool:
-                    result = await _dispatch_meta_tool(dispatcher, session_key, name, arguments, principal, base_url)
+                    result = await _dispatch_meta_tool(
+                        dispatcher, session_key, name, arguments, principal, base_url, scope=scope,
+                    )
                 else:
                     result = await _dispatch_connector_tool(dispatcher, session_key, name, arguments)
             except local_files.LocalFilesNeeded as needed:
@@ -501,9 +563,13 @@ def _connector_for_tool(connectors: dict[str, Connector], tool: str) -> str | No
 
 async def _dispatch_meta_tool(
     dispatcher: McpDispatcher, session_key: str, name: str, arguments: dict[str, Any],
-    principal: Principal, base_url: str,
+    principal: Principal, base_url: str, *, scope: scoped_tokens.ScopedToken | None = None,
 ) -> Any:
     reason = arguments.get("reason", "")
+    if scope is not None:
+        scoped = _dispatch_scoped_meta_tool(dispatcher, name, arguments, scope)
+        if scoped is not None:
+            return scoped
     if name == mcp_tools.CHECK_POLICY_TOOL.name:
         return dispatcher.check_policy(
             arguments["connector"], arguments["tool"], arguments.get("args") or {}, reason,
@@ -532,6 +598,45 @@ async def _dispatch_meta_tool(
             size_bytes=arguments.get("size_bytes"), base_url=base_url,
         )
     raise ValueError(f"Unknown tool: {name!r}")  # pragma: no cover -- unreachable, META_TOOL_NAMES gates this
+
+
+def _dispatch_scoped_meta_tool(
+    dispatcher: McpDispatcher, name: str, arguments: dict[str, Any], scope: scoped_tokens.ScopedToken,
+) -> dict[str, Any] | None:
+    """How a meta-tool answers a scoped token differently (ADR 0164), or ``None`` to dispatch it
+    as usual. ``check_policy`` only falls through for a tool in the token's scope."""
+    reason = arguments.get("reason", "")
+    if name in (mcp_tools.BEGIN_UNATTENDED_SESSION_TOOL.name, mcp_tools.END_UNATTENDED_SESSION_TOOL.name):
+        # A scoped call is always deny-only, which is all an unattended session does (ADR 0015),
+        # so beginning one needs no admin opt-in and ending one leaves the token deny-only.
+        return {"unattended": True, "scoped_token": True}  # nosec B105  # a flag name, not a credential
+    if name == mcp_tools.CHECK_POLICY_TOOL.name:
+        tool = arguments.get("tool")
+        if not isinstance(tool, str) or tool not in scope.tools:
+            connector = arguments.get("connector")
+            with reason_scope(str(reason)):
+                audit_scoped_refusal(
+                    connector if isinstance(connector, str) and connector in dispatcher.connectors else "mcp",
+                    tool if isinstance(tool, str) else "", scope, f"Tool not in scoped token {scope.label!r}",
+                )
+            raise ValueError(f"This token may not call {tool}.")
+        return None
+    if name == mcp_tools.PRIVACYFENCE_STATUS_TOOL.name:
+        result = dispatcher.status(reason)
+        days_left = scope.days_left(time.time())
+        expiring_soon = days_left <= scoped_tokens.WARN_DAYS
+        result["token"] = {
+            "label": scope.label,
+            "expires_at": datetime.fromtimestamp(scope.expires_at, tz=timezone.utc).isoformat(),
+            "days_left": days_left,
+            "expiring_soon": expiring_soon,
+            "rules": len(scope.rule_ids),
+            "tools": len(scope.tools),
+        }
+        if expiring_soon:
+            result["message"] += f" This token expires in {days_left} day(s); ask its owner for a new one."
+        return result
+    return None
 
 
 @contextlib.asynccontextmanager

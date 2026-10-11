@@ -41,7 +41,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from privacyfence import approval_ui, auto_accept, gate
+from privacyfence import approval_ui, auto_accept, gate, scoped_tokens
 from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.deny_feedback import DenialFeedback, EarlierDecision, denial_message
@@ -52,6 +52,7 @@ from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import TOOL_REGISTRY, Verb
+from privacyfence.scoped_tokens import ScopedToken
 from privacyfence.web_approval_ui import WebApprovalUI
 
 from ..helpers import policy_rules
@@ -2124,6 +2125,29 @@ class TestPersonalDataRules:
         assert result is FILTERED
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
+    async def test_a_flagged_rule_outside_a_tokens_scope_does_not_let_personal_data_through(
+        self, monkeypatch, audit_dir,
+    ):
+        self._install(monkeypatch, allow_personal_data=True)
+
+        with scoped_tokens.token_scope(_scoped_token(rule_ids=("r-other",), tools=("grist_export_records",))):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_a_flagged_rule_inside_a_tokens_scope_still_lets_personal_data_through(
+        self, monkeypatch, audit_dir,
+    ):
+        rule = self._install(monkeypatch, allow_personal_data=True)
+
+        with scoped_tokens.token_scope(_scoped_token(rule_ids=(rule.id,), tools=("grist_export_records",))):
+            result = await self._call(pii_scan_text=self.PII_TEXT)
+
+        assert result is FILTERED
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["decision"], entry["rule_id"], entry["pii_detected"]) == ("auto_accepted", rule.id, True)
+
     async def test_unflagged_rule_still_shows_the_card_on_pii(self, monkeypatch, audit_dir):
         self._install(monkeypatch, allow_personal_data=False)
         popups = []
@@ -3523,6 +3547,161 @@ class TestUnattendedMode:
 
         assert result is FILTERED
         assert len(called) == 1
+
+
+def _scoped_token(*, rule_ids=("r-in",), tools=("gmail_get_message", "gmail_send_message")) -> ScopedToken:
+    return ScopedToken(
+        id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
+        principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
+        rule_ids=frozenset(rule_ids), tools=frozenset(tools),
+    )
+
+
+def _gmail_read_rule(rule_id: str) -> PolicyRule:
+    return PolicyRule(
+        id=rule_id, predicate="gmail.anything", value=None, operations=frozenset({"gmail.read_message"}),
+    )
+
+
+class TestScopedTokenGate:
+    """A call made with a scoped token (ADR 0164): only the token's own rules auto-accept, the
+    temp-accept window never does, and anything else is denied at once -- never a card, never a
+    pending approval. An unscoped call must behave exactly as before."""
+
+    @pytest.fixture(autouse=True)
+    def _no_rules(self):
+        auto_accept.set_policy_v2_store_rules([])
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    @staticmethod
+    def _popups(monkeypatch, answer: str = "accept") -> list:
+        shown: list = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (shown.append("read") or answer, None))
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (shown.append("write") or answer, None))
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        return shown
+
+    async def test_only_the_tokens_rules_auto_accept(self, monkeypatch, audit_dir):
+        auto_accept.set_policy_v2_store_rules([_gmail_read_rule("r-in")])
+        shown = self._popups(monkeypatch)
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            result = await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert result is FILTERED
+        assert shown == []
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["decision"], entry["rule_id"]) == ("auto_accepted", "r-in")
+
+    async def test_a_matching_rule_outside_the_scope_is_denied(self, monkeypatch, audit_dir):
+        auto_accept.set_policy_v2_store_rules([_gmail_read_rule("r-out")])
+        shown = self._popups(monkeypatch)
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            with pytest.raises(gate.GateDeniedError, match="scoped token, and none of the token's rules"):
+                await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert shown == []
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["decision"], entry["auto_accept_rule"], entry["rule_id"]) == ("denied_scoped_token", "", "")
+
+    @pytest.mark.parametrize("gate_kind", ["review", "popup"])
+    async def test_no_card_and_no_pending_for_a_scoped_call(self, monkeypatch, audit_dir, gate_kind):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        shown = self._popups(monkeypatch)
+        kwargs = base_kwargs(gate=gate_kind)
+        if gate_kind == "popup":
+            kwargs.update(tool="gmail_send_message", tool_name="Send Gmail message")
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await gate.gated_call(**kwargs)
+
+        assert shown == []
+        assert registry.list_pending() == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    async def test_temp_accept_does_not_apply_under_a_scope(self, monkeypatch, audit_dir):
+        monkeypatch.setattr(gate, "is_temp_accepted", lambda *a, **k: True)
+        shown = self._popups(monkeypatch)
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_send_message"))
+        # Not vacuous: the same call without a scope rides the grace window.
+        assert await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_send_message")) is FILTERED
+
+        assert shown == []
+        decisions = [(e["decision"], e["auto_accept_rule"]) for e in read_audit_entries(audit_dir)]
+        assert decisions == [("denied_scoped_token", ""), ("auto_accepted", "session_temp_accept")]
+
+    async def test_pii_on_a_scoped_call_is_denied(self, monkeypatch, audit_dir):
+        auto_accept.set_policy_v2_store_rules([_gmail_read_rule("r-in")])
+        shown = self._popups(monkeypatch)
+
+        pii_text = "Please wire the deposit to DE89370400440532013000, thanks."
+        with scoped_tokens.token_scope(_scoped_token()):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await gate.gated_call(**base_kwargs(gate="review", details_text=pii_text))
+
+        assert shown == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "denied_scoped_token"
+        assert entry["pii_detected"] is True
+
+    def test_preflight_reports_only_the_tokens_rules(self, monkeypatch):
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id=rule_id, predicate="apps_script.project", value=[script],
+                operations=frozenset({"apps_script.read_content"}),
+            )
+            for rule_id, script in (("r-in", "script1"), ("r-out", "script2"))
+        ])
+        monkeypatch.setattr(gate, "is_temp_accepted", lambda *a, **k: False)
+
+        def predict(script: str) -> tuple[str, str]:
+            verdict, _rule, rule_id, _reason = gate.preflight_auto_accept(
+                "apps_script.read_content", {"script_id": script},
+            )
+            return verdict, rule_id
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            assert predict("script1") == ("auto_accept", "r-in")
+            assert predict("script2") == ("requires_review", "")
+            monkeypatch.setattr(gate, "is_temp_accepted", lambda *a, **k: True)
+            assert predict("script2") == ("requires_review", "")
+        assert predict("script2") == ("auto_accept", "session_temp_accept")
+
+    async def test_propose_is_refused_under_a_scope(self, monkeypatch, audit_dir):
+        confirmations: list = []
+        monkeypatch.setattr(
+            gate, "show_rule_confirmation_popup", lambda *a, **k: confirmations.append(a) or True,
+        )
+
+        with scoped_tokens.token_scope(_scoped_token()):
+            with pytest.raises(gate.GateDeniedError, match="scoped token cannot change"):
+                # An unknown rule id would raise ValueError if validation ran first.
+                await gate.propose_policy_change(operation="remove", reason="tidy up", rule_id="no-such-rule")
+
+        assert confirmations == []
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["decision"], entry["connector"]) == ("denied_scoped_token", "policy")
+
+    async def test_unscoped_calls_are_unchanged(self, monkeypatch, audit_dir):
+        auto_accept.set_policy_v2_store_rules([_gmail_read_rule("r-out")])
+        shown = self._popups(monkeypatch, answer="deny")
+
+        # Review: any rule auto-accepts an unscoped call.
+        assert await gate.gated_call(**base_kwargs(gate="review")) is FILTERED
+        # Popup: no rule covers the write, so the person is asked (and here denies).
+        with pytest.raises(gate.GateDeniedError, match="Request denied by user"):
+            await gate.gated_call(**base_kwargs(gate="popup", tool="gmail_send_message"))
+
+        assert shown == ["write"]
+        decisions = [(e["decision"], e["rule_id"]) for e in read_audit_entries(audit_dir)]
+        assert decisions == [("auto_accepted", "r-out"), ("rejected", "")]
 
 
 class TestClaudeReason:
