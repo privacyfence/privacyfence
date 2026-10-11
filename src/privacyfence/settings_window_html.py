@@ -178,6 +178,12 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-st-chip { cursor: default; }
 .pf-st-warn { color: var(--ink); border-color: var(--control-line); }
 .pf-st-expired { color: var(--muted); }
+.pf-st-meta { color: var(--muted); font-weight: 400; margin-left: 0.35em; }
+.pf-st-uncovered .pf-st-meta { color: var(--warning); }
+.pf-st-notice {
+  color: var(--warning); background: var(--warning-soft); border: 1px solid currentColor; border-radius: var(--radius-s);
+  padding: var(--space-2xs) var(--space-xs); font-size: var(--step-small);
+}
 
 /* ---- Connectors (local mode) ---- */
 .pf-connector-list { display: flex; flex-direction: column; gap: var(--space-xs); }
@@ -1226,28 +1232,59 @@ _JS = r"""
     html += '<label><span class="field-label">Days valid</span><input type="number" class="field" aria-label="Days valid" data-st-days="1" min="1" max="' +
       esc(SCOPED.max_days) + '" value="' + esc(ui.stDays) + '"/></label>';
     html += '<div class="pf-row-title">Rules</div>';
+    html += '<div class="pf-hint">A rule sets which documents, reports, projects or pages the token may use, and what it may do there. ' +
+      'Pick the tools below as well: a tool that needs approval works only where a selected rule covers it.</div>';
     if (SCOPED.rules.length === 0) { html += '<div class="pf-hint">You have no Auto-accept rules.</div>'; }
     html += '<div class="pf-chips">';
     SCOPED.rules.forEach(function (r) {
       var on = !!ui.stRules[r.id];
+      var allows = r.verbs.length ? 'allows ' + r.verbs.join(', ') : '';
       html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
-        esc(r.sentence) + '" data-st-rule="' + esc(r.id) + '">' + esc(r.sentence) + '</div>';
+        esc(r.title + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' + esc(r.title) +
+        (allows ? ' <span class="pf-st-meta">· ' + esc(allows) + '</span>' : '') + '</div>';
     });
     html += '</div>';
+    var coverage = scopedToolCoverage();
     html += '<div class="pf-row-title">Tools</div>';
     SCOPED.tools.forEach(function (g) {
       html += '<div class="pf-hint">' + esc(g.connector) + '</div><div class="pf-chips">';
       g.tools.forEach(function (name) {
         var on = !!ui.stTools[name];
-        html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') + '" tabindex="0" aria-label="' +
-          esc(name) + '" data-st-tool="' + esc(name) + '">' + esc(name) + '</div>';
+        var status = scopedToolStatus(name, coverage);
+        html += '<div class="pf-chip' + (on ? ' on' : '') + (on && status.uncovered ? ' pf-st-uncovered' : '') + '" role="checkbox" aria-checked="' +
+          (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(name + ', ' + status.text) + '" data-st-tool="' + esc(name) + '">' +
+          esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></div>';
       });
       html += '</div>';
     });
+    var uncovered = Object.keys(ui.stTools).filter(function (name) {
+      return ui.stTools[name] && scopedToolStatus(name, coverage).uncovered;
+    }).sort();
+    if (uncovered.length) {
+      html += '<div class="pf-st-notice" role="status" data-st-uncovered="1">No selected rule covers ' + esc(uncovered.join(', ')) +
+        ', so ' + (uncovered.length === 1 ? 'its calls' : 'their calls') + ' will be denied. Select a rule that covers ' +
+        (uncovered.length === 1 ? 'it' : 'them') + ', or untick ' + (uncovered.length === 1 ? 'it' : 'them') + '.</div>';
+    }
     html += '<div><div class="pf-link" role="button" tabindex="0" aria-label="Add the tools these rules cover" data-st-add-covered="1">Add the tools these rules cover</div></div>';
     html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Create token" data-st-create="1">Create token</div></div>';
     html += '</div></div>';
     return html;
+  }
+
+  // tool name -> titles of the selected rules that cover it
+  function scopedToolCoverage() {
+    var cover = {};
+    SCOPED.rules.forEach(function (r) {
+      if (!ui.stRules[r.id]) { return; }
+      r.tools.forEach(function (name) { (cover[name] = cover[name] || []).push(r.title); });
+    });
+    return cover;
+  }
+
+  function scopedToolStatus(name, coverage) {
+    if ((SCOPED.auto_tools || []).indexOf(name) !== -1) { return {text: 'no rule needed', uncovered: false}; }
+    if (coverage[name]) { return {text: 'covered by ' + coverage[name].join('; '), uncovered: false}; }
+    return {text: 'no selected rule covers it', uncovered: true};
   }
 
   function addCoveredScopedTools() {

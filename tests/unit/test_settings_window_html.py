@@ -606,8 +606,10 @@ class TestScopedTokensSection:
             {"id": "st-2", "label": "old", "created_at": 0, "expires_at": 1, "days_left": 0,
              "expiring_soon": False, "expired": True, "rules": [], "tools": []},
         ],
-        "rules": [{"id": "r1", "sentence": "Allow reads", "tools": ["gmail_get_message", "gmail_list_messages"]}],
+        "rules": [{"id": "r1", "title": "Gmail — anything", "verbs": ["read"], "sentence": "Allow reads",
+                   "tools": ["gmail_get_message", "gmail_list_messages"]}],
         "tools": [{"connector": "gmail", "tools": ["gmail_get_message", "gmail_list_messages"]}],
+        "auto_tools": ["gmail_list_messages"],
     }
 
     def _caps(self, html: str) -> dict:
@@ -667,6 +669,24 @@ class TestScopedTokensSection:
         assert "Add the tools these rules cover" in html
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
+
+    def test_rules_show_their_resource_with_the_verbs_as_a_detail(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "esc(r.title) +" in html
+        assert "'allows ' + r.verbs.join(', ')" in html
+        assert "Pick the tools below as well: a tool that needs approval works only where a selected rule covers it." in html
+
+    def test_each_tool_shows_whether_a_selected_rule_covers_it(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "text: 'no rule needed'" in html
+        assert "text: 'covered by ' + coverage[name].join('; ')" in html
+        assert "text: 'no selected rule covers it', uncovered: true" in html
+        assert "(SCOPED.auto_tools || []).indexOf(name)" in html
+
+    def test_ticked_tools_no_rule_covers_are_listed_in_a_warning(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-uncovered="1">No selected rule covers' in html
+        assert "will be denied. Select a rule that covers" in html
 
     def test_a_missing_rule_is_shown_as_no_longer_existing(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)

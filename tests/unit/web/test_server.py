@@ -1920,6 +1920,46 @@ class TestScopedTokenWiring:
         self._store(tmp_path, monkeypatch)
         assert _status(mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok").count("No such token.") == 1
 
+    def test_page_data_names_rules_by_their_cached_resource_names(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.policy.engine import PolicyRule
+        from privacyfence.web import server as server_module
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        rule = PolicyRule(
+            id="r-doc", predicate="grist.document", value=["8CAN8gKdxY7z"],
+            operations=frozenset({"grist.read_records", "grist.update_csv"}),
+        )
+        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
+
+        class _Names:
+            def cached_name(self, rt, resource_id):
+                return "Salesforce mirror" if resource_id == "8CAN8gKdxY7z" else None
+
+        monkeypatch.setattr(server_module, "get_resolver", lambda: _Names())
+        [entry] = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()["rules"]
+
+        assert entry["title"] == "Grist — document Salesforce mirror"
+        assert "8CAN8gKdxY7z" not in entry["title"] and "8CAN8gKdxY7z" not in entry["sentence"]
+        assert "allow" not in entry["title"]
+        assert entry["verbs"] == ["read", "update"]
+        assert "Salesforce mirror" in entry["sentence"]
+        assert "grist_update_csv" in entry["tools"]
+
+    def test_page_data_lists_the_tools_that_need_no_rule(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.web.server import build_scoped_token_wiring
+
+        self._store(tmp_path, monkeypatch)
+        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [])
+        data = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()
+
+        assert "grist_list_tables" in data["auto_tools"]
+        assert "grist_update_csv" not in data["auto_tools"]
+        assert all(name.startswith("grist_") for name in data["auto_tools"])
+        assert all(auto_accept.TOOL_TO_GATE[name] == "auto" for name in data["auto_tools"])
+
     def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
         import time
 

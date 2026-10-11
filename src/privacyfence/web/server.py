@@ -100,9 +100,12 @@ from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..policy import describe
+from ..policy import propose as policy_propose
+from ..policy.engine import PolicyRule
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
-from ..settings_controller import SettingsController, set_main_dispatcher
+from ..resource_names import get_resolver
+from ..settings_controller import SettingsController, cached_rule_value, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from ..web_push import PushNotifier, PushSubscriptionStore
@@ -283,6 +286,22 @@ def copy_local_mcp_token(mint: Callable[[bool], str], *, rotate: bool = False) -
     )
 
 
+def _scoped_rule_entry(rule: PolicyRule, value_display: str) -> dict[str, Any]:
+    """One rule as the scoped token form shows it: ``title`` says which resource it covers,
+    ``verbs`` what it allows there, ``tools`` which tools those verbs govern."""
+    connectors = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    connector = describe.connector_label(connectors[0]) if connectors else ""
+    scope_type = describe.scope_type_of(rule)
+    subject = f"{describe.scope_type_label(scope_type)} {value_display}".strip() if scope_type else rule.predicate
+    return {
+        "id": rule.id,
+        "title": f"{connector} — {subject}" if connector else subject,
+        "verbs": [verb.value for verb in describe.rule_verbs(rule)],
+        "sentence": describe.rule_sentence(rule, value_display=value_display or None),
+        "tools": list(describe.covered_tools(rule)),
+    }
+
+
 def scoped_token_page_data(
     principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
 ) -> dict[str, Any]:
@@ -291,15 +310,17 @@ def scoped_token_page_data(
     connectors. ``delivery`` is how a new secret reaches the person:
     ``"companion"`` (local mode, ADR 0164) or ``"once"`` (organization mode,
     ADR 0165). Must not be called under another principal's scope.
+
+    Each rule's resource ids are shown by the names the Auto-accept page has
+    cached (``cached_rule_value``), so the two pages name a rule alike. A
+    rule's ``title`` names what it covers without its verbs, which the form
+    shows separately; ``auto_tools`` are the tools that need no rule at all.
     """
     now = time.time()
     with principal_scope(principal):
-        rules = {
-            rule.id: {
-                "id": rule.id, "sentence": describe.rule_sentence(rule), "tools": list(describe.covered_tools(rule)),
-            }
-            for rule in auto_accept.get_policy_v2_store_rules()
-        }
+        resolver = get_resolver()
+        rules = {rule.id: _scoped_rule_entry(rule, cached_rule_value(rule, resolver))
+                 for rule in auto_accept.get_policy_v2_store_rules()}
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
         connector = name.split("_", 1)[0]
@@ -314,7 +335,8 @@ def scoped_token_page_data(
             "expires_at": token.expires_at, "days_left": days_left,
             "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
             "rules": [
-                {"id": rule_id, "sentence": rules[rule_id]["sentence"]} if rule_id in rules
+                {"id": rule_id, "sentence": rules[rule_id]["sentence"], "title": rules[rule_id]["title"]}
+                if rule_id in rules
                 else {"id": rule_id, "missing": True}
                 for rule_id in sorted(token.rule_ids)
             ],
@@ -323,6 +345,10 @@ def scoped_token_page_data(
     return {
         "delivery": delivery, "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": list(rules.values()),
+        "auto_tools": sorted(
+            name for name, gate in auto_accept.TOOL_TO_GATE.items()
+            if gate == "auto" and name.split("_", 1)[0] in connector_names
+        ),
         "tools": [{"connector": connector, "tools": names} for connector, names in sorted(by_connector.items())],
     }
 
