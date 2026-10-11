@@ -9,3 +9,6 @@ include src/privacyfence/_telegram_credentials.py
 # setuptools_scm's file finder packages every tracked file, so without this the privacyfence sdist
 # would carry the whole sync/ tree.
 prune sync
+
+# plugins/ holds the privacyfence-sync Claude plugin (ADR 0163), attached to releases as a zip.
+prune plugins
