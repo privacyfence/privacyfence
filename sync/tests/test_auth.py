@@ -169,7 +169,8 @@ def test_interactive_sign_in_prints_the_link_and_opens_the_browser(
         port = flow._server.server_address[1]
         getter = asyncio.get_running_loop().run_in_executor(None, _get, port, "/callback?code=z")
         result = await flow.callback_handler()
-        await getter
+        status, _ = await getter
+        assert status == 200
         return result
 
     result = asyncio.run(drive())

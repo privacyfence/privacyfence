@@ -176,7 +176,6 @@ async def _call(
         return result
     approval_id = str(result["approval_id"])
     out.write(f"[{step.id}] waiting for approval: {result['url']}\n")
-    status = "pending"
     for _ in range(_APPROVAL_POLLS):
         answer = await client.call(
             "privacyfence_await_approval",
