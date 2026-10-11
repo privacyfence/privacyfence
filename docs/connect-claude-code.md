@@ -67,6 +67,20 @@ claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mc
 
 Any other MCP client that speaks Streamable HTTP takes the same URL and header.
 
+### Scoped tokens
+
+A scheduled job or a single script needs less than your own token. In **Settings → Scoped tokens**
+create one: give it a name, a lifetime (90 days by default, at most 365), the auto-accept rules it
+may use and the tools it may call. The companion copies the token to your clipboard once; it cannot
+be shown again. Use it as the bearer token in place of your own, for example
+`PRIVACYFENCE_TOKEN` for `privacyfence-sync`.
+
+A client holding it sees only the tools you chose, and a call goes through only if one of its rules
+auto-accepts it. Anything else is denied at once; a scoped token never raises an approval card.
+Settings flags a token with 14 days or fewer left, and `privacyfence_status` tells the client its
+expiry. **Revoke** stops one token at once; **Revoke all** stops every one. Your own token and your
+other clients are not affected. See [Scoped tokens](security-and-compliance.md#scoped-tokens).
+
 ## Organization mode
 
 Your administrator gives you the deployment's URL, for example `https://pf.example.com`. Then:
@@ -79,6 +93,15 @@ Run `/mcp` inside Claude Code and choose **privacyfence** to sign in. Claude Cod
 PrivacyFence's authorization server, registers itself, and opens your organization's sign-in page
 in the browser. After you sign in it holds its own tokens; there is nothing to copy or paste.
 Access tokens last one hour and are refreshed silently; after 30 days you sign in again.
+
+### Scoped tokens
+
+If your administrator has turned scoped tokens on, **Settings → Scoped tokens** lets you create a
+named, expiring bearer token limited to chosen rules and tools, for a scheduled job that cannot sign
+in. The token is shown once, in a dialog with a Copy button; it is not stored and cannot be shown
+again. Pass it as the bearer token (`Authorization: Bearer pfst_…`) to `/mcp`. Its lifetime is 90
+days by default and at most the administrator's limit. Revoke it in the same page. It is
+[deny-only](security-and-compliance.md#scoped-tokens).
 
 Connect your services at `https://pf.example.com/connect`. Setting up the deployment itself is
 [Organization deployment](org-mode-setup-guide.md).

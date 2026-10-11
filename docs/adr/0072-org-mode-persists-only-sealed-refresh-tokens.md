@@ -5,6 +5,7 @@
 Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-16 in
 [#402](https://github.com/privacyfence/privacyfence/issues/402) and implemented in `b6be2407`,
 merged in [#437](https://github.com/privacyfence/privacyfence/pull/437)). Implemented.
+Amended by [ADR 0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md).
 
 ## Context
 
