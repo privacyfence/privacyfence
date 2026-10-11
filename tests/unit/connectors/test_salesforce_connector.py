@@ -993,6 +993,17 @@ def amount_run(**metadata):
     return result
 
 
+def both_run():
+    result = export_run(make_rows(1))
+    cells = result["factMap"]["T!T"]["rows"][0]["dataCells"]
+    cells[1] = {"value": {"amount": 10.5, "currency": "EUR"}, "label": "EUR 10.50"}
+    cells[2] = {"value": "001A", "label": "Acme"}
+    result["reportExtendedMetadata"] = {"detailColumnInfo": {
+        COLUMNS[1]: {"dataType": "currency"}, COLUMNS[2]: {"dataType": "string"},
+    }}
+    return result
+
+
 class TestExportReport:
     async def test_unpaged_tabular_report_writes_all_rows(self, gated_call_spy, delivered):
         connector, client = export_connector()
@@ -1078,14 +1089,77 @@ class TestExportReport:
         assert row[COLUMNS[2]] == "-"
         assert gated_call_spy[0]["args"]["cell_format"] == "label"
 
-    async def test_bad_cell_format_is_refused_before_any_request(self, gated_call_spy, delivered):
+    async def test_unknown_cell_format_names_all_three(self, gated_call_spy, delivered):
         connector, client = export_connector()
 
-        with pytest.raises(ValueError, match="cell_format must be value or label"):
+        with pytest.raises(ValueError, match="cell_format must be value, label or both"):
             await connector.call("salesforce_export_report", {**EXPORT_ARGS, "cell_format": "raw"})
 
         client.run_report.assert_not_called()
         assert gated_call_spy == []
+
+    async def test_both_writes_value_label_and_currency_columns(self, gated_call_spy, delivered):
+        result = both_run()
+        connector, _client = export_connector(result)
+
+        await connector.call(
+            "salesforce_export_report",
+            {**EXPORT_ARGS, "cell_format": "both", "file_name": "r.json"},
+        )
+
+        rows = json.loads(delivered[0]["data"])
+        assert list(rows[0]) == [
+            KEY, f"{KEY}.label", COLUMNS[1], f"{COLUMNS[1]}.label", f"{COLUMNS[1]}.currency",
+            COLUMNS[2], f"{COLUMNS[2]}.label", COLUMNS[3], f"{COLUMNS[3]}.label",
+        ]
+        assert rows[0][COLUMNS[1]] == 10.5
+        assert rows[0][f"{COLUMNS[1]}.label"] == "EUR 10.50"
+        assert rows[0][f"{COLUMNS[1]}.currency"] == "EUR"
+        assert rows[0][COLUMNS[2]] == "001A"
+        assert rows[0][f"{COLUMNS[2]}.label"] == "Acme"
+        assert gated_call_spy[0]["args"]["cell_format"] == "both"
+
+    async def test_both_adds_currency_only_for_money_columns(self, gated_call_spy, delivered):
+        connector, _client = export_connector(both_run())
+
+        await connector.call(
+            "salesforce_export_report", {**EXPORT_ARGS, "cell_format": "both"},
+        )
+
+        header = delivered[0]["data"].decode("utf-8").splitlines()[0].split(",")
+        assert [h for h in header if h.endswith(".currency")] == [f"{COLUMNS[1]}.currency"]
+
+    async def test_both_columns_do_not_depend_on_the_data(self, gated_call_spy, delivered):
+        result = both_run()
+        for row in result["factMap"]["T!T"]["rows"]:
+            row["dataCells"][1] = {"value": None, "label": "-"}
+        connector, _client = export_connector(result)
+
+        await connector.call(
+            "salesforce_export_report", {**EXPORT_ARGS, "cell_format": "both"},
+        )
+
+        lines = delivered[0]["data"].decode("utf-8").splitlines()
+        assert f"{COLUMNS[1]}.currency" in lines[0].split(",")
+        assert lines[1].split(",")[2:5] == ["", "-", ""]
+
+    async def test_value_and_label_formats_are_unchanged(self, gated_call_spy, delivered):
+        connector, _client = export_connector(amount_run())
+
+        for cell_format in ("value", "label"):
+            await connector.call(
+                "salesforce_export_report",
+                {**EXPORT_ARGS, "cell_format": cell_format, "file_name": "r.json"},
+            )
+
+        value_row, label_row = (json.loads(call["data"])[0] for call in delivered)
+        assert list(value_row) == COLUMNS
+        assert value_row[COLUMNS[1]] == 1200.0
+        assert value_row[COLUMNS[2]] is None
+        assert value_row[COLUMNS[3]] == "X list"
+        assert list(label_row) == COLUMNS
+        assert label_row[COLUMNS[1]] == "$1,200.00"
+        assert label_row[COLUMNS[2]] == "-"
 
     async def test_filters_are_passed_to_each_run(self, gated_call_spy, delivered):
         connector, client = export_connector()
