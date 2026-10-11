@@ -190,6 +190,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "salesforce_run_report": Verb.READ,
     "salesforce_search": Verb.SEARCH,
     "grist_get_records": Verb.READ,
+    "grist_export_records": Verb.READ,
     "grist_add_records": Verb.CREATE,
     "grist_update_records": Verb.UPDATE,
     "grist_create_table": Verb.RESTRUCTURE,

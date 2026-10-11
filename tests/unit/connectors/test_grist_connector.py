@@ -842,12 +842,19 @@ class TestEveryToolIsAudited:
         client.get_records.return_value = GristRecordPage(records=[], truncated=False)
         csv = tmp_path / "a.csv"
         csv.write_bytes(b"Name\nnew\n")
+        monkeypatch.setattr(
+            grist_module.local_files, "deliver_file",
+            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
+        )
 
         await assert_all_tools_leave_an_audit_trail(
             connector, grist_module, monkeypatch, tmp_path,
             arg_overrides={
                 "grist_list_tables": {"doc_id": "DOC1"},
                 "grist_get_records": {"doc_id": "DOC1", "table_id": "Table1"},
+                "grist_export_records": {
+                    "doc_id": "DOC1", "table_id": "Table1", "destination_dir": str(tmp_path),
+                },
                 "grist_add_records": {
                     "doc_id": "DOC1", "table_id": "Table1", "records": '[{"Name": "a"}]',
                 },
@@ -1566,3 +1573,216 @@ class TestUpdateCsv:
             LocalFileAccessError, match="expired or was already used",
         ):
             await connector.call("grist_update_csv", args)
+
+
+# ---------------------------------------------------------------------- #
+# Export to a file
+# ---------------------------------------------------------------------- #
+
+EXPORT_COLUMNS = [
+    GristColumn("Name", "Name", "Text", False),
+    GristColumn("Born", "Born", "Date", False),
+    GristColumn("Seen", "Seen", "DateTime:UTC", False),
+    GristColumn("Tags", "Tags", "ChoiceList", False),
+]
+EXPORT_ARGS = {"doc_id": DOC_ID, "table_id": "Contacts", "destination_dir": "~/out"}
+
+
+def export_records_page(truncated=False):
+    return GristRecordPage(
+        records=[
+            GristRecord(1, {
+                "Name": "Ada", "Born": calendar_seconds("1815-12-10"),
+                "Seen": 1_700_000_000, "Tags": ["L", "a", "b"],
+            }),
+            GristRecord(2, {"Name": "Grace", "Born": None, "Seen": None, "Tags": None}),
+        ],
+        truncated=truncated,
+    )
+
+
+@pytest.fixture
+def delivered(monkeypatch):
+    calls = []
+
+    def fake_deliver(dest_dir, name, data, mime_type, *, download_mode):
+        calls.append({
+            "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
+            "download_mode": download_mode,
+        })
+        return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
+                "delivery": "local_disk"}
+
+    monkeypatch.setattr(grist_module.local_files, "deliver_file", fake_deliver)
+    return calls
+
+
+def export_connector(page=None, columns=None):
+    connector, client = make_connector()
+    client.host = "docs.getgrist.com"
+    client.get_document.return_value = make_doc()
+    client.list_columns.return_value = EXPORT_COLUMNS if columns is None else columns
+    client.get_records.return_value = page or export_records_page()
+    return connector, client
+
+
+class TestExportRecords:
+    async def test_writes_csv_with_id_first_and_dates_as_iso(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert delivered[0]["name"] == "Contacts.csv"
+        assert delivered[0]["dest_dir"] == "~/out"
+        assert delivered[0]["mime_type"] == "text/csv"
+        lines = delivered[0]["data"].decode("utf-8").splitlines()
+        assert lines[0] == "id,Name,Born,Seen,Tags"
+        assert lines[1].startswith("1,Ada,1815-12-10,")
+
+    async def test_writes_json_when_file_name_ends_json(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", {**EXPORT_ARGS, "file_name": "People.json"})
+
+        assert delivered[0]["name"] == "People.json"
+        assert delivered[0]["mime_type"] == "application/json"
+        rows = json.loads(delivered[0]["data"])
+        assert rows[0]["id"] == 1
+        assert rows[0]["Name"] == "Ada"
+        assert rows[1]["Born"] is None
+
+    async def test_choice_list_drops_the_L_marker(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", {**EXPORT_ARGS, "file_name": "p.json"})
+
+        assert json.loads(delivered[0]["data"])[0]["Tags"] == ["a", "b"]
+
+    async def test_datetime_column_written_as_utc_iso(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", {**EXPORT_ARGS, "file_name": "p.json"})
+
+        assert json.loads(delivered[0]["data"])[0]["Seen"] == "2023-11-14T22:13:20Z"
+
+    async def test_one_card_with_sample_and_no_cell_in_raw_data(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert len(gated_call_spy) == 1
+        call = gated_call_spy[0]
+        assert call["gate"] == "review"
+        assert call["tool"] == "grist_export_records"
+        assert call["filtered_data"] is None
+        assert call["preview_tables"][0]["headers"] == ["id", "Name", "Born", "Seen", "Tags"]
+        assert call["preview_tables"][0]["rows"][0][1] == "Ada"
+        assert list(call["raw_data"]) == ["doc_id", "table_id", "rows", "columns", "sha256"]
+        assert "Ada" not in json.dumps(call["raw_data"])
+        assert call["new_info"]["Saved to"] == "~/out/Contacts.csv"
+        assert call["new_info"]["Rows"] == "2"
+
+    async def test_details_text_has_no_agent_placeholder(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert "{agent}" not in gated_call_spy[0]["details_text"]
+        assert "Saved to: ~/out/Contacts.csv" in gated_call_spy[0]["details_text"]
+
+    async def test_audit_delivery_is_passed(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert gated_call_spy[0]["delivery"] == "local_disk"
+
+    async def test_approval_args_carry_sha256_and_options(self, gated_call_spy, delivered):
+        import hashlib
+
+        connector, _client = export_connector()
+
+        await connector.call("grist_export_records", {**EXPORT_ARGS, "filter": '{"Name": ["Ada"]}'})
+
+        assert gated_call_spy[0]["args"] == {
+            "doc_id": DOC_ID, "table_id": "Contacts", "filter": '{"Name": ["Ada"]}',
+            "destination_dir": "~/out", "file_name": "Contacts.csv",
+            "sha256": hashlib.sha256(delivered[0]["data"]).hexdigest(),
+        }
+
+    async def test_filter_is_passed_to_the_client(self, gated_call_spy, delivered):
+        connector, client = export_connector()
+
+        await connector.call("grist_export_records", {**EXPORT_ARGS, "filter": '{"Name": ["Ada"]}'})
+
+        client.get_records.assert_called_once_with(
+            DOC_ID, "Contacts", filters={"Name": ["Ada"]}, limit=50_000,
+        )
+
+    async def test_more_than_50000_records_is_refused_before_the_card(self, gated_call_spy, delivered):
+        connector, _client = export_connector(page=export_records_page(truncated=True))
+
+        with pytest.raises(ValueError, match="More than 50,000 records match"):
+            await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert gated_call_spy == []
+        assert delivered == []
+
+    async def test_over_the_delivery_limit_is_refused_before_the_card(
+        self, gated_call_spy, delivered, monkeypatch,
+    ):
+        def too_big(size):
+            raise grist_module.local_files.LocalFileAccessError("over the limit")
+
+        monkeypatch.setattr(grist_module.local_files, "check_delivery_size", too_big)
+        connector, _client = export_connector()
+
+        with pytest.raises(grist_module.local_files.LocalFileAccessError, match="over the limit"):
+            await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert gated_call_spy == []
+        assert delivered == []
+
+    async def test_org_mode_is_refused_before_any_request(self, gated_call_spy, delivered):
+        connector, client = export_connector()
+        connector.download_mode = "org"
+
+        with pytest.raises(ValueError, match="organization-managed"):
+            await connector.call("grist_export_records", EXPORT_ARGS)
+
+        client.get_document.assert_not_called()
+        client.get_records.assert_not_called()
+        assert gated_call_spy == []
+
+    @pytest.mark.parametrize("name", ["a/b.csv", "notes.txt", ".hidden.csv"])
+    async def test_bad_file_name_is_refused_before_any_request(self, gated_call_spy, delivered, name):
+        connector, client = export_connector()
+
+        with pytest.raises(ValueError, match="file_name must be"):
+            await connector.call("grist_export_records", {**EXPORT_ARGS, "file_name": name})
+
+        client.get_document.assert_not_called()
+        client.get_records.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_deny_writes_nothing(self, monkeypatch, delivered):
+        async def denied(**kwargs):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(grist_module, "gated_call", denied)
+        connector, _client = export_connector()
+
+        with pytest.raises(PermissionError):
+            await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert delivered == []
+
+    async def test_result_is_summary_only(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        result = await connector.call("grist_export_records", EXPORT_ARGS)
+
+        assert set(result) == {"rows", "columns", "sha256", "path", "name", "size_bytes", "delivery"}
+        assert result["rows"] == 2
+        assert result["columns"] == ["id", "Name", "Born", "Seen", "Tags"]
+        assert "Ada" not in json.dumps(result)
