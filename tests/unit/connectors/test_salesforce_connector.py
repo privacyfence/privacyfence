@@ -15,6 +15,7 @@ connectors/salesforce.py:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -84,6 +85,12 @@ def gated_call_spy(monkeypatch):
     return calls
 
 
+def export_run(rows, *, row_limit=2000, **metadata):
+    """One report run over ``rows`` as the Analytics API returns it (factMap T!T)."""
+    saved = tabular_report(name="Pipeline", **metadata)
+    return FakeAnalytics(saved, COLUMNS, rows, row_limit=row_limit)._run(saved)
+
+
 class TestDispatch:
     async def test_unknown_tool_raises(self):
         connector, _client = make_connector()
@@ -94,6 +101,7 @@ class TestDispatch:
 SALESFORCE_SIBLINGS: dict[str, tuple[str, ...]] = {
     "salesforce_list_reports": ("salesforce_run_report",),
     "salesforce_run_report": ("salesforce_list_reports",),
+    "salesforce_export_report": ("salesforce_run_report",),
     "salesforce_search": ("salesforce_get_record",),
     "salesforce_get_record": ("salesforce_search",),
 }
@@ -925,5 +933,228 @@ class TestEveryToolIsAudited:
         # isn't a dataclass instance.
         client.get_record.return_value = SalesforceRecord(object_type="Account", id="001", fields={})
         client.search.return_value = [SalesforceRecord(object_type="Account", id="001", fields={})]
+        client.run_report.return_value = export_run(make_rows(2))
+        monkeypatch.setattr(
+            salesforce_module.local_files, "deliver_file",
+            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
+        )
 
-        await assert_all_tools_leave_an_audit_trail(connector, salesforce_module, monkeypatch, tmp_path)
+        await assert_all_tools_leave_an_audit_trail(
+            connector, salesforce_module, monkeypatch, tmp_path,
+            arg_overrides={
+                "salesforce_export_report": {
+                    "report_id": "00O000000000001", "destination_dir": str(tmp_path),
+                },
+            },
+        )
+
+
+# ---------------------------------------------------------------------- #
+# Export to a file
+# ---------------------------------------------------------------------- #
+
+EXPORT_ARGS = {"report_id": REPORT_ID, "destination_dir": "~/out"}
+
+
+@pytest.fixture
+def delivered(monkeypatch):
+    calls = []
+
+    def fake_deliver(dest_dir, name, data, mime_type, *, download_mode):
+        calls.append({
+            "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
+            "download_mode": download_mode,
+        })
+        return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
+                "delivery": "local_disk"}
+
+    monkeypatch.setattr(salesforce_module.local_files, "deliver_file", fake_deliver)
+    return calls
+
+
+def export_connector(result=None):
+    connector, client = make_connector()
+    client.run_report.return_value = export_run(make_rows(3)) if result is None else result
+    return connector, client
+
+
+def amount_run(**metadata):
+    result = export_run(make_rows(1), **metadata)
+    cells = result["factMap"]["T!T"]["rows"][0]["dataCells"]
+    cells[1] = {"value": {"amount": 1200.0, "currency": "USD"}, "label": "$1,200.00"}
+    cells[2] = {"value": None, "label": "-"}
+    cells[3] = {"value": ["x"], "label": "X list"}
+    return result
+
+
+class TestExportReport:
+    async def test_unpaged_tabular_report_writes_all_rows(self, gated_call_spy, delivered):
+        connector, client = export_connector()
+
+        await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        client.run_report.assert_called_once_with(REPORT_ID, None, None, False)
+        assert delivered[0]["name"] == f"{REPORT_ID}.csv"
+        assert delivered[0]["dest_dir"] == "~/out"
+        assert delivered[0]["mime_type"] == "text/csv"
+        lines = delivered[0]["data"].decode("utf-8").splitlines()
+        assert lines[0] == ",".join(COLUMNS)
+        assert lines[1] == "PFQA-00001,Account 1,Chicago,Customer"
+        assert len(lines) == 4
+
+    async def test_paged_export_runs_until_all_data(self, gated_call_spy, delivered):
+        connector, client = export_connector()
+        client.run_report_page.side_effect = [
+            ReportPage(export_run(make_rows(2)), ["PFQA-00001", "PFQA-00002"], False, 5),
+            ReportPage(export_run(make_rows(2, start=3)), ["PFQA-00003", "PFQA-00004"], False, 3),
+            ReportPage(export_run(make_rows(1, start=5)), ["PFQA-00005"], True, 1),
+        ]
+
+        result = await connector.call(
+            "salesforce_export_report", {**EXPORT_ARGS, "page_by": f" {KEY} ", "columns": "A, B"},
+        )
+
+        assert [c.args for c in client.run_report_page.call_args_list] == [
+            (REPORT_ID, KEY, ["A", "B"], None, None, 0, None),
+            (REPORT_ID, KEY, ["A", "B"], None, "PFQA-00002", 1, 3),
+            (REPORT_ID, KEY, ["A", "B"], None, "PFQA-00004", 2, 1),
+        ]
+        client.run_report.assert_not_called()
+        assert result["rows"] == 5
+        assert gated_call_spy[0]["preview"]["Report runs"] == "3"
+        assert gated_call_spy[0]["preview"]["Paged by"] == KEY
+        assert len(delivered[0]["data"].decode("utf-8").splitlines()) == 6
+
+    async def test_grouped_report_without_page_by_is_refused(self, gated_call_spy, delivered):
+        result = export_run(make_rows(2))
+        result["factMap"]["0!T"] = {"rows": [], "aggregates": []}
+        connector, _client = export_connector(result)
+
+        with pytest.raises(ValueError, match="this report is grouped; pass page_by"):
+            await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert gated_call_spy == []
+        assert delivered == []
+
+    async def test_cut_off_report_without_page_by_is_refused(self, gated_call_spy, delivered):
+        connector, _client = export_connector(export_run(make_rows(5), row_limit=2))
+
+        with pytest.raises(ValueError, match="more than 2,000 rows; pass page_by"):
+            await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert gated_call_spy == []
+        assert delivered == []
+
+    async def test_value_format_uses_amount_and_raw_values(self, gated_call_spy, delivered):
+        connector, _client = export_connector(amount_run())
+
+        await connector.call(
+            "salesforce_export_report", {**EXPORT_ARGS, "file_name": "r.json"},
+        )
+
+        assert delivered[0]["mime_type"] == "application/json"
+        row = json.loads(delivered[0]["data"])[0]
+        assert row[KEY] == "PFQA-00001"
+        assert row[COLUMNS[1]] == 1200.0
+        assert row[COLUMNS[2]] is None
+        assert row[COLUMNS[3]] == "X list"
+
+    async def test_label_format_uses_labels(self, gated_call_spy, delivered):
+        connector, _client = export_connector(amount_run())
+
+        await connector.call(
+            "salesforce_export_report",
+            {**EXPORT_ARGS, "cell_format": "label", "file_name": "r.json"},
+        )
+
+        row = json.loads(delivered[0]["data"])[0]
+        assert row[COLUMNS[1]] == "$1,200.00"
+        assert row[COLUMNS[2]] == "-"
+        assert gated_call_spy[0]["args"]["cell_format"] == "label"
+
+    async def test_bad_cell_format_is_refused_before_any_request(self, gated_call_spy, delivered):
+        connector, client = export_connector()
+
+        with pytest.raises(ValueError, match="cell_format must be value or label"):
+            await connector.call("salesforce_export_report", {**EXPORT_ARGS, "cell_format": "raw"})
+
+        client.run_report.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_filters_are_passed_to_each_run(self, gated_call_spy, delivered):
+        connector, client = export_connector()
+        filters = '[{"column": "LAST_UPDATE", "operator": "greaterOrEqual", "value": "2026-10-04"}]'
+        expected = [ReportFilter(column="LAST_UPDATE", operator="greaterOrEqual", values=["2026-10-04"])]
+        client.run_report_page.side_effect = [
+            ReportPage(export_run(make_rows(2)), ["PFQA-00001", "PFQA-00002"], False, 3),
+            ReportPage(export_run(make_rows(1, start=3)), ["PFQA-00003"], True, 1),
+        ]
+
+        await connector.call("salesforce_export_report", {**EXPORT_ARGS, "filters": filters})
+        await connector.call(
+            "salesforce_export_report", {**EXPORT_ARGS, "filters": filters, "page_by": KEY},
+        )
+
+        client.run_report.assert_called_once_with(REPORT_ID, None, expected, False)
+        assert [c.args[3] for c in client.run_report_page.call_args_list] == [expected, expected]
+        assert gated_call_spy[0]["preview"]["Filters"] == "LAST_UPDATE greaterOrEqual 2026-10-04"
+
+    async def test_one_card_with_report_runs_line(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert len(gated_call_spy) == 1
+        call = gated_call_spy[0]
+        assert call["gate"] == "review"
+        assert call["tool"] == "salesforce_export_report"
+        assert call["filtered_data"] is None
+        assert call["preview"] == {"Report": "Pipeline", "Report ID": REPORT_ID, "Report runs": "1"}
+        assert call["preview_tables"][0]["headers"] == COLUMNS
+        assert call["preview_tables"][0]["rows"][0][1] == "Account 1"
+        assert list(call["raw_data"]) == ["report_id", "rows", "columns", "sha256"]
+        assert "Account 1" not in json.dumps(call["raw_data"])
+        assert call["new_info"]["Saved to"] == f"~/out/{REPORT_ID}.csv"
+        assert call["new_info"]["Rows"] == "3"
+        assert "{agent}" not in call["details_text"]
+        assert call["args"]["sha256"] == hashlib.sha256(delivered[0]["data"]).hexdigest()
+
+    async def test_audit_delivery_is_passed(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert gated_call_spy[0]["delivery"] == "local_disk"
+
+    async def test_org_mode_is_refused_before_any_request(self, gated_call_spy, delivered):
+        connector, client = export_connector()
+        connector.download_mode = "org"
+
+        with pytest.raises(ValueError, match="organization-managed"):
+            await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        client.run_report.assert_not_called()
+        client.run_report_page.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_deny_writes_nothing(self, monkeypatch, delivered):
+        async def denied(**kwargs):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(salesforce_module, "gated_call", denied)
+        connector, _client = export_connector()
+
+        with pytest.raises(PermissionError):
+            await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert delivered == []
+
+    async def test_result_is_summary_only(self, gated_call_spy, delivered):
+        connector, _client = export_connector()
+
+        result = await connector.call("salesforce_export_report", EXPORT_ARGS)
+
+        assert set(result) == {"rows", "columns", "sha256", "path", "name", "size_bytes", "delivery"}
+        assert result["rows"] == 3
+        assert result["columns"] == COLUMNS
+        assert "Account 1" not in json.dumps(result)

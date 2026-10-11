@@ -77,6 +77,7 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ),
     ("salesforce_get_record", make_ctx(connector="salesforce", args={"object_type": "Account", "record_id": "r1"}, raw_data={})),
     ("salesforce_run_report", make_ctx(connector="salesforce", args={"report_id": "R1"}, raw_data={})),
+    ("salesforce_export_report", make_ctx(connector="salesforce", args={"report_id": "R1"}, raw_data={})),
     ("salesforce_search", make_ctx(connector="salesforce", args={"object_types": "Account,Contact"}, raw_data={})),
     (
         "jira_get_issue",
@@ -254,6 +255,16 @@ class TestProposalsAgainstTheV1Tables:
             "approved_folder", "i_am_owner",
         ]
 
+    def test_export_report_is_offered_this_report(self):
+        ctx = make_ctx(connector="salesforce", args={"report_id": "R1"}, raw_data={})
+        proposals = propose.proposals_for("salesforce_export_report", ctx)
+        assert len(proposals) == 1
+        assert proposals[0].scope.predicate == "approved_report_ids"
+        assert proposals[0].value == ["R1"]
+        assert [(p.scope.predicate, p.value) for p in propose.proposals_for("salesforce_run_report", ctx)] == [
+            ("approved_report_ids", ["R1"]),
+        ]
+
     def test_an_ungoverned_or_unknown_tool_proposes_nothing(self):
         assert propose.proposals_for("drive_list_files", make_ctx()) == []
         assert propose.proposals_for("not_a_tool", make_ctx()) == []
@@ -272,7 +283,7 @@ class TestProposalsAgainstTheV1Tables:
             *(
                 (tool, make_ctx(connector="grist", args={"doc_id": "DOC1", "table_id": "Table1"}))
                 for tool in (
-                    "grist_get_records", "grist_add_records", "grist_update_records",
+                    "grist_get_records", "grist_export_records", "grist_export_sql", "grist_add_records", "grist_update_records",
                     "grist_create_table", "grist_add_columns", "grist_import_csv", "grist_update_csv",
                 )
             ),

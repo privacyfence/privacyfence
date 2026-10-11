@@ -944,6 +944,7 @@ class TestBuildConnectorsSalesforce:
 
         assert len(connectors) == 1
         assert connectors[0].name == "salesforce"
+        assert connectors[0].download_mode == "local"
         # config= must carry both the org registration and the per-user token.
         assert fake.captured_kwargs["config"] == {
             "consumer_key": "ck",

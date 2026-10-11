@@ -1485,7 +1485,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             salesforce_client.check_connection()
             salesforce_client.report_max_pages = _salesforce_report_max_pages(config)
             logger.info("Salesforce connector ready for %s", merged.get("instance_url"))
-            connectors.append(SalesforceConnector(salesforce_client))
+            salesforce_connector = SalesforceConnector(salesforce_client)
+            salesforce_connector.download_mode = download_mode
+            connectors.append(salesforce_connector)
         except (SalesforceClientError, FileNotFoundError) as exc:
             logger.warning("Salesforce connector disabled: %s", exc)
             failures["salesforce"] = _classify_connector_failure(exc)

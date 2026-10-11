@@ -242,3 +242,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0152](0152-which-peek-server-is-used-and-a-token-stays-with-it.md) | Which Peek server is used, and a Peek token stays with the server it was issued for | Accepted |
 | [0153](0153-peek-comments-are-posted-only-through-the-account-comment-endpoint.md) | Peek comments are posted only through the account comment endpoint | Accepted |
 | [0154](0154-peek-visit-stats-carry-names-and-times-never-ip-addresses.md) | Peek visit stats carry counts, visitor names and times, never IP addresses | Accepted |
+| [0155](0155-exports-write-a-file-and-return-only-counts-and-a-hash.md) | Exports write a file and return only counts and a hash | Accepted |
+| [0156](0156-grist-export-sql-reads-through-the-sql-endpoint.md) | `grist_export_sql` reads through Grist's SQL endpoint | Accepted; amends 0146 |

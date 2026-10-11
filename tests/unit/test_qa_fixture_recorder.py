@@ -2955,11 +2955,13 @@ class _FakeGristApi:
     DOC = "qaDocId123"
 
     def __init__(self, *, names=("[QATEST] one", "[QATEST] two"), docs_status=None, records_status=None,
-                 ignore_sort=False):
+                 ignore_sort=False, sql_status=None, sql_ids=None):
         self.rows: dict[int, dict] = {i + 1: {"Name": n, "Note": ""} for i, n in enumerate(names)}
         self.docs_status = docs_status
         self.records_status = records_status
         self.ignore_sort = ignore_sort
+        self.sql_status = sql_status
+        self.sql_ids = sql_ids
         self.updates = 0
 
     def __call__(self, method, path, *, params=None, json_body=None):
@@ -2977,6 +2979,11 @@ class _FakeGristApi:
                 {"id": "Name", "fields": {"label": "Name", "type": "Text", "isFormula": False}},
                 {"id": "Note", "fields": {"label": "Note", "type": "Text", "isFormula": False}},
             ]}
+        if method == "POST" and path.endswith("/sql"):
+            if self.sql_status:
+                raise self.sql_status
+            ids = sorted(self.rows) if self.sql_ids is None else self.sql_ids
+            return {"records": [{"fields": {"id": i}} for i in ids]}
         records = path.endswith("/records")
         if records and method == "GET":
             if self.records_status and "filter" not in params:
@@ -3027,10 +3034,13 @@ class TestCheckGrist:
             ("list_columns", True, "list_columns.json"),
             ("get_records", True, "get_records.json"),
             ("get_records_paged", True, ""),
+            ("run_sql", True, ""),
         ]
         assert all(r.raw is not None for r in results[:3])
         assert results[3].raw is None
         assert results[3].note == "2 row(s) over 2 page(s), in record-id order"
+        assert results[4].raw is None
+        assert results[4].note == "2 id(s) match one records read"
 
     def test_paging_needs_two_rows(self, monkeypatch):
         paged = self._run(monkeypatch, _FakeGristApi(names=("[QATEST] one",)))[3]
@@ -3046,6 +3056,16 @@ class TestCheckGrist:
         results = self._run(monkeypatch, _FakeGristApi(records_status=GristClientError("HTTP 500")))
 
         assert not results[3].ok and results[3].note == "HTTP 500"
+
+    def test_run_sql_403_fails_the_row(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeGristApi(sql_status=GristAccessDenied("forbidden")))
+
+        assert not results[4].ok and results[4].note == "Grist refused /sql (HTTP 403)"
+
+    def test_run_sql_id_mismatch_fails_the_row(self, monkeypatch):
+        results = self._run(monkeypatch, _FakeGristApi(sql_ids=[1]))
+
+        assert not results[4].ok and results[4].note == "sql ids [1] differ from one read's [1, 2]"
 
     def test_list_documents_fixture_keeps_only_the_qa_document(self, monkeypatch):
         raw = self._run(monkeypatch, _FakeGristApi())[0].raw

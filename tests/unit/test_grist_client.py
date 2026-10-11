@@ -529,6 +529,36 @@ class TestGetRecordsById:
         assert net.calls == []
 
 
+class TestRunSql:
+    def test_run_sql_posts_sql_and_args_to_the_sql_endpoint(
+        self, net: Net, client: GristClient,
+    ) -> None:
+        net.reply(ok({"records": []}))
+        client.run_sql("doc1", "SELECT * FROM (SELECT 1) LIMIT 5", ["a", 2])
+        call = net.calls[0]
+        assert call["method"] == "POST"
+        assert call["url"].endswith("/api/docs/doc1/sql")
+        assert call["json"] == {"sql": "SELECT * FROM (SELECT 1) LIMIT 5", "args": ["a", 2]}
+
+    def test_run_sql_returns_fields(self, net: Net, client: GristClient) -> None:
+        net.reply(ok({"statement": "x", "records": [
+            {"fields": {"id": 1, "A": "x"}}, {"fields": {"id": 2, "A": None}},
+        ]}))
+        assert client.run_sql("doc1", "SELECT 1", []) == [
+            {"id": 1, "A": "x"}, {"id": 2, "A": None},
+        ]
+
+    def test_run_sql_403_raises_access_denied(self, net: Net, client: GristClient) -> None:
+        net.reply(FakeResponse(403, {"error": "nope"}))
+        with pytest.raises(GristAccessDenied):
+            client.run_sql("doc1", "SELECT 1", [])
+
+    def test_run_sql_validates_doc_id(self, net: Net, client: GristClient) -> None:
+        with pytest.raises(GristClientError):
+            client.run_sql("a/b", "SELECT 1", [])
+        assert net.calls == []
+
+
 class TestAddRecords:
     def test_created_record_without_a_usable_id_is_a_client_error(self, net: Net, client: GristClient) -> None:
         net.reply(ok({"records": [{"id": 7}, {"id": "x"}]}))

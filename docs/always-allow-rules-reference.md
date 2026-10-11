@@ -79,6 +79,8 @@ the request on the card, once.
 
 | Tool | Always allow buttons |
 |---|---|
+| `grist_export_records` |  |
+| `grist_export_sql` |  |
 | `grist_get_records` |  |
 
 ### Jira
@@ -99,6 +101,7 @@ the request on the card, once.
 
 | Tool | Always allow buttons |
 |---|---|
+| `salesforce_export_report` | this report |
 | `salesforce_get_record` | this object type |
 | `salesforce_run_report` | this report |
 | `salesforce_search` | this object type |

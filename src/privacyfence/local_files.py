@@ -420,6 +420,19 @@ def local_file_size(path: str, *, download_mode: str) -> int:
     return os.path.getsize(expanded)
 
 
+def check_delivery_size(size: int) -> None:
+    """Raise ``LocalFileAccessError`` if ``size`` bytes exceed ``file_bridge.
+    max_download_bytes``. ``deliver_file`` calls it; a caller that builds the
+    data before asking for approval calls it first, so a file that can never
+    be delivered does not cost an approval."""
+    if size > _max_download_bytes:
+        raise LocalFileAccessError(
+            f"This file is {size:,} bytes, over PrivacyFence's {_max_download_bytes:,}-byte "
+            "file-bridge delivery limit (file_bridge.max_download_bytes in settings.yaml). Ask "
+            "for a narrower export or a different way to share it."
+        )
+
+
 def deliver_file(
     dest_dir: str, name: str, data: bytes, mime_type: str, *, download_mode: str,
 ) -> dict[str, Any]:
@@ -445,12 +458,7 @@ def deliver_file(
     every branch, direct writes included, since ``data`` is already fully
     in memory by the time this is called either way.
     """
-    if len(data) > _max_download_bytes:
-        raise LocalFileAccessError(
-            f"This file is {len(data):,} bytes, over PrivacyFence's {_max_download_bytes:,}-byte "
-            "file-bridge delivery limit (file_bridge.max_download_bytes in settings.yaml). Ask "
-            "for a narrower export or a different way to share it."
-        )
+    check_delivery_size(len(data))
     if can_access_user_files(download_mode):
         return _deliver_direct(dest_dir, name, data)
     state = _current_state()
@@ -551,6 +559,7 @@ __all__ = [
     "call_context",
     "call_produced_deliveries",
     "can_access_user_files",
+    "check_delivery_size",
     "configure_file_bridge",
     "deliver_file",
     "force_bridge_for_tests",

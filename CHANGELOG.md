@@ -45,6 +45,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A whole Grist table to a file in one approval.** `grist_export_records` writes every record of a table, optionally filtered, to a CSV or JSON file on your computer. The assistant gets back only the row count, the columns and the file's SHA-256.
+- **A whole Salesforce report to a file.** `salesforce_export_report` pages through the report internally and writes it to a CSV or JSON file after one approval. It takes the same `columns` and `filters` as `salesforce_run_report`, so an incremental pull such as `LAST_UPDATE` since a date needs nothing new.
+- **One read-only Grist query to a file.** `grist_export_sql` runs one `SELECT` over a document, so a join across tables needs one approval, and writes the result to a CSV or JSON file. Grist runs SQL only for people who can copy the whole document.
 - **Peek connector.** List your Peek pages, read their comments and visit counts after review, and publish pages and new versions, change who can open them, rename, comment on and delete them with approval. Connect with Peek's own sign-in from Settings, the connections page in organization mode, or `privacyfence-app --peek-login`; an organization bundle can pin the Peek server with `--peek-base-url`. Posting comments needs a Peek server with the account comment endpoint.
 
 ## [5.8.1] — 2026-10-11

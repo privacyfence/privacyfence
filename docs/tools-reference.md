@@ -97,12 +97,12 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Apps Script](#apps-script) | 4 | 1 | 2 | 1 |
 | [Slack](#slack) | 11 | 6 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
-| [Salesforce](#salesforce) | 4 | 1 | 3 | 0 |
+| [Salesforce](#salesforce) | 5 | 1 | 4 | 0 |
 | [Jira](#jira) | 12 | 6 | 2 | 4 |
 | [Confluence](#confluence) | 12 | 7 | 3 | 2 |
-| [Grist](#grist) | 9 | 2 | 1 | 6 |
+| [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 8 | 1 | 2 | 5 |
-| **Total** | **137** | **50** | **25** | **62** |
+| **Total** | **140** | **50** | **28** | **62** |
 
 ## Gmail
 
@@ -241,6 +241,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
 | `salesforce_list_reports` | read | `auto` | List Salesforce reports accessible to the user. |
+| `salesforce_export_report` | read | `review` | Write every row of a Salesforce report to a CSV or JSON file on the user's computer, in one approval. |
 | `salesforce_get_record` | read | `review` | Fetch a Salesforce record by object type and id. |
 | `salesforce_run_report` | read | `review` | Run a Salesforce report by id and return the results. |
 | `salesforce_search` | read | `review` | Search Salesforce by name or id across one or more object types — the same mechanism as the search bar at the top of the Salesforce UI. |
@@ -285,6 +286,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 |---|---|---|---|
 | `grist_list_documents` | read | `auto` | List the Grist documents this account can open, with their workspace and team. |
 | `grist_list_tables` | read | `auto` | List the tables of one Grist document and each table's columns (id, label and type). |
+| `grist_export_records` | read | `review` | Write every record of one table of a Grist document, optionally filtered, to a CSV or JSON file on the user's computer, in one approval. |
+| `grist_export_sql` | read | `review` | Run one read-only SQL query over a Grist document and write the result to a CSV or JSON file on the user's computer, in one approval. |
 | `grist_get_records` | read | `review` | Read records from one table of a Grist document, optionally filtered and sorted. |
 | `grist_add_columns` | write | `popup` | Add new columns to an existing table of a Grist document. |
 | `grist_add_records` | write | `popup` | Add new records to one table of a Grist document. |

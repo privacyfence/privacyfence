@@ -390,6 +390,8 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 Matching is case-insensitive for domains, labels, space keys, project keys and object types.
 
+A Grist document rule and an approved-report rule also cover the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`) for the same document or report; the PII gate still applies to them.
+
 ### Conditions
 
 Conditions narrow a rule; they never widen it. They go in the rule's `conditions:` list. The card
